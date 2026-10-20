@@ -228,9 +228,8 @@ enum AuditForwardRun {
             guard let secret = configuration.secret(named: name) else {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
             }
-            if managed.policy?.allowsSecretSource(secret.source.kind) == false {
-                return .failure(CommandFailure(
-                    "organization policy: \(name) uses a \(secret.source.kind) source, which is not allowed"))
+            if let reason = SecretOrganizationRules.violation(secret, policy: managed.policy) {
+                return .failure(CommandFailure("organization policy: \(reason)"))
             }
             switch resolver.resolve(secret.source) {
             case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))

@@ -88,7 +88,7 @@ struct DotenvConfigurationTests {
                     canonicalPath: "/proj/.env", data: Data("API_KEY=real-secret-value\n".utf8), identity: "1"))
             })
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: resolver,
+            configDirectory: fixture.directory, makeResolver: { resolver },
             transport: RecordingUpstream().transport, workspace: "W1")
         let lease = try broker.lease(names: ["API_KEY"], agent: nil).get()
         #expect(lease.environment.contains { $0.name == "API_BASE_URL" })
@@ -116,7 +116,7 @@ struct DotenvConfigurationTests {
                     canonicalPath: "/proj/.env", data: Data("STRIPE_SECRET_KEY=sk-test-123\n".utf8), identity: "1"))
             })
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: resolver,
+            configDirectory: fixture.directory, makeResolver: { resolver },
             transport: RecordingUpstream().transport, workspace: "W1")
         let lease = try broker.lease(names: ["STRIPE_SECRET_KEY", "GH_TOKEN"], agent: nil).get()
         #expect(lease.environment.contains { $0.name == "STRIPE_SECRET_KEY" && $0.value == "sk-test-123" })
@@ -127,7 +127,7 @@ struct DotenvConfigurationTests {
         policy.secrets.allowedSources = ["keychain"]
         let bundle = ManagedPolicyBundle(policy: policy, sha256: "", isSigned: false, directory: "")
         let denied = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: resolver,
+            configDirectory: fixture.directory, makeResolver: { resolver },
             transport: RecordingUpstream().transport, workspace: "W1",
             managed: { .active(bundle) })
         guard case .failure(.organizationPolicy(let reason)) = denied.lease(names: ["STRIPE_SECRET_KEY"], agent: nil) else {

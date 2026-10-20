@@ -340,8 +340,7 @@ enum SecretsDecoding {
                 throw Failure("\(place).secret is required")
             }
             let project = try optionalToken(fields["project"], "\(place).project")
-            let version = (fields["version"] as? String) ?? "latest"
-            guard cliToken(version) else { throw Failure("\(place).version is invalid") }
+            let version = try optionalToken(fields["version"], "\(place).version") ?? "latest"
             return .gcp(secret: secretName, project: project, version: version)
         case "azure":
             try onlyKeys(fields, ["vault", "name", "version"], at: place)
@@ -379,6 +378,9 @@ enum SecretsDecoding {
             guard let baseURLEnv = fields["baseURLEnv"] as? String, variable(baseURLEnv),
                 reservedVariables.contains(baseURLEnv) == false, baseURLEnv != secret
             else { throw Failure("\(place).baseURLEnv must be a distinct environment variable name") }
+            if let rawPrefix = fields["placeholderPrefix"], rawPrefix is String == false {
+                throw Failure("\(place).placeholderPrefix must be a string")
+            }
             let prefix = fields["placeholderPrefix"] as? String ?? ""
             guard prefix.utf8.count <= 32, prefix.utf8.allSatisfy(placeholderByte) else {
                 throw Failure("\(place).placeholderPrefix must be up to 32 letters, digits, _ or -")

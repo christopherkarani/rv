@@ -38,7 +38,7 @@ struct SecretGatewayCageTests {
             status: 200, headers: [("Content-Type", "application/json")],
             chunks: [Data("{\"echo\":\"\(Self.realKey)\"}".utf8)])
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver,
+            configDirectory: fixture.directory, makeResolver: { fakeResolver },
             transport: upstream.transport, workspace: "cage-test")
         let opened = try open(broker: broker)
         defer {
@@ -96,7 +96,7 @@ struct SecretGatewayCageTests {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver,
+            configDirectory: fixture.directory, makeResolver: { fakeResolver },
             transport: RecordingUpstream().transport, workspace: nil)
         let opened = try open(broker: broker)
         defer {
@@ -125,7 +125,7 @@ struct SecretGatewayCageTests {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver,
+            configDirectory: fixture.directory, makeResolver: { fakeResolver },
             transport: RecordingUpstream().transport, workspace: nil)
         let opened = try open(broker: broker)
         defer {

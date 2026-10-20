@@ -109,6 +109,50 @@ struct DotenvImportTests {
         #expect(failure.message.contains("writable"))
     }
 
+    @Test func loaderAndInterpreterNamesAreNeverBound() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let env = try writeEnv(fixture, """
+            NODE_OPTIONS=--require /tmp/evil.js
+            DYLD_INSERT_LIBRARIES=/tmp/evil.dylib
+            LD_PRELOAD=/tmp/evil.so
+            GOOD_KEY=ok
+            """)
+        let candidates = try SecretsRun.dotenvCandidates(
+            path: env, current: .empty, hostEnvironment: [:]).get()
+        #expect(candidates.fresh.map(\.name) == ["GOOD_KEY"])
+        for name in ["NODE_OPTIONS", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD"] {
+            #expect(candidates.lines.contains { $0.contains("skip \(name): loader/interpreter") })
+        }
+    }
+
+    @Test func wiredNamesNeverCrossProjects() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let mine = try writeEnv(fixture, "SHARED=from-b\nFRESH=1\n", name: "b.env")
+        let canonical = try #require(DotenvLiveReader.canonicalPath(mine.path))
+        // SHARED bound to another project's file: never wired here.
+        let foreign = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "SHARED", source: .dotenv(path: "/other/project/.env", variable: "SHARED"),
+                delivery: .environment),
+        ])
+        let foreignCandidates = try SecretsRun.dotenvCandidates(
+            path: mine, current: foreign, hostEnvironment: [:]).get()
+        #expect(foreignCandidates.alreadyDefinedHere.isEmpty)
+        #expect(InitRun.dotenvWiredNames(foreignCandidates) == ["FRESH"])
+        // SHARED bound to this exact file: wired.
+        let own = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "SHARED", source: .dotenv(path: canonical, variable: "SHARED"), delivery: .environment),
+        ])
+        let ownCandidates = try SecretsRun.dotenvCandidates(
+            path: mine, current: own, hostEnvironment: [:]).get()
+        #expect(ownCandidates.alreadyDefinedHere == ["SHARED"])
+        #expect(InitRun.dotenvWiredNames(ownCandidates) == ["FRESH", "SHARED"])
+        #expect(InitRun.dotenvReviewLines(ownCandidates).contains("  wire SHARED (already bound to this file)"))
+    }
+
     @Test func exactlyOneOfVarlockOrDotenv() throws {
         #expect(throws: Error.self) { try SecretsImport.parse([]) }
         #expect(throws: Error.self) { try SecretsImport.parse(["--varlock", "a", "--dotenv", "b"]) }
@@ -127,7 +171,7 @@ struct DotenvImportTests {
         #expect(lines.first == "dotenv \(env.path): would bind 2 names (values stay in .env)")
         #expect(lines.contains("  bind STRIPE_SECRET_KEY (dotenv STRIPE_SECRET_KEY; delivery environment)"))
         #expect(lines.contains("  bind DEBUG (dotenv DEBUG; delivery environment; not secret-looking)"))
-        #expect(InitRun.dotenvFreshNames(candidates) == ["STRIPE_SECRET_KEY", "DEBUG"])
+        #expect(InitRun.dotenvWiredNames(candidates) == ["STRIPE_SECRET_KEY", "DEBUG"])
     }
 
     @Test func listMarksDotenvFileBackedNotWeaker() throws {

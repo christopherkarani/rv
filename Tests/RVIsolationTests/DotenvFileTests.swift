@@ -45,6 +45,28 @@ struct DotenvFileTests {
         #expect(parsed.value(for: "KEPT") == "abc#def")
     }
 
+    @Test func controlAndSeparatorScalarsCannotFoldAssignments() throws {
+        // LF is the only line split: CR-only files, Unicode separators, and
+        // other controls must not weld the next variable into this value.
+        for text in ["A=1\rB=secretB\r", "A=1\u{2028}B=secretB\n", "A=1\u{0085}B=secretB\n", "K=ab\u{1B}[31mcd\n"] {
+            let parsed = try parse(text)
+            #expect(parsed.malformedLine == 1)
+            #expect(parsed.entries.isEmpty)
+        }
+        let tabbed = try parse("A=x\ty\n")
+        #expect(tabbed.malformedLine == nil)
+        #expect(tabbed.value(for: "A") == "x\ty")
+    }
+
+    @Test func commentsHonorTabAndLiteralApostrophes() throws {
+        let parsed = try parse("A=v\t# note\nB=it's # note\nC=\"a # b\" # note\nD=abc#def\n")
+        #expect(parsed.malformedLine == nil)
+        #expect(parsed.value(for: "A") == "v")
+        #expect(parsed.value(for: "B") == "it's")
+        #expect(parsed.value(for: "C") == "a # b")
+        #expect(parsed.value(for: "D") == "abc#def")
+    }
+
     @Test func secretBearingTypesRedactDescriptions() throws {
         let parsed = try parse("KEY=hunter2secret\n")
         #expect(String(describing: parsed).contains("hunter2secret") == false)
@@ -152,6 +174,22 @@ struct DotenvFileTests {
         }
     }
 
+    @Test func resolverRefusesRetargetedCanonicalPath() {
+        // The stored binding is /proj/.env; the reader now canonicalizes it
+        // elsewhere (a symlink component was swapped after import).
+        let reader: DotenvReaderFunction = { _ in
+            .success(DotenvFileSnapshot(
+                canonicalPath: "/other/.env", data: Data("GOOD=ok\n".utf8), identity: "1"))
+        }
+        let resolver = SecretResolver.live(environment: [:], home: "/nonexistent", dotenvReader: reader)
+        switch resolver.resolve(.dotenv(path: "/proj/.env", variable: "GOOD")) {
+        case .success: Issue.record("retargeted binding must fail closed")
+        case .failure(let error):
+            #expect(error.message.contains("now resolves to"))
+            #expect(error.message.contains("ok") == false)
+        }
+    }
+
     @Test func liveReaderTrustChecks() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-dotenv-tests-\(UUID().uuidString)", isDirectory: true)
@@ -243,4 +281,33 @@ struct DotenvFileTests {
             return
         }
     }
+
+    #if os(macOS)
+    @Test func liveReaderRefusesAllowACL() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-dotenv-acl-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent(".env")
+        try Data("KEY=value\n".utf8).write(to: file)
+        chmod(file.path, 0o644)
+        let canonical = try #require(DotenvLiveReader.canonicalPath(file.path))
+        guard case .success = DotenvLiveReader.read(path: canonical) else {
+            Issue.record("plain 0644 file must read before the ACL is added")
+            return
+        }
+        let chmodACL = Process()
+        chmodACL.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmodACL.arguments = ["+a", "everyone allow write", canonical]
+        try chmodACL.run()
+        chmodACL.waitUntilExit()
+        #expect(chmodACL.terminationStatus == 0)
+        // Mode bits still show 0644; only the ACL grants write.
+        guard case .failure(let error) = DotenvLiveReader.read(path: canonical) else {
+            Issue.record("allow-write ACL must be refused")
+            return
+        }
+        #expect(error.message.contains("ACL"))
+    }
+    #endif
 }

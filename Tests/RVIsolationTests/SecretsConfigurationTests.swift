@@ -18,6 +18,24 @@ struct SecretsConfigurationTests {
         return reason
     }
 
+    @Test func nonStringOptionalFieldsFailDecodeInsteadOfDefaulting() {
+        // A numeric GCP version must not silently become "latest", and a
+        // non-string placeholderPrefix must not silently become "".
+        let gcp = #"{"version":1,"secrets":[{"name":"G","source":{"gcp":{"secret":"s","version":3}},"delivery":{"environment":{}}}]}"#
+        #expect(invalidReason(gcp)?.contains("version") == true)
+        let prefix = #"{"version":1,"secrets":[{"name":"G","source":{"hostEnvironment":{"variable":"G"}},"delivery":{"gateway":{"upstream":"https://a.example","baseURLEnv":"G_BASE","placeholderPrefix":7}}}]}"#
+        #expect(invalidReason(prefix)?.contains("placeholderPrefix") == true)
+        // Absent fields keep their defaults.
+        let absent = #"{"version":1,"secrets":[{"name":"G","source":{"gcp":{"secret":"s"}},"delivery":{"environment":{}}}]}"#
+        guard case .success(let configuration) = decode(absent),
+            case .gcp(_, _, let version) = configuration.secrets.first?.source
+        else {
+            Issue.record("absent version must still default")
+            return
+        }
+        #expect(version == "latest")
+    }
+
     @Test func decodesEveryProviderAndDelivery() throws {
         let json = """
             {"version":1,"secrets":[

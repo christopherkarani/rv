@@ -49,9 +49,15 @@ struct SecretsCLIFixture {
     let keychain = FakeKeychain()
 
     init() throws {
-        directory = FileManager.default.temporaryDirectory
+        let created = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-secrets-cli-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
+        // Canonicalized (realpath, not resolvingSymlinksInPath, which keeps
+        // /var unresolved): dotenv bindings store canonical paths, so
+        // fixture paths must already be canonical for exact comparisons.
+        directory = DotenvLiveReader.canonicalPath(created.path).map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? created
     }
 
     func environment(host: [String: String] = [:]) -> SecretsEnvironment {

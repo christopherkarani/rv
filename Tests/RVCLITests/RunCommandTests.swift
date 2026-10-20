@@ -16,6 +16,22 @@ struct RunCommandTests {
         #expect(help.contains("Agent-tagged secrets do not stage"))
     }
 
+    @Test func projectDerivationIsSingleAndPWDConsistent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-run-project-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Explicit workspace always wins.
+        #expect(RunRun.project(workspace: "/explicit", currentDirectory: "/cwd", environment: ["PWD": directory.path]) == "/explicit")
+        // A PWD naming an existing directory wins over the process cwd:
+        // prepare validates this path and the launch uses the same value.
+        #expect(RunRun.project(workspace: nil, currentDirectory: "/cwd", environment: ["PWD": directory.path]) == directory.path)
+        // Missing, relative, or stale PWD falls back to the cwd.
+        #expect(RunRun.project(workspace: nil, currentDirectory: "/cwd", environment: ["PWD": "/definitely/not/here"]) == "/cwd")
+        #expect(RunRun.project(workspace: nil, currentDirectory: "/cwd", environment: ["PWD": "relative"]) == "/cwd")
+        #expect(RunRun.project(workspace: nil, currentDirectory: "/cwd", environment: [:]) == "/cwd")
+    }
+
     @Test func parsesPassthroughAfterDoubleDash() throws {
         let parsed = try Run.parse(["--resource-profile", "main", "--", "python", "-c", "print(1)"])
         #expect(parsed.resourceProfile == "main")
@@ -24,14 +40,16 @@ struct RunCommandTests {
 
     @Test func prepareResolvesAbsolutePathAndPATH() throws {
         let environment = ["PATH": "/bin:/usr/bin"]
+        // Resolution canonicalizes symlinks: /bin/sh is dash on merged-usr
+        // Linux, so compare against the canonicalized path, not the name.
+        let canonicalSh = URL(fileURLWithPath: "/bin/sh").resolvingSymlinksInPath().path
         let absolute = try RunRun.prepare(
             command: ["/bin/sh", "-c", "true"], workspace: "/tmp", environment: environment).get()
-        #expect(absolute.executable.hasSuffix("/sh"))
+        #expect(absolute.executable == canonicalSh)
         #expect(absolute.arguments == ["-c", "true"])
         let searched = try RunRun.prepare(
             command: ["sh", "-c", "true"], workspace: "/tmp", environment: environment).get()
-        #expect(searched.executable.hasPrefix("/"))
-        #expect(searched.executable.hasSuffix("/sh"))
+        #expect(searched.executable == canonicalSh)
     }
 
     @Test func prepareRejectsMissingRelativeAndEmpty() {

@@ -48,15 +48,17 @@ final class SecretLaunchBroker: @unchecked Sendable {
 
     init(
         configDirectory: URL,
-        resolver: SecretResolver,
+        // A factory, not an instance: each lease builds a fresh resolver so
+        // dotenv snapshots are lease-scoped. Reusing one resolver across
+        // leases would keep its snapshot cache alive and fail every later
+        // lease once a bound file changes.
+        makeResolver: @escaping @Sendable () -> SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
         workspace: String?,
-        managed: (@Sendable () -> ManagedPolicyState)? = nil,
-        makeResolver: (@Sendable () -> SecretResolver)? = nil
+        managed: (@Sendable () -> ManagedPolicyState)? = nil
     ) {
         self.configDirectory = configDirectory
-        // Fresh resolver per lease so dotenv snapshots are lease-scoped.
-        self.makeResolver = makeResolver ?? { resolver }
+        self.makeResolver = makeResolver
         self.workspace = workspace
         self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
         let directory = configDirectory
@@ -73,8 +75,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
         return SecretLaunchBroker(
-            configDirectory: directory, resolver: .live(home: home), workspace: workspace,
-            makeResolver: { .live(home: home) })
+            configDirectory: directory, makeResolver: { .live(home: home) }, workspace: workspace)
     }
 
     deinit {

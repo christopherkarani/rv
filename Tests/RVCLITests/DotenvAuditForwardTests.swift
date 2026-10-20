@@ -43,6 +43,23 @@ struct DotenvAuditForwardTests {
         #expect(failure.message.contains("invalid"))
     }
 
+    @Test func environmentDeliveryDenyBlocksHeaderResolution() throws {
+        // Source axis allows dotenv; the delivery axis must still block an
+        // environment-delivered value from leaving the host.
+        var policy = ManagedPolicy()
+        policy.secrets.allowEnvironmentDelivery = false
+        let state = ManagedPolicyState.active(
+            ManagedPolicyBundle(policy: policy, sha256: "", isSigned: false, directory: ""))
+        guard case .failure(let failure) = AuditForwardRun.resolveHeaders(
+            ["Authorization": "Bearer ${secret:SIEM}"], secrets: { .success(secrets) },
+            resolver: resolver, managed: state)
+        else {
+            Issue.record("delivery-denying policy must block off-host header resolution")
+            return
+        }
+        #expect(failure.message.contains("delivered as an environment variable"))
+    }
+
     @Test func noPolicyStillResolves() throws {
         let resolved = try AuditForwardRun.resolveHeaders(
             ["Authorization": "Bearer ${secret:SIEM}"], secrets: { .success(secrets) },

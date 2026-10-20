@@ -337,6 +337,8 @@ enum SecretsRun {
         var successLines: [String] = []
         var failed = false
         var rebound: [String: SecretDefinition] = [:]
+        var originals: [String: SecretDefinition] = [:]
+        var storedValues: [String: SecretValue] = [:]
         var events: [AuditEvent] = []
         for name in selected {
             guard let definition = current.secret(named: name) else {
@@ -353,6 +355,14 @@ enum SecretsRun {
                 }
                 continue
             }
+            let target = SecretSource.keychain(service: SecretKeychain.service, account: name)
+            if current.secrets.contains(where: { $0.name != name && $0.source == target }) {
+                lines.append(
+                    "could not harden \(name): another secret already reads from \(target.locator); "
+                        + "storing would overwrite its value")
+                failed = true
+                continue
+            }
             let value: SecretValue
             switch environment.resolver.resolve(definition.source) {
             case .failure(let error):
@@ -366,7 +376,6 @@ enum SecretsRun {
                 failed = true
                 continue
             }
-            let target = SecretSource.keychain(service: SecretKeychain.service, account: name)
             switch environment.resolver.resolve(target) {
             case .success(let readBack) where readBack == value:
                 break
@@ -378,6 +387,8 @@ enum SecretsRun {
             var hardened = definition
             hardened.source = target
             rebound[name] = hardened
+            originals[name] = definition
+            storedValues[name] = value
             events.append(AuditEvent(
                 time: Date(), kind: .secretUse, decision: .info, subject: name,
                 reason: "dotenv value moved to the Keychain", source: "secrets-harden",
@@ -390,7 +401,8 @@ enum SecretsRun {
             successLines.append(
                 "hardened \(name): \(definition.source.locator) -> \(target.locator) (delivery unchanged: \(definition.delivery.kind); stored value verified)")
             if let reason = SecretOrganizationRules.violation(hardened, policy: environment.managed.policy) {
-                successLines.append("warning: organization policy: \(reason)")
+                successLines.append(
+                    "warning: organization policy: \(reason); \(name) still will not stage until that is resolved")
             }
             successLines.append("rotation checklist for \(name):")
             successLines.append("  - rotate the value at the provider (the old value is still live in .env)")
@@ -406,14 +418,53 @@ enum SecretsRun {
                     + "fix the failures and run harden again (do not remove any .env lines yet)")
             return .success((lines.joined(separator: "\n") + "\n", true))
         }
-        lines += successLines
         if rebound.isEmpty == false {
-            var updated = current
+            // Re-verify against a fresh load immediately before the single
+            // write: a config edit or a .env change since the values were
+            // copied must not be silently overwritten or rebound stale.
+            let reloaded: SecretsConfiguration
+            switch configuration(environment) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let loaded): reloaded = loaded
+            }
+            for (name, original) in originals {
+                guard reloaded.secret(named: name) == original else {
+                    lines.append(
+                        "nothing rebound: \(name) changed in secrets.json during harden; run harden again "
+                            + "(do not remove any .env lines yet)")
+                    return .success((lines.joined(separator: "\n") + "\n", true))
+                }
+                guard case .success(let fresh) = environment.resolver.resolve(original.source),
+                    fresh == storedValues[name]
+                else {
+                    lines.append(
+                        "nothing rebound: the .env value for \(name) changed during harden; run harden again "
+                            + "(do not remove any .env lines yet)")
+                    return .success((lines.joined(separator: "\n") + "\n", true))
+                }
+            }
+            var updated = reloaded
             updated.secrets = updated.secrets.map { rebound[$0.name] ?? $0 }
             if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
                 return .failure(CommandFailure(error.message))
             }
-            for event in events { _ = AuditLog.append(event, configDirectory: environment.configDirectory) }
+            lines += successLines
+            // The migration carve-out is only accountable if its audit event
+            // landed; a lost append is a loud failure, never silent.
+            var auditFailed = false
+            for event in events {
+                if AuditLog.append(event, configDirectory: environment.configDirectory) == false {
+                    auditFailed = true
+                }
+            }
+            if auditFailed {
+                lines.append(
+                    "error: bindings were rebound but the harden audit event could not be recorded; "
+                        + "check the audit log under \(DisplayedText.field(environment.configDirectory.path))")
+                return .success((lines.joined(separator: "\n") + "\n", true))
+            }
+        } else {
+            lines += successLines
         }
         if lines.isEmpty { lines.append("no dotenv-bound secrets to harden") }
         return .success((lines.joined(separator: "\n") + "\n", failed))
@@ -429,6 +480,12 @@ enum SecretsRun {
         /// A scan that checked nothing must not pass the gate.
         var blocked: String?
         var skipped: [String]
+
+        /// The gate fails on findings, on a blocked scan, and on any secret
+        /// that could not be checked: a partial scan is not a clean scan.
+        var failed: Bool {
+            blocked != nil || findings.isEmpty == false || skipped.isEmpty == false
+        }
     }
 
     static func scan(
@@ -490,7 +547,11 @@ enum SecretsRun {
             }
         }
         lines += report.findings.map { "\(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
-        if report.findings.isEmpty { lines.append("No secret values found.") }
+        if report.findings.isEmpty {
+            lines.append(report.skipped.isEmpty
+                ? "No secret values found."
+                : "No secret values found, but not every secret could be checked.")
+        }
         lines += report.skipped.map { "could not check \($0)" }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -583,18 +644,25 @@ enum SecretsRun {
         var fresh: [SecretDefinition]
         /// Names already defined (any source) that appear in the file.
         var alreadyDefined: [String]
+        /// Already-defined names bound to exactly this file and variable:
+        /// the only pre-existing names an ingestion may wire, so one
+        /// project's profile never stages another project's value.
+        var alreadyDefinedHere: [String] = []
         var lines: [String]
     }
 
     static func dotenvCandidates(
         path: URL, current: SecretsConfiguration, hostEnvironment: [String: String]
     ) -> Result<DotenvCandidates, CommandFailure> {
-        let storedPath = path.standardizedFileURL.path
         let snapshot: DotenvFileSnapshot
-        switch DotenvLiveReader.read(path: storedPath) {
+        switch DotenvLiveReader.read(path: path.standardizedFileURL.path) {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let loaded): snapshot = loaded
         }
+        // Bind the canonical path the trust checks just validated. The
+        // resolver refuses a binding whose path later resolves elsewhere,
+        // so a retargeted symlink component cannot substitute files.
+        let storedPath = snapshot.canonicalPath
         let parsed: DotenvParse
         switch DotenvFile.parse(snapshot.data) {
         case .failure(let error): return .failure(CommandFailure(error.message))
@@ -607,6 +675,7 @@ enum SecretsRun {
         var lines = parsed.lintNotes
         var fresh: [SecretDefinition] = []
         var alreadyDefined: [String] = []
+        var alreadyDefinedHere: [String] = []
         let exported = Set(current.secrets.flatMap { secret -> [String] in
             if case .gateway(let binding) = secret.delivery { return [secret.name, binding.baseURLEnv] }
             return [secret.name]
@@ -620,6 +689,11 @@ enum SecretsRun {
             if let existing = current.secret(named: name) {
                 lines.append("skip \(name): already bound to \(existing.source.locator)")
                 alreadyDefined.append(name)
+                if case .dotenv(let boundPath, let boundVariable) = existing.source,
+                    boundPath == storedPath, boundVariable == name
+                {
+                    alreadyDefinedHere.append(name)
+                }
                 continue
             }
             if SecretsConfiguration.isVariableName(name) == false {
@@ -628,6 +702,10 @@ enum SecretsRun {
             }
             if SecretsConfiguration.isReservedVariable(name) {
                 lines.append("skip \(name): reserved variable")
+                continue
+            }
+            if ContainedEnvironmentPolicy.isLoaderOrInterpreterVariableName(name) {
+                lines.append("skip \(name): loader/interpreter variable is never bound from a file")
                 continue
             }
             if exported.contains(name) {
@@ -654,10 +732,9 @@ enum SecretsRun {
                 name: name, source: .dotenv(path: storedPath, variable: name), delivery: .environment))
             lines.append("import \(name): dotenv (delivery environment)")
         }
-        // The operator's absolutized path is stored; the reader canonicalizes
-        // on every use, so deliberate symlink re-targeting is followed.
         return .success(DotenvCandidates(
-            storedPath: storedPath, fresh: fresh, alreadyDefined: alreadyDefined, lines: lines))
+            storedPath: storedPath, fresh: fresh, alreadyDefined: alreadyDefined,
+            alreadyDefinedHere: alreadyDefinedHere, lines: lines))
     }
 
     /// Binds `.env` variables by reference. Values stay in the file; the
@@ -754,9 +831,14 @@ enum SecretsRun {
         case .success(let found): findings = found
         }
         var lines = findings.map { "\($0.path):\($0.line):\($0.secret)" }
-        if findings.isEmpty { lines.append("No secret values in staged files.") }
+        if findings.isEmpty {
+            lines.append(skipped.isEmpty
+                ? "No secret values in staged files."
+                : "No secret values in staged files, but not every secret could be checked.")
+        }
         lines += skipped
-        return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
+        // A commit gate that could not check a secret must not pass it.
+        return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false || skipped.isEmpty == false))
     }
 
     static func rvPath() -> String {
@@ -971,7 +1053,7 @@ struct SecretsRemove: AsyncParsableCommand {
 
 struct SecretsScan: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "scan", abstract: "Find files containing any secret value rv can resolve (exits 1 on findings).")
+        commandName: "scan", abstract: "Find files containing any secret value rv can resolve (exits 1 on findings or unchecked secrets).")
 
     @Argument(help: "Directory to scan. Default: current directory.") var path: String?
     @OptionGroup var format: FormatFlags
@@ -992,12 +1074,10 @@ struct SecretsScan: AsyncParsableCommand {
         }
         let report = SecretsRun.scan(root: root, configuration: configuration, environment: environment)
         let text = ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.scanText(report)
-        if report.blocked != nil {
+        if report.failed {
             try ctx.emit(stdout: text, exitCode: 1)
-        } else if report.findings.isEmpty {
-            ctx.writeStdout(text)
         } else {
-            try ctx.emit(stdout: text, exitCode: 1)
+            ctx.writeStdout(text)
         }
     }
 }

@@ -55,9 +55,10 @@ public enum DotenvFileError: Error, Sendable, Equatable {
 }
 
 /// Strict `.env` subset: `NAME=VALUE`, optional `export `, whitespace around
-/// `=`, `#` comment only outside quotes and preceded by a space, single- and
-/// double-quoted values read literally (no interpolation, no escapes). Values
-/// stay in the file; rv reads them host-side at lease time.
+/// `=`, `#` comment only preceded by a space or tab (a quote is special only
+/// as the first value character), single- and double-quoted values read
+/// literally (no interpolation, no escapes). Values stay in the file; rv
+/// reads them host-side at lease time.
 public enum DotenvFile {
     public static let maximumBytes = 256 * 1024
 
@@ -76,6 +77,13 @@ public enum DotenvFile {
             var line = String(rawLine)
             if line.hasSuffix("\r") { line.removeLast() }
             let lineNumber = offset + 1
+            // Split is LF-only, so a stray CR, a Unicode line separator, or
+            // another control would fold the next assignment into this
+            // value. Refuse the line instead of leaking across variables.
+            if line.unicodeScalars.contains(where: isForbiddenScalar) {
+                if parsed.malformedLine == nil { parsed.malformedLine = lineNumber }
+                continue
+            }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
             var body = trimmed
@@ -103,13 +111,12 @@ public enum DotenvFile {
         guard let equals = body.firstIndex(of: "=") else { return nil }
         let name = String(body[..<equals]).trimmingCharacters(in: .whitespaces)
         guard SecretsConfiguration.isVariableName(name) else { return nil }
-        // Strip the comment before trimming: in `KEY= #note` the `#` is
-        // space-preceded in the file and must start a comment.
-        let rawValue = stripTrailingComment(String(body[body.index(after: equals)...]))
-            .trimmingCharacters(in: .whitespaces)
-        guard let first = rawValue.first, first == "\"" || first == "'" else {
-            return (name, stripTrailingComment(rawValue).trimmingCharacters(in: .whitespaces))
+        let afterEquals = String(body[body.index(after: equals)...])
+        let leadTrimmed = afterEquals.drop(while: { $0 == " " || $0 == "\t" })
+        guard let first = leadTrimmed.first, first == "\"" || first == "'" else {
+            return (name, stripTrailingComment(afterEquals).trimmingCharacters(in: .whitespaces))
         }
+        let rawValue = String(leadTrimmed)
         guard rawValue.count >= 2, let close = rawValue.dropFirst().firstIndex(of: first) else { return nil }
         let quoted = String(rawValue[rawValue.index(after: rawValue.startIndex)..<close])
         let rest = String(rawValue[rawValue.index(after: close)...]).trimmingCharacters(in: .whitespaces)
@@ -117,21 +124,27 @@ public enum DotenvFile {
         return (name, quoted)
     }
 
+    /// Unquoted values only: a `#` preceded by a space or tab starts the
+    /// comment. Quotes inside an unquoted value are literal (`it's`), so no
+    /// quote state is tracked here; a leading quote takes the quoted path in
+    /// `assignment` instead. Comment detection runs on the untrimmed text:
+    /// in `KEY= #note` the `#` is space-preceded in the file.
     private static func stripTrailingComment(_ value: String) -> String {
-        var quote: Character?
         var index = value.startIndex
         while index < value.endIndex {
-            let character = value[index]
-            if let open = quote {
-                if character == open { quote = nil }
-            } else if character == "\"" || character == "'" {
-                quote = character
-            } else if character == "#", index > value.startIndex, value[value.index(before: index)] == " " {
-                return String(value[..<index])
+            if value[index] == "#", index > value.startIndex {
+                let before = value[value.index(before: index)]
+                if before == " " || before == "\t" { return String(value[..<index]) }
             }
             index = value.index(after: index)
         }
         return value
+    }
+
+    private static func isForbiddenScalar(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar == "\t" { return false }
+        return scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value)
+            || scalar.value == 0x2028 || scalar.value == 0x2029
     }
 
     private static func containsLint(_ value: String) -> Bool {
@@ -185,11 +198,14 @@ public enum DotenvReadError: Error, Sendable, Equatable {
 
 public typealias DotenvReaderFunction = @Sendable (String) -> Result<DotenvFileSnapshot, DotenvReadError>
 
-/// Host-side reader for bound `.env` files. Canonicalizes the stored path
-/// (symlinks, including parent components, are followed deliberately), then
-/// applies OwnerOnlyFile-style checks to the canonical target: regular file,
-/// owner-owned, not group/world-writable. Group/world-readable (0644) is
-/// allowed; strict orgs forbid dotenv sources entirely via managed policy.
+/// Host-side reader for bound `.env` files. Canonicalizes the given path
+/// (symlinks, including parent components, are followed at this layer so an
+/// import can capture the canonical target), then applies OwnerOnlyFile-style
+/// checks to that target: regular file, owner-owned, not group/world-writable,
+/// no allow ACL. The resolver additionally requires the canonical path to
+/// equal the stored binding, so a later retarget is refused at lease time.
+/// Group/world-readable (0644) is allowed; strict orgs forbid dotenv sources
+/// entirely via managed policy.
 public enum DotenvLiveReader {
     public static func canonicalPath(_ path: String) -> String? {
         guard let resolved = realpath(path, nil) else { return nil }
@@ -208,6 +224,13 @@ public enum DotenvLiveReader {
             return .failure(.unreadable(path))
         }
         defer { close(fd) }
+        #if os(macOS)
+        // Mode bits do not describe ACL authority: an allow-write ACL on a
+        // 0644 file would otherwise read as trusted.
+        guard ProtectedPeerTrustConfiguration.hasNoAllowACL(fd: fd) else {
+            return .failure(.untrustedFile(path: canonical, reason: "has an allow ACL entry"))
+        }
+        #endif
         let data: Data
         let info: stat
         switch OwnerOnlyFile.checkedRead(fd: fd, maximumBytes: DotenvFile.maximumBytes) {
@@ -220,6 +243,15 @@ public enum DotenvLiveReader {
             return .failure(.oversized(canonical))
         case .failure(.unreadable):
             return .failure(.unreadable(path))
+        }
+        // Close the realpath→open interval: the file read must still be the
+        // file at the canonical path (a swapped component or final-file
+        // replacement between canonicalize and open changes the inode).
+        var current = stat()
+        guard lstat(canonical, &current) == 0,
+            current.st_dev == info.st_dev, current.st_ino == info.st_ino
+        else {
+            return .failure(.untrustedFile(path: canonical, reason: "changed while reading"))
         }
         #if canImport(Darwin)
         let mtime = info.st_mtimespec
@@ -261,7 +293,7 @@ enum DotenvResolver {
             return .failure(.notFound(
                 "dotenv \(DisplayedText.field(path))#\(variable): variable is not set in the file"))
         }
-        return SecretResolver.value(Array(raw.utf8), from: "dotenv \(path)#\(variable)")
+        return SecretResolver.value(Array(raw.utf8), from: "dotenv \(DisplayedText.field(path))#\(variable)")
     }
 }
 
@@ -279,6 +311,15 @@ final class DotenvSnapshotCache: @unchecked Sendable {
         switch reader(path) {
         case .failure(let error): return .failure(error.resolutionError)
         case .success(let loaded): snapshot = loaded
+        }
+        // The binding stores the canonical path captured at import. If the
+        // stored path now resolves elsewhere, a symlink component was
+        // retargeted after the operator attested it: refuse rather than
+        // read a different file host-side. Re-importing rebinds.
+        guard snapshot.canonicalPath == path else {
+            return .failure(.failed(
+                "dotenv file \(DisplayedText.field(path)) now resolves to \(DisplayedText.field(snapshot.canonicalPath)); "
+                    + "refusing to follow a retargeted binding (re-import to rebind)"))
         }
         lock.lock()
         if let prior = cached[snapshot.canonicalPath] {

@@ -12,6 +12,22 @@ enum RunRun {
     static let missingProfileWarning =
         "rv run: no --resource-profile selected; no secrets or credentials are staged. Pass --resource-profile <id> to stage them (profile IDs are defined in ~/.config/rv/runtime-resources.json). Run `rv init` in the project to generate one.\n"
 
+    /// The one project derivation for `rv run`: prepare validates this
+    /// path and the launch uses it, so the two can never disagree. Mirrors
+    /// `WorkspaceCommandRun.requireProject` semantics (explicit workspace,
+    /// else the shell's `PWD` when it names an existing directory, else the
+    /// process working directory) without the macOS-only dependency.
+    static func project(workspace: String?, currentDirectory: String, environment: [String: String]) -> String {
+        if let workspace { return workspace }
+        if let candidate = environment["PWD"], candidate.hasPrefix("/"), candidate.contains("\0") == false {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory), isDirectory.boolValue {
+                return candidate
+            }
+        }
+        return currentDirectory
+    }
+
     /// Profile-less runs stage nothing. With dotenv bindings that would be
     /// silent non-injection, so it fails closed and loud instead.
     static func missingProfileRefusal(dotenvBoundCount: Int) -> String {
@@ -54,7 +70,10 @@ struct Run: AsyncParsableCommand {
             throw ValidationError("rv run needs a command: rv run --resource-profile <id> -- <command> [args...]")
         }
         FileHandle.standardError.write(Data(RunRun.isolationNotice.utf8))
-        let project = workspace ?? CLIProcess.workspacePath()
+        let project = RunRun.project(
+            workspace: workspace,
+            currentDirectory: FileManager.default.currentDirectoryPath,
+            environment: CLIProcess.environment())
         let prepared: RunPreparedCommand
         switch RunRun.prepare(command: arguments, workspace: project, environment: CLIProcess.environment()) {
         case .success(let built):
@@ -64,14 +83,14 @@ struct Run: AsyncParsableCommand {
         }
         if resourceProfile == nil {
             guard let dotenvBound = RunRun.dotenvBoundCount(environment: CLIProcess.environment()) else {
-                FileHandle.standardOutput.write(Data((
+                FileHandle.standardError.write(Data((
                     "rv run: secrets.json could not be read, so dotenv bindings cannot be checked. "
                         + "Fix ~/.config/rv/secrets.json or pass --resource-profile <id> (the lease will report the error).\n"
                 ).utf8))
                 throw ExitCode(1)
             }
             if dotenvBound > 0 {
-                FileHandle.standardOutput.write(Data(RunRun.missingProfileRefusal(dotenvBoundCount: dotenvBound).utf8))
+                FileHandle.standardError.write(Data(RunRun.missingProfileRefusal(dotenvBoundCount: dotenvBound).utf8))
                 throw ExitCode(1)
             }
             FileHandle.standardError.write(Data(RunRun.missingProfileWarning.utf8))
@@ -80,11 +99,7 @@ struct Run: AsyncParsableCommand {
         throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         try WorkspaceCommandRun.runInteractive(
-            project: WorkspaceCommandRun.requireProject(
-                workspace,
-                currentDirectory: FileManager.default.currentDirectoryPath,
-                environment: CLIProcess.environment()
-            ),
+            project: project,
             executable: prepared.executable,
             arguments: prepared.arguments,
             hook: nil,

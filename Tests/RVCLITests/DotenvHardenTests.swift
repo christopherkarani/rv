@@ -183,6 +183,50 @@ struct DotenvHardenTests {
         #expect(configuration.secrets.allSatisfy { $0.source.kind == "keychain" })
     }
 
+    @Test func hardenRefusesToOverwriteAReferencedKeychainAccount() throws {
+        let (fixture, environment, _) = try self.fixture()
+        defer { fixture.tearDown() }
+        var configuration = try SecretsRun.configuration(environment).get()
+        configuration.secrets.append(SecretDefinition(
+            name: "OTHER",
+            source: .keychain(service: SecretKeychain.service, account: "STRIPE_SECRET_KEY"),
+            delivery: .environment))
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let result = try SecretsRun.harden(names: ["STRIPE_SECRET_KEY"], all: false, environment: environment).get()
+        #expect(result.failed)
+        #expect(result.text.contains("another secret already reads from"))
+        let after = try SecretsRun.configuration(environment).get()
+        #expect(after.secret(named: "STRIPE_SECRET_KEY")?.source.kind == "dotenv")
+    }
+
+    @Test func hardenDetectsConfigChangeDuringKeychainStore() throws {
+        let (fixture, base, _) = try self.fixture()
+        defer { fixture.tearDown() }
+        // The writer simulates a concurrent edit: while harden copies the
+        // value, secrets.json changes under it. Harden must rebind nothing.
+        let directory = fixture.directory
+        var environment = base
+        environment.keychain = SecretKeychainWriter(
+            store: { service, account, value in
+                fixture.keychain.items.withLock { $0["\(service)/\(account)"] = value }
+                if case .success(var edited) = SecretsConfiguration.load(configDirectory: directory) {
+                    edited.secrets.removeAll { $0.name == "STRIPE_SECRET_KEY" }
+                    edited.secrets.append(SecretDefinition(
+                        name: "STRIPE_SECRET_KEY", source: .hostEnvironment(variable: "OTHER"),
+                        delivery: .environment))
+                    _ = edited.write(configDirectory: directory)
+                }
+                return true
+            },
+            delete: { _, _ in true })
+        let result = try SecretsRun.harden(names: ["STRIPE_SECRET_KEY"], all: false, environment: environment).get()
+        #expect(result.failed)
+        #expect(result.text.contains("nothing rebound"))
+        #expect(result.text.contains("changed in secrets.json during harden"))
+        let after = try SecretsRun.configuration(environment).get()
+        #expect(after.secret(named: "STRIPE_SECRET_KEY")?.source.kind == "hostEnvironment")
+    }
+
     @Test func hardenFailsClosedOnInvalidPolicy() throws {
         let (fixture, base, _) = try self.fixture()
         defer { fixture.tearDown() }
@@ -225,6 +269,19 @@ struct DotenvHardenTests {
         #expect(report.blocked == nil)
         #expect(report.skipped.contains { $0.contains("STRIPE_SECRET_KEY") && $0.contains("dotenv source") })
         #expect(report.findings.isEmpty)
+        // A scan that could not check a secret must not pass the gate.
+        #expect(report.failed)
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        git.arguments = ["-C", fixture.directory.path, "init", "-q"]
+        try git.run()
+        git.waitUntilExit()
+        guard case .success(let hook) = SecretsRun.hookRun(workTree: fixture.directory, environment: environment) else {
+            Issue.record("hook run must produce a report")
+            return
+        }
+        #expect(hook.failed)
+        #expect(hook.text.contains("could not check STRIPE_SECRET_KEY"))
     }
 
     @Test func checkAndDescribeRenderDotenvRows() throws {

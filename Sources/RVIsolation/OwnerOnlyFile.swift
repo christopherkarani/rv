@@ -67,7 +67,29 @@ public enum OwnerOnlyFile {
             count += n
         }
         guard count <= maximumBytes else { return .failure(.oversized) }
-        return .success((Data(bytes.prefix(count)), info))
+        // Bind the returned identity to the bytes actually read: a writer
+        // during the loop must not yield a torn buffer carrying the
+        // pre-read generation's stat.
+        var after = stat()
+        guard fstat(fd, &after) == 0 else { return .failure(.unreadable) }
+        guard sameGeneration(info, after), count == Int(info.st_size) else {
+            return .failure(.unsafe("changed while reading"))
+        }
+        return .success((Data(bytes.prefix(count)), after))
+    }
+
+    private static func sameGeneration(_ lhs: stat, _ rhs: stat) -> Bool {
+        #if canImport(Darwin)
+        let lhsTime = lhs.st_mtimespec
+        let rhsTime = rhs.st_mtimespec
+        #else
+        let lhsTime = lhs.st_mtim
+        let rhsTime = rhs.st_mtim
+        #endif
+        return lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino
+            && lhs.st_uid == rhs.st_uid && lhs.st_mode == rhs.st_mode
+            && lhs.st_size == rhs.st_size
+            && lhsTime.tv_sec == rhsTime.tv_sec && lhsTime.tv_nsec == rhsTime.tv_nsec
     }
 
     /// Temp file (0600) + fsync + rename in the same directory, which is

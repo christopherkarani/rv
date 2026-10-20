@@ -214,13 +214,31 @@ enum InitRun {
             if MCPRedaction.isSecretName(secret.name) == false { line += "; not secret-looking" }
             lines.append(line + ")")
         }
+        for name in candidates.alreadyDefinedHere {
+            lines.append("  wire \(name) (already bound to this file)")
+        }
         lines += candidates.lines.filter { $0.hasPrefix("skip ") || $0.hasPrefix("note ") }
         return lines
     }
 
-    /// Names a dry-run dotenv ingestion would wire: fresh binds only.
-    static func dotenvFreshNames(_ candidates: SecretsRun.DotenvCandidates) -> [String] {
-        candidates.fresh.map(\.name)
+    /// Names a dotenv ingestion wires into the profile: fresh binds plus
+    /// names already bound to this exact file. Identical for dry-run and
+    /// write, so the reviewed plan is what lands. A name bound anywhere
+    /// else is never wired: another project's value must not stage here.
+    static func dotenvWiredNames(_ candidates: SecretsRun.DotenvCandidates) -> [String] {
+        candidates.fresh.map(\.name) + candidates.alreadyDefinedHere
+    }
+
+    /// Whether `profileID` is already taken, checked before any ingestion
+    /// write so a doomed init leaves secrets.json untouched. `writeProfile`
+    /// remains the authoritative check at write time.
+    static func profileExists(_ profileID: String, configDirectory: URL) -> Result<Bool, CommandFailure> {
+        switch RuntimeResourcePolicyStore.load(from: configDirectory) {
+        case .failure(let error):
+            return .failure(CommandFailure(RuntimeResourcePolicyFile.message(error)))
+        case .success(let policy):
+            return .success(policy.profiles.contains { $0.id == profileID })
+        }
     }
 
     static func planText(
@@ -353,6 +371,7 @@ struct Init: AsyncParsableCommand {
         }
         var dotenvLines: [String] = []
         var dotenvBound = false
+        var dotenvWritePending = false
         let dotenvURL = root.appendingPathComponent(".env", isDirectory: false)
         if dotenv {
             guard FileManager.default.fileExists(atPath: dotenvURL.path) else {
@@ -370,25 +389,21 @@ struct Init: AsyncParsableCommand {
             case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
             case .success(let built): candidates = built
             }
-            if dryRun {
-                // Same policy gate as the write path: a dry run under a
-                // denying policy reports the denial, not a clean plan.
-                switch SecretsRun.importDotenv(path: dotenvURL, dryRun: true, environment: secretsEnvironment) {
-                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-                case .success: break
-                }
-                dotenvLines = InitRun.dotenvReviewLines(candidates)
-                importedNames += InitRun.dotenvFreshNames(candidates)
-            } else {
-                switch SecretsRun.importDotenv(path: dotenvURL, dryRun: false, environment: secretsEnvironment) {
-                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-                case .success(let text):
-                    dotenvLines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-                        .filter { $0.hasPrefix("storing absolute path:") == false }
-                }
-                importedNames += candidates.fresh.map(\.name) + candidates.alreadyDefined
+            // Same policy gate as the write path, applied before anything
+            // is written: a denying policy reports the denial, not a plan.
+            // The real import runs only after the profile plan validates,
+            // so a failed init never leaves new bindings behind.
+            switch SecretsRun.importDotenv(path: dotenvURL, dryRun: true, environment: secretsEnvironment) {
+            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+            case .success: break
             }
-            dotenvBound = candidates.fresh.isEmpty == false || candidates.alreadyDefined.isEmpty == false
+            if dryRun {
+                dotenvLines = InitRun.dotenvReviewLines(candidates)
+            } else {
+                dotenvWritePending = true
+            }
+            importedNames += InitRun.dotenvWiredNames(candidates)
+            dotenvBound = InitRun.dotenvWiredNames(candidates).isEmpty == false
         } else if FileManager.default.fileExists(atPath: dotenvURL.path) {
             var countClause = ""
             if case .success(let snapshot) = DotenvLiveReader.read(path: dotenvURL.path),
@@ -408,6 +423,22 @@ struct Init: AsyncParsableCommand {
         case .success(let built): plan = built
         }
         if dryRun == false {
+            if dotenvWritePending {
+                switch InitRun.profileExists(profileID, configDirectory: environment.configDirectory) {
+                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+                case .success(true):
+                    try ctx.fail(
+                        "rv init: profile \(DisplayedText.field(profileID)) already exists; "
+                            + "pass --profile-id or edit runtime-resources.json\n")
+                case .success(false): break
+                }
+                switch SecretsRun.importDotenv(path: dotenvURL, dryRun: false, environment: secretsEnvironment) {
+                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+                case .success(let text):
+                    dotenvLines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+                        .filter { $0.hasPrefix("storing absolute path:") == false }
+                }
+            }
             switch InitRun.writeProfile(plan.profile, configDirectory: environment.configDirectory) {
             case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
             case .success: break
