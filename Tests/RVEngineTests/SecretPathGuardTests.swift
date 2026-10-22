@@ -215,17 +215,77 @@ struct SecretPathGuardTests {
         #expect(result.outcome == .plain)
     }
 
-    @Test func secretPathGuard_capsCandidatesAt64() {
-        let ignored = (0..<64).map { _ in "x" }.joined(separator: " ")
-        let overflow = MatchingView("cat \(ignored) .env")
-        #expect(SecretPathGuard.firstHit(in: overflow, catalog: .dayOne) == nil)
+    @Test func overflowPadding_deniesAtEngineLevel() throws {
+        let padding = (0..<64).map { _ in "x" }.joined(separator: " ")
+        let result = try run("cat \(padding) ~/.ssh/id_rsa")
+        guard case .deny(let deny, let matched) = result.outcome else {
+            Issue.record("expected operand-overflow deny, got \(String(describing: result.outcome))")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:\(SecretPathGuard.overflowPatternName)")
+        #expect(deny.reason == SecretPathGuard.overflowDenialReason)
+        let match = try #require(matched)
+        #expect(match.ruleID.rawValue == "core.secrets:\(SecretPathGuard.overflowPatternName)")
+        #expect(match.matchedText == nil)
+        #expect(match.searchText == result.matchingView.rawValue)
+        #expect(match.packID == .coreSecrets)
+        #expect(match.severity == .high)
+    }
 
+    @Test func overflowPadding_beforeSegmentedSecret_stillDeniesFirstOverflowingSegment() throws {
+        // Segment 1 overflows (65 candidates); segment 2 holds a secret path.
+        // Fail-closed wins over a per-segment rule hit from the later scan.
+        let padding = (0..<65).map { _ in "x" }.joined(separator: " ")
+        let result = try run("cat \(padding) && cat .env")
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected operand-overflow deny, got \(String(describing: result.outcome))")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:\(SecretPathGuard.overflowPatternName)")
+    }
+
+    @Test func overflowPadding_acrossSegmentsDoesNotFoolPerSegmentScan() throws {
+        // Padding spread across segments keeps every segment scan complete,
+        // so the 65th candidate (.env) is still found by its own segment.
+        let first = (0..<32).map { _ in "x" }.joined(separator: " ")
+        let second = (0..<32).map { _ in "x" }.joined(separator: " ")
+        let result = try run("cat \(first) && cat \(second) .env")
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected env deny, got \(String(describing: result.outcome))")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func secretPathGuard_overflowDeniesPaddedSecretPath() {
+        let padding = (0..<64).map { _ in "x" }.joined(separator: " ")
+        let hit = SecretPathGuard.firstHit(in: MatchingView("cat \(padding) .env"), catalog: .dayOne)
+        #expect(hit?.ruleID.rawValue == "core.secrets:\(SecretPathGuard.overflowPatternName)")
+        #expect(hit?.matchedText == nil)
+        #expect(SecretPathGuard.overflowPatternName == "operand-overflow")
+
+        // Exactly at the cap no candidate is dropped, so the secret path
+        // itself is the 64th scanned candidate and still matches normally.
         let within = (0..<63).map { _ in "x" }.joined(separator: " ")
-        let hit = SecretPathGuard.firstHit(
+        let atCap = SecretPathGuard.firstHit(
             in: MatchingView("cat \(within) .env"),
             catalog: .dayOne
         )
-        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+        #expect(atCap?.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func secretPathGuard_overflowDeniesGrepFindPadding() {
+        let padding = (0..<64).map { _ in "x" }.joined(separator: " ")
+        let grepHit = SecretPathGuard.firstHit(
+            in: MatchingView("grep -e pat \(padding) ~/.ssh/id_rsa"),
+            catalog: .dayOne
+        )
+        #expect(grepHit?.ruleID.rawValue == "core.secrets:\(SecretPathGuard.overflowPatternName)")
+        let findHit = SecretPathGuard.firstHit(
+            in: MatchingView("find \(padding) ~/.ssh -type f"),
+            catalog: .dayOne
+        )
+        #expect(findHit?.ruleID.rawValue == "core.secrets:\(SecretPathGuard.overflowPatternName)")
     }
 
     @Test func secretPathGuard_echoAndPrintfYieldNoCandidates() {
