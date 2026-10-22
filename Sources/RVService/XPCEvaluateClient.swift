@@ -1,4 +1,5 @@
 #if canImport(XPC)
+import Darwin
 import Foundation
 import Synchronization
 import RVIsolation
@@ -8,6 +9,18 @@ import RVIPC
 public final class XPCEvaluateClient: Sendable {
     public let serviceName: String
     private let state: Mutex<ClientState>
+    private let daemonTrust: DaemonTrustMode
+    private let siblingDaemonPath: String?
+
+    /// How strictly replies must prove daemon identity. Hook consult mirrors
+    /// the daemon's own matrix: it confers no authority beyond an allow/deny
+    /// for a cooperating host, and one-click installs have no admin trust
+    /// manifest, so role-gating would brick them. Every other method keeps
+    /// requiring the manifest `.service` role.
+    public enum DaemonTrustMode: Sendable {
+        case manifestRequired
+        case hookConsult
+    }
 
     /// Never cancel/resume a connection while holding the state lock.
     private struct ClientState {
@@ -15,9 +28,58 @@ public final class XPCEvaluateClient: Sendable {
         var opened = 0
     }
 
-    public init(serviceName: String = RVService.machServiceName) {
+    public init(
+        serviceName: String = RVService.machServiceName,
+        daemonTrust: DaemonTrustMode = .manifestRequired,
+        siblingDaemonPath: String? = nil
+    ) {
         self.serviceName = serviceName
+        self.daemonTrust = daemonTrust
+        self.siblingDaemonPath = siblingDaemonPath
         self.state = Mutex(ClientState())
+    }
+
+    /// `rvd` beside the running executable (install layout), canonicalized.
+    static func defaultSiblingDaemonPath() -> String? {
+        var capacity = UInt32(PATH_MAX)
+        var buffer = [CChar](repeating: 0, count: Int(capacity))
+        guard _NSGetExecutablePath(&buffer, &capacity) == 0 else { return nil }
+        let executable = String(cString: buffer)
+        let directory = (executable as NSString).deletingLastPathComponent
+        guard !directory.isEmpty else { return nil }
+        return (directory as NSString).appendingPathComponent("rvd")
+    }
+
+    /// Verifies the sender of one reply before any field is consumed.
+    private func verifyDaemon(reply: xpc_object_t) -> Bool {
+        switch daemonTrust {
+        case .manifestRequired:
+            guard let trust = try? ProtectedPeerTrustConfiguration.installed(),
+                let peer = try? MacOSPeerAuthenticator.capture(
+                    message: reply, connectionID: UUID(), trust: trust
+                ), peer.componentRole == .service
+            else { return false }
+            return true
+        case .hookConsult:
+            switch ProtectedPeerTrustConfiguration.hookTrustSource() {
+            case .manifest(let trust):
+                guard let peer = try? MacOSPeerAuthenticator.capture(
+                    message: reply, connectionID: UUID(), trust: trust
+                ), peer.componentRole == .service
+                else { return false }
+                return true
+            case .siblingPin:
+                guard let sibling = siblingDaemonPath ?? Self.defaultSiblingDaemonPath(),
+                    let peer = try? MacOSPeerAuthenticator.capture(
+                        message: reply, connectionID: UUID(), trust: .denyAll
+                    ), peer.evidence.effectiveUserID == geteuid()
+                else { return false }
+                return MacOSPeerCodeVerifier.matchesSibling(
+                    peer: peer.evidence.codeIdentity, siblingPath: sibling)
+            case .invalid:
+                return false
+            }
+        }
     }
 
     public var openedConnectionCount: Int {
@@ -94,11 +156,7 @@ public final class XPCEvaluateClient: Sendable {
                     }
                     // A Mach service name is not server identity. Do not consume
                     // authority-bearing results from an unverified daemon.
-                    guard let trust = try? ProtectedPeerTrustConfiguration.installed(),
-                        let peer = try? MacOSPeerAuthenticator.capture(
-                            message: reply, connectionID: UUID(), trust: trust
-                        ), peer.componentRole == .service
-                    else {
+                    guard self.verifyDaemon(reply: reply) else {
                         xpc_connection_cancel(held.object)
                         once.resume(throwing: XPCEvaluateClientError.authenticationFailed)
                         self.invalidate()

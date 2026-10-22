@@ -15,7 +15,7 @@ case "$OS" in
       printf "rv-c tests: Apple Silicon only\n" >&2
       exit 1
     fi
-    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0)
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0 -framework Security -framework CoreFoundation)
     ;;
   Linux)
     case "$ARCH" in
@@ -76,6 +76,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -o "$OUT/rv" \
   "$SRC/json_escape.c" \
   "$SRC/json_reply.c" \
+  "$SRC/daemon_trust.c" \
   "$SRC/rv.c"
 
 # Pipe hosts must match HookHost.setupSlotOrder. Invalid hosts exec rv-cli
@@ -94,7 +95,7 @@ if ! awk '
 fi
 
 if [[ "$OS" == "Darwin" ]]; then
-  if otool -L "$OUT/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
+  if otool -L "$OUT/rv" | grep -E 'Frameworks/Foundation\.framework|CFNetwork' >/dev/null; then
     printf "rv-c tests: C rv must not link Foundation or CFNetwork\n" >&2
     otool -L "$OUT/rv" >&2
     exit 1

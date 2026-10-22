@@ -36,6 +36,9 @@ public protocol ServiceTransport: Sendable {
     func hello(clientSemver: String) async throws -> HelloAckView
     func send(_ body: Data) async throws -> Data
     func send(_ body: Data, timeoutMs: Int) async throws -> Data
+    /// Hook-consult send: daemon identity may use the sibling pin when no
+    /// trust manifest is installed (see `XPCEvaluateClient.DaemonTrustMode`).
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data
     /// Drops the current transport connection after a failed or skewed handshake.
     func invalidate()
 }
@@ -47,6 +50,10 @@ extension ServiceTransport {
         _ = timeoutMs
         return try await send(body)
     }
+
+    public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        try await send(body, timeoutMs: timeoutMs)
+    }
 }
 
 #if canImport(XPC)
@@ -55,11 +62,13 @@ public struct XPCServiceTransport: ServiceTransport {
     public var connectTimeoutMs: Int
     public var requestTimeoutMs: Int
     private let session: XPCEvaluateClient
+    private let hookSession: XPCEvaluateClient
 
     public init(connectTimeoutMs: Int = 200, requestTimeoutMs: Int = 500) {
         self.connectTimeoutMs = connectTimeoutMs
         self.requestTimeoutMs = requestTimeoutMs
         self.session = XPCEvaluateClient(serviceName: Self.serviceName)
+        self.hookSession = XPCEvaluateClient(serviceName: Self.serviceName, daemonTrust: .hookConsult)
     }
 
     public func hello(clientSemver: String) async throws -> HelloAckView {
@@ -86,17 +95,26 @@ public struct XPCServiceTransport: ServiceTransport {
         try await perform(body, timeoutMs: timeoutMs)
     }
 
+    public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        try await perform(body, timeoutMs: timeoutMs, on: hookSession)
+    }
+
     /// Drops the current XPC connection.
     public func invalidate() {
         session.invalidate()
+        hookSession.invalidate()
     }
 
     var openedConnectionCount: Int { session.openedConnectionCount }
 
     private func perform(_ body: Data, timeoutMs: Int) async throws -> Data {
+        try await perform(body, timeoutMs: timeoutMs, on: session)
+    }
+
+    private func perform(_ body: Data, timeoutMs: Int, on client: XPCEvaluateClient) async throws -> Data {
         try await withThrowingTaskGroup(of: Data.self) { group in
             group.addTask {
-                try await self.session.perform(body)
+                try await client.perform(body)
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
@@ -109,7 +127,7 @@ public struct XPCServiceTransport: ServiceTransport {
                 group.cancelAll()
                 return first
             } catch {
-                session.invalidate()
+                client.invalidate()
                 group.cancelAll()
                 throw error
             }

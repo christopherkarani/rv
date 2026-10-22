@@ -36,8 +36,9 @@ struct LinuxCHookTests {
         let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         #expect(process.terminationStatus == 0, "linux c-hook-proof failed:\n\(err)\n\(out)")
         #expect(out.contains("linux-clang ok"))
-        #expect(out.contains("linux-killswitch-deny ok"))
+        #expect(out.contains("linux-no-daemon-deny ok"))
         #expect(out.contains("linux-no-replay ok"))
+        #expect(out.contains("linux-fake-daemon-deny ok"))
         #expect(out.contains("linux-c-hook-proof ok"))
     }
 
@@ -82,8 +83,8 @@ struct LinuxCHookTests {
         try process.run()
         process.waitUntilExit()
         let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        // No daemon in this probe: the Swift CLI answers the miss replay
-        // with the fail-closed boundary deny. Mint-on-deny needs a live
+        // No daemon in this probe: the C hook itself answers with the
+        // fail-closed boundary deny. Mint-on-deny needs a live
         // service (pinned by HookReviewCeremonyTests + c-hook-proof AC-001),
         // so no unlock code and no per-rule reason appear here.
         #expect(out.contains("\"decision\":\"deny\""))
@@ -117,6 +118,7 @@ private func compileCHook() throws -> URL {
         "-o", dest.path,
         src.appendingPathComponent("json_escape.c").path,
         src.appendingPathComponent("json_reply.c").path,
+        src.appendingPathComponent("daemon_trust.c").path,
         src.appendingPathComponent("rv.c").path,
     ]
     process.standardOutput = Pipe()

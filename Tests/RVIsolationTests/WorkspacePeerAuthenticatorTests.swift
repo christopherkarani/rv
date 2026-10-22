@@ -146,4 +146,44 @@ import Testing
     }
 }
 
+@Test func hookTrustSourceMissingManifestIsSiblingPin() {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-absent-manifest-\(UUID().uuidString)").path
+    guard case .siblingPin = ProtectedPeerTrustConfiguration.hookTrustSource(manifestPath: path) else {
+        Issue.record("missing manifest must resolve to siblingPin")
+        return
+    }
+}
+
+@Test func hookTrustSourceUnprotectedManifestIsInvalid() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try Data("[]".utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    guard case .invalid = ProtectedPeerTrustConfiguration.hookTrustSource(manifestPath: url.path) else {
+        Issue.record("unprotected manifest must resolve to invalid")
+        return
+    }
+}
+
+@Test func siblingPinMatchesOnDiskBytes() throws {
+    let identity = try MacOSPeerCodeVerifier.staticIdentity(ofPath: "/bin/ls")
+    #expect(MacOSPeerCodeVerifier.matchesSibling(peer: identity, siblingPath: "/bin/ls"))
+}
+
+@Test func siblingPinRejectsDifferentHash() throws {
+    let onDisk = try MacOSPeerCodeVerifier.staticIdentity(ofPath: "/bin/ls")
+    let forged = PeerCodeIdentity(
+        identifier: onDisk.identifier, teamIdentifier: onDisk.teamIdentifier,
+        cdHash: Data(repeating: 0xFF, count: onDisk.cdHash.count),
+        executablePath: onDisk.executablePath, isAdHoc: onDisk.isAdHoc,
+        hardenedRuntime: onDisk.hardenedRuntime, injectionExceptions: onDisk.injectionExceptions)
+    #expect(!MacOSPeerCodeVerifier.matchesSibling(peer: forged, siblingPath: "/bin/ls"))
+}
+
+@Test func siblingPinRejectsDifferentPath() throws {
+    let identity = try MacOSPeerCodeVerifier.staticIdentity(ofPath: "/bin/ls")
+    #expect(!MacOSPeerCodeVerifier.matchesSibling(peer: identity, siblingPath: "/bin/cat"))
+    #expect(!MacOSPeerCodeVerifier.matchesSibling(peer: identity, siblingPath: "/nonexistent/rvd"))
+}
+
 #endif

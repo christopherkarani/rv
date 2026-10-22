@@ -1,9 +1,13 @@
 # rv-c — C front door
 
 `rv` (the installed front door) is C, not Swift. It locates and execs the
-installed `rv-cli` sibling for operator commands. Its XPC (Darwin) and
-AF_UNIX (Linux) authority paths are disabled pending server proof. Authority-bearing hooks currently emit a host-compatible
-explicit denial until supported mutual daemon authentication is implemented.
+installed `rv-cli` sibling for operator commands. Authority-bearing hooks
+verify the daemon before any reply field is consumed (`daemon_trust.{h,c}`):
+Darwin checks every XPC reply's sender against the root trust manifest's
+`.service` role, or — with no manifest installed — pins it to the exact
+sibling `rvd` bytes; Linux requires a same-uid `SO_PEERCRED` peer whose
+`/proc/<pid>/exe` is the sibling `rvd`, verified before sending. Any
+verification or transport failure emits a host-compatible explicit denial.
 Transport errors, malformed input and version skew never replay to `rv-cli`.
 Operator/help commands still execute the installed sibling CLI.
 
@@ -22,6 +26,7 @@ enforced by `tests/run.sh`:
 | `evaluation_route.h` (`rv_semver_major`, `rv_should_miss_replay`) | `RVIPC/EvaluationRoute.swift` + `ProtocolVersion.major(of:)` | `tests/evaluation_route_vectors.tsv` drives BOTH harnesses. Add cases there; never fork per-side cases. |
 | `json_reply.{h,c}` (hook-reply decode, recursion-capped) | `RVIPC/IPCEvaluate.swift` (`EvaluateReply`: `via` must be `"xpc"`) | Same wire rule: unexpected shape, `result.error`, missing `via`, or `via != "xpc"` is MISS. |
 | `json_escape.{h,c}` (request JSON building) | `RVIPC/IPCJSON.swift` + hook request encoders | Byte-level JSON escaping; covered by `json_escape_test.c`. |
+| `daemon_trust.{h,c}` (daemon-identity verification) | `RVService/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed. Linux has no Swift transport; C is the reference. |
 
 ## Test entry points
 
