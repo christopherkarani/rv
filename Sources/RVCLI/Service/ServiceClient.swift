@@ -195,12 +195,16 @@ public struct ServiceClient: Sendable {
     private func send<C: IPCCall>(
         _ call: C,
         using transport: any ServiceTransport,
-        timeoutMs: Int? = nil
+        timeoutMs: Int? = nil,
+        hookConsult: Bool = false
     ) async throws -> C.Reply {
         let request = IPCRequest(method: call.method)
         let body = try IPCJSON.encode(request)
         let data: Data
-        if let timeoutMs {
+        if hookConsult {
+            data = try await transport.sendHookConsult(
+                body, timeoutMs: timeoutMs ?? transport.oneShotEvaluateTimeoutMs)
+        } else if let timeoutMs {
             data = try await transport.send(body, timeoutMs: timeoutMs)
         } else {
             data = try await transport.send(body)
@@ -318,7 +322,8 @@ public struct ServiceClient: Sendable {
                     )
                 ),
                 using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs
+                timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                hookConsult: true
             )
             switch EvaluationRoute.path(for: .reply(
                 clientSemver: ProtocolVersion.serviceSemver,
