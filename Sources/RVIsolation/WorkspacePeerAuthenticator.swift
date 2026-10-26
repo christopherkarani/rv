@@ -101,6 +101,33 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
 
     public static func installed() throws -> Self { try load(from: installedURL) }
 
+    /// How a hook-consult client may authenticate its daemon. An installed
+    /// manifest always wins. No manifest (one-click install) falls back to
+    /// pinning the daemon to the sibling `rvd` bytes, mirroring the C front
+    /// door's existing sibling-`rv-cli` exec trust. A manifest that exists
+    /// but fails validation is tamper evidence: fail closed, never fall back.
+    public enum HookTrustSource: Sendable {
+        case manifest(ProtectedPeerTrustConfiguration)
+        case siblingPin
+        case invalid
+    }
+
+    public static func hookTrustSource() -> HookTrustSource {
+        hookTrustSource(manifestPath: installedURL.path)
+    }
+
+    static func hookTrustSource(manifestPath: String) -> HookTrustSource {
+        var info = stat()
+        if lstat(manifestPath, &info) != 0 {
+            return errno == ENOENT ? .siblingPin : .invalid
+        }
+        do {
+            return .manifest(try load(from: URL(fileURLWithPath: manifestPath)))
+        } catch {
+            return .invalid
+        }
+    }
+
     private init(entries: [Entry]) { self.entries = entries }
 
     public static func load(from url: URL) throws -> Self {
@@ -285,6 +312,30 @@ public enum WorkspacePeerAuthenticator {
 
 /// Consumes a dynamic code object derived at a trusted transport boundary.
 public enum MacOSPeerCodeVerifier {
+    /// Signing identity of the file at `path` (no dynamic-code binding).
+    public static func staticIdentity(ofPath path: String) throws -> PeerCodeIdentity {
+        var staticCode: SecStaticCode?
+        let created = SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &staticCode)
+        guard created == errSecSuccess, let staticCode else {
+            throw PeerAuthenticationError.codeLookup(created)
+        }
+        let valid = SecStaticCodeCheckValidity(staticCode, [], nil)
+        guard valid == errSecSuccess else { throw PeerAuthenticationError.invalidCode(valid) }
+        return try identity(fromStaticCode: staticCode).identity
+    }
+
+    /// Sibling-pin check for one-click installs without a trust manifest:
+    /// the live peer must be the exact on-disk sibling bytes (same canonical
+    /// executable path, same CDHash). Any lookup failure is a mismatch.
+    public static func matchesSibling(peer: PeerCodeIdentity, siblingPath: String) -> Bool {
+        guard !peer.cdHash.isEmpty,
+              let peerPath = posixRealpath(peer.executablePath),
+              let expectedPath = posixRealpath(siblingPath),
+              peerPath == expectedPath,
+              let sibling = try? staticIdentity(ofPath: siblingPath) else { return false }
+        return peer.cdHash == sibling.cdHash
+    }
+
     public static func capture(
         code: SecCode, processID: Int32, effectiveUserID: UInt32, auditToken: Data? = nil,
         trust: ProtectedPeerTrustConfiguration = .denyAll
@@ -296,6 +347,22 @@ public enum MacOSPeerCodeVerifier {
         guard staticResult == errSecSuccess, let staticCode else {
             throw PeerAuthenticationError.codeLookup(staticResult)
         }
+        let (identity, hash) = try identity(fromStaticCode: staticCode)
+        // SecCodeCopyStaticCode's filesystem link alone is not security proof.
+        // Rebind copied signing metadata to the original live code's exact hash.
+        let hashText = hash.map { String(format: "%02x", $0) }.joined()
+        var hashRequirement: SecRequirement?
+        let parsed = SecRequirementCreateWithString("cdhash H\"\(hashText)\"" as CFString, [], &hashRequirement)
+        guard parsed == errSecSuccess, let hashRequirement else {
+            throw PeerAuthenticationError.invalidCode(parsed)
+        }
+        let bound = SecCodeCheckValidity(code, [], hashRequirement)
+        guard bound == errSecSuccess else { throw PeerAuthenticationError.invalidCode(bound) }
+        return PlatformPeerEvidence(processID: processID, effectiveUserID: effectiveUserID,
+            auditToken: auditToken, codeIdentity: identity, componentRole: trust.role(code: code, identity: identity))
+    }
+
+    private static func identity(fromStaticCode staticCode: SecStaticCode) throws -> (identity: PeerCodeIdentity, hash: Data) {
         var raw: CFDictionary?
         let result = SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &raw)
         guard result == errSecSuccess, let info = raw as? [String: Any],
@@ -328,18 +395,7 @@ public enum MacOSPeerCodeVerifier {
             // Public CSCommon.h kSecCodeSignatureRuntime = 0x10000.
             hardenedRuntime: flags.uint32Value & 0x10000 != 0,
             injectionExceptions: injectionExceptions)
-        // SecCodeCopyStaticCode's filesystem link alone is not security proof.
-        // Rebind copied signing metadata to the original live code's exact hash.
-        let hashText = hash.map { String(format: "%02x", $0) }.joined()
-        var hashRequirement: SecRequirement?
-        let parsed = SecRequirementCreateWithString("cdhash H\"\(hashText)\"" as CFString, [], &hashRequirement)
-        guard parsed == errSecSuccess, let hashRequirement else {
-            throw PeerAuthenticationError.invalidCode(parsed)
-        }
-        let bound = SecCodeCheckValidity(code, [], hashRequirement)
-        guard bound == errSecSuccess else { throw PeerAuthenticationError.invalidCode(bound) }
-        return PlatformPeerEvidence(processID: processID, effectiveUserID: effectiveUserID,
-            auditToken: auditToken, codeIdentity: identity, componentRole: trust.role(code: code, identity: identity))
+        return (identity, hash)
     }
 }
 #endif

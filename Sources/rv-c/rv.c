@@ -5,6 +5,7 @@
 #include "json_escape.h"
 #include "json_reply.h"
 #include "evaluation_route.h"
+#include "daemon_trust.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -489,6 +490,12 @@ static xpc_object_t xpc_exchange(
         xpc_release(reply);
         return NULL;
     }
+    /* A Mach service name is not server identity. Do not consume
+     * authority-bearing results from an unverified daemon. */
+    if (!rv_verify_daemon_reply(reply)) {
+        xpc_release(reply);
+        return NULL;
+    }
     return reply;
 }
 
@@ -551,9 +558,8 @@ static const char kHelloJson[] =
  * the pinned endpoint, then the hook request. The Mach service answers
  * discovery only; anything else there is authorizationDenied.
  *
- * No daemon-identity verification yet (mutual auth follow-up): this path
- * is reachable only in TRANSITIONAL-PROOF-DAEMON builds, which dial a
- * proof-launched daemon over an isolated transport. */
+ * Every reply's sender is verified in xpc_exchange (daemon_trust.h)
+ * before any field is consumed, exactly like the Swift client. */
 static int xpc_hook_evaluate(
     const void *json,
     size_t json_len,
@@ -756,6 +762,12 @@ static int unix_hook_evaluate(
         close(fd);
         return -1;
     }
+    /* A socket path is not server identity. Verify the connected peer
+     * is the sibling rvd before sending any action bytes. */
+    if (!rv_verify_unix_daemon(fd)) {
+        close(fd);
+        return -1;
+    }
 
     write_be32(header, (uint32_t)json_len);
     if (send_nosig(fd, header, 4) != 0 || send_nosig(fd, json, json_len) != 0) {
@@ -806,18 +818,10 @@ int main(int argc, char **argv) {
         exec_same_argv(argv);
     }
 
-    /* C has no supported mutual daemon-authentication implementation yet.
-     * Do not send action bytes or trust successful replies without server proof.
-     *
-     * TRANSITIONAL-PROOF-DAEMON: RV_HOOK_PROOF_UNAUTHENTICATED_DAEMON is
-     * defined ONLY for proof binaries compiled by the Scripts proof shells, which
-     * dial a proof-launched daemon over an isolated transport. Production
-     * builds (Scripts/release.sh) never define it: shipped hooks stay
-     * fail-closed until mutual daemon auth lands. Delete this bypass with
-     * the follow-up; do not thread it into any shipped artifact. */
-#ifndef RV_HOOK_PROOF_UNAUTHENTICATED_DAEMON
-    deny_hook(host);
-#endif
+    /* Action bytes go only to a verified daemon: Darwin verifies every
+     * reply's sender in xpc_exchange, Linux verifies the connected peer
+     * in unix_hook_evaluate (daemon_trust.h). Any verification or
+     * transport failure below fails closed to deny_hook. */
 
     memset(&stdin_buf, 0, sizeof stdin_buf);
     int stdin_read = buf_read_fd_limited(&stdin_buf, STDIN_FILENO, RV_STDIN_XPC_MAX);

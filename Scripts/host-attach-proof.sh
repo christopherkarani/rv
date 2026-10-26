@@ -182,16 +182,16 @@ stage_from_debug() {
   rvd="$(find_debug_bin rvd)" || return 1
   mkdir -p "$STAGE"
   case "$(uname -s)" in
-    Darwin) clang_flags=(-arch arm64 -mmacosx-version-min=15.0) ;;
+    Darwin) clang_flags=(-arch arm64 -mmacosx-version-min=15.0 -framework Security -framework CoreFoundation) ;;
   esac
-  # Proof binary: daemon dialing enabled (TRANSITIONAL-PROOF-DAEMON in
-  # rv.c). Shipped rv is built by Scripts/release.sh without this flag.
+  # Shipped C sources: daemon verification pins the sibling rvd staged
+  # beside this binary below.
   clang -Os "${clang_flags[@]}" -std=c11 -Wall \
-    -DRV_HOOK_PROOF_UNAUTHENTICATED_DAEMON \
     -I "$C_SRC" \
     -o "$STAGE/rv" \
     "$C_SRC/json_escape.c" \
     "$C_SRC/json_reply.c" \
+    "$C_SRC/daemon_trust.c" \
     "$C_SRC/rv.c" || return 1
   chmod 755 "$STAGE/rv"
   cp "$rvcli" "$STAGE/rv-cli"
@@ -255,9 +255,10 @@ if [[ "$RV_ON_PATH_REAL" != "$BIN_RV_REAL" ]]; then
   fail "PATH rv is $RV_ON_PATH_REAL (want $BIN_RV_REAL)"
 fi
 
-# TRANSITIONAL-PROOF-DAEMON: hooks evaluate via a proof-launched rvd over
-# an isolated socket. The daemon serves only this proof and dies in
-# cleanup; shipped hooks stay kill-switched until mutual daemon auth.
+# Hooks evaluate via a proof-launched rvd (Linux: isolated socket under
+# XDG_RUNTIME_DIR; Darwin: proof LaunchAgent below). Daemon verification
+# pins the sibling rvd beside the proof rv. The daemon serves only this
+# proof and dies in cleanup.
 if [[ "$(uname -s)" != "Darwin" ]]; then
   export XDG_RUNTIME_DIR="$PROOF_ROOT/run"
   mkdir -p "$XDG_RUNTIME_DIR"
@@ -286,17 +287,18 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 # Darwin twin of the Linux rvd block: bootstrap the staged rvd as the
-# proof LaunchAgent and compile a proof rv (daemon dialing enabled) over
-# $BIN/rv. The live agent, if any, was parked above and is restored in
-# cleanup. launchd cannot read plists under TMPDIR, so the plist and
-# daemon logs live under /tmp, not $PROOF_ROOT.
+# proof LaunchAgent and compile the shipped rv over $BIN/rv (daemon
+# verification pins the sibling $BIN/rvd the plist launches). The live
+# agent, if any, was parked above and is restored in cleanup. launchd
+# cannot read plists under TMPDIR, so the plist and daemon logs live
+# under /tmp, not $PROOF_ROOT.
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  clang -Os -arch arm64 -mmacosx-version-min=15.0 -std=c11 -Wall \
-    -DRV_HOOK_PROOF_UNAUTHENTICATED_DAEMON \
+  clang -Os -arch arm64 -mmacosx-version-min=15.0 -framework Security -framework CoreFoundation -std=c11 -Wall \
     -I "$C_SRC" \
     -o "$BIN/rv" \
     "$C_SRC/json_escape.c" \
     "$C_SRC/json_reply.c" \
+    "$C_SRC/daemon_trust.c" \
     "$C_SRC/rv.c" || fail "could not compile proof rv"
   chmod 755 "$BIN/rv"
   RVD_PROOF_DIR="/tmp/rv-host-attach-$$"
@@ -360,6 +362,10 @@ EOF
     sleep 0.25
   done
   if [[ "$warm" -ne 1 ]]; then
+    if [[ -f "/Library/Application Support/RV/peer-trust.json" ]] \
+      && grep -q 'operation-bound owner authorization' "$PROOF_ROOT/warm.out" 2>/dev/null; then
+      fail "admin trust manifest is installed, so the unpinned proof rvd is correctly rejected; run this proof on a manifest-free machine (as CI does) or with an admin-pinned current daemon"
+    fi
     printf 'host-attach-proof: rvd.err\n' >&2
     cat "$RVD_PROOF_DIR/rvd.err" >&2 || true
     fail "could not warm proof rvd (last exit $st)"

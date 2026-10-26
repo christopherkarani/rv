@@ -63,7 +63,7 @@ case "$OS" in
       printf "release: Apple Silicon only\n" >&2
       exit 1
     fi
-    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0)
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0 -framework Security -framework CoreFoundation)
     ;;
   Linux)
     case "$ARCH" in
@@ -109,11 +109,12 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -o "$STAGE/rv" \
   "$C_SRC/json_escape.c" \
   "$C_SRC/json_reply.c" \
+  "$C_SRC/daemon_trust.c" \
   "$C_SRC/rv.c"
 chmod 755 "$STAGE/rv"
 if [[ "$OS" == "Darwin" ]]; then
   strip -x "$STAGE/rv"
-  if otool -L "$STAGE/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
+  if otool -L "$STAGE/rv" | grep -E 'Frameworks/Foundation\.framework|CFNetwork' >/dev/null; then
     printf "release: C rv must not link Foundation or CFNetwork\n" >&2
     otool -L "$STAGE/rv" >&2
     exit 1

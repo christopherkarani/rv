@@ -25,14 +25,14 @@ fail() {
 }
 
 clang_c_hook() {
-  local dest="$1" proof="${2:-}"
+  local dest="$1"
   local os arch
   local flags=()
   os="$(uname -s)"
   arch="$(uname -m)"
   case "$os" in
     Darwin)
-      flags=(-arch arm64 -mmacosx-version-min=15.0)
+      flags=(-arch arm64 -mmacosx-version-min=15.0 -framework Security -framework CoreFoundation)
       ;;
     Linux)
       case "$arch" in
@@ -44,26 +44,24 @@ clang_c_hook() {
       fail "macOS 15 Apple Silicon, or Linux aarch64/x86_64"
       ;;
   esac
-  if [[ "$proof" == "proof" ]]; then
-    flags+=(-DRV_HOOK_PROOF_UNAUTHENTICATED_DAEMON)
-  fi
   clang -Os "${flags[@]}" -std=c11 -Wall \
     -I "$ROOT/Sources/rv-c" \
     -o "$dest" \
     "$ROOT/Sources/rv-c/json_escape.c" \
     "$ROOT/Sources/rv-c/json_reply.c" \
+    "$ROOT/Sources/rv-c/daemon_trust.c" \
     "$ROOT/Sources/rv-c/rv.c"
   chmod 755 "$dest"
 }
 
 linux_c_hook_proof() {
-  # Kill-switch contract (C mutual daemon auth pending — see the deny_hook
-  # call at the top of rv.c main): every hook call denies with the boundary
-  # reason and never execs rv-cli. REVERT to the last_resort/miss_replay
-  # legs when the switch is removed (git log -S killswitch this file).
+  # Verified-daemon contract: with no daemon socket every hook call denies
+  # with the boundary reason and never execs rv-cli; with a fake daemon on
+  # the socket the hook verifies the peer before sending (SO_PEERCRED +
+  # sibling rvd) and denies without sending a single byte.
   local out home bin st
   out="${TMPDIR:-/tmp}/rv-c-hook-linux-$$"
-  mkdir -p "$out/home/.local/bin"
+  mkdir -p "$out/home/.local/bin" "$out/xdg"
   home="$out/home"
   bin="$home/.local/bin"
   clang_c_hook "$out/rv"
@@ -71,24 +69,24 @@ linux_c_hook_proof() {
   file "$out/rv" || true
 
   set +e
-  HOME="$home" PATH="/usr/bin:/bin" "$out/rv" hook --host grok \
+  HOME="$home" PATH="/usr/bin:/bin" XDG_RUNTIME_DIR="$out/xdg" "$out/rv" hook --host grok \
     <"$FIXTURES/deny-git-reset-hard.json" \
     >"$out/deny.out" 2>"$out/deny.err"
   st=$?
   set -e
   if [[ "$st" -ne 0 ]]; then
-    fail "kill-switch deny must exit 0, got $st"
+    fail "no-daemon deny must exit 0, got $st"
   fi
   if ! grep -q '"decision":"deny"' "$out/deny.out"; then
-    fail "kill-switch deny missing decision JSON"
+    fail "no-daemon deny missing decision JSON"
   fi
   if ! grep -q 'operation-bound owner authorization' "$out/deny.out"; then
-    fail "kill-switch deny missing boundary reason"
+    fail "no-daemon deny missing boundary reason"
   fi
   if grep -q 'git reset --hard' "$out/deny.out"; then
-    fail "kill-switch deny echoes the command"
+    fail "no-daemon deny echoes the command"
   fi
-  printf 'linux-killswitch-deny ok exit=%s\n' "$st"
+  printf 'linux-no-daemon-deny ok exit=%s\n' "$st"
 
   cp "$out/rv" "$bin/rv"
   chmod 755 "$bin/rv"
@@ -101,18 +99,73 @@ EOF
   chmod 755 "$bin/rv-cli"
 
   set +e
-  HOME="$home" PATH="/usr/bin:/bin" "$bin/rv" hook --host grok \
+  HOME="$home" PATH="/usr/bin:/bin" XDG_RUNTIME_DIR="$out/xdg" "$bin/rv" hook --host grok \
     <"$FIXTURES/deny-git-reset-hard.json" \
     >"$out/noreplay.out" 2>"$out/noreplay.err"
   st=$?
   set -e
   if [[ "$st" -ne 0 ]]; then
-    fail "kill-switch deny with rv-cli present must exit 0, got $st"
+    fail "no-daemon deny with rv-cli present must exit 0, got $st"
   fi
   if [[ -f "$out/rv-cli-marker" ]]; then
-    fail "kill-switch deny must not exec rv-cli"
+    fail "no-daemon deny must not exec rv-cli"
   fi
   printf 'linux-no-replay ok exit=%s\n' "$st"
+
+  # Fake daemon: any same-user process can bind the socket path. The hook
+  # must refuse it (peer exe is python3, not the sibling rvd) before
+  # sending: the server must observe zero request bytes.
+  printf 'not-rvd\n' > "$bin/rvd"
+  chmod 755 "$bin/rvd"
+  mkdir -p "$out/xdg/rv"
+  cat > "$out/fake-daemon.py" <<'PY'
+import socket
+import sys
+
+path, received_path = sys.argv[1], sys.argv[2]
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+server.listen(1)
+server.settimeout(10)
+conn, _ = server.accept()
+conn.settimeout(5)
+data = b""
+try:
+    while True:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+except socket.timeout:
+    pass
+with open(received_path, "wb") as handle:
+    handle.write(data)
+PY
+  python3 "$out/fake-daemon.py" "$out/xdg/rv/evaluate.sock" "$out/fake-received" &
+  local fake_pid=$!
+  local _try
+  for _try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [[ -S "$out/xdg/rv/evaluate.sock" ]] && break
+    sleep 0.1
+  done
+  [[ -S "$out/xdg/rv/evaluate.sock" ]] || fail "fake daemon socket never appeared"
+  set +e
+  HOME="$home" PATH="/usr/bin:/bin" XDG_RUNTIME_DIR="$out/xdg" "$bin/rv" hook --host grok \
+    <"$FIXTURES/deny-git-reset-hard.json" \
+    >"$out/fake.out" 2>"$out/fake.err"
+  st=$?
+  set -e
+  wait "$fake_pid" || fail "fake daemon exited abnormally"
+  if [[ "$st" -ne 0 ]]; then
+    fail "fake-daemon deny must exit 0, got $st"
+  fi
+  if ! grep -q '"decision":"deny"' "$out/fake.out"; then
+    fail "fake-daemon deny missing decision JSON"
+  fi
+  if [[ -s "$out/fake-received" ]]; then
+    fail "hook sent action bytes to an unverified daemon"
+  fi
+  printf 'linux-fake-daemon-deny ok exit=%s\n' "$st"
   printf 'linux-c-hook-proof ok\n'
   rm -rf "$out"
 }
@@ -238,7 +291,7 @@ else
   stage_ok || fail "release stage incomplete: $STAGE"
 fi
 
-if otool -L "$STAGE/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
+if otool -L "$STAGE/rv" | grep -E 'Frameworks/Foundation\.framework|CFNetwork' >/dev/null; then
   fail "staged rv links Foundation or CFNetwork"
 fi
 if grep -E 'RV_BYPASS|RV_SKIP|RV_NO_EVAL' "$ROOT/Sources/rv-c"/*.[ch] >/dev/null 2>&1; then
@@ -251,30 +304,18 @@ PROOF_HOME="$PROOF_ROOT/home"
 export HOME="$PROOF_HOME"
 BIN="$PROOF_HOME/.local/bin"
 
-# Staged (shipped-posture) rv stays kill-switched: deny with the boundary
-# reason, no evaluation, no rv-cli exec. The daemonized legs below use a
-# proof-built rv instead; this leg pins what production ships.
-set +e
-"$STAGE/rv" hook --host grok \
-  <"$FIXTURES/deny-git-reset-hard.json" \
-  >"$PROOF_ROOT/staged-deny.out" 2>"$PROOF_ROOT/staged-deny.err"
-st=$?
-set -e
-[[ "$st" -eq 0 ]] || fail "staged rv deny must exit 0, got $st"
-grep -q '"decision":"deny"' "$PROOF_ROOT/staged-deny.out" \
-  || fail "staged rv deny missing decision JSON"
-grep -q 'operation-bound owner authorization' "$PROOF_ROOT/staged-deny.out" \
-  || fail "staged rv deny missing boundary reason"
-if grep -q 'git reset --hard' "$PROOF_ROOT/staged-deny.out"; then
-  fail "staged rv deny echoes the command"
-fi
-printf 'staged-killswitch-deny ok\n'
-
-# Proof rv: identical C sources with daemon dialing enabled
-# (TRANSITIONAL-PROOF-DAEMON in rv.c) so the legs below exercise the
-# bootstrapped rvd end to end. Never staged, never shipped.
-clang_c_hook "$BIN/rv" proof
+# Proof rv: identical shipped C sources. Daemon verification pins the
+# daemon to the sibling rvd, so the staged rvd runs from $BIN below.
+clang_c_hook "$BIN/rv"
 chmod 755 "$BIN/rv"
+cp "$STAGE/rvd" "$BIN/rvd"
+chmod 755 "$BIN/rvd"
+# Bundle.module looks beside the daemon binary first.
+for bundle in "$STAGE"/*_RVPacks.bundle; do
+  [[ -d "$bundle" ]] || continue
+  rm -rf "$BIN/$(basename "$bundle")"
+  cp -R "$bundle" "$BIN/$(basename "$bundle")"
+done
 cat > "$BIN/rv-cli" <<EOF
 #!/bin/sh
 {
@@ -538,7 +579,27 @@ if [[ -f "$LIVE_PLIST" ]]; then
   PARKED=1
 fi
 
-write_plist "$STAGE/rvd" "$PROOF_ROOT/rvd.plist"
+# Shipped posture with no daemon reachable: staged rv denies with the
+# boundary reason, no evaluation, no command echo.
+bootout_label
+wait_unloaded
+set +e
+"$STAGE/rv" hook --host grok \
+  <"$FIXTURES/deny-git-reset-hard.json" \
+  >"$PROOF_ROOT/staged-deny.out" 2>"$PROOF_ROOT/staged-deny.err"
+st=$?
+set -e
+[[ "$st" -eq 0 ]] || fail "staged rv deny must exit 0, got $st"
+grep -q '"decision":"deny"' "$PROOF_ROOT/staged-deny.out" \
+  || fail "staged rv deny missing decision JSON"
+grep -q 'operation-bound owner authorization' "$PROOF_ROOT/staged-deny.out" \
+  || fail "staged rv deny missing boundary reason"
+if grep -q 'git reset --hard' "$PROOF_ROOT/staged-deny.out"; then
+  fail "staged rv deny echoes the command"
+fi
+printf 'staged-no-daemon-deny ok\n'
+
+write_plist "$BIN/rvd" "$PROOF_ROOT/rvd.plist"
 bootstrap_plist "$PROOF_ROOT/rvd.plist"
 
 warm=0
@@ -554,13 +615,28 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   fi
   sleep 0.25
 done
+MANIFEST_MODE=0
 if [[ "$warm" -ne 1 ]]; then
-  printf 'c-hook-proof: rvd.err\n' >&2
-  cat "$PROOF_ROOT/rvd.err" >&2 || true
-  fail "could not warm staged rvd (last exit $st cli=$(cat "$CLI_LOG" 2>/dev/null || true))"
+  # With an admin trust manifest installed, the staged daemon is not the
+  # manifest-pinned service and the hook must reject it: warm can never
+  # succeed here. Accept exactly that rejection (boundary deny, no
+  # rv-cli exec) and skip the daemon-verdict legs; CI runners without a
+  # manifest run them in full.
+  if [[ -f "/Library/Application Support/RV/peer-trust.json" ]] \
+    && failclosed_deny_ok "$PROOF_ROOT/warm.out" && ! cli_invoked; then
+    MANIFEST_MODE=1
+    printf 'manifest-rejects-unpinned-daemon ok (daemon-verdict legs skipped: trust manifest installed)\n'
+  else
+    printf 'c-hook-proof: rvd.err\n' >&2
+    cat "$PROOF_ROOT/rvd.err" >&2 || true
+    fail "could not warm staged rvd (last exit $st cli=$(cat "$CLI_LOG" 2>/dev/null || true))"
+  fi
 fi
 
 # AC-001: warm pipe deny, C image, existing Grok deny JSON.
+if [[ "$MANIFEST_MODE" -eq 1 ]]; then
+printf 'AC-001 skipped (trust manifest installed)\n'
+else
 clear_cli
 set +e
 run_hook "$FIXTURES/deny-git-reset-hard.json" >"$PROOF_ROOT/ac001.out" 2>"$PROOF_ROOT/ac001.err"
@@ -573,8 +649,12 @@ if cli_invoked; then
   fail "AC-001 invoked rv-cli (pipe path must stay on the C hook): $(cat "$CLI_LOG")"
 fi
 printf 'AC-001 ok\n'
+fi
 
 # AC-002: warm pipe allow.
+if [[ "$MANIFEST_MODE" -eq 1 ]]; then
+printf 'AC-002 skipped (trust manifest installed)\n'
+else
 clear_cli
 set +e
 run_hook "$FIXTURES/allow-git-status.json" >"$PROOF_ROOT/ac002.out" 2>"$PROOF_ROOT/ac002.err"
@@ -598,6 +678,7 @@ if cli_invoked; then
   fail "AC-002 stash-drop invoked rv-cli: $(cat "$CLI_LOG")"
 fi
 printf 'AC-002 ok\n'
+fi
 
 # AC-005: help is HelpDispatch; C execs rv-cli and does not pipe.
 clear_cli
@@ -667,7 +748,11 @@ RV_BYPASS=1 RV_ALLOW=1 RV_SKIP=1 RV_DISABLE=1 RV_NO_EVAL=1 \
 ac011=$?
 set -e
 [[ "$ac011" -eq 0 ]] || fail "AC-011 exit $ac011"
-expect_json "$PROOF_ROOT/ac011.out" "deny" || fail "AC-011 honored a skip env"
+if [[ "$MANIFEST_MODE" -eq 1 ]]; then
+  failclosed_deny_ok "$PROOF_ROOT/ac011.out" || fail "AC-011 honored a skip env"
+else
+  expect_json "$PROOF_ROOT/ac011.out" "deny" || fail "AC-011 honored a skip env"
+fi
 if cli_invoked; then
   fail "AC-011 fell off the pipe path: $(cat "$CLI_LOG")"
 fi
