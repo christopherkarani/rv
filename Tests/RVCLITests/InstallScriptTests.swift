@@ -661,7 +661,9 @@ private func proveLinuxInstall(arch: String) throws {
 @Test func installSh_fetchesGitHubLatestWhenInstallBinUnset() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("https://github.com/christopherkarani/rv/releases/latest/download"))
-    #expect(text.contains("rv_RVPacks.bundle.tar.gz"))
+    #expect(text.contains("rv_RVPacks-$target.tar.gz"))
+    #expect(text.contains("rv-$target"))
+    #expect(text.contains("rv-isolation-exec-$target"))
     #expect(text.contains("tar -xzf"))
     #expect(text.contains("curl -fsSL"))
     #expect(text.contains("Downloading"))
@@ -673,7 +675,7 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(text.contains("run rv-cli") == false)
     // Tarball URL contains this prefix; strip it so a directory-asset fetch still fails.
     let withoutTarball = text.replacingOccurrences(
-        of: "$release_base/rv_RVPacks.bundle.tar.gz",
+        of: "$release_base/rv_RVPacks-$target.tar.gz",
         with: ""
     )
     #expect(withoutTarball.contains("$release_base/rv_RVPacks.bundle") == false)
@@ -688,7 +690,7 @@ private func writePackBundleTarball(in assets: URL) throws {
     )
     try "{}\n".write(to: bundlePack, atomically: true, encoding: .utf8)
 
-    let tarball = assets.appendingPathComponent("rv_RVPacks.bundle.tar.gz")
+    let tarball = assets.appendingPathComponent("rv_RVPacks-darwin-arm64.tar.gz")
     let tar = Process()
     tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
     tar.arguments = ["-czf", tarball.path, "rv_RVPacks.bundle"]
@@ -776,7 +778,7 @@ private func writeCurlShim(
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     let assets = root.appendingPathComponent("assets", isDirectory: true)
     try writeExecutable(
-        assets.appendingPathComponent("rv"),
+        assets.appendingPathComponent("rv-darwin-arm64"),
         contents: """
         #!/bin/sh
         printf 'rv-ran\\n' > "$HOME/.rv-ran"
@@ -784,7 +786,7 @@ private func writeCurlShim(
         """
     )
     try writeExecutable(
-        assets.appendingPathComponent("rv-cli"),
+        assets.appendingPathComponent("rv-cli-darwin-arm64"),
         contents: """
         #!/bin/sh
         printf 'from_install=%s argv=%s\\n' "${RV_FROM_INSTALL-}" "$*" > "$HOME/.rv-setup-marker"
@@ -792,15 +794,15 @@ private func writeCurlShim(
         """
     )
     try writeExecutable(
-        assets.appendingPathComponent("rvd"),
+        assets.appendingPathComponent("rvd-darwin-arm64"),
         contents: "#!/bin/sh\nexit 0\n"
     )
     try writeExecutable(
-        assets.appendingPathComponent("rv-workspace-host"),
+        assets.appendingPathComponent("rv-workspace-host-darwin-arm64"),
         contents: "#!/bin/sh\nexit 0\n"
     )
     try writePackBundleTarball(in: assets)
-    #expect(FileManager.default.fileExists(atPath: assets.appendingPathComponent("rv_RVPacks.bundle.tar.gz").path))
+    #expect(FileManager.default.fileExists(atPath: assets.appendingPathComponent("rv_RVPacks-darwin-arm64.tar.gz").path))
     #expect(isDirectory(assets.appendingPathComponent("rv_RVPacks.bundle")) == false)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
@@ -848,14 +850,14 @@ private func writeCurlShim(
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     let assets = root.appendingPathComponent("assets", isDirectory: true)
     try writeExecutable(
-        assets.appendingPathComponent("rv"),
+        assets.appendingPathComponent("rv-darwin-arm64"),
         contents: """
         #!/bin/sh
         exec "$(dirname "$0")/rv-cli" "$@"
         """
     )
     try writeExecutable(
-        assets.appendingPathComponent("rv-cli"),
+        assets.appendingPathComponent("rv-cli-darwin-arm64"),
         contents: """
         #!/bin/sh
         printf 'from_install=%s argv=%s\\n' "${RV_FROM_INSTALL-}" "$*" > "$HOME/.rv-setup-marker"
@@ -863,11 +865,11 @@ private func writeCurlShim(
         """
     )
     try writeExecutable(
-        assets.appendingPathComponent("rvd"),
+        assets.appendingPathComponent("rvd-darwin-arm64"),
         contents: "#!/bin/sh\nexit 0\n"
     )
     try writeExecutable(
-        assets.appendingPathComponent("rv-workspace-host"),
+        assets.appendingPathComponent("rv-workspace-host-darwin-arm64"),
         contents: "#!/bin/sh\nexit 0\n"
     )
 
@@ -946,20 +948,20 @@ private func writeCurlShim(
 
 private func writeReleaseAssets(in assets: URL, withSpanRuntime: Bool = true, withPTYClaim: Bool = true) throws {
     try writeExecutable(
-        assets.appendingPathComponent("rv"),
+        assets.appendingPathComponent("rv-darwin-arm64"),
         contents: "#!/bin/sh\nexec \"$(dirname \"$0\")/rv-cli\" \"$@\"\n"
     )
     try writeExecutable(
-        assets.appendingPathComponent("rv-cli"),
+        assets.appendingPathComponent("rv-cli-darwin-arm64"),
         contents: "#!/bin/sh\nprintf 'from_install=%s argv=%s\\n' \"${RV_FROM_INSTALL-}\" \"$*\" > \"$HOME/.rv-setup-marker\"\nexit 0\n"
     )
-    try writeExecutable(assets.appendingPathComponent("rvd"), contents: "#!/bin/sh\n# release-rvd\nexit 0\n")
-    try writeExecutable(assets.appendingPathComponent("rv-workspace-host"), contents: "#!/bin/sh\nexit 0\n")
+    try writeExecutable(assets.appendingPathComponent("rvd-darwin-arm64"), contents: "#!/bin/sh\n# release-rvd\nexit 0\n")
+    try writeExecutable(assets.appendingPathComponent("rv-workspace-host-darwin-arm64"), contents: "#!/bin/sh\nexit 0\n")
     if withSpanRuntime {
         try writeExecutable(assets.appendingPathComponent("libswiftCompatibilitySpan.dylib"), contents: "span\n")
     }
     if withPTYClaim {
-        try writeExecutable(assets.appendingPathComponent("rv-pty-claim"), contents: "#!/bin/sh\n# release-claim\nexit 0\n")
+        try writeExecutable(assets.appendingPathComponent("rv-pty-claim-darwin-arm64"), contents: "#!/bin/sh\n# release-claim\nexit 0\n")
     }
 }
 

@@ -62,6 +62,14 @@ model.mlpackage/Data/com.apple.CoreML/model.mlmodel fd60b8928154754362d660163a4a
 model.mlpackage/Data/com.apple.CoreML/weights/weight.bin 5abb590e28cef8c312b3afc2f28046f186f1127893989bda6a880f352261377b 613899008
 tokenizer.json 609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f 34363188
 config.json c0099d659944d44cb3d711b55c25482819f2e8f5e17f2d0b37d6d7cb1b22aba5 423"
+# Release assets carry a per-target suffix (rv-linux-x86_64 and friends);
+# downloaded files are always staged under their plain names.
+case "$os/$arch" in
+  Darwin/arm64) target="darwin-arm64" ;;
+  Linux/aarch64) target="linux-aarch64" ;;
+  Linux/x86_64) target="linux-x86_64" ;;
+  *) refuse ;;
+esac
 # Flip to 1 and pin the Team ID once releases are Developer ID signed: from
 # then on an unsigned download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1.
 signed_releases=0
@@ -193,12 +201,14 @@ progress_finish() {
 }
 
 # Download one release asset. Updates the bar from real bytes while curl runs.
+# $4 is the local filename when the asset name carries a target suffix.
 download_release_asset() {
   dest="$1"
   name="$2"
   expected="$3"
+  local_name="${4:-$name}"
   url="$release_base/$name"
-  out="$dest/$name"
+  out="$dest/$local_name"
 
   curl -fsSL "$url" -o "$out" &
   cpid=$!
@@ -241,7 +251,7 @@ fetch_pack_bundles() {
   # GitHub release assets are files. A bare *_RVPacks.bundle file is not a
   # payload: staging only copies a directory. Optional tarball unpacks to
   # $dest/rv_RVPacks.bundle so the existing [ -d ] stage works. 404 is fine.
-  name="rv_RVPacks.bundle.tar.gz"
+  name="rv_RVPacks-$target.tar.gz"
   url="$release_base/$name"
   tarball="$dest/$name"
 
@@ -689,43 +699,43 @@ if [ -n "${RV_INSTALL_BIN:-}" ]; then
 else
   tmp_fetch="$(mktemp -d "${TMPDIR:-/tmp}/rv-install.XXXXXX")"
 
-  size_rv="$(normalize_size "$(content_length "$release_base/rv")")"
-  size_cli="$(normalize_size "$(content_length "$release_base/rv-cli")")"
-  size_rvd="$(normalize_size "$(content_length "$release_base/rvd")")"
-  size_host="$(normalize_size "$(content_length "$release_base/rv-workspace-host")")"
-  size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks.bundle.tar.gz")")"
+  size_rv="$(normalize_size "$(content_length "$release_base/rv-$target")")"
+  size_cli="$(normalize_size "$(content_length "$release_base/rv-cli-$target")")"
+  size_rvd="$(normalize_size "$(content_length "$release_base/rvd-$target")")"
+  size_host="$(normalize_size "$(content_length "$release_base/rv-workspace-host-$target")")"
+  size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks-$target.tar.gz")")"
   size_span=0
   size_claim=0
   if [ "$os" = "Darwin" ]; then
     size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
-    size_claim="$(normalize_size "$(content_length "$release_base/rv-pty-claim")")"
+    size_claim="$(normalize_size "$(content_length "$release_base/rv-pty-claim-$target")")"
   fi
 
   progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim))
   size_isolation=0
   if [ "$os" = "Linux" ]; then
-    size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec")")"
+    size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec-$target")")"
     progress_total=$((progress_total + size_isolation))
   fi
   progress_base=0
   progress_have=0
   progress_start
 
-  download_release_asset "$tmp_fetch" "rv" "$size_rv"
-  download_release_asset "$tmp_fetch" "rv-cli" "$size_cli"
-  download_release_asset "$tmp_fetch" "rvd" "$size_rvd"
-  download_release_asset "$tmp_fetch" "rv-workspace-host" "$size_host"
+  download_release_asset "$tmp_fetch" "rv-$target" "$size_rv" "rv"
+  download_release_asset "$tmp_fetch" "rv-cli-$target" "$size_cli" "rv-cli"
+  download_release_asset "$tmp_fetch" "rvd-$target" "$size_rvd" "rvd"
+  download_release_asset "$tmp_fetch" "rv-workspace-host-$target" "$size_host" "rv-workspace-host"
   chmod 755 "$tmp_fetch/rv" "$tmp_fetch/rv-cli" "$tmp_fetch/rvd" "$tmp_fetch/rv-workspace-host"
   if [ "$os" = "Darwin" ] && [ "$size_span" -gt 0 ]; then
     download_release_asset "$tmp_fetch" "libswiftCompatibilitySpan.dylib" "$size_span"
     chmod 755 "$tmp_fetch/libswiftCompatibilitySpan.dylib"
   fi
   if [ "$os" = "Darwin" ] && [ "$size_claim" -gt 0 ]; then
-    download_release_asset "$tmp_fetch" "rv-pty-claim" "$size_claim"
+    download_release_asset "$tmp_fetch" "rv-pty-claim-$target" "$size_claim" "rv-pty-claim"
     chmod 755 "$tmp_fetch/rv-pty-claim"
   fi
   if [ "$os" = "Linux" ]; then
-    download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
+    download_release_asset "$tmp_fetch" "rv-isolation-exec-$target" "$size_isolation" "rv-isolation-exec"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
   fi
   fetch_pack_bundles "$tmp_fetch" "$size_packs"
