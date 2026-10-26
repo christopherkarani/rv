@@ -71,7 +71,8 @@ public struct EvaluateSession: Sendable {
         _ request: EvaluationRequest,
         safety: SafetyLevel = .normal,
         allowPaths: SecretAllowPathSet = .empty,
-        home: HomePath? = nil
+        home: HomePath? = nil,
+        pathResolution: SecretPathResolution? = nil
     ) -> EvaluationResult {
         if !corePacksReady {
             return EvaluationResult(
@@ -85,6 +86,7 @@ public struct EvaluateSession: Sendable {
             safety: safety,
             allowPaths: allowPaths,
             home: home,
+            pathResolution: pathResolution,
             engine: engine,
             compiled: compiled
         )
@@ -103,6 +105,7 @@ public struct EvaluateSession: Sendable {
         safety: SafetyLevel = .normal,
         allowPaths: SecretAllowPathSet = .empty,
         home: HomePath? = nil,
+        pathResolution: SecretPathResolution? = nil,
         workingDirectory: WorkingDirectory? = nil,
         gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
         filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
@@ -114,6 +117,7 @@ public struct EvaluateSession: Sendable {
             safety: safety,
             allowPaths: allowPaths,
             home: home,
+            pathResolution: pathResolution,
             engine: engine,
             compiled: compiled,
             workingDirectory: workingDirectory,
@@ -141,6 +145,7 @@ private func engineEvaluate(
     safety: SafetyLevel,
     allowPaths: SecretAllowPathSet,
     home: HomePath?,
+    pathResolution: SecretPathResolution?,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>
 ) -> EvaluationResult {
@@ -150,6 +155,7 @@ private func engineEvaluate(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
+        pathResolution: pathResolution,
         engine: engine,
         compiled: compiled
     )
@@ -161,6 +167,7 @@ private func engineEvaluateWithSemantics(
     safety: SafetyLevel,
     allowPaths: SecretAllowPathSet,
     home: HomePath?,
+    pathResolution: SecretPathResolution?,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>,
     workingDirectory: WorkingDirectory?,
@@ -174,6 +181,7 @@ private func engineEvaluateWithSemantics(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
+        pathResolution: pathResolution,
         engine: engine,
         compiled: compiled,
         workingDirectory: workingDirectory,
