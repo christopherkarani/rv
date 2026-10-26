@@ -1,0 +1,36 @@
+[0;36mrv preflight[0m — 22 checks
+────────────────────────────────────────────────────────
+  [0;32m✓[0m No class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation
+  [0;32m✓[0m No boolean isDenied
+  [0;32m✓[0m No try! in Sources
+  [0;32m✓[0m No force-unwrap (!) in Sources
+  [0;32m✓[0m No as! in Sources
+  [0;32m✓[0m No fatalError in Sources
+  [0;32m✓[0m No preconditionFailure in Sources
+  [0;32m✓[0m No implicitly unwrapped optionals in Sources
+  [0;32m✓[0m No @_exported import
+  [0;32m✓[0m evaluate pure: no Date()
+  [0;32m✓[0m evaluate pure: no FileManager
+  [0;32m✓[0m evaluate pure: no ProcessInfo
+  [0;32m✓[0m No RV_BYPASS or skip-evaluate env
+  [0;32m✓[0m No NSHomeDirectory() in Sources
+  [0;32m✓[0m No NSHomeDirectory() in Tests
+  [0;32m✓[0m No os_log usage (no command-text risk)
+  [0;33m⚠ dcg/ryk in agent-config dotfiles[0m (33, pre-existing — not product code)
+  [0;32m✓[0m Name hygiene: no dcg/ryk in product files
+  [0;32m✓[0m One CLI surface: README/help do not list rv-cli
+  [0;32m✓[0m Tests use Swift Testing, not XCTest
+  [0;32m✓[0m No main.swift in library targets
+  [0;32m✓[0m RVEngine does not import RVPacks
+  [0;32m✓[0m reset-hard/fork-bomb not in quarantine
+  [0;32m✓[0m near-miss.json retains required landmines
+  [0;32m✓[0m deny.json: valid (cases array)
+  [0;32m✓[0m near-miss.json: valid (cases array)
+  [0;32m✓[0m quarantine.json: valid (cases array)
+  [0;32m✓[0m skill-table.json: valid (cases array)
+  [0;33m⚠ Test target with 2 module deps[0m (test fakes — review)
+    WARN	RVHooksTests	2 modules: ['RVHooks', 'RVEngine']
+    WARN	RVWorkspaceTUITests	2 modules: ['RVWorkspaceTUI', 'RVIsolation']
+  [0;32m✓[0m RVIsolationTests deps ok
+────────────────────────────────────────────────────────
+[0;32m0 failed[0m, [0;33m2 warnings[0m

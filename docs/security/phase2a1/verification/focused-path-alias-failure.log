@@ -1,0 +1,96 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.74 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Live workspace host registry logic" started.
+􀟈  Test hostRestartRejectsOldGenerationAndReplays() started.
+􀟈  Test checksExactCodeIdentityAndConnection() started.
+􀟈  Test disconnectWinsAgainstPendingValidityAndReplacement() started.
+􀟈  Test synchronousTransportDeathWinsBeforeActorDisconnect() started.
+􀟈  Test incomingWorkspaceMismatchNeverCallsRPC() started.
+􀟈  Test duplicateWorkspaceAndHostRefused() started.
+􀟈  Test wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test disconnectBeforeRegistrationRefusesLateRegistration() started.
+􀟈  Test missingAndFailedRPCFailClosed() started.
+􀟈  Test eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() started.
+􀟈  Test validatesFreshEveryTimeAndRefusesRevocation() started.
+􀟈  Test serviceEvaluationReceivesVerifiedPrincipal() started.
+􀟈  Test case passing 1 argument rawRole → "untrusted" to wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test case passing 1 argument rawRole → "cli" to wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test case passing 1 argument field → 1 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument rawRole → "service" to wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test case passing 1 argument field → 2 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 0 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 3 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 4 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument validity → .unknown to nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test case passing 1 argument validity → .revoking to nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test case passing 1 argument validity → .inactive to nonActiveValidityFailsClosed(validity:) started.
+􁁛  Test incomingWorkspaceMismatchNeverCallsRPC() passed after 0.001 seconds.
+􁁛  Test disconnectBeforeRegistrationRefusesLateRegistration() passed after 0.001 seconds.
+􁁛  Test checksExactCodeIdentityAndConnection() passed after 0.001 seconds.
+􁁛  Test wrongRoleCannotRegister(rawRole:) with 3 test cases passed after 0.001 seconds.
+􁁛  Test duplicateWorkspaceAndHostRefused() passed after 0.001 seconds.
+􁁛  Test validatesFreshEveryTimeAndRefusesRevocation() passed after 0.001 seconds.
+􁁛  Test eachResponseIdentityFieldMustMatch(field:) with 5 test cases passed after 0.001 seconds.
+􁁛  Test hostRestartRejectsOldGenerationAndReplays() passed after 0.001 seconds.
+􁁛  Test disconnectWinsAgainstPendingValidityAndReplacement() passed after 0.001 seconds.
+􁁛  Test nonActiveValidityFailsClosed(validity:) with 3 test cases passed after 0.001 seconds.
+􁁛  Test missingAndFailedRPCFailClosed() passed after 0.001 seconds.
+􁁛  Test synchronousTransportDeathWinsBeforeActorDisconnect() passed after 0.001 seconds.
+􁁛  Test serviceEvaluationReceivesVerifiedPrincipal() passed after 0.052 seconds.
+􁁛  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() passed after 0.052 seconds.
+􁁛  Suite "Live workspace host registry logic" passed after 0.052 seconds.
+􁁛  Test run with 14 tests in 1 suite passed after 0.052 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite WorkspacePrincipalAuthorityTests started.
+􀟈  Suite ProductionIdentityLaunchTests started.
+􀟈  Test everyReferenceFieldIsRequired() started.
+􀟈  Test closeIsIrreversible() started.
+􀟈  Test selectedDefinitionMintsAnActivePrincipalAndCancellationInvalidatesIt() started.
+􀟈  Test restartAndDiskHistoryDoNotRestoreAuthority() started.
+􀟈  Test activeLookupAndRevocation() started.
+􀟈  Test inactiveLaunchCannotIssueReference() started.
+􁁛  Test inactiveLaunchCannotIssueReference() passed after 0.003 seconds.
+􁁛  Test everyReferenceFieldIsRequired() passed after 0.003 seconds.
+􁁛  Test restartAndDiskHistoryDoNotRestoreAuthority() passed after 0.003 seconds.
+􁁛  Test closeIsIrreversible() passed after 0.003 seconds.
+􁁛  Test activeLookupAndRevocation() passed after 0.003 seconds.
+􁁛  Suite WorkspacePrincipalAuthorityTests passed after 0.003 seconds.
+􁁛  Test selectedDefinitionMintsAnActivePrincipalAndCancellationInvalidatesIt() passed after 13.295 seconds.
+􀟈  Test legacyHookLabelDoesNotMintAPrincipal() started.
+􁁛  Test legacyHookLabelDoesNotMintAPrincipal() passed after 2.148 seconds.
+􀟈  Test realAdmissionPipesResolveTheSelectedChildPrincipal() started.
+􀢄  Test realAdmissionPipesResolveTheSelectedChildPrincipal() recorded an issue at ProductionIdentityLaunchTests.swift:123:9: Expectation failed: subject.policyWorkspace == supervisor.snapshot.policyWorkspace
+􀄵  subject.policyWorkspace == supervisor.snapshot.policyWorkspace → false
+􀄵    subject.policyWorkspace → WorkingDirectory(rawValue: "/tmp/rv-containment-1776A9FE-11F4-459E-AD62-22D4448EC168/repo/ws")
+􀄵      rawValue → "/tmp/rv-containment-1776A9FE-11F4-459E-AD62-22D4448EC168/repo/ws"
+􀄵    supervisor.snapshot.policyWorkspace → WorkingDirectory(rawValue: "/private/tmp/rv-containment-1776A9FE-11F4-459E-AD62-22D4448EC168/repo/ws")
+􀄵      rawValue → "/private/tmp/rv-containment-1776A9FE-11F4-459E-AD62-22D4448EC168/repo/ws"
+􀢄  Test realAdmissionPipesResolveTheSelectedChildPrincipal() failed after 2.342 seconds with 1 issue.
+􀢄  Suite ProductionIdentityLaunchTests failed after 17.786 seconds with 1 issue.
+􀄵  /// Real supervisor and contained children. This does not exercise the installed
+􀄵  /// three-process service topology or certify its authenticated XPC bridge.
+􀢄  Test run with 8 tests in 2 suites failed after 17.786 seconds with 1 issue.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test hostIncarnationsHaveDistinctGeneration() started.
+􀟈  Test principalReferenceRoundTripsAllFiveNames() started.
+􀟈  Test principalReferenceRequiresGeneration() started.
+􁁛  Test hostIncarnationsHaveDistinctGeneration() passed after 0.001 seconds.
+􁁛  Test principalReferenceRoundTripsAllFiveNames() passed after 0.001 seconds.
+􁁛  Test principalReferenceRequiresGeneration() passed after 0.003 seconds.
+􁁛  Test run with 3 tests in 0 suites passed after 0.003 seconds.
+Note: Some test targets reported failures:
+  - RVIsolationTests (Swift Testing)

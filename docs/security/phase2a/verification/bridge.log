@@ -1,0 +1,196 @@
+warning: /Users/chriskarani/Library/org.swift.swiftpm/configuration is not accessible or not writable, disabling user-level cache features.
+warning: /Users/chriskarani/Library/org.swift.swiftpm/security is not accessible or not writable, disabling user-level cache features.
+warning: /Users/chriskarani/Library/Caches/org.swift.swiftpm is not accessible or not writable, disabling user-level cache features.
+warning: 'rv': failed storing manifest for 'rv' in cache: attempt to write a readonly database
+warning: 'swift-collections': failed storing manifest for 'swift-collections' in cache: attempt to write a readonly database
+warning: 'swiftterm': failed storing manifest for 'swiftterm' in cache: attempt to write a readonly database
+warning: 'swift-argument-parser': failed storing manifest for 'swift-argument-parser' in cache: attempt to write a readonly database
+warning: 'swift-tui': failed storing manifest for 'swift-tui' in cache: attempt to write a readonly database
+warning: 'swift-async-algorithms': failed storing manifest for 'swift-async-algorithms' in cache: attempt to write a readonly database
+Building for debugging...
+[Computing dependencies]
+[Using on-disk description]
+[1 / 4] RVService
+[5 / 8] RVService
+[5 / 9] RVService
+[12 / 15] RVService
+[15 / 16] RVService
+[24 / 54] rv-workspace-host-product
+[32 / 54] RVServiceTests-product
+[47 / 69] rvd-product
+[49 / 69] RVServiceTests-product
+[51 / 69] RVServiceTests-product
+[53 / 76]
+[58 / 77] rvd-product
+[60 / 77] RVCLI
+[60 / 77] rv-workspace-host-product
+[60 / 78] RVCLI
+[60 / 78] RVServiceTests-product
+[62 / 78] RVCLI
+[68 / 78] RVCLI-product
+[68 / 78] rv-product
+[74 / 81] RVServiceTests-product
+[89 / 98] RVServiceTests-product
+[90 / 97] RVServiceTests-product
+[90 / 96] RVServiceTests-product
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/CLITestSupport.swift:134:42: warning: 'withValue(_:operation:isolation:file:line:)' is deprecated: Prefer the 'nonisolated(nonsending)' overload with stricter execution on caller context semantics: withValue(_:operation:file:line:) [#DeprecatedDeclaration]
+132 |         stdinText: stdinText
+133 |     )
+134 |     return try await CLIProcess.$context.withValue(context, operation: body)
+    |                                          `- warning: 'withValue(_:operation:isolation:file:line:)' is deprecated: Prefer the 'nonisolated(nonsending)' overload with stricter execution on caller context semantics: withValue(_:operation:file:line:) [#DeprecatedDeclaration]
+135 | }
+136 | 
+
+[#DeprecatedDeclaration]: <https://docs.swift.org/compiler/documentation/diagnostics/deprecated-declaration>
+[92 / 98] rv-workspace-host-product
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/LocalControlBoundaryTests.swift:76:13: warning: variable 'add' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 74 |     }
+ 75 |     @Test func permanentAllowlistMutationsRequireOwnerAuthorization() async throws {
+ 76 |         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
+    |             `- warning: variable 'add' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 77 |         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])
+ 78 |         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/LocalControlBoundaryTests.swift:77:13: warning: variable 'exact' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 75 |     @Test func permanentAllowlistMutationsRequireOwnerAuthorization() async throws {
+ 76 |         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
+ 77 |         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])
+    |             `- warning: variable 'exact' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 78 |         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
+ 79 |         await #expect(throws: ValidationError.self) { try await add.run() }
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/LocalControlBoundaryTests.swift:78:13: warning: variable 'remove' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 76 |         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
+ 77 |         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])
+ 78 |         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
+    |             `- warning: variable 'remove' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 79 |         await #expect(throws: ValidationError.self) { try await add.run() }
+ 80 |         await #expect(throws: ValidationError.self) { try await exact.run() }
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/LocalControlBoundaryTests.swift:91:13: warning: variable 'setup' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 89 | 
+ 90 |     @Test func setupAndUninstallRequireOwnerBeforeMutation() throws {
+ 91 |         var setup = try Setup.parse(["--force"])
+    |             `- warning: variable 'setup' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 92 |         var uninstall = try Uninstall.parse([])
+ 93 |         #expect(throws: ValidationError.self) { try setup.run() }
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/LocalControlBoundaryTests.swift:92:13: warning: variable 'uninstall' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 90 |     @Test func setupAndUninstallRequireOwnerBeforeMutation() throws {
+ 91 |         var setup = try Setup.parse(["--force"])
+ 92 |         var uninstall = try Uninstall.parse([])
+    |             `- warning: variable 'uninstall' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 93 |         #expect(throws: ValidationError.self) { try setup.run() }
+ 94 |         #expect(throws: ValidationError.self) { try uninstall.run() }
+
+[#VariableNeverMutated]: <https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated>
+[94 / 99] rv-product
+[95 / 100] RVCLITests-product
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/OperatorCommandRunTests.swift:14:17: warning: variable 'missing' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 12 |         let home = try isolatedHome()
+ 13 |         try await withCLIProcess(home: home) {
+ 14 |             var missing = try Test.parse([])
+    |                 `- warning: variable 'missing' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+ 15 |             await #expect(throws: (any Error).self) {
+ 16 |                 try await missing.run()
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/OperatorCommandRunTests.swift:555:17: warning: variable 'hook' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+553 |         let home = try isolatedHome()
+554 |         try await withCLIProcess(home: home) {
+555 |             var hook = try Hook.parse(["--host", "grok"])
+    |                 `- warning: variable 'hook' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+556 |             let outcome = await hook.run(
+557 |                 stdin: #"{"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"echo ok"}}"#,
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/OperatorCommandRunTests.swift:564:17: warning: variable 'hook' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+562 |         let stdin = #"{"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"echo ok"}}"#
+563 |         try await withCLIProcess(home: home, stdinText: stdin) {
+564 |             var hook = try Hook.parse(["--host", "grok"])
+    |                 `- warning: variable 'hook' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+565 |             await #expect(throws: ExitCode.self) {
+566 |                 try await hook.run()
+
+/Users/chriskarani/CodingProjects/rv/Tests/RVCLITests/OperatorCommandRunTests.swift:569:21: warning: variable 'named' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+567 |             }
+568 |             for host in ["pi", "claude", "cursor", "opencode", "openclaw", "hermes", "codex"] {
+569 |                 var named = try Hook.parse(["--host", host])
+    |                     `- warning: variable 'named' was never mutated; consider changing to 'let' constant [#VariableNeverMutated]
+570 |                 await #expect(throws: ExitCode.self) {
+571 |                     try await named.run()
+
+[#VariableNeverMutated]: <https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated>
+[99 / 103] RVCLITests-product
+[101 / 103] RVCLITests-product
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (10.17 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Live workspace host registry logic" started.
+􀟈  Test serviceEvaluationReceivesVerifiedPrincipal() started.
+􀟈  Test synchronousTransportDeathWinsBeforeActorDisconnect() started.
+􀟈  Test disconnectWinsAgainstPendingValidityAndReplacement() started.
+􀟈  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() started.
+􀟈  Test hostRestartRejectsOldGenerationAndReplays() started.
+􀟈  Test missingAndFailedRPCFailClosed() started.
+􀟈  Test disconnectBeforeRegistrationRefusesLateRegistration() started.
+􀟈  Test nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test validatesFreshEveryTimeAndRefusesRevocation() started.
+􀟈  Test duplicateWorkspaceAndHostRefused() started.
+􀟈  Test incomingWorkspaceMismatchNeverCallsRPC() started.
+􀟈  Test eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test checksExactCodeIdentityAndConnection() started.
+􀟈  Test wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test case passing 1 argument validity → .inactive to nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test case passing 1 argument validity → .revoking to nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test case passing 1 argument validity → .unknown to nonActiveValidityFailsClosed(validity:) started.
+􀟈  Test case passing 1 argument field → 0 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 1 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 2 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 3 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument field → 4 to eachResponseIdentityFieldMustMatch(field:) started.
+􀟈  Test case passing 1 argument rawRole → "service" to wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test case passing 1 argument rawRole → "untrusted" to wrongRoleCannotRegister(rawRole:) started.
+􀟈  Test case passing 1 argument rawRole → "cli" to wrongRoleCannotRegister(rawRole:) started.
+􁁛  Test incomingWorkspaceMismatchNeverCallsRPC() passed after 0.001 seconds.
+􁁛  Test disconnectBeforeRegistrationRefusesLateRegistration() passed after 0.001 seconds.
+􁁛  Test validatesFreshEveryTimeAndRefusesRevocation() passed after 0.001 seconds.
+􁁛  Test checksExactCodeIdentityAndConnection() passed after 0.001 seconds.
+􁁛  Test duplicateWorkspaceAndHostRefused() passed after 0.001 seconds.
+􁁛  Test nonActiveValidityFailsClosed(validity:) with 3 test cases passed after 0.001 seconds.
+􁁛  Test eachResponseIdentityFieldMustMatch(field:) with 5 test cases passed after 0.001 seconds.
+􁁛  Test hostRestartRejectsOldGenerationAndReplays() passed after 0.001 seconds.
+􁁛  Test wrongRoleCannotRegister(rawRole:) with 3 test cases passed after 0.001 seconds.
+􁁛  Test synchronousTransportDeathWinsBeforeActorDisconnect() passed after 0.001 seconds.
+􁁛  Test missingAndFailedRPCFailClosed() passed after 0.001 seconds.
+􁁛  Test disconnectWinsAgainstPendingValidityAndReplacement() passed after 0.001 seconds.
+􁁛  Test serviceEvaluationReceivesVerifiedPrincipal() passed after 0.035 seconds.
+􁁛  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() passed after 0.035 seconds.
+􁁛  Suite "Live workspace host registry logic" passed after 0.035 seconds.
+􁁛  Test run with 14 tests in 1 suite passed after 0.035 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite WorkspacePrincipalAuthorityTests started.
+􀟈  Test restartAndDiskHistoryDoNotRestoreAuthority() started.
+􀟈  Test activeLookupAndRevocation() started.
+􀟈  Test inactiveLaunchCannotIssueReference() started.
+􀟈  Test everyReferenceFieldIsRequired() started.
+􀟈  Test closeIsIrreversible() started.
+􁁛  Test inactiveLaunchCannotIssueReference() passed after 0.004 seconds.
+􁁛  Test everyReferenceFieldIsRequired() passed after 0.004 seconds.
+􁁛  Test restartAndDiskHistoryDoNotRestoreAuthority() passed after 0.004 seconds.
+􁁛  Test closeIsIrreversible() passed after 0.004 seconds.
+􁁛  Test activeLookupAndRevocation() passed after 0.004 seconds.
+􁁛  Suite WorkspacePrincipalAuthorityTests passed after 0.004 seconds.
+􁁛  Test run with 5 tests in 1 suite passed after 0.004 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test principalReferenceRoundTripsAllFiveNames() started.
+􀟈  Test hostIncarnationsHaveDistinctGeneration() started.
+􀟈  Test principalReferenceRequiresGeneration() started.
+􁁛  Test hostIncarnationsHaveDistinctGeneration() passed after 0.001 seconds.
+􁁛  Test principalReferenceRoundTripsAllFiveNames() passed after 0.001 seconds.
+􁁛  Test principalReferenceRequiresGeneration() passed after 0.002 seconds.
+􁁛  Test run with 3 tests in 0 suites passed after 0.002 seconds.

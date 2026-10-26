@@ -1,0 +1,38 @@
+warning: /Users/chriskarani/Library/org.swift.swiftpm/configuration is not accessible or not writable, disabling user-level cache features.
+warning: /Users/chriskarani/Library/org.swift.swiftpm/security is not accessible or not writable, disabling user-level cache features.
+warning: /Users/chriskarani/Library/Caches/org.swift.swiftpm is not accessible or not writable, disabling user-level cache features.
+warning: 'rv': failed storing manifest for 'rv' in cache: attempt to write a readonly database
+warning: 'swift-argument-parser': failed storing manifest for 'swift-argument-parser' in cache: attempt to write a readonly database
+warning: 'swift-collections': failed storing manifest for 'swift-collections' in cache: attempt to write a readonly database
+warning: 'swiftterm': failed storing manifest for 'swiftterm' in cache: attempt to write a readonly database
+warning: 'swift-tui': failed storing manifest for 'swift-tui' in cache: attempt to write a readonly database
+warning: 'swift-async-algorithms': failed storing manifest for 'swift-async-algorithms' in cache: attempt to write a readonly database
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+[2 / 4] RVServiceTests-product
+[4 / 6] RVServiceTests-product
+[6 / 6] RVServiceTests-product
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (3.48 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Live workspace host registry logic" started.
+􀟈  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() started.
+􀢄  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() recorded an issue at LiveWorkspaceHostRegistryTests.swift:242:69: Issue recorded
+􀄵  Agent must not use an owner grant
+􀢄  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() recorded an issue at LiveWorkspaceHostRegistryTests.swift:245:9: Expectation failed: rows.first?.kind == .granted
+􀄵  rows.first?.kind == .granted → false
+􀄵    rows.first?.kind → .consumed
+􀄵      some → .consumed
+􀄵      some → .granted
+􀢄  Test agentEvaluationCannotConsumeOrReuseOwnerGrant() failed after 0.024 seconds with 2 issues.
+􀢄  Suite "Live workspace host registry logic" failed after 0.024 seconds with 2 issues.
+􀄵  /// Synthetic evidence exercises registry logic only. These tests do not prove
+􀄵  /// platform role assignment, transport authenticity or a product journey.
+􀢄  Test run with 1 test in 1 suite failed after 0.024 seconds with 2 issues.
+Note: Some test targets reported failures:
+  - RVServiceTests (Swift Testing)

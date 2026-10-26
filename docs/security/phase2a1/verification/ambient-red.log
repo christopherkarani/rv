@@ -1,0 +1,36 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+[2 / 4] RVCLI
+[4 / 6] RVCLI
+[9 / 11] RVCLI
+[10 / 12] RVCLI
+[13 / 13] RVCLI-product
+[15 / 22] rv-product
+[19 / 25] RVCLITests-product
+[22 / 26] rv-product
+[24 / 27] rv-product
+[24 / 27] RVCLITests-product
+[28 / 30] RVCLITests-product
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (7.24 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite IdentityAmbientCredentialTests started.
+􀟈  Test customLaunchCannotReadAmbientCodexAuthentication() started.
+􁁛  Test customLaunchCannotReadAmbientCodexAuthentication() passed after 1.846 seconds.
+􀟈  Test customPreparationDoesNotGrantAmbientCodexAuthentication() started.
+􀢄  Test customPreparationDoesNotGrantAmbientCodexAuthentication() recorded an issue at IdentityAmbientCredentialTests.swift:66:9: Expectation failed: profile.source.contains("(literal \"\(fixture.authentication.path)\")") == false
+􀄵  profile.source.contains("(literal \"\(fixture.authentication.path)\")") == false → false
+􀄵    profile.source.contains("(literal \"\(fixture.authentication.path)\")") → true
+􀢄  Test customPreparationDoesNotGrantAmbientCodexAuthentication() failed after 0.105 seconds with 1 issue.
+􀄵  /// The production prepare oracle for an explicit custom executable must
+􀄵  /// omit unrelated provider credentials from the host's installed bin set.
+􀄵  /// This checks the generated OS policy, not credential read success.
+􀢄  Suite IdentityAmbientCredentialTests failed after 1.952 seconds with 1 issue.
+􀢄  Test run with 2 tests in 1 suite failed after 1.953 seconds with 1 issue.
+Note: Some test targets reported failures:
+  - RVIsolationTests (Swift Testing)

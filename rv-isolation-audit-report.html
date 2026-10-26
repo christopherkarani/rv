@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rv — Codebase, UX &amp; Isolation Audit</title>
+<style>
+  :root{
+    --ink:#1a1d21; --muted:#5b6470; --line:#e3e6ea; --paper:#ffffff;
+    --teal:#0f766e; --teal-bg:#ecfdf9; --rust:#9a3412; --rust-bg:#fff3ec;
+    --amber:#92400e; --amber-bg:#fffbeb; --blue:#1e4a6b; --blue-bg:#eff6fc;
+    --code-bg:#f4f5f7; --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  h1,h2,h3{font-family:"Iowan Old Style",Palatino,Palatino Linotype,Georgia,serif;font-weight:600;line-height:1.2;color:#111417}
+  h1{font-size:2.4rem;margin:0 0 .4rem;letter-spacing:-.02em}
+  h2{font-size:1.55rem;margin:0 0 .6rem;padding-bottom:.45rem;border-bottom:2px solid var(--ink)}
+  h3{font-size:1.12rem;margin:1.6rem 0 .5rem}
+  p{margin:.55rem 0}
+  a{color:var(--teal);text-decoration-thickness:1px;text-underline-offset:2px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em;background:var(--code-bg);padding:.12em .35em;border-radius:4px;word-break:break-word}
+  pre{background:#111417;color:#e8ecf0;padding:1rem 1.1rem;border-radius:8px;overflow:auto;font-size:.82rem;line-height:1.55}
+  pre code{background:none;color:inherit;padding:0}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px 80px}
+  header.top{border-bottom:1px solid var(--line);padding:36px 0 28px;margin-bottom:8px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:.88rem;margin-top:10px}
+  .meta strong{color:var(--ink)}
+  nav.toc{position:sticky;top:0;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);z-index:5;padding:10px 0}
+  nav.toc .wrap{padding-bottom:0;padding-top:0;display:flex;gap:6px;flex-wrap:wrap}
+  nav.toc a{font-size:.84rem;color:var(--ink);text-decoration:none;padding:5px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+  nav.toc a:hover{border-color:var(--teal);color:var(--teal)}
+  section{padding:34px 0 6px}
+  .verdict{border:2px solid var(--rust);background:var(--rust-bg);border-radius:var(--radius);padding:20px 22px;margin:22px 0}
+  .verdict h2{border:none;padding:0;font-size:1.3rem;color:var(--rust)}
+  .verdict p{margin:.4rem 0}
+  .callout{border:1px solid var(--line);border-left:4px solid var(--teal);border-radius:6px;padding:14px 18px;margin:16px 0;background:#fcfcfd}
+  .callout.warn{border-left-color:var(--amber);background:var(--amber-bg)}
+  .callout.bad{border-left-color:var(--rust);background:var(--rust-bg)}
+  table{width:100%;border-collapse:collapse;margin:14px 0 20px;font-size:.88rem}
+  th{font-family:-apple-system,sans-serif;text-align:left;font-size:.76rem;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--ink);padding:8px 10px;vertical-align:bottom}
+  td{border-bottom:1px solid var(--line);padding:9px 10px;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.03em;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .p0{background:#7c2d12;color:#fff}.p1{background:#fee2c8;color:#7c2d12}.p2{background:#fef3c7;color:#92400e}
+  .p3{background:#e5e7eb;color:#374151}.p4{background:#f3f4f6;color:#6b7280}
+  .pass{background:var(--teal-bg);color:#065f56}.fail{background:var(--rust-bg);color:var(--rust)}
+  .part{background:var(--amber-bg);color:var(--amber)}.na{background:#f3f4f6;color:#6b7280}
+  ul,ol{margin:.5rem 0 .5rem 1.2rem;padding:0} li{margin:.3rem 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr} h1{font-size:1.9rem}}
+  .card{border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+  .card h3{margin-top:0}
+  .small{font-size:.86rem;color:var(--muted)}
+  .finding{border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin:14px 0}
+  .finding h3{margin:0 0 6px;font-size:1.05rem}
+  .finding .loc{font-size:.82rem;color:var(--muted);margin-bottom:8px}
+  footer{border-top:1px solid var(--line);margin-top:40px;padding-top:20px;color:var(--muted);font-size:.85rem}
+  .kbd{font-family:ui-monospace,monospace;font-size:.82em;border:1px solid #cfd4da;border-bottom-width:2px;border-radius:4px;padding:1px 5px;background:#fff}
+</style>
+</head>
+<body>
+<nav class="toc"><div class="wrap">
+  <a href="#verdict">Verdict</a><a href="#map">Map</a><a href="#isolation">Isolation</a>
+  <a href="#backlog">Backlog P0–P4</a><a href="#ux">UX</a><a href="#bugs">Bugs &amp; gaps</a>
+  <a href="#tests">Tests</a><a href="#sequence">Sequence</a><a href="#appendix">Appendix</a>
+</div></nav>
+<div class="wrap">
+<header class="top">
+  <div style="font-size:.82rem;letter-spacing:.06em;text-transform:uppercase;color:var(--teal);font-weight:700">Comprehensive codebase review · Isolation focus</div>
+  <h1>rv (Rykan V) — codebase, UX, bugs &amp; Isolation audit</h1>
+  <p style="font-size:1.08rem;color:#33393f;max-width:760px">Hook-grade shell guard for coding agents, plus a macOS Seatbelt-contained workspace runtime (<code>rv opencode</code> / <code>rv workspace</code>). This audit covers the whole product with depth on <code>RVIsolation</code>: what the sandbox actually guarantees today, where it leaks, and what a user experiences when it refuses.</p>
+  <div class="meta">
+    <span><strong>Date:</strong> 12 Oct 2026</span>
+    <span><strong>Tree:</strong> <code>main @ 04b4740c</code> + large uncommitted working tree (45 files, +7,412 lines)</span>
+    <span><strong>Toolchain:</strong> Swift 6.4, macOS 27 arm64 (audit host)</span>
+    <span><strong>Method:</strong> source inspection of every RVIsolation file, CLI probes against <code>.build/debug/rv</code>, focused test run, and the repo&rsquo;s own acceptance/adversarial records</span>
+  </div>
+</header>
+<section id="verdict">
+  <div class="verdict">
+    <h2>Verdict — NOT SATISFIED for Isolation as a finished boundary. Ship the hook guard; do not sell the cage as complete.</h2>
+    <p><strong>Top finding:</strong> On macOS the contained launch is a real deny-default Seatbelt fence — workspace-only file access, loopback-only networking through a host-side proxy, same-sandbox signals only, and a private-volume inode boundary — and it is backed by genuine kernel-effect tests. That is substantially stronger than the hook-only story. It is still <strong>not a finished agent isolation boundary</strong>, exactly as the README and <code>docs/security/runtime-acceptance.md</code> state: Linux refuses every contained launch, a caged process can still read other same-user processes&rsquo; argv+environment (secrets included), killing RV with <code>SIGKILL</code> leaves children holding workspace write authority, descendants never re-enter semantic authorization, and there is no runtime-issued authenticated identity or mandatory audit stream. Several advertised commands (<code>workspace agent</code>, <code>workspace custom</code>, <code>egress approve/deny</code>, <code>workspace abandon</code>) are wired in help but always refuse at runtime.</p>
+    <p>The hook guard itself (packs, explain, allow-once, scan) is coherent and well-tested. The risk is <em>positioning and UX</em>: present-tense help/README language plus dead-end commands invite users to trust a boundary the code itself — correctly and honestly in its security docs — says is blocked.</p>
+  </div>
+
+  <h3>Scorecard</h3>
+  <table>
+    <thead><tr><th>Area</th><th>State</th><th>One-line basis</th></tr></thead>
+    <tbody>
+      <tr><td>Hook policy engine (packs / test / explain)</td><td><span class="tag pass">SOUND</span></td><td>Typed domain, corpus-backed; <code>rv test</code>/<code>explain</code> verified live in this audit.</td></tr>
+      <tr><td>macOS Seatbelt filesystem fence</td><td><span class="tag pass">HOLDS (scoped)</span></td><td><code>(deny default)</code> + workspace subpath; outside read/write, symlink, traversal, hardlink cases kernel-tested.</td></tr>
+      <tr><td>macOS network fence</td><td><span class="tag part">PARTIAL</span></td><td>Direct public/LAN/metadata denied; loopback allowed — but LAN <em>listen</em> and shared loopback are unfixable in Seatbelt (R1/R2, accepted).</td></tr>
+      <tr><td>Process / host boundary</td><td><span class="tag fail">OPEN</span></td><td>Cross-sandbox signal denied, but host process argv+env readable via <code>KERN_PROCARGS2</code> (R4); per-MIB fix reverted as ship-blocked.</td></tr>
+      <tr><td>Linux containment</td><td><span class="tag fail">ABSENT</span></td><td><code>compileLandlockRuleset</code> always returns <code>containedGuaranteesUnsupported</code>; no supported-kernel enforcement proof.</td></tr>
+      <tr><td>Lifetime / supervisor death</td><td><span class="tag fail">OPEN</span></td><td>Process-group kill works on graceful paths only; <code>SIGKILL</code> of RV leaves the group and volume alive (CLI proof GAP).</td></tr>
+      <tr><td>Identity, capability lifetime, audit</td><td><span class="tag fail">OPEN</span></td><td>Session IDs are labels, not credentials; admission is one shell command + one HTTPS GET; logs are not a mandatory audit stream.</td></tr>
+      <tr><td>Egress proxy</td><td><span class="tag part">PARTIAL</span></td><td>Strong DNS-consensus + binary-pin design; production still uses one shared open-mode proxy per workspace host — per-runtime credentialed wiring not landed.</td></tr>
+      <tr><td>CLI / TUI UX</td><td><span class="tag part">MIXED</span></td><td>Help is unusually honest; but dead commands, JSON-by-default output, and terse errors strand users at exactly the security moments.</td></tr>
+      <tr><td>Test evidence</td><td><span class="tag part">STRONG / GAPPED</span></td><td>5,212 Swift Testing cases repo-wide; isolation suites run real sandboxed children. Linux positive enforcement and supervisor-death proofs missing.</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Priorities in this report follow the codebase-health rubric: P0 = user/security harm now, P1 = likely harm or broken promise, P2 = correctness/maintainability debt with a concrete trigger, P3 = polish, P4 = optional experiments. Every finding names a location, the invariant it breaks, the smallest next action, and how to prove the fix.</p>
+</section>
+
+<section id="map">
+  <h2>1 &middot; Codebase map — where Isolation lives and what depends on it</h2>
+  <p>Swift 6.4 package, 26 source targets (~85,600 lines of Swift), Swift Testing throughout (5,212 <code>@Test</code> cases). The dependency direction is disciplined: pure domain at the bottom, OS effects at the edge, CLI as composition root. Isolation is the largest and most security-critical edge module.</p>
+<pre><code>RVDomain        pure types: IsolationGuarantees, ContainedPlan, EgressPolicy,
+                AgentAuthorization, ShellAction, JSONValue   (no I/O)
+   ▲
+RVPolicy        policy documents, typed rules, pending approvals, revision logs
+RVIPC           workspace control wire protocol
+   ▲
+RVIsolation     46 files, 25,526 lines — Seatbelt, Landlock, egress proxy,
+                workspace host, supervisors, admission, inode boundary
+   ▲
+RVService       rvd daemon: gated evaluate, ceremonies, operator authorizers
+RVCLI (rv)      ArgumentParser surface: opencode / workspace / egress / policy…
+rv-workspace-host  persistent per-project host process (owns the supervisors)
+rvd, rv-c       daemon + C frontend (locates rv-cli from its own exe path)</code></pre>
+  <table>
+    <thead><tr><th>Isolation component</th><th>Files (lines)</th><th>Responsibility</th></tr></thead>
+    <tbody>
+      <tr><td>Domain intent</td><td><code>Sources/RVDomain/Isolation.swift</code> (316)</td><td>Closed enums (<code>Filesystem/Network/Process/DescentContainment</code>); <code>fileprivate</code> initializers make &ldquo;contained but unrestricted&rdquo; unrepresentable. Compile is pure and fail-closed.</td></tr>
+      <tr><td>Seatbelt backend</td><td><code>SeatbeltProfile.swift</code> (1,172), <code>IsolationApply.swift</code> (927), <code>SessionSupervisor.swift</code> (1,693)</td><td>SBPL generation (<code>(deny default)</code>), <code>sandbox-exec</code> spawn, fd-3 handshake nonce, process-group ownership.</td></tr>
+      <tr><td>Landlock backend</td><td><code>LandlockRuleset.swift</code>, <code>LandlockApply.swift</code>, <code>landlock_apply.c</code>, <code>rv-isolation-exec</code></td><td>C trampoline (<code>restrict_self</code> + exec). Compiles read+write classes but <em>always refuses</em> contained plans today.</td></tr>
+      <tr><td>Workspace host</td><td><code>WorkspaceSessionSupervisor.swift</code> (2,313), <code>WorkspaceHostServer/Client</code> (1,141/1,538), <code>WorkspaceControlProtocol.swift</code> (1,452)</td><td>Persistent per-project host: volume lifecycle, runtime registry, PTY terminals, control RPC over Unix socket with peer authentication.</td></tr>
+      <tr><td>Inode boundary</td><td><code>WorkspaceInodeBoundary.swift</code> (1,639), <code>WorkspaceRecovery.swift</code> (1,370)</td><td>Fresh APFS volume per workspace, publish/copy-back with inode stamps, orphan recovery and abandon.</td></tr>
+      <tr><td>Admission &amp; egress</td><td><code>RuntimeAdmission.swift</code> (1,471), <code>EgressProxy.swift</code> (1,171), <code>HTTPDirectConnector.swift</code>, <code>NetworkReviewQueue.swift</code></td><td>Per-runtime pipes (fds 4/5) + unguessable capability; one mediated shell command / one HTTPS GET; host-side CONNECT proxy with DNS pinning.</td></tr>
+      <tr><td>Environment</td><td><code>ContainedEnvironmentPolicy.swift</code> (728)</td><td>Sanitized PATH/HOME/tmp, credential-class strip, broker placeholders. Deny-by-default since the F2 fix.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><strong>Architectural strength worth keeping:</strong> intent vs. establishment is a type-level distinction (<code>IsolationPlan</code> ≠ <code>EstablishedIsolation</code>), hand-built Seatbelt profiles cannot reach spawn (<code>isContainedCompilerOutput</code> provenance flag, not text sniffing), and every denial probe in the test suite runs a real sandboxed child with a positive control. This is the correct shape — the gaps are missing mechanisms, not confused layering.</div>
+  <div class="callout warn"><strong>Audit caveat — moving tree:</strong> the working tree carries 45 modified files (+7,412/−253) plus untracked <code>EgressCommand.swift</code>, <code>NetworkReviewQueue.swift</code>, <code>PolicyDiffRisk.swift</code> and ~15 new test files that are not on <code>main</code>. Findings below cite the working tree (what a build today produces) and flag where a behavior exists only in uncommitted code. Any release decision must first land or explicitly discard this stack, then re-run the acceptance matrix against the landed hashes.</div>
+</section>
+
+<section id="isolation">
+  <h2>2 &middot; Isolation deep dive — what holds, what leaks</h2>
+
+  <h3>2.1 What genuinely holds on macOS today (keep, and say so precisely)</h3>
+  <ul>
+    <li><strong>Deny-default filesystem fence.</strong> <code>compileFirstSliceProfile</code> emits <code>(version 1) (deny default)</code>, allows exec/fork, read/map on <code>/usr /bin /sbin /System /Library /dev</code> (the minimum to start programs), read/write only on the canonical workspace subpath, and explicit <code>(deny file-link) (deny file-clone)</code>. Outside reads <em>and</em> writes are kernel-denied — verified by <code>SeatbeltContainmentTests</code>, <code>SeatbeltCapabilityTests</code>, and the adversarial suite (traversal, symlink chains, rename-across-boundary, interpolated shells, shebangs, recursive <code>rv</code>).</li>
+    <li><strong>Network: direct egress denied, proxy-mediated HTTPS.</strong> No Unix-socket rules at all (a pathless allow would expose every host socket — the comment in <code>SeatbeltProfile.swift</code> is exactly right); outbound TCP only as <code>(remote tcp "localhost:*")</code> to reach the host-side <code>EgressProxy</code> and loopback dev servers. LAN/public/metadata connects return <code>EPERM</code>. The proxy resolves once, requires the whole DNS answer set to be public-unicast, and dials the pinned sockaddr — no check-to-use race, no poisonable pin cache for addresses.</li>
+    <li><strong>Process fence.</strong> <code>(allow signal (target same-sandbox))</code> only; <code>setpgid</code> (82) and <code>setsid</code> (147) denied by syscall number so a descendant cannot leave RV&rsquo;s process group. <code>posix_spawn</code> deliberately stays allowed (Node/Python/Rust need it) — children inherit the same profile, and the group kill on runtime/workspace close reaps them.</li>
+    <li><strong>Mach/XPC deny-by-default.</strong> <code>(deny mach-lookup) (deny mach-register)</code> with exactly one allow (<code>com.apple.bsd.dirhelper</code>, proven necessary for SwiftPM linking; Keychain verified still blocked). This closes securityd/SecurityServer/trustd/pasteboard reachability from the cage.</li>
+    <li><strong>Inode boundary.</strong> A pre-existing hardlink inside the workspace refuses launch (<code>workspaceContainsInodeAlias</code>); the workspace path is then mounted on a fresh volume (<code>WorkspaceInodeBoundary</code>) so a later <code>link()</code> to an outside inode fails <code>EXDEV</code>. Publish copies back only when device/inode/kind stamps still match.</li>
+    <li><strong>Descriptor &amp; environment hygiene.</strong> <code>POSIX_SPAWN_CLOEXEC_DEFAULT</code>; the child sees only stdio (or the PTY slave), the fd-3 handshake write end (closed by the trusted wrapper before exec), and its own admission pipes on fds 4/5. Ambient fds, loader/interpreter variables, and secret-bearing env are stripped; <code>HOME</code>/<code>TMPDIR</code> point at RV-managed roots. Establishment is proven by an in-sandbox nonce on fd 3 — never by exit code — and a recognized <code>rv-isolation-exec</code> exit 0 is explicitly refused as establishment.</li>
+    <li><strong>Admission narrowness.</strong> A contained process may ask RV — over its private pipes, presenting the per-runtime capability — for <em>one</em> shell command (spawned by RV under the same profile, without the pipes) or <em>one</em> HTTPS GET (performed by RV: canonicalized URL, one pinned public address, no cookies/credentials, 64 KiB body cap, 10 s budget, redirects not followed). Replay by request-id or action fingerprint is rejected; runtime A&rsquo;s pipe cannot act as runtime B.</li>
+  </ul>
+
+  <h3>2.2 The open holes, in the repo&rsquo;s own evidence</h3>
+  <table>
+    <thead><tr><th>ID</th><th>Hole</th><th>Evidence</th><th>Status in code</th></tr></thead>
+    <tbody>
+      <tr><td>R4</td><td><strong>Host argv+env disclosure.</strong> The production <code>(allow sysctl-read)</code> lets a caged process read <code>KERN_PROCARGS2</code> for same-user host processes — full argument <em>and environment</em> blocks (measured: 9,164-byte block from the unsandboxed test runner; host env routinely carries API keys). Seatbelt&rsquo;s <code>sysctl-read</code> cannot mediate this MIB at all.</td><td><code>SeatbeltLoopbackTests.containedProcessListSeesHostButCannotSignalIt</code>; boundary doc R4 (widened 2026-10-10)</td><td><span class="tag fail">OPEN</span> Per-MIB deny-first fix measured working (<code>SeatbeltSysctlExperiment</code>, tests-only) but the cutover <em>broke <code>ld</code> linking and <code>zsh</code>/<code>xargs</code> startup</em> and was reverted the same day. Default profile is coarse again; ship blocked on identifying the fatal sysctl leaves (needs root <code>dtruss</code>).</td></tr>
+      <tr><td>R1</td><td><strong>LAN listen.</strong> Any loopback-listen allow also permits bind/listen/accept on <code>0.0.0.0</code>, <code>::</code>, and LAN addresses — SBPL accepts only <code>*</code>/<code>localhost</code> and matches only the port in <code>local</code> position. A caged dev server is LAN-reachable.</td><td><code>SeatbeltProfile.allowingLoopbackBind</code> doc; <code>nonLoopbackBindIsNotScopedBySeatbelt</code></td><td><span class="tag part">ACCEPTED RISK</span> — correctly documented, but not surfaced at launch (see UX-04).</td></tr>
+      <tr><td>R2</td><td><strong>Shared loopback.</strong> One host loopback interface: another workspace&rsquo;s runtime — or any unsandboxed host process — can connect to a caged server&rsquo;s port. No per-workspace namespace exists on macOS.</td><td><code>crossWorkspaceLoopbackIsShared</code></td><td><span class="tag part">ACCEPTED RISK</span></td></tr>
+      <tr><td>R3</td><td><strong>Per-user tmp read-write.</strong> The confstr per-user temp dir is granted read-write because SwiftBuild tasks drop <code>TMPDIR</code> and fall back to it. The cage can read/write every same-user transient temp file.</td><td><code>SeatbeltR3TmpPostureTests</code> (4), <code>containedChildReadsPlantedPerUserTmpFile</code></td><td><span class="tag part">ACCEPTED, RE-AFFIRMED (T11)</span> — narrowing measured and rejected; structural fix is a dedicated cage uid (deferred).</td></tr>
+      <tr><td>—</td><td><strong>Supervisor SIGKILL.</strong> Cleanup (group kill, volume detach, publish) runs only on RV&rsquo;s return path. <code>kill -9</code> of the supervisor leaves children alive with workspace write authority and the volume mounted.</td><td>CLI proof <code>supervisor-SIGKILL-cleanup</code>: GAP; acceptance §9.11 FAIL</td><td><span class="tag fail">OPEN</span> No independent guardian, lease, or death-watch exists.</td></tr>
+      <tr><td>—</td><td><strong>No descendant mediation.</strong> The OpenCode process tree never re-enters <code>LocalExecutor</code>/<code>AgentAuthorization</code>. Inherited Seatbelt rules are the <em>only</em> control on tool calls the agent spawns.</td><td>Boundary doc execution-path diagram; acceptance §1.1/§1.8 FAIL</td><td><span class="tag fail">OPEN BY DESIGN GAP</span> — needs the U02 feasibility answer (Endpoint Security vs. brokered exec), not more SBPL.</td></tr>
+      <tr><td>—</td><td><strong>Writable control plane.</strong> <code>.git/hooks</code>, shell startup files, and any RV policy/config placed inside the workspace are agent-writable. No protected subpaths are reserved.</td><td><code>knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable</code></td><td><span class="tag fail">OPEN</span></td></tr>
+      <tr><td>—</td><td><strong>Force-unmount.</strong> A same-user <code>diskutil unmount force</code> tears down the inode-boundary volume mid-run. Polite unmount is blocked by a held directory fd; force is explicitly &ldquo;not claimed as closed.&rdquo;</td><td><code>WorkspaceInodeBoundary</code> doc comment</td><td><span class="tag part">DOCUMENTED, OPEN</span> Same trust class as killing RV; must stay in the threat model, not the marketing.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>2.3 Platform split — the Linux story is refusal, and the product copy must own that</h3>
+  <p><code>Sources/RVIsolation/LandlockRuleset.swift:101</code> — <code>compileLandlockRuleset</code> validates the plan and workspace, compiles the read+write classes, then <em>unconditionally</em> returns <code>.containedGuaranteesUnsupported</code> (line 148). The C shim handles <code>RV_LANDLOCK_HANDLED_FS</code> beneath the workspace and fail-closes below ABI 3, but system-read layering (<code>/usr</code>, loader), EXECUTE, network, and process guarantees are unenforced, and production launch never reaches it. There has been <strong>no supported-kernel (ABI ≥ 3) enforcement run</strong>; the audit container kernel (<code>6.10.14-linuxkit</code>) returns <code>ENOSYS</code>. CI now probes the runner ABI and fail-closes when unmeasurable (T8), which is honest — but the README badge (<em>&ldquo;macOS 15+ arm64 | Linux&rdquo;</em>) and the platform table (<em>&ldquo;Linux aarch64/x86_64&rdquo;</em> as a supported install) read as parity. For the hook guard that is true; for <code>rv opencode</code> / <code>rv workspace</code> a Linux user gets only <code>contained workspace host is unavailable</code> (see UX-03). Either scope the badge/table by feature, or keep Linux contained launch explicitly experimental until a real ABI ≥ 3 run passes the containment suite.</p>
+
+  <h3>2.4 Egress &amp; credentials — strong design, unfinished production wiring</h3>
+  <ul>
+    <li><strong>Binary attribution is instance attribution</strong> (correctly: TCP loopback carries no peer credentials, and Unix-socket egress would expose every host socket). <code>EgressBinaryPinCache</code> now pins at admission (<code>admit</code> / <code>pinExpected</code> / strict <code>verifyAdmitted</code>), closes the stat/hash window with a post-hash re-stat, and bounds hashing at 256 MiB. The verify-to-use window still needs fd-pinned exec — documented, not hidden.</li>
+    <li><strong>But production does not use it yet.</strong> Per the phase-3/4 boundary notes, <code>WorkspaceSessionSupervisor</code> still constructs <em>one shared <code>EgressProxy(record:)</code> per workspace host</em> with no binary scope and no credential. The credentialed mode (<code>EgressProxy(grants:)</code>, 256-bit per-principal tokens, <code>407 denied-credential</code>) and the per-runtime bound instances exist and are tested — the supervisor mint/distribute wiring is the missing step. Until it lands, co-tenant runtimes share one open-mode grant set: rights inheritance by construction. The live supplement (human-approved <code>host:port</code> rules pushed with a generation guard) is likewise honored in open mode only, so one principal&rsquo;s approved rule is visible to the shared instance.</li>
+    <li><strong>Credential broker is deny-by-default and names-only in audit</strong> — the right shape. Two seams remain: legacy <code>.effect</code> transports still drop a granted injection fail-closed as <code>credentialUnwired</code> (only <code>.direct</code> and <code>.effectWithCredential</code> deliver bytes), and <code>AgentHomeStaging.credentialLinks</code> + API-key re-injection are gated behind <code>ContainedCredentialDelivery</code> opt-ins that default closed — good — but the <code>ANTHROPIC_API_KEY=rv-cage-gateway-placeholder</code> public constant stays unconditional, so auditors must compare against the constant, not absence. Pins are in-memory per proxy instance: a restarted proxy re-pins on first use (TOFU window reopens per restart; <code>pinExpected</code> policy digests are the durable answer and should become the recommended configuration).</li>
+    <li><strong>No identity, no audit stream.</strong> <code>WorkspaceSessionID</code>/<code>RuntimeSessionID</code> are minted labels; the boundary doc is explicit that <em>knowing an ID is not authentication</em> (the pipe + capability is). What is missing for release is the surrounding record: <code>workspace-sessions.jsonl</code> + <code>runtime-admission.jsonl</code> carry no policy ID, capability set, or kernel-deny events, and launch is not gated on audit success (start-record write <em>does</em> fail closed — the matrix&rsquo;s §9.5 FAIL is about the absence of a mandatory sink for the tree, not that one line). A user cannot answer &ldquo;what did this agent do?&rdquo; from RV&rsquo;s own logs.</li>
+  </ul>
+</section>
+
+<section id="backlog">
+  <h2>3 &middot; Prioritized backlog — Isolation first</h2>
+  <p>Each row: invariant broken → smallest next action → proof. IDs are stable references for issues/PRs.</p>
+  <table>
+    <thead><tr><th>ID / Pri</th><th>Finding (location)</th><th>Smallest next action</th><th>Proof plan</th></tr></thead>
+    <tbody>
+      <tr><td><strong>ISO-01</strong> <span class="tag p0">P0</span></td><td><strong>R4 env disclosure ships by default.</strong> <code>SeatbeltProfile.swift</code> — <code>SeatbeltSysctlExperiment.sbplRules(.coarse)</code> = <code>(allow sysctl-read)</code>; <code>compileSeatbeltProfile</code> never selects <code>.perMIBExperiment</code>. A caged process reads same-user host argv+env.</td><td>Land the per-MIB shape as default: identify the <code>ld</code>/<code>zsh</code> fatal leaves (root <code>dtruss</code> or Apple MIB docs), add <code>kern.argmax</code> + those leaves under the host-denial gate, flip the OPEN HOLE assertion to deny-only. If leaves cannot be identified, ship the dedicated-uid design instead — do not ship another coarse release silently.</td><td><code>SeatbeltPerMIBExperimentTests</code> host-denial gate (<code>HOST errno=</code>, no <code>HOST read bytes=</code>) + full toolchain matrix (<code>swift build/test</code>, <code>zsh</code>, <code>xargs</code>, <code>clang</code> link) green in the cage.</td></tr>
+      <tr><td><strong>ISO-02</strong> <span class="tag p0">P0</span></td><td><strong>Supervisor death orphans the tree.</strong> <code>SessionSupervisor.swift</code> / <code>WorkspaceSessionSupervisor.swift</code> — group kill, detach, publish all run on RV&rsquo;s return path only.</td><td>Introduce a death-watch: an independently-lived guardian (or kernel-enforced lease) that kills the group and detaches the volume when the supervisor disappears, including <code>SIGKILL</code>. Specify guardian-death behavior explicitly.</td><td>CLI proof: <code>kill -9</code> the supervisor mid-run; assert no delayed workspace write, group empty, volume detached. Must fail on today&rsquo;s code.</td></tr>
+      <tr><td><strong>ISO-03</strong> <span class="tag p0">P0</span></td><td><strong>Linux contained launch is advertised, then refused.</strong> <code>LandlockRuleset.swift:148</code>; CLI throws <code>contained workspace host is unavailable</code> (<code>OpenCodeCommand.swift:87</code> and 8 sites in <code>WorkspaceCommand.swift</code>).</td><td>Short term (copy): scope README badge/platform table and <code>rv --help</code> by feature — hook guard on Linux, contained runtime macOS-only. Long term: supported-kernel Landlock (+ net/pid mechanisms) with the same negative-effect suite as macOS.</td><td>Copy: help/README diff reviewed against feature matrix. Enforcement: ABI ≥ 3 host runs <code>LandlockContainmentTests</code> with positive controls; unsupported kernel still exits 125 with no marker.</td></tr>
+      <tr><td><strong>ISO-04</strong> <span class="tag p0">P0</span></td><td><strong>Descendants bypass semantic authorization.</strong> <code>LocalExecutor.perform</code> is not on the OpenCode descendant path (boundary doc, §1.1).</td><td>Run the U02 feasibility gate before building: Endpoint Security exec-blocking vs. brokered-exec vs. accepted &ldquo;kernel-rules-only&rdquo; scope. Publish the mechanism decision; do not widen SBPL and call it mediation.</td><td>Per-mechanism probes with positive/negative exec effects retained in <code>docs/security/runtime-mechanism-decision.md</code>; matrix §1 rows re-scored only on that evidence.</td></tr>
+      <tr><td><strong>ISO-05</strong> <span class="tag p1">P1</span></td><td><strong>Shared open-mode egress proxy in production.</strong> <code>WorkspaceSessionSupervisor</code> builds one <code>EgressProxy(record:)</code> per host; credentialed/per-runtime instances un-wired (phase-3/4 notes).</td><td>Wire the supervisor: mint one credential per runtime, construct <code>EgressProxy(grants:)</code> (or a bound instance) per runtime at the spawn seam, distribute the token over that runtime&rsquo;s private pipes, stop the proxy with the child.</td><td><code>PerRuntimeProxyEnvironmentTests</code> + a two-runtime test: runtime A&rsquo;s approved rule/credential denies for runtime B (<code>denied-credential</code> / <code>denied-policy</code> in <code>egress-denials.jsonl</code>).</td></tr>
+      <tr><td><strong>ISO-06</strong> <span class="tag p1">P1</span></td><td><strong>No protected control-plane paths.</strong> <code>.git/hooks</code> et al. writable inside the workspace (<code>knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable</code>).</td><td>Reserve control subpaths: deny write (or stage outside the volume) for RV policy/config and <code>.git/hooks</code> by default; require explicit grant to write them.</td><td>Flip the knownGap test to a denial test; positive control: normal workspace writes still succeed.</td></tr>
+      <tr><td><strong>ISO-07</strong> <span class="tag p1">P1</span></td><td><strong>Audit cannot answer &ldquo;what ran?&rdquo;</strong> <code>workspace-sessions.jsonl</code> / <code>runtime-admission.jsonl</code> lack policy ID, capabilities, deny events; no mandatory sink.</td><td>Add a typed, append-only runtime audit event (session, parent workspace, policy hash, capability set, admission decisions, teardown outcome); gate contained launch on sink availability.</td><td>Inject sink failure → launch refuses with no marker; normal run → events reconstruct the tree.</td></tr>
+      <tr><td><strong>ISO-08</strong> <span class="tag p1">P1</span></td><td><strong>Helper/executable provenance is path-only.</strong> Linux helper: regular-file + name + outside-workspace check; no ownership/content authentication or inode pinning (boundary doc §7). Same class for <code>sandbox-exec</code> trust on macOS.</td><td>Inode-pin the helper/executable across prepare→spawn; validate install ownership. At minimum document the same-user replacement residual next to the launch surface.</td><td>Race test: replace helper between prepare and spawn → refusal, no payload marker.</td></tr>
+      <tr><td><strong>ISO-09</strong> <span class="tag p2">P2</span></td><td><strong>God-files concentrate lifecycle risk.</strong> <code>WorkspaceSessionSupervisor</code> 2,313 LOC, <code>SessionSupervisor</code> 1,693, <code>WorkspaceInodeBoundary</code> 1,639, <code>WorkspaceHostClient</code> 1,538, <code>RuntimeAdmission</code> 1,471.</td><td>Extract along existing seams only (mount/publish, terminal registry, admission gate) with characterization tests first. No rewrite; each extraction must keep the handshake/teardown ordering byte-identical in behavior.</td><td>Existing isolation suites green per extraction; diff touches one seam at a time.</td></tr>
+      <tr><td><strong>ISO-10</strong> <span class="tag p2">P2</span></td><td><strong>Concurrency idioms mixed at the boundary.</strong> <code>EgressProxy: @unchecked Sendable</code> + <code>NSLock</code> + concurrent <code>DispatchQueue</code>s; <code>RuntimeTerminal</code>/<code>EventBoard</code> likewise; <code>LocalTerminalMode</code> keeps signal state in <code>nonisolated(unsafe)</code> globals.</td><td>Audit each <code>@unchecked</code> with a written happens-before note; prefer <code>Mutex</code>/<code>actor</code> (already the house style elsewhere). Keep the signal-handler globals but confine them behind the existing save/restore discipline and a TSan/stress test.</td><td><code>swift test</code> with Thread Sanitizer on the egress/terminal suites; no new <code>@unchecked</code> without a justification comment.</td></tr>
+      <tr><td><strong>ISO-11</strong> <span class="tag p2">P2</span></td><td><strong>Silent audit drops.</strong> <code>try?</code> swallows in the egress denial log (<code>EgressProxy.swift:1158</code>), <code>NetworkReviewQueue</code> snapshot writes, and admission-event appends.</td><td>Surface log-write failure (stderr diagnostic + non-zero health in <code>rv doctor</code>); denial logging is part of the security record, not best-effort telemetry.</td><td>Fault-injection test: unwritable log dir → visible failure, proxy still denies (fail-closed on policy, loud on audit).</td></tr>
+      <tr><td><strong>ISO-12</strong> <span class="tag p3">P3</span></td><td><strong>Mach allowlist brittleness.</strong> Single-entry <code>SeatbeltMachPolicy.allowedServices</code>; a future macOS rename of <code>com.apple.bsd.dirhelper</code> breaks SwiftPM linking in the cage with an opaque failure.</td><td>Keep the exact-name discipline (no wildcards); add a cage smoke (<code>swift build</code> hello-world) to the OS-upgrade checklist and list both spellings if a rename ships.</td><td>Smoke green on each new macOS beta before release notes claim support.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="ux">
+  <h2>4 &middot; UX review — the guard is honest; the exits are missing</h2>
+  <p>Verified live against <code>.build/debug/rv</code> on this machine (non-TTY probes noted as such). Credit first: <code>rv --help</code> is grouped by task (<em>Get started / Everyday / Advanced</em>) with examples and a <em>Next</em> pointer; <code>rv opencode --help</code> states its isolation limits in plain words including the Linux refusal; the launch banner (<code>OpenCodeRun.isolationNotice</code>) prints the fence summary on stderr before running. That honesty is the product&rsquo;s best UX asset — the findings below are where behavior diverges from it.</p>
+
+  <div class="finding"><h3>UX-01 <span class="tag p1">P1</span> — Advertised commands that always fail</h3>
+  <div class="loc">Sources/RVCLI/Commands/WorkspaceCommand.swift · EgressCommand.swift · LocalControlBoundary.swift</div>
+  <p><code>rv workspace agent &lt;id&gt;</code> and <code>rv workspace custom --expected-content-digest-sha256 …</code> parse, validate (including a 64-hex digest check), then throw <code>operator permits not yet available</code> in <code>runInteractiveSelection</code> <em>before contacting any host</em>. <code>rv egress approve/deny</code> and <code>rv workspace abandon</code> are fully implemented behind <code>LocalControlBoundary.requireOwnerAuthorization()</code>, which unconditionally throws <em>&ldquo;Authenticated RV service and operation-bound owner authorization required.&rdquo;</em> — verified live: <code>rv egress approve test123</code> → that message + generic <code>Usage: rv &lt;subcommand&gt;</code>, exit 64. The user did nothing wrong; the command does not exist yet, but help presents all four as peers of working commands (egress help does add one honest line: <em>&ldquo;mutations approve and deny refuse until authenticated service routes land&rdquo;</em> — keep that pattern, extend it).</p>
+  <p><strong>Fix:</strong> mark unshipped commands in help with an explicit <code>(not yet available)</code> suffix and make the runtime error say what is missing and what to do instead (e.g. for egress: <em>&ldquo;approvals are read-only today; blocked hosts are listed by <code>rv egress pending</code>&rdquo;</em>). Better: hide <code>agent</code>/<code>custom</code> from help until permits land. <strong>Proof:</strong> CLI snapshot tests pin help text + refusal wording; a new user can predict the failure from <code>--help</code> alone.</p></div>
+
+  <div class="finding"><h3>UX-02 <span class="tag p1">P1</span> — Default output is machine JSON; <code>--plain</code> does not rescue humans</h3>
+  <div class="loc">Sources/RVCLI/CommandContext.swift (appearance seam) · live probes</div>
+  <p>Piped (non-TTY) invocations render robot JSON by design (<code>CI or non-TTY stdout → .robot</code>). Verified: <code>rv test 'git reset --hard'</code>, <code>rv explain 'rm -rf ~'</code>, and <code>rv doctor</code> each print a single-line JSON object on stdout; adding <code>--plain</code> changed nothing in the piped probes, and <code>rv doctor</code> reported <code>"ok":true</code> alongside <code>"state":"down"</code>, <code>"launch_agent":"missing"</code>, and <code>"warning":"request failed"</code> — a contradictory health signal. Scripts get a stable contract (good); a human pasting a command into a bug report gets escaped JSON with literal <code>\n</code> sequences inside the explanation string (bad). <code>rv test</code> also exits 1 for a <em>deny</em> verdict, which shell scripts must special-case.</p>
+  <p><strong>Fix:</strong> honor <code>--plain</code> as an explicit human override even when piped (an explicit flag should beat TTY inference); give <code>doctor</code> a graded verdict (degraded ≠ ok) in both formats; document the <code>test</code> exit-code contract in its help. <strong>Proof:</strong> golden-output tests for <code>--plain</code> piped vs. TTY; doctor fixture with service down asserts non-ok.</p></div>
+
+  <div class="finding"><h3>UX-03 <span class="tag p1">P1</span> — Linux refusal gives no next step, and wording differs by entry point</h3>
+  <div class="loc">OpenCodeCommand.swift:87 · WorkspaceCommand.swift (8× &ldquo;contained workspace host is unavailable&rdquo;)</div>
+  <p>On Linux every contained command throws the bare <code>ValidationError("contained workspace host is unavailable")</code>. It does not say the hook guard still works, that only the contained runtime is macOS-only, or where to read why. The <code>opencode</code> help text <em>does</em> say it well (<em>&ldquo;Linux refuses launch until it can enforce the same limits&rdquo;</em>) — the runtime error should match its own help.</p>
+  <p><strong>Fix:</strong> one shared refusal string: <em>&ldquo;contained runtimes are macOS-only today — the Linux sandbox cannot yet enforce the same limits, so rv refuses rather than run unsandboxed. Hook protection (rv setup / test / explain) works on Linux. See docs/security/runtime-boundary.md.&rdquo;</em> <strong>Proof:</strong> Linux CI smoke asserts the string; macOS unaffected.</p></div>
+
+  <div class="finding"><h3>UX-04 <span class="tag p2">P2</span> — Accepted risks (R1/R2/R3) are documented in security docs but invisible at launch</h3>
+  <div class="loc">OpenCodeRun.isolationNotice · HelpCatalog (opencode &ldquo;limits&rdquo; row)</div>
+  <p>The launch banner says <em>&ldquo;loopback networking is allowed&rdquo;</em> / <em>&ldquo;loopback allowed&rdquo;</em>. It does not say a caged server can be reached from the LAN (R1), from other workspaces or host processes (R2), or that same-user temp files are readable (R3). A user running a dev server with test data in the cage reasonably believes &ldquo;loopback&rdquo; means &ldquo;only this machine, only me.&rdquo; R1 means the first half is false.</p>
+  <p><strong>Fix:</strong> add one banner line: <em>&ldquo;Note: servers the agent starts on loopback can also be reached from your LAN and by other local processes — treat caged ports as LAN-visible.&rdquo;</em> Mirror it in the help &ldquo;limits&rdquo; row. <strong>Proof:</strong> help/banner snapshot tests.</p></div>
+
+  <div class="finding"><h3>UX-05 <span class="tag p2">P2</span> — Workspace lifecycle errors are terse at exactly the scary moments</h3>
+  <div class="loc">WorkspaceCommand.swift:190–301 · WorkspaceRecovery / WorkspaceInodeBoundary errors</div>
+  <p><code>workspace host is not reachable</code>, <code>stale endpoint</code>, <code>abandon failed</code>, and the <code>WorkspaceHosts.inspect</code> text dumps tell the user <em>what</em> but never <em>what to do</em>: is the volume still mounted? Are unpublished changes safe? Should they run <code>workspace abandon</code> (which itself refuses per UX-01), <code>rv doctor</code>, or reboot? A blocked workspace holding the only copy of agent work is the highest-anxiety state in the product, and its recovery path currently dead-ends at the owner-authorization gate.</p>
+  <p><strong>Fix:</strong> every lifecycle refusal gains a <em>state + next action</em> pair (e.g. <em>&ldquo;workspace volume is still mounted at &lt;path&gt;; your unpublished changes are intact. Run rv workspace status, then rv doctor. If the host died, rv workspace abandon restores the saved tree.&rdquo;</em>), and ship the abandon path (or a documented manual recovery) before promoting persistent workspaces. <strong>Proof:</strong> kill-the-host integration test walks status → recovery unattended.</p></div>
+
+  <div class="finding"><h3>UX-06 <span class="tag p2">P2</span> — <code>rv opencode</code> without <code>--resource-profile</code> fails late, inside the cage</h3>
+  <div class="loc">OpenCodeCommand.swift — missingProfileWarning</div>
+  <p>The warning is honest (<em>&ldquo;provider credentials are unstaged and agent auth will fail&rdquo;</em>) but non-blocking by design so keyless runs (local models, <code>--help</code>) keep working. The failure then surfaces as the agent&rsquo;s own provider auth error inside a sandbox the user may not realize strips credentials — support tickets will blame the provider. <code>workspace run</code> has the same shape with less warning.</p>
+  <p><strong>Fix:</strong> keep the non-blocking default, but name the remedy in the warning (<code>--resource-profile &lt;id&gt;</code>; list available IDs via the profiles command) and mirror it on <code>workspace run</code>. <strong>Proof:</strong> first-run walkthrough test with no profile → warning visible before spawn in captured stderr.</p></div>
+
+  <div class="finding"><h3>UX-07 <span class="tag p3">P3</span> — Small frictions</h3>
+  <ul>
+    <li>Bare <code>rv</code> means <em>&ldquo;open the workspace shell&rdquo;</em> while the abstract says <em>&ldquo;Block destructive shell commands&rdquo;</em> — in a non-TTY it errors <em>&ldquo;workspace shell requires an interactive terminal&rdquo;</em> (correct, but the mapping surprises). Consider printing help when stdin/stdout are not TTYs instead of an error.</li>
+    <li><code>rv workspace --help</code> renders <code>agent</code>/<code>custom</code> rows with long inline descriptions that break the column layout (observed overflow in terminal output). Move detail to per-subcommand help.</li>
+    <li>Validation errors are single-sentence <code>ValidationError</code>s with no error codes; <code>egress</code> uses structured <code>ctx.fail(…, exitCode: 2)</code> — converge on the egress pattern (stable prefix + exit code) so failures are scriptable and searchable.</li>
+    <li>The Workspace TUI signals runtime state by color alone (<code>WorkspaceTUIApp</code>: ● red/yellow/green; pane borders green/gray). Add a text label beside each indicator for color-blind users and screen-reader transcripts.</li>
+    <li>Shell completions were modified in the working tree for the new commands — verify <code>Resources/Completions/*</code> cover <code>egress</code> subcommands and do not complete the not-yet-available paths as if functional.</li>
+  </ul></div>
+</section>
+
+<section id="bugs">
+  <h2>5 &middot; Bugs &amp; implementation gaps (beyond the Isolation holes)</h2>
+  <div class="finding"><h3>BUG-01 <span class="tag p2">P2</span> — <code>rv doctor</code> reports <code>ok:true</code> while its own payload says the service is down</h3>
+  <div class="loc">Sources/RVCLI/Commands/DoctorCommand.swift · live probe</div>
+  <p>Observed: <code>{"ok":true, "service":{"state":"down","launch_agent":"missing","warning":"request failed"}, "grade":"hook"}</code>. Whatever <code>grade:"hook"</code> means internally, a top-level <code>ok</code> that coexists with a down service and a missing LaunchAgent will be read — by humans and by scripts gating on <code>.ok</code> — as healthy. <strong>Fix:</strong> derive <code>ok</code> from the worst component, or replace it with a graded <code>status: ok|degraded|down</code>. <strong>Proof:</strong> fixture with service down asserts not-ok.</p></div>
+
+  <div class="finding"><h3>BUG-02 <span class="tag p2">P2</span> — Explain&rsquo;s human explanation is stored with literal escape sequences</h3>
+  <div class="loc">RVEngine explanation strings → rv.explain.v1 payload · live probe</div>
+  <p><code>rv explain 'rm -rf ~'</code> returns an <code>explanation</code> field containing literal <code>\n</code> and <code>\\</code> sequences (double-escaped prose). Decoded by a JSON consumer it renders correctly, but any consumer that prints the field verbatim — including a future pretty printer — shows backslashes. Store plain prose; let the encoder escape. <strong>Proof:</strong> unit test asserts the decoded explanation contains real newlines and no backslash-n.</p></div>
+
+  <div class="finding"><h3>BUG-03 <span class="tag p2">P2</span> — The audit tree does not build a release story: 45 files of uncommitted security work</h3>
+  <div class="loc">git status — RVIsolation/RVPolicy/RVCLI + docs/security/runtime-boundary.md (+1,279 lines)</div>
+  <p>The working tree <em>is</em> the product right now (credential broker, network review queue, policy diff-risk, revision-log HMAC chain, per-MIB experiment), yet none of it is on <code>main</code>, and the acceptance matrix still cites base <code>854e691</code> hashes. Risks: loss of the only copy, review by accretion, and evidence tied to hashes nobody can check out. <strong>Fix:</strong> land the stack in reviewed slices (or explicitly discard), then regenerate <code>docs/security/evidence/source-sha256.json</code> and re-run the matrix. <strong>Proof:</strong> clean-tree <code>Scripts/gate.sh</code> run on the landed commit.</p></div>
+
+  <div class="finding"><h3>BUG-04 <span class="tag p2">P2</span> — KnownGap tests pass by proving the product is unsafe</h3>
+  <div class="loc">Tests/RVIsolationTests/RuntimeAdversarialTests.swift — knownGap* suite</div>
+  <p>By design, <code>knownGap</code> tests <em>succeed when the gap reproduces</em> (e.g. writable git hooks; the suite also still carries <code>knownGapCanSignal…</code>/<code>knownGapSyntheticCredentials…</code> names whose macOS behavior has since flipped to DENIED per the inventory — stale names now misdescribe what they pin). The convention is honest and documented, but it inverts the usual signal: a green suite contains proven vulnerabilities, and a future contributor can &ldquo;fix&rdquo; a test by deleting the witness. <strong>Fix:</strong> rename flipped witnesses to their denied expectation; keep remaining knownGap tests in a separately-reported suite whose pass count is displayed as <em>open blockers</em> in CI output. <strong>Proof:</strong> CI summary prints &ldquo;known gaps open: N&rdquo;; closing one requires flipping its test in the same PR.</p></div>
+
+  <div class="finding"><h3>BUG-05 <span class="tag p2">P2</span> — Pre-existing failures blur the gate</h3>
+  <div class="loc">docs/security/runtime-acceptance.md — broader gate notes</div>
+  <p>The broader 652-test gate carries 3 failures reproduced on pristine HEAD (installed-service assumption, host-app presence assumption, empty-stdin policy fixture), plus a preflight name-hygiene failure on an ignored historical handoff doc. Each is individually explained — collectively they train contributors to ignore red. The phase-5 note adds environment-dependent isolation failures (<code>swiftpm-testing-helper</code> missing; <code>containedProcessReachesLoopbackOnly</code>). <strong>Fix:</strong> hermetic fixtures for the three, and quarantine-with-owner for environment-dependent cases so the default gate is fully green or fully red. <strong>Proof:</strong> <code>Scripts/gate.sh</code> clean on a fresh machine.</p></div>
+
+  <div class="finding"><h3>BUG-06 <span class="tag p3">P3</span> — Admission/egress edge semantics worth pinning before they bite</h3>
+  <ul>
+    <li><strong>TOFU re-pin on proxy restart</strong> (in-memory <code>EgressBinaryPinCache</code>): every supervisor restart reopens the first-use window per binary. Recommend <code>pinExpected</code> digests in authored policy as the default posture; document TOFU as bootstrap-only.</li>
+    <li><strong>Legacy <code>.effect</code> credential drop</strong> is fail-closed (<code>credentialUnwired</code>) — safe, but a configured broker that silently never delivers on that transport reads as &ldquo;broker broken.&rdquo; Emit a one-time loud diagnostic at configuration time, not per-request audit noise.</li>
+    <li><strong><code>alreadyRedeemed</code>/generation-guard paths</strong> in <code>NetworkReviewQueue</code> are well-tested (9/9), including drift fail-closed — keep the <em>exact-row re-parse</em> discipline when the dedicated <code>ProposedAction</code> network case replaces the synthetic <code>egress:</code> fingerprint namespace; that migration is a P2 design task in itself (today&rsquo;s synthetic workspace identity <code>egress:&lt;workspace-uuid&gt;</code> must not leak into displayed principals).</li>
+    <li><strong><code>workspace custom</code> digest is decorative</strong> until verification lands: help already admits <em>&ldquo;executable image verification is deferred&rdquo;</em> — combined with UX-01, prefer hiding the command over shipping a flag that asks for a hash it ignores.</li>
+  </ul></div>
+
+  <h3>What was checked and found clean (so it is not re-litigated)</h3>
+  <ul>
+    <li>No <code>try!</code>/force-unwrap/force-cast/<code>fatalError</code> on production isolation paths (preflight enforces; grep confirms).</li>
+    <li>Seatbelt path encoding: quotes/backslashes escaped, NUL/newline/root rejected; five hostile-path classes kernel-tested (<code>LaunchBoundaryRegressionTests</code>).</li>
+    <li>C frontend locates <code>rv-cli</code> from its own executable path (not argv0/HOME) on both OSes; Linux Swift helper resolution is <code>/proc/self/exe</code>-only.</li>
+    <li>Policy revision logs: HMAC-chained machine log with sealed tip (truncation fails closed), rollback gated by diff-risk, repo log relocated out of the caged workspace.</li>
+    <li><code>PolicyDiffRisk</code> normalizes IP literals to bytes before classification (mapped/6to4/compatible embeddings, octal-alias rejection) — a previously real bypass class, now closed with dedicated tests.</li>
+  </ul>
+</section>
+
+<section id="tests">
+  <h2>6 &middot; Test &amp; verification state</h2>
+  <table>
+    <thead><tr><th>Claim</th><th>Evidence</th><th>Confidence</th></tr></thead>
+    <tbody>
+      <tr><td>Domain isolation compile is fail-closed</td><td>Re-run in this audit: <code>Scripts/swift-6.4 test --filter 'SeatbeltProfile|IsolationPlan'</code> → 19/19 pass (IsolationPlan suite).</td><td><span class="tag pass">VERIFIED</span></td></tr>
+      <tr><td>Hook verdicts behave (<code>test</code>/<code>explain</code>)</td><td>Live probes: <code>git reset --hard</code> denied (<code>core.git:reset-hard</code>, exit 1); <code>rm -rf ~</code> explained (<code>core.filesystem:rm-rf-root-home</code>).</td><td><span class="tag pass">VERIFIED</span></td></tr>
+      <tr><td>Dead-command refusals</td><td>Live probe: <code>rv egress approve test123</code> → owner-authorization refusal, exit 64.</td><td><span class="tag pass">VERIFIED</span></td></tr>
+      <tr><td>macOS kernel denial effects</td><td>Repo suites run real contained children (Seatbelt capability/loopback/containment, adversarial, descriptor hygiene); acceptance matrix + CLI proof retained under <code>docs/security/evidence/</code>. Not re-run end-to-end in this audit (full suite is long); spot suites above re-run green.</td><td><span class="tag part">REPO-EVIDENCED</span></td></tr>
+      <tr><td>Linux enforcement</td><td>No supported-kernel run exists; only fail-closed refusal (exit 125, no marker) + stubbed C units.</td><td><span class="tag fail">UNPROVEN</span></td></tr>
+      <tr><td>Supervisor-death cleanup</td><td>CLI proof records GAP; no guardian mechanism in code.</td><td><span class="tag fail">DISPROVEN (gap)</span></td></tr>
+      <tr><td>Workspace TUI interaction</td><td>Code-reviewed (reducer/model, pane layout, terminal adapter); not exercised in a live terminal in this audit. State is color-only (UX-07).</td><td><span class="tag part">NOT ASSESSED live</span></td></tr>
+    </tbody>
+  </table>
+  <p class="small">Not assessed in this audit: <code>rvd</code> daemon internals beyond their isolation call sites, Foundation Models features (macOS 26+), host-adapter fidelity for the eight hook hosts, performance/throughput of the egress relay under load, and the <code>rv-operator-ui</code> XPC app. Each needs its own pass; none changes the Isolation verdict.</p>
+</section>
+
+<section id="sequence">
+  <h2>7 &middot; Recommended sequence</h2>
+  <ol>
+    <li><strong>Land the tree (BUG-03).</strong> Reviewed slices, clean gate, regenerated evidence hashes. Everything else is unreviewable until this is done.</li>
+    <li><strong>Tell the truth at the surface (ISO-03 copy half, UX-01, UX-03, UX-04).</strong> One day of help/banner/error work; removes the largest user-harm class (misplaced trust) without touching the sandbox.</li>
+    <li><strong>Close R4 (ISO-01).</strong> Root-cause the <code>ld</code>/<code>zsh</code> sysctl leaves and land per-MIB as default — or commit to the dedicated-uid design. This is the only open hole that leaks <em>secrets</em> by default.</li>
+    <li><strong>Wire per-runtime egress (ISO-05) + protect control paths (ISO-06) + typed audit (ISO-07).</strong> The mechanisms exist; this is supervisor wiring, the highest-leverage isolation work remaining.</li>
+    <li><strong>Supervisor-death guardian (ISO-02) and the U02 mediation decision (ISO-04).</strong> Design-gated; start the feasibility probes early because they may conclude &ldquo;Endpoint Security entitlement&rdquo; or &ldquo;not shippable,&rdquo; both of which change the roadmap.</li>
+    <li><strong>Linux (ISO-03 enforcement half).</strong> Only after an ABI ≥ 3 runner exists in CI; keep refusal until the macOS-equivalent negative suite passes there.</li>
+  </ol>
+  <div class="callout"><strong>Release rule of thumb:</strong> the hook guard can ship on its own merits today. The contained runtime should be labeled <em>preview</em> — in the banner, the help, and the README badge — until ISO-01, ISO-02, and ISO-05 are closed and the acceptance matrix is re-run green-or-explicitly-partial on landed code.</div>
+</section>
+
+<section id="appendix">
+  <h2>Appendix A &middot; Evidence index</h2>
+  <table>
+    <thead><tr><th>Source</th><th>What it proves / records</th></tr></thead>
+    <tbody>
+      <tr><td><code>docs/security/runtime-acceptance.md</code></td><td>132-criterion matrix; overall NOT SATISFIED; retained logs under <code>.build/security-audit/</code> and <code>docs/security/evidence/</code>.</td></tr>
+      <tr><td><code>docs/security/runtime-boundary.md</code> (1,379 lines)</td><td>Implemented architecture, R1–R4 verdicts, phase 1–7 + F1–F4 + T1–T11 fix/residual record. The single most honest document in the repo — this audit&rsquo;s findings corroborate it.</td></tr>
+      <tr><td><code>docs/security/adversarial-inventory.md</code></td><td>Per-technique DENIED/GAP/NOT-TESTED table keyed to named tests and the CLI/Linux proof harnesses (9 PASS / 10 GAP / 5 NOT-TESTED; Linux 6/3).</td></tr>
+      <tr><td><code>Scripts/runtime-cli-proof.py</code>, <code>Scripts/isolation-linux-adversarial.py</code></td><td>Executable oracles; both exit 2 today by design (gaps present).</td></tr>
+      <tr><td>This audit&rsquo;s live probes</td><td><code>rv --help / opencode --help / workspace --help / egress --help</code>; <code>rv test</code>, <code>explain</code>, <code>doctor</code> (piped); <code>rv egress approve</code> refusal; focused test re-run 19/19.</td></tr>
+    </tbody>
+  </table>
+  <h3>Appendix B &middot; Method note</h3>
+  <p>Read-only audit: no source files were modified. Every RVIsolation source file was inventoried (46 files, 25,526 lines); the load-bearing files (domain compile, Seatbelt profile/apply, Landlock ruleset, supervisors, inode boundary, egress proxy, admission, workspace client/server, CLI commands) were read in full or in decisive sections, and claims were cross-checked against the repo&rsquo;s acceptance/adversarial records and live binary behavior. Where this report disagrees with a document, the code or the live probe wins and the disagreement is stated (see BUG-04 on stale knownGap names). Priorities follow the codebase-health rubric (P0–P4 by user impact, confidence, scope, and leverage); &ldquo;not assessed&rdquo; areas are listed in §6 rather than silently omitted.</p>
+</section>
+
+<footer>
+  <p>Report generated 12 Oct 2026 from the working tree at <code>/Users/chriskarani/CodingProjects/rv</code> (<code>main @ 04b4740c</code> + uncommitted changes). File: <code>rv-isolation-audit-report.html</code>. Companion records: <code>docs/security/runtime-acceptance.md</code>, <code>docs/security/runtime-boundary.md</code>, <code>docs/security/adversarial-inventory.md</code>.</p>
+</footer>
+</div>
+</body>
+</html>

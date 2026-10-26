@@ -1,0 +1,12 @@
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite ProductionIdentityLaunchTests started.
+􀟈  Test selectedDefinitionMintsAnActivePrincipalAndCancellationInvalidatesIt() started.
+􁁛  Test selectedDefinitionMintsAnActivePrincipalAndCancellationInvalidatesIt() passed after 1.893 seconds.
+􀟈  Test legacyHookLabelDoesNotMintAPrincipal() started.
+􁁛  Test legacyHookLabelDoesNotMintAPrincipal() passed after 1.961 seconds.
+􀟈  Test realAdmissionPipesResolveTheSelectedChildPrincipal() started.
+􁁛  Test realAdmissionPipesResolveTheSelectedChildPrincipal() passed after 2.512 seconds.
+􁁛  Suite ProductionIdentityLaunchTests passed after 6.368 seconds.
+􁁛  Test run with 3 tests in 1 suite passed after 6.368 seconds.

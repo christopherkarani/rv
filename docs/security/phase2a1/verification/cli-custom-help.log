@@ -1,0 +1,18 @@
+OVERVIEW: Launch a custom executable with an ad-hoc Agent Definition.
+
+USAGE: rv workspace custom [--workspace <workspace>] --expected-content-digest-sha256 <expected-content-digest-sha256> [--rows <rows>] [--columns <columns>] [<command> ...]
+
+ARGUMENTS:
+  <command>               Absolute custom executable and arguments.
+
+OPTIONS:
+  --workspace <workspace> Project directory, not the home directory. Defaults
+                          to the current directory.
+  --expected-content-digest-sha256 <expected-content-digest-sha256>
+                          Expected SHA-256 digest for the ad-hoc definition;
+                          launch does not verify the executable image.
+  --rows <rows>           Initial terminal rows.
+  --columns <columns>     Initial terminal columns.
+  --version               Show the version.
+  -h, --help              Show help information.
+
