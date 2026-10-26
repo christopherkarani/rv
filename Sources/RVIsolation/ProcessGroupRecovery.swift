@@ -1,8 +1,11 @@
+import Foundation
 #if os(macOS)
 import Darwin
-import Foundation
+#endif
 
 /// Start time and process-group id captured from the kernel after spawn.
+/// These value types are platform-independent: the journal stage machine
+/// (`WorkspaceSessionLifecycle`) narrows recorded groups on every platform.
 struct ProcessGroupFact: Equatable, Sendable {
     var pgid: ValidatedPGID
     var startSeconds: Int64
@@ -36,6 +39,7 @@ struct RecordedProcessGroup: Equatable, Sendable {
     var startMicroseconds: Int64
 }
 
+#if os(macOS)
 enum ProcessGroupStop: Error, Equatable, Sendable {
     /// The kernel did not answer. Do not signal.
     case queryFailed
