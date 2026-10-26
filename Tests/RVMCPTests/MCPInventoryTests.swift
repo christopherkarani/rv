@@ -170,6 +170,7 @@ struct MCPInventoryTests {
             transport: .stdio(command: fake.rv.path, args: ["mcp", "serve", "--server=gone"]))
         #expect(MCPInventoryRow.status(dangling, configuration: configuration, rvExecutable: fake.rv.path) == .dangling)
         #expect(MCPEntryStatus.dangling.isAcceptable == false)
+        #expect(MCPEntryStatus.direct.isAcceptable == false)
         #expect(MCPEntryStatus.governed.isAcceptable)
 
         let relative = MCPHostEntry(

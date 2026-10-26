@@ -119,6 +119,30 @@ struct MCPApprovalSecurityTests {
         #expect(keyless.grant(id: "any", server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: []) == nil)
     }
 
+    /// Linux file custody: the key is readable by any same-user process,
+    /// so a correctly MAC'd grant proves nothing about who approved.
+    /// Such a store must never mint, grant, verify, or consume approvals.
+    @Test func sameUserFileCustodyNeverMintsOrHonorsGrants() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyed = MCPApprovalStore(
+            configDirectory: directory,
+            keys: MCPApprovalKeyStore(load: { MCPSigner(key: Self.key) }, loadOrCreate: { MCPSigner(key: Self.key) }))
+        let ticket = try #require(keyed.request(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []))
+        #expect(keyed.grant(id: ticket.id, server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []) != nil)
+
+        let fileCustody = MCPApprovalStore(
+            configDirectory: directory,
+            keys: MCPApprovalKeyStore(
+                load: { MCPSigner(key: Self.key) }, loadOrCreate: { MCPSigner(key: Self.key) }, honorsGrants: false))
+        #expect(fileCustody.request(server: "gh", tool: "push", argumentsHash: "h2", argumentKeys: []) == nil)
+        #expect(fileCustody.grant(id: ticket.id, server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []) == nil)
+        #expect(fileCustody.verifyCode(id: ticket.id, typed: ticket.code ?? "") == false)
+        #expect(fileCustody.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []) == .none)
+        // Untouched: a gateway whose key needs the person present can still use it.
+        #expect(keyed.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []) == .granted(id: ticket.id))
+    }
+
     @Test func rewrittenPendingRowIsNotSigned() throws {
         let directory = Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }

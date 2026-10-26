@@ -438,18 +438,19 @@ public enum MCPEntryStatus: String, Sendable, Equatable {
     case dangling
     case disabled
 
-    /// Whether `rv mcp check` accepts this status.
+    /// Whether `rv mcp check` accepts this status. Nothing that runs
+    /// outside rv passes: a `direct` entry is recorded, not accepted.
     public var isAcceptable: Bool {
         switch self {
-        case .governed, .direct, .disabled: true
-        case .bypass, .unreviewed, .blocked, .dangling: false
+        case .governed, .disabled: true
+        case .direct, .bypass, .unreviewed, .blocked, .dangling: false
         }
     }
 
     public var explanation: String {
         switch self {
         case .governed: "runs through rv"
-        case .direct: "allowed to run outside rv (mcp.json direct)"
+        case .direct: "runs outside rv (mcp.json direct); import it through rv or disable it"
         case .bypass: "rv has a definition, but this host runs it directly; run `rv mcp setup`"
         case .unreviewed: "not reviewed; `rv mcp import` it, add it to direct, or block it"
         case .blocked: "blocked by mcp.json"
