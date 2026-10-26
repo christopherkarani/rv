@@ -118,6 +118,15 @@ jobs:
           path: .build/release-stage/
           if-no-files-found: error
 
+      - name: Rename release assets (darwin-arm64)
+        run: Scripts/release-assets.sh .build/release-stage release-assets darwin-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-darwin-arm64
+          path: release-assets/
+          if-no-files-found: error
+
   sequoia-smoke:
     name: macos 15 smoke
     runs-on: macos-15
@@ -187,4 +196,132 @@ jobs:
           grep -q 'rv.test.v1' /tmp/rv-test.json
           if grep -E 'Symbol not found|Library not loaded' /tmp/rv-test.err; then
             exit 1
+          fi
+
+  linux:
+    name: linux ${{ matrix.target }}
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache official Swift Linux tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/swift
+          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/.cache/org.swift.swiftpm
+          key: swiftpm-pkgs-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-release-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Tarball runtime deps (not apt swift)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils gcc git gnupg2 libc6-dev libcurl4-openssl-dev \
+            libedit2 libgcc-13-dev libncurses-dev libpython3-dev \
+            libsqlite3-0 libsqlite3-dev libstdc++-13-dev libxml2-dev \
+            libz3-dev pkg-config tzdata zip unzip zlib1g-dev file
+          if dpkg-query -W -f='${Status}\n' swift swiftlang 2>/dev/null \
+            | grep -q 'install ok installed'; then
+            printf 'release: apt swift/swiftlang is present; refuse\n' >&2
+            exit 1
+          fi
+
+      - name: Install official Swift 6.4 Linux tarball
+        run: |
+          bin="$(Scripts/install-official-swift-linux.sh --print-bin)"
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "Official tarball bin: $bin"
+
+      - name: Confirm official Swift 6.4
+        run: |
+          swift --version
+          pin="$(tr -d '[:space:]' < .swift-version)"
+          swift --version | head -n 1 | grep -Eq "Swift version ${pin}( |$)"
+
+      - name: Stage release binaries
+        run: Scripts/release.sh
+
+      - name: Linux stage smoke
+        run: |
+          set -euo pipefail
+          stage=.build/release-stage
+          for bin in rv rv-cli rvd rv-workspace-host rv-isolation-exec; do
+            file "$stage/$bin"
+            file "$stage/$bin" | grep -q 'ELF'
+            case "${{ matrix.target }}" in
+              linux-x86_64) file "$stage/$bin" | grep -q 'x86-64' ;;
+              linux-aarch64) file "$stage/$bin" | grep -q 'ARM aarch64' ;;
+            esac
+          done
+          "$stage/rv-cli" --help > /tmp/rv-cli-help.txt
+          grep -q 'setup' /tmp/rv-cli-help.txt
+          "$stage/rvd" --version > /tmp/rvd-version.txt
+          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' /tmp/rvd-version.txt
+          # No daemon beside the stage: the hook fails closed with a deny.
+          tmp_run="$(mktemp -d)"
+          printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
+            | HOME=/tmp XDG_RUNTIME_DIR="$tmp_run" "$stage/rv" hook --host claude-code > /tmp/hook-out.json
+          grep -q 'deny' /tmp/hook-out.json
+
+      - name: Rename release assets
+        run: Scripts/release-assets.sh .build/release-stage release-assets ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.target }}
+          path: release-assets/
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    if: github.event_name == 'push'
+    needs: [gate, sequoia-smoke, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: assets
+          merge-multiple: true
+
+      - name: Attach install script and checksums
+        run: |
+          set -euo pipefail
+          cp install.sh assets/install.sh
+          (cd assets && sha256sum -- * > SHA256SUMS)
+          ls -l assets
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" assets/* \
+              --title "$GITHUB_REF_NAME" --generate-notes
           fi
