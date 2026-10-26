@@ -204,6 +204,50 @@ private func runInstallScript(
     #expect(text.contains("LaunchAgent") == false)
 }
 
+/// install.sh's baked HF pins must match Scripts/laya/distribution-manifest.json
+/// (the upload script's pin). Drift means curl installs fetch the wrong revision.
+@Test func installSh_modelPinsMatchManifest() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    func pin(_ name: String) throws -> String {
+        for line in text.split(separator: "\n") {
+            let line = String(line)
+            guard line.hasPrefix(name + "=") else { continue }
+            var value = String(line.dropFirst(name.count + 1))
+            // Strip `"${VAR:-default}"` / `"default"` wrapping.
+            if value.hasPrefix("\"${") , let range = value.range(of: ":-") {
+                value = String(value[range.upperBound...])
+            }
+            value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"}"))
+            return value
+        }
+        throw NSError(domain: "InstallScriptTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "missing pin \(name)"])
+    }
+    let repo = try pin("models_hf_repo")
+    let rev = try pin("models_hf_rev")
+    let bundle = try pin("models_bundle")
+    #expect(repo.contains("/") && !repo.contains(" "))
+    #expect(rev.count == 40)
+    #expect(bundle == "laya-ft-v2-coreml")
+
+    let manifestURL = repoRootURL().appendingPathComponent("Scripts/laya/distribution-manifest.json")
+    let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any]
+    let engines = try #require(manifest?["engines"] as? [String: [String: Any]])
+    let ft = try #require(engines["ft"])
+    #expect(ft["hf_repo"] as? String == repo)
+    #expect(ft["hf_revision"] as? String == rev)
+    #expect(ft["bundle_dir"] as? String == bundle)
+    let files = try #require(ft["files"] as? [[String: Any]])
+    let manifestLines = files.map { "\($0["path"] ?? "") \($0["sha256"] ?? "") \($0["bytes"] ?? "")" }
+    let scriptBlock: String = {
+        guard let start = text.range(of: "models_files=\""),
+              let end = text[start.upperBound...].range(of: "\"")
+        else { return "" }
+        return String(text[start.upperBound...][..<end.lowerBound])
+    }()
+    let scriptLines = scriptBlock.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+    #expect(scriptLines == manifestLines)
+}
+
 @Test func readme_hasNoBrewInstallPath() throws {
     let text = try String(
         contentsOf: repoRootURL().appendingPathComponent("README.md"),

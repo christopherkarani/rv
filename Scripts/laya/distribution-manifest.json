@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "note": "Single source of truth for Laya judge weight distribution. files[] entries (path, sha256, bytes) were recorded at packaging time from /tmp/laya-train/ft and are the values the fetch script verifies. hf_repo / hf_revision are null until the owner runs Scripts/laya/hf-upload.py, which fills them in. Tests/RVServiceTests/JudgeModelDistributionTests.swift guards this contract.",
+  "engines": {
+    "ft": {
+      "description": "Fine-tuned single-pass judge (Ticket 4b/5a). macOS production bundle.",
+      "bundle_dir": "laya-ft-v2-coreml",
+      "hf_repo": "karc14/rv-laya-ft-v2-coreml",
+      "hf_revision": "a71b1ce7cba9e795334ec60017a23c6488171ce8",
+      "files": [
+        {
+          "path": "model.mlpackage/Manifest.json",
+          "sha256": "3c713c254fee9e6914355e82f4c3e9adc4dbca667a956b284d38f5a18393a1d5",
+          "bytes": 617
+        },
+        {
+          "path": "model.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "sha256": "fd60b8928154754362d660163a4a15e203337ae4cb2ccf98b461233db366bce4",
+          "bytes": 356877
+        },
+        {
+          "path": "model.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "sha256": "5abb590e28cef8c312b3afc2f28046f186f1127893989bda6a880f352261377b",
+          "bytes": 613899008
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f",
+          "bytes": 34363188
+        },
+        {
+          "path": "config.json",
+          "sha256": "c0099d659944d44cb3d711b55c25482819f2e8f5e17f2d0b37d6d7cb1b22aba5",
+          "bytes": 423
+        }
+      ]
+    },
+    "onnx": {
+      "description": "Same fine-tune, fp16 ONNX. Held for the future Linux runtime (not wired yet); uploaded alongside so the weights are archived once.",
+      "bundle_dir": "laya-ft-v2-onnx",
+      "hf_repo": "karc14/rv-laya-ft-v2-onnx",
+      "hf_revision": "7b6ad83cd8bf4670f50bb31cac60d682d2280279",
+      "files": [
+        {
+          "path": "model-fp16.onnx",
+          "sha256": "c5b0fa4c2aa985743be9893866ca50001da0fd32e4fe5564e2e85c244e170255",
+          "bytes": 2499182
+        },
+        {
+          "path": "model-fp16.onnx.data",
+          "sha256": "6e8c9cb8417f498d46d88921fca8fb227667e83514e1a4829efa8e1dfc379025",
+          "bytes": 613941248
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f",
+          "bytes": 34363188
+        },
+        {
+          "path": "config.json",
+          "sha256": "ea6c542bb0e18f0e961539144571f682c8b034aa6ac2e4b4cdadac6fc444e93c",
+          "bytes": 1896
+        }
+      ]
+    }
+  }
+}
