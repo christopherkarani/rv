@@ -24,6 +24,7 @@ import hashlib
 import json
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -130,15 +131,19 @@ def main() -> int:
     ap.add_argument("--repo", required=True, help="owner/name of the HF repo")
     ap.add_argument("--engine", required=True, choices=["ft", "onnx"])
     ap.add_argument("--source", default=str(DEFAULT_SOURCE))
-    ap.add_argument("--staging", default="/tmp/laya-hf-stage")
+    ap.add_argument("--staging", default=None,
+                    help="staging root (default: a fresh mkdtemp)")
     ap.add_argument("--private", action="store_true", help="create a private repo")
     ap.add_argument("--dry-run", action="store_true", help="stage + print, no upload")
     args = ap.parse_args()
 
     source = Path(args.source)
-    staging = Path(args.staging) / args.engine
-    if staging.exists():
-        shutil.rmtree(staging)
+    if args.staging:
+        staging = Path(args.staging) / args.engine
+        if staging.exists():
+            shutil.rmtree(staging)
+    else:
+        staging = Path(tempfile.mkdtemp(prefix="laya-hf-stage-")) / args.engine
     staging.mkdir(parents=True)
 
     staged = stage_files(args.engine, source, staging)

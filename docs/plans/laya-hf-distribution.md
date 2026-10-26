@@ -10,18 +10,19 @@ says so. This doc is the runbook.
 
 ## The pieces (all landed)
 
-- [distribution-manifest.json](../Scripts/laya/distribution-manifest.json) —
+- [distribution-manifest.json](../../Scripts/laya/distribution-manifest.json) —
   single source of truth. Per engine: install dir name, HF repo + revision
   (null until first upload), and every file with its SHA-256 and byte size,
   recorded at packaging time from `/tmp/laya-train/ft`.
-- [hf-upload.py](../Scripts/laya/hf-upload.py) — stages the verified Ticket 5a
+- [hf-upload.py](../../Scripts/laya/hf-upload.py) — stages the verified Ticket 5a
   artifacts plus a model card (same shape as the stock
   `aac6fef/laya-multilingual-coreml` card: Apache-2.0, `base_model` pointer,
   provenance, per-file hashes) and uploads one engine per repo. `--dry-run`
   stages and prints without touching the network.
-- [fetch-models.sh](../Scripts/laya/fetch-models.sh) — downloads the pinned
-  revision with curl, verifies SHA-256 + size per file, refuses on any
-  mismatch, installs to `~/.config/rv/models/<bundle-dir>` (the exact dir
+- [fetch-models.sh](../../Scripts/laya/fetch-models.sh) — downloads the pinned
+  revision with curl into staging, verifies SHA-256 + size per file, refuses
+  on any mismatch, and swaps into place atomically only when everything
+  verifies. Installs to `~/.config/rv/models/<bundle-dir>` (the exact dir
   `JudgeRuntime.expectedBundleDir` looks in). Fully offline afterwards.
 - [JudgeModelDistributionTests.swift](../../Tests/RVServiceTests/JudgeModelDistributionTests.swift) —
   contract test: the manifest parses, engine names match the runtime's bundle

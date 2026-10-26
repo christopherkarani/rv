@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Single source of truth for Laya judge weight distribution. files[] entries (path, sha256, bytes) were recorded at packaging time from /tmp/laya-train/ft and are the values the fetch script verifies. hf_repo / hf_revision are null until the owner runs Scripts/laya/hf-upload.py, which fills them in. Tests/RVServiceTests/JudgeModelDistributionTests.swift guards this contract.",
+  "note": "Single source of truth for Laya judge weight distribution. files[] entries (path, sha256, bytes) were recorded at packaging time from /tmp/laya-train/ft and are the values the fetch script verifies. hf_repo / hf_revision are written by Scripts/laya/hf-upload.py on every upload (commit the manifest with the upload); the fetch script refuses to run when either is missing. version must be 1 (asserted by the fetch script and JudgeModelDistributionTests). Tests/RVServiceTests/JudgeModelDistributionTests.swift guards this contract.",
   "engines": {
     "ft": {
       "description": "Fine-tuned single-pass judge (Ticket 4b/5a). macOS production bundle.",

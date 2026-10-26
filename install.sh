@@ -306,14 +306,20 @@ fetch_model_bundle() {
   [ -z "${RV_INSTALL_BIN:-}" ] || return 0
   [ "${RV_INSTALL_NO_MODELS:-}" != "1" ] || return 0
   dest="$HOME/.config/rv/models/$models_bundle"
-  [ -d "$dest/model.mlpackage" ] && return 0
+  # A partial bundle does not count: JudgeRuntime.ftBundleDir requires the
+  # model AND the tokenizer, so re-running the installer must repair a
+  # partial bundle instead of skipping it.
+  if [ -d "$dest/model.mlpackage" ] && { [ -f "$dest/tokenizer.json" ] || [ -f "$dest/tokenizer/tokenizer.json" ]; }; then
+    return 0
+  fi
+  command -v shasum >/dev/null 2>&1 || { echo "rv: warning: shasum missing; skipping judge weights" >&2; return 0; }
   tmp_models="$(mktemp -d "${TMPDIR:-/tmp}/rv-models.XXXXXX")" || return 0
   while read -r rel _bytes; do
     [ -n "$rel" ] || continue
     out="$tmp_models/$rel"
     mkdir -p "$(dirname "$out")"
     url="https://huggingface.co/$models_hf_repo/resolve/$models_hf_rev/$rel"
-    curl -fsSL "$url" -o "$out" &
+    curl -fsSL --connect-timeout 15 --speed-limit 1000 --speed-time 60 "$url" -o "$out" &
     cpid=$!
     while kill -0 "$cpid" 2>/dev/null; do
       got="$(bytes_of "$out")"
@@ -327,6 +333,7 @@ fetch_model_bundle() {
     if ! wait "$cpid"; then
       echo "rv: warning: failed to download judge weights ($rel); continuing packs-only" >&2
       rm -rf "$tmp_models"
+      tmp_models=""
       return 0
     fi
     progress_base=$((progress_base + $(bytes_of "$out")))
@@ -350,7 +357,7 @@ EOF
   done <<EOF
 $models_files
 EOF
-  mkdir -p "$HOME/.config/rv/models"
+  mkdir -p "$HOME/.config/rv/models" || { echo "rv: warning: could not create models dir; continuing packs-only" >&2; rm -rf "$tmp_models"; tmp_models=""; return 0; }
   rm -rf "$dest"
   if ! mv "$tmp_models" "$dest"; then
     echo "rv: warning: could not install judge weights; continuing packs-only" >&2
