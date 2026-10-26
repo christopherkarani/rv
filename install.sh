@@ -46,6 +46,22 @@ bin="$HOME/.local/bin"
 mkdir -p "$bin"
 
 release_base="https://github.com/christopherkarani/rv/releases/latest/download"
+# Laya judge weights (Hugging Face). macOS curl installs fetch these into
+# ~/.config/rv/models/laya-ft-v2-coreml so the judge binds on first run;
+# Linux skips (no ONNX runtime yet — an ONNX-only dir would read as
+# packs-only). Pinned by Scripts/laya/hf-upload.py; the same pins live in
+# Scripts/laya/distribution-manifest.json (InstallScriptTests check they
+# match). Override only via the env vars below, and update the manifest in
+# the same commit.
+models_hf_repo="${MODELS_HF_REPO:-karc14/rv-laya-ft-v2-coreml}"
+models_hf_rev="${MODELS_HF_REVISION:-a71b1ce7cba9e795334ec60017a23c6488171ce8}"
+models_bundle="laya-ft-v2-coreml"
+# path, sha256, bytes — must match the manifest's ft engine files.
+models_files="model.mlpackage/Manifest.json 3c713c254fee9e6914355e82f4c3e9adc4dbca667a956b284d38f5a18393a1d5 617
+model.mlpackage/Data/com.apple.CoreML/model.mlmodel fd60b8928154754362d660163a4a15e203337ae4cb2ccf98b461233db366bce4 356877
+model.mlpackage/Data/com.apple.CoreML/weights/weight.bin 5abb590e28cef8c312b3afc2f28046f186f1127893989bda6a880f352261377b 613899008
+tokenizer.json 609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f 34363188
+config.json c0099d659944d44cb3d711b55c25482819f2e8f5e17f2d0b37d6d7cb1b22aba5 423"
 # Flip to 1 and pin the Team ID once releases are Developer ID signed: from
 # then on an unsigned download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1.
 signed_releases=0
@@ -57,6 +73,7 @@ tmp_rvd=""
 tmp_host=""
 tmp_span=""
 tmp_isolation=""
+tmp_models=""
 
 # Download progress. Same glyphs/width as Sources/RVTUI/SetupRenderer.swift.
 progress_width=24
@@ -75,6 +92,7 @@ cleanup() {
   [ -n "${tmp_host:-}" ] && rm -f "$tmp_host"
   [ -n "${tmp_span:-}" ] && rm -f "$tmp_span"
   [ -n "${tmp_isolation:-}" ] && rm -f "$tmp_isolation"
+  [ -n "${tmp_models:-}" ] && rm -rf "$tmp_models"
   [ -n "${tmp_fetch:-}" ] && rm -rf "$tmp_fetch"
   :
 }
@@ -277,6 +295,78 @@ fetch_pack_bundles() {
   rm -f "$tarball"
   echo "rv: failed to unpack $name" >&2
   exit 1
+}
+
+# Best-effort judge weights for macOS curl installs. Never fails the
+# install: any error warns on stderr and the guard runs packs-only.
+# Skipped for local stages (RV_INSTALL_BIN: tests/offline), with
+# RV_INSTALL_NO_MODELS=1, and when a bundle is already installed.
+fetch_model_bundle() {
+  [ "$os" = "Darwin" ] || return 0
+  [ -z "${RV_INSTALL_BIN:-}" ] || return 0
+  [ "${RV_INSTALL_NO_MODELS:-}" != "1" ] || return 0
+  dest="$HOME/.config/rv/models/$models_bundle"
+  # A partial bundle does not count: JudgeRuntime.ftBundleDir requires the
+  # model AND the tokenizer, so re-running the installer must repair a
+  # partial bundle instead of skipping it.
+  if [ -d "$dest/model.mlpackage" ] && { [ -f "$dest/tokenizer.json" ] || [ -f "$dest/tokenizer/tokenizer.json" ]; }; then
+    return 0
+  fi
+  command -v shasum >/dev/null 2>&1 || { echo "rv: warning: shasum missing; skipping judge weights" >&2; return 0; }
+  tmp_models="$(mktemp -d "${TMPDIR:-/tmp}/rv-models.XXXXXX")" || return 0
+  while read -r rel _bytes; do
+    [ -n "$rel" ] || continue
+    out="$tmp_models/$rel"
+    mkdir -p "$(dirname "$out")"
+    url="https://huggingface.co/$models_hf_repo/resolve/$models_hf_rev/$rel"
+    curl -fsSL --connect-timeout 15 --speed-limit 1000 --speed-time 60 "$url" -o "$out" &
+    cpid=$!
+    while kill -0 "$cpid" 2>/dev/null; do
+      got="$(bytes_of "$out")"
+      progress_have=$((progress_base + got))
+      if [ "$progress_have" -gt "$progress_total" ]; then
+        progress_total=$progress_have
+      fi
+      progress_update
+      sleep 0.05
+    done
+    if ! wait "$cpid"; then
+      echo "rv: warning: failed to download judge weights ($rel); continuing packs-only" >&2
+      rm -rf "$tmp_models"
+      tmp_models=""
+      return 0
+    fi
+    progress_base=$((progress_base + $(bytes_of "$out")))
+    progress_have=$progress_base
+    progress_update
+  done <<EOF
+$(printf '%s\n' "$models_files" | awk '{print $1, $3}')
+EOF
+  total=0
+  while read -r rel want_hash want_bytes; do
+    [ -n "$rel" ] || continue
+    got_hash="$(shasum -a 256 "$tmp_models/$rel" | awk '{print $1}')"
+    got_bytes="$(bytes_of "$tmp_models/$rel")"
+    if [ "$got_hash" != "$want_hash" ] || [ "$got_bytes" != "$want_bytes" ]; then
+      echo "rv: warning: judge weights failed verification ($rel); continuing packs-only" >&2
+      rm -rf "$tmp_models"
+      tmp_models=""
+      return 0
+    fi
+    total=$((total + got_bytes))
+  done <<EOF
+$models_files
+EOF
+  mkdir -p "$HOME/.config/rv/models" || { echo "rv: warning: could not create models dir; continuing packs-only" >&2; rm -rf "$tmp_models"; tmp_models=""; return 0; }
+  rm -rf "$dest"
+  if ! mv "$tmp_models" "$dest"; then
+    echo "rv: warning: could not install judge weights; continuing packs-only" >&2
+    rm -rf "$tmp_models" "$dest"
+    tmp_models=""
+    return 0
+  fi
+  tmp_models=""
+  echo "rv: judge weights $models_hf_repo @ $(printf '%s' "$models_hf_rev" | cut -c1-12) installed ($total bytes)" >&2
 }
 
 # The last physical line whose text starts with $2. A newline inside
@@ -639,6 +729,9 @@ else
     chmod 755 "$tmp_fetch/rv-isolation-exec"
   fi
   fetch_pack_bundles "$tmp_fetch" "$size_packs"
+  # Judge weights ride the same progress bar. Best-effort: any failure
+  # warns and the install continues packs-only.
+  fetch_model_bundle
   progress_finish
 
   src="$tmp_fetch"

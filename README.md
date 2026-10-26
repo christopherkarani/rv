@@ -40,6 +40,11 @@ rv setup    # auto-detects your agents and wires their hooks
 rv doctor   # verify everything is live
 ```
 
+On macOS the installer also fetches the on-device judge weights (~649 MB,
+verified by SHA-256, fully offline after) so the neural judge binds on first
+run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
+installer anytime to pick up the weights.
+
 Works with **Claude Code, Codex, Cursor, Grok, OpenCode, Pi, Hermes,
 OpenClaw, and Antigravity**. Hooks are only written for hosts already
 on your machine. Requires macOS 15+ (Apple Silicon) or Linux
