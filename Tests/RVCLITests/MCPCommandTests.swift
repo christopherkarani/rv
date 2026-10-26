@@ -5468,7 +5468,15 @@ struct MCPCommandTests {
                 name: "fs", command: "fs-mcp", tools: MCPToolPolicy(allow: ["read_*"], ask: ["write_*"]),
                 sandbox: MCPSandboxPolicy(network: false))
         ]))
-        #expect(try report(fixture).passes)
+        let initial = try report(fixture)
+        #if os(macOS)
+        #expect(initial.passes)
+        #else
+        // No cage off macOS yet: the sandboxed fixture server cannot serve,
+        // so check reports it instead of passing.
+        #expect(initial.passes == false)
+        #expect(initial.problems.contains { $0.message.contains("only on macOS") })
+        #endif
         let path = ".config/rv/mcp.json"
         try fixture.write(path, fixture.text(path).replacingOccurrences(of: "write_*", with: "zz_*"))
         chmod(fixture.home.appendingPathComponent(path).path, 0o600)
