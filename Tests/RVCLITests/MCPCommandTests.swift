@@ -74,7 +74,7 @@ struct MCPCommandTests {
         #expect(MCPRun.checkText(try report(fixture), home: fixture.home).contains("plaintext"))
 
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: fixture.environment()
+            host: .cursor, names: [], project: nil, dryRun: false, environment: fixture.environment()
         ).get()
         #expect(imported.contains("import github: npx (credentials → rv secrets GITHUB_PERSONAL_ACCESS_TOKEN)"))
         #expect(imported.contains("ghp_") == false)
@@ -94,7 +94,10 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)
-        #expect(after.passes)
+        // Imported local servers carry no sandbox yet: governed, but check
+        // stays red until one is added and the file is re-trusted.
+        #expect(after.passes == false)
+        #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
         #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         let relative = try report(fixture, rvExecutable: "")
         #expect(relative.rows.contains { $0.name == "github" && $0.status == "governed" } == false)
@@ -110,27 +113,27 @@ struct MCPCommandTests {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
         let dry = try await MCPRun.importServers(
-            host: .cursor, names: ["github"], project: nil, allowTools: false, dryRun: true, environment: fixture.environment()
+            host: .cursor, names: ["github"], project: nil, dryRun: true, environment: fixture.environment()
         ).get()
         #expect(dry.contains("dry run"))
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
 
         let refusing = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false })
         let failed = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(keychain: refusing))
         #expect(failed.failureMessage?.contains("nothing imported") == true)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
 
         let unknown = await MCPRun.importServers(
-            host: .cursor, names: ["nope"], project: nil, allowTools: false, dryRun: false, environment: fixture.environment())
+            host: .cursor, names: ["nope"], project: nil, dryRun: false, environment: fixture.environment())
         #expect(unknown.failureMessage == "cursor has no MCP server named nope")
 
         let huge = String(repeating: "a1", count: (SecretValue.maximumBytes / 2) + 1)
         try fixture.write(".cursor/mcp.json", #"{"mcpServers": {"gh": {"command": "npx", "env": {"GITHUB_TOKEN": "\#(huge)"}}}}"#)
         let rejected = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: fixture.environment())
+            host: .cursor, names: [], project: nil, dryRun: false, environment: fixture.environment())
         #expect(rejected.failureMessage?.contains("nothing imported") == true)
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
 
@@ -147,7 +150,7 @@ struct MCPCommandTests {
             {"mcpServers": {"gh": {"command": "npx", "env": {"GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "API_KEY": "sk-abcdefghijklmnopqrst"}}}}
             """)
         let failedSecond = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(keychain: partial))
         #expect(failedSecond.failureMessage?.contains("nothing imported") == false)
         #expect(failedSecond.failureMessage?.contains("already stored") == true)
@@ -179,14 +182,14 @@ struct MCPCommandTests {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
         let dry = try await MCPRun.importServers(
-            host: .cursor, names: ["github"], project: nil, allowTools: false, dryRun: true,
+            host: .cursor, names: ["github"], project: nil, dryRun: true,
             environment: fixture.environment(presence: Self.absent)
         ).get()
         #expect(dry.contains("dry run"))
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
 
         let refused = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(presence: Self.absent))
         #expect(refused.failureMessage == "not imported: this process has no terminal; nothing imported")
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
@@ -212,7 +215,7 @@ struct MCPCommandTests {
         }
         let dryShown = Mutex(false)
         let dry = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: true, dryRun: true,
+            host: .cursor, names: [], project: nil, dryRun: true,
             environment: fixture.environment(presence: presence), show: { _ in dryShown.withLock { $0 = true } }
         ).get()
         #expect(dry.contains("dry run"))
@@ -221,14 +224,14 @@ struct MCPCommandTests {
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
 
         let refused = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: true, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } })
         #expect(refused.failureMessage == "not imported: declined; nothing imported")
         let review = shown.withLock { $0 }
         #expect(review.contains("https://mcp.example/mcp"))
         #expect(review.contains("Authorization → secret API_AUTHORIZATION"))
         #expect(review.contains("GITHUB_PERSONAL_ACCESS_TOKEN → secret GITHUB_PERSONAL_ACCESS_TOKEN"))
-        #expect(review.contains("tools will be allow"))
+        #expect(review.contains("tools: ask before every tool"))
         #expect(review.contains(token) == false)
         #expect(promptedAfterReview.withLock { $0 })
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
@@ -255,7 +258,7 @@ struct MCPCommandTests {
             return .refused("value was not shown")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
         ).get()
         let review = shown.withLock { $0 }
@@ -281,7 +284,7 @@ struct MCPCommandTests {
             try fixture.write(".cursor/mcp.json", #"{"mcpServers":{"api":{"url":"\#(url)"}}}"#)
             let shown = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: fixture.environment(presence: Self.present),
                 show: { text in shown.withLock { $0 += text } }
             ).get()
@@ -317,7 +320,7 @@ struct MCPCommandTests {
             return .refused("arg was not shown")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
         ).get()
         #expect(imported.contains("wrote mcp.json"))
@@ -340,7 +343,7 @@ struct MCPCommandTests {
                 """)
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -487,7 +490,7 @@ struct MCPCommandTests {
             return .refused("value was not shown")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: home.environment(presence: importing),
             show: { text in importedReview.withLock { $0 += text } }
         ).get()
@@ -699,7 +702,7 @@ struct MCPCommandTests {
             try home.write(".cursor/mcp.json", #"{"mcpServers":{"db":{"command":"db-mcp","args":\#(args)}}}"#)
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -718,7 +721,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?token=\#(token)"}}}"#)
         let commandResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: commandHome.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(commandResult.contains("nothing to import"))
@@ -731,7 +734,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user:%2F\#(password)@collector.example"}}}"#)
         let slashResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: slashCommand.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(slashResult.contains("nothing to import"))
@@ -744,7 +747,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user:/\#(password)@collector.example"}}}"#)
         let rawSlashResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: rawSlashCommand.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(rawSlashResult.contains("nothing to import"))
@@ -757,7 +760,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user://su&\#(password)@collector.example"}}}"#)
         let doubleSlashResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: doubleSlashCommand.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(doubleSlashResult.contains("nothing to import"))
@@ -770,7 +773,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user:/%2Fsu&\#(password)@collector.example"}}}"#)
         let encodedSlashResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: encodedSlashCommand.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(encodedSlashResult.contains("nothing to import"))
@@ -796,7 +799,7 @@ struct MCPCommandTests {
                     #"{"mcpServers":{"db":{"command":"db-mcp","env":{"\#(variable)":"\#(encoded)"}}}}"#)
                 let review = Mutex("")
                 let result = try await MCPRun.importServers(
-                    host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                    host: .cursor, names: [], project: nil, dryRun: false,
                     environment: home.environment(presence: Self.present),
                     show: { text in review.withLock { $0 += text } }
                 ).get()
@@ -815,7 +818,7 @@ struct MCPCommandTests {
             #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"Authorization":"Bearer ctx7sk-12345678^\#(token)"}}}}"#)
         let bearerReview = Mutex("")
         let bearerResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: bearer.environment(presence: Self.present),
             show: { text in bearerReview.withLock { $0 += text } }
         ).get()
@@ -830,7 +833,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"X-API-Key":"sk-12345678^\#(token)"}}}}"#)
         let apiResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: apiKey.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(apiResult.contains(token) == false)
@@ -872,7 +875,7 @@ struct MCPCommandTests {
                     #"{"mcpServers":{"db":{"command":"db-mcp","env":{"\#(variable)":"\#(encoded)"}}}}"#)
                 let review = Mutex("")
                 let result = try await MCPRun.importServers(
-                    host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                    host: .cursor, names: [], project: nil, dryRun: false,
                     environment: home.environment(presence: Self.present),
                     show: { text in review.withLock { $0 += text } }
                 ).get()
@@ -911,7 +914,7 @@ struct MCPCommandTests {
                 #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"\#(header)":"\#(encoded)"}}}}"#)
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -929,7 +932,7 @@ struct MCPCommandTests {
             #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"Authorization":"Bearer\tctx7sk-12345678^\#(token)"}}}}"#)
         let tabbedReview = Mutex("")
         let tabbedResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: tabbed.environment(presence: Self.present),
             show: { text in tabbedReview.withLock { $0 += text } }
         ).get()
@@ -945,7 +948,7 @@ struct MCPCommandTests {
             ".cursor/mcp.json",
             #"{"mcpServers":{"db":{"command":"db-mcp","env":{"GITHUB_TOKEN":"ctx7sk-12345678g\u200ehp_1234567890abcdefghij"}}}}"#)
         let escapeResult = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: jsonEscape.environment(presence: Self.present), show: { _ in }
         ).get()
         #expect(escapeResult.contains("ghp_") == false)
@@ -964,7 +967,7 @@ struct MCPCommandTests {
         try home.write(".cursor/mcp.json", document)
         let review = Mutex("")
         let result = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: home.environment(presence: Self.present),
             show: { text in review.withLock { $0 += text } }
         ).get()
@@ -1121,7 +1124,7 @@ struct MCPCommandTests {
         try home.write(".cursor/mcp.json", try hostJSON("db", ["command": named, "args": ["--cwd=\(named)"]]))
         let review = Mutex("")
         let result = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: home.environment(presence: Self.present),
             show: { text in review.withLock { $0 += text } }
         ).get()
@@ -2753,7 +2756,7 @@ struct MCPCommandTests {
             try home.write(".cursor/mcp.json", try hostJSON("db", fields))
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -2869,7 +2872,7 @@ struct MCPCommandTests {
                 try home.write(".cursor/mcp.json", try hostJSON("db", fields))
                 let review = Mutex("")
                 let result = try await MCPRun.importServers(
-                    host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                    host: .cursor, names: [], project: nil, dryRun: false,
                     environment: home.environment(presence: Self.present),
                     show: { text in review.withLock { $0 += text } }
                 ).get()
@@ -3201,7 +3204,7 @@ struct MCPCommandTests {
             try home.write(".cursor/mcp.json", try hostJSON("db", ["command": value, "args": ["--cwd=\(value)"]]))
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -3467,7 +3470,7 @@ struct MCPCommandTests {
         ]))
         let review = Mutex("")
         let result = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: bare.environment(presence: Self.present),
             show: { text in review.withLock { $0 += text } }
         ).get()
@@ -3717,7 +3720,7 @@ struct MCPCommandTests {
             try home.write(".cursor/mcp.json", #"{"mcpServers":{"db":{"command":"\#(command)"}}}"#)
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -3736,7 +3739,7 @@ struct MCPCommandTests {
             try home.write(".cursor/mcp.json", #"{"mcpServers":{"api":{"url":"\#(url)"}}}"#)
             let review = Mutex("")
             let result = try await MCPRun.importServers(
-                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                host: .cursor, names: [], project: nil, dryRun: false,
                 environment: home.environment(presence: Self.present),
                 show: { text in review.withLock { $0 += text } }
             ).get()
@@ -3819,7 +3822,7 @@ struct MCPCommandTests {
         ])
         strict.profile = .strict
         let review = MCPRun.trustReview(strict)
-        #expect(review.hasPrefix("mcp.json: default deny for tools without a rule\n  profile strict: unlisted tools deny"), "\(review)")
+        #expect(review.hasPrefix("mcp.json: default deny for tools without a rule\n  unlisted tools deny; local servers need a sandbox"), "\(review)")
         #expect(review.contains("allow get_* · other tools deny · network only to api.github.com"), "\(review)")
         #expect(review.contains(" · no network"), "\(review)")
     }
@@ -4747,7 +4750,7 @@ struct MCPCommandTests {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", "{\"mcpServers\":{}}")
         let imported = await MCPRun.importServers(
-            host: .cursor, names: [reversed], project: nil, allowTools: false, dryRun: true,
+            host: .cursor, names: [reversed], project: nil, dryRun: true,
             environment: fixture.environment())
         guard case .failure(let failure) = imported else {
             Issue.record("unknown host server was imported")
@@ -4861,8 +4864,8 @@ struct MCPCommandTests {
         #expect(controlReview.contains("\\\\u001b[2J"))
         #expect(controlReview.contains("\\\\\\\\u001b[2J") == false)
         #expect(literalReview.contains("\\\\\\\\u001b[2J"))
-        let controlImport = MCPRun.importPresenceReview(servers: control.servers, allowTools: false)
-        let literalImport = MCPRun.importPresenceReview(servers: literal.servers, allowTools: false)
+        let controlImport = MCPRun.importPresenceReview(servers: control.servers)
+        let literalImport = MCPRun.importPresenceReview(servers: literal.servers)
         func digest(_ shown: String) -> String {
             shown.split(separator: "\n").first { $0.hasPrefix("sha256 ") }.map(String.init) ?? ""
         }
@@ -4872,8 +4875,8 @@ struct MCPCommandTests {
 
         let spaced = MCPServerDefinition(name: "notes", command: "bash", args: ["-c", "id"])
         let joined = MCPServerDefinition(name: "notes", command: "bash -c", args: ["id"])
-        let spacedImport = MCPRun.importPresenceReview(servers: [spaced], allowTools: false)
-        let joinedImport = MCPRun.importPresenceReview(servers: [joined], allowTools: false)
+        let spacedImport = MCPRun.importPresenceReview(servers: [spaced])
+        let joinedImport = MCPRun.importPresenceReview(servers: [joined])
         #expect(spacedImport.shown != joinedImport.shown)
         #expect(digest(spacedImport.shown) != digest(joinedImport.shown))
         #expect(MCPRun.trustReview(MCPConfiguration(servers: [spaced])) != MCPRun.trustReview(MCPConfiguration(servers: [joined])))
@@ -5216,7 +5219,7 @@ struct MCPCommandTests {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", #"{"mcpServers": {"notes": {"command": "echo\u001b[3J"}}}"#)
         let dry = try await MCPRun.importServers(
-            host: .cursor, names: ["notes"], project: nil, allowTools: false, dryRun: true,
+            host: .cursor, names: ["notes"], project: nil, dryRun: true,
             environment: fixture.environment(presence: Self.absent)
         ).get()
         #expect(dry.unicodeScalars.contains { $0.value == 0x1B } == false)
@@ -5229,13 +5232,13 @@ struct MCPCommandTests {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
         let absent = await MCPRun.importServers(
-            host: .cursor, names: ["seq"], project: nil, allowTools: true, dryRun: false,
+            host: .cursor, names: ["seq"], project: nil, dryRun: false,
             environment: fixture.environment(presence: Self.absent))
         #expect(absent.failureMessage?.contains("nothing imported") == true)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
 
         let dry = try await MCPRun.importServers(
-            host: .cursor, names: ["seq"], project: nil, allowTools: true, dryRun: true,
+            host: .cursor, names: ["seq"], project: nil, dryRun: true,
             environment: fixture.environment(presence: Self.absent)
         ).get()
         #expect(dry.contains("dry run"))
@@ -5250,7 +5253,7 @@ struct MCPCommandTests {
             return .refused("not device owner")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: ["seq"], project: nil, allowTools: true, dryRun: false,
+            host: .cursor, names: ["seq"], project: nil, dryRun: false,
             environment: fixture.environment(presence: watching)
         ).get()
         #expect(imported.contains("wrote mcp.json"))
@@ -5258,14 +5261,15 @@ struct MCPCommandTests {
         let loaded = try MCPRun.configuration(fixture.environment()).get()
         let seq = try #require(loaded.server(named: "seq"))
         #expect(seq.command == "npx")
-        #expect(seq.tools.defaultDecision == .allow)
+        #expect(seq.tools.defaultDecision == nil)
+        #expect(seq.tools.ask == ["*"])
         #expect(fixture.environment().integrity == .trusted)
     }
 
     @Test func untrustedConfigurationDoesNotPlanLaunches() async throws {
         let fixture = Fixture()
         try signedConfiguration(fixture, MCPConfiguration(servers: [
-            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"])
+            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"], sandbox: MCPSandboxPolicy(network: false))
         ]))
         let path = ".config/rv/mcp.json"
         try fixture.write(path, fixture.text(path).replacingOccurrences(of: "fs-mcp", with: "evil-binary"))
@@ -5290,7 +5294,7 @@ struct MCPCommandTests {
         #expect(calls.withLock { $0 } == 0)
 
         try signedConfiguration(fixture, MCPConfiguration(servers: [
-            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"])
+            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"], sandbox: MCPSandboxPolicy(network: false))
         ]))
         let trustedConfiguration = try MCPRun.configuration(fixture.environment()).get()
         let planned = try MCPRun.upstreamLaunches(
@@ -5396,7 +5400,7 @@ struct MCPCommandTests {
         let evil = trustedReplacing("safe-bin", with: "evil-binary", in: trusted)
         let swapping = keysReplacing(fixture, with: evil, onCall: 1)
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: ["seq"], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: ["seq"], project: nil, dryRun: false,
             environment: fixture.environment(approvalKeys: swapping)
         ).get()
         #expect(imported.contains("wrote mcp.json"))
@@ -5412,7 +5416,7 @@ struct MCPCommandTests {
         try plant(trustedReplacing("safe-bin", with: "evil-binary", in: try Data(contentsOf: url)), at: url)
         let restoring = keysReplacing(fixture, with: trusted, onCall: 1)
         let refused = await MCPRun.importServers(
-            host: .cursor, names: ["github"], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: ["github"], project: nil, dryRun: false,
             environment: fixture.environment(approvalKeys: restoring))
         #expect(refused.failureMessage?.contains("edited outside rv") == true)
         #expect(refused.failureMessage?.contains("nothing imported") == true)
@@ -5425,7 +5429,9 @@ struct MCPCommandTests {
     @Test func outsideEditFailsCheckDowngradesAllowAndBlocksSigningUntilTrusted() async throws {
         let fixture = Fixture()
         try signedConfiguration(fixture, MCPConfiguration(servers: [
-            MCPServerDefinition(name: "fs", command: "fs-mcp", tools: MCPToolPolicy(allow: ["read_*"], ask: ["write_*"]))
+            MCPServerDefinition(
+                name: "fs", command: "fs-mcp", tools: MCPToolPolicy(allow: ["read_*"], ask: ["write_*"]),
+                sandbox: MCPSandboxPolicy(network: false))
         ]))
         #expect(try report(fixture).passes)
         let path = ".config/rv/mcp.json"
@@ -5445,7 +5451,7 @@ struct MCPCommandTests {
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
         let importShown = Mutex("")
         let imported = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment,
+            host: .cursor, names: [], project: nil, dryRun: false, environment: environment,
             show: { text in importShown.withLock { $0 += text } })
         #expect(imported.failureMessage?.contains("edited outside rv") == true)
         #expect(imported.failureMessage?.contains("nothing imported") == true)
@@ -5492,20 +5498,20 @@ struct MCPCommandTests {
             return .confirmed(method: "device owner authentication")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: true, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(presence: watching),
             show: { text in shown.withLock { $0 = text } }
         ).get()
         let reason = reasonAtPrompt.withLock { $0 }
         let review = shown.withLock { $0 }
         #expect(shownBeforePrompt.withLock { $0 })
-        #expect(review.contains("tools: allow every tool"))
+        #expect(review.contains("tools: ask before every tool"))
         #expect(review.contains("first: \"long-cmd\", \"\(long)\""))
         #expect(review.contains("second: \"hidden-cmd\", \"--flag\""))
-        #expect(reason.contains("tools: allow every tool"))
+        #expect(reason.contains("tools: ask before every tool"))
         #expect(reason.contains("first: \"long-cmd\", \"\(long)\""))
         #expect(reason.contains("second: \"hidden-cmd\", \"--flag\""))
-        #expect(reason.contains("ask before every tool") == false)
+        #expect(reason.contains("allow every tool") == false)
         #expect(reason.count > 240)
         #expect(reason.hasSuffix("…") == false)
         let parts = review.components(separatedBy: "\nsha256 ")
@@ -5519,7 +5525,8 @@ struct MCPCommandTests {
         let loaded = try MCPRun.configuration(fixture.environment()).get()
         #expect(loaded.server(named: "first")?.command == "long-cmd")
         #expect(loaded.server(named: "second")?.command == "hidden-cmd")
-        #expect(loaded.server(named: "second")?.tools.defaultDecision == .allow)
+        #expect(loaded.server(named: "second")?.tools.defaultDecision == nil)
+        #expect(loaded.server(named: "second")?.tools.ask == ["*"])
     }
 
     @Test func importAskIsNotOverriddenByAFileAllow() async throws {
@@ -5545,7 +5552,7 @@ struct MCPCommandTests {
             return .confirmed(method: "device owner authentication")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: ["notes"], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: ["notes"], project: nil, dryRun: false,
             environment: fixture.environment(presence: watching),
             show: { text in shown.withLock { $0 = text } }
         ).get()
@@ -5564,11 +5571,12 @@ struct MCPCommandTests {
         let loaded = try MCPRun.configuration(fixture.environment()).get()
         #expect(loaded.defaultDecision == .allow)
         let notes = try #require(loaded.server(named: "notes"))
-        #expect(notes.tools.defaultDecision == .ask)
+        #expect(notes.tools.defaultDecision == nil)
+        #expect(notes.tools.ask == ["*"])
         #expect(loaded.decision(server: notes, tool: "status") == .ask)
         let kept = try #require(loaded.server(named: "kept"))
         #expect(kept.tools.defaultDecision == nil)
-        #expect(loaded.decision(server: kept, tool: "anything") == .allow)
+        #expect(loaded.decision(server: kept, tool: "anything") == .deny)
         let stored = fixture.text(".config/rv/mcp.json")
         #expect(stored.contains("/tmp/evil"))
         #expect(stored.contains("ghp_") == false)
@@ -5676,7 +5684,7 @@ struct MCPCommandTests {
             })
             #expect(text.contains("writable none") == false)
             #expect(lines.contains { $0.hasSuffix("no sandbox") })
-            #expect(text.contains("other tools ask"))
+            #expect(text.contains("other tools deny"))
             #expect(text.contains("closed: \"/bin/echo\", \"\\\\n  notes: /usr/bin/true\""))
             #expect(text.contains("bare: \"/bin/cat\""))
             #expect(text.contains("\\n  notes: /usr/bin/true"))
@@ -5704,7 +5712,7 @@ struct MCPCommandTests {
             return .confirmed(method: "device owner authentication")
         }
         let imported = try await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             environment: fixture.environment(presence: importing),
             show: { text in importShown.withLock { $0 = text } }
         ).get()
@@ -5731,7 +5739,7 @@ struct MCPCommandTests {
             name: "caged", command: "/bin/true",
             sandbox: MCPSandboxPolicy(network: false, writable: []))
         let configuration = MCPConfiguration(servers: [server])
-        let imported = MCPRun.importPresenceReview(servers: [server], allowTools: false)
+        let imported = MCPRun.importPresenceReview(servers: [server])
         let fixture = Fixture()
         let url = try fixture.write(".config/rv/mcp.json", configuration.encoded().prettyText)
         chmod(url.path, 0o600)
@@ -5783,7 +5791,7 @@ struct MCPCommandTests {
         _ = try await MCPRun.trust(
             environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 = text } }
         ).get()
-        let imported = MCPRun.importPresenceReview(servers: configuration.servers, allowTools: false)
+        let imported = MCPRun.importPresenceReview(servers: configuration.servers)
         for text in [shown.withLock { $0 }, reasonAtPrompt.withLock { $0 }, imported.shown, imported.reason] {
             let scalars = Set(text.unicodeScalars.map(\.value))
             #expect(scalars.contains(0x08) == false)

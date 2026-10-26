@@ -135,7 +135,7 @@ struct ManagedCommandTests {
             """)
         environment.managed = try active(#"{"version": 1, "secrets": {"allowedSources": ["vault"]}}"#)
         #expect(failure(await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment))?
+            host: .cursor, names: [], project: nil, dryRun: false, environment: environment))?
             .contains("keychain source, which is not allowed") == true)
     }
 

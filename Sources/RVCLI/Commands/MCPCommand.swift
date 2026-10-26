@@ -207,6 +207,8 @@ enum MCPRun {
                 governedServer: row.entry.governedServer)
         }
         let integrity = environment.integrity
+        var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
+        problems += sandboxProblems(configuration, configDirectory: environment.configDirectory)
         return Report(
             servers: configuration.servers.count,
             direct: configuration.direct.count,
@@ -214,7 +216,7 @@ enum MCPRun {
             integrity: integrity.label,
             integrityProblem: integrity.problem,
             rows: rows,
-            problems: inventory.problems.map { Problem(path: $0.path, message: $0.message) })
+            problems: problems)
     }
 
     static func listText(_ report: Report, home: URL) -> String {
@@ -366,9 +368,30 @@ enum MCPRun {
         return "\(report.rows.count) host entries in \(files) files" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", "))
     }
 
+    /// Governed local servers `rv mcp serve` will refuse: every local server
+    /// needs an explicit sandbox, and a sandbox reaches the network only
+    /// through `sandbox.hosts`. Blocked servers are refused either way.
+    static func sandboxProblems(_ configuration: MCPConfiguration, configDirectory: URL) -> [Problem] {
+        let path = MCPConfiguration.fileURL(configDirectory: configDirectory).path
+        return configuration.servers.compactMap { server -> Problem? in
+            guard server.remote == nil, configuration.isBlocked(server.name) == false else { return nil }
+            if server.sandbox == nil {
+                return Problem(
+                    path: path,
+                    message: "\(server.name) has no sandbox; add \"sandbox\" to its mcp.json entry")
+            }
+            if server.sandbox?.network == true {
+                return Problem(
+                    path: path,
+                    message: "\(server.name) has sandbox network on; list the hosts it needs in sandbox.hosts")
+            }
+            return nil
+        }
+    }
+
     static func problemLines(_ report: Report, home: URL) -> [String] {
         report.problems.map {
-            "unreadable: \(reviewField(abbreviate($0.path, home: home))): \(reviewField($0.message))"
+            "problem: \(reviewField(abbreviate($0.path, home: home))): \(reviewField($0.message))"
         }
     }
 
@@ -589,11 +612,10 @@ enum MCPRun {
     }
 
     static func trustReview(_ configuration: MCPConfiguration) -> String {
-        let strict = configuration.profile == .strict
-        var lines = ["mcp.json: default \(strict ? "deny" : configuration.defaultDecision.rawValue) for tools without a rule"]
-        if strict {
-            lines.append("  profile strict: unlisted tools deny; local servers need a sandbox; network only through sandbox.hosts")
-        }
+        var lines = [
+            "mcp.json: default deny for tools without a rule",
+            "  unlisted tools deny; local servers need a sandbox; network only through sandbox.hosts",
+        ]
         if configuration.toolMode == .search {
             lines.append("  tool mode search: clients see only rv_search_tools and rv_call_tool")
         }
@@ -637,11 +659,7 @@ enum MCPRun {
             for glob in tools.ask { lines.append("    ask \(visible(glob))") }
             for glob in tools.deny { lines.append("    deny \(visible(glob))") }
             for ruled in tools.rules { rules.append("\(ruled.decision.rawValue) \(visible(ruled.rule.summary))") }
-            if strict {
-                rules.append("other tools deny")
-            } else if let fallback = tools.defaultDecision {
-                rules.append("other tools \(fallback.rawValue)")
-            }
+            rules.append("other tools deny")
             if let sandbox = server.sandbox {
                 for path in sandbox.writable {
                     lines.append("    writable: \(visible(path))")
@@ -656,9 +674,6 @@ enum MCPRun {
                 rules.append("no sandbox")
             }
             if server.remote == nil { lines += sandboxLines(server, indent: "    ") }
-            if let fallback = tools.defaultDecision {
-                lines.append("    other tools \(fallback.rawValue)")
-            }
             if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
         }
         if configuration.direct.isEmpty == false {
@@ -910,12 +925,12 @@ enum MCPRun {
     /// Every server that will be signed: command, arguments, tool policy, env
     /// bindings, secret bindings, and every allow, ask, and deny name.
     /// The digest is of that whole text. Nothing is clipped.
-    static func importPresenceReview(servers: [MCPServerDefinition], allowTools: Bool) -> (shown: String, reason: String) {
-        let policy = allowTools ? "allow every tool" : "ask before every tool"
+    static func importPresenceReview(servers: [MCPServerDefinition]) -> (shown: String, reason: String) {
+        let policy = "ask before every tool"
         let lines = servers.flatMap { server -> [String] in
             let command = reviewField(server.name) + ": " + quotedReviewFields([server.command] + server.args)
             return ["\(command) (\(policy))"] + bindingLines(server) + sandboxLines(server)
-                + reviewedServerLines(server, allowTools: allowTools)
+                + reviewedServerLines(server)
         }
         let body = (["tools: \(policy)"] + lines).joined(separator: "\n")
         let digest = RVDigest.sha256Hex(Array(body.utf8))
@@ -923,7 +938,7 @@ enum MCPRun {
     }
 
     static func importServers(
-        host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool, environment: MCPEnvironment,
+        host: MCPHost, names: [String], project: URL?, dryRun: Bool, environment: MCPEnvironment,
         toolModeForFreshConfig: MCPToolMode? = nil,
         show: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> Result<String, CommandFailure> {
@@ -948,7 +963,7 @@ enum MCPRun {
             let shown = missing.map(reviewField).joined(separator: ", ")
             return .failure(CommandFailure("\(host.rawValue) has no MCP server named \(shown)"))
         }
-        let plan = MCPImport.plan(entries: entries, configuration: configuration, secrets: secrets, allowTools: allowTools)
+        let plan = MCPImport.plan(entries: entries, configuration: configuration, secrets: secrets)
         var lines: [String] = []
         for server in plan.servers {
             var detail = "import \(reviewField(server.name)): \(reviewField(server.command))"
@@ -989,7 +1004,7 @@ enum MCPRun {
             return .failure(CommandFailure(
                 "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
         }
-        let review = importPresenceReview(servers: plan.servers, allowTools: allowTools)
+        let review = importPresenceReview(servers: plan.servers)
         guard reviewShowsEveryLiteral(plan, review.shown) else {
             return .failure(CommandFailure("import review omitted a literal value; nothing imported"))
         }
@@ -1055,9 +1070,7 @@ enum MCPRun {
         if toolModeForFreshConfig != nil, configuration.servers.isEmpty {
             lines.append("tool mode search: clients see only rv_search_tools and rv_call_tool")
         }
-        if allowTools == false {
-            lines.append("every tool asks for approval until you allow it (mcp.json \"tools\" or `rv mcp approve <id> --always`)")
-        }
+        lines.append("every tool asks for approval until you allow it (mcp.json \"tools\" or `rv mcp approve <id> --always`)")
         lines.append("next: `rv mcp setup --host \(host.rawValue)` routes the host through rv")
         return .success(lines.joined(separator: "\n") + "\n")
     }
@@ -1066,13 +1079,13 @@ enum MCPRun {
     /// through `rv mcp serve`. The import asks for presence once; setup asks
     /// nothing, so the whole flow needs a single confirmation.
     static func onboard(
-        host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool,
+        host: MCPHost, names: [String], project: URL?, dryRun: Bool,
         rvPath: String, environment: MCPEnvironment,
         show: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> Result<String, CommandFailure> {
         let imported: String
         switch await importServers(
-            host: host, names: names, project: project, allowTools: allowTools, dryRun: dryRun,
+            host: host, names: names, project: project, dryRun: dryRun,
             environment: environment, toolModeForFreshConfig: .search, show: show)
         {
         case .failure(let failure): return .failure(failure)
@@ -1119,7 +1132,7 @@ enum MCPRun {
         return true
     }
 
-    private static func reviewedServerLines(_ server: MCPServerDefinition, allowTools: Bool) -> [String] {
+    private static func reviewedServerLines(_ server: MCPServerDefinition) -> [String] {
         var lines: [String] = []
         if let remote = server.remote {
             let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
@@ -1164,7 +1177,6 @@ enum MCPRun {
         for host in server.sandbox?.hosts ?? [] {
             lines.append("    host \(visible(host))")
         }
-        if allowTools { lines.append("    tools will be allow") }
         return lines
     }
 
@@ -1297,7 +1309,7 @@ struct MCPList: AsyncParsableCommand {
 struct MCPCheck: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "check",
-        abstract: "Exit 1 when any MCP server bypasses rv, is unreviewed, or is blocked.")
+        abstract: "Exit 1 when any MCP server bypasses rv, is unreviewed, is blocked, or has no usable sandbox.")
 
     @Option(help: "Project directory for project-scoped configs. Default: current directory.") var project: String?
     @OptionGroup var format: FormatFlags
@@ -1497,14 +1509,13 @@ struct MCPImportCommand: AsyncParsableCommand {
     @Option(help: "Host to import from: \(MCPHost.allCases.map(\.rawValue).joined(separator: ", ")).") var host: MCPHost
     @Option(name: .customLong("server"), help: "Only this server (repeatable).") var servers: [String] = []
     @Option(help: "Project directory for project-scoped configs. Default: current directory.") var project: String?
-    @Flag(help: "Allow every tool of the imported servers instead of asking.") var allowTools = false
     @Flag(help: "Show what would change; write nothing.") var dryRun = false
 
     func run() async throws {
         let ctx = CommandContext.current(command: "mcp import", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         switch await MCPRun.importServers(
-            host: host, names: servers, project: MCPRun.projectURL(project), allowTools: allowTools, dryRun: dryRun,
+            host: host, names: servers, project: MCPRun.projectURL(project), dryRun: dryRun,
             environment: environment, show: { ctx.writeStdout($0) })
         {
         case .failure(let failure): try ctx.fail("rv mcp import: \(failure.message)\n")
@@ -1521,7 +1532,6 @@ struct MCPOnboard: AsyncParsableCommand {
     @Option(help: "Host to onboard: \(MCPHost.allCases.map(\.rawValue).joined(separator: ", ")).") var host: MCPHost
     @Option(name: .customLong("server"), help: "Only this server (repeatable).") var servers: [String] = []
     @Option(help: "Project directory for project-scoped configs. Default: current directory.") var project: String?
-    @Flag(help: "Allow every tool of the imported servers instead of asking.") var allowTools = false
     @Flag(help: "Show what would change; write nothing.") var dryRun = false
     @Option(help: "rv path the host should launch. Default: this rv.") var rvPath: String?
 
@@ -1530,7 +1540,7 @@ struct MCPOnboard: AsyncParsableCommand {
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         let path = rvPath ?? MCPRun.rvExecutablePath(environment: environment.processEnvironment)
         switch await MCPRun.onboard(
-            host: host, names: servers, project: MCPRun.projectURL(project), allowTools: allowTools,
+            host: host, names: servers, project: MCPRun.projectURL(project),
             dryRun: dryRun, rvPath: path, environment: environment, show: { ctx.writeStdout($0) })
         {
         case .failure(let failure): try ctx.fail("rv mcp onboard: \(failure.message)\n")

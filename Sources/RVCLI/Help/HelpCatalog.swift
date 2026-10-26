@@ -492,8 +492,8 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv mcp [list] [--project <dir>] [--json]"),
                 HelpRow(name: "rv mcp check [--project <dir>] [--json]"),
-                HelpRow(name: "rv mcp import --host <host> [--server <name>...] [--allow-tools] [--dry-run]"),
-                HelpRow(name: "rv mcp onboard --host <host> [--server <name>...] [--allow-tools] [--dry-run]"),
+                HelpRow(name: "rv mcp import --host <host> [--server <name>...] [--dry-run]"),
+                HelpRow(name: "rv mcp onboard --host <host> [--server <name>...] [--dry-run]"),
                 HelpRow(name: "rv mcp setup --host <host> [--server <name>...] [--rv-path <path>] [--undo]"),
                 HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
@@ -516,8 +516,8 @@ enum HelpCatalog {
                     description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
-                    name: "profile",
-                    description: "\"strict\": unlisted tools deny, local servers need a sandbox, network only via sandbox.hosts"
+                    name: "defaults",
+                    description: "Unlisted tools deny; written allow defaults are ignored. Local servers need a sandbox"
                 ),
                 HelpRow(name: "toolMode", description: "\"search\" lists only rv_search_tools and rv_call_tool; same policy per call"),
                 HelpRow(name: "remote", description: "\"url\": https://… (\"transport\": http|sse, \"headers\" with ${secret:NAME}); no sandbox"),

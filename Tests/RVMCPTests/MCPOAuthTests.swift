@@ -250,8 +250,8 @@ struct MCPOAuthFixtureTests {
         #expect(tokens.refreshToken != nil)
         #expect(store.save("remote", tokens))
 
-        let configuration = MCPConfiguration(defaultDecision: .allow, servers: [
-            MCPServerDefinition(name: "remote", remote: MCPRemoteServer(url: url))
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "remote", remote: MCPRemoteServer(url: url), tools: MCPToolPolicy(allow: ["*"]))
         ])
         let planned = try MCPLaunchPlanner.plan(
             servers: ["remote"], configuration: configuration, secrets: SecretsConfiguration(),

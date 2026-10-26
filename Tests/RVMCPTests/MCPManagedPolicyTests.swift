@@ -13,7 +13,7 @@ struct MCPManagedPolicyTests {
     @Test func organizationOnlyTightensToolDecisions() throws {
         var configuration = MCPConfiguration(
             defaultDecision: .allow,
-            servers: [MCPServerDefinition(name: "github", command: "gh-mcp", tools: MCPToolPolicy(deny: ["merge_*"]))])
+            servers: [MCPServerDefinition(name: "github", command: "gh-mcp", tools: MCPToolPolicy(allow: ["*"], deny: ["merge_*"]))])
         let github = try #require(configuration.server(named: "github"))
         configuration.managed = try organization("""
             {"version": 1, "mcp": {"deny": ["*/delete_*"], "ask": ["github/create_*"], "allow": ["github/merge_*"]}}
@@ -52,7 +52,7 @@ struct MCPManagedPolicyTests {
         var configuration = MCPConfiguration(servers: [
             MCPServerDefinition(name: "shell-exec", command: "sh-mcp"),
             MCPServerDefinition(name: "plain", command: "p"),
-            MCPServerDefinition(name: "envy", command: "e", secrets: ["TOKEN": "HOST_TOKEN"]),
+            MCPServerDefinition(name: "envy", command: "e", secrets: ["TOKEN": "HOST_TOKEN"], sandbox: MCPSandboxPolicy(network: false)),
         ])
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "HOST_TOKEN", source: .hostEnvironment(variable: "T"), delivery: .environment)
@@ -75,10 +75,13 @@ struct MCPManagedPolicyTests {
             Issue.record("requireSandbox must refuse an unsandboxed server")
             return
         }
-        #expect(reason.contains("organization policy requires a sandbox"))
+        #expect(reason.contains("needs a sandbox"))
 
         configuration.managed?.mcp.requireSandbox = false
-        #expect(plan("plain") == nil)
+        guard case .sandbox = plan("plain") else {
+            Issue.record("sandbox must stay required without organization policy")
+            return
+        }
         #expect(plan("envy") == .secretUnavailable(
             server: "envy", secret: "HOST_TOKEN", reason: "organization policy does not allow hostEnvironment secrets"))
     }
@@ -86,7 +89,7 @@ struct MCPManagedPolicyTests {
     @Test func organizationThresholdsUseTheExactIntegerSpelling() throws {
         func decide(_ op: String, _ threshold: String, _ amount: String) throws -> MCPToolDecision {
             var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
-                MCPServerDefinition(name: "pay", command: "pay", tools: MCPToolPolicy(defaultDecision: .allow)),
+                MCPServerDefinition(name: "pay", command: "pay", tools: MCPToolPolicy(allow: ["*"])),
             ])
             configuration.managed = try organization("""
                 {"version":1,"mcp":{"deny":[{"tool":"pay/charge","when":{"/amount":{"\(op)":\(threshold)}}}]}}

@@ -90,18 +90,13 @@ public enum MCPLaunchPlanner {
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
-            if configuration.profile == .strict {
-                guard let policy = definition.sandbox else {
-                    return .failure(.sandbox("profile strict requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
-                }
-                if policy.network {
-                    return .failure(.sandbox("profile strict keeps \(name) off the network; list the hosts it needs in sandbox.hosts"))
-                }
+            guard let policy = definition.sandbox else {
+                return .failure(.sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry"))
             }
-            if configuration.managed?.mcp.requireSandbox == true, definition.sandbox == nil {
-                return .failure(.sandbox("organization policy requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
+            if policy.network {
+                return .failure(.sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts"))
             }
-            var environment = definition.sandbox == nil ? baseEnvironment : sandboxEnvironment(baseEnvironment)
+            var environment = sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
             let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
             let resolved: [String: String]

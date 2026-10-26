@@ -168,7 +168,7 @@ struct MCPRemoteRuntimeTests {
         _ servers: [MCPServerDefinition], resolver: SecretResolver = SecretResolver { _ in .success(SecretValue("tok-123")!) },
         _ body: (LineClient) throws -> Void
     ) throws -> RecordedLogs {
-        let configuration = MCPConfiguration(defaultDecision: .allow, servers: servers)
+        let configuration = MCPConfiguration(servers: servers)
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "API_TOKEN", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
         ])
@@ -218,7 +218,7 @@ struct MCPRemoteRuntimeTests {
         let fixture = try RemoteFixture(["--token", "tok-123"])
         let remote = MCPRemoteServer(
             url: fixture.url("/mcp"), headers: ["Authorization": "Bearer ${secret:API_TOKEN}", "X-Team": "core"])
-        _ = try run([MCPServerDefinition(name: "remote", remote: remote, tools: MCPToolPolicy(deny: ["delete_*"]))]) { client in
+        _ = try run([MCPServerDefinition(name: "remote", remote: remote, tools: MCPToolPolicy(allow: ["*"], deny: ["delete_*"]))]) { client in
             #expect(tools(client) == ["echo", "whoami"])
             #expect(text(call(client, id: 3, "echo", #"{"text":"over http"}"#)) == "over http")
             #expect(text(call(client, id: 4, "whoami")) == "authorization=Bearer [redacted:API_TOKEN] team=core")
@@ -236,7 +236,7 @@ struct MCPRemoteRuntimeTests {
         let fixture = try RemoteFixture(["--token", "tok-123"])
         let remote = MCPRemoteServer(
             url: fixture.url("/sse"), headers: ["Authorization": "Bearer ${secret:API_TOKEN}"], transport: .sse)
-        _ = try run([MCPServerDefinition(name: "legacy", remote: remote)]) { client in
+        _ = try run([MCPServerDefinition(name: "legacy", remote: remote, tools: MCPToolPolicy(allow: ["*"]))]) { client in
             #expect(tools(client) == ["echo", "whoami", "delete_all"])
             #expect(text(call(client, id: 3, "echo", #"{"text":"over sse"}"#)) == "over sse")
         }

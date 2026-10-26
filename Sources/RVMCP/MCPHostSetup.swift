@@ -25,8 +25,7 @@ public enum MCPImport {
     public static func plan(
         entries: [MCPHostEntry],
         configuration: MCPConfiguration,
-        secrets: SecretsConfiguration,
-        allowTools: Bool
+        secrets: SecretsConfiguration
     ) -> MCPImportPlan {
         var plan = MCPImportPlan()
         var takenSecrets = Set(secrets.secrets.map(\.name))
@@ -58,7 +57,7 @@ public enum MCPImport {
                 case .failure(let skip): plan.skipped.append((entry.name, skip.reason))
                 case .success(let remote):
                     var definition = MCPServerDefinition(name: entry.name, description: description, remote: remote)
-                    if allowTools { definition.tools.defaultDecision = .allow }
+                    definition.tools.ask = ["*"]
                     plan.servers.append(definition)
                     takenServers.insert(entry.name)
                 }
@@ -77,9 +76,9 @@ public enum MCPImport {
                 continue
             }
             var definition = MCPServerDefinition(name: entry.name, description: description, command: command)
-            // The confirmed policy is stored on the server. A file-level allow
-            // must not become the decision for a server the person was shown as ask.
-            definition.tools.defaultDecision = allowTools ? .allow : .ask
+            // Imported servers ask for every tool until the person allows
+            // one. Defaults are inert, so this must be an ask glob.
+            definition.tools.ask = ["*"]
             let credentials = Set(MCPRedaction.literalCredentials(entry.environment))
             for (variable, value) in entry.environment.sorted(by: { $0.key < $1.key }) {
                 guard SecretsConfiguration.isVariableName(variable) else {

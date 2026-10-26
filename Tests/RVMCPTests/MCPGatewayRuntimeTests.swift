@@ -96,7 +96,8 @@ struct MCPGatewayRuntimeTests {
             MCPServerDefinition(
                 name: "fixture", command: "python3", args: ["-u", script.path],
                 secrets: ["FIXTURE_TOKEN": "FIXTURE_SECRET"],
-                tools: MCPToolPolicy(defaultDecision: .allow, deny: ["delete_*"]))
+                tools: MCPToolPolicy(allow: ["*"], deny: ["delete_*"]),
+                sandbox: MCPSandboxPolicy(network: false))
         ])
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "FIXTURE_SECRET", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
@@ -157,7 +158,9 @@ struct MCPGatewayRuntimeTests {
 
     @Test func plannerRefusesUnknownBlockedAndUndefinedSecrets() {
         let configuration = MCPConfiguration(
-            servers: [MCPServerDefinition(name: "a", command: "x", secrets: ["T": "MISSING"])], blocked: ["b"])
+            servers: [MCPServerDefinition(
+                name: "a", command: "x", secrets: ["T": "MISSING"], sandbox: MCPSandboxPolicy(network: false))],
+            blocked: ["b"])
         let resolver = SecretResolver { _ in .failure(.notFound("x")) }
         func plan(_ name: String) -> MCPLaunchError? {
             if case .failure(let error) = MCPLaunchPlanner.plan(

@@ -109,7 +109,7 @@ struct MCPGatewayElicitationTests {
         #expect(swallowed.split(separator: "\n").map(String.init).contains("Arguments: {\"ok\":true}") == false)
 
         var harness = GatewayHarness(MCPConfiguration(servers: [
-            MCPServerDefinition(name: "fs", command: "fs", tools: MCPToolPolicy(defaultDecision: .ask))
+            MCPServerDefinition(name: "fs", command: "fs", tools: MCPToolPolicy(ask: ["*"]))
         ]))
         _ = harness.ready()
         _ = harness.client(

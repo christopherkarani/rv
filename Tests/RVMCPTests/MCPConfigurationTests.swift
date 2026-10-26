@@ -17,7 +17,7 @@ struct MCPConfigurationTests {
             { "name": "github", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
               "env": { "LOG_LEVEL": "info" },
               "secrets": { "GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_TOKEN" },
-              "tools": { "default": "allow", "deny": ["delete_*"], "ask": ["create_pull_request"] },
+              "tools": { "allow": ["*"], "deny": ["delete_*"], "ask": ["create_pull_request"] },
               "sandbox": { "network": false, "writable": ["~/.npm"] } }
           ],
           "direct": ["stripe"],
@@ -46,7 +46,7 @@ struct MCPConfigurationTests {
         #expect(configuration.decision(server: github, tool: "create_pull_request") == .ask)
         #expect(configuration.decision(server: github, tool: "list_issues") == .allow)
         let bare = MCPServerDefinition(name: "x", command: "x")
-        #expect(configuration.decision(server: bare, tool: "anything") == .ask)
+        #expect(configuration.decision(server: bare, tool: "anything") == .deny)
         let overlap = MCPToolPolicy(defaultDecision: .allow, allow: ["*"], ask: ["write_*"], deny: ["write_secret"])
         #expect(overlap.decision(for: "write_secret", fallback: .deny) == .deny)
         #expect(overlap.decision(for: "write_file", fallback: .deny) == .ask)
@@ -65,18 +65,18 @@ struct MCPConfigurationTests {
         func args(_ text: String) throws -> JSONValue { try JSONValue.parse(Data(text.utf8)) }
         #expect(db.tools.deny == ["drop_*"])
         #expect(db.tools.rules.map(\.decision) == [.ask, .deny])
-        #expect(configuration.decision(server: db, tool: "query", arguments: try args(#"{"database":"test"}"#)) == .allow)
+        #expect(configuration.decision(server: db, tool: "query", arguments: try args(#"{"database":"test"}"#)) == .deny)
         #expect(configuration.decision(server: db, tool: "query", arguments: try args(#"{"database":"prod"}"#)) == .ask)
         #expect(configuration.decision(
             server: db, tool: "query", arguments: try args(#"{"database":"test","sql":"DROP TABLE t"}"#)) == .deny)
-        #expect(configuration.decision(server: db, tool: "query") == .allow)
+        #expect(configuration.decision(server: db, tool: "query") == .deny)
         #expect(configuration.decision(server: db, tool: "drop_table", arguments: try args("{}")) == .deny)
         #expect(configuration.hasArgumentRules(server: db, tool: "query"))
         #expect(configuration.hasArgumentRules(server: db, tool: "list") == false)
 
         var untrusted = configuration
         untrusted.untrusted = true
-        #expect(untrusted.decision(server: db, tool: "query", arguments: try args(#"{"database":"test"}"#)) == .ask)
+        #expect(untrusted.decision(server: db, tool: "query", arguments: try args(#"{"database":"test"}"#)) == .deny)
     }
 
     @Test func argumentRulesRoundTripAndRejectMistakes() throws {
