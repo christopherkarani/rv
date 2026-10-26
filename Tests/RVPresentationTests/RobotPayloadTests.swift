@@ -147,7 +147,7 @@ private let readyService = DoctorServiceView(
     #expect(packs["enabled"] as? [String] == (dayOnePackIDs + [PackID(rawValue: "core.network")]).map(\.rawValue).sorted())
     #expect(packs["extras_enabled"] as? [String] == ["core.network"])
 
-    #expect(Set(hosts.keys) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity"])
+    #expect(Set(hosts.keys) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity", "muse"])
     #expect(hosts["grok"] as? String == "missing")
     #expect(hosts["pi"] as? String == "missing")
     #expect(hosts["opencode"] as? String == "missing")
@@ -156,6 +156,7 @@ private let readyService = DoctorServiceView(
     #expect(hosts["hermes"] as? String == "missing")
     #expect(hosts["codex"] as? String == "missing")
     #expect(hosts["cursor"] as? String == "missing")
+    #expect(hosts["muse"] as? String == "missing")
 }
 
 @Test func packsRobotPayload_fieldSetUnchanged() throws {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Canonical host wire vocabulary: one table per host for the tool and
-/// hook-event spellings matched by the 9 hook codecs (strict) and the 8
+/// hook-event spellings matched by the 10 hook codecs (strict) and the 8
 /// scan adapters (loose), plus the shared fallback-chain helper.
 ///
 /// Each host's known spellings are exhaustive cases; anything else parses
@@ -1209,6 +1209,150 @@ public enum AntigravityToolName: Sendable, Equatable, Hashable, Codable {
     }
 
     public func match(policy: HostWirePolicy) -> HostToolMatch {
+        switch policy {
+        case .strict:
+            strictMatch
+        case .loose:
+            looseMatch
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(wireValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wireValue)
+    }
+}
+
+// MARK: - Muse
+
+/// Muse tool-name vocabulary (codec `tool_name`; no scan adapter).
+///
+/// Strict admits only the observed lowercase `bash` (live probe
+/// 2026-10-26, `planning/muse-wire-probe-fixtures.md` P1). v1 is
+/// shell-only: file spellings such as `read_file` parse to `other`
+/// and stay foreign under both policies. Both policies agree — there
+/// is no loose-side store to diverge.
+public enum MuseToolName: Sendable, Equatable, Hashable, Codable {
+    /// `bash`: strict + loose shell.
+    case bash
+    /// Unknown spelling, carried verbatim. Never matches.
+    case other(String)
+
+    public init(wireValue: String) {
+        switch wireValue {
+        case "bash":
+            self = .bash
+        default:
+            self = .other(wireValue)
+        }
+    }
+
+    public init?(wireValue: String?) {
+        guard let wireValue else { return nil }
+        self.init(wireValue: wireValue)
+    }
+
+    public var wireValue: String {
+        switch self {
+        case .bash:
+            "bash"
+        case .other(let raw):
+            raw
+        }
+    }
+
+    public var strictMatch: HostToolMatch {
+        switch self {
+        case .bash:
+            .shell
+        case .other:
+            .foreign
+        }
+    }
+
+    public var looseMatch: HostToolMatch {
+        switch self {
+        case .bash:
+            .shell
+        case .other:
+            .foreign
+        }
+    }
+
+    public func match(policy: HostWirePolicy) -> HostToolMatch {
+        switch policy {
+        case .strict:
+            strictMatch
+        case .loose:
+            looseMatch
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(wireValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wireValue)
+    }
+}
+
+/// Muse hook-event vocabulary (`hook_event_name`).
+///
+/// Both policies agree — there is no loose-side store to diverge.
+public enum MuseEventName: Sendable, Equatable, Hashable, Codable {
+    /// `PreToolUse`: the only admitted event.
+    case preToolUse
+    /// Unknown spelling, carried verbatim. Never matches.
+    case other(String)
+
+    public init(wireValue: String) {
+        switch wireValue {
+        case "PreToolUse":
+            self = .preToolUse
+        default:
+            self = .other(wireValue)
+        }
+    }
+
+    public init?(wireValue: String?) {
+        guard let wireValue else { return nil }
+        self.init(wireValue: wireValue)
+    }
+
+    public var wireValue: String {
+        switch self {
+        case .preToolUse:
+            "PreToolUse"
+        case .other(let raw):
+            raw
+        }
+    }
+
+    public var strictMatch: Bool {
+        switch self {
+        case .preToolUse:
+            true
+        case .other:
+            false
+        }
+    }
+
+    public var looseMatch: Bool {
+        switch self {
+        case .preToolUse:
+            true
+        case .other:
+            false
+        }
+    }
+
+    public func match(policy: HostWirePolicy) -> Bool {
         switch policy {
         case .strict:
             strictMatch

@@ -32,6 +32,7 @@ enum HostLifecycle {
             codex: .skipped,
             cursor: .skipped,
             antigravity: .skipped,
+            muse: .skipped,
             wrote: []
         )
 
@@ -84,6 +85,7 @@ enum HostLifecycle {
             codex: slots.codex,
             cursor: slots.cursor,
             antigravity: slots.antigravity,
+            muse: slots.muse,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -229,6 +231,12 @@ enum HostLifecycle {
                 _ = try SetupRun.removeCodexRVHooks(at: path, files: files)
             case .removeCursorRVHooks(let path):
                 _ = try SetupRun.removeCursorRVHooks(at: path, files: files)
+            case .removeMuseSettingsKey(let settingsPath, let hooksPath):
+                _ = try SetupRun.removeMuseSettingsKey(
+                    at: settingsPath,
+                    hooksPath: hooksPath,
+                    files: files
+                )
             case .stripOpenCodeAskPlugin:
                 enacted.stripOpenCodeAsk = true
             case .removeEmptyDirectory(let path):
@@ -251,6 +259,7 @@ private extension SetupSlotSnapshot {
         case .codex: codex = kind
         case .cursor: cursor = kind
         case .antigravity: antigravity = kind
+        case .muse: muse = kind
         }
     }
 }

@@ -113,7 +113,7 @@ struct FileToolDecodeStressTests {
 
 private func grepEnvelope(for host: HookHost) -> String {
     switch host {
-    case .claude, .codex:
+    case .claude, .codex, .muse:
         return #"{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"secret"}}"#
     case .grok:
         return #"{"hookEventName":"pre_tool_use","toolName":"Grep","toolInput":{"pattern":"secret"}}"#
@@ -134,7 +134,7 @@ private func grepEnvelope(for host: HookHost) -> String {
 
 private func mcpEnvelope(for host: HookHost) -> String {
     switch host {
-    case .claude, .codex:
+    case .claude, .codex, .muse:
         return #"{"hook_event_name":"PreToolUse","tool_name":"MCP","tool_input":{"name":"x"}}"#
     case .grok:
         return #"{"hookEventName":"pre_tool_use","toolName":"MCP","toolInput":{"name":"x"}}"#

@@ -16,6 +16,7 @@ struct SetupReport: Equatable, Sendable {
         codex: SetupSlotKind = .skipped,
         cursor: SetupSlotKind = .skipped,
         antigravity: SetupSlotKind = .skipped,
+        muse: SetupSlotKind = .skipped,
         wrote: Set<HookHost>
     ) {
         slots = SetupSlotSnapshot(
@@ -28,6 +29,7 @@ struct SetupReport: Equatable, Sendable {
             codex: codex,
             cursor: cursor,
             antigravity: antigravity,
+            muse: muse,
             wrote: wrote
         )
     }
@@ -41,6 +43,7 @@ struct SetupReport: Equatable, Sendable {
     var codex: SetupSlotKind { slots.codex }
     var cursor: SetupSlotKind { slots.cursor }
     var antigravity: SetupSlotKind { slots.antigravity }
+    var muse: SetupSlotKind { slots.muse }
     var wrote: Set<HookHost> { slots.wrote }
 }
 

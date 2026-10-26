@@ -105,6 +105,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var codex: HostAdapterInstallation
     private var cursor: HostAdapterInstallation
     private var antigravity: HostAdapterInstallation
+    private var muse: HostAdapterInstallation
     /// Cursor File tool matchers live in `hooks.json`, not the adapter script.
     private var cursorHooksJSON: Data?
 
@@ -118,6 +119,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         codex: HostAdapterInstallation,
         cursor: HostAdapterInstallation,
         antigravity: HostAdapterInstallation,
+        muse: HostAdapterInstallation,
         cursorHooksJSON: Data? = nil
     ) {
         self.grok = grok
@@ -129,6 +131,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         self.codex = codex
         self.cursor = cursor
         self.antigravity = antigravity
+        self.muse = muse
         self.cursorHooksJSON = cursorHooksJSON
     }
 
@@ -167,6 +170,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
             cursor
         case .antigravity:
             antigravity
+        case .muse:
+            muse
         }
     }
 }
@@ -224,6 +229,11 @@ extension HostAdapterInstallation {
                 pathEntries: pathEntries,
                 fileManager: fileManager
             ),
+            muse: try inspect(
+                path: paths.hostAdapter(for: .muse),
+                pathEntries: pathEntries,
+                fileManager: fileManager
+            ),
             cursorHooksJSON: fileManager.contents(atPath: paths.cursorHooksJSON)
         )
     }
@@ -249,7 +259,71 @@ extension HostAdapterInstallation {
                 descriptor: AntigravityHooksMerge.mergeDescriptor
             )
         }
+        if path.host == .muse {
+            return try inspectMuse(path: path, pathEntries: pathEntries, fileManager: fileManager)
+        }
         return try inspectExclusive(path: path, pathEntries: pathEntries, fileManager: fileManager)
+    }
+
+    /// Inspects the Muse owned-file × settings-key pair. Installed means the
+    /// owned hooks file matches the current template AND `managed_hooks_path`
+    /// points at it; either half missing means repair, and unmergeable or
+    /// foreign-keyed settings mean occupied (setup skips, never writes).
+    private static func inspectMuse(
+        path: OwnedHostAdapterPath,
+        pathEntries: [String],
+        fileManager: FileManager
+    ) throws -> HostAdapterInstallation {
+        guard isDetected(path, pathEntries: pathEntries, fileManager: fileManager) else {
+            return .missing(path)
+        }
+        let settingsPath = MuseSettingsMerge.settingsPath(hooksPath: path.destination)
+        if (try? fileManager.destinationOfSymbolicLink(atPath: path.destination)) != nil {
+            return .occupied(path)
+        }
+        if (try? fileManager.destinationOfSymbolicLink(atPath: settingsPath)) != nil {
+            return .occupied(path)
+        }
+        switch MuseSettingsMerge.inspect(
+            fileManager.contents(atPath: settingsPath),
+            hooksPath: path.destination
+        ) {
+        case .unmergeable, .foreignKey:
+            return .occupied(path)
+        case .missingKey:
+            return try inspectMuseOwnedFile(path: path, keyMissing: true, fileManager: fileManager)
+        case .ours:
+            return try inspectMuseOwnedFile(path: path, keyMissing: false, fileManager: fileManager)
+        }
+    }
+
+    /// Owned-file half of the Muse cross-check. A missing key downgrades
+    /// current-but-unpointed files to repair (`.broken`); everything else
+    /// follows exclusive-file semantics.
+    private static func inspectMuseOwnedFile(
+        path: OwnedHostAdapterPath,
+        keyMissing: Bool,
+        fileManager: FileManager
+    ) throws -> HostAdapterInstallation {
+        guard fileManager.fileExists(atPath: path.destination) else {
+            return .absentFile(path)
+        }
+        guard let data = fileManager.contents(atPath: path.destination),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return .occupied(path)
+        }
+        let adapter = try HostAdapterResources.load(for: path.host)
+        guard let bakedRvPath = adapter.bakedRvPath(in: text) else {
+            return .occupied(path)
+        }
+        if keyMissing {
+            return .broken(path: path, existingData: data)
+        }
+        if isWiredMissPath(bakedRvPath: bakedRvPath, fileManager: fileManager) {
+            return .wired(path: path, existingData: data)
+        }
+        return .broken(path: path, existingData: data)
     }
 
     /// Inspects a hook-merge host (Claude/Antigravity) through the shared

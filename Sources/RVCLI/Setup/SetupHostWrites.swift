@@ -158,6 +158,12 @@ extension SetupRun {
                     hooksPath: hooksPath,
                     files: files
                 )
+            case .museSettingsKey(let settingsPath, let hooksPath):
+                wrote = try writeMuseSettingsKey(
+                    settingsPath: settingsPath,
+                    hooksPath: hooksPath,
+                    files: files
+                )
             }
             if wrote {
                 wroteAny = true
@@ -280,6 +286,33 @@ extension SetupRun {
             try files.writeData(merged.data, to: hooksPath)
         } catch {
             throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        return true
+    }
+
+    /// Merges the Muse `managed_hooks_path` key for `hooksPath` into `settings.json`.
+    /// Missing / malformed / foreign-keyed settings merge to `wrote: false`
+    /// (inspect gates those states to occupied; the key is never seeded or
+    /// overwritten). Only a symlinked settings file fails the run.
+    private static func writeMuseSettingsKey(
+        settingsPath: String,
+        hooksPath: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(settingsPath) {
+            throw SetupError.hostHookWriteFailed(.muse)
+        }
+        let merged = MuseSettingsMerge.merge(
+            existingData: files.readData(settingsPath),
+            hooksPath: hooksPath
+        )
+        if merged.wrote == false {
+            return false
+        }
+        do {
+            try files.writeData(merged.data, to: settingsPath)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.muse)
         }
         return true
     }

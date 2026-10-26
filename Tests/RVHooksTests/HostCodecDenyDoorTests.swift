@@ -36,6 +36,38 @@ import RVDomain
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
+@Test func hookWire_museFirstCallDeny_isPermissionDecisionViaHostCodec() throws {
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let match = RuleMatch(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        severity: .critical,
+        reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
+        explanation: "Discards every uncommitted change."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: match.ruleID, reason: match.reason),
+            matched: match
+        )
+    )
+    let wire = hookWire(
+        from: result,
+        command: command,
+        using: MuseHostCodec(),
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
+    #expect(wire.exitCode == 0)
+    #expect(wire.stderr.isEmpty)
+    #expect(wire.stdout.contains("\"hookEventName\":\"PreToolUse\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecisionReason\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(wire.stdout.hasSuffix("\n"))
+    assertHookDenyHasNoBypassOrEssay(wire.stdout)
+}
+
 @Test func encodeEvaluatedDeny_leftoverCodecIsEncodeDeny() throws {
     let codec = LeftoverVoiceCodec()
     let command = ShellCommand(rawValue: "git reset --hard")

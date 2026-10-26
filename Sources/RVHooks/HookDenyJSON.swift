@@ -42,6 +42,18 @@ func hookBlockJSON(reason: String) -> String {
     "{\"decision\":\"block\",\"reason\":\(jsonQuoted(hookBlockReason(reason)))}\n"
 }
 
+/// Muse PreToolUse honor path (`hookSpecificOutput.permissionDecision: deny`
+/// + exit 0), proven by live probe 2026-10-26
+/// (`planning/muse-wire-probe-fixtures.md` P2). `decision: block` is
+/// rejected on this event, and bare `permissionDecision: allow` is
+/// rejected — so allow stays empty stdout (the `HostCodec` default) and
+/// deny carries the reason (required non-empty) in
+/// `permissionDecisionReason`. Minimal shape on purpose: only this exact
+/// JSON was observed to block.
+func musePermissionDenyJSON(reason: String) -> String {
+    "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\(jsonQuoted(hookBlockReason(reason)))}}\n"
+}
+
 /// Codex TUI fail-opens exit 2 unless this blocking reason is on stderr.
 /// A bare newline or whitespace-only stderr is the same fail-open as empty.
 func hookBlockStderr(reason: String) -> String {

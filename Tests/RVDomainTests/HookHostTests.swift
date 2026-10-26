@@ -12,14 +12,15 @@ import Testing
     #expect(HookHost.codex.rawValue == "codex")
     #expect(HookHost.cursor.rawValue == "cursor")
     #expect(HookHost.antigravity.rawValue == "antigravity")
+    #expect(HookHost.muse.rawValue == "muse")
 }
 
 @Test func hookHost_allCasesAreDeclarationOrder() {
-    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity"])
+    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity", "muse"])
 }
 
 @Test func hookHost_setupSlotOrderIncludesOpenClawHermesCodexAndCursor() {
-    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity"])
+    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity", "muse"])
 }
 
 @Test func hookHost_codableIsJSONString() throws {
