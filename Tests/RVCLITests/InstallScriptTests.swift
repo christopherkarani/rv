@@ -1181,6 +1181,10 @@ private func runSignedDownloadInstall(
         "HOME": home.path,
         "PATH": shim.path + ":/usr/bin:/bin",
         "RV_TEST_TOOL_LOG": log.path,
+        // Signature tests never exercise model fetching: the sandbox has no
+        // network, so a real fetch would warn and slow every run. Model
+        // fetch is covered by FetchModelsScriptTests against a file:// stub.
+        "RV_INSTALL_NO_MODELS": "1",
     ].merging(environment) { $1 }
     // The shipped script takes its Team ID pin only from its own
     // `release_team_id` (no environment override), so pin by patching a
