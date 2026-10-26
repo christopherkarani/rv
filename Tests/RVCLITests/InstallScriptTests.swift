@@ -983,6 +983,12 @@ private func writeSignatureShims(in shim: URL) throws {
             case "$mode" in
               unsigned) echo "$file: code object is not signed at all" >&2; exit 1 ;;
               adhoc) printf 'Executable=%s\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
+              adhoc-plus-unpinned-dylib)
+                case "$name" in
+                  *.dylib) printf 'Executable=%s\\nAuthority=Developer ID Application: Swift Open Source (V9AUD2URP3)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=V9AUD2URP3\\n' "$file" >&2; exit 0 ;;
+                  *) printf 'Executable=%s\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
+                esac
+                ;;
               phrase) printf 'Executable=/tmp/not signed at all/%s\\nIdentifier=not signed at all\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\n' "$name" >&2; exit 0 ;;
               identifier-team) printf 'Executable=%s\\nIdentifier=com.rv.TeamIdentifier=TEAMRV1234\\nAuthority=Developer ID Application: Other (OTHERTEAM9)\\nTeamIdentifier=OTHERTEAM9\\n' "$file" >&2; exit 0 ;;
               identifier-newline) printf 'Executable=%s\\nIdentifier=com.evil\\nTeamIdentifier=TEAMRV1234\\nAuthority=Developer ID Application: Other (OTHERTEAM9)\\nTeamIdentifier=OTHERTEAM9\\n' "$file" >&2; exit 0 ;;
@@ -1195,7 +1201,7 @@ private func runSignedDownloadInstall(
     // `RV_TEST_CHILD_TEAM_ID` deliberately plants a *different* env value.
     processEnvironment["RV_INSTALL_TEAM_ID"] = environment["RV_TEST_CHILD_TEAM_ID"]
     var scriptURL = script ?? installScriptURL()
-    if script == nil, let team = environment["RV_INSTALL_TEAM_ID"] {
+    if let team = environment["RV_INSTALL_TEAM_ID"] {
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
         let patched = source.replacingOccurrences(
             of: "release_team_id=\"\"", with: "release_team_id=\"\(team)\"")
@@ -1269,16 +1275,17 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierPhraseDoesNotSkipTheEmptyTeamCheck() throws {
-    let run = try runSignedDownloadInstall(
-        environment: ["RV_TEST_CODESIGN": "phrase"], previousInstall: true)
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierPhraseTakesUnsignedPathWhileTeamUnpinned() throws {
+    // No pin: a Developer ID file the release cannot attribute is unsigned
+    // for trust purposes, so the "not signed at all" phrase in Identifier=
+    // warns and installs with the rest of the set instead of refusing.
+    let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "phrase"])
     defer { removeTemporaryRoot(of: run) }
 
-    #expect(run.status == 1)
-    #expect(run.stderr.contains("is signed, but no Developer ID team is pinned"))
-    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning: release files are not code-signed"))
     #expect(run.toolLog.contains("codesign -dvv "))
-    try expectPreviousInstallKept(run)
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv").path))
 }
 
 @Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierNewlineUnderDashDoesNotPass() throws {
@@ -1444,23 +1451,44 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_adHocSignatureIsNotDeveloperID() throws {
-    let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "adhoc"], previousInstall: true)
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_adHocWarnsWhileSignedReleasesIsOff() throws {
+    // Ad-hoc is self-asserted: refusing it while warning on truly-unsigned
+    // files would only push an attacker to strip the signature. Both take
+    // the unsigned path, governed by the signed_releases switch.
+    let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "adhoc"])
     defer { removeTemporaryRoot(of: run) }
 
-    #expect(run.status == 1)
-    #expect(run.stderr.contains("not signed with a Developer ID Application certificate"))
-    try expectPreviousInstallKept(run)
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning: release files are not code-signed"))
+    #expect(run.toolLog.contains("spctl") == false)
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv").path))
 }
 
-@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_signedReleaseWithoutPinnedTeamRefuses() throws {
-    let run = try runSignedDownloadInstall(previousInstall: true)
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_unpinnedTeamWarnsWhileSignedReleasesIsOff() throws {
+    // No pin yet (today: the Swift toolchain dylib still carries its own
+    // team's signature): Developer ID files warn and install. Refusing
+    // them while warning on unsigned files bricked the unsigned-era
+    // installer with no security gain.
+    let run = try runSignedDownloadInstall()
     defer { removeTemporaryRoot(of: run) }
 
-    #expect(run.status == 1)
-    #expect(run.stderr.contains("libswiftCompatibilitySpan.dylib is signed, but no Developer ID team is pinned"))
-    #expect(run.stderr.contains("warning") == false)
-    try expectPreviousInstallKept(run)
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning: release files are not code-signed"))
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv").path))
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_adHocTrioWithSignedDylibWarnsWhileUnpinned() throws {
+    // Unsigned-era release shape (v0.2.0): ad-hoc binaries beside a
+    // third-party-signed toolchain dylib. With no team pinned the whole set
+    // takes the unsigned path: one warning, no mix refusal.
+    let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "adhoc-plus-unpinned-dylib"])
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning: release files are not code-signed"))
+    #expect(run.stderr.contains("some release files are signed and some are not") == false)
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv").path))
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("libswiftCompatibilitySpan.dylib").path))
 }
 
 @Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_foreignTeamRefuses() throws {
@@ -1734,6 +1762,60 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
     try expectPreviousInstallKept(refused)
     #expect(allowed.status == 0, "\(allowed.stderr)")
     #expect(allowed.stderr.contains("warning: release files are not code-signed"))
+}
+
+private func flippedSignedReleasesScript() throws -> URL {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    try #require(text.contains("\nsigned_releases=0\n"))
+    let flippedText = text.replacingOccurrences(of: "\nsigned_releases=0\n", with: "\nsigned_releases=1\n")
+    try #require(flippedText != text)
+    let flipped = FileManager.default.temporaryDirectory.appendingPathComponent("rv-install-flipped-\(UUID().uuidString).sh")
+    try flippedText.write(to: flipped, atomically: true, encoding: .utf8)
+    return flipped
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_adHocRefusesWhileSignedReleasesIsOn() throws {
+    let flipped = try flippedSignedReleasesScript()
+    defer { try? FileManager.default.removeItem(at: flipped) }
+    let refused = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "adhoc"], script: flipped, previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: refused) }
+    let allowed = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "adhoc", "RV_INSTALL_ALLOW_UNSIGNED": "1"], script: flipped
+    )
+    defer { removeTemporaryRoot(of: allowed) }
+
+    #expect(refused.status == 1)
+    #expect(refused.stderr.contains("refusing to install unsigned release files"))
+    try expectPreviousInstallKept(refused)
+    #expect(allowed.status == 0, "\(allowed.stderr)")
+    #expect(allowed.stderr.contains("warning: release files are not code-signed"))
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_unpinnedTeamRefusesWhileSignedReleasesIsOn() throws {
+    let flipped = try flippedSignedReleasesScript()
+    defer { try? FileManager.default.removeItem(at: flipped) }
+    let run = try runSignedDownloadInstall(script: flipped, previousInstall: true)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("refusing to install unsigned release files"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_pinnedReleaseInstallsWhileSignedReleasesIsOn() throws {
+    // The strict era must work when properly configured: flipped switch +
+    // pinned team + valid signatures installs without warnings.
+    let flipped = try flippedSignedReleasesScript()
+    defer { try? FileManager.default.removeItem(at: flipped) }
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"], script: flipped
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning") == false)
 }
 
 @Test func installSh_localStageIsNotSignatureChecked() throws {
