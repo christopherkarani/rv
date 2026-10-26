@@ -120,14 +120,16 @@ struct UserPresence: Sendable {
 
     /// What approve does after the code has been checked. Device owner wins
     /// when it ran. A cancelled prompt stays a refusal. A pseudo-terminal is
-    /// not presence when device owner can run and did not confirm. Linux has
-    /// no device-owner prompt, so a verified code on `/dev/pts` stands.
+    /// not presence when device owner can run and did not confirm. Without a
+    /// device-owner prompt at all (Linux today) a code alone proves nothing:
+    /// whoever read it could be the agent. Fail closed like the shell side.
     static func finishPrintedCode(
         ttyPath: String?, codeVerified: Bool, deviceOwner: PresenceOutcome?, deviceOwnerCanRun: Bool
     ) -> PresenceOutcome {
         guard codeVerified else { return .refused("wrong confirmation code") }
         if let deviceOwner { return deviceOwner }
-        if deviceOwnerCanRun, let refused = refusalForPrintedCode(ttyPath: ttyPath) { return refused }
+        guard deviceOwnerCanRun else { return .refused(deviceOwnerRefusal) }
+        if let refused = refusalForPrintedCode(ttyPath: ttyPath) { return refused }
         return .confirmed(method: "terminal confirmation code")
     }
 

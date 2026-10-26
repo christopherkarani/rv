@@ -129,6 +129,7 @@ public struct MCPApprovalStore: Sendable {
 
     /// Reusing a pending request mints a fresh code: only the newest printed code works.
     public func request(server: String, tool: String, argumentsHash: String, argumentKeys: [String]) -> MCPApprovalTicket? {
+        guard keys.honorsGrants else { return nil }
         let signer = keys.loadOrCreate()
         return withLockedRequests { requests in
             let code = signer.map { _ in MCPConfirmationCode.generate() }
@@ -173,6 +174,7 @@ public struct MCPApprovalStore: Sendable {
     public func consumeGrant(
         server: String, tool: String, argumentsHash: String, argumentKeys: [String]
     ) -> MCPGrantLookup {
+        guard keys.honorsGrants else { return .none }
         let signer = keys.load()
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: {
@@ -201,7 +203,7 @@ public struct MCPApprovalStore: Sendable {
     /// Whether `typed` is the code for this pending request as it stands now.
     /// Server, tool, argument hash, and argument key names are part of the MAC, so a rewrite fails.
     public func verifyCode(id: String, typed: String) -> Bool {
-        guard let signer = keys.load() else { return false }
+        guard keys.honorsGrants, let signer = keys.load() else { return false }
         let request = withLockedRequests { requests in requests.first { $0.id == id && $0.state == .pending } } ?? nil
         guard let request else { return false }
         return signer.verify(request.codeMAC, "code", Self.codeFields(
@@ -221,7 +223,7 @@ public struct MCPApprovalStore: Sendable {
     public func grant(
         id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String]
     ) -> MCPApprovalRequest? {
-        guard let signer = keys.loadOrCreate() else { return nil }
+        guard keys.honorsGrants, let signer = keys.loadOrCreate() else { return nil }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: { $0.id == id && $0.state == .pending }) else { return nil }
             guard requests[index].server == server, requests[index].tool == tool,

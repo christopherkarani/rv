@@ -4003,7 +4003,7 @@ struct MCPCommandTests {
         #expect(codeFirst == .refused("wrong confirmation code"))
         let linux = UserPresence.finishPrintedCode(
             ttyPath: "/dev/pts/4", codeVerified: true, deviceOwner: nil, deviceOwnerCanRun: false)
-        #expect(linux == .confirmed(method: "terminal confirmation code"))
+        #expect(linux == .refused(UserPresence.deviceOwnerRefusal))
         let console = UserPresence.finishPrintedCode(
             ttyPath: "/dev/tty1", codeVerified: true, deviceOwner: nil, deviceOwnerCanRun: true)
         #expect(console == .confirmed(method: "terminal confirmation code"))

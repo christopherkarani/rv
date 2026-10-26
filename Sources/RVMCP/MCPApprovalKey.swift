@@ -53,18 +53,29 @@ public struct MCPApprovalKeyStore: Sendable {
 
     public var load: @Sendable () -> MCPSigner?
     public var loadOrCreate: @Sendable () -> MCPSigner?
+    /// Whether a grant MAC'd under this key proves a person approved.
+    /// Only a key whose every read requires the person present (the macOS
+    /// data-protection keychain) qualifies. A same-user-readable key file
+    /// proves nothing: any process running as the user can mint grants.
+    /// The key still seals integrity state either way.
+    public var honorsGrants: Bool
 
-    public init(load: @escaping @Sendable () -> MCPSigner?, loadOrCreate: @escaping @Sendable () -> MCPSigner?) {
+    public init(
+        load: @escaping @Sendable () -> MCPSigner?, loadOrCreate: @escaping @Sendable () -> MCPSigner?,
+        honorsGrants: Bool = true
+    ) {
         self.load = load
         self.loadOrCreate = loadOrCreate
+        self.honorsGrants = honorsGrants
     }
 
-    public static let unavailable = MCPApprovalKeyStore(load: { nil }, loadOrCreate: { nil })
+    public static let unavailable = MCPApprovalKeyStore(load: { nil }, loadOrCreate: { nil }, honorsGrants: false)
 
     /// macOS keeps the key in the data-protection keychain and requires the
     /// user to be present for every read. Linux has no OS secret store, so
     /// the key is a 0600 file in the rv config directory, which a process
-    /// running as the same user can read.
+    /// running as the same user can read; approvals there fail closed
+    /// instead of trusting MACs anyone could mint.
     public static func live(configDirectory: URL, home: String) -> MCPApprovalKeyStore {
         #if os(macOS)
         _ = home
@@ -75,7 +86,9 @@ public struct MCPApprovalKeyStore: Sendable {
             })
         #else
         _ = home
-        return file(configDirectory: configDirectory)
+        var store = file(configDirectory: configDirectory)
+        store.honorsGrants = false
+        return store
         #endif
     }
 
