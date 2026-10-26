@@ -35,6 +35,12 @@ fail() {
   cat "$WORK/stdout.log" >&2
   echo "--- installer stderr ---" >&2
   cat "$WORK/stderr.log" >&2
+  for log in "$WORK/help.log" "$WORK/version.log"; do
+    if [ -f "$log" ]; then
+      echo "--- $log ---" >&2
+      cat "$log" >&2
+    fi
+  done
   exit 1
 }
 

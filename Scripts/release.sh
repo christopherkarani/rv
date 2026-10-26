@@ -318,6 +318,40 @@ if [[ "$copied" -eq 0 ]]; then
   exit 1
 fi
 
+if [[ "$OS" == "Linux" ]]; then
+  # The Swift products link the toolchain runtime dynamically (their RUNPATH
+  # names the toolchain dir plus $ORIGIN). Curl-install machines have no
+  # toolchain, so stage the loader closure beside the binaries: ldd on the
+  # build runner resolves it, and every non-system path ships. Dereference:
+  # DT_NEEDED names the unversioned file, which is often a symlink.
+  staged_libs=0
+  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-isolation-exec"; do
+    while IFS= read -r line; do
+      case "$line" in
+        *" => "*) ;;
+        *) continue ;;
+      esac
+      path="${line#* => }"
+      path="${path%% *}"
+      case "$path" in
+        ""|/lib*|/usr/lib*) continue ;;
+      esac
+      base="$(basename "$path")"
+      if [[ ! -f "$STAGE/$base" ]]; then
+        cp -L "$path" "$STAGE/$base"
+        chmod 755 "$STAGE/$base"
+        staged_libs=$((staged_libs + 1))
+      fi
+    done < <(ldd "$staged" 2>/dev/null || true)
+  done
+  if [[ "$staged_libs" -eq 0 ]]; then
+    printf 'release: no Swift runtime libraries resolved for the Linux stage\n' >&2
+    exit 1
+  fi
+  printf 'release: staged %s Swift runtime libraries\n' "$staged_libs" >&2
+  ls "$STAGE"/*.so >&2
+fi
+
 if [[ "$OS" == "Darwin" ]]; then
   for staged in "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host"; do
     show="$(vtool -show-build "$staged")"

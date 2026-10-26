@@ -382,6 +382,81 @@ func installSh_refusesOlderMacOS(_ productVersion: String) throws {
     )
 }
 
+@Test func installSh_linuxDownloadStagesSwiftLibs() throws {
+    // Linux skips signature verification, so the download path needs no
+    // unshare mount and this test runs on every host.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let assets = root.appendingPathComponent("assets", isDirectory: true)
+    try writeExecutable(
+        assets.appendingPathComponent("rv-linux-x86_64"),
+        contents: """
+        #!/bin/sh
+        exec "$(dirname "$0")/rv-cli" "$@"
+        """
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-cli-linux-x86_64"),
+        contents: """
+        #!/bin/sh
+        printf 'from_install=%s argv=%s\\n' "${RV_FROM_INSTALL-}" "$*" > "$HOME/.rv-setup-marker"
+        exit 0
+        """
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rvd-linux-x86_64"),
+        contents: "#!/bin/sh\nexit 0\n"
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-workspace-host-linux-x86_64"),
+        contents: "#!/bin/sh\nexit 0\n"
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-isolation-exec-linux-x86_64"),
+        contents: "#!/bin/sh\nexit 125\n"
+    )
+    try writeSwiftLibsTarball(in: assets)
+    try writePackBundleTarball(in: assets, target: "linux-x86_64", bundle: "rv_RVPacks.resources")
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeLinuxShims(in: shim, arch: "x86_64")
+    try writeCurlShim(in: shim, assets: assets)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [installScriptURL().path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+        "TAR_OPTIONS": "--no-same-owner",
+    ]
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    try process.run()
+    process.waitUntilExit()
+    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    #expect(process.terminationStatus == 0, "\(err)")
+
+    let destBin = home.appendingPathComponent(".local/bin")
+    for name in ["rv", "rv-cli", "rvd", "rv-workspace-host", "rv-isolation-exec"] {
+        #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent(name).path), "\(name) missing")
+    }
+    #expect(try String(contentsOf: destBin.appendingPathComponent("libswiftCore.so"), encoding: .utf8) == "core\n")
+    #expect(try String(contentsOf: destBin.appendingPathComponent("libFoundation.so"), encoding: .utf8) == "foundation\n")
+    #expect(FileManager.default.fileExists(atPath: destBin.appendingPathComponent("liblinked.so").path) == false)
+    #expect(FileManager.default.fileExists(atPath: destBin.appendingPathComponent("README.txt").path) == false)
+    #expect(isDirectory(destBin.appendingPathComponent("rv_RVPacks.resources")))
+    let marker = try String(contentsOfFile: home.path + "/.rv-setup-marker", encoding: .utf8)
+    #expect(marker.contains("from_install=1"))
+    #expect(marker.contains("setup"))
+}
+
 private func proveLinuxInstall(arch: String) throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-linux-\(UUID().uuidString)", isDirectory: true)
@@ -662,6 +737,7 @@ private func proveLinuxInstall(arch: String) throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("https://github.com/christopherkarani/rv/releases/latest/download"))
     #expect(text.contains("rv_RVPacks-$target.tar.gz"))
+    #expect(text.contains("rv-swiftlibs-$target.tar.gz"))
     #expect(text.contains("rv-$target"))
     #expect(text.contains("rv-isolation-exec-$target"))
     #expect(text.contains("tar -xzf"))
@@ -681,8 +757,12 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(withoutTarball.contains("$release_base/rv_RVPacks.bundle") == false)
 }
 
-private func writePackBundleTarball(in assets: URL) throws {
-    let bundleDir = assets.appendingPathComponent("rv_RVPacks.bundle", isDirectory: true)
+private func writePackBundleTarball(
+    in assets: URL,
+    target: String = "darwin-arm64",
+    bundle: String = "rv_RVPacks.bundle"
+) throws {
+    let bundleDir = assets.appendingPathComponent(bundle, isDirectory: true)
     let bundlePack = bundleDir.appendingPathComponent("packs/core.json")
     try FileManager.default.createDirectory(
         at: bundlePack.deletingLastPathComponent(),
@@ -690,10 +770,10 @@ private func writePackBundleTarball(in assets: URL) throws {
     )
     try "{}\n".write(to: bundlePack, atomically: true, encoding: .utf8)
 
-    let tarball = assets.appendingPathComponent("rv_RVPacks-darwin-arm64.tar.gz")
+    let tarball = assets.appendingPathComponent("rv_RVPacks-\(target).tar.gz")
     let tar = Process()
     tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-    tar.arguments = ["-czf", tarball.path, "rv_RVPacks.bundle"]
+    tar.arguments = ["-czf", tarball.path, bundle]
     tar.currentDirectoryURL = assets
     tar.standardOutput = Pipe()
     tar.standardError = Pipe()
@@ -705,6 +785,32 @@ private func writePackBundleTarball(in assets: URL) throws {
     }
     // GitHub serves a tarball file, not a directory asset.
     try FileManager.default.removeItem(at: bundleDir)
+}
+
+private func writeSwiftLibsTarball(in assets: URL, target: String = "linux-x86_64") throws {
+    let libs = assets.appendingPathComponent("swiftlibs", isDirectory: true)
+    try FileManager.default.createDirectory(at: libs, withIntermediateDirectories: true)
+    try "core\n".write(to: libs.appendingPathComponent("libswiftCore.so"), atomically: true, encoding: .utf8)
+    try "foundation\n".write(to: libs.appendingPathComponent("libFoundation.so"), atomically: true, encoding: .utf8)
+    try "notes\n".write(to: libs.appendingPathComponent("README.txt"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(
+        atPath: libs.appendingPathComponent("liblinked.so").path,
+        withDestinationPath: "libswiftCore.so"
+    )
+    let tarball = assets.appendingPathComponent("rv-swiftlibs-\(target).tar.gz")
+    let tar = Process()
+    tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+    tar.arguments = ["-czf", tarball.path, "libswiftCore.so", "libFoundation.so", "README.txt", "liblinked.so"]
+    tar.currentDirectoryURL = libs
+    tar.standardOutput = Pipe()
+    tar.standardError = Pipe()
+    try tar.run()
+    tar.waitUntilExit()
+    guard tar.terminationStatus == 0 else {
+        struct TarFailed: Error {}
+        throw TarFailed()
+    }
+    try FileManager.default.removeItem(at: libs)
 }
 
 private func isDirectory(_ url: URL) -> Bool {

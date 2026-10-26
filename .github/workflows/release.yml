@@ -312,7 +312,6 @@ jobs:
         with:
           name: release-assets-${{ matrix.asset }}
           path: assets
-          if-no-files-found: error
 
       # The exact install.sh that publish will attach, against the exact
       # renamed assets, on every target: a verifier/asset mismatch fails
