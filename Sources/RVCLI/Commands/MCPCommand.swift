@@ -368,24 +368,34 @@ enum MCPRun {
         return "\(report.rows.count) host entries in \(files) files" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", "))
     }
 
-    /// Governed local servers `rv mcp serve` will refuse: every local server
-    /// needs an explicit sandbox, and a sandbox reaches the network only
-    /// through `sandbox.hosts`. Blocked servers are refused either way.
-    static func sandboxProblems(_ configuration: MCPConfiguration, configDirectory: URL) -> [Problem] {
+    /// Governed local servers `rv mcp serve` will refuse. Where the cage
+    /// is enforced every local server needs an explicit sandbox, and a
+    /// sandbox reaches the network only through `sandbox.hosts`.
+    /// Elsewhere there is no cage yet: bare servers serve, sandboxed
+    /// ones are refused. Blocked servers are refused either way.
+    static func sandboxProblems(
+        _ configuration: MCPConfiguration, configDirectory: URL, requireSandbox: Bool = MCPSandbox.enforced
+    ) -> [Problem] {
         let path = MCPConfiguration.fileURL(configDirectory: configDirectory).path
         return configuration.servers.compactMap { server -> Problem? in
             guard server.remote == nil, configuration.isBlocked(server.name) == false else { return nil }
-            if server.sandbox == nil {
-                return Problem(
-                    path: path,
-                    message: "\(server.name) has no sandbox; add \"sandbox\" to its mcp.json entry")
+            if requireSandbox {
+                if server.sandbox == nil {
+                    return Problem(
+                        path: path,
+                        message: "\(server.name) has no sandbox; add \"sandbox\" to its mcp.json entry")
+                }
+                if server.sandbox?.network == true {
+                    return Problem(
+                        path: path,
+                        message: "\(server.name) has sandbox network on; list the hosts it needs in sandbox.hosts")
+                }
+                return nil
             }
-            if server.sandbox?.network == true {
-                return Problem(
-                    path: path,
-                    message: "\(server.name) has sandbox network on; list the hosts it needs in sandbox.hosts")
-            }
-            return nil
+            guard server.sandbox != nil else { return nil }
+            return Problem(
+                path: path,
+                message: "\(server.name) asks for a sandbox, which rv supports only on macOS")
         }
     }
 
@@ -839,8 +849,9 @@ enum MCPRun {
         "refused \(reviewField(server)) \(reviewField(tool))\n"
     }
 
-    /// Sandbox network and writable paths, or `no sandbox` when serve will
-    /// inherit the host environment.
+    /// Sandbox network and writable paths, or `no sandbox` when the
+    /// server declares none (serve refuses it where the cage is
+    /// enforced; elsewhere it runs uncaged until the Linux cage lands).
     static func sandboxLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
         guard let sandbox = server.sandbox else { return ["\(indent)no sandbox"] }
         let writable = quotedReviewFields(

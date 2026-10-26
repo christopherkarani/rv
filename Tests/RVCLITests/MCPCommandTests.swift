@@ -94,10 +94,15 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)
+        #if os(macOS)
         // Imported local servers carry no sandbox yet: governed, but check
         // stays red until one is added and the file is re-trusted.
         #expect(after.passes == false)
         #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
+        #else
+        // No cage off macOS yet: bare servers serve, so check reports no sandbox problem.
+        #expect(after.problems.contains { $0.message.contains("sandbox") } == false)
+        #endif
         #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         let relative = try report(fixture, rvExecutable: "")
         #expect(relative.rows.contains { $0.name == "github" && $0.status == "governed" } == false)
@@ -107,6 +112,36 @@ struct MCPCommandTests {
         ).get()
         #expect(undone.contains("restored github"))
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
+    }
+
+    @Test func sandboxProblemsFollowThePlatformCage() {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "bare", command: "b"),
+            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
+            MCPServerDefinition(name: "closed", command: "c", sandbox: MCPSandboxPolicy(network: false)),
+        ])
+        let directory = URL(fileURLWithPath: "/nonexistent")
+        let enforced = MCPRun.sandboxProblems(configuration, configDirectory: directory, requireSandbox: true)
+        #expect(enforced.contains { $0.message == #"bare has no sandbox; add "sandbox" to its mcp.json entry"# })
+        #expect(enforced.contains { $0.message == "open has sandbox network on; list the hosts it needs in sandbox.hosts" })
+        #expect(enforced.contains { $0.message.contains("closed") } == false)
+        let uncaged = MCPRun.sandboxProblems(configuration, configDirectory: directory, requireSandbox: false)
+        #expect(uncaged.contains { $0.message.contains("bare") } == false)
+        #expect(uncaged.count == 2)
+        #expect(uncaged.allSatisfy { $0.message.contains("only on macOS") })
+        let platformDefault = MCPRun.sandboxProblems(configuration, configDirectory: directory)
+        #if os(macOS)
+        #expect(platformDefault == enforced)
+        #else
+        #expect(platformDefault == uncaged)
+        #endif
+    }
+
+    @Test func problemLinesLabelEachProblem() {
+        let report = MCPRun.Report(
+            servers: 1, direct: 0, blocked: 0, integrity: "none", integrityProblem: nil, rows: [],
+            problems: [MCPRun.Problem(path: "/tmp/home/.config/rv/mcp.json", message: "boom")])
+        #expect(MCPRun.problemLines(report, home: URL(fileURLWithPath: "/tmp/home")) == ["problem: ~/.config/rv/mcp.json: boom"])
     }
 
     @Test func dryRunAndKeychainFailureWriteNothing() async throws {

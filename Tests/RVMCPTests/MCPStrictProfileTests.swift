@@ -68,7 +68,8 @@ struct MCPStrictProfileTests {
         func plan(_ name: String) -> Result<Void, MCPLaunchError> {
             MCPLaunchPlanner.plan(
                 servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
-                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:]
+                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
+                requireSandbox: true
             ).map { _ in () }
         }
         guard case .failure = plan("bare"), case .failure = plan("open") else {
@@ -107,7 +108,8 @@ struct MCPStrictProfileTests {
         func plan(_ name: String) -> Result<Void, MCPLaunchError> {
             MCPLaunchPlanner.plan(
                 servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
-                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:]
+                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
+                requireSandbox: true
             ).map { _ in () }
         }
         guard case .failure(let bare) = plan("bare"), case .failure(let open) = plan("open") else {

@@ -15,6 +15,15 @@ import Synchronization
 public enum MCPSandbox {
     public static let sandboxExec = "/usr/bin/sandbox-exec"
 
+    /// Whether serve cages local servers on this platform. The seatbelt
+    /// cage is macOS-only: elsewhere bare servers run uncaged and
+    /// sandboxed ones are refused until the Linux cage lands.
+    #if os(macOS)
+    public static let enforced = true
+    #else
+    public static let enforced = false
+    #endif
+
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]
     /// Paths `profile` allows even when `policy.writable` is empty.
     static let seatbeltWriteRoots = ["/private/tmp", "/private/var/folders", "/dev"]

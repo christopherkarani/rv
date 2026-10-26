@@ -22,6 +22,18 @@ public struct MCPImportPlan: Sendable {
 }
 
 public enum MCPImport {
+    /// Pre-hard-flip entry point: imported tools always ask now, so
+    /// `allowTools` is accepted so existing callers still compile, and ignored.
+    @available(*, deprecated, message: "Imported tools always ask; allowTools is ignored.")
+    public static func plan(
+        entries: [MCPHostEntry],
+        configuration: MCPConfiguration,
+        secrets: SecretsConfiguration,
+        allowTools: Bool
+    ) -> MCPImportPlan {
+        plan(entries: entries, configuration: configuration, secrets: secrets)
+    }
+
     public static func plan(
         entries: [MCPHostEntry],
         configuration: MCPConfiguration,

@@ -157,10 +157,14 @@ def text_of(reply):
 
 
 def server(**extra):
-    # Local servers need an explicit sandbox since the hard flip. The cage
-    # is macOS-only, so the local-gateway legs below run on macOS until the
-    # Linux cage lands.
-    return {"name": "db", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "sandbox": {"network": False}, **extra}
+    # Local servers need an explicit sandbox where the cage is enforced.
+    # The cage is macOS-only, so fixtures carry a sandbox there and run
+    # bare elsewhere (serve refuses sandbox-less servers only on macOS)
+    # until the Linux cage lands.
+    base = {"name": "db", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]}
+    if sys.platform == "darwin":
+        base["sandbox"] = {"network": False}
+    return {**base, **extra}
 
 
 # 7.2 argument-aware rules
@@ -402,7 +406,7 @@ r = rv("mcp", "connect", "nope")
 step("7.1 connect refuses an unknown server", r.returncode != 0 and "mcp.json has no server named nope" in r.stderr, r.stderr.strip())
 ofx.kill()
 
-# 7.4 hard defaults: unlisted tools deny; local servers need a sandbox; open network is refused
+# 7.4 hard defaults: unlisted tools deny; local servers need a sandbox where the cage is enforced (macOS); open network is refused
 fx4, port4, _ = remote_fixture()
 base4 = f"http://127.0.0.1:{port4}"
 out = write_and_trust({"version": 1, "profile": "strict", "defaultDecision": "allow", "servers": [
@@ -424,11 +428,25 @@ step("7.4 an ask tool still asks", "rv paused this call: web tool whoami" in tex
 reply = g.call(42, "delete_all", {})
 step("7.4 an unlisted tool is denied", "rv policy denies web tool delete_all" in text_of(reply), text_of(reply)[:70])
 g.close()
-r = rv("mcp", "serve", "--server", "bare")
-step("7.4 a local server without a sandbox is refused", r.returncode != 0 and "bare needs a sandbox" in r.stderr,
-     r.stderr.strip()[:140])
+if sys.platform == "darwin":
+    r = rv("mcp", "serve", "--server", "bare")
+    step("7.4 a local server without a sandbox is refused", r.returncode != 0 and "bare needs a sandbox" in r.stderr,
+         r.stderr.strip()[:140])
+else:
+    try:
+        g = Gateway(args=["--server", "bare"])
+        names = sorted(t["name"] for t in g.tools)
+        g.close()
+        step("7.4 a local server without a sandbox serves on Linux (uncaged until the cage lands)", True,
+             ", ".join(names) or "no listed tools")
+    except Exception as error:
+        step("7.4 a local server without a sandbox serves on Linux (uncaged until the cage lands)", False, str(error)[:100])
 r = rv("mcp", "serve", "--server", "open")
-step("7.4 open network is refused", r.returncode != 0 and "open stays off the network" in r.stderr, r.stderr.strip()[:140])
+if sys.platform == "darwin":
+    step("7.4 open network is refused", r.returncode != 0 and "open stays off the network" in r.stderr, r.stderr.strip()[:140])
+else:
+    step("7.4 a sandboxed server is refused on Linux (the cage is macOS)", r.returncode != 0 and "only on macOS" in r.stderr,
+         r.stderr.strip()[:140])
 if sys.platform == "darwin":
     g = Gateway(args=["--server", "proxied"])
     reply = g.call(43, "echo", {"text": "caged"})

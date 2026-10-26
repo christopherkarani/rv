@@ -60,7 +60,8 @@ struct MCPManagedPolicyTests {
         let resolver = SecretResolver { _ in .success(SecretValue("v")!) }
         func plan(_ name: String) -> MCPLaunchError? {
             if case .failure(let error) = MCPLaunchPlanner.plan(
-                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:])
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
             {
                 return error
             }

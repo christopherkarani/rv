@@ -225,6 +225,43 @@ struct MCPGatewayRuntimeTests {
         #expect(calls.count == 0)
     }
 
+    @Test func plannerGatesTheSandboxRequirementOnTheCage() {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "bare", command: "b"),
+            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
+        ])
+        func plan(_ name: String, requireSandbox: Bool) -> MCPLaunchError? {
+            if case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
+                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
+                requireSandbox: requireSandbox)
+            {
+                return error
+            }
+            return nil
+        }
+        #expect(plan("bare", requireSandbox: true)?.message.contains("needs a sandbox") == true)
+        #expect(plan("open", requireSandbox: true)?.message.contains("stays off the network") == true)
+        // No cage off macOS yet: bare servers serve, and serve (not the
+        // planner) still refuses sandboxed ones there.
+        #expect(plan("bare", requireSandbox: false) == nil)
+        #expect(plan("open", requireSandbox: false) == nil)
+    }
+
+    @Test func plannerSandboxDefaultFollowsThePlatformCage() {
+        let configuration = MCPConfiguration(servers: [MCPServerDefinition(name: "bare", command: "b")])
+        let refused: Bool
+        if case .failure = MCPLaunchPlanner.plan(
+            servers: ["bare"], configuration: configuration, secrets: SecretsConfiguration(),
+            resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:])
+        {
+            refused = true
+        } else {
+            refused = false
+        }
+        #expect(refused == MCPSandbox.enforced)
+    }
+
     @Test func oauthTokenStaysOnTheResourceURLItWasIssuedFor() throws {
         let issued = MCPOAuthTokens(
             accessToken: "super-token", tokenEndpoint: URL(string: "https://auth.example/token")!, clientID: "c",

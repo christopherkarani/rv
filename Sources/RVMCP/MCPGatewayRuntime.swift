@@ -59,6 +59,7 @@ public enum MCPLaunchPlanner {
         secrets: SecretsConfiguration,
         resolver: SecretResolver,
         baseEnvironment: [String: String],
+        requireSandbox: Bool = MCPSandbox.enforced,
         oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
         sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
@@ -90,11 +91,13 @@ public enum MCPLaunchPlanner {
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
-            guard let policy = definition.sandbox else {
-                return .failure(.sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry"))
-            }
-            if policy.network {
-                return .failure(.sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts"))
+            if requireSandbox {
+                guard let policy = definition.sandbox else {
+                    return .failure(.sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry"))
+                }
+                if policy.network {
+                    return .failure(.sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts"))
+                }
             }
             var environment = sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }

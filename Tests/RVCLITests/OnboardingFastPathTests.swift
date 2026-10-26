@@ -175,10 +175,15 @@ struct OnboardingFastPathTests {
         #expect(configuration.toolMode == .search)
         let report = MCPRun.report(
             fixture.environment(), project: nil, configuration: configuration, rvExecutable: rv.path)
+        #if os(macOS)
         // Onboarded local servers carry no sandbox yet: check fails until
         // one is added and the file is re-trusted.
         #expect(report.passes == false)
         #expect(report.problems.contains { $0.message.contains("github has no sandbox") })
+        #else
+        // No cage off macOS yet: bare servers serve, so check reports no sandbox problem.
+        #expect(report.problems.contains { $0.message.contains("sandbox") } == false)
+        #endif
     }
 
     @Test func onboardDryRunWritesNothing() async throws {
