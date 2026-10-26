@@ -533,9 +533,9 @@ public struct GatedEvaluate: Sendable {
         // disarming path rules must not buy an allow).
         let stance = run(nil)
         switch stance.outcome {
-        case .deny, .indeterminate, .hit:
+        case .deny, .indeterminate:
             return stance
-        case .quickRejected, .plain, .safeOnly:
+        case .quickRejected, .plain, .safeOnly, .hit:
             return run(SecretPathCandidateResolver.resolution(home: home, cwd: cwd))
         }
     }
