@@ -1,0 +1,17 @@
+OVERVIEW: Launch a trusted operator-configured Agent Definition on the
+workspace host.
+
+USAGE: rv workspace agent [--workspace <workspace>] [--rows <rows>] [--columns <columns>] <definition-id> [<arguments> ...]
+
+ARGUMENTS:
+  <definition-id>         Agent Definition ID from the operator's configuration.
+  <arguments>             Arguments passed to the configured executable.
+
+OPTIONS:
+  --workspace <workspace> Project directory, not the home directory. Defaults
+                          to the current directory.
+  --rows <rows>           Initial terminal rows.
+  --columns <columns>     Initial terminal columns.
+  --version               Show the version.
+  -h, --help              Show help information.
+

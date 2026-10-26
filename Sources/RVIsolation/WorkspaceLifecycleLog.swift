@@ -316,27 +316,18 @@ enum WorkspaceLifecycleLog {
         return outcome
     }
 
-    /// Per-workspace accumulation for the compaction drop predicate.
-    /// Mirrors the inputs to `WorkspaceRecovery.reconstruction()`'s final
-    /// guard, which that function applies after its phase walk.
+    /// Per-workspace drop predicate input, computed by the shared stage
+    /// machine (`WorkspaceSessionLifecycle.ShapeFacts`) so compaction and
+    /// recovery read the journal one way. This predicate keeps the
+    /// conservative delta recovery's phase walk allows: workspaces closing
+    /// only through `.recoveryCompleted` stay (a later `.closed` line for
+    /// the same id is still possible), and `.blocked`-but-well-formed
+    /// streams stay because only recovery may decide their fate.
     private struct DropTally {
-        var closed = false
-        var created = 0
-        var paths: Set<String> = []
-        var hasOriginal = false
-        var hasProtected = false
+        var facts = WorkspaceSessionLifecycle.ShapeFacts()
 
-        /// True only when recovery classifies this workspace as closed.
-        /// Recovery treats a `.closed`-bearing workspace as `.corrupt`
-        /// (open) when it has zero or two `.created` lines, split paths, or
-        /// empty paths, so dropping on `.closed` alone would flip blocked
-        /// assessments to clean. Workspaces carrying only
-        /// `.recoveryCompleted` also reconstruct as closed, but a later
-        /// `.closed` line for the same id is still possible, so keeping them
-        /// is the conservative direction. `reconstruction()` is macOS-only;
-        /// keep this predicate aligned with it.
         var droppable: Bool {
-            closed && created == 1 && paths.count <= 1 && hasOriginal && hasProtected
+            facts.droppable
         }
     }
 
@@ -367,21 +358,7 @@ enum WorkspaceLifecycleLog {
         }
         var tallies: [UUID: DropTally] = [:]
         for record in records.compactMap({ $0 }) {
-            var tally = tallies[record.workspace, default: DropTally()]
-            if record.kind == .closed {
-                tally.closed = true
-            }
-            if record.kind == .created {
-                tally.created += 1
-            }
-            if record.originalPath.isEmpty == false {
-                tally.paths.insert(record.originalPath)
-                tally.hasOriginal = true
-            }
-            if record.protectedPath.isEmpty == false {
-                tally.hasProtected = true
-            }
-            tallies[record.workspace] = tally
+            tallies[record.workspace, default: DropTally()].facts.absorb(record)
         }
         let closedIDs = Set(tallies.compactMap { id, tally in tally.droppable ? id : nil })
         if closedIDs.isEmpty {

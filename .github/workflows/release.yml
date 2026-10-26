@@ -290,10 +290,40 @@ jobs:
           path: release-assets/
           if-no-files-found: error
 
+  install-smoke:
+    name: install smoke (${{ matrix.asset }})
+    needs: [gate, linux]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            asset: darwin-arm64
+          - runner: ubuntu-24.04
+            asset: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            asset: linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets-${{ matrix.asset }}
+          path: assets
+          if-no-files-found: error
+
+      # The exact install.sh that publish will attach, against the exact
+      # renamed assets, on every target: a verifier/asset mismatch fails
+      # the release before anything is published.
+      - name: One-line install smoke
+        run: sh Scripts/install-smoke.sh --local install.sh assets
+
   publish:
     name: publish release
     if: github.event_name == 'push'
-    needs: [gate, sequoia-smoke, linux]
+    needs: [gate, sequoia-smoke, linux, install-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -325,3 +355,27 @@ jobs:
             gh release create "$GITHUB_REF_NAME" assets/* \
               --title "$GITHUB_REF_NAME" --generate-notes
           fi
+
+  curl-e2e:
+    name: curl install e2e (${{ matrix.asset }})
+    needs: [publish]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            asset: darwin-arm64
+          - runner: ubuntu-24.04
+            asset: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            asset: linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Backstop behind install-smoke: the real public URL, including the
+      # rykanv.com redirect and latest/download resolution, minutes after
+      # publish. Fails the workflow visibly if the live path regressed.
+      - name: Live one-line install
+        run: sh Scripts/install-smoke.sh --live https://rykanv.com/install

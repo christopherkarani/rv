@@ -1,0 +1,1725 @@
+warning: /Users/chriskarani/Library/org.swift.swiftpm/configuration is not accessible or not writable, disabling user-level cache features.
+warning: /Users/chriskarani/Library/org.swift.swiftpm/security is not accessible or not writable, disabling user-level cache features.
+warning: /Users/chriskarani/Library/Caches/org.swift.swiftpm is not accessible or not writable, disabling user-level cache features.
+warning: 'rv': failed storing manifest for 'rv' in cache: attempt to write a readonly database
+warning: 'swift-collections': failed storing manifest for 'swift-collections' in cache: attempt to write a readonly database
+warning: 'swiftterm': failed storing manifest for 'swiftterm' in cache: attempt to write a readonly database
+warning: 'swift-argument-parser': failed storing manifest for 'swift-argument-parser' in cache: attempt to write a readonly database
+warning: 'swift-tui': failed storing manifest for 'swift-tui' in cache: attempt to write a readonly database
+warning: 'swift-async-algorithms': failed storing manifest for 'swift-async-algorithms' in cache: attempt to write a readonly database
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.75 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Workspace recovery" started.
+􀟈  Suite "SeatbeltContainment" started.
+􀟈  Suite "Terminal stream" started.
+􀟈  Test terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() started.
+􀟈  Suite "AgentTurn" started.
+􀟈  Suite "Workspace lifecycle core" started.
+􀟈  Test selectedManifestIsIdenticalForOneShotAndTerminalResources() started.
+􀟈  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() started.
+􀟈  Test controlRPCFailureTypedOverloadShape() started.
+􀟈  Test egressProxyDeniesMalformedAndBypassShapes() started.
+􀟈  Suite "AgentInstanceRegistry" started.
+􀟈  Suite "WorkspaceSession" started.
+􀟈  Test productiveProfileGrantsSystemTemporaryDirectoryReadWrite() started.
+􀟈  Test agentBinResolutionOmitsClaudeScratchWhenClaudeIsAbsent() started.
+􀟈  Suite "RuntimeAdmission" started.
+􀟈  Test sanitizedPATHSymlinkGrandparentNeverReachesRoot() started.
+􀟈  Suite "LaunchBoundaryRegression" started.
+􀟈  Suite "IsolationConformance" started.
+􀟈  Suite "IsolationApply" started.
+􀟈  Suite "Executor lifecycle regressions" started.
+􀟈  Suite "HTTP admission" started.
+􀟈  Suite "Workspace client terminal queue" started.
+􀟈  Suite "DescriptorHygiene" started.
+􀟈  Suite "SeatbeltMachBoundary" started.
+􀟈  Suite "SeatbeltLoopback" started.
+􀟈  Suite "LocalExecutor" started.
+􀟈  Suite "SeatbeltCapability" started.
+􀟈  Suite "Workspace host" started.
+􀟈  Suite "Runtime terminal" started.
+􀟈  Suite WorkspacePrincipalAuthorityTests started.
+􀟈  Test egressProxyExternalDialFilterRejectsNonPublicAddresses() started.
+􀟈  Suite "AgentInstanceRegistry concurrency" started.
+􀟈  Suite "RuntimeAdversarial" started.
+􀟈  Test selectedGenericProfileStagesOnlyItsOwnSyntheticCredential() started.
+􀟈  Test unknownResourceProfileIDResolvesToNothing() started.
+􀟈  Suite "IsolationApply" started.
+􀟈  Test terminalEnvironmentKeyPolicy() started.
+􀟈  Suite "ContainedLaunch" started.
+􀟈  Suite "Local terminal restore" started.
+􀟈  Test profileLessTmpdirStaysOutOfTheWorkspaceRoot() started.
+􀟈  Test controlRPCRequestRoundTrips() started.
+􀟈  Test agentBinDirectoryDerivesFromExecutablePath() started.
+􀟈  Test stagedCredentialMustBeOwnerFileAndNeverSymlink() started.
+􀟈  Test noProfileNeverAdmitsInstalledAgentResources() started.
+􀟈  Test keychainRawSecretWithoutFieldDecodesAsText() started.
+􀟈  Test productiveResolutionHonorsInjectedProbe() started.
+􀟈  Test egressProxyRejectsOversizeHeaders() started.
+􀟈  Test profileBoundToProjectAIsUnresolvableForProjectB() started.
+􀟈  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() started.
+􀟈  Test terminalReplayDropsTheOldestBytes() started.
+􀟈  Test workspaceControlRejectsUnknownVersionAndFields() started.
+􀟈  Test egressProxyDeniesExternalAbsoluteHTTP() started.
+􀟈  Test terminalEnvironmentPassesGatewayThrough() started.
+􀟈  Test egressProxyParsesAbsoluteHTTP() started.
+􀟈  Test egressProxyReportsDialFailures() started.
+􀟈  Test symlinkedCredentialSourceEscapeFailsClosedStaging() started.
+􀟈  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() started.
+􀟈  Test controlRPCResponseCodeRoundTrips() started.
+􀟈  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() started.
+􀟈  Test controlRPCResponseRoundTrips() started.
+􀟈  Test nonTerminalEnvironmentStaysNonInteractive() started.
+􀟈  Test peerTrustRejectsUserOwnedManifest() started.
+􀟈  Test keychainFailuresNameTheEnvAndStageNothing() started.
+􀟈  Test keychainEntryInjectsOnlyForMatchingAgent() started.
+􀟈  Test controlRPCCodableInitEnforcesVersionAndLimits() started.
+􀟈  Test loopbackHelpersRejectOutOfRangePorts() started.
+􀟈  Test controlRPCUnknownOperationPreservesRawEcho() started.
+􀟈  Test agentBinResolutionAdmitsMuseInstallFiles() started.
+􀟈  Test deadExecutableLinkNamesItselfInStagingFailure() started.
+􀟈  Test preparedContainedProfileAdmitsLoopbackOnly() started.
+􀟈  Test controlRPCCodableEncodeAgreesWithValidatedEncode() started.
+􀟈  Test pseudoTerminalEnvironmentAdvertisesColorOutput() started.
+􀟈  Test controlRPCPropagatesInvalidAndIncompatible() started.
+􀟈  Test unselectedRuntimeStripsSecretsButProjectsNonSecretVars() started.
+􀟈  Test agentBinResolveWithMissingBinDirGrantsNothing() started.
+􀟈  Test activeDeveloperRootFollowsSelectLinkToEnclosingApp() started.
+􀟈  Test sanitizedPATHBinParentExpansionHonorsSecretVeto() started.
+􀟈  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() started.
+􀟈  Test controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() started.
+􀟈  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() started.
+􀟈  Test agentBinDirectoryIsASiblingOfTheHostBinary() started.
+􀟈  Test terminalPATHPrefersInstalledAgentBin() started.
+􀟈  Test sanitizedPATHImpliesBinParentsButNeverRoot() started.
+􀟈  Test ambientSecretsDoNotFlowUnlessExplicitlyNamed() started.
+􀟈  Test egressProxyRelaysLoopbackTargets() started.
+􀟈  Test agentNamedExecutableWithNoProfileStagesZeroResources() started.
+􀟈  Test productiveResolutionIncludesActiveDeveloperRoot() started.
+􀟈  Test agentFilteredCredentialsStageOnlyForMatchingAgent() started.
+􀟈  Test unixPeerEvidenceRejectsNonSocketDescriptor() started.
+􀟈  Test egressProxyDeniesUnknownHosts() started.
+􀟈  Test egressProxyRelaysLoopbackAbsoluteHTTP() started.
+􀟈  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() started.
+􀟈  Test sanitizeTrimsToPATHBudgetFromTheTail() started.
+􀟈  Test activeDeveloperRootPrefersDeveloperDir() started.
+􀟈  Test controlRPCFramesAreByteIdenticalToLegacyCodec() started.
+􀟈  Test productiveResolutionCarriesSystemTemporaryDirectory() started.
+􀟈  Test writeShimRefreshesContent() started.
+􀟈  Test blockedVariableNameMatchesUnderscoreTokens() started.
+􀟈  Test activeDeveloperRootVetoesSensitiveSelection() started.
+􀟈  Test profileStagingFailureKeepsLaunchFailurePath() started.
+􀟈  Test productiveProfileOmitsSystemTemporaryDirectoryWhenUnresolved() started.
+􀟈  Test stageAgentHomesLinksClaudeCredentials() started.
+􀟈  Test seedGitIdentityUsesInjectedReader() started.
+􀟈  Test emptyAgentsListNormalizesToNilInInitAndDecode() started.
+􀟈  Test unixPeerEvidenceFromRealConnectedSocket() started.
+􀟈  Test seedGitIdentitySkipsWhenIdentityIsEmpty() started.
+􀟈  Test egressProxyParsesStrictCONNECTOnly() started.
+􀟈  Test keychainValuesLandInEnvironmentForAnyIO() started.
+􀟈  Test agentBinResolutionGrantsOnlyResolvedAgents() started.
+􀟈  Test terminalBytesRoundTripThroughBase64() started.
+􀟈  Test agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() started.
+􀟈  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() started.
+􀟈  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() started.
+􀟈  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() started.
+􀟈  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() started.
+􀟈  Test observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() started.
+􀟈  Test cleanRecoveryDoesNotTouchTheProject() started.
+􀟈  Test teardownFailedIsTerminal() started.
+􀟈  Test strayCompletionsDrain() started.
+􀟈  Test perform_pendingDeny_doesNotSpawn() started.
+􀟈  Test duplicateSpawnRequestDrains() started.
+􀟈  Test handshakeFailureFailsTheRuntime() started.
+􀟈  Test fullLifecycleScript() started.
+􀟈  Test duplicateRecoveryReportDrains() started.
+􀟈  Test perform_sameFingerprint_secondTurnFails() started.
+􀟈  Test perform_pendingUnavailable_fails() started.
+􀟈  Test observedPlan_containedIsolation_fails() started.
+􀟈  Test perform_pendingCreateRule_fails() started.
+􀟈  Test closeWithoutPublishDoesNotCount() started.
+􀟈  Test spawnFailureEndsTheRuntime() started.
+􀟈  Test perform_pendingAllowOnce_containedInWorkspaceWrite() started.
+􀟈  Test lateControlReplyDrains() started.
+􀟈  Test perform_pendingWithoutApproval_awaitsAndDoesNotSpawn() started.
+􀟈  Test spawnRefusedAtLimit() started.
+􀟈  Test perform_allowed_containedInWorkspaceWrite() started.
+􀟈  Test childrenAliveLeavesCloseRetryable() started.
+􀟈  Test perform_denied_doesNotSpawn() started.
+􀟈  Test openSequenceReachesActive() started.
+􀟈  Test forgetPrunesOnlyFinishedRuntimes() started.
+􀟈  Test allRefusalOutcomesRefuseTheAttempt() started.
+􀟈  Test closePublishesAnEmptyWorkspace() started.
+􀟈  Test closeDuringCreatingIsRefused() started.
+􀟈  Test closeDuringClosingWaitsForTheLeader() started.
+􀟈  Test liveOwnerRefusesOpenAndDrains() started.
+􀟈  Test openFailureDiscardsTheWorkspace() started.
+􀟈  Test closeStopsRuntimesThenFinishes() started.
+􀟈  Test mismatchedPhaseCompletionsDrain() started.
+􀟈  Test subscriberQueueOverflowsAboveTheBound() started.
+􀟈  Test unknownTerminalFieldFailsClosed() started.
+􀟈  Test failedRecoveryRefusesTheAttemptButAllowsRetry() started.
+􀟈  Test oldClientFramesStillDecode() started.
+􀟈  Test spawnRefusedOutsideActive() started.
+􀟈  Test spawnRefusedWhenBoundaryLost() started.
+􀟈  Test replayKeepsTheNewestBoundedBytes() started.
+􀟈  Test blockedRecoveryRefusesOpen() started.
+􀟈  Test cancelStopsARunningRuntime() started.
+􀟈  Test terminalRulesKeepTheNonceDrainAndPartialWrite() started.
+􀟈  Test denialDetailRoundTripsAndOversizeFailsClosed() started.
+􀟈  Test replayTrimsInsideTheOldestChunk() started.
+􀟈  Test capabilityRepliesRoundTripWithinTheirBounds() started.
+􀟈  Test cancelUnknownRuntimeReplies() started.
+􀟈  Test codecRoundTripsArbitraryBytes() started.
+􀟈  Test launchHandshakeSequence() started.
+􀟈  Test recoveredWorkspaceAdmits() started.
+􀟈  Test mismatchedPrincipalBindingFails() started.
+􀟈  Test twoWorkspacesMintDifferentIDs() started.
+􀟈  Test pendingCommandDoesNotRunUntilAllowOnce() started.
+􀢄  Test egressProxyReportsDialFailures() recorded an issue at EgressProxyTests.swift:349:9: Expectation failed: bound == 0
+􀄵  bound == 0 → false
+􀄵    bound → -1
+􀟈  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() started.
+􀟈  Test evaluationFailureDoesNotRun() started.
+􀟈  Test runtimeBindsExactlyOneInstance() started.
+􀟈  Test instanceBindsExpectedWorkspaceAndRuntime() started.
+􀢄  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() recorded an issue at WorkspacePeerAuthenticatorTests.swift:95:2: Caught error: .bind
+􀟈  Test containedEnvironmentContainsOnlyDeliberateValues() started.
+􀟈  Test allowedCommandRunsOnce() started.
+􀟈  Test announcedInstanceIsUnusableUntilEstablished() started.
+􀟈  Test unwritableSessionLogDoesNotExecute() started.
+􀟈  Test lifecycleMovesActiveRevokingInactive() started.
+􀟈  Test isolationConformance_catalogListsEverySection8ID() started.
+􀢄  Test egressProxyDeniesMalformedAndBypassShapes() recorded an issue at EgressProxyTests.swift:315:20: Expectation failed: proxy.start()
+􀄵  proxy.start() → nil
+􀄵    proxy → RVIsolation.EgressProxy
+􀄵      policy → EgressHostPolicy(allowedHosts: Set(["opencode.ai", "models.opencode.ai", "auth.meta.com", "api.openai.com", "api.anthropic.com", "chatgpt.com", "auth.openai.com", "api.meta.ai"]), allowedPort: 443, mode: RVDomain.EgressHostPolicy.ExternalMode.allowlist)
+􀄵        allowedHosts → ["opencode.ai", "models.opencode.ai", "auth.meta.com", "api.openai.com", "api.anthropic.com", "chatgpt.com", "auth.openai.com", "api.meta.ai"]
+􀄵        allowedPort → 443
+􀄵        mode → .allowlist
+􀄵      lock → <NSLock: 0x78bac9c0c0>{name = nil}
+􀄵      listenFD → -1
+􀄵      running → false
+􀄵      acceptQueue → <OS_dispatch_queue_serial: rv.egress.accept>
+􀄵      relayQueue → <OS_dispatch_queue_concurrent: rv.egress.relay>
+􀄵      boundPort → 0
+􀢄  Test egressProxyRejectsOversizeHeaders() recorded an issue at EgressProxyTests.swift:377:20: Expectation failed: proxy.start()
+􀄵  proxy.start() → nil
+􀄵    proxy → RVIsolation.EgressProxy
+􀄵      policy → EgressHostPolicy(allowedHosts: Set([]), allowedPort: 443, mode: RVDomain.EgressHostPolicy.ExternalMode.publicHTTPS)
+􀄵        allowedHosts → []
+􀄵        allowedPort → 443
+􀄵        mode → .publicHTTPS
+􀄵      lock → <NSLock: 0x78bac9c180>{name = nil}
+􀄵      listenFD → -1
+􀄵      running → false
+􀄵      acceptQueue → <OS_dispatch_queue_serial: rv.egress.accept>
+􀄵      relayQueue → <OS_dispatch_queue_concurrent: rv.egress.relay>
+􀄵      boundPort → 0
+􀢄  Test egressProxyDeniesExternalAbsoluteHTTP() recorded an issue at EgressProxyTests.swift:277:20: Expectation failed: proxy.start()
+􀄵  proxy.start() → nil
+􀄵    proxy → RVIsolation.EgressProxy
+􀄵      policy → EgressHostPolicy(allowedHosts: Set(["opencode.ai", "models.opencode.ai", "auth.meta.com", "api.openai.com", "api.anthropic.com", "chatgpt.com", "auth.openai.com", "api.meta.ai"]), allowedPort: 443, mode: RVDomain.EgressHostPolicy.ExternalMode.allowlist)
+􀄵        allowedHosts → ["opencode.ai", "models.opencode.ai", "auth.meta.com", "api.openai.com", "api.anthropic.com", "chatgpt.com", "auth.openai.com", "api.meta.ai"]
+􀄵        allowedPort → 443
+􀄵        mode → .allowlist
+􀄵      lock → <NSLock: 0x78bac9c120>{name = nil}
+􀄵      listenFD → -1
+􀄵      running → false
+􀄵      acceptQueue → <OS_dispatch_queue_serial: rv.egress.accept>
+􀄵      relayQueue → <OS_dispatch_queue_concurrent: rv.egress.relay>
+􀄵      boundPort → 0
+􀟈  Test fakeCapabilityWrongSessionAndClosedChannelDoNotRun() started.
+􀟈  Test concurrentAppendsKeepEveryRecordReadable() started.
+􀟈  Test channelBindingNeverMovesToAnotherInstance() started.
+􀟈  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() started.
+􀟈  Test revokingIsObservableWhileTeardownRuns() started.
+􀟈  Test cachedContextNeverEqualsLiveValidity() started.
+􀟈  Test preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() started.
+􀟈  Test requestPayloadCannotReplacePrincipal() started.
+􀟈  Test supervisorLaunchWithoutDefinitionMintsNoInstance() started.
+􀟈  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test evidenceFileRecordsTheSessionAndOutcome() started.
+􀟈  Test delegationNarrowsThroughRegistry() started.
+􀟈  Test tornSessionLineDoesNotHideTheNextRecord() started.
+􀟈  Test malformedFrameDoesNotRun() started.
+􀟈  Test invalidSeatbeltProfileDoesNotExecuteInnerCommand() started.
+􀟈  Test admittedCommandStopsWhenContainedProcessExits() started.
+􀟈  Test restartMintsFreshIDAndKeepsOldDead() started.
+􀟈  Test unregisteredIDsHaveUnknownValidity() started.
+􀟈  Test appendedSessionRecordsStayIndependent() started.
+􀟈  Test suppressedExecuteKeepsPrincipalAttribution() started.
+􀟈  Test ptyRuntimeStillAdmitsShellCommands() started.
+􀟈  Test supervisorRegisterFaultRetiresAnnouncedInstance() started.
+􀟈  Test sessionRecordFailureDoesNotExecuteInnerCommand() started.
+􀟈  Test activateJournalFailureLeavesInstanceInactive() started.
+􀟈  Test embeddedNULCannotChangeExecutedArgv() started.
+􀟈  Test journalFailureRefusesEstablishment() started.
+􀟈  Test recoveryResurrectsNothing() started.
+􀟈  Test landlock_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() started.
+􀟈  Test containedClientUsesTheGrantedPipes() started.
+􀟈  Test supervisorLaunchMintsActivatesAndFinishesInstance() started.
+􀟈  Test cleanupFailureKeepsAuthorityDead() started.
+􀟈  Test deniedCommandDoesNotRun() started.
+􀟈  Test seatbeltProfileGainsNoNetworkAllow() started.
+􀟈  Test landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() started.
+􀟈  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() started.
+􀟈  Test landlock_prepare_observed_returnsProfileNotApplicable() started.
+􀟈  Test compileLandlockRuleset_newlineWorkspace_returnsWorkspacePathUnsafe() started.
+􀟈  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() started.
+􀟈  Test redirectDoesNotOpenASecondTransfer() started.
+􀟈  Test isolationExecIdentity_rejectsWrongNameDirectoryAndWorkspaceLocalHelper() started.
+􀟈  Test cancellingAHelperDoesNotWaitForItToExit() started.
+􀟈  Test landlock_prepare_mediated_returnsProfileNotApplicable() started.
+􀟈  Test cancellationStopsTheExchangeBeforeFinishReturns() started.
+􀟈  Test failedApply_consumesAuthorizationBeforeRetry() started.
+􀟈  Test landlock_prepare_contained_launchArguments_areWorkspaceSeparatorAndInnerArgv() started.
+􀟈  Test allowedGETRunsOnce() started.
+􀟈  Test resolutionReturnsWhenTheSessionStopsDuringLookup() started.
+􀟈  Test clearingOverflowedAdmitsOutputWithoutWipingBacklog() started.
+􀟈  Test cancellationTerminatesOwnedProcessesBeforeReturn() started.
+􀟈  Test directConfigurationDisablesProxiesAndCredentials() started.
+􀟈  Test drainsRuntimesFairlyWithoutReorderingOneRuntime() started.
+􀟈  Test ambientOutsideFileDescriptorIsNotWritable() started.
+􀟈  Test capabilitySessionAndClosureDoNotRun() started.
+􀟈  Test denyPendingAndFailureDoNotRun() started.
+􀟈  Test landlock_prepare_contained_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test reservedChildExit_cannotReplayCompletedSideEffect() started.
+􀟈  Test resolutionDoesNotStartWhenTheSessionHasStopped() started.
+􀟈  Test directConnectorRefusesLoopbackBeforeAccept() started.
+􀟈  Test runLandlock_seatbeltRequest_returnsBackendMismatch() started.
+􀟈  Test landlock_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test keychainSecurityCLICannotReachService() started.
+􀟈  Test resettingOneSubscriptionPreservesAnotherRuntime() started.
+􀟈  Test landlock_run_contained_onDarwin_returnsBackendUnavailable() started.
+􀟈  Test unframedReplayIsAdmittedForLegacyHosts() started.
+􀟈  Test compileLandlockRuleset_observedAndMediated_returnsProfileNotApplicable() started.
+􀢄  Test egressProxyRelaysLoopbackTargets() recorded an issue at EgressProxyTests.swift:228:20: Expectation failed: EgressStubServer(reply: "PONG\n")
+􀄵  EgressStubServer(reply: "PONG\n") → nil
+􀄵    "PONG\n" → ()
+􀟈  Test ipv4BindListenAcceptConnectRoundTrip() started.
+􀢄  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() recorded an issue at WorkspacePeerAuthenticatorTests.swift:85:2: Caught error: .invalidCode(-67061)
+􀟈  Test firstOutputFromAnotherRuntimeReclaimsTheFloodingRuntime() started.
+􀢄  Test egressProxyDeniesUnknownHosts() recorded an issue at EgressProxyTests.swift:296:20: Expectation failed: proxy.start()
+􀄵  proxy.start() → nil
+􀄵    proxy → RVIsolation.EgressProxy
+􀄵      policy → EgressHostPolicy(allowedHosts: Set(["opencode.ai", "models.opencode.ai", "auth.meta.com", "api.openai.com", "api.anthropic.com", "chatgpt.com", "auth.openai.com", "api.meta.ai"]), allowedPort: 443, mode: RVDomain.EgressHostPolicy.ExternalMode.allowlist)
+􀄵        allowedHosts → ["opencode.ai", "models.opencode.ai", "auth.meta.com", "api.openai.com", "api.anthropic.com", "chatgpt.com", "auth.openai.com", "api.meta.ai"]
+􀄵        allowedPort → 443
+􀄵        mode → .allowlist
+􀄵      lock → <NSLock: 0x78bac9c300>{name = nil}
+􀄵      listenFD → -1
+􀄵      running → false
+􀄵      acceptQueue → <OS_dispatch_queue_serial: rv.egress.accept>
+􀄵      relayQueue → <OS_dispatch_queue_concurrent: rv.egress.relay>
+􀄵      boundPort → 0
+􀟈  Test compileLandlockRuleset_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test isolatedLaunchRequest_rejectsLandlockWithObservedOrUnsandboxedContained() started.
+􀟈  Test mismatchedReplayBoundaryOverflowsOnlyItsRuntime() started.
+􀟈  Test compileExecutable_missingWorkingDirectory_fails() started.
+􀟈  Test spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() started.
+􀢄  Test egressProxyRelaysLoopbackAbsoluteHTTP() recorded an issue at EgressProxyTests.swift:249:20: Expectation failed: EgressStubServer(reply: "PONG\n")
+􀄵  EgressStubServer(reply: "PONG\n") → nil
+􀄵    "PONG\n" → ()
+􀟈  Test overflowDiscardsQueuedReplayMetadataUntilResubscribe() started.
+􀟈  Test compileExecutable_workspaceMismatch_fails() started.
+􀟈  Test localExecutor_containedInWorkspaceWrite_succeeds() started.
+􀟈  Test landlock_run_missingTrampoline_returnsBackendUnavailable() started.
+􀟈  Test containedProcessReachesLoopbackOnly() started.
+􀟈  Test compileExecutable_missingCommand_fails() started.
+􀟈  Test compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot() started.
+􀟈  Test compileExecutable_bareTouch_resolvesOnSafePath() started.
+􀟈  Test firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() started.
+􀟈  Test compileExecutable_redirect_fails() started.
+􀟈  Test localExecutor_containedOutsideWrite_deniedByKernel() started.
+􀟈  Test compileExecutable_absoluteTouch_succeeds() started.
+􀟈  Test overflowIsAttributedToItsRuntimeAndDoesNotDropAnotherStream() started.
+􀟈  Test compileExecutable_unresolvedName_fails() started.
+􀟈  Test localExecutor_sameFingerprint_secondRunFails() started.
+􀟈  Test apply_contained_onDarwin_stillEstablishesSeatbelt() started.
+􀟈  Test pendingAuthorization_hasNoExecuteInput() started.
+􀟈  Test localExecutor_performWhenCancelled_returnsExecuteCancelled() started.
+􀟈  Test replayBatchBoundariesPreserveOrderAndRuntimeAttribution() started.
+􀟈  Test isolationExecExit125_isBackendUnavailable_notEstablished() started.
+􀟈  Test localExecutor_askResolve_containedInWorkspaceTouch() started.
+􀟈  Test windowNoticesDeliverAndCoalesceToLatest() started.
+􀟈  Test compileLandlockRuleset_filesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test exitIsNotStarvedByAnotherRuntimeAndSurvivesDisconnect() started.
+􀟈  Test compileLandlockRuleset_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test localExecutor_applyFailure_consumesFingerprint() started.
+􀢄  Test unixPeerEvidenceFromRealConnectedSocket() recorded an issue at WorkspacePeerAuthenticatorTests.swift:61:2: Caught error: .bind
+􀟈  Test concurrentDeliverAndNextKeepByteAccountingExact() started.
+􀟈  Test observedAndMediated_containedIsolation_fails() started.
+􀟈  Test excessControlFramesFailTheStreamExplicitly() started.
+􀟈  Test compileExecutable_fileAction_fails() started.
+􀟈  Test workspaceRootPolicyRejectsOnlyTheHomeDirectory() started.
+􀟈  Test openRejectsDimensionsAndFaultsDoNotLeakMasters() started.
+􀟈  Test fourHundredShortOutputFramesStayInOrderWithoutOverflow() started.
+􀟈  Test aggregateAndFrameCapsKeepFloodsBounded() started.
+􀟈  Test restartAndDiskHistoryDoNotRestoreAuthority() started.
+􀟈  Test everyReferenceFieldIsRequired() started.
+􀟈  Test inactiveLaunchCannotIssueReference() started.
+􀟈  Test closeIsIrreversible() started.
+􀟈  Test activeLookupAndRevocation() started.
+􀟈  Test concurrentDuplicateInstanceAnnounceWinsOnce() started.
+􀟈  Test launch_containedTrue_establishes() started.
+􀟈  Test engageAndRestoreAreIdempotent() started.
+􀟈  Test concurrentDuplicateRuntimeAnnounceWinsOnce() started.
+􀟈  Test launch_containedInWorkspaceTouch_succeeds() started.
+􀟈  Test descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test concurrentRevokeRunsTeardownExactlyOnce() started.
+􀟈  Test activateVersusRevokeKeepsSingleAuthority() started.
+􀟈  Test launch_persistsSessionBeforeExecution() started.
+􀟈  Test finishRuntimeVersusRevokeRetiresOnce() started.
+􀟈  Test launch_containedSessionsAreDistinctFromHookSessionID() started.
+􀟈  Test launch_containedOutsideTouch_deniedByKernel() started.
+􀟈  Test compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() started.
+􀟈  Test unavailable_prepareAndRun_observed_establishesObservedFamilyNone_withoutSandboxExec() started.
+􀟈  Test rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() started.
+􀟈  Test seatbelt_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test seatbelt_prepare_observed_returnsProfileNotApplicable() started.
+􀟈  Test isolatedCommand_rejectsEmptyAndRelativeExecutable() started.
+􁁛  Test productiveProfileGrantsSystemTemporaryDirectoryReadWrite() passed after 0.075 seconds.
+􀟈  Test rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() started.
+􀟈  Test workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() started.
+􁁛  Test agentBinDirectoryDerivesFromExecutablePath() passed after 0.074 seconds.
+􀟈  Test platform_family_isSeatbeltOnDarwin_landlockOnLinux() started.
+􀟈  Test apply_observedAndMediated_doNotRequireCallerToPickUnavailable() started.
+􀟈  Test apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() started.
+􀟈  Test hfsSliceDevice_fallsBackToSolePartition() started.
+􀟈  Test unavailable_prepare_contained_returnsBackendUnavailable() started.
+􁁛  Test agentBinResolutionOmitsClaudeScratchWhenClaudeIsAbsent() passed after 0.075 seconds.
+􀟈  Test compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope() started.
+􀟈  Test isolationApply_operatorProbe_printsEstablishedModes() started.
+􁁛  Test profileLessTmpdirStaysOutOfTheWorkspaceRoot() passed after 0.075 seconds.
+􀟈  Test workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() started.
+􀟈  Test hfsSliceDevice_prefersAppleHFSContentHint() started.
+􁁛  Test egressProxyExternalDialFilterRejectsNonPublicAddresses() passed after 0.075 seconds.
+􀟈  Test isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() started.
+􁁛  Test unknownResourceProfileIDResolvesToNothing() passed after 0.075 seconds.
+􀟈  Test workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() started.
+􀟈  Test compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() started.
+􀟈  Test unavailable_prepareAndRun_mediated_establishesMediatedFamilyNone() started.
+􀟈  Test compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() started.
+􀟈  Test containedLaunchResult_reportsTeardownFailure() started.
+􀟈  Test compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test seatbelt_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() started.
+􁁛  Test selectedManifestIsIdenticalForOneShotAndTerminalResources() passed after 0.076 seconds.
+􀟈  Test workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() started.
+􀟈  Test seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() started.
+􁁛  Test terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() passed after 0.079 seconds.
+􁁛  Test terminalEnvironmentKeyPolicy() passed after 0.079 seconds.
+􁁛  Test sanitizedPATHSymlinkGrandparentNeverReachesRoot() passed after 0.079 seconds.
+􁁛  Test keychainRawSecretWithoutFieldDecodesAsText() passed after 0.079 seconds.
+􁁛  Test terminalReplayDropsTheOldestBytes() passed after 0.079 seconds.
+􁁛  Test controlRPCFailureTypedOverloadShape() passed after 0.079 seconds.
+􁁛  Test egressProxyParsesAbsoluteHTTP() passed after 0.087 seconds.
+􁁛  Test terminalEnvironmentPassesGatewayThrough() passed after 0.087 seconds.
+􀢄  Test egressProxyReportsDialFailures() failed after 0.087 seconds with 1 issue.
+􁁛  Test controlRPCRequestRoundTrips() passed after 0.091 seconds.
+􁁛  Test controlRPCResponseCodeRoundTrips() passed after 0.090 seconds.
+􁁛  Test workspaceControlRejectsUnknownVersionAndFields() passed after 0.096 seconds.
+􀢄  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() failed after 0.096 seconds with 1 issue.
+􁁛  Test nonTerminalEnvironmentStaysNonInteractive() passed after 0.100 seconds.
+􀢄  Test egressProxyDeniesMalformedAndBypassShapes() failed after 0.106 seconds with 1 issue.
+􀢄  Test egressProxyRejectsOversizeHeaders() failed after 0.106 seconds with 1 issue.
+􀢄  Test egressProxyDeniesExternalAbsoluteHTTP() failed after 0.109 seconds with 1 issue.
+􁁛  Test keychainEntryInjectsOnlyForMatchingAgent() passed after 0.109 seconds.
+􁁛  Test loopbackHelpersRejectOutOfRangePorts() passed after 0.110 seconds.
+􁁛  Test keychainFailuresNameTheEnvAndStageNothing() passed after 0.110 seconds.
+􁁛  Test controlRPCResponseRoundTrips() passed after 0.112 seconds.
+􁁛  Test controlRPCUnknownOperationPreservesRawEcho() passed after 0.112 seconds.
+􁁛  Test controlRPCCodableInitEnforcesVersionAndLimits() passed after 0.114 seconds.
+􀟈  Test case passing 1 argument name → "quote"name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "slash\name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "close") (allow default) ;" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "tab	name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "carriagename" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􁁛  Test controlRPCCodableEncodeAgreesWithValidatedEncode() passed after 0.258 seconds.
+􁁛  Test pseudoTerminalEnvironmentAdvertisesColorOutput() passed after 0.259 seconds.
+􁁛  Test stagedCredentialMustBeOwnerFileAndNeverSymlink() passed after 0.285 seconds.
+􁁛  Test controlRPCPropagatesInvalidAndIncompatible() passed after 0.291 seconds.
+􁁛  Test agentBinResolveWithMissingBinDirGrantsNothing() passed after 0.291 seconds.
+􁁛  Test deadExecutableLinkNamesItselfInStagingFailure() passed after 0.292 seconds.
+􁁛  Test unselectedRuntimeStripsSecretsButProjectsNonSecretVars() passed after 0.309 seconds.
+􁁛  Test sanitizedPATHBinParentExpansionHonorsSecretVeto() passed after 0.532 seconds.
+􁁛  Test profileBoundToProjectAIsUnresolvableForProjectB() passed after 0.543 seconds.
+􁁛  Test agentBinDirectoryIsASiblingOfTheHostBinary() passed after 0.544 seconds.
+􁁛  Test peerTrustRejectsUserOwnedManifest() passed after 0.563 seconds.
+􁁛  Test symlinkedCredentialSourceEscapeFailsClosedStaging() passed after 0.563 seconds.
+􁁛  Test sanitizedPATHImpliesBinParentsButNeverRoot() passed after 0.563 seconds.
+􀢄  Test directConnectorRefusesLoopbackBeforeAccept() recorded an issue at HTTPEgressTests.swift:161:6: Caught error: ListenerError()
+􁁛  Test controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() passed after 0.630 seconds.
+􁁛  Test activeDeveloperRootFollowsSelectLinkToEnclosingApp() passed after 0.635 seconds.
+􀢄  Test egressProxyRelaysLoopbackTargets() failed after 0.635 seconds with 1 issue.
+􀢄  Test keychainSecurityCLICannotReachService() recorded an issue at SeatbeltMachBoundaryTests.swift:31:9: Expectation failed: unsandboxed.output.contains("One or more parameters") == false
+􀄵  unsandboxed.output.contains("One or more parameters") == false → false
+􀄵    unsandboxed.output.contains("One or more parameters") → true
+􁁛  Test agentBinResolutionAdmitsMuseInstallFiles() passed after 0.643 seconds.
+􀢄  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() failed after 0.643 seconds with 1 issue.
+􀢄  Test egressProxyDeniesUnknownHosts() failed after 0.731 seconds with 1 issue.
+􁁛  Test agentFilteredCredentialsStageOnlyForMatchingAgent() passed after 0.732 seconds.
+􁁛  Test unixPeerEvidenceRejectsNonSocketDescriptor() passed after 0.732 seconds.
+􁁛  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() passed after 0.732 seconds.
+􁁛  Test sanitizeTrimsToPATHBudgetFromTheTail() passed after 0.732 seconds.
+􀢄  Test egressProxyRelaysLoopbackAbsoluteHTTP() failed after 0.739 seconds with 1 issue.
+􁁛  Test activeDeveloperRootPrefersDeveloperDir() passed after 0.746 seconds.
+􀢄  Test containedProcessReachesLoopbackOnly() recorded an issue at SeatbeltCapabilityTests.swift:214:17: Expectation failed: bound == 0
+􀄵  bound == 0 → false
+􀄵    bound → -1
+􁁛  Test controlRPCFramesAreByteIdenticalToLegacyCodec() passed after 0.808 seconds.
+􁁛  Test writeShimRefreshesContent() passed after 0.818 seconds.
+􁁛  Test blockedVariableNameMatchesUnderscoreTokens() passed after 0.818 seconds.
+􁁛  Test activeDeveloperRootVetoesSensitiveSelection() passed after 0.819 seconds.
+􁁛  Test productiveResolutionCarriesSystemTemporaryDirectory() passed after 0.819 seconds.
+􁁛  Test productiveProfileOmitsSystemTemporaryDirectoryWhenUnresolved() passed after 0.819 seconds.
+􁁛  Test productiveResolutionIncludesActiveDeveloperRoot() passed after 0.821 seconds.
+􁁛  Test seedGitIdentityUsesInjectedReader() passed after 0.821 seconds.
+􁁛  Test stageAgentHomesLinksClaudeCredentials() passed after 0.821 seconds.
+􁁛  Test emptyAgentsListNormalizesToNilInInitAndDecode() passed after 0.822 seconds.
+􀢄  Test unixPeerEvidenceFromRealConnectedSocket() failed after 0.827 seconds with 1 issue.
+􁁛  Test egressProxyParsesStrictCONNECTOnly() passed after 0.836 seconds.
+􁁛  Test keychainValuesLandInEnvironmentForAnyIO() passed after 0.836 seconds.
+􁁛  Test seedGitIdentitySkipsWhenIdentityIsEmpty() passed after 0.992 seconds.
+􁁛  Test terminalBytesRoundTripThroughBase64() passed after 0.996 seconds.
+􁁛  Test agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() passed after 0.998 seconds.
+􀟈  Test case passing 1 argument launcher → .sh to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() recorded an issue at RuntimeResourceAdversarialTests.swift:167:2: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() recorded an issue at RuntimeResourceAdversarialTests.swift:130:2: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test profileStagingFailureKeepsLaunchFailurePath() recorded an issue at RuntimeResourceAdversarialTests.swift:223:2: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􁁛  Test agentBinResolutionGrantsOnlyResolvedAgents() passed after 2.335 seconds.
+􁁛  Test teardownFailedIsTerminal() passed after 2.335 seconds.
+􁁛  Test strayCompletionsDrain() passed after 2.336 seconds.
+􁁛  Test cleanRecoveryDoesNotTouchTheProject() passed after 2.337 seconds.
+􁁛  Test duplicateSpawnRequestDrains() passed after 2.337 seconds.
+􁁛  Test handshakeFailureFailsTheRuntime() passed after 2.337 seconds.
+􁁛  Test fullLifecycleScript() passed after 2.337 seconds.
+􁁛  Test duplicateRecoveryReportDrains() passed after 2.337 seconds.
+􁁛  Test perform_pendingDeny_doesNotSpawn() passed after 2.337 seconds.
+􁁛  Test perform_pendingUnavailable_fails() passed after 2.337 seconds.
+􀢄  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() recorded an issue at RuntimeResourceAdversarialTests.swift:269:2: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􁁛  Test observedPlan_containedIsolation_fails() passed after 2.337 seconds.
+􁁛  Test closeWithoutPublishDoesNotCount() passed after 2.337 seconds.
+􀢄  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() recorded an issue at RuntimeResourceAdversarialTests.swift:320:2: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􁁛  Test spawnFailureEndsTheRuntime() passed after 2.339 seconds.
+􁁛  Test perform_pendingCreateRule_fails() passed after 2.340 seconds.
+􁁛  Test lateControlReplyDrains() passed after 2.340 seconds.
+􁁛  Test spawnRefusedAtLimit() passed after 2.340 seconds.
+􁁛  Test childrenAliveLeavesCloseRetryable() passed after 2.340 seconds.
+􁁛  Test perform_denied_doesNotSpawn() passed after 2.340 seconds.
+􁁛  Test openSequenceReachesActive() passed after 2.340 seconds.
+􁁛  Test forgetPrunesOnlyFinishedRuntimes() passed after 2.340 seconds.
+􁁛  Test allRefusalOutcomesRefuseTheAttempt() passed after 2.340 seconds.
+􁁛  Test closePublishesAnEmptyWorkspace() passed after 2.339 seconds.
+􁁛  Test perform_pendingWithoutApproval_awaitsAndDoesNotSpawn() passed after 2.340 seconds.
+􁁛  Test closeDuringCreatingIsRefused() passed after 2.339 seconds.
+􁁛  Test closeDuringClosingWaitsForTheLeader() passed after 2.339 seconds.
+􁁛  Test liveOwnerRefusesOpenAndDrains() passed after 2.339 seconds.
+􁁛  Test openFailureDiscardsTheWorkspace() passed after 2.339 seconds.
+􁁛  Test mismatchedPhaseCompletionsDrain() passed after 2.339 seconds.
+􁁛  Test closeStopsRuntimesThenFinishes() passed after 2.339 seconds.
+􁁛  Test subscriberQueueOverflowsAboveTheBound() passed after 2.339 seconds.
+􁁛  Test failedRecoveryRefusesTheAttemptButAllowsRetry() passed after 2.341 seconds.
+􁁛  Test unknownTerminalFieldFailsClosed() passed after 2.341 seconds.
+􁁛  Test spawnRefusedOutsideActive() passed after 2.341 seconds.
+􁁛  Test spawnRefusedWhenBoundaryLost() passed after 2.341 seconds.
+􁁛  Test oldClientFramesStillDecode() passed after 2.342 seconds.
+􁁛  Test blockedRecoveryRefusesOpen() passed after 2.342 seconds.
+􁁛  Test replayKeepsTheNewestBoundedBytes() passed after 2.342 seconds.
+􁁛  Test cancelStopsARunningRuntime() passed after 2.343 seconds.
+􁁛  Test denialDetailRoundTripsAndOversizeFailsClosed() passed after 2.343 seconds.
+􁁛  Test terminalRulesKeepTheNonceDrainAndPartialWrite() passed after 2.343 seconds.
+􁁛  Test replayTrimsInsideTheOldestChunk() passed after 2.343 seconds.
+􁁛  Test cancelUnknownRuntimeReplies() passed after 2.343 seconds.
+􁁛  Test codecRoundTripsArbitraryBytes() passed after 2.343 seconds.
+􁁛  Test capabilityRepliesRoundTripWithinTheirBounds() passed after 2.345 seconds.
+􁁛  Test recoveredWorkspaceAdmits() passed after 2.345 seconds.
+􁁛  Test launchHandshakeSequence() passed after 2.345 seconds.
+􁁛  Test mismatchedPrincipalBindingFails() passed after 2.348 seconds.
+􁁛  Test pendingCommandDoesNotRunUntilAllowOnce() passed after 2.347 seconds.
+􁁛  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() passed after 2.347 seconds.
+􁁛  Test evaluationFailureDoesNotRun() passed after 2.347 seconds.
+􁁛  Test runtimeBindsExactlyOneInstance() passed after 2.347 seconds.
+􁁛  Test instanceBindsExpectedWorkspaceAndRuntime() passed after 2.347 seconds.
+􁁛  Test allowedCommandRunsOnce() passed after 2.346 seconds.
+􁁛  Test announcedInstanceIsUnusableUntilEstablished() passed after 2.346 seconds.
+􁁛  Test lifecycleMovesActiveRevokingInactive() passed after 2.346 seconds.
+􁁛  Test fakeCapabilityWrongSessionAndClosedChannelDoNotRun() passed after 2.346 seconds.
+􁁛  Test isolationConformance_catalogListsEverySection8ID() passed after 2.346 seconds.
+􁁛  Test terminalPATHPrefersInstalledAgentBin() passed after 2.353 seconds.
+􁁛  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() passed after 2.348 seconds.
+􁁛  Test channelBindingNeverMovesToAnotherInstance() passed after 2.348 seconds.
+􁁛  Test cachedContextNeverEqualsLiveValidity() passed after 2.348 seconds.
+􁁛  Test preparedContainedProfileAdmitsLoopbackOnly() passed after 2.353 seconds.
+􁁛  Test noProfileNeverAdmitsInstalledAgentResources() passed after 2.353 seconds.
+􁁛  Test preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() passed after 2.348 seconds.
+􁁛  Test requestPayloadCannotReplacePrincipal() passed after 2.348 seconds.
+􁁛  Test selectedGenericProfileStagesOnlyItsOwnSyntheticCredential() passed after 2.353 seconds.
+􁁛  Test tornSessionLineDoesNotHideTheNextRecord() passed after 2.348 seconds.
+􁁛  Test evidenceFileRecordsTheSessionAndOutcome() passed after 2.348 seconds.
+􁁛  Test delegationNarrowsThroughRegistry() passed after 2.349 seconds.
+􁁛  Test ambientSecretsDoNotFlowUnlessExplicitlyNamed() passed after 2.353 seconds.
+􁁛  Test malformedFrameDoesNotRun() passed after 2.349 seconds.
+􁁛  Test appendedSessionRecordsStayIndependent() passed after 2.348 seconds.
+􁁛  Test unregisteredIDsHaveUnknownValidity() passed after 2.348 seconds.
+􁁛  Test suppressedExecuteKeepsPrincipalAttribution() passed after 2.348 seconds.
+􁁛  Test restartMintsFreshIDAndKeepsOldDead() passed after 2.348 seconds.
+􁁛  Test activateJournalFailureLeavesInstanceInactive() passed after 2.347 seconds.
+􁁛  Test embeddedNULCannotChangeExecutedArgv() passed after 2.347 seconds.
+􁁛  Test journalFailureRefusesEstablishment() passed after 2.347 seconds.
+􁁛  Test agentNamedExecutableWithNoProfileStagesZeroResources() passed after 2.353 seconds.
+􁁛  Test landlock_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() passed after 2.347 seconds.
+􁁛  Test recoveryResurrectsNothing() passed after 2.348 seconds.
+􀢄  Test unwritableSessionLogDoesNotExecute() recorded an issue at LaunchBoundaryRegressionTests.swift:237:25: Issue recorded
+􀄵  unwritable session log must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test perform_sameFingerprint_secondTurnFails() recorded an issue at AgentTurnTests.swift:234:36: Issue recorded
+􀄵  expected executed, got execute .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() recorded an issue at SeatbeltContainmentTests.swift:126:45: Issue recorded
+􀄵  expected blocked write under repositoryRoot outside workspace, got workspaceContainsInodeAlias
+􀢄  Test perform_pendingAllowOnce_containedInWorkspaceWrite() recorded an issue at AgentTurnTests.swift:109:36: Issue recorded
+􀄵  expected executed, got execute .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test perform_sameFingerprint_secondTurnFails() recorded an issue at AgentTurnTests.swift:203:6: Caught error: .expectedExecuted
+􀢄  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() recorded an issue at SeatbeltContainmentTests.swift:81:45: Issue recorded
+􀄵  expected inherited write deny for /bin/sh child, got workspaceContainsInodeAlias
+􀢄  Test perform_pendingAllowOnce_containedInWorkspaceWrite() recorded an issue at AgentTurnTests.swift:89:6: Caught error: .expectedExecuted
+􀢄  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() recorded an issue at SeatbeltContainmentTests.swift:39:45: Issue recorded
+􀄵  expected in-workspace touch, got workspaceContainsInodeAlias
+􀢄  Test containedEnvironmentContainsOnlyDeliberateValues() recorded an issue at LaunchBoundaryRegressionTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() recorded an issue at SeatbeltContainmentTests.swift:59:45: Issue recorded
+􀄵  expected blocked outside touch with established contained, got workspaceContainsInodeAlias
+􀢄  Test perform_allowed_containedInWorkspaceWrite() recorded an issue at AgentTurnTests.swift:85:36: Issue recorded
+􀄵  expected executed, got execute .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test perform_allowed_containedInWorkspaceWrite() recorded an issue at AgentTurnTests.swift:72:6: Caught error: .expectedExecuted
+􀢄  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) recorded an issue with 1 argument name → "slash\name" at LaunchBoundaryRegressionTests.swift:105:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test sessionRecordFailureDoesNotExecuteInnerCommand() recorded an issue at LaunchBoundaryRegressionTests.swift:264:25: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) recorded an issue with 1 argument name → "carriagename" at LaunchBoundaryRegressionTests.swift:105:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) recorded an issue with 1 argument name → "close") (allow default) ;" at LaunchBoundaryRegressionTests.swift:105:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test deniedCommandDoesNotRun() passed after 2.353 seconds.
+􁁛  Test cleanupFailureKeepsAuthorityDead() passed after 2.353 seconds.
+􁁛  Test seatbeltProfileGainsNoNetworkAllow() passed after 2.353 seconds.
+􁁛  Test landlock_prepare_observed_returnsProfileNotApplicable() passed after 2.353 seconds.
+􁁛  Test compileLandlockRuleset_newlineWorkspace_returnsWorkspacePathUnsafe() passed after 2.353 seconds.
+􁁛  Test landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() passed after 2.353 seconds.
+􁁛  Test redirectDoesNotOpenASecondTransfer() passed after 2.353 seconds.
+􁁛  Test isolationExecIdentity_rejectsWrongNameDirectoryAndWorkspaceLocalHelper() passed after 2.353 seconds.
+􁁛  Test landlock_prepare_mediated_returnsProfileNotApplicable() passed after 2.353 seconds.
+􁁛  Test cancellationStopsTheExchangeBeforeFinishReturns() passed after 2.353 seconds.
+􀢄  Test twoWorkspacesMintDifferentIDs() recorded an issue at WorkspaceSessionTests.swift:13:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􁁛  Test landlock_prepare_contained_launchArguments_areWorkspaceSeparatorAndInnerArgv() passed after 2.353 seconds.
+􁁛  Test allowedGETRunsOnce() passed after 2.353 seconds.
+􁁛  Test resolutionReturnsWhenTheSessionStopsDuringLookup() passed after 2.353 seconds.
+􁁛  Test clearingOverflowedAdmitsOutputWithoutWipingBacklog() passed after 2.353 seconds.
+􁁛  Test directConfigurationDisablesProxiesAndCredentials() passed after 2.351 seconds.
+􀢄  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) recorded an issue with 1 argument name → "tab	name" at LaunchBoundaryRegressionTests.swift:105:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test drainsRuntimesFairlyWithoutReorderingOneRuntime() passed after 2.351 seconds.
+􁁛  Test capabilitySessionAndClosureDoNotRun() passed after 2.351 seconds.
+􁁛  Test denyPendingAndFailureDoNotRun() passed after 2.351 seconds.
+􀢄  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) recorded an issue with 1 argument name → "quote"name" at LaunchBoundaryRegressionTests.swift:105:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test landlock_prepare_contained_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() passed after 2.351 seconds.
+􁁛  Test resolutionDoesNotStartWhenTheSessionHasStopped() passed after 2.351 seconds.
+􀢄  Test directConnectorRefusesLoopbackBeforeAccept() failed after 2.351 seconds with 1 issue.
+􁁛  Test landlock_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 2.351 seconds.
+􁁛  Test resettingOneSubscriptionPreservesAnotherRuntime() passed after 2.351 seconds.
+􁁛  Test landlock_run_contained_onDarwin_returnsBackendUnavailable() passed after 2.351 seconds.
+􁁛  Test unframedReplayIsAdmittedForLegacyHosts() passed after 2.351 seconds.
+􁁛  Test compileLandlockRuleset_observedAndMediated_returnsProfileNotApplicable() passed after 2.351 seconds.
+􁁛  Test compileLandlockRuleset_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 2.346 seconds.
+􁁛  Test isolatedLaunchRequest_rejectsLandlockWithObservedOrUnsandboxedContained() passed after 2.346 seconds.
+􁁛  Test mismatchedReplayBoundaryOverflowsOnlyItsRuntime() passed after 2.346 seconds.
+􁁛  Test compileExecutable_missingWorkingDirectory_fails() passed after 2.343 seconds.
+􁁛  Test spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() passed after 2.343 seconds.
+􁁛  Test overflowDiscardsQueuedReplayMetadataUntilResubscribe() passed after 2.343 seconds.
+􁁛  Test compileExecutable_workspaceMismatch_fails() passed after 2.343 seconds.
+􁁛  Test landlock_run_missingTrampoline_returnsBackendUnavailable() passed after 2.342 seconds.
+􀢄  Test reservedChildExit_cannotReplayCompletedSideEffect() recorded an issue at ExecutorLifecycleRegressionTests.swift:81:25: Issue recorded
+􀄵  the contained child must execute before its reserved exit
+􀢄  Test containedClientUsesTheGrantedPipes() recorded an issue at RuntimeAdmissionTests.swift:184:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test ptyRuntimeStillAdmitsShellCommands() recorded an issue at RuntimeAdmissionTests.swift:244:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test containedProcessReachesLoopbackOnly() failed after 2.344 seconds with 1 issue.
+􀄵  /// The cage reaches loopback TCP (egress proxy, local gateways) and
+􀄵  /// nothing else: no UDP, no public IPs, no unix sockets it does not own,
+􀄵  /// no DNS. Descent inherits the same rule.
+􁁛  Test compileExecutable_missingCommand_fails() passed after 2.342 seconds.
+􁁛  Test compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot() passed after 2.342 seconds.
+􁁛  Test compileExecutable_bareTouch_resolvesOnSafePath() passed after 2.342 seconds.
+􁁛  Test firstOutputFromAnotherRuntimeReclaimsTheFloodingRuntime() passed after 2.348 seconds.
+􁁛  Test compileExecutable_redirect_fails() passed after 2.342 seconds.
+􁁛  Test compileExecutable_absoluteTouch_succeeds() passed after 2.338 seconds.
+􁁛  Test firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() passed after 2.342 seconds.
+􁁛  Test compileExecutable_unresolvedName_fails() passed after 2.301 seconds.
+􁁛  Test pendingAuthorization_hasNoExecuteInput() passed after 2.300 seconds.
+􁁛  Test replayBatchBoundariesPreserveOrderAndRuntimeAttribution() passed after 2.297 seconds.
+􁁛  Test isolationExecExit125_isBackendUnavailable_notEstablished() passed after 2.297 seconds.
+􁁛  Test windowNoticesDeliverAndCoalesceToLatest() passed after 2.297 seconds.
+􁁛  Test compileLandlockRuleset_filesystemRoot_returnsWorkspacePathUnsafe() passed after 2.297 seconds.
+􁁛  Test exitIsNotStarvedByAnotherRuntimeAndSurvivesDisconnect() passed after 2.297 seconds.
+􁁛  Test compileLandlockRuleset_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() passed after 2.297 seconds.
+􀢄  Test admittedCommandStopsWhenContainedProcessExits() recorded an issue at RuntimeAdmissionTests.swift:294:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test overflowIsAttributedToItsRuntimeAndDoesNotDropAnotherStream() passed after 2.301 seconds.
+􁁛  Test observedAndMediated_containedIsolation_fails() passed after 2.297 seconds.
+􁁛  Test cancellingAHelperDoesNotWaitForItToExit() passed after 2.356 seconds.
+􁁛  Test compileExecutable_fileAction_fails() passed after 2.297 seconds.
+􁁛  Test workspaceRootPolicyRejectsOnlyTheHomeDirectory() passed after 2.297 seconds.
+􁁛  Test openRejectsDimensionsAndFaultsDoNotLeakMasters() passed after 2.297 seconds.
+􀢄  Test ambientOutsideFileDescriptorIsNotWritable() recorded an issue at DescriptorHygieneTests.swift:19:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test keychainSecurityCLICannotReachService() recorded an issue at SeatbeltMachBoundaryTests.swift:22:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test fourHundredShortOutputFramesStayInOrderWithoutOverflow() passed after 2.297 seconds.
+􁁛  Test excessControlFramesFailTheStreamExplicitly() passed after 2.297 seconds.
+􁁛  Test restartAndDiskHistoryDoNotRestoreAuthority() passed after 2.297 seconds.
+􁁛  Test everyReferenceFieldIsRequired() passed after 2.297 seconds.
+􁁛  Test inactiveLaunchCannotIssueReference() passed after 2.297 seconds.
+􁁛  Test closeIsIrreversible() passed after 2.297 seconds.
+􁁛  Test activeLookupAndRevocation() passed after 2.297 seconds.
+􀢄  Test apply_contained_onDarwin_stillEstablishesSeatbelt() recorded an issue at LandlockApplyTests.swift:636:39: Issue recorded
+􀄵  expected Darwin apply(contained) seatbelt establish, got workspaceContainsInodeAlias
+􀢄  Test localExecutor_containedInWorkspaceWrite_succeeds() recorded an issue at LocalExecutorTests.swift:207:6: Caught error: .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test ipv4BindListenAcceptConnectRoundTrip() recorded an issue at SeatbeltLoopbackTests.swift:25:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test aggregateAndFrameCapsKeepFloodsBounded() passed after 2.298 seconds.
+􀢄  Test localExecutor_containedOutsideWrite_deniedByKernel() recorded an issue at LocalExecutorTests.swift:228:6: Caught error: .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􁁛  Test engageAndRestoreAreIdempotent() passed after 2.297 seconds.
+􀢄  Test launch_containedTrue_establishes() recorded an issue at ContainedLaunchTests.swift:43:39: Issue recorded
+􀄵  expected contained true establish, got workspaceContainsInodeAlias
+􁁛  Test productiveResolutionHonorsInjectedProbe() passed after 2.364 seconds.
+􀢄  Test launch_containedInWorkspaceTouch_succeeds() recorded an issue at ContainedLaunchTests.swift:75:39: Issue recorded
+􀄵  expected in-workspace touch, got workspaceContainsInodeAlias
+􀢄  Test localExecutor_askResolve_containedInWorkspaceTouch() recorded an issue at LocalExecutorTests.swift:360:6: Caught error: .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() failed after 2.365 seconds with 1 issue.
+􀢄  Test localExecutor_sameFingerprint_secondRunFails() recorded an issue at LocalExecutorTests.swift:262:6: Caught error: .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() failed after 2.365 seconds with 1 issue.
+􀢄  Test profileStagingFailureKeepsLaunchFailurePath() failed after 2.365 seconds with 1 issue.
+􁁛  Test compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() passed after 2.294 seconds.
+􀢄  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() failed after 2.366 seconds with 1 issue.
+􀢄  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() failed after 2.365 seconds with 1 issue.
+􁁛  Test rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() passed after 2.292 seconds.
+􁁛  Test observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() passed after 2.365 seconds.
+􁁛  Test seatbelt_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 2.292 seconds.
+􁁛  Test seatbelt_prepare_observed_returnsProfileNotApplicable() passed after 2.291 seconds.
+􁁛  Test isolatedCommand_rejectsEmptyAndRelativeExecutable() passed after 2.291 seconds.
+􁁛  Test unavailable_prepareAndRun_observed_establishesObservedFamilyNone_withoutSandboxExec() passed after 2.293 seconds.
+􁁛  Test platform_family_isSeatbeltOnDarwin_landlockOnLinux() passed after 2.291 seconds.
+􁁛  Test hfsSliceDevice_fallsBackToSolePartition() passed after 2.291 seconds.
+􁁛  Test unavailable_prepare_contained_returnsBackendUnavailable() passed after 2.291 seconds.
+􁁛  Test compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope() passed after 2.291 seconds.
+􁁛  Test rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() passed after 2.291 seconds.
+􁁛  Test workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() passed after 2.291 seconds.
+􁁛  Test isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() passed after 2.290 seconds.
+􁁛  Test hfsSliceDevice_prefersAppleHFSContentHint() passed after 2.291 seconds.
+􁁛  Test workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() passed after 2.290 seconds.
+􁁛  Test compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() passed after 2.290 seconds.
+􁁛  Test containedLaunchResult_reportsTeardownFailure() passed after 2.290 seconds.
+􁁛  Test compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() passed after 2.290 seconds.
+􁁛  Test compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() passed after 2.290 seconds.
+􁁛  Test workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() passed after 2.290 seconds.
+􁁛  Test seatbelt_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() passed after 2.290 seconds.
+􁁛  Test workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() passed after 2.291 seconds.
+􁁛  Test unavailable_prepareAndRun_mediated_establishesMediatedFamilyNone() passed after 2.290 seconds.
+􁁛  Test invalidSeatbeltProfileDoesNotExecuteInnerCommand() passed after 2.360 seconds.
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument launcher → .sh at RuntimeAdversarialTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test unwritableSessionLogDoesNotExecute() failed after 2.362 seconds with 1 issue.
+􀢄  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() failed after 2.365 seconds with 1 issue.
+􀢄  Test perform_sameFingerprint_secondTurnFails() failed after 2.365 seconds with 2 issues.
+􀢄  Test perform_pendingAllowOnce_containedInWorkspaceWrite() failed after 2.365 seconds with 2 issues.
+􀢄  Test containedEnvironmentContainsOnlyDeliberateValues() failed after 2.362 seconds with 1 issue.
+􀢄  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() failed after 2.365 seconds with 1 issue.
+􀢄  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() failed after 2.365 seconds with 1 issue.
+􀢄  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() failed after 2.365 seconds with 1 issue.
+􀢄  Test perform_allowed_containedInWorkspaceWrite() failed after 2.365 seconds with 2 issues.
+􀢄  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) with 5 test cases failed after 2.361 seconds with 5 issues.
+􀢄  Test sessionRecordFailureDoesNotExecuteInnerCommand() failed after 2.360 seconds with 1 issue.
+􀢄  Test twoWorkspacesMintDifferentIDs() failed after 2.364 seconds with 1 issue.
+􁁛  Test runLandlock_seatbeltRequest_returnsBackendMismatch() passed after 2.357 seconds.
+􁁛  Test failedApply_consumesAuthorizationBeforeRetry() passed after 2.359 seconds.
+􀢄  Test containedClientUsesTheGrantedPipes() failed after 2.360 seconds with 1 issue.
+􀢄  Test reservedChildExit_cannotReplayCompletedSideEffect() failed after 2.357 seconds with 1 issue.
+􀢄  Test ptyRuntimeStillAdmitsShellCommands() failed after 2.360 seconds with 1 issue.
+􀢄  Test admittedCommandStopsWhenContainedProcessExits() failed after 2.360 seconds with 1 issue.
+􀢄  Test ambientOutsideFileDescriptorIsNotWritable() failed after 2.357 seconds with 1 issue.
+􀢄  Test keychainSecurityCLICannotReachService() failed after 2.357 seconds with 2 issues.
+􀄵  /// `/usr/bin/security` cannot cleanly reach the real Keychain service.
+􀄵  /// Unsandboxed, a nonexistent item reports only "could not be found".
+􀄵  /// Sandboxed, the boundary blocks the XPC path and the CLI surfaces the
+􀄵  /// resulting paramErr ("One or more parameters") instead of a clean
+􀄵  /// service answer. Exit 44 alone is ambiguous; the marker distinguishes.
+􁁛  Test localExecutor_applyFailure_consumesFingerprint() passed after 2.301 seconds.
+􀢄  Test apply_contained_onDarwin_stillEstablishesSeatbelt() failed after 2.305 seconds with 1 issue.
+􀢄  Test localExecutor_containedInWorkspaceWrite_succeeds() failed after 2.349 seconds with 1 issue.
+􀢄  Test ipv4BindListenAcceptConnectRoundTrip() failed after 2.356 seconds with 1 issue.
+􀄵  /// A. IPv4 bind -> listen -> accept -> connect, all inside the cage.
+􀢄  Test localExecutor_containedOutsideWrite_deniedByKernel() failed after 2.344 seconds with 1 issue.
+􀢄  Test localExecutor_askResolve_containedInWorkspaceTouch() failed after 2.302 seconds with 1 issue.
+􀢄  Test launch_containedTrue_establishes() failed after 2.300 seconds with 1 issue.
+􀢄  Test localExecutor_sameFingerprint_secondRunFails() failed after 2.305 seconds with 1 issue.
+􀢄  Test launch_containedInWorkspaceTouch_succeeds() failed after 2.298 seconds with 1 issue.
+􁁛  Suite "Workspace lifecycle core" passed after 2.367 seconds.
+􁁛  Suite "Terminal stream" passed after 2.367 seconds.
+􁁛  Test apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() passed after 2.292 seconds.
+􀢄  Suite "HTTP admission" failed after 2.367 seconds with 1 issue.
+􁁛  Test revokingIsObservableWhileTeardownRuns() passed after 2.362 seconds.
+􁁛  Suite WorkspacePrincipalAuthorityTests passed after 2.367 seconds.
+􀢄  Suite "SeatbeltContainment" failed after 2.368 seconds with 4 issues.
+􀄵  /// Darwin kernel edges this suite encodes before production code:
+􀄵  /// 10. contained + `seatbelt()`: `touch` inside workspace → `exitStatus == 0`,
+􀄵  ///     file exists, established `.contained` first-slice, family `.seatbelt`
+􀄵  /// 11. contained + `seatbelt()`: `touch` outside workspace (sibling path) →
+􀄵  ///     `exitStatus != 0`, file absent, established still `.contained` / `.seatbelt`
+􀄵  /// 12. contained + `seatbelt()`: `/bin/sh -c '/usr/bin/touch OUTSIDE'` → same as 11
+􀄵  ///     (inheritance)
+􀄵  /// 13. observed + workspace + `IsolationBackends.apply`: `touch` outside succeeds
+􀄵  ///     (control: the production door does not secretly sandbox observed)
+􀄵  /// 14. contained + differing `RepositoryRoot`: write under the repo root but
+􀄵  ///     outside the workspace is blocked
+􀄵  /// Missing `/usr/bin/sandbox-exec` must fail these tests — do not skip.
+􀢄  Suite "AgentTurn" failed after 2.368 seconds with 6 issues.
+􀄵  /// Agent turn dispatch this suite encodes before production code:
+􀄵  /// 1. empty-effect in-workspace `touch` stays pending; `perform` without
+􀄵  ///    approval is `awaitingApproval` and does not spawn
+􀄵  /// 2. shared-main `forcePush` is denied and does not spawn
+􀄵  /// 3. in-repo contained `touch` executes, exit 0, file exists
+􀄵  /// 4. pending + `allowOnce` compiles and runs the uncovered `touch`
+􀄵  /// 5. pending + `deny` is denied and does not spawn
+􀄵  /// 6. pending + `approvalUnavailable` is `.failure(.approval)`; file absent
+􀄵  /// 7. pending + `createRule` is `.approval(.ruleCreationUnsupported)`
+􀄵  /// 8. observed plan `containedIsolation()` is `.notContained`, so perform cannot take it
+􀄵  /// 9. second `perform` of the same allowed fingerprint is `.alreadyExecuted`
+􀄵  /// Authorizations are built through `decide`. Spawn is only `perform`.
+􀟈  Test case passing 1 argument launcher → .bash to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Suite "IsolationApply" failed after 2.368 seconds with 1 issue.
+􀄵  /// Portable Landlock apply edges this suite encodes before production code:
+􀄵  /// 1. `compileLandlockRuleset(contained)` write root is resolved workspace, not
+􀄵  ///    `RepositoryRoot` when they differ; handled bits are write-class only
+􀄵  /// 2. compile of observed / mediated → `profileNotApplicable`
+􀄵  /// 3. `IsolationBackendFamily` is exactly none / seatbelt / landlock
+􀄵  ///    (exhaustive switch lives in IsolationApply)
+􀄵  /// 4. Landlock stays a prepared-request family and cannot be a successful
+􀄵  ///    `IsolatedRunResult` (IsolationApply)
+􀄵  /// 5. `landlock().prepare(observed)` → `profileNotApplicable`
+􀄵  /// 6. A strict contained plan does not prepare a Landlock launch.
+􀄵  ///    `prepare` returns `containedGuaranteesUnsupported` for a real directory.
+􀄵  /// 7. Darwin: `IsolationBackends.apply(contained)` still family `.seatbelt`
+􀄵  /// 8. `platform().family` is `.seatbelt` on Darwin and `.landlock` on Linux
+􀄵  /// 14. Trampoline exit 125 maps to `backendUnavailable` (not established)
+􀄵  /// 15. Missing trampoline → `backendUnavailable`
+􀄵  /// 16. Exit 126 maps to `processSpawnFailed` (not established)
+􀄵  /// 17. Compile / prepare reject filesystem-root and symlink-to-root workspaces
+􀄵  /// 18. `rv-isolation-exec` identity: basename, regular file, not under workspace
+􀄵  /// 19. `spawn` of `/usr/bin/true`, a workspace-local helper, or an
+􀄵  ///     identity-valid helper does not mint contained+landlock. A valid helper
+􀄵  ///     is refused before it executes.
+􀢄  Suite "RuntimeAdmission" failed after 2.368 seconds with 3 issues.
+􀟈  Test tornTrailingLineKeepsTheEarlierWorkspaceVisible() started.
+􀟈  Test isolationConformance_catalogVerdictsMatchSection8() started.
+􀟈  Test containedProcessCannotReadSiblingFile() started.
+􀟈  Test startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() started.
+􀟈  Test subscribersShareOneOrderedBinaryStream() started.
+􀟈  Test secondEngageDoesNotReplaceTheArmedSavedMode() started.
+􀟈  Test runtimesShareTheWorkspaceAndNotTheCapability() started.
+􀟈  Test ambientSocketpairIsNotUsable() started.
+􀟈  Test securityFrameworkLookupIsBlockedAtBoundary() started.
+􀟈  Test ipv6BindListenAcceptConnectRoundTrip() started.
+􁁛  Test concurrentAppendsKeepEveryRecordReadable() passed after 2.365 seconds.
+􁁛  Test isolationConformance_catalogVerdictsMatchSection8() passed after 0.002 seconds.
+􁁛  Test localExecutor_performWhenCancelled_returnsExecuteCancelled() passed after 2.308 seconds.
+􁁛  Test tornTrailingLineKeepsTheEarlierWorkspaceVisible() passed after 0.078 seconds.
+􁁛  Test secondEngageDoesNotReplaceTheArmedSavedMode() passed after 0.078 seconds.
+􁁛  Test subscribersShareOneOrderedBinaryStream() passed after 0.078 seconds.
+􁁛  Test seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() passed after 2.370 seconds.
+􁁛  Test apply_observedAndMediated_doNotRequireCallerToPickUnavailable() passed after 2.371 seconds.
+􀢄  Suite "LaunchBoundaryRegression" failed after 2.446 seconds with 8 issues.
+􀢄  Suite "LocalExecutor" failed after 2.446 seconds with 4 issues.
+􀄵  /// Local executor compile + apply edges this suite encodes before production code:
+􀄵  /// 1. `compileExecutable` of decide-allow `echo hi > file` is `commandNotSimpleArgv`
+􀄵  ///    (policy allow is not argv)
+􀄵  /// 2. `ProposedAction.file` is `fileActionUnsupported`
+􀄵  /// 3. shell without `supportingCommand` is `missingCommand`
+􀄵  /// 4. bare `touch` resolves only `/usr/bin` then `/bin`
+􀄵  /// 5. unknown bare name is `executableNotResolved`
+􀄵  /// 6. allowed cwd `/a` + plan workspace `/b` is `workspaceMismatch`
+􀄵  /// 7. nil action cwd is `workingDirectoryRequired`. Contained plans always have a workspace.
+􀄵  /// 8. absolute `/usr/bin/touch` or `/bin/touch` + matching contained plan compiles
+􀄵  /// 9. contained in-workspace `touch` establishes platform contained, exit 0, file exists
+􀄵  /// 10. contained outside `touch` stays contained, file absent, exit != 0
+􀄵  /// 11. observed and mediated plans fail `containedIsolation()` with `.notContained`
+􀄵  /// 12. second `run` of the same fingerprint throws `alreadyExecuted`
+􀄵  /// 13. a contained apply failure consumes the fingerprint
+􀄵  /// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
+􀄵  ///     resolve(allowOnce) → compileExecutable → contained run creates the file
+􀄵  /// `compileExecutable(allowed:plan:)` takes `AllowedAction` and `ContainedPlan`.
+􀄵  /// `LocalExecutor.run` takes `ExecutableAction` only.
+􀄵  /// There is no `PendingAuthorization` or `DeniedAction` overload.
+􀄵  /// A decide → pending fixture has no call path into `run`.
+􀟈  Test isolationConformance_kernelFence(_:) started.
+􀟈  Test tornLineAloneIsNotACleanHistory() started.
+􀟈  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() started.
+􀟈  Test case passing 1 argument id → FS-WRITE-IN to isolationConformance_kernelFence(_:) started.
+􀟈  Test resizePublishesActualWindowOnlyToOptedInSubscribers() started.
+􁁛  Test tornLineAloneIsNotACleanHistory() passed after 0.074 seconds.
+􁁛  Test startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() passed after 0.153 seconds.
+􁁛  Test resizePublishesActualWindowOnlyToOptedInSubscribers() passed after 0.074 seconds.
+􀟈  Test closedHistoryWithATornTailIsNotClean() started.
+􀟈  Test clientsAttachDetachAndCancelWithoutSharingAuthority() started.
+􀟈  Test replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() started.
+􀢄  Test supervisorLaunchWithoutDefinitionMintsNoInstance() recorded an issue at AgentInstanceRegistryTests.swift:955:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􁁛  Test closedHistoryWithATornTailIsNotClean() passed after 0.041 seconds.
+􀢄  Test supervisorLaunchWithoutDefinitionMintsNoInstance() failed after 2.558 seconds with 1 issue.
+􀢄  Test launch_persistsSessionBeforeExecution() recorded an issue at ContainedLaunchTests.swift:148:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test launch_containedOutsideTouch_deniedByKernel() recorded an issue at ContainedLaunchTests.swift:108:39: Issue recorded
+􀄵  expected blocked outside touch with established contained, got workspaceContainsInodeAlias
+􀢄  Test launch_persistsSessionBeforeExecution() failed after 2.495 seconds with 1 issue.
+􀢄  Test launch_containedOutsideTouch_deniedByKernel() failed after 2.494 seconds with 1 issue.
+􀟈  Test reusedProcessGroupIsNotKilled() started.
+􁁛  Test reusedProcessGroupIsNotKilled() passed after 0.001 seconds.
+􀟈  Test provenProcessGroupIsKilled() started.
+􀢄  Test launch_containedSessionsAreDistinctFromHookSessionID() recorded an issue at ContainedLaunchTests.swift:115:6: Caught error: .workspaceInodeBoundaryFailed
+􁁛  Test provenProcessGroupIsKilled() passed after 0.013 seconds.
+􀢄  Test launch_containedSessionsAreDistinctFromHookSessionID() failed after 2.508 seconds with 1 issue.
+􀢄  Suite "ContainedLaunch" failed after 2.578 seconds with 5 issues.
+􀄵  /// Executor-internal contained launch edges (`IsolationBackends.applyLaunch`).
+􀄵  ///
+􀄵  /// This is the `LocalExecutor` / admitted-command door, not an interactive
+􀄵  /// path: no CLI command reaches it. Interactive launches go through the
+􀄵  /// workspace host (`WorkspaceHostTests`, `RuntimeTerminalTests`).
+􀄵  /// 1. Contained + `/usr/bin/true` (or `/bin/true`) → established `.seatbelt`, exit 0
+􀄵  /// 2. Contained + absolute `touch` inside `ContainmentTree` → file exists, seatbelt
+􀄵  /// 3. Contained + `touch` sibling path → seatbelt established, file absent, exit ≠ 0
+􀄵  /// 4. Two contained launches mint distinct runtime sessions, never the hook id
+􀄵  /// 5. The session record lands before execution with host/backend/workspace
+􀟈  Test liveOwnerRefusesASecondWorkspace() started.
+􀢄  Test supervisorRegisterFaultRetiresAnnouncedInstance() recorded an issue at AgentInstanceRegistryTests.swift:910:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test supervisorRegisterFaultRetiresAnnouncedInstance() failed after 2.582 seconds with 1 issue.
+􀢄  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() recorded an issue at ExecutorLifecycleRegressionTests.swift:113:9: Expectation failed: outcomes.filter { if case .success = $0 { true } else { false } }.count == 1
+􀄵  outcomes.filter { if case .success = $0 { true } else { false } }.count == 1 → false
+􀄵    outcomes.filter { if case .success = $0 { true } else { false } }.count → 0
+􀢄  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() recorded an issue at ExecutorLifecycleRegressionTests.swift:92:6: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “concurrent-marker” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/tmp/rv-containment-67F0024A-43E1-468B-9ECD-534AB7560632/repo/ws/concurrent-marker, NSURL=file:///tmp/rv-containment-67F0024A-43E1-468B-9ECD-534AB7560632/repo/ws/concurrent-marker, NSUnderlyingError=0x78b9065ec0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() failed after 2.606 seconds with 2 issues.
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument launcher → .bash at RuntimeAdversarialTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument launcher → .zsh to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() recorded an issue at ExecutorLifecycleRegressionTests.swift:12:6: Caught error: .applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() failed after 2.640 seconds with 1 issue.
+􀢄  Test containedProcessCannotReadSiblingFile() recorded an issue at SeatbeltCapabilityTests.swift:92:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test containedProcessCannotReadSiblingFile() failed after 0.279 seconds with 1 issue.
+􀢄  Suite "SeatbeltCapability" failed after 2.647 seconds with 2 issues.
+􀄵  /// Kernel effects of the deny-default Seatbelt profile. Payloads must run.
+􀄵  /// A tool that exits before the operation is not a denial.
+􀢄  Test ambientSocketpairIsNotUsable() recorded an issue at DescriptorHygieneTests.swift:36:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-WRITE-IN at IsolationConformanceTests.swift:239:41: Issue recorded
+􀄵  id=FS-WRITE-IN expected in-workspace touch established contained, got workspaceInodeBoundaryFailed
+􀢄  Test ambientSocketpairIsNotUsable() failed after 0.300 seconds with 1 issue.
+􀟈  Test case passing 1 argument id → FS-WRITE-OUT to isolationConformance_kernelFence(_:) started.
+􀟈  Test ambientPipeIsNotUsable() started.
+􀢄  Test supervisorLaunchMintsActivatesAndFinishesInstance() recorded an issue at AgentInstanceRegistryTests.swift:867:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test supervisorLaunchMintsActivatesAndFinishesInstance() failed after 2.692 seconds with 1 issue.
+􀢄  Suite "AgentInstanceRegistry" failed after 2.699 seconds with 3 issues.
+􀢄  Test ipv6BindListenAcceptConnectRoundTrip() recorded an issue at SeatbeltLoopbackTests.swift:40:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test ipv6BindListenAcceptConnectRoundTrip() failed after 0.362 seconds with 1 issue.
+􀄵  /// B. IPv6 equivalent on ::1.
+􀟈  Test pythonHTTPServerServesContainedCurlClient() started.
+􁁛  Test replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() passed after 0.268 seconds.
+􀟈  Test emptyAttachmentStillDeclaresAReplayBatch() started.
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument launcher → .zsh at RuntimeAdversarialTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument launcher → .env to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test emptyAttachmentStillDeclaresAReplayBatch() passed after 0.023 seconds.
+􀟈  Test slowSubscriberIsDroppedAndDoesNotStallTheReader() started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-WRITE-OUT at IsolationConformanceTests.swift:274:41: Issue recorded
+􀄵  id=FS-WRITE-OUT expected blocked outside write with established contained, got workspaceInodeBoundaryFailed
+􁁛  Test concurrentDeliverAndNextKeepByteAccountingExact() passed after 2.769 seconds.
+􁁛  Suite "Workspace client terminal queue" passed after 2.835 seconds.
+􀟈  Test case passing 1 argument id → FS-WRITE-REPO to isolationConformance_kernelFence(_:) started.
+􁁛  Test slowSubscriberIsDroppedAndDoesNotStallTheReader() passed after 0.048 seconds.
+􀟈  Test resubscribeAfterOverflowResumesFromReplay() started.
+􀢄  Test pythonHTTPServerServesContainedCurlClient() recorded an issue at SeatbeltLoopbackTests.swift:57:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test ambientPipeIsNotUsable() recorded an issue at DescriptorHygieneTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test pythonHTTPServerServesContainedCurlClient() failed after 0.177 seconds with 1 issue.
+􀄵  /// C1. Real stdlib HTTP server plus a contained curl client on 127.0.0.1.
+􀄵  /// The cage sets HTTP_PROXY, so a correct body also proves NO_PROXY
+􀄵  /// bypass for loopback.
+􀢄  Test ambientPipeIsNotUsable() failed after 0.239 seconds with 1 issue.
+􀟈  Test containedProcessListsOnlyGrantedDescriptors() started.
+􀟈  Test nodeHTTPServerServesContainedCurlClient() started.
+􁁛  Test resubscribeAfterOverflowResumesFromReplay() passed after 0.102 seconds.
+􀟈  Test clientResubscribeAfterUnsubscribeReceivesReplay() started.
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument launcher → .env at RuntimeAdversarialTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument launcher → .xargs to descendantsCannotWriteOutsideWorkspace(_:) started.
+requested=contained established=none family=none exit=none error=workspaceInodeBoundaryFailed
+requested=contained established=none family=none exit=none error=workspaceInodeBoundaryFailed
+requested=contained established=none family=none exit=none error=workspaceInodeBoundaryFailed
+requested=observed established=observed family=none exit=0 error=none
+requested=contained established=none family=none exit=none error=backendUnavailable
+􁁛  Test isolationApply_operatorProbe_printsEstablishedModes() passed after 2.913 seconds.
+􁁛  Suite "IsolationApply" passed after 2.989 seconds.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-WRITE-REPO at IsolationConformanceTests.swift:274:41: Issue recorded
+􀄵  id=FS-WRITE-REPO expected blocked outside write with established contained, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → FS-MKDIR-OUT to isolationConformance_kernelFence(_:) started.
+􀢄  Test nodeHTTPServerServesContainedCurlClient() recorded an issue at SeatbeltLoopbackTests.swift:91:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test nodeHTTPServerServesContainedCurlClient() failed after 0.161 seconds with 1 issue.
+􀄵  /// C2. Real Node HTTP server plus a contained curl client on 127.0.0.1.
+􀟈  Test literalHTTPServerCLIServesTypedFile() started.
+􀢄  Test containedProcessListsOnlyGrantedDescriptors() recorded an issue at DescriptorHygieneTests.swift:60:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test containedProcessListsOnlyGrantedDescriptors() failed after 0.226 seconds with 1 issue.
+􀟈  Test inheritedStandardIOMatchesParent() started.
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument launcher → .xargs at RuntimeAdversarialTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument launcher → .python to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=python coverage=NOT-TESTED reason=outside-baseline-or-stub
+􀟈  Test case passing 1 argument launcher → .ruby to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-MKDIR-OUT at IsolationConformanceTests.swift:303:41: Issue recorded
+􀄵  id=FS-MKDIR-OUT expected blocked outside mkdir with established contained, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → FS-APPEND-OUT to isolationConformance_kernelFence(_:) started.
+􀢄  Test securityFrameworkLookupIsBlockedAtBoundary() recorded an issue at SeatbeltMachBoundaryTests.swift:65:9: Expectation failed: direct.output.contains("status=-25300")
+􀄵  direct.output.contains("status=-25300") → false
+􀄵    direct.output → "status=-50
+     "
+􀢄  Test literalHTTPServerCLIServesTypedFile() recorded an issue at SeatbeltLoopbackTests.swift:125:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test literalHTTPServerCLIServesTypedFile() failed after 0.160 seconds with 1 issue.
+􀄵  /// C3. The literal `python3 -m http.server` CLI on 127.0.0.1, ephemeral
+􀄵  /// port, serving a real .txt file to a contained curl client. The .txt
+􀄵  /// extension forces `mimetypes` table reads, which is what the MIME
+􀄵  /// grant in the profile exists for.
+􀟈  Test twoRuntimesShareLoopbackInOneWorkspace() started.
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument launcher → .ruby at RuntimeAdversarialTests.swift:15:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument launcher → .node to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=node coverage=NOT-TESTED reason=outside-baseline-or-stub
+􀢄  Test descendantsCannotWriteOutsideWorkspace(_:) with 8 test cases failed after 3.250 seconds with 6 issues.
+􀟈  Test shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument technique → "nested" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-APPEND-OUT at IsolationConformanceTests.swift:334:41: Issue recorded
+􀄵  id=FS-APPEND-OUT expected blocked outside append with established contained, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → FS-UNLINK-OUT to isolationConformance_kernelFence(_:) started.
+􀢄  Test inheritedStandardIOMatchesParent() recorded an issue at DescriptorHygieneTests.swift:86:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test inheritedStandardIOMatchesParent() failed after 0.235 seconds with 1 issue.
+􀟈  Test discardedStandardIOIsNullDevice() started.
+􀢄  Test securityFrameworkLookupIsBlockedAtBoundary() recorded an issue at SeatbeltMachBoundaryTests.swift:55:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test securityFrameworkLookupIsBlockedAtBoundary() failed after 1.001 seconds with 2 issues.
+􀄵  /// Direct Security.framework use is blocked at the sandbox boundary.
+􀄵  /// Unsandboxed control returns errSecItemNotFound (-25300): the request
+􀄵  /// reaches securityd. Sandboxed, the denied mach-lookup to
+􀄵  /// `com.apple.securityd.xpc` / `com.apple.SecurityServer` fails the call
+􀄵  /// with paramErr (-50) before any service answer.
+􀟈  Test blockedMachServiceLookupFailsFromContainedChild() started.
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) recorded an issue with 1 argument technique → "nested" at RuntimeAdversarialTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument technique → "exec" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-UNLINK-OUT at IsolationConformanceTests.swift:363:41: Issue recorded
+􀄵  id=FS-UNLINK-OUT expected blocked outside unlink with established contained, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → FS-RENAME-OUT to isolationConformance_kernelFence(_:) started.
+􀢄  Test discardedStandardIOIsNullDevice() recorded an issue at DescriptorHygieneTests.swift:101:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test discardedStandardIOIsNullDevice() failed after 0.215 seconds with 1 issue.
+􀟈  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() started.
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) recorded an issue with 1 argument technique → "exec" at RuntimeAdversarialTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument technique → "background-wait" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → FS-RENAME-OUT at IsolationConformanceTests.swift:395:41: Issue recorded
+􀄵  id=FS-RENAME-OUT expected blocked rename-out with established contained, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → DESC-SH to isolationConformance_kernelFence(_:) started.
+􀢄  Test blockedMachServiceLookupFailsFromContainedChild() recorded an issue at SeatbeltMachBoundaryTests.swift:95:13: Expectation failed: direct.output.contains("kr=0")
+􀄵  direct.output.contains("kr=0") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test blockedMachServiceLookupFailsFromContainedChild() recorded an issue at SeatbeltMachBoundaryTests.swift:96:13: Expectation failed: direct.output.contains("REACHABLE")
+􀄵  direct.output.contains("REACHABLE") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test blockedMachServiceLookupFailsFromContainedChild() recorded an issue at SeatbeltMachBoundaryTests.swift:95:13: Expectation failed: direct.output.contains("kr=0")
+􀄵  direct.output.contains("kr=0") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test blockedMachServiceLookupFailsFromContainedChild() recorded an issue at SeatbeltMachBoundaryTests.swift:96:13: Expectation failed: direct.output.contains("REACHABLE")
+􀄵  direct.output.contains("REACHABLE") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􁁛  Test concurrentRevokeRunsTeardownExactlyOnce() passed after 3.704 seconds.
+􁁛  Test activateVersusRevokeKeepsSingleAuthority() passed after 3.735 seconds.
+􁁛  Test concurrentDuplicateInstanceAnnounceWinsOnce() passed after 3.745 seconds.
+􁁛  Test concurrentDuplicateRuntimeAnnounceWinsOnce() passed after 3.750 seconds.
+􁁛  Test finishRuntimeVersusRevokeRetiresOnce() passed after 3.758 seconds.
+􁁛  Suite "AgentInstanceRegistry concurrency" passed after 3.828 seconds.
+􀢄  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() recorded an issue at DescriptorHygieneTests.swift:124:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() failed after 0.242 seconds with 1 issue.
+􀟈  Test innerExecutableDoesNotKeepHandshakeDescriptor() started.
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) recorded an issue with 1 argument technique → "background-wait" at RuntimeAdversarialTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument technique → "env-shebang" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → DESC-SH at IsolationConformanceTests.swift:433:41: Issue recorded
+􀄵  id=DESC-SH expected blocked inherited outside touch with established contained, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → DESC-NESTED to isolationConformance_kernelFence(_:) started.
+􀢄  Test blockedMachServiceLookupFailsFromContainedChild() recorded an issue at SeatbeltMachBoundaryTests.swift:86:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test blockedMachServiceLookupFailsFromContainedChild() failed after 0.557 seconds with 5 issues.
+􀄵  /// A known credential-bearing Mach service is unreachable from the cage.
+􀄵  /// `bootstrap_look_up` returns KERN_SUCCESS (0) unsandboxed and
+􀄵  /// BOOTSTRAP_NOT_PRIVILEGED (1100, sandbox denial) sandboxed — never a
+􀄵  /// port, and never BOOTSTRAP_UNKNOWN_SERVICE (1102, which would mean the
+􀄵  /// probe named a service that does not exist).
+􀟈  Test otherCredentialServicesStayBlocked() started.
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) recorded an issue with 1 argument technique → "env-shebang" at RuntimeAdversarialTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument technique → "path-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀢄  Test isolationConformance_kernelFence(_:) recorded an issue with 1 argument id → DESC-NESTED at IsolationConformanceTests.swift:433:41: Issue recorded
+􀄵  id=DESC-NESTED expected blocked inherited outside touch with established contained, got workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_kernelFence(_:) with 9 test cases failed after 1.551 seconds with 9 issues.
+􀟈  Test isolationConformance_hole(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-NET to isolationConformance_hole(_:) started.
+􀢄  Test innerExecutableDoesNotKeepHandshakeDescriptor() recorded an issue at DescriptorHygieneTests.swift:161:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test innerExecutableDoesNotKeepHandshakeDescriptor() failed after 0.215 seconds with 1 issue.
+􀟈  Test failedLaunchesDoNotAccumulateDescriptors() started.
+􀢄  Test otherCredentialServicesStayBlocked() recorded an issue at SeatbeltMachBoundaryTests.swift:135:13: Expectation failed: direct.output.contains("kr=0")
+􀄵  com.apple.GSSCred
+􀄵  direct.output.contains("kr=0") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test otherCredentialServicesStayBlocked() recorded an issue at SeatbeltMachBoundaryTests.swift:135:13: Expectation failed: direct.output.contains("kr=0")
+􀄵  com.apple.pasteboard.1
+􀄵  direct.output.contains("kr=0") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test otherCredentialServicesStayBlocked() recorded an issue at SeatbeltMachBoundaryTests.swift:135:13: Expectation failed: direct.output.contains("kr=0")
+􀄵  com.apple.trustd
+􀄵  direct.output.contains("kr=0") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test isolationConformance_hole(_:) recorded an issue with 1 argument id → HOLE-NET at IsolationConformanceTests.swift:485:41: Issue recorded
+􀄵  id=HOLE-NET expected established contained with unrestricted network, got workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument id → HOLE-READ to isolationConformance_hole(_:) started.
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) recorded an issue with 1 argument technique → "path-replacement" at RuntimeAdversarialTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument technique → "executable-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test otherCredentialServicesStayBlocked() recorded an issue at SeatbeltMachBoundaryTests.swift:121:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test otherCredentialServicesStayBlocked() failed after 0.296 seconds with 4 issues.
+􀄵  /// Other credential-bearing services stay blocked as well: GSS
+􀄵  /// credentials, the pasteboard (which may hold secrets), and trustd all
+􀄵  /// deny with 1100 from a contained child. BiometricKit is verified
+􀄵  /// blocked manually but omitted here: it is hardware-dependent and may
+􀄵  /// be absent on runners without Touch ID.
+􀟈  Test allowedDirhelperServiceStillSucceeds() started.
+􀢄  Test isolationConformance_hole(_:) recorded an issue with 1 argument id → HOLE-READ at IsolationConformanceTests.swift:517:45: Issue recorded
+􀄵  id=HOLE-READ expected denied read or refused launch, got workspaceInodeBoundaryFailed
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) recorded an issue with 1 argument technique → "executable-replacement" at RuntimeAdversarialTests.swift:48:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test shellIndirectionCannotRemoveWriteFence(_:) with 6 test cases failed after 1.031 seconds with 6 issues.
+􀟈  Test relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument target → "../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-SYMLINK to isolationConformance_hole(_:) started.
+􀢄  Test allowedDirhelperServiceStillSucceeds() recorded an issue at SeatbeltMachBoundaryTests.swift:165:9: Expectation failed: direct.output.contains("kr=0")
+􀄵  direct.output.contains("kr=0") → false
+􀄵    direct.output → "kr=1100
+     BLOCKED-or-missing
+     "
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test relativeTraversalCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument target → "../outside" at RuntimeAdversarialTests.swift:85:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument target → "../../sibling/outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test isolationConformance_hole(_:) recorded an issue with 1 argument id → HOLE-SYMLINK at IsolationConformanceTests.swift:550:41: Issue recorded
+􀄵  id=HOLE-SYMLINK expected established contained write via workspace symlink, got workspaceInodeBoundaryFailed
+id=HOLE-SYMLINK effect=unchanged
+􀢄  Test isolationConformance_hole(_:) with 3 test cases failed after 0.536 seconds with 3 issues.
+􀟈  Test isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-UNAVAILABLE to isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-LANDLOCK-DARWIN to isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-ROOT-WS to isolationConformance_failClosed(_:) started.
+􁁛  Test isolationConformance_failClosed(_:) with 3 test cases passed after 0.001 seconds.
+􀟈  Test isolationConformance_operatorProbe_printsCatalog() started.
+􀢄  Test allowedDirhelperServiceStillSucceeds() recorded an issue at SeatbeltMachBoundaryTests.swift:157:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test allowedDirhelperServiceStillSucceeds() failed after 0.310 seconds with 2 issues.
+􀄵  /// The one explicitly allowed Mach service remains reachable: SwiftPM
+􀄵  /// linking requires `com.apple.bsd.dirhelper`, so a contained lookup
+􀄵  /// must succeed while every other service stays denied.
+􀟈  Test swiftBuildSucceedsWithHardenedMachPolicy() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test runtimesShareTheWorkspaceAndNotTheCapability() recorded an issue at WorkspaceSessionTests.swift:38:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test runtimesShareTheWorkspaceAndNotTheCapability() failed after 2.302 seconds with 1 issue.
+􀟈  Test childExitLeavesTheWorkspaceMounted() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test relativeTraversalCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument target → "../../sibling/outside" at RuntimeAdversarialTests.swift:85:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument target → "./nested/../../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:239:41: Issue recorded
+􀄵  id=FS-WRITE-IN expected in-workspace touch established contained, got workspaceInodeBoundaryFailed
+id=FS-WRITE-IN verdict=allow-in established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test swiftBuildSucceedsWithHardenedMachPolicy() recorded an issue at SeatbeltMachBoundaryTests.swift:183:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test swiftBuildSucceedsWithHardenedMachPolicy() failed after 0.191 seconds with 1 issue.
+􀄵  /// The workflow that justifies the dirhelper allow still succeeds: a
+􀄵  /// minimal `swift build` links inside the cage under the hardened Mach
+􀄵  /// policy. Without the allow this fails at `Ld` with `permissionDenied`.
+􀟈  Test proxiedPublicHTTPSStillSucceeds() started.
+􀢄  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() recorded an issue at LocalTerminalRestoreTests.swift:52:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() failed after 2.289 seconds with 1 issue.
+􀟈  Test disconnectAndProtocolErrorRestoreRawMode() started.
+mach-boundary egress coverage=NOT-TESTED reason=no-internet control=6
+􁁛  Test proxiedPublicHTTPSStillSucceeds() passed after 0.008 seconds.
+􀟈  Test filesystemSecretsRemainDenied() started.
+􀢄  Test clientsAttachDetachAndCancelWithoutSharingAuthority() recorded an issue at WorkspaceHostTests.swift:107:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test clientsAttachDetachAndCancelWithoutSharingAuthority() failed after 2.296 seconds with 1 issue.
+􀟈  Test malformedFramesAndForeignTokensDoNotMutate() started.
+􀢄  Test liveOwnerRefusesASecondWorkspace() recorded an issue at WorkspaceRecoveryTests.swift:116:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test liveOwnerRefusesASecondWorkspace() failed after 2.282 seconds with 1 issue.
+􀟈  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:274:41: Issue recorded
+􀄵  id=FS-WRITE-OUT expected blocked outside write with established contained, got workspaceInodeBoundaryFailed
+􀢄  Test relativeTraversalCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument target → "./nested/../../outside" at RuntimeAdversarialTests.swift:85:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test relativeTraversalCannotWriteOutsideWorkspace(_:) with 3 test cases failed after 0.564 seconds with 3 issues.
+􀟈  Test symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+id=FS-WRITE-OUT verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument createdByAgent → false to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test filesystemSecretsRemainDenied() recorded an issue at SeatbeltMachBoundaryTests.swift:263:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test filesystemSecretsRemainDenied() failed after 0.180 seconds with 1 issue.
+􀄵  /// File-based secrets stay denied under the hardened policy: synthetic
+􀄵  /// stand-ins outside the workspace are unreadable from a contained
+􀄵  /// child, and no content crosses into the workspace. One contained run
+􀄵  /// covers every category to keep volume-mount costs down.
+􀟈  Test processContainmentRemainsGreen() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test processContainmentRemainsGreen() recorded an issue at SeatbeltMachBoundaryTests.swift:307:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test processContainmentRemainsGreen() failed after 0.181 seconds with 1 issue.
+􀄵  /// Basic process containment still holds: writes inside the workspace
+􀄵  /// succeed, writes outside fail, and the run establishes a seatbelt
+􀄵  /// session under the hardened Mach policy.
+􀟈  Test ptyRemainsGreen() started.
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:274:41: Issue recorded
+􀄵  id=FS-WRITE-REPO expected blocked outside write with established contained, got workspaceInodeBoundaryFailed
+id=FS-WRITE-REPO verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test symlinkChainsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument createdByAgent → false at RuntimeAdversarialTests.swift:99:6: Caught error: .workspaceInodeBoundaryFailed
+􀟈  Test case passing 1 argument createdByAgent → true to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test clientResubscribeAfterUnsubscribeReceivesReplay() recorded an issue at RuntimeTerminalTests.swift:291:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test clientResubscribeAfterUnsubscribeReceivesReplay() failed after 2.281 seconds with 1 issue.
+􀟈  Test detachWaitsUntilFlushLeavesEmit() started.
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:303:41: Issue recorded
+􀄵  id=FS-MKDIR-OUT expected blocked outside mkdir with established contained, got workspaceInodeBoundaryFailed
+id=FS-MKDIR-OUT verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test ptyRemainsGreen() recorded an issue at SeatbeltMachBoundaryTests.swift:330:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test ptyRemainsGreen() failed after 0.186 seconds with 1 issue.
+􀄵  /// A contained PTY runtime still starts: stdin/stdout are terminals and
+􀄵  /// the child reports success under the hardened Mach policy.
+􀟈  Test machPolicyHasNoBroadLookupAllow() started.
+􀢄  Test symlinkChainsCannotWriteOutsideWorkspace(_:) recorded an issue with 1 argument createdByAgent → true at RuntimeAdversarialTests.swift:99:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test symlinkChainsCannotWriteOutsideWorkspace(_:) with 2 test cases failed after 0.369 seconds with 2 issues.
+􀟈  Test renameCannotMoveAcrossWriteBoundary() started.
+􁁛  Test machPolicyHasNoBroadLookupAllow() passed after 0.051 seconds.
+􀢄  Suite "SeatbeltMachBoundary" failed after 5.336 seconds with 19 issues.
+􀄵  /// Mach/XPC boundary: the cage must not reach host credential/security
+􀄵  /// services, while normal development workflows keep working.
+􀄵  ///
+􀄵  /// Every test runs a real contained child (or the real profile compiler for
+􀄵  /// the architectural invariant). No test prints real Keychain items or
+􀄵  /// secret values: Keychain probes use guaranteed-nonexistent items and
+􀄵  /// assert only on error markers.
+􁁛  Test detachWaitsUntilFlushLeavesEmit() passed after 0.152 seconds.
+􀟈  Test failedSendDropsTheSubscriberAfterOneOverflow() started.
+􁁛  Test failedSendDropsTheSubscriberAfterOneOverflow() passed after 0.025 seconds.
+􀟈  Test resizeUpdatesTheSlaveWindowAndRejectsBounds() started.
+􁁛  Test resizeUpdatesTheSlaveWindowAndRejectsBounds() passed after 0.001 seconds.
+􀟈  Test localRawModeRestoresTheSavedTermios() started.
+􁁛  Test localRawModeRestoresTheSavedTermios() passed after 0.001 seconds.
+􀟈  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() started.
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:334:41: Issue recorded
+􀄵  id=FS-APPEND-OUT expected blocked outside append with established contained, got workspaceInodeBoundaryFailed
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+id=FS-APPEND-OUT verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test renameCannotMoveAcrossWriteBoundary() recorded an issue at RuntimeAdversarialTests.swift:120:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test renameCannotMoveAcrossWriteBoundary() failed after 0.185 seconds with 1 issue.
+􀟈  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() started.
+􀢄  Test twoRuntimesShareLoopbackInOneWorkspace() recorded an issue at SeatbeltLoopbackTests.swift:154:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test twoRuntimesShareLoopbackInOneWorkspace() failed after 2.379 seconds with 1 issue.
+􀄵  /// D. Runtime A serves, runtime B connects, same workspace, v4 and v6.
+􀟈  Test nonLoopbackBindIsNotScopedBySeatbelt() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:363:41: Issue recorded
+􀄵  id=FS-UNLINK-OUT expected blocked outside unlink with established contained, got workspaceInodeBoundaryFailed
+id=FS-UNLINK-OUT verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() recorded an issue at RuntimeAdversarialTests.swift:137:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() failed after 0.185 seconds with 1 issue.
+􀟈  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() started.
+􁁛  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() passed after 0.001 seconds.
+􀟈  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() started.
+􀢄  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() recorded an issue at RuntimeTerminalTests.swift:395:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() failed after 0.246 seconds with 1 issue.
+􀟈  Test hookAndBareLaunchesShareTheCageEnvironment() started.
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:395:41: Issue recorded
+􀄵  id=FS-RENAME-OUT expected blocked rename-out with established contained, got workspaceInodeBoundaryFailed
+id=FS-RENAME-OUT verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test nonLoopbackBindIsNotScopedBySeatbelt() recorded an issue at SeatbeltLoopbackTests.swift:201:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test nonLoopbackBindIsNotScopedBySeatbelt() failed after 0.246 seconds with 1 issue.
+􀄵  /// E. Seatbelt cannot scope TCP bind/listen by address: wildcard binds
+􀄵  /// succeed. Locked in as a documented residual, not as approval. If a
+􀄵  /// future macOS enforces local-host matching, this test flips and the
+􀄵  /// policy comment plus threat model must be tightened. The UDP control
+􀄵  /// proves bind gating itself exists (protocol-scoped, not
+􀄵  /// address-scoped).
+􀟈  Test loopbackOnlyConnectMatrix() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:433:41: Issue recorded
+􀄵  id=DESC-SH expected blocked inherited outside touch with established contained, got workspaceInodeBoundaryFailed
+id=DESC-SH verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test loopbackOnlyConnectMatrix() recorded an issue at SeatbeltLoopbackTests.swift:226:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test loopbackOnlyConnectMatrix() failed after 0.248 seconds with 1 issue.
+􀄵  /// F/G/H. Loopback connects pass the sandbox (refused only when nothing
+􀄵  /// listens); LAN, metadata, and direct public connects fail with EPERM
+􀄵  /// before any packet. Targets equal to an own interface address route
+􀄵  /// via lo0 and are reported SKIP-OWN instead.
+􀟈  Test cancelKillsLoopbackServerAndFreesPort() started.
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() recorded an issue at DescriptorHygieneTests.swift:212:29: Issue recorded
+􀄵  failed session record must be sessionRecordFailed, got .workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:433:41: Issue recorded
+􀄵  id=DESC-NESTED expected blocked inherited outside touch with established contained, got workspaceInodeBoundaryFailed
+id=DESC-NESTED verdict=deny established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test failedLaunchesDoNotAccumulateDescriptors() failed after 2.140 seconds with 12 issues.
+􀟈  Test refusedLaunchPathAttributionIgnoresOtherSuites() started.
+􁁛  Test refusedLaunchPathAttributionIgnoresOtherSuites() passed after 0.001 seconds.
+􀟈  Test cancellationClosesLaunchDescriptors() started.
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:485:41: Issue recorded
+􀄵  id=HOLE-NET expected established contained with unrestricted network, got workspaceInodeBoundaryFailed
+id=HOLE-NET verdict=hole established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:517:45: Issue recorded
+􀄵  id=HOLE-READ expected denied read or refused launch, got workspaceInodeBoundaryFailed
+id=HOLE-READ verdict=hole established=- family=- exit=- error=workspaceInodeBoundaryFailed
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() recorded an issue at IsolationConformanceTests.swift:550:41: Issue recorded
+􀄵  id=HOLE-SYMLINK expected established contained write via workspace symlink, got workspaceInodeBoundaryFailed
+id=HOLE-SYMLINK effect=unchanged
+id=HOLE-SYMLINK verdict=hole established=- family=- exit=- error=workspaceInodeBoundaryFailed effect=unchanged
+id=FC-UNAVAILABLE verdict=failClosed established=- family=- exit=- error=backendUnavailable
+id=FC-LANDLOCK-DARWIN verdict=failClosed established=- family=- exit=- error=containedGuaranteesUnsupported
+id=FC-ROOT-WS verdict=failClosed established=- family=- exit=- error=workspacePathUnsafe
+id=FC-HELPER-IN-WS verdict=failClosed established=- family=- exit=- error=linux-only
+􀢄  Test isolationConformance_operatorProbe_printsCatalog() failed after 2.121 seconds with 12 issues.
+􀢄  Suite "IsolationConformance" failed after 6.657 seconds with 24 issues.
+􀄵  /// First-slice named bypass catalog (Seatbelt + Landlock).
+􀄵  /// §8 IDs are locked here. A missing deny ID must fail this suite.
+􀄵  /// Deny / allow-in cases call `IsolationBackends.apply` only.
+􀢄  Test childExitLeavesTheWorkspaceMounted() recorded an issue at WorkspaceSessionTests.swift:134:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test childExitLeavesTheWorkspaceMounted() failed after 2.291 seconds with 1 issue.
+􀟈  Test cancellingOneRuntimeLeavesTheOther() started.
+􀢄  Test disconnectAndProtocolErrorRestoreRawMode() recorded an issue at LocalTerminalRestoreTests.swift:142:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test disconnectAndProtocolErrorRestoreRawMode() failed after 2.295 seconds with 1 issue.
+􀟈  Test clientInterruptRestoresTheLocalTerminal() started.
+􀢄  Test malformedFramesAndForeignTokensDoNotMutate() recorded an issue at WorkspaceHostTests.swift:175:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test malformedFramesAndForeignTokensDoNotMutate() failed after 2.276 seconds with 1 issue.
+􀟈  Test hostSurvivesTheCreatingClientAndAKilledClient() started.
+􀢄  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() recorded an issue at WorkspaceRecoveryTests.swift:142:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() failed after 2.288 seconds with 1 issue.
+􀟈  Test liveChildDiesBeforePublish() started.
+􁁛  Test clientInterruptRestoresTheLocalTerminal() passed after 0.489 seconds.
+􀢄  Suite "Local terminal restore" failed after 7.521 seconds with 2 issues.
+􀢄  Test hookAndBareLaunchesShareTheCageEnvironment() recorded an issue at RuntimeTerminalTests.swift:466:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test hookAndBareLaunchesShareTheCageEnvironment() failed after 2.303 seconds with 1 issue.
+􀟈  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() started.
+􀢄  Test cancelKillsLoopbackServerAndFreesPort() recorded an issue at SeatbeltLoopbackTests.swift:260:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test cancelKillsLoopbackServerAndFreesPort() failed after 2.398 seconds with 1 issue.
+􀄵  /// I+K. Cancelling the runtime kills its server; the port refuses and
+􀄵  /// becomes bindable again immediately.
+􀟈  Test closeKillsAllLoopbackServers() started.
+􀢄  Test cancellingOneRuntimeLeavesTheOther() recorded an issue at WorkspaceSessionTests.swift:195:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test cancellingOneRuntimeLeavesTheOther() failed after 2.333 seconds with 1 issue.
+􀟈  Test closeKillsEveryRuntimeBeforeItReturns() started.
+􀢄  Test liveChildDiesBeforePublish() recorded an issue at WorkspaceRecoveryTests.swift:173:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test liveChildDiesBeforePublish() failed after 2.322 seconds with 1 issue.
+􀟈  Test publicationConflictKeepsBothCopies() started.
+􀢄  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() recorded an issue at RuntimeTerminalTests.swift:506:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() failed after 2.343 seconds with 1 issue.
+􀟈  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() started.
+􀢄  Test closeKillsAllLoopbackServers() recorded an issue at SeatbeltLoopbackTests.swift:280:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test closeKillsAllLoopbackServers() failed after 2.443 seconds with 1 issue.
+􀄵  /// J+K. Closing the workspace kills every runtime server, v4 and v6.
+􀟈  Test portReusableAfterNaturalServerExit() started.
+􀢄  Test closeKillsEveryRuntimeBeforeItReturns() recorded an issue at WorkspaceSessionTests.swift:242:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test closeKillsEveryRuntimeBeforeItReturns() failed after 2.328 seconds with 1 issue.
+􀟈  Test launchAfterCloseBeginsDoesNotSpawn() started.
+􀢄  Test publicationConflictKeepsBothCopies() recorded an issue at WorkspaceRecoveryTests.swift:200:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test publicationConflictKeepsBothCopies() failed after 2.341 seconds with 1 issue.
+􀟈  Test missingMountStaysUnresolved() started.
+􀢄  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() recorded an issue at RuntimeTerminalTests.swift:542:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() failed after 2.333 seconds with 1 issue.
+􀟈  Test childObservesResizeAndSignal() started.
+􀢄  Test portReusableAfterNaturalServerExit() recorded an issue at SeatbeltLoopbackTests.swift:308:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test portReusableAfterNaturalServerExit() failed after 2.448 seconds with 1 issue.
+􀄵  /// K (explicit). After a server exits on its own, its port rebinds.
+􀟈  Test portCollisionFailsWithEADDRINUSE() started.
+􀢄  Test portCollisionFailsWithEADDRINUSE() recorded an issue at SeatbeltLoopbackTests.swift:329:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test portCollisionFailsWithEADDRINUSE() failed after 0.294 seconds with 1 issue.
+􀄵  /// M. Normal collision semantics: the second bind fails EADDRINUSE, and
+􀄵  /// the port the cage reports is the port the host reaches (no remap).
+􀟈  Test crossWorkspaceLoopbackIsShared() started.
+􀢄  Test launchAfterCloseBeginsDoesNotSpawn() recorded an issue at WorkspaceSessionTests.swift:277:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test launchAfterCloseBeginsDoesNotSpawn() failed after 2.324 seconds with 1 issue.
+􀟈  Test hardlinkRefusesBeforeTheWorkspaceIsActive() started.
+􁁛  Test hardlinkRefusesBeforeTheWorkspaceIsActive() passed after 0.002 seconds.
+􀟈  Test runtimeDoesNotReceiveWorkspaceDescriptors() started.
+􀢄  Test missingMountStaysUnresolved() recorded an issue at WorkspaceRecoveryTests.swift:239:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test missingMountStaysUnresolved() failed after 2.322 seconds with 1 issue.
+􀟈  Test unrelatedMountIsNotDetached() started.
+􀢄  Test childObservesResizeAndSignal() recorded an issue at RuntimeTerminalTests.swift:581:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test childObservesResizeAndSignal() failed after 2.309 seconds with 1 issue.
+􀟈  Test onlyInputLeaseOwnerCanResizeTerminal() started.
+􀢄  Test crossWorkspaceLoopbackIsShared() recorded an issue at SeatbeltLoopbackTests.swift:345:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test crossWorkspaceLoopbackIsShared() failed after 2.490 seconds with 1 issue.
+􀄵  /// N. Host loopback is shared: a runtime in another workspace, and the
+􀄵  /// unsandboxed host itself, can connect to a caged server's port. There
+􀄵  /// is no cross-workspace loopback isolation; locked in so a future
+􀄵  /// mechanism flips this test deliberately.
+􀟈  Test loopbackServerCoexistsWithKeychainBoundary() started.
+􀢄  Test runtimeDoesNotReceiveWorkspaceDescriptors() recorded an issue at WorkspaceSessionTests.swift:351:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test runtimeDoesNotReceiveWorkspaceDescriptors() failed after 2.367 seconds with 1 issue.
+􀟈  Test closeKeepsReadOnlyFilesReadable() started.
+􀢄  Test loopbackServerCoexistsWithKeychainBoundary() recorded an issue at SeatbeltLoopbackTests.swift:373:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test loopbackServerCoexistsWithKeychainBoundary() failed after 0.263 seconds with 1 issue.
+􀄵  /// L. The server grant coexists with the credential boundary: loopback
+􀄵  /// round trip succeeds while the Security CLI still fails at the XPC
+􀄵  /// boundary (paramErr marker, never a clean service answer).
+􀢄  Suite "SeatbeltLoopback" failed after 16.446 seconds with 14 issues.
+􀄵  /// Productive loopback servers in the cage.
+􀄵  ///
+􀄵  /// Contract: a contained process may run an ordinary localhost TCP server
+􀄵  /// (bind 127.0.0.1/::1, ephemeral or fixed port, listen, accept) and
+􀄵  /// contained clients in the same workspace may connect to it. Direct
+􀄵  /// connect to LAN, public, and metadata addresses stays denied with EPERM,
+􀄵  /// UDP and Unix sockets stay denied, and the Mach/Keychain boundary is
+􀄵  /// unchanged.
+􀄵  ///
+􀄵  /// Measured Seatbelt residuals, locked in here (see
+􀄵  /// `SeatbeltProfile.allowingLoopbackBind`): bind/listen/accept cannot be
+􀄵  /// scoped to loopback, so 0.0.0.0/::/LAN binds also succeed; host loopback
+􀄵  /// is shared, so another workspace or the host can also connect to a caged
+􀄵  /// server's port. Every test below runs a real contained child.
+􀢄  Test unrelatedMountIsNotDetached() recorded an issue at WorkspaceRecoveryTests.swift:265:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test unrelatedMountIsNotDetached() failed after 2.320 seconds with 1 issue.
+􀟈  Test unrelatedSavedTreeIsNotRestored() started.
+􀢄  Test onlyInputLeaseOwnerCanResizeTerminal() recorded an issue at RuntimeTerminalTests.swift:610:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test onlyInputLeaseOwnerCanResizeTerminal() failed after 2.340 seconds with 1 issue.
+􀟈  Test twoViewersDetachReattachAndKeepInputExclusive() started.
+􀢄  Test closeKeepsReadOnlyFilesReadable() recorded an issue at WorkspaceSessionTests.swift:395:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test closeKeepsReadOnlyFilesReadable() failed after 2.315 seconds with 1 issue.
+􀟈  Test closePublishesEditedReadOnlyFile() started.
+􀢄  Test unrelatedSavedTreeIsNotRestored() recorded an issue at WorkspaceRecoveryTests.swift:291:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test unrelatedSavedTreeIsNotRestored() failed after 2.327 seconds with 1 issue.
+􀟈  Test partialRecoveryConverges(_:) started.
+􀟈  Test case passing 1 argument boundary → .afterChildTeardown to partialRecoveryConverges(_:) started.
+􀢄  Test twoViewersDetachReattachAndKeepInputExclusive() recorded an issue at RuntimeTerminalTests.swift:645:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test twoViewersDetachReattachAndKeepInputExclusive() failed after 2.337 seconds with 1 issue.
+􀟈  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() started.
+􀢄  Test closePublishesEditedReadOnlyFile() recorded an issue at WorkspaceSessionTests.swift:407:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test closePublishesEditedReadOnlyFile() failed after 2.310 seconds with 1 issue.
+􀟈  Test keychainEntryReachesOnlyMatchingAgentRuntime() started.
+􀢄  Test partialRecoveryConverges(_:) recorded an issue with 1 argument boundary → .afterChildTeardown at WorkspaceRecoveryTests.swift:316:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀟈  Test case passing 1 argument boundary → .afterPublish to partialRecoveryConverges(_:) started.
+􀢄  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() recorded an issue at RuntimeTerminalTests.swift:698:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() failed after 2.319 seconds with 1 issue.
+􀟈  Test inputReachesOnlyTheAddressedRuntime() started.
+􀢄  Test keychainEntryReachesOnlyMatchingAgentRuntime() recorded an issue at WorkspaceSessionTests.swift:421:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test keychainEntryReachesOnlyMatchingAgentRuntime() failed after 2.308 seconds with 1 issue.
+􀟈  Test keychainReadFailureFailsLaunchClosed() started.
+􀢄  Test partialRecoveryConverges(_:) recorded an issue with 1 argument boundary → .afterPublish at WorkspaceRecoveryTests.swift:316:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀟈  Test case passing 1 argument boundary → .afterUnmount to partialRecoveryConverges(_:) started.
+􀢄  Test inputReachesOnlyTheAddressedRuntime() recorded an issue at RuntimeTerminalTests.swift:728:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test inputReachesOnlyTheAddressedRuntime() failed after 2.333 seconds with 1 issue.
+􀟈  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() started.
+􀢄  Test keychainReadFailureFailsLaunchClosed() recorded an issue at WorkspaceSessionTests.swift:462:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test keychainReadFailureFailsLaunchClosed() failed after 2.324 seconds with 1 issue.
+􀢄  Suite "WorkspaceSession" failed after 25.579 seconds with 11 issues.
+􀢄  Test partialRecoveryConverges(_:) recorded an issue with 1 argument boundary → .afterUnmount at WorkspaceRecoveryTests.swift:316:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀟈  Test case passing 1 argument boundary → .afterOriginalRestoration to partialRecoveryConverges(_:) started.
+􀢄  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() recorded an issue at RuntimeTerminalTests.swift:770:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() failed after 2.333 seconds with 1 issue.
+􀟈  Test launchFaultsDoNotReportARunningRuntime() started.
+􀢄  Test partialRecoveryConverges(_:) recorded an issue with 1 argument boundary → .afterOriginalRestoration at WorkspaceRecoveryTests.swift:316:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀟈  Test case passing 1 argument boundary → .beforeTerminalAppend to partialRecoveryConverges(_:) started.
+􀢄  Test launchFaultsDoNotReportARunningRuntime() recorded an issue at RuntimeTerminalTests.swift:808:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test launchFaultsDoNotReportARunningRuntime() failed after 2.337 seconds with 1 issue.
+􀟈  Test registerFaultRetiresTheStagedPrivateHome() started.
+􀢄  Test partialRecoveryConverges(_:) recorded an issue with 1 argument boundary → .beforeTerminalAppend at WorkspaceRecoveryTests.swift:316:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test partialRecoveryConverges(_:) with 5 test cases failed after 11.644 seconds with 5 issues.
+􀟈  Test canonicalAliasCannotOpenASecondWorkspace() started.
+􀢄  Test registerFaultRetiresTheStagedPrivateHome() recorded an issue at RuntimeTerminalTests.swift:894:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test registerFaultRetiresTheStagedPrivateHome() failed after 2.346 seconds with 1 issue.
+􀟈  Test closingTheWorkspaceKillsEveryPTYRuntime() started.
+􀢄  Test canonicalAliasCannotOpenASecondWorkspace() recorded an issue at WorkspaceRecoveryTests.swift:366:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test canonicalAliasCannotOpenASecondWorkspace() failed after 2.335 seconds with 1 issue.
+􀟈  Test oldCapabilityCannotRunInTheNextWorkspace() started.
+􀢄  Test closingTheWorkspaceKillsEveryPTYRuntime() recorded an issue at RuntimeTerminalTests.swift:932:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test closingTheWorkspaceKillsEveryPTYRuntime() failed after 2.325 seconds with 1 issue.
+􀟈  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() started.
+􀢄  Test oldCapabilityCannotRunInTheNextWorkspace() recorded an issue at WorkspaceRecoveryTests.swift:390:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test oldCapabilityCannotRunInTheNextWorkspace() failed after 2.329 seconds with 1 issue.
+􀟈  Test normalCloseDoesNotRecordRecovery() started.
+􀢄  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() recorded an issue at RuntimeTerminalTests.swift:979:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() failed after 2.345 seconds with 1 issue.
+􀟈  Test repeatedAttachCyclesDoNotLeakPTYs() started.
+􀢄  Test normalCloseDoesNotRecordRecovery() recorded an issue at WorkspaceRecoveryTests.swift:423:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test normalCloseDoesNotRecordRecovery() failed after 2.338 seconds with 1 issue.
+􀟈  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() started.
+􀢄  Test repeatedAttachCyclesDoNotLeakPTYs() recorded an issue at RuntimeTerminalTests.swift:1017:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test repeatedAttachCyclesDoNotLeakPTYs() failed after 2.329 seconds with 1 issue.
+􀟈  Test provingClientRestoresTheLocalTerminal() started.
+􀢄  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() recorded an issue at WorkspaceRecoveryTests.swift:440:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() failed after 2.321 seconds with 1 issue.
+􀟈  Test abandonWithIdenticalContentReportsNothingDiscarded() started.
+􀢄  Test abandonWithIdenticalContentReportsNothingDiscarded() recorded an issue at WorkspaceRecoveryTests.swift:489:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test abandonWithIdenticalContentReportsNothingDiscarded() failed after 2.325 seconds with 1 issue.
+􀟈  Test abandonMissingVolumeRestoresSaved() started.
+􀢄  Test abandonMissingVolumeRestoresSaved() recorded an issue at WorkspaceRecoveryTests.swift:522:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test abandonMissingVolumeRestoresSaved() failed after 2.342 seconds with 1 issue.
+􀟈  Test abandonRefusesLiveOwner() started.
+􀢄  Test abandonRefusesLiveOwner() recorded an issue at WorkspaceRecoveryTests.swift:553:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test abandonRefusesLiveOwner() failed after 2.340 seconds with 1 issue.
+􀟈  Test abandonRefusesUnrelatedMount() started.
+􀢄  Test abandonRefusesUnrelatedMount() recorded an issue at WorkspaceRecoveryTests.swift:568:6: Caught error: .apply(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed)
+􀢄  Test abandonRefusesUnrelatedMount() failed after 2.342 seconds with 1 issue.
+􀟈  Test abandonWithoutAWorkspaceRefuses() started.
+􁁛  Test abandonWithoutAWorkspaceRefuses() passed after 0.002 seconds.
+􀢄  Suite "Workspace recovery" failed after 49.108 seconds with 20 issues.
+􀢄  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() recorded an issue at RuntimeAdversarialTests.swift:222:9: Expectation failed: exists(ready)
+􀄵  exists(ready) → false
+􀄵    ready → ()
+􀢄  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() recorded an issue at RuntimeAdversarialTests.swift:236:25: Issue recorded
+􀄵  same-user hardlink after ready succeeded; boundary did not reject it
+􀢄  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() recorded an issue at RuntimeAdversarialTests.swift:186:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() failed after 45.027 seconds with 3 issues.
+􀄵  /// The alias is created only after the contained process has written `ready`,
+􀄵  /// so the preflight scan has already returned. A same-user process outside
+􀄵  /// the sandbox plants the link.
+􀟈  Test nestedDirectoryEditsPublishAfterLinkCountChanges() started.
+􀢄  Test nestedDirectoryEditsPublishAfterLinkCountChanges() recorded an issue at RuntimeAdversarialTests.swift:253:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test nestedDirectoryEditsPublishAfterLinkCountChanges() failed after 0.178 seconds with 1 issue.
+􀄵  /// APFS counts every child in a directory's link count. Publish must still
+􀄵  /// accept two new names under an existing directory, a file inside a new
+􀄵  /// subdirectory, an edit of an existing file, and removal of a non-empty
+􀄵  /// directory.
+􀟈  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() started.
+􀢄  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() recorded an issue at RuntimeAdversarialTests.swift:283:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() failed after 0.145 seconds with 1 issue.
+􀟈  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() started.
+􀢄  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() recorded an issue at RuntimeAdversarialTests.swift:310:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() failed after 0.143 seconds with 1 issue.
+􀟈  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() started.
+􀢄  Test cancellationClosesLaunchDescriptors() recorded an issue at DescriptorHygieneTests.swift:286:25: Issue recorded
+􀄵  contained command did not start before cancellation
+􀢄  Test cancellationClosesLaunchDescriptors() failed after 45.003 seconds with 1 issue.
+􀢄  Suite "DescriptorHygiene" failed after 51.188 seconds with 21 issues.
+􀄵  /// Effect tests for contained descriptor inheritance. A path denial is not
+􀄵  /// enough: the child must see `EBADF` on a descriptor the parent still holds.
+􀄵  /// The payload keeps stdio and fds 4 and 5. Every other parent descriptor stays closed.
+􀢄  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() recorded an issue at RuntimeAdversarialTests.swift:323:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() failed after 0.161 seconds with 1 issue.
+􀟈  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() started.
+􀢄  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() recorded an issue at RuntimeAdversarialTests.swift:350:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() failed after 0.142 seconds with 1 issue.
+􀟈  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() started.
+􀢄  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() recorded an issue at RuntimeAdversarialTests.swift:356:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() failed after 0.141 seconds with 1 issue.
+􀟈  Test spawnIsAllowedWhileGroupEscapeStaysDenied() started.
+􀢄  Test spawnIsAllowedWhileGroupEscapeStaysDenied() recorded an issue at RuntimeAdversarialTests.swift:363:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test spawnIsAllowedWhileGroupEscapeStaysDenied() failed after 0.206 seconds with 1 issue.
+􀟈  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􀢄  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() recorded an issue at RuntimeAdversarialTests.swift:588:21: Issue recorded
+􀄵  probe must run under Seatbelt, got .workspaceInodeBoundaryFailed
+􀢄  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() failed after 0.695 seconds with 1 issue.
+􀟈  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􀢄  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() recorded an issue at RuntimeAdversarialTests.swift:588:21: Issue recorded
+􀄵  probe must run under Seatbelt, got .workspaceInodeBoundaryFailed
+􀢄  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() failed after 0.719 seconds with 1 issue.
+􀟈  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􀢄  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() recorded an issue at RuntimeAdversarialTests.swift:588:21: Issue recorded
+􀄵  probe must run under Seatbelt, got .workspaceInodeBoundaryFailed
+􀢄  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() failed after 0.734 seconds with 1 issue.
+􀟈  Test knownGapCanSignalSyntheticUnrelatedProcess() started.
+􀢄  Test knownGapCanSignalSyntheticUnrelatedProcess() recorded an issue at RuntimeAdversarialTests.swift:403:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test knownGapCanSignalSyntheticUnrelatedProcess() failed after 0.192 seconds with 1 issue.
+􀟈  Test containedShellCanSignalItsOwnChild() started.
+􀢄  Test containedShellCanSignalItsOwnChild() recorded an issue at RuntimeAdversarialTests.swift:434:6: Caught error: .workspaceInodeBoundaryFailed
+􀢄  Test containedShellCanSignalItsOwnChild() failed after 0.144 seconds with 1 issue.
+􀢄  Suite "RuntimeAdversarial" failed after 54.291 seconds with 34 issues.
+􀄵  /// Effect-based acceptance probes for the implemented write fence.
+􀄵  /// `knownGap` tests reproduce missing guarantees; their success is evidence of
+􀄵  /// a release blocker, never evidence that the requested isolation is secure.
+􀄵  /// Every resource and signal target belongs to this test, including fake secrets.
+􀢄  Test hostSurvivesTheCreatingClientAndAKilledClient() recorded an issue at WorkspaceHostTests.swift:266:28: Expectation failed: waitLive(project: workspace.path, configuration: config, seconds: 60)
+􀄵  waitLive(project: workspace.path, configuration: config, seconds: 60) → nil
+􀄵    workspace.path → ()
+􀄵    config → "/tmp/rvwvk21qe/ws"
+􀄵    60 → file:///tmp/rvwvk21qe/.config/rv/
+􀄵      _url → Foundation._SwiftURL
+􀄵        _parseInfo → Foundation.URLParseInfo
+􀄵          urlString → "file:///tmp/rvwvk21qe/.config/rv/"
+􀄵          schemeRange → 0[utf8] ..< 4[utf8]
+􀄵            some → 0[utf8] ..< 4[utf8]
+􀄵              lowerBound → 0[utf8]
+􀄵                _rawBits → 4
+􀄵              upperBound → 4[utf8]
+􀄵                _rawBits → 262148
+􀄵          userRange → nil
+􀄵          passwordRange → nil
+􀄵          hostRange → 7[utf8] ..< 7[utf8]
+􀄵            some → 7[utf8] ..< 7[utf8]
+􀄵              lowerBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵              upperBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵          portRange → nil
+􀄵          pathRange → 7[utf8] ..< 33[utf8]
+􀄵            some → 7[utf8] ..< 33[utf8]
+􀄵              lowerBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵              upperBound → 33[utf8]
+􀄵                _rawBits → 2162692
+􀄵          queryRange → nil
+􀄵          fragmentRange → nil
+􀄵          isIPLiteral → false
+􀄵          didPercentEncodeHost → false
+􀄵          pathHasFileID → false
+􀄵          encodedComponents → EncodedComponentSet(rawValue: 0)
+􀄵            rawValue → 0
+􀄵        _baseURL → nil
+􀄵        _encoding → Unicode (UTF-8)
+􀄵          rawValue → 4
+􀄵        _isCanonicalFileURL → false
+􀄵        _nsurlLock → ()
+􀢄  Test hostSurvivesTheCreatingClientAndAKilledClient() failed after 60.070 seconds with 1 issue.
+􀟈  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() started.
+􀢄  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1074:9: Expectation failed: waitUntil(seconds: 40) { FileManager.default.fileExists(atPath: ready.path) }
+􀄵  waitUntil(seconds: 40) { FileManager.default.fileExists(atPath: ready.path) } → <not evaluated>
+􀢄  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1075:9: Expectation failed: waitUntilRaw(pty.slave)
+􀄵  waitUntilRaw(pty.slave) → false
+􀄵    pty.slave → ()
+Error: no workspace
+Usage: rv <subcommand>
+  See 'rv --help' for more information.
+􀢄  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1048:6: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “client-sleep.pid” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/tmp/rvt1YF8iv/ws/client-sleep.pid, NSURL=file:///tmp/rvt1YF8iv/ws/client-sleep.pid, NSUnderlyingError=0x78b9060000 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test provingClientRestoresTheLocalTerminal() failed after 50.099 seconds with 3 issues.
+􀟈  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() started.
+􀢄  Test cancellationTerminatesOwnedProcessesBeforeReturn() recorded an issue at ExecutorLifecycleRegressionTests.swift:157:25: Issue recorded
+􀄵  contained sleep pid did not appear; launch returned failure(RVIsolation.LocalExecutorError.applyFailed(RVIsolation.IsolationApplyError.workspaceInodeBoundaryFailed))
+􀢄  Test cancellationTerminatesOwnedProcessesBeforeReturn() failed after 90.575 seconds with 1 issue.
+􀢄  Suite "Executor lifecycle regressions" failed after 90.583 seconds with 5 issues.
+􀢄  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() recorded an issue at WorkspaceHostTests.swift:347:28: Expectation failed: waitLive(project: workspace.path, configuration: config, seconds: 60)
+􀄵  waitLive(project: workspace.path, configuration: config, seconds: 60) → nil
+􀄵    workspace.path → ()
+􀄵    config → "/tmp/rvp4wULly/ws"
+􀄵    60 → file:///tmp/rvp4wULly/.config/rv/
+􀄵      _url → Foundation._SwiftURL
+􀄵        _parseInfo → Foundation.URLParseInfo
+􀄵          urlString → "file:///tmp/rvp4wULly/.config/rv/"
+􀄵          schemeRange → 0[utf8] ..< 4[utf8]
+􀄵            some → 0[utf8] ..< 4[utf8]
+􀄵              lowerBound → 0[utf8]
+􀄵                _rawBits → 4
+􀄵              upperBound → 4[utf8]
+􀄵                _rawBits → 262148
+􀄵          userRange → nil
+􀄵          passwordRange → nil
+􀄵          hostRange → 7[utf8] ..< 7[utf8]
+􀄵            some → 7[utf8] ..< 7[utf8]
+􀄵              lowerBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵              upperBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵          portRange → nil
+􀄵          pathRange → 7[utf8] ..< 33[utf8]
+􀄵            some → 7[utf8] ..< 33[utf8]
+􀄵              lowerBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵              upperBound → 33[utf8]
+􀄵                _rawBits → 2162692
+􀄵          queryRange → nil
+􀄵          fragmentRange → nil
+􀄵          isIPLiteral → false
+􀄵          didPercentEncodeHost → false
+􀄵          pathHasFileID → false
+􀄵          encodedComponents → EncodedComponentSet(rawValue: 0)
+􀄵            rawValue → 0
+􀄵        _baseURL → nil
+􀄵        _encoding → Unicode (UTF-8)
+􀄵          rawValue → 4
+􀄵        _isCanonicalFileURL → false
+􀄵        _nsurlLock → ()
+􀢄  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() failed after 60.047 seconds with 1 issue.
+􀟈  Test workspaceStartLeavesALiveHostAfterTheClientExits() started.
+􀢄  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() recorded an issue at RuntimeTerminalTests.swift:1157:9: Expectation failed: waitUntil(seconds: 40) {
+            FileManager.default.fileExists(atPath: leaderURL.path)
+                && FileManager.default.fileExists(atPath: childURL.path)
+        }
+􀄵  waitUntil(seconds: 40) {
+               FileManager.default.fileExists(atPath: leaderURL.path)
+                   && FileManager.default.fileExists(atPath: childURL.path)
+           } → <not evaluated>
+Error: workspace host failed
+Usage: rv <subcommand>
+  See 'rv --help' for more information.
+􀢄  Test workspaceStartLeavesALiveHostAfterTheClientExits() recorded an issue at WorkspaceHostTests.swift:412:9: Expectation failed: start.terminationStatus == 0
+􀄵  start.terminationStatus == 0 → false
+􀄵    start.terminationStatus → 64
+􀢄  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() recorded an issue at RuntimeTerminalTests.swift:1161:9: Expectation failed: waitUntilRaw(pty.slave)
+􀄵  waitUntilRaw(pty.slave) → false
+􀄵    pty.slave → ()
+􀢄  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() recorded an issue at RuntimeTerminalTests.swift:1162:26: Expectation failed: pidFile(leaderURL)
+􀄵  pidFile(leaderURL) → nil
+􀄵    leaderURL → ()
+􀢄  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() failed after 50.029 seconds with 3 issues.
+􀢄  Suite "Runtime terminal" failed after 138.442 seconds with 22 issues.
+􀢄  Test workspaceStartLeavesALiveHostAfterTheClientExits() recorded an issue at WorkspaceHostTests.swift:414:28: Expectation failed: waitLive(project: workspace.path, configuration: config, seconds: 60)
+􀄵  waitLive(project: workspace.path, configuration: config, seconds: 60) → nil
+􀄵    workspace.path → ()
+􀄵    config → "/tmp/rvs4D0dKE/ws"
+􀄵    60 → file:///tmp/rvs4D0dKE/.config/rv/
+􀄵      _url → Foundation._SwiftURL
+􀄵        _parseInfo → Foundation.URLParseInfo
+􀄵          urlString → "file:///tmp/rvs4D0dKE/.config/rv/"
+􀄵          schemeRange → 0[utf8] ..< 4[utf8]
+􀄵            some → 0[utf8] ..< 4[utf8]
+􀄵              lowerBound → 0[utf8]
+􀄵                _rawBits → 4
+􀄵              upperBound → 4[utf8]
+􀄵                _rawBits → 262148
+􀄵          userRange → nil
+􀄵          passwordRange → nil
+􀄵          hostRange → 7[utf8] ..< 7[utf8]
+􀄵            some → 7[utf8] ..< 7[utf8]
+􀄵              lowerBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵              upperBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵          portRange → nil
+􀄵          pathRange → 7[utf8] ..< 33[utf8]
+􀄵            some → 7[utf8] ..< 33[utf8]
+􀄵              lowerBound → 7[utf8]
+􀄵                _rawBits → 458756
+􀄵              upperBound → 33[utf8]
+􀄵                _rawBits → 2162692
+􀄵          queryRange → nil
+􀄵          fragmentRange → nil
+􀄵          isIPLiteral → false
+􀄵          didPercentEncodeHost → false
+􀄵          pathHasFileID → false
+􀄵          encodedComponents → EncodedComponentSet(rawValue: 0)
+􀄵            rawValue → 0
+􀄵        _baseURL → nil
+􀄵        _encoding → Unicode (UTF-8)
+􀄵          rawValue → 4
+􀄵        _isCanonicalFileURL → false
+􀄵        _nsurlLock → ()
+􀢄  Test workspaceStartLeavesALiveHostAfterTheClientExits() failed after 62.454 seconds with 2 issues.
+􀟈  Test rvSpawnedHostDiesOnSIGTERM() started.
+Error: workspace host failed
+Usage: rv <subcommand>
+  See 'rv --help' for more information.
+􀢄  Test rvSpawnedHostDiesOnSIGTERM() recorded an issue at WorkspaceHostTests.swift:437:9: Expectation failed: start.terminationStatus == 0
+􀄵  start.terminationStatus == 0 → false
+􀄵    start.terminationStatus → 64
+Note: Some test targets reported failures:
+  - RVIsolationTests (Swift Testing)

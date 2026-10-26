@@ -1,0 +1,7 @@
+Usage:
+  phase2a-development-trust.sh install --host PATH --service PATH [--cli PATH]
+  phase2a-development-trust.sh uninstall
+
+Run explicitly as an administrator after building the binaries. Installation
+refuses existing trust configuration. It copies and re-signs only the installed
+copies, using hardened ad-hoc signatures and exact CDHash requirements.

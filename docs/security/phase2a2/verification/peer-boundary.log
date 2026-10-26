@@ -1,0 +1,16 @@
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test unixPeerEvidenceRejectsNonSocketDescriptor() started.
+􀟈  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() started.
+􀟈  Test peerTrustRejectsUserOwnedManifest() started.
+􀟈  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() started.
+􀟈  Test unixPeerEvidenceFromRealConnectedSocket() started.
+􀟈  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() started.
+􁁛  Test unixPeerEvidenceRejectsNonSocketDescriptor() passed after 0.001 seconds.
+􁁛  Test peerTrustRejectsUserOwnedManifest() passed after 0.001 seconds.
+􁁛  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() passed after 0.008 seconds.
+􁁛  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() passed after 0.009 seconds.
+􁁛  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() passed after 0.009 seconds.
+􁁛  Test unixPeerEvidenceFromRealConnectedSocket() passed after 0.011 seconds.
+􁁛  Test run with 6 tests in 0 suites passed after 0.011 seconds.

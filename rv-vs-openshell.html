@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RV vs OpenShell — Sandbox Showdown</title>
+<style>
+:root{--ink:#141414;--mut:#5c5c5c;--line:#e3e3e3;--acc:#0b6e4f;--rv:#1f2937;--bg:#fff;--soft:#f6f6f4}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1020px;margin:0 auto;padding:0 28px}
+nav{border-bottom:1px solid var(--line);padding:14px 0;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px}
+nav .brand{font-weight:700;font-size:15px;letter-spacing:-.01em}
+nav .meta{color:var(--mut);font-size:13px}
+header{padding:44px 0 8px}
+h1{font-size:40px;line-height:1.08;letter-spacing:-.025em;max-width:16em}
+h1 .vs{color:var(--mut);font-weight:400}
+.sub{color:var(--mut);font-size:17px;margin-top:10px;max-width:44em}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);margin:28px 0 8px}
+.stat{padding:16px 18px;border-left:1px solid var(--line)}
+.stat:first-child{border-left:0}
+.stat .n{font-size:26px;font-weight:700;letter-spacing:-.02em}
+.stat .n small{font-size:14px;font-weight:600;color:var(--mut)}
+.stat .l{font-size:12.5px;color:var(--mut);margin-top:2px}
+h2{font-size:22px;letter-spacing:-.02em;margin:44px 0 4px}
+.lede{color:var(--mut);font-size:14px;margin-bottom:16px}
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line)}
+.panel{padding:20px 22px}
+.panel+.panel{border-left:1px solid var(--line)}
+.panel h3{font-size:15px;margin-bottom:2px}
+.panel .tag{display:inline-block;font-size:11.5px;font-weight:700;padding:1px 8px;border:1px solid var(--line);border-radius:20px;color:var(--mut);margin-bottom:12px}
+.panel.winner .tag{background:var(--acc);border-color:var(--acc);color:#fff}
+svg.flow{width:100%;height:auto;display:block;margin-top:6px}
+.cap{font-size:12.5px;color:var(--mut);margin-top:10px}
+.bars{border:1px solid var(--line);padding:20px 22px;margin-top:6px}
+.bar-row{display:grid;grid-template-columns:150px 1fr 52px;gap:12px;align-items:center;margin:12px 0}
+.bar-row .who{font-weight:700;font-size:14px}
+.bar-row .who span{display:block;font-weight:400;font-size:12px;color:var(--mut)}
+.track{background:var(--soft);height:22px;position:relative}
+.fill{height:100%}
+.fill.os{background:var(--acc)}
+.fill.rv{background:var(--rv)}
+.bar-row .pts{font-weight:700;font-size:20px;text-align:right}
+table.card{width:100%;border-collapse:collapse;border:1px solid var(--line);font-size:14px}
+table.card th,table.card td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+table.card tr:last-child th,table.card tr:last-child td{border-bottom:0}
+table.card thead th{background:var(--soft);font-size:12.5px;color:var(--mut);font-weight:700}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 9px;border-radius:20px;letter-spacing:.02em}
+.pill.win{background:var(--acc);color:#fff}
+.pill.lose{background:transparent;border:1px solid var(--line);color:var(--mut)}
+.strips{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line)}
+.strip{padding:18px 22px}
+.strip+.strip{border-left:1px solid var(--line)}
+.strip h3{font-size:14px;margin-bottom:8px}
+.strip ul{list-style:none}
+.strip li{font-size:13.5px;padding:6px 0 6px 20px;border-top:1px solid var(--line);position:relative}
+.strip li:first-child{border-top:0}
+.strip li::before{content:"—";position:absolute;left:0;color:var(--mut)}
+.term{background:#101214;color:#e8e8e8;border-radius:6px;padding:14px 18px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.7;margin-top:14px;overflow-x:auto}
+.term .c{color:#8a8f98}.term .g{color:#7ee2ae}
+.verdict{border:2px solid var(--ink);padding:26px 28px;margin-top:44px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+.verdict .big{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1.15}
+.verdict .big em{font-style:normal;color:var(--acc)}
+.verdict p{color:var(--mut);font-size:14px;max-width:34em}
+footer{border-top:1px solid var(--line);margin:44px 0 0;padding:18px 0 60px;color:var(--mut);font-size:12.5px}
+footer code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+@media(max-width:760px){.stats{grid-template-columns:1fr 1fr}.stat:nth-child(3){border-left:0}.stat{border-top:1px solid var(--line)}.stat:nth-child(-n+2){border-top:0}.duo,.strips{grid-template-columns:1fr}.panel+.panel,.strip+.strip{border-left:0;border-top:1px solid var(--line)}h1{font-size:31px}.bar-row{grid-template-columns:110px 1fr 46px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><span class="brand">RV vs OpenShell — Sandbox Showdown</span><span class="meta">Oct 2026 · harsh but fair · offline single file</span></nav>
+<header>
+<h1>Two agent guardrails enter. <span class="vs">One runtime leaves.</span></h1>
+<p class="sub">Neither is a terminal. Both try to stop your AI agent from burning the house down — OpenShell with kernel-enforced sandboxes, RV with host hooks and a Seatbelt workspace. Scores are editorial, counts are measured.</p>
+</header>
+<div class="stats">
+<div class="stat"><div class="n">82 <small>vs 71</small></div><div class="l">Overall score / 100 · OpenShell wins</div></div>
+<div class="stat"><div class="n">542 <small>vs 484</small></div><div class="l">Source files · .rs vs .swift</div></div>
+<div class="stat"><div class="n">96 <small>packs</small></div><div class="l">RV hook rule packs (JSON)</div></div>
+<div class="stat"><div class="n">4 <small>SDKs</small></div><div class="l">OpenShell: Py · TS · Go · Rust</div></div>
+</div>
+<h2>Architecture showdown</h2>
+<p class="lede">OpenShell mediates every syscall below the agent. RV intercepts above it, at the host hook — plus an optional Seatbelt workspace for OpenCode.</p>
+<div class="duo">
+<div class="panel winner">
+<h3>OpenShell — kernel-enforced fleet runtime</h3>
+<span class="tag">WINNER · enforcement</span>
+<svg class="flow" viewBox="0 0 420 268" role="img" aria-label="OpenShell pipeline diagram">
+<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#141414" stroke-width="1.4"/></marker></defs>
+<rect x="110" y="4" width="200" height="34" fill="#fff" stroke="#141414" stroke-width="1.4"/><text x="210" y="26" text-anchor="middle" font-size="13" font-weight="700">Agent (any)</text>
+<line x1="210" y1="38" x2="210" y2="58" stroke="#141414" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="110" y="60" width="200" height="34" fill="#f6f6f4" stroke="#141414"/><text x="210" y="82" text-anchor="middle" font-size="13">Sandbox · openshell-sandbox</text>
+<line x1="210" y1="94" x2="210" y2="114" stroke="#141414" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="110" y="116" width="200" height="34" fill="#f6f6f4" stroke="#141414"/><text x="210" y="138" text-anchor="middle" font-size="13">Supervisor · mediates TCP/DNS</text>
+<line x1="210" y1="150" x2="210" y2="170" stroke="#141414" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="110" y="172" width="200" height="34" fill="#0b6e4f" stroke="#0b6e4f"/><text x="210" y="194" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">Gateway · policy + credentials</text>
+<rect x="8" y="116" width="88" height="58" fill="#fff" stroke="#141414" stroke-dasharray="4 3"/><text x="52" y="138" text-anchor="middle" font-size="11">Prover</text><text x="52" y="152" text-anchor="middle" font-size="11">verifies</text><text x="52" y="166" text-anchor="middle" font-size="11">diffs</text>
+<rect x="324" y="116" width="88" height="58" fill="#fff" stroke="#141414" stroke-dasharray="4 3"/><text x="368" y="138" text-anchor="middle" font-size="11">Providers</text><text x="368" y="152" text-anchor="middle" font-size="11">inject</text><text x="368" y="166" text-anchor="middle" font-size="11">secrets</text>
+<text x="210" y="232" text-anchor="middle" font-size="12" fill="#5c5c5c">Drivers: Docker · Podman · K8s · VM · Vault</text>
+<text x="210" y="250" text-anchor="middle" font-size="12" fill="#5c5c5c">Agent never holds real credentials</text>
+</svg>
+<p class="cap">Every file access, syscall and connection passes a policy check. Agent cannot bypass by design.</p>
+</div>
+<div class="panel">
+<h3>RV — hook-grade guard + Seatbelt workspace</h3>
+<span class="tag">WINNER · onboarding</span>
+<svg class="flow" viewBox="0 0 420 268" role="img" aria-label="RV pipeline diagram">
+<defs><marker id="ah2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#141414" stroke-width="1.4"/></marker></defs>
+<rect x="110" y="4" width="200" height="34" fill="#fff" stroke="#141414" stroke-width="1.4"/><text x="210" y="26" text-anchor="middle" font-size="13" font-weight="700">Agent host (8 supported)</text>
+<line x1="210" y1="38" x2="210" y2="58" stroke="#141414" stroke-width="1.4" marker-end="url(#ah2)"/>
+<rect x="110" y="60" width="200" height="34" fill="#1f2937" stroke="#1f2937"/><text x="210" y="82" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">rv hook · 96 packs allow/deny</text>
+<line x1="130" y1="94" x2="130" y2="120" stroke="#141414" stroke-width="1.4" marker-end="url(#ah2)"/>
+<line x1="290" y1="94" x2="290" y2="120" stroke="#141414" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ah2)"/>
+<rect x="40" y="122" width="180" height="34" fill="#f6f6f4" stroke="#141414"/><text x="130" y="144" text-anchor="middle" font-size="12">deny: rm -rf · force-push</text>
+<rect x="230" y="122" width="160" height="34" fill="#fff" stroke="#141414"/><text x="310" y="144" text-anchor="middle" font-size="12">allow-once code</text>
+<rect x="110" y="172" width="200" height="34" fill="#fff" stroke="#141414" stroke-dasharray="4 3"/><text x="210" y="194" text-anchor="middle" font-size="12">rv opencode → Seatbelt (macOS)</text>
+<text x="210" y="232" text-anchor="middle" font-size="12" fill="#5c5c5c">Hook fires only if the host calls rv</text>
+<text x="210" y="250" text-anchor="middle" font-size="12" fill="#5c5c5c">Linux runtime: refuses (no weak sandbox)</text>
+</svg>
+<p class="cap">One curl, instant blocks. Bypassable if the host skips the hook; runtime audit verdict: RELEASE BLOCKED.</p>
+</div>
+</div>
+<h2>Scorecards</h2>
+<p class="lede">Overall bars are the editorial scores. Category rows are qualitative wins, not measured benchmarks.</p>
+<div class="bars">
+<div class="bar-row"><div class="who">OpenShell<span>Rust · NVIDIA + Red Hat</span></div><div class="track"><div class="fill os" style="width:82%"></div></div><div class="pts">82</div></div>
+<div class="bar-row"><div class="who">RV v0.1.5<span>Swift 6.4 · solo-maintained</span></div><div class="track"><div class="fill rv" style="width:71%"></div></div><div class="pts">71</div></div>
+</div>
+<br>
+<table class="card">
+<thead><tr><th style="width:26%">Category</th><th style="width:37%">OpenShell</th><th>RV</th></tr></thead>
+<tr><td><b>Enforcement</b></td><td><span class="pill win">WIN</span> kernel mediation, unbypassable</td><td><span class="pill lose">—</span> hook needs host call; runtime blocked</td></tr>
+<tr><td><b>Policy depth</b></td><td><span class="pill win">WIN</span> prover + advisor verify diffs</td><td><span class="pill lose">—</span> typed rules + explain, no prover</td></tr>
+<tr><td><b>Fleet / enterprise</b></td><td><span class="pill win">WIN</span> K8s, Helm, OIDC, Vault, 4 SDKs</td><td><span class="pill lose">—</span> single-machine, Swift-only</td></tr>
+<tr><td><b>Onboarding</b></td><td><span class="pill lose">—</span> Docker + gateway + image</td><td><span class="pill win">WIN</span> one curl, <code>rv setup</code>, done</td></tr>
+<tr><td><b>Host coverage</b></td><td><span class="pill lose">—</span> agent-agnostic sandbox</td><td><span class="pill win">WIN</span> 8 hosts wired, 96 packs</td></tr>
+<tr><td><b>Honesty / docs</b></td><td><span class="pill lose">—</span> polished, 0.1.x churn buried</td><td><span class="pill win">WIN</span> ships a RELEASE BLOCKED audit</td></tr>
+</table>
+<h2>Install: minutes vs afternoon</h2>
+<p class="lede">The gap RV owns. What it takes to get a first block.</p>
+<div class="term"><span class="c"># RV — one curl, instant guard</span><br>curl -fsSL https://rykanv.com/install | sh<br>rv setup <span class="c"># wires 8 hosts it finds</span><br>rv test 'git reset --hard' <span class="g">→ deny (core.git)</span><br><br><span class="c"># OpenShell — platform, then policy</span><br>curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh<br><span class="c"># + Docker/Podman, gateway up, image pull, sandbox create, policy write…</span><br>openshell sandbox create --name demo</div>
+<h2>Where each stings</h2>
+<p class="lede">Harsh, from the repos themselves.</p>
+<div class="strips">
+<div class="strip"><h3>OpenShell pays in weight</h3><ul>
+<li>Container tax on Mac (Docker Desktop) and every run</li>
+<li>0.1.x: Experimental APIs may break in a patch</li>
+<li>~35 crates + gateway ops to audit and run</li>
+<li>Telemetry on unless you opt out</li>
+</ul></div>
+<div class="strip"><h3>RV pays in guarantees</h3><ul>
+<li>Hook skipped = no guard; bypass by design</li>
+<li>Runtime audit: NOT SATISFIED, no Linux launch</li>
+<li>Secrets stripped, never endpoint-bound like providers</li>
+<li>Analytics on; setup prints no notice</li>
+</ul></div>
+</div>
+<div class="verdict">
+<div class="big">Verdict: <em>OpenShell 82 — RV 71.</em></div>
+<p>For fleets, OpenShell: real boundary, verification, K8s, credential brokering. For your Mac tonight, RV: one curl and your agent stops deleting trees. Install RV today; graduate to OpenShell when you outgrow one machine.</p>
+</div>
+<footer>Sources, all read from disk: OpenShell <code>/tmp/OpenShell @ 8aa5846</code> (README, Cargo workspace, crates/, docs/, e2e/) · RV <code>./ @ v0.1.5</code> (README, Package.swift, Sources/, docs/security/runtime-acceptance.md). Counts: 542 .rs files, 484 .swift files, 96 packs, 8 hosts, 4 SDKs. Scores editorial, Oct 2026. No network calls on this page.</footer>
+</div>
+</body>
+</html>

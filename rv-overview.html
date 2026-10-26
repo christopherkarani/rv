@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rv — Rykan V · Feature Overview</title>
+<style>
+  :root{
+    --bg:#fff; --fg:#000; --gray:#666; --faint:#999;
+    --line:#eaeaea; --panel:#fafafa; --chip:#f4f4f5;
+    --blue:#0070f3; --red:#e00; --green:#1a7f37;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;font-size:15px;line-height:1.55}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+  nav{border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(1.2)}
+  .nav-in{display:flex;align-items:center;gap:10px;height:56px}
+  .logo{font-weight:800;letter-spacing:-.02em;font-size:17px}
+  .logo span{color:var(--faint);font-weight:400}
+  .nav-links{margin-left:auto;display:flex;gap:18px;font-size:13px;color:var(--gray)}
+  .nav-links a{color:var(--gray);text-decoration:none}
+  .nav-links a:hover{color:#000}
+  .ver{font:12px ui-monospace,"SF Mono",Menlo,monospace;border:1px solid var(--line);
+    border-radius:6px;padding:2px 8px;color:var(--gray);background:#fff}
+  /* hero */
+  .hero{display:grid;grid-template-columns:1.15fr .85fr;gap:40px;padding:56px 0 40px;align-items:start}
+  @media(max-width:860px){.hero{grid-template-columns:1fr}}
+  h1{font-size:44px;line-height:1.05;letter-spacing:-.035em;margin:0 0 12px}
+  .sub{color:var(--gray);font-size:17px;margin:0 0 24px;max-width:44ch}
+  .stats{display:flex;gap:28px;margin:0}
+  .stat b{display:block;font-size:28px;letter-spacing:-.02em}
+  .stat span{font-size:12px;color:var(--faint)}
+  .term{border:1px solid var(--line);border-radius:10px;background:var(--panel);
+    font:12.5px/1.7 ui-monospace,"SF Mono",Menlo,monospace;overflow:hidden}
+  .term-bar{display:flex;gap:6px;padding:10px 14px;border-bottom:1px solid var(--line);background:#fff}
+  .dot{width:10px;height:10px;border-radius:50%;background:#e4e4e7}
+  .term-body{padding:14px 16px;white-space:pre-wrap}
+  .c-dim{color:var(--faint)} .c-red{color:var(--red);font-weight:700}
+  .c-green{color:var(--green);font-weight:700} .c-blue{color:var(--blue)}
+  .cursor{display:inline-block;width:7px;height:14px;background:#000;vertical-align:-2px;
+    animation:blink 1.1s steps(1) infinite}
+  @media(prefers-reduced-motion:reduce){.cursor{animation:none}}
+  @keyframes blink{50%{opacity:0}}
+  /* sections */
+  section{padding:36px 0;border-top:1px solid var(--line)}
+  h2{font-size:22px;letter-spacing:-.02em;margin:0 0 4px}
+  .lede{color:var(--gray);margin:0 0 24px;font-size:14px}
+  /* pipeline */
+  .flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding:4px 2px 8px}
+  .node{border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:118px;
+    background:#fff;flex-shrink:0}
+  .node b{display:block;font-size:13px}
+  .node small{color:var(--gray);font-size:11.5px;line-height:1.4;display:block}
+  .node.core{border-color:#000;border-width:1.5px;background:var(--panel)}
+  .node.deny{border-color:var(--red)}
+  .node.ok{border-color:var(--green)}
+  .arr{align-self:center;padding:0 7px;color:#c9c9c9;font-size:18px;flex-shrink:0}
+  .mini{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+  .mini i{font-style:normal;font:10.5px ui-monospace,Menlo,monospace;background:#fff;
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--gray)}
+  .loop{margin-top:14px;border:1px dashed var(--line);border-radius:8px;padding:10px 14px;
+    font-size:12.5px;color:var(--gray);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .loop code{font:12px ui-monospace,Menlo,monospace;background:var(--chip);
+    padding:2px 8px;border-radius:6px;color:#000}
+  /* bars */
+  .bars{display:grid;gap:10px}
+  .bar-row{display:grid;grid-template-columns:170px 1fr 34px;gap:12px;align-items:center;font-size:13px}
+  @media(max-width:640px){.bar-row{grid-template-columns:120px 1fr 30px}}
+  .bar-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar-name small{display:block;color:var(--faint);font-size:11px}
+  .track{background:#f1f1f3;border-radius:4px;height:20px;overflow:hidden}
+  .fill{background:#000;height:100%;border-radius:4px}
+  .fill.dayone{background:var(--blue)}
+  .bar-n{font:12px ui-monospace,Menlo,monospace;text-align:right;color:var(--gray)}
+  .legend{display:flex;gap:16px;margin-top:14px;font-size:12px;color:var(--gray)}
+  .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:baseline}
+  /* hosts */
+  .hosts{display:flex;flex-wrap:wrap;gap:10px}
+  .host{border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:13px;
+    display:flex;align-items:center;gap:9px;background:#fff}
+  .host b{font-weight:600}
+  .dots{display:flex;gap:5px}
+  .d{width:9px;height:9px;border-radius:50%}
+  .d.on{background:#000}.d.file{background:var(--blue)}.d.off{background:#e4e4e7}
+  /* sandbox */
+  .sb{display:grid;grid-template-columns:1.2fr .8fr;gap:24px}
+  @media(max-width:860px){.sb{grid-template-columns:1fr}}
+  .nest{border:1.5px solid #000;border-radius:12px;padding:14px}
+  .nest .nest{border-color:#a1a1aa;margin-top:10px}
+  .nest .nest .nest{border-color:#d4d4d8}
+  .tag{font:11px ui-monospace,Menlo,monospace;color:var(--gray)}
+  .tag b{color:#000}
+  .proc{margin-top:10px;background:#000;color:#fff;border-radius:8px;padding:10px 14px;
+    font:12.5px ui-monospace,Menlo,monospace}
+  .allow-deny{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ad{border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:12.5px}
+  .ad h3{margin:0 0 8px;font-size:12px;letter-spacing:.02em}
+  .ad ul{margin:0;padding:0;list-style:none;display:grid;gap:6px;color:var(--gray)}
+  .ad li::before{margin-right:7px;font-weight:700}
+  .ad.yes h3{color:var(--green)} .ad.yes li::before{content:"✓";color:var(--green)}
+  .ad.no h3{color:var(--red)} .ad.no li::before{content:"✕";color:var(--red)}
+  /* commands */
+  .cmd-groups{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:760px){.cmd-groups{grid-template-columns:1fr}}
+  .cmd-g{border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .cmd-g h3{margin:0 0 10px;font-size:12px;color:var(--faint);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font:12px ui-monospace,Menlo,monospace;background:var(--chip);
+    border-radius:6px;padding:3px 9px}
+  /* value */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
+  @media(max-width:700px){.ba{grid-template-columns:1fr}}
+  .ba-card{border-radius:10px;padding:18px;font-size:13px}
+  .ba-card.without{background:#fef2f2;border:1px solid #fecaca}
+  .ba-card.with{background:#f0fdf4;border:1px solid #bbf7d0}
+  .ba-card h3{margin:0 0 10px;font-size:13px}
+  .ba-flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    font:12px ui-monospace,Menlo,monospace}
+  .ba-flow i{font-style:normal;background:#fff;border:1px solid var(--line);
+    border-radius:6px;padding:3px 9px}
+  .ba-flow .x{background:var(--red);border-color:var(--red);color:#fff;font-weight:700}
+  .ba-flow .ok{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}
+  .vals{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media(max-width:860px){.vals{grid-template-columns:1fr 1fr}}
+  @media(max-width:520px){.vals{grid-template-columns:1fr}}
+  .val{border:1px solid var(--line);border-radius:10px;padding:18px 16px}
+  .val svg{display:block;margin-bottom:12px}
+  .val b{display:block;font-size:14px;margin-bottom:4px}
+  .val p{margin:0;font-size:12.5px;color:var(--gray)}
+  footer{border-top:1px solid var(--line);padding:24px 0 48px;color:var(--faint);font-size:12px;
+    display:flex;gap:16px;flex-wrap:wrap}
+  footer a{color:var(--gray)}
+</style>
+</head>
+<body>
+<nav><div class="wrap nav-in">
+  <div class="logo">▲ rv <span>· Rykan V</span></div>
+  <div class="nav-links">
+    <a href="#pipeline">Pipeline</a><a href="#packs">Packs</a>
+    <a href="#sandbox">Sandbox</a><a href="#value">Value</a>
+  </div>
+  <span class="ver">macOS 15+ · Linux</span>
+</div></nav>
+
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>Control what your agent can do.</h1>
+      <p class="sub">A hook-grade guard that denies destructive shell before it runs — plus a sandboxed workspace runtime for contained agents.</p>
+      <div class="stats">
+        <div class="stat"><b>95</b><span>rule packs</span></div>
+        <div class="stat"><b>9</b><span>agent hosts</span></div>
+        <div class="stat"><b>17</b><span>CLI commands</span></div>
+        <div class="stat"><b>2</b><span>runtimes: hook + sandbox</span></div>
+      </div>
+    </div>
+    <div class="term" aria-label="Example deny and redeem session">
+      <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <div class="term-body"><span class="c-dim">$ agent runs:</span> git reset --hard
+<span class="c-red">✕ denied</span> <span class="c-dim">core.git · code</span> <span class="c-blue">a1b2c3</span>
+<span class="c-dim">$</span> rv allow-once a1b2c3
+<span class="c-green">✓ redeemed</span> <span class="c-dim">— next match in this dir runs once</span>
+<span class="c-dim">$</span> rv blocks
+<span class="c-dim">… every deny, logged with rule + path</span> <span class="cursor"></span></div>
+    </div>
+  </div>
+
+  <section id="pipeline">
+    <h2>One pipeline, every host</h2>
+    <p class="lede">The agent never talks to rv directly — the host's pre-tool hook calls <b>rv</b>, rvd decides, the host enforces.</p>
+    <div class="flow">
+      <div class="node"><b>Agent</b><small>tool call:<br>shell / read / edit</small></div>
+      <div class="arr">→</div>
+      <div class="node"><b>Host adapter</b><small>9 hosts,<br>stdin codec</small></div>
+      <div class="arr">→</div>
+      <div class="node"><b>rv hook</b><small>stdin adapter,<br>no trust</small></div>
+      <div class="arr">→</div>
+      <div class="node core"><b>rvd decides</b><small>daemon verdict</small>
+        <div class="mini"><i>engine</i><i>packs:95</i><i>policy</i><i>allowlist</i></div>
+      </div>
+      <div class="arr">→</div>
+      <div class="node ok"><b>✓ allow</b><small>host runs it</small></div>
+      <div class="node deny"><b>✕ deny + code</b><small>6-char unlock</small></div>
+    </div>
+    <div class="loop">↩&nbsp; redeem path&nbsp; <code>rv allow-once a1b2c3</code> → next matching call in this directory runs once
+      <span style="margin-left:auto">every deny → ledger → <code>rv blocks</code> · <code>rv scan</code></span></div>
+  </section>
+  <section id="packs">
+    <h2>95 packs across the stack</h2>
+    <p class="lede">Three day-one packs ship compiled; the rest enable per project. Grouped from the shipped catalog.</p>
+    <div class="bars">
+      <div class="bar-row"><div class="bar-name">Cloud &amp; infra<small>k8s · containers · terraform · LB</small></div><div class="track"><div class="fill" style="width:100%"></div></div><div class="bar-n">17</div></div>
+      <div class="bar-row"><div class="bar-name">Data &amp; storage<small>8 databases · search · s3/gcs</small></div><div class="track"><div class="fill" style="width:94%"></div></div><div class="bar-n">16</div></div>
+      <div class="bar-row"><div class="bar-name">Ops<small>monitoring · flags · payments</small></div><div class="track"><div class="fill" style="width:94%"></div></div><div class="bar-n">16</div></div>
+      <div class="bar-row"><div class="bar-name">Delivery<small>CI/CD · platform · CDN · DNS</small></div><div class="track"><div class="fill" style="width:88%"></div></div><div class="bar-n">15</div></div>
+      <div class="bar-row"><div class="bar-name">Guard rails<small>backup · secrets · system</small></div><div class="track"><div class="fill" style="width:82%"></div></div><div class="bar-n">14</div></div>
+      <div class="bar-row"><div class="bar-name">Comms &amp; APIs<small>email · messaging · gateways</small></div><div class="track"><div class="fill" style="width:65%"></div></div><div class="bar-n">11</div></div>
+      <div class="bar-row"><div class="bar-name">Windows preset<small>careful_company bundle</small></div><div class="track"><div class="fill" style="width:35%"></div></div><div class="bar-n">6</div></div>
+      <div class="bar-row"><div class="bar-name">Day-one compiled<small>core.git · core.filesystem · system.disk</small></div><div class="track"><div class="fill dayone" style="width:18%"></div></div><div class="bar-n">3</div></div>
+    </div>
+    <div class="legend"><span><span class="sw" style="background:#000"></span>opt-in pack</span><span><span class="sw" style="background:var(--blue)"></span>always compiled</span><span style="margin-left:auto">rv packs · rv packs enable &lt;pack&gt; · rv test · rv explain</span></div>
+  </section>
+
+  <section id="hosts">
+    <h2>9 hosts, one setup</h2>
+    <p class="lede"><b>rv setup</b> writes an adapter only for hosts already on the machine. Three hosts also guard file reads/edits against secret paths.</p>
+    <div class="hosts">
+      <div class="host"><b>Grok</b><span class="dots"><span class="d on"></span><span class="d file"></span></span></div>
+      <div class="host"><b>Claude</b><span class="dots"><span class="d on"></span><span class="d file"></span></span></div>
+      <div class="host"><b>Cursor</b><span class="dots"><span class="d on"></span><span class="d file"></span></span></div>
+      <div class="host"><b>Pi</b><span class="dots"><span class="d on"></span><span class="d off"></span></span></div>
+      <div class="host"><b>OpenCode</b><span class="dots"><span class="d on"></span><span class="d off"></span></span></div>
+      <div class="host"><b>OpenClaw</b><span class="dots"><span class="d on"></span><span class="d off"></span></span></div>
+      <div class="host"><b>Hermes</b><span class="dots"><span class="d on"></span><span class="d off"></span></span></div>
+      <div class="host"><b>Codex</b><span class="dots"><span class="d on"></span><span class="d off"></span></span></div>
+      <div class="host"><b>Antigravity</b><span class="dots"><span class="d on"></span><span class="d off"></span></span></div>
+    </div>
+    <div class="legend"><span><span class="sw" style="background:#000;border-radius:50%"></span>shell hook</span><span><span class="sw" style="background:var(--blue);border-radius:50%"></span>file-tool secret guard</span><span style="margin-left:auto">strict mode also denies ls / test / stat of catalog paths</span></div>
+  </section>
+
+  <section id="sandbox">
+    <h2>Sandboxed runtime for contained agents</h2>
+    <p class="lede"><b>rv opencode</b> / <b>rv workspace run</b> attach to a persistent per-project host under deny-default Seatbelt. Linux refuses to launch rather than weaken it.</p>
+    <div class="sb">
+      <div class="nest"><span class="tag"><b>host</b> · owns process group + volume</span>
+        <div class="nest"><span class="tag"><b>workspace host</b> · persistent per project · fresh volume kills hard-link escapes</span>
+          <div class="nest"><span class="tag"><b>seatbelt</b> · deny-default · children inherit</span>
+            <div class="proc">$ opencode run '…' &nbsp;·&nbsp; HOME + PATH sanitized · secrets stripped</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="allow-deny">
+          <div class="ad yes"><h3>ALLOWED</h3><ul><li>workspace read + write</li><li>system read to execute</li><li>public HTTPS via RV proxy</li><li>loopback servers</li></ul></div>
+          <div class="ad no"><h3>DENIED</h3><ul><li>direct public / LAN / metadata</li><li>host unix sockets</li><li>outside signals · Mach · Keychain</li><li>hard links off-volume</li></ul></div>
+        </div>
+        <div class="loop" style="margin-top:12px">◉&nbsp; close runtime or workspace → owned process group killed · sandbox init failure → no fallback</div>
+      </div>
+    </div>
+  </section>
+  <section id="commands">
+    <h2>17 commands, three rhythms</h2>
+    <p class="lede">Bare <b>rv</b> opens the workspace shell. Everything renders pretty, <b>--robot</b>, or <b>--plain</b>.</p>
+    <div class="cmd-groups">
+      <div class="cmd-g"><h3>GET STARTED</h3><div class="chips"><span class="chip">rv</span><span class="chip">setup</span><span class="chip">opencode</span><span class="chip">workspace</span><span class="chip">test</span><span class="chip">doctor</span></div></div>
+      <div class="cmd-g"><h3>EVERYDAY</h3><div class="chips"><span class="chip">explain</span><span class="chip">allow-once</span><span class="chip">scan</span><span class="chip">safety</span><span class="chip">blocks</span><span class="chip">service</span></div></div>
+      <div class="cmd-g"><h3>ADVANCED</h3><div class="chips"><span class="chip">packs</span><span class="chip">policy</span><span class="chip">allowlist</span><span class="chip">hook</span><span class="chip">operator</span><span class="chip">uninstall</span></div></div>
+    </div>
+  </section>
+
+  <section id="value">
+    <h2>Business value</h2>
+    <p class="lede">The before / after is the pitch: accidents become approvals.</p>
+    <div class="ba">
+      <div class="ba-card without"><h3>Without rv</h3><div class="ba-flow"><i>agent</i>→<i>rm -rf ~</i>→<span class="x">✕ gone</span></div></div>
+      <div class="ba-card with"><h3>With rv</h3><div class="ba-flow"><i>agent</i>→<i>deny + code</i>→<i>human redeems</i>→<span class="ok">✓ intentional</span></div></div>
+    </div>
+    <div class="vals">
+      <div class="val">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2"><path d="M12 3l7 3v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        <b>Stop the 3am deletion</b><p>reset --hard, clean -fd, force-push, rm -rf — denied before the host executes.</p>
+      </div>
+      <div class="val">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>
+        <b>Secrets stay secret</b><p>.env and keys blocked from reads/edits; sandbox strips secret env vars.</p>
+      </div>
+      <div class="val">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>
+        <b>Audit every deny</b><p>Denial ledger + session forensics: who tried what, which rule fired.</p>
+      </div>
+      <div class="val">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>
+        <b>Adopt in one curl</b><p>No agent rewrites. Setup wires hosts already installed; strict when ready.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer><span>▲ rv — Rykan V · Apache 2.0</span><span style="margin-left:auto">Sources: README · HelpCatalog · packs index · runtime-acceptance audit</span></footer>
+</div>
+</body>
+</html>

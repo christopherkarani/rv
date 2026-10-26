@@ -4,9 +4,11 @@
 # Tests must set HOME to a temp directory.
 # Unset RV_INSTALL_BIN downloads the latest GitHub release trio into a temp
 # dir, then uses the same atomic stage+setup path as a local stage.
-# Downloaded macOS files are signature-checked before anything is staged:
-# a signed file must be valid, notarized, and from the pinned team once one
-# is set. Unsigned files only warn until signed_releases=1 below.
+# Downloaded macOS files are signature-checked before anything is staged. A
+# file counts as signed only with a valid, notarized Developer ID signature
+# from the pinned team. Ad-hoc and missing signatures, and Developer ID
+# signatures while no team is pinned, only warn until signed_releases=1
+# below. A mix of signed and unsigned never installs.
 # TTY download UI matches SetupRenderer: "Downloading" + 24× ━/─ bar, driven by
 # real Content-Length weights (and mid-file byte growth while each curl runs).
 set -eu
@@ -562,11 +564,13 @@ phrase_outside_authority() {
   return 1
 }
 
-# Downloaded macOS release files must carry a valid, notarized Developer ID
-# signature from the pinned team. A broken, foreign, or unpinned signature
-# always refuses, including libswiftCompatibilitySpan.dylib. Unsigned files
-# follow signed_releases; a mix never installs. An empty team id does not
-# accept "any notarized Developer ID".
+# A downloaded macOS release file counts as signed only with a valid,
+# notarized Developer ID signature from the pinned team. A broken signature
+# or a pinned team that does not match always refuses, including
+# libswiftCompatibilitySpan.dylib. Ad-hoc signatures, missing signatures,
+# and Developer ID signatures while no team is pinned all take the unsigned
+# path: warn until signed_releases=1, then refuse unless
+# RV_INSTALL_ALLOW_UNSIGNED=1. A mix of signed and unsigned never installs.
 verify_release_signatures() {
   dir="$1"
   shift
@@ -609,6 +613,20 @@ verify_release_signatures() {
       echo "rv: refusing to install: $name has an invalid code signature" >&2
       exit 1
     fi
+    # No Developer ID authority above, and the signature verifies, so an
+    # ad-hoc file is unsigned for trust purposes: ad-hoc is self-asserted,
+    # and refusing it while warning on truly-unsigned files would only push
+    # an attacker to strip the signature. The signed_releases switch below
+    # governs both. An Authority line keeps the strict path even beside
+    # ad-hoc markers: that combination is a forged-injection shape, not a
+    # plain ad-hoc file.
+    case "$details" in
+      *"Authority=Developer ID Application:"*) ;;
+      *"Signature=adhoc"*|*"TeamIdentifier=not set"*)
+        unsigned="$unsigned $name"
+        continue
+        ;;
+    esac
     # A Developer ID certificate is an Authority line outside Identifier=.
     # The same text in the leaf name, or on a line a newline inside
     # Identifier= created, is not that certificate.
@@ -635,9 +653,14 @@ verify_release_signatures() {
       echo "rv: refusing to install: $name is not signed with a Developer ID Application certificate" >&2
       exit 1
     fi
+    # No pin yet: a Developer ID file the release cannot attribute (today the
+    # Swift toolchain dylib, still carrying its own team's signature) is
+    # unsigned for trust purposes. It warns until signed_releases=1, which
+    # refuses; pinning the team moves attributed files to the signed path.
+    # A pinned team that does not match still refuses below.
     if [ -z "$team" ]; then
-      echo "rv: refusing to install: $name is signed, but no Developer ID team is pinned (release_team_id)" >&2
-      exit 1
+      unsigned="$unsigned $name"
+      continue
     fi
     team_line=$(last_field_prefix "$details" "TeamIdentifier=")
     sig_line=$(last_field_prefix "$details" "Signature=")
