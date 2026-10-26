@@ -453,7 +453,7 @@ struct MCPIntegrityTests {
 
     @Test func untrustedConfigurationTurnsAllowIntoAskOnly() {
         let server = MCPServerDefinition(
-            name: "gh", command: "gh-mcp", tools: MCPToolPolicy(defaultDecision: .allow, ask: ["create_*"], deny: ["delete_*"]))
+            name: "gh", command: "gh-mcp", tools: MCPToolPolicy(allow: ["*"], ask: ["create_*"], deny: ["delete_*"]))
         var configuration = MCPConfiguration(servers: [server])
         #expect(configuration.decision(server: server, tool: "list") == .allow)
         configuration.untrusted = true

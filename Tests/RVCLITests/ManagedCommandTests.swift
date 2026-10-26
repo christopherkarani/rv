@@ -85,9 +85,17 @@ struct ManagedCommandTests {
         #expect(rollback.hasPrefix("organization policy INVALID: rollback: policy.json serial 2"))
     }
 
-    @Test func requireSandboxSaysRemoteServersAreExempt() throws {
-        let policy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
-        #expect(ManagedRun.restrictions(policy) == ["mcp: every local server must be sandboxed (remote servers are exempt)"])
+    @Test func restrictionsAlwaysNameTheSandboxRequirement() throws {
+        let legacy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
+        let plain = try ManagedPolicy.decode(Data(#"{"version":1}"#.utf8)).get()
+        #if os(macOS)
+        let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
+        #else
+        let sandbox = "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
+        #endif
+        // The policy flag is legacy: the hard flip requires sandboxes either way.
+        #expect(ManagedRun.restrictions(legacy) == [sandbox])
+        #expect(ManagedRun.restrictions(plain) == [sandbox])
     }
 
     @Test func mcpCommandsFollowTheOrganization() async throws {
@@ -127,15 +135,20 @@ struct ManagedCommandTests {
             environment.approvals.request(server: "github", tool: "merge_pr", argumentsHash: "h", argumentKeys: []))
         #expect(failure(await MCPRun.approve(id: merge.id, always: true, environment: environment))?
             .contains("has argument rules") == true)
+        #if os(macOS)
+        let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
+        #else
+        let sandbox = "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
+        #endif
         #expect(ManagedRun.restrictions(try #require(environment.managed.policy))
-            == [#"mcp deny: github/merge_* when /branch == "main""#])
+            == [sandbox, #"mcp deny: github/merge_* when /branch == "main""#])
 
         try scratch.write("home/.cursor/mcp.json", """
             {"mcpServers": {"svc": {"command": "svc", "env": {"API_TOKEN": "tok_live_abcdefghijklmnopqrstu"}}}}
             """)
         environment.managed = try active(#"{"version": 1, "secrets": {"allowedSources": ["vault"]}}"#)
         #expect(failure(await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment))?
+            host: .cursor, names: [], project: nil, dryRun: false, environment: environment))?
             .contains("keychain source, which is not allowed") == true)
     }
 

@@ -167,7 +167,7 @@ struct OnboardingFastPathTests {
         try FileManager.default.createDirectory(at: rv.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: rv.path, contents: Data())
         let onboarded = try await MCPRun.onboard(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: [], project: nil, dryRun: false,
             rvPath: rv.path, environment: fixture.environment()).get()
         #expect(onboarded.contains("import github"))
         #expect(onboarded.contains("routed through rv: github"))
@@ -175,7 +175,15 @@ struct OnboardingFastPathTests {
         #expect(configuration.toolMode == .search)
         let report = MCPRun.report(
             fixture.environment(), project: nil, configuration: configuration, rvExecutable: rv.path)
-        #expect(report.passes)
+        #if os(macOS)
+        // Onboarded local servers carry no sandbox yet: check fails until
+        // one is added and the file is re-trusted.
+        #expect(report.passes == false)
+        #expect(report.problems.contains { $0.message.contains("github has no sandbox") })
+        #else
+        // No cage off macOS yet: bare servers serve, so check reports no sandbox problem.
+        #expect(report.problems.contains { $0.message.contains("sandbox") } == false)
+        #endif
     }
 
     @Test func onboardDryRunWritesNothing() async throws {
@@ -183,7 +191,7 @@ struct OnboardingFastPathTests {
         try fixture.write(
             ".cursor/mcp.json", #"{"mcpServers": {"github": {"command": "npx"}}}"#)
         let dry = try await MCPRun.onboard(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: true,
+            host: .cursor, names: [], project: nil, dryRun: true,
             rvPath: "/bin/rv", environment: fixture.environment()).get()
         #expect(dry.contains("dry run"))
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
@@ -195,13 +203,13 @@ struct OnboardingFastPathTests {
         try fixture.write(
             ".cursor/mcp.json", #"{"mcpServers": {"one": {"command": "a"}, "two": {"command": "b"}}}"#)
         _ = try await MCPRun.importServers(
-            host: .cursor, names: ["one"], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: ["one"], project: nil, dryRun: false,
             environment: fixture.environment(), toolModeForFreshConfig: .search, show: { _ in }).get()
         #expect(try MCPRun.configuration(fixture.environment()).get().toolMode == .search)
         // Second import into the now-populated config must not flip an
         // operator-chosen mode back.
         _ = try await MCPRun.importServers(
-            host: .cursor, names: ["two"], project: nil, allowTools: false, dryRun: false,
+            host: .cursor, names: ["two"], project: nil, dryRun: false,
             environment: fixture.environment(), toolModeForFreshConfig: .direct, show: { _ in }).get()
         #expect(try MCPRun.configuration(fixture.environment()).get().toolMode == .search)
     }

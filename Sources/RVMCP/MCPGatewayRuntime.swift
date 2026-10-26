@@ -59,6 +59,7 @@ public enum MCPLaunchPlanner {
         secrets: SecretsConfiguration,
         resolver: SecretResolver,
         baseEnvironment: [String: String],
+        requireSandbox: Bool = MCPSandbox.enforced,
         oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
         sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
@@ -90,18 +91,15 @@ public enum MCPLaunchPlanner {
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
-            if configuration.profile == .strict {
+            if requireSandbox {
                 guard let policy = definition.sandbox else {
-                    return .failure(.sandbox("profile strict requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
+                    return .failure(.sandbox("\(name) needs a sandbox; add \"sandbox\" to its mcp.json entry"))
                 }
                 if policy.network {
-                    return .failure(.sandbox("profile strict keeps \(name) off the network; list the hosts it needs in sandbox.hosts"))
+                    return .failure(.sandbox("\(name) stays off the network; list the hosts it needs in sandbox.hosts"))
                 }
             }
-            if configuration.managed?.mcp.requireSandbox == true, definition.sandbox == nil {
-                return .failure(.sandbox("organization policy requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
-            }
-            var environment = definition.sandbox == nil ? baseEnvironment : sandboxEnvironment(baseEnvironment)
+            var environment = sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
             let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
             let resolved: [String: String]

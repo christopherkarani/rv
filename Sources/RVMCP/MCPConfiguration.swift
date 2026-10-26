@@ -22,7 +22,9 @@ public enum MCPToolDecision: String, Sendable, Equatable, CaseIterable {
 }
 
 /// The strictest matching glob or argument rule (deny > ask > allow), else
-/// `default`, else the file's `defaultDecision`.
+/// `default`, else the caller's fallback. `MCPConfiguration.decision`
+/// always passes a deny fallback and overwrites `default`, so a written
+/// user default never decides; organization policy composes separately.
 public struct MCPToolPolicy: Sendable, Equatable {
     public var defaultDecision: MCPToolDecision?
     public var allow: [String]
@@ -85,8 +87,11 @@ public struct MCPSandboxPolicy: Sendable, Equatable {
     }
 }
 
-/// `strict`: tools no list names are denied, local servers need a sandbox,
-/// and a sandbox reaches the network only through `sandbox.hosts`.
+/// Legacy profile key. Strict semantics are unconditional now: tools no
+/// list names are denied, local servers need a sandbox, and a sandbox
+/// reaches the network only through `sandbox.hosts`. Both values still
+/// decode so existing files need no migration; the value no longer
+/// changes any decision.
 public enum MCPProfile: String, Sendable, Equatable {
     case standard
     case strict
@@ -299,7 +304,7 @@ public struct MCPConfiguration: Sendable, Equatable {
     public var untrusted = false
 
     public init(
-        defaultDecision: MCPToolDecision = .ask,
+        defaultDecision: MCPToolDecision = .deny,
         servers: [MCPServerDefinition] = [],
         direct: [String] = [],
         blocked: [String] = []
@@ -315,11 +320,13 @@ public struct MCPConfiguration: Sendable, Equatable {
     }
 
     /// The stricter of the user's rules and the organization's. Without
-    /// arguments (a listing), argument rules do not apply.
+    /// arguments (a listing), argument rules do not apply. Written
+    /// `defaultDecision` / `tools.default` values are inert: a tool no
+    /// glob or argument rule names is denied.
     public func decision(server: MCPServerDefinition, tool: String, arguments: JSONValue? = nil) -> MCPToolDecision {
         var tools = server.tools
-        if profile == .strict { tools.defaultDecision = .deny }
-        var user = tools.decision(for: tool, arguments: arguments, fallback: profile == .strict ? .deny : defaultDecision)
+        tools.defaultDecision = .deny
+        var user = tools.decision(for: tool, arguments: arguments, fallback: .deny)
         if untrusted, user == .allow { user = .ask }
         guard let organization = organizationDecision(server: server.name, tool: tool, arguments: arguments) else {
             return user

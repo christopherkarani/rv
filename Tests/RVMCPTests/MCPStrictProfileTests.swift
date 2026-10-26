@@ -36,8 +36,47 @@ struct MCPStrictProfileTests {
 
         var standard = configuration
         standard.profile = .standard
-        #expect(standard.decision(server: gh, tool: "delete_repo") == .allow)
+        #expect(standard.decision(server: gh, tool: "delete_repo") == .deny)
         #expect(standard.encoded().prettyText.contains("profile") == false)
+    }
+
+    /// No-migration contract: a pre-flip file stays byte-valid and trusted,
+    /// but its written allow defaults no longer decide anything. Explicit
+    /// allow/ask globs still do.
+    @Test func writtenAllowDefaultsAreInertWithoutMigration() throws {
+        let legacy = #"""
+            {"version": 1, "defaultDecision": "allow", "servers": [
+              {"name": "s", "command": "x", "tools": {"default": "allow", "allow": ["get_*"], "ask": ["create_*"]}},
+              {"name": "r", "url": "https://mcp.example.com/mcp"}
+            ]}
+            """#
+        let configuration = try MCPConfiguration.decode(Data(legacy.utf8)).get()
+        let local = try #require(configuration.server(named: "s"))
+        #expect(configuration.decision(server: local, tool: "get_issue") == .allow)
+        #expect(configuration.decision(server: local, tool: "create_issue") == .ask)
+        #expect(configuration.decision(server: local, tool: "delete_repo") == .deny)
+        let remote = try #require(configuration.server(named: "r"))
+        #expect(configuration.decision(server: remote, tool: "anything") == .deny)
+    }
+
+    @Test func plannerRequiresSandboxWithoutOpenNetworkByDefault() throws {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "bare", command: "b"),
+            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
+            MCPServerDefinition(name: "closed", command: "c", sandbox: MCPSandboxPolicy(network: false)),
+        ])
+        func plan(_ name: String) -> Result<Void, MCPLaunchError> {
+            MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
+                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
+                requireSandbox: true
+            ).map { _ in () }
+        }
+        guard case .failure = plan("bare"), case .failure = plan("open") else {
+            Issue.record("default profile launched an uncaged or open-network server")
+            return
+        }
+        #expect((try? plan("closed").get()) != nil)
     }
 
     @Test func refusesBadProfilesAndHosts() {
@@ -69,20 +108,24 @@ struct MCPStrictProfileTests {
         func plan(_ name: String) -> Result<Void, MCPLaunchError> {
             MCPLaunchPlanner.plan(
                 servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
-                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:]
+                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
+                requireSandbox: true
             ).map { _ in () }
         }
         guard case .failure(let bare) = plan("bare"), case .failure(let open) = plan("open") else {
             Issue.record("strict profile launched an uncaged or open-network server")
             return
         }
-        #expect(bare.message == #"sandbox: profile strict requires a sandbox for bare; add "sandbox" to its mcp.json entry"#)
-        #expect(open.message == "sandbox: profile strict keeps open off the network; list the hosts it needs in sandbox.hosts")
+        #expect(bare.message == #"sandbox: bare needs a sandbox; add "sandbox" to its mcp.json entry"#)
+        #expect(open.message == "sandbox: open stays off the network; list the hosts it needs in sandbox.hosts")
         for name in ["closed", "proxied", "remote"] {
             #expect((try? plan(name).get()) != nil, "\(name)")
         }
         configuration.profile = .standard
-        #expect((try? plan("bare").get()) != nil)
+        guard case .failure = plan("bare") else {
+            Issue.record("legacy standard profile must not launch an uncaged server")
+            return
+        }
     }
 
     @Test func profileTextLetsTheCageReachOnlyItsProxy() {

@@ -31,14 +31,15 @@ struct MCPImportTests {
                 entry("bare", transport: .stdio(command: "srv", args: ["sk-proj-abcdefghijklmnop1234", "--port=8080"])),
                 entry("db", transport: .stdio(command: "psql", args: ["postgres://user:secret@db.example/app"])),
             ],
-            configuration: MCPConfiguration(), secrets: SecretsConfiguration(), allowTools: false)
+            configuration: MCPConfiguration(), secrets: SecretsConfiguration())
 
         let context7 = try #require(plan.servers.first { $0.name == "context7" })
         #expect(context7.command == "npx")
         #expect(context7.args == ["-y", "@upstash/context7-mcp", "--api-key", "${secret:CONTEXT7_API_KEY}"])
         #expect(context7.secrets == ["GITHUB_TOKEN": "GITHUB_TOKEN"])
         #expect(context7.environment == ["LOG_LEVEL": "info"])
-        #expect(context7.tools.defaultDecision == .ask)
+        #expect(context7.tools.defaultDecision == nil)
+        #expect(context7.tools.ask == ["*"])
         #expect(plan.notes.contains { $0.contains("PROXY") })
 
         let bare = try #require(plan.servers.first { $0.name == "bare" })
@@ -69,9 +70,10 @@ struct MCPImportTests {
                         "GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
                     ])
             ],
-            configuration: configuration, secrets: SecretsConfiguration(), allowTools: false)
+            configuration: configuration, secrets: SecretsConfiguration())
         let notes = try #require(plan.servers.first { $0.name == "notes" })
-        #expect(notes.tools.defaultDecision == .ask)
+        #expect(notes.tools.defaultDecision == nil)
+        #expect(notes.tools.ask == ["*"])
         #expect(notes.environment == ["PATH": "/tmp/evil", "GIT_SSH_COMMAND": "evil-ssh", "LD_PRELOAD": "/tmp/p.so"])
         #expect(notes.secrets == ["GITHUB_TOKEN": "GITHUB_TOKEN"])
         configuration.servers.append(notes)
@@ -79,7 +81,7 @@ struct MCPImportTests {
         #expect(configuration.decision(server: notes, tool: "status") == .ask)
         let kept = try #require(configuration.server(named: "kept"))
         #expect(kept.tools.defaultDecision == nil)
-        #expect(configuration.decision(server: kept, tool: "anything") == .allow)
+        #expect(configuration.decision(server: kept, tool: "anything") == .deny)
     }
 
     @Test func skipsGovernedRemoteExistingAndAvoidsSecretNameCollisions() {
@@ -94,11 +96,12 @@ struct MCPImportTests {
                 entry("existing", transport: .stdio(command: "x", args: [])),
                 entry("svc", transport: .stdio(command: "svc", args: []), environment: ["API_TOKEN": "tok_live_abcdefghijklmnop"]),
             ],
-            configuration: configuration, secrets: secrets, allowTools: true)
+            configuration: configuration, secrets: secrets)
         #expect(plan.skipped.map(\.name) == ["governed", "remote", "existing"])
         #expect(plan.servers.map(\.name) == ["svc"])
         #expect(plan.servers.first?.secrets == ["API_TOKEN": "SVC_API_TOKEN"])
-        #expect(plan.servers.first?.tools.defaultDecision == .allow)
+        #expect(plan.servers.first?.tools.defaultDecision == nil)
+        #expect(plan.servers.first?.tools.ask == ["*"])
     }
 
     @Test func remoteEntriesImportWithHeaderCredentialsAsSecrets() throws {
@@ -116,7 +119,7 @@ struct MCPImportTests {
                 entry("leaky", transport: .remote(url: "https://a.example/mcp?api_key=0123456789abcdefghijklmnop")),
                 entry("plain", transport: .remote(url: "http://a.example/mcp")),
             ],
-            configuration: MCPConfiguration(), secrets: SecretsConfiguration(), allowTools: false)
+            configuration: MCPConfiguration(), secrets: SecretsConfiguration())
 
         let linear = try #require(plan.servers.first { $0.name == "linear" }?.remote)
         #expect(linear.url.absoluteString == "https://mcp.linear.app/mcp" && linear.transport == .http)
@@ -162,7 +165,9 @@ struct MCPImportTests {
 
     @Test func plannerSubstitutesArgSecretsAndScrubsThem() throws {
         let configuration = MCPConfiguration(servers: [
-            MCPServerDefinition(name: "s", command: "srv", args: ["--api-key", "${secret:S_KEY}"])
+            MCPServerDefinition(
+                name: "s", command: "srv", args: ["--api-key", "${secret:S_KEY}"],
+                sandbox: MCPSandboxPolicy(network: false))
         ])
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "S_KEY", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
@@ -215,11 +220,13 @@ struct MCPImportTests {
 
         var plain = definition
         plain.sandbox = nil
-        let inherited = try MCPLaunchPlanner.plan(
+        guard case .failure(.sandbox) = MCPLaunchPlanner.plan(
             servers: ["s"], configuration: MCPConfiguration(servers: [plain]), secrets: secrets, resolver: resolver,
-            baseEnvironment: base
-        ).get()
-        #expect(inherited[0].1.process?.environment["AWS_SECRET_ACCESS_KEY"] == "aws-secret")
+            baseEnvironment: base, requireSandbox: true
+        ) else {
+            Issue.record("launch without a sandbox must be refused where the cage is enforced")
+            return
+        }
     }
 }
 

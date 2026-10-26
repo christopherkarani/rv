@@ -69,9 +69,13 @@ enum ManagedRun {
         let mcp = policy.mcp
         if mcp.blocked.isEmpty == false { lines.append("mcp blocked servers: " + mcp.blocked.joined(separator: ", ")) }
         if mcp.allowDirect == false { lines.append("mcp: servers may not run outside rv (direct ignored)") }
-        if mcp.requireSandbox {
-            lines.append("mcp: every local server must be sandboxed (remote servers are exempt)")
-        }
+        // The hard flip requires sandboxes unconditionally; the policy's
+        // `requireSandbox` is legacy and no longer gates this line.
+        #if os(macOS)
+        lines.append("mcp: every local server must be sandboxed (remote servers are exempt)")
+        #else
+        lines.append("mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)")
+        #endif
         if mcp.deny.isEmpty == false { lines.append("mcp deny: " + mcp.deny.joined(separator: ", ")) }
         if mcp.ask.isEmpty == false { lines.append("mcp ask: " + mcp.ask.joined(separator: ", ")) }
         if mcp.allow.isEmpty == false { lines.append("mcp allow: " + mcp.allow.joined(separator: ", ")) }

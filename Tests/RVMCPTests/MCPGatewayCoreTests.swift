@@ -67,8 +67,8 @@ extension [MCPGatewayOutput] {
 struct MCPGatewayCoreTests {
     static let github = MCPServerDefinition(
         name: "github", command: "gh-mcp",
-        tools: MCPToolPolicy(defaultDecision: .allow, ask: ["create_*"], deny: ["delete_*"]))
-    static let notes = MCPServerDefinition(name: "notes", command: "notes-mcp", tools: MCPToolPolicy(defaultDecision: .allow))
+        tools: MCPToolPolicy(allow: ["*"], ask: ["create_*"], deny: ["delete_*"]))
+    static let notes = MCPServerDefinition(name: "notes", command: "notes-mcp", tools: MCPToolPolicy(allow: ["*"]))
 
     @Test func initializesUpstreamsAndAnswersTheClientItself() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
@@ -154,7 +154,7 @@ struct MCPGatewayCoreTests {
 
     @Test func argumentRulesDecideEachCall() throws {
         let configuration = try MCPConfiguration.decode(Data(#"""
-            {"version": 1, "servers": [{"name": "db", "command": "db-mcp", "tools": {"default": "allow",
+            {"version": 1, "servers": [{"name": "db", "command": "db-mcp", "tools": {"allow": ["*"],
               "ask": [{"tool": "query", "when": {"/database": {"==": "prod"}}}],
               "deny": [{"tool": "query", "when": {"/sql": {"glob": "DROP *"}}}]}}]}
             """#.utf8)).get()
@@ -185,7 +185,7 @@ struct MCPGatewayCoreTests {
     @Test func searchModeListsTwoToolsAndRoutesCallsThroughTheSamePolicy() throws {
         let configuration = try MCPConfiguration.decode(Data(#"""
             {"version": 1, "toolMode": "search", "servers": [{"name": "db", "command": "db-mcp",
-              "tools": {"default": "allow", "ask": ["write"], "deny": ["drop"]}}]}
+              "tools": {"allow": ["*"], "ask": ["write"], "deny": ["drop"]}}]}
             """#.utf8)).get()
         var harness = GatewayHarness(configuration)
         _ = harness.ready()
@@ -579,8 +579,8 @@ struct MCPGatewayCoreTests {
     }
 
     @Test func serverNamesContainingSeparatorUseTheLongestPrefix() {
-        let payments = MCPServerDefinition(name: "payments", command: "pay", tools: MCPToolPolicy(defaultDecision: .allow))
-        let v2 = MCPServerDefinition(name: "payments__v2", command: "pay2", tools: MCPToolPolicy(defaultDecision: .allow))
+        let payments = MCPServerDefinition(name: "payments", command: "pay", tools: MCPToolPolicy(allow: ["*"]))
+        let v2 = MCPServerDefinition(name: "payments__v2", command: "pay2", tools: MCPToolPolicy(allow: ["*"]))
         var harness = GatewayHarness(MCPConfiguration(servers: [payments, v2]))
         _ = harness.ready()
         let fanout = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).toUpstream
@@ -605,7 +605,7 @@ struct MCPGatewayCoreTests {
         #expect(unknown.toUpstream.isEmpty)
 
         let deniedV2 = MCPServerDefinition(
-            name: "payments__v2", command: "pay2", tools: MCPToolPolicy(defaultDecision: .allow, deny: ["refund"]))
+            name: "payments__v2", command: "pay2", tools: MCPToolPolicy(allow: ["*"], deny: ["refund"]))
         var denied = GatewayHarness(MCPConfiguration(servers: [payments, deniedV2]))
         _ = denied.ready()
         let blocked = denied.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"payments__v2__refund"}}"#)
@@ -824,7 +824,7 @@ struct MCPApprovalStoreTests {
 
     @Test func nonCanonicalIntegersCannotSlipPastADenyOrAsk() throws {
         let configuration = try MCPConfiguration.decode(Data(#"""
-            {"version": 1, "toolMode": "search", "servers": [{"name": "pay", "command": "pay-mcp", "tools": {"default": "allow",
+            {"version": 1, "toolMode": "search", "servers": [{"name": "pay", "command": "pay-mcp", "tools": {"allow": ["*"],
               "ask": [{"tool": "note", "when": {"/amount": {"==": 7}}}],
               "deny": [
                 {"tool": "eq", "when": {"/amount": {"==": 9007199254740993}}},

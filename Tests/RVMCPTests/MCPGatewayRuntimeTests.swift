@@ -96,7 +96,8 @@ struct MCPGatewayRuntimeTests {
             MCPServerDefinition(
                 name: "fixture", command: "python3", args: ["-u", script.path],
                 secrets: ["FIXTURE_TOKEN": "FIXTURE_SECRET"],
-                tools: MCPToolPolicy(defaultDecision: .allow, deny: ["delete_*"]))
+                tools: MCPToolPolicy(allow: ["*"], deny: ["delete_*"]),
+                sandbox: MCPSandboxPolicy(network: false))
         ])
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "FIXTURE_SECRET", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
@@ -157,7 +158,9 @@ struct MCPGatewayRuntimeTests {
 
     @Test func plannerRefusesUnknownBlockedAndUndefinedSecrets() {
         let configuration = MCPConfiguration(
-            servers: [MCPServerDefinition(name: "a", command: "x", secrets: ["T": "MISSING"])], blocked: ["b"])
+            servers: [MCPServerDefinition(
+                name: "a", command: "x", secrets: ["T": "MISSING"], sandbox: MCPSandboxPolicy(network: false))],
+            blocked: ["b"])
         let resolver = SecretResolver { _ in .failure(.notFound("x")) }
         func plan(_ name: String) -> MCPLaunchError? {
             if case .failure(let error) = MCPLaunchPlanner.plan(
@@ -220,6 +223,43 @@ struct MCPGatewayRuntimeTests {
             return
         }
         #expect(calls.count == 0)
+    }
+
+    @Test func plannerGatesTheSandboxRequirementOnTheCage() {
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "bare", command: "b"),
+            MCPServerDefinition(name: "open", command: "o", sandbox: MCPSandboxPolicy(network: true)),
+        ])
+        func plan(_ name: String, requireSandbox: Bool) -> MCPLaunchError? {
+            if case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: SecretsConfiguration(),
+                resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:],
+                requireSandbox: requireSandbox)
+            {
+                return error
+            }
+            return nil
+        }
+        #expect(plan("bare", requireSandbox: true)?.message.contains("needs a sandbox") == true)
+        #expect(plan("open", requireSandbox: true)?.message.contains("stays off the network") == true)
+        // No cage off macOS yet: bare servers serve, and serve (not the
+        // planner) still refuses sandboxed ones there.
+        #expect(plan("bare", requireSandbox: false) == nil)
+        #expect(plan("open", requireSandbox: false) == nil)
+    }
+
+    @Test func plannerSandboxDefaultFollowsThePlatformCage() {
+        let configuration = MCPConfiguration(servers: [MCPServerDefinition(name: "bare", command: "b")])
+        let refused: Bool
+        if case .failure = MCPLaunchPlanner.plan(
+            servers: ["bare"], configuration: configuration, secrets: SecretsConfiguration(),
+            resolver: SecretResolver { _ in .failure(.notFound("none")) }, baseEnvironment: [:])
+        {
+            refused = true
+        } else {
+            refused = false
+        }
+        #expect(refused == MCPSandbox.enforced)
     }
 
     @Test func oauthTokenStaysOnTheResourceURLItWasIssuedFor() throws {

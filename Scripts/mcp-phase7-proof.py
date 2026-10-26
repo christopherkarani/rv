@@ -157,12 +157,19 @@ def text_of(reply):
 
 
 def server(**extra):
-    return {"name": "db", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], **extra}
+    # Local servers need an explicit sandbox where the cage is enforced.
+    # The cage is macOS-only, so fixtures carry a sandbox there and run
+    # bare elsewhere (serve refuses sandbox-less servers only on macOS)
+    # until the Linux cage lands.
+    base = {"name": "db", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]}
+    if sys.platform == "darwin":
+        base["sandbox"] = {"network": False}
+    return {**base, **extra}
 
 
 # 7.2 argument-aware rules
 out = write_and_trust({"version": 1, "servers": [server(tools={
-    "default": "allow",
+    "allow": ["*"],
     "ask": [{"tool": "query", "when": {"/database": {"in": ["prod", "billing"]}}}],
     "deny": [{"tool": "query", "when": {"/sql": {"glob": "DROP *"}}}, {"tool": "query", "when": {"/limit": {">": 1000}}}],
 })]}, "7.2 rules")
@@ -247,8 +254,8 @@ step("7.6 --install refuses a literal header", i.returncode == 1 and "${secret:N
 
 # 7.3 search tool mode (two servers, so names carry the server prefix)
 out = write_and_trust({"version": 1, "toolMode": "search", "servers": [
-    server(tools={"default": "allow", "deny": ["tables"]}),
-    {**server(tools={"default": "allow", "ask": ["query"]}), "name": "wh"},
+    server(tools={"allow": ["*"], "deny": ["tables"]}),
+    {**server(tools={"allow": ["*"], "ask": ["query"]}), "name": "wh"},
 ]}, "7.3 search")
 step("7.3 trust review names the mode", "tool mode search" in out)
 g = Gateway()
@@ -292,8 +299,8 @@ os.chmod(f"{CONFIG}/secrets.json", 0o600)
 ENV_T = {**ENV, "RV_PROOF_TOKEN": TOKEN}
 auth = {"Authorization": "Bearer ${secret:FIXTURE_TOKEN}"}
 out = write_and_trust({"version": 1, "servers": [
-    {"name": "web", "url": f"{base}/mcp", "headers": {**auth, "X-Team": "eng"}, "tools": {"default": "allow", "deny": ["delete_all"]}},
-    {"name": "old", "url": f"{base}/sse", "transport": "sse", "headers": auth, "tools": {"default": "allow", "ask": ["delete_all"]}},
+    {"name": "web", "url": f"{base}/mcp", "headers": {**auth, "X-Team": "eng"}, "tools": {"allow": ["*"], "deny": ["delete_all"]}},
+    {"name": "old", "url": f"{base}/sse", "transport": "sse", "headers": auth, "tools": {"allow": ["*"], "ask": ["delete_all"]}},
 ]}, "7.1 remote")
 step("7.1 trust review shows URL, transport and header names, never the token",
      f"web: {base}/mcp (remote, streamable HTTP)" in out and "old: " in out and "legacy SSE" in out
@@ -345,7 +352,7 @@ if sys.platform != "darwin":
     step("7.1 import keyed on Linux: no Keychain, nothing imported, nothing leaked",
          r.returncode != 0 and "could not store KEYED_AUTHORIZATION in the Keychain; nothing imported" in r.stderr
          and TOKEN not in r.stdout + r.stderr + open(f"{CONFIG}/mcp.json").read(), r.stderr.strip())
-r = rv("mcp", "import", "--host", "cursor", "--server", "hosted", "--server", "legacy", "--allow-tools")
+r = rv("mcp", "import", "--host", "cursor", "--server", "hosted", "--server", "legacy")
 step("7.1 import hosted and legacy", r.returncode == 0 and "wrote mcp.json" in r.stdout, r.stdout.strip().splitlines()[-1] if r.stdout else r.stderr)
 imported = {s["name"]: s for s in json.load(open(f"{CONFIG}/mcp.json"))["servers"]}
 step("7.1 imported definitions", imported["hosted"].get("url") == f"{base}/mcp" and imported["hosted"].get("headers") == {"X-Team": "eng"}
@@ -360,7 +367,7 @@ fx.kill()
 
 ofx, oport, ofx_log = remote_fixture("--oauth")
 obase = f"http://127.0.0.1:{oport}"
-write_and_trust({"version": 1, "servers": [{"name": "acme", "url": f"{obase}/mcp", "tools": {"default": "allow"}}]}, "7.1 oauth")
+write_and_trust({"version": 1, "servers": [{"name": "acme", "url": f"{obase}/mcp", "tools": {"allow": ["*"]}}]}, "7.1 oauth")
 connect = subprocess.Popen([RV, "mcp", "connect", "acme", "--no-browser"], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 prompt = connect.stderr.readline() + connect.stderr.readline()
 sign_in = prompt.strip().splitlines()[-1].strip() if prompt.strip() else ""
@@ -399,7 +406,7 @@ r = rv("mcp", "connect", "nope")
 step("7.1 connect refuses an unknown server", r.returncode != 0 and "mcp.json has no server named nope" in r.stderr, r.stderr.strip())
 ofx.kill()
 
-# 7.4 strict profile: unlisted tools deny; local servers need a sandbox; open network is refused
+# 7.4 hard defaults: unlisted tools deny; local servers need a sandbox where the cage is enforced (macOS); open network is refused
 fx4, port4, _ = remote_fixture()
 base4 = f"http://127.0.0.1:{port4}"
 out = write_and_trust({"version": 1, "profile": "strict", "defaultDecision": "allow", "servers": [
@@ -408,8 +415,8 @@ out = write_and_trust({"version": 1, "profile": "strict", "defaultDecision": "al
     {"name": "proxied", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "tools": {"allow": ["echo"]}, "sandbox": {"hosts": ["api.example.com"]}},
     {"name": "bare", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]},
 ]}, "7.4 strict")
-step("7.4 trust review names the profile, the denials and the allowlist",
-     out.startswith("mcp.json: default deny") and "profile strict: unlisted tools deny" in out
+step("7.4 trust review names the denials and the allowlist",
+     out.startswith("mcp.json: default deny") and "unlisted tools deny; local servers need a sandbox" in out
      and "network only to api.example.com" in out and "no network" not in out.split("proxied")[0])
 g = Gateway(args=["--server", "web"])
 step("7.4 strict hides tools no list names", sorted(t["name"] for t in g.tools) == ["echo", "whoami"],
@@ -421,11 +428,25 @@ step("7.4 an ask tool still asks", "rv paused this call: web tool whoami" in tex
 reply = g.call(42, "delete_all", {})
 step("7.4 an unlisted tool is denied", "rv policy denies web tool delete_all" in text_of(reply), text_of(reply)[:70])
 g.close()
-r = rv("mcp", "serve", "--server", "bare")
-step("7.4 a local server without a sandbox is refused", r.returncode != 0 and "profile strict requires a sandbox for bare" in r.stderr,
-     r.stderr.strip()[:140])
+if sys.platform == "darwin":
+    r = rv("mcp", "serve", "--server", "bare")
+    step("7.4 a local server without a sandbox is refused", r.returncode != 0 and "bare needs a sandbox" in r.stderr,
+         r.stderr.strip()[:140])
+else:
+    try:
+        g = Gateway(args=["--server", "bare"])
+        names = sorted(t["name"] for t in g.tools)
+        g.close()
+        step("7.4 a local server without a sandbox serves on Linux (uncaged until the cage lands)", True,
+             ", ".join(names) or "no listed tools")
+    except Exception as error:
+        step("7.4 a local server without a sandbox serves on Linux (uncaged until the cage lands)", False, str(error)[:100])
 r = rv("mcp", "serve", "--server", "open")
-step("7.4 open network is refused", r.returncode != 0 and "keeps open off the network" in r.stderr, r.stderr.strip()[:140])
+if sys.platform == "darwin":
+    step("7.4 open network is refused", r.returncode != 0 and "open stays off the network" in r.stderr, r.stderr.strip()[:140])
+else:
+    step("7.4 a sandboxed server is refused on Linux (the cage is macOS)", r.returncode != 0 and "only on macOS" in r.stderr,
+         r.stderr.strip()[:140])
 if sys.platform == "darwin":
     g = Gateway(args=["--server", "proxied"])
     reply = g.call(43, "echo", {"text": "caged"})

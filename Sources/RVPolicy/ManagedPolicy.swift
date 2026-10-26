@@ -35,6 +35,9 @@ public struct ManagedPolicy: Sendable, Equatable {
         public var blocked: [String] = []
         /// When false, the user's mcp.json `direct` list is ignored.
         public var allowDirect = true
+        /// Legacy: sandboxes are required where the cage is enforced
+        /// since the hard flip, so this no longer changes any decision.
+        /// Still decoded so older bundles load.
         public var requireSandbox = false
         /// `server/tool` globs.
         public var deny: [String] = []
