@@ -647,7 +647,7 @@ extension WorkspaceRecovery {
         log: URL,
         progress: inout Set<WorkspaceLifecycleRecord.Kind>
     ) -> Step {
-        if progress.contains(.publicationCompleted) || progress.contains(.originalRestored) {
+        if WorkspaceSessionLifecycle.isComplete(.publish, progress: progress) {
             return .done
         }
         switch workspaceMountObservation(identity: identity, project: workspace.originalPath) {
@@ -696,7 +696,7 @@ extension WorkspaceRecovery {
         log: URL,
         progress: inout Set<WorkspaceLifecycleRecord.Kind>
     ) -> Step {
-        if progress.contains(.mountCleanupCompleted) || progress.contains(.originalRestored) {
+        if WorkspaceSessionLifecycle.isComplete(.detach, progress: progress) {
             return .done
         }
         switch workspaceMountObservation(identity: identity, project: workspace.originalPath) {
@@ -738,7 +738,7 @@ extension WorkspaceRecovery {
         log: URL,
         progress: inout Set<WorkspaceLifecycleRecord.Kind>
     ) -> Step {
-        if progress.contains(.originalRestored) {
+        if WorkspaceSessionLifecycle.isComplete(.restore, progress: progress) {
             return .done
         }
         switch workspaceMountObservation(identity: identity, project: workspace.originalPath) {
@@ -823,20 +823,21 @@ extension WorkspaceRecovery {
         }
     }
 
+    /// Whether a busy lock is held by a recovery that already began (the
+    /// journal is the arbiter) or by an unknown live owner. One question,
+    /// answered once and mapped by each caller's return type.
+    private static func busyRecoveryBegan(_ workspace: WorkspaceReconstruction) -> Bool {
+        workspace.records.contains { $0.kind == .recoveryBegan }
+    }
+
     private static func busyAssessment(
         _ workspace: WorkspaceReconstruction
     ) -> WorkspaceRecoveryAssessment {
-        if workspace.records.contains(where: { $0.kind == .recoveryBegan }) {
-            return .recoveryInProgress(workspace.id)
-        }
-        return .liveOwner(workspace.id)
+        busyRecoveryBegan(workspace) ? .recoveryInProgress(workspace.id) : .liveOwner(workspace.id)
     }
 
     private static func busyOutcome(_ workspace: WorkspaceReconstruction) -> WorkspaceRecoveryOutcome {
-        if workspace.records.contains(where: { $0.kind == .recoveryBegan }) {
-            return .recoveryInProgress(workspace.id)
-        }
-        return .liveOwner(workspace.id)
+        busyRecoveryBegan(workspace) ? .recoveryInProgress(workspace.id) : .liveOwner(workspace.id)
     }
 
     private static func block(
@@ -923,7 +924,7 @@ extension WorkspaceRecovery {
             return .liveOwner(id)
         case .opening:
             if case .workspace(let workspace) = history(canonicalPath: path, log: log),
-                workspace.records.contains(where: { $0.kind == .recoveryBegan })
+                busyRecoveryBegan(workspace)
             {
                 return .recoveryInProgress(workspace.id)
             }
@@ -993,123 +994,12 @@ extension WorkspaceRecovery {
 }
 
 extension WorkspaceRecovery {
-    struct WorkspaceReconstruction: Equatable {
-        var id: UUID
-        var originalPath: String
-        var protectedPath: String
-        var records: [WorkspaceLifecycleRecord]
-        var identity: WorkspaceDurableIdentity?
-        var groups: [RecordedProcessGroup]
-        var malformedGroup: Bool
-        var phase: Phase
-
-        enum Phase: Equatable {
-            case recoverable
-            case closed
-            case blocked(WorkspaceRecoveryBlock.Reason)
-            case corrupt
-        }
-    }
+    typealias WorkspaceReconstruction = WorkspaceSessionLifecycle.WorkspaceReconstruction
 
     static func reconstruct(
         _ records: [WorkspaceLifecycleRecord]
     ) -> [WorkspaceReconstruction] {
-        var order: [UUID] = []
-        var grouped: [UUID: [WorkspaceLifecycleRecord]] = [:]
-        for record in records {
-            if grouped[record.workspace] == nil {
-                order.append(record.workspace)
-            }
-            grouped[record.workspace, default: []].append(record)
-        }
-        return order.compactMap { id in
-            guard let events = grouped[id] else { return nil }
-            return reconstruction(id: id, records: events)
-        }
-    }
-
-    private static func reconstruction(
-        id: UUID,
-        records: [WorkspaceLifecycleRecord]
-    ) -> WorkspaceReconstruction {
-        var original = ""
-        var protected = ""
-        var identity: WorkspaceDurableIdentity?
-        var groups: [UUID: RecordedProcessGroup] = [:]
-        var malformedGroup = false
-        var created = 0
-        var phase = WorkspaceReconstruction.Phase.recoverable
-        var paths = Set<String>()
-        for record in records {
-            if record.originalPath.isEmpty == false {
-                paths.insert(record.originalPath)
-                if original.isEmpty { original = record.originalPath }
-            }
-            if record.protectedPath.isEmpty == false, protected.isEmpty {
-                protected = record.protectedPath
-            }
-            switch record.kind {
-            case .created:
-                created += 1
-                if let next = record.identity {
-                    if let identity, identity != next {
-                        phase = .corrupt
-                    } else {
-                        identity = next
-                    }
-                }
-            case .runtimeStarted:
-                guard let runtime = record.runtime,
-                    let rawGroup = record.processGroup,
-                    let seconds = record.processStartSeconds,
-                    let microseconds = record.processStartMicroseconds,
-                    // Failable narrowing: the journal is untrusted input and
-                    // `Int32(_:)` would trap below `Int32.min`.
-                    let narrowed = Int32(exactly: rawGroup),
-                    let pgid = ValidatedPGID(narrowed)
-                else {
-                    malformedGroup = true
-                    continue
-                }
-                let group = RecordedProcessGroup(
-                    runtime: runtime,
-                    pgid: pgid,
-                    startSeconds: seconds,
-                    startMicroseconds: microseconds
-                )
-                if let existing = groups[runtime], existing != group {
-                    malformedGroup = true
-                } else {
-                    groups[runtime] = group
-                }
-            case .recoveryBlocked:
-                if phase != .closed, phase != .corrupt {
-                    if let reason = record.blockReason.flatMap(WorkspaceRecoveryBlock.Reason.init(rawValue:)) {
-                        phase = .blocked(reason)
-                    } else {
-                        phase = .corrupt
-                    }
-                }
-            case .recoveryCompleted, .closed:
-                phase = .closed
-            case .runtimeEnded, .recoveryBegan, .childTeardownCompleted, .publicationCompleted,
-                .mountCleanupCompleted, .originalRestored, .hostStarted:
-                break
-            }
-        }
-        if created != 1 || paths.count > 1 || original.isEmpty || protected.isEmpty {
-            phase = .corrupt
-        }
-        return WorkspaceReconstruction(
-            id: id,
-            originalPath: original,
-            protectedPath: protected,
-            records: records,
-            identity: identity,
-            groups: Array(groups.values),
-            malformedGroup: malformedGroup,
-            phase: phase
-        )
+        WorkspaceSessionLifecycle.reconstruct(records)
     }
 
     private static func savedTreeRelationship(
