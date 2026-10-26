@@ -278,7 +278,7 @@ jobs:
           # No daemon beside the stage: the hook fails closed with a deny.
           tmp_run="$(mktemp -d)"
           printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
-            | HOME=/tmp XDG_RUNTIME_DIR="$tmp_run" "$stage/rv" hook --host claude-code > /tmp/hook-out.json
+            | HOME=/tmp XDG_RUNTIME_DIR="$tmp_run" "$stage/rv" hook --host claude > /tmp/hook-out.json
           grep -q 'deny' /tmp/hook-out.json
 
       - name: Rename release assets
