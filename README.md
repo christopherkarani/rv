@@ -157,7 +157,7 @@ swift test                  # full suite (this is the PR gate)
 ```
 
 Architecture in one line: a tiny C front door (`rv`) execs the Swift
-CLI (`rv-cli`), which talks to the `rvd` daemon over a Unix socket
+CLI, which talks to the `rvd` daemon over a Unix socket
 (XPC on macOS) — 15 IPC methods, one gated evaluation path for every
 door. A Python SDK lives in [`sdk/python`](sdk/python). Security
 model and evidence: [`docs/security`](docs/security).
