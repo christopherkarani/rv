@@ -309,6 +309,70 @@ fetch_pack_bundles() {
   exit 1
 }
 
+# Linux Swift runtime libraries. The release binaries link the toolchain
+# dynamically, and curl-install machines have no toolchain, so the release
+# ships the loader closure as a tarball. Required: without these libraries
+# nothing runs. Only top-level regular .so files stage; symlinks and other
+# names stay in the scratch dir.
+fetch_swift_libs() {
+  dest="$1"
+  expected="$2"
+  name="rv-swiftlibs-$target.tar.gz"
+  url="$release_base/$name"
+  tarball="$dest/$name"
+
+  if [ "$expected" -gt 0 ]; then
+    curl -fsSL "$url" -o "$tarball" &
+    cpid=$!
+    while kill -0 "$cpid" 2>/dev/null; do
+      got="$(bytes_of "$tarball")"
+      if [ "$got" -gt "$expected" ]; then
+        got=$expected
+      fi
+      progress_have=$((progress_base + got))
+      progress_update
+      sleep 0.05
+    done
+    if ! wait "$cpid"; then
+      echo "rv: failed to download $name from $url" >&2
+      exit 1
+    fi
+  else
+    if ! curl -fsSL "$url" -o "$tarball" 2>/dev/null; then
+      echo "rv: failed to download $name from $url" >&2
+      exit 1
+    fi
+  fi
+
+  unpack="$dest/.swiftlibs-unpack"
+  rm -rf "$unpack"
+  mkdir -p "$unpack"
+  if tar -xzf "$tarball" -C "$unpack"; then
+    rm -f "$tarball"
+    promoted=0
+    for lib in "$unpack"/*.so; do
+      [ -f "$lib" ] && [ ! -L "$lib" ] || continue
+      cp "$lib" "$dest/$(basename "$lib")"
+      promoted=$((promoted + 1))
+    done
+    rm -rf "$unpack"
+    if [ "$promoted" -eq 0 ]; then
+      echo "rv: $name contained no shared libraries" >&2
+      exit 1
+    fi
+    if [ "$expected" -gt 0 ]; then
+      progress_base=$((progress_base + expected))
+      progress_have=$progress_base
+      progress_update
+    fi
+    return 0
+  fi
+  rm -rf "$unpack"
+  rm -f "$tarball"
+  echo "rv: failed to unpack $name" >&2
+  exit 1
+}
+
 # Best-effort judge weights for macOS curl installs. Never fails the
 # install: any error warns on stderr and the guard runs packs-only.
 # Skipped for local stages (RV_INSTALL_BIN: tests/offline), with
@@ -736,9 +800,11 @@ else
 
   progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim))
   size_isolation=0
+  size_swiftlibs=0
   if [ "$os" = "Linux" ]; then
     size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec-$target")")"
-    progress_total=$((progress_total + size_isolation))
+    size_swiftlibs="$(normalize_size "$(content_length "$release_base/rv-swiftlibs-$target.tar.gz")")"
+    progress_total=$((progress_total + size_isolation + size_swiftlibs))
   fi
   progress_base=0
   progress_have=0
@@ -762,6 +828,9 @@ else
     chmod 755 "$tmp_fetch/rv-isolation-exec"
   fi
   fetch_pack_bundles "$tmp_fetch" "$size_packs"
+  if [ "$os" = "Linux" ]; then
+    fetch_swift_libs "$tmp_fetch" "$size_swiftlibs"
+  fi
   # Judge weights ride the same progress bar. Best-effort: any failure
   # warns and the install continues packs-only.
   fetch_model_bundle
@@ -862,6 +931,16 @@ for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
   name="$(basename "$bundle")"
   rm -rf "$bin/$name"
   cp -R "$bundle" "$bin/$name"
+done
+
+# Linux Swift runtime libraries ship in rv-swiftlibs-<target>.tar.gz and
+# land beside the binaries, where their $ORIGIN RUNPATH finds them.
+for lib in "$src"/*.so; do
+  [ -f "$lib" ] && [ ! -L "$lib" ] || continue
+  name="$(basename "$lib")"
+  rm -f "$bin/$name"
+  cp "$lib" "$bin/$name"
+  chmod 755 "$bin/$name"
 done
 
 RV_FROM_INSTALL=1 exec "$bin/rv" setup
