@@ -552,6 +552,20 @@ enum MCPRun {
             configDirectory: configDirectory)
     }
 
+    /// Why a signing operation failed, in the operator's terms. On macOS
+    /// the key lives in the approvals custodian; when it cannot be
+    /// reached, approvals stay disabled and the message says so.
+    static func signingFailureText(status: MCPApprovalKeyStatus) -> String {
+        #if os(macOS)
+        if status == .unavailable {
+            return "rv's approvals custodian is unavailable — reinstall rv or run `rv setup`; MCP approvals stay disabled until it is reachable"
+        }
+        #endif
+        return status == .enrolled
+            ? "could not write \(MCPIntegrity.fileName)"
+            : "could not create rv's approvals key (\(MCPApprovalKeyIdentity.keychainService))"
+    }
+
     /// Signs mcp.json as it is now, after showing what it allows and confirming presence.
     static func trust(
         environment: MCPEnvironment, show: @Sendable (String) -> Void
@@ -585,9 +599,7 @@ enum MCPRun {
             return .failure(CommandFailure("not trusted: \(refusal)"))
         }
         guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
-            return .failure(environment.approvalSigning.status() == .enrolled
-                ? "could not write \(MCPIntegrity.fileName)"
-                : "could not create rv's approvals key (\(MCPApprovalKeyIdentity.keychainService))")
+            return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
         }
         guard environment.integrity == .trusted else {
             return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")

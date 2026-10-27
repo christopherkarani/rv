@@ -217,6 +217,33 @@ let macOSOperatorUITargets: [Target] = []
 let macOSOperatorUIProducts: [Product] = []
 let macOSOperatorUITestTargets: [Target] = []
 #endif
+
+// The approvals custodian holds the macOS data-protection keychain item
+// behind an authenticated XPC service. macOS-only: Linux keeps its 0600
+// file store (honorsGrants=false) and has no custodian process.
+#if os(macOS)
+let macOSCustodianTargets: [Target] = [
+    .target(
+        name: "RVMCPCustodianCore",
+        dependencies: ["RVMCP", "RVIPC", "RVIsolation", "RVDomain", "RVPolicy"]
+    ),
+    .executableTarget(
+        name: "rv-mcp-custodian",
+        dependencies: ["RVMCPCustodianCore"]
+    ),
+]
+let macOSCustodianProducts: [Product] = [
+    .library(name: "RVMCPCustodianCore", targets: ["RVMCPCustodianCore"]),
+    .executable(name: "rv-mcp-custodian", targets: ["rv-mcp-custodian"]),
+]
+let macOSCustodianTestTargets: [Target] = [
+    .testTarget(name: "RVMCPCustodianCoreTests", dependencies: ["RVMCPCustodianCore"]),
+]
+#else
+let macOSCustodianTargets: [Target] = []
+let macOSCustodianProducts: [Product] = []
+let macOSCustodianTestTargets: [Target] = []
+#endif
 let serviceLibraryAndDaemon: [Target] = [
     .target(
         name: "RVService",
@@ -233,15 +260,15 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "rv-workspace-host",
         dependencies: ["RVDomain", "RVIsolation", "RVEngine", "RVService"]
     ),
-] + macOSOperatorUITargets
+] + macOSOperatorUITargets + macOSCustodianTargets
 let serviceProducts: [Product] = [
     .library(name: "RVService", targets: ["RVService"]),
     .executable(name: "rvd", targets: ["rvd"]),
     .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
-] + macOSOperatorUIProducts
+] + macOSOperatorUIProducts + macOSCustodianProducts
 let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
-] + macOSOperatorUITestTargets
+] + macOSOperatorUITestTargets + macOSCustodianTestTargets
 
 let cliTargets: [Target] = [
     .target(
