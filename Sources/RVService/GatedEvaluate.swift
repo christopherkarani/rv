@@ -87,11 +87,13 @@ public struct GatedEvaluate: Sendable {
         )
         let result = evaluateFileTool(
             action,
-            allowPaths: detailed.effective,
-            home: home,
-            pathResolution: SecretPathCandidateResolver.resolution(
+            secretPaths: SecretPathDecider(
+                allowPaths: detailed.effective,
                 home: home,
-                cwd: cwd
+                resolution: SecretPathCandidateResolver.resolution(
+                    home: home,
+                    cwd: cwd
+                )
             )
         )
         // Observe is whole-guard: the file door logs-and-allows too,
@@ -504,13 +506,15 @@ public struct GatedEvaluate: Sendable {
                 matchingView: Normalize.matchingView(of: request.command)
             )
         }
-        func run(_ pathResolution: SecretPathResolution?) -> EvaluationResult {
+        let secretPaths = SecretPathDecider(
+            safety: SafetyStore.loadEffective(home: home, workspace: workspace),
+            allowPaths: detailed.effective,
+            home: home
+        )
+        func run(_ secretPaths: SecretPathDecider) -> EvaluationResult {
             resolvedSession().evaluateWithSemantics(
                 request,
-                safety: SafetyStore.loadEffective(home: home, workspace: workspace),
-                allowPaths: detailed.effective,
-                home: home,
-                pathResolution: pathResolution,
+                secretPaths: secretPaths,
                 workingDirectory: cwd,
                 gitProbe: { unwrapped in
                     GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
@@ -531,13 +535,10 @@ public struct GatedEvaluate: Sendable {
         // would allow does the alias-resolution seam run, escalating allows
         // whose candidates really land on secret paths (F-2: symlinks
         // disarming path rules must not buy an allow).
-        let stance = run(nil)
-        switch stance.outcome {
-        case .deny, .indeterminate:
-            return stance
-        case .quickRejected, .plain, .safeOnly, .hit:
-            return run(SecretPathCandidateResolver.resolution(home: home, cwd: cwd))
-        }
+        let stance = run(secretPaths)
+        guard secretPaths.escalatesToAliasPass(stance) else { return stance }
+        return run(secretPaths.withResolution(
+            SecretPathCandidateResolver.resolution(home: home, cwd: cwd)))
     }
 
     /// Machine from `$HOME/.config/rv`; repo from `<cwd>/.rv`. Missing file is empty.

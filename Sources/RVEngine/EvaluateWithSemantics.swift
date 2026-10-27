@@ -11,11 +11,7 @@ import RVDomain
 public func evaluateWithSemantics<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
-    secrets: SecretPathCatalog = .dayOne,
-    safety: SafetyLevel = .normal,
-    allowPaths: SecretAllowPathSet = .empty,
-    home: HomePath? = nil,
-    pathResolution: SecretPathResolution? = nil,
+    secretPaths: SecretPathDecider = .dayOne,
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
     workingDirectory: WorkingDirectory? = nil,
@@ -26,11 +22,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     let pack = evaluate(
         request,
         packs: packs,
-        secrets: secrets,
-        safety: safety,
-        allowPaths: allowPaths,
-        home: home,
-        pathResolution: pathResolution,
+        secretPaths: secretPaths,
         engine: engine,
         compiled: compiled
     )

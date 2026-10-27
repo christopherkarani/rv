@@ -759,7 +759,7 @@ private func runFilesystemPack(
     return evaluate(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: world.packs,
-        secrets: secrets,
+        secretPaths: SecretPathDecider(catalog: secrets),
         engine: world.engine,
         compiled: world.compiled
     )

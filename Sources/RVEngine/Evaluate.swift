@@ -7,11 +7,7 @@ public let commandByteCap = 65_536
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
-    secrets: SecretPathCatalog = .dayOne,
-    safety: SafetyLevel = .normal,
-    allowPaths: SecretAllowPathSet = .empty,
-    home: HomePath? = nil,
-    pathResolution: SecretPathResolution? = nil,
+    secretPaths: SecretPathDecider = .dayOne,
     engine: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -35,13 +31,8 @@ public func evaluate<E: PatternEngine>(
     let matchingView = Normalize.matchingView(of: request.command)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return foldSecretPathIfAllow(
-            EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
-            catalog: secrets,
-            safety: safety,
-            allowPaths: allowPaths,
-            home: home,
-            resolution: pathResolution
+        return secretPaths.fold(
+            EvaluationResult(outcome: .quickRejected, matchingView: matchingView)
         )
     }
 
@@ -77,55 +68,10 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return foldSecretPathIfAllow(
-            viewed,
-            catalog: secrets,
-            safety: safety,
-            allowPaths: allowPaths,
-            home: home,
-            resolution: pathResolution
-        )
+        return secretPaths.fold(viewed)
     }
-    return foldSecretPathIfAllow(
-        EvaluationResult(outcome: .plain, matchingView: matchingView),
-        catalog: secrets,
-        safety: safety,
-        allowPaths: allowPaths,
-        home: home,
-        resolution: pathResolution
-    )
-}
-
-private func foldSecretPathIfAllow(
-    _ result: EvaluationResult,
-    catalog: SecretPathCatalog,
-    safety: SafetyLevel,
-    allowPaths: SecretAllowPathSet,
-    home: HomePath?,
-    resolution: SecretPathResolution? = nil
-) -> EvaluationResult {
-    switch result.outcome {
-    case .quickRejected, .plain, .safeOnly, .hit:
-        break
-    case .deny, .indeterminate:
-        return result
-    }
-    guard !catalog.rules.isEmpty else { return result }
-    guard let matched = SecretPathGuard.firstHit(
-        in: result.matchingView,
-        catalog: catalog,
-        includeMetadata: safety == .strict,
-        resolution: resolution,
-        exempts: { path, rule in allowPaths.exempts(path, rule: rule, home: home) }
-    ) else {
-        return result
-    }
-    return EvaluationResult(
-        outcome: .deny(
-            Deny(ruleID: matched.ruleID, reason: matched.reason),
-            matched: matched
-        ),
-        matchingView: result.matchingView
+    return secretPaths.fold(
+        EvaluationResult(outcome: .plain, matchingView: matchingView)
     )
 }
 
