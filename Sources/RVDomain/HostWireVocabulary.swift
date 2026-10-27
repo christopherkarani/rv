@@ -48,7 +48,7 @@ public enum HostToolMatch: Sendable, Equatable, Hashable {
 
 /// First non-empty value in order, or nil when all are nil or empty.
 ///
-/// Shared by the hook codecs (one copy replaces the nine private copies).
+/// Shared by all ten hook codecs (one copy, not one per codec).
 /// Whitespace-only strings COUNT as non-empty — this is deliberately
 /// narrower than `FileToolPath.firstPresent`, which trims whitespace.
 public func firstNonEmpty(_ values: String?...) -> String? {

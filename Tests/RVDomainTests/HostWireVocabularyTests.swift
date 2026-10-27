@@ -5,7 +5,7 @@ import RVDomain
 /// Host wire vocabulary: per-host closed-known + open-other tables with
 /// explicit strict (hook-codec) and loose (scan-adapter) policies.
 ///
-/// Each row pins today's matching behavior exactly (see the 9
+/// Each row pins today's matching behavior exactly (see the 10
 /// `*HostCodec.decode` bodies and the 8 `*StoreAdapter.extract` paths);
 /// T3b/T3c adopt these tables without redesigning them. Plain
 /// `import RVDomain` (not `@testable`) proves the API is public, as the
@@ -21,7 +21,7 @@ struct HostWireVocabularyTests {
     }
 
     @Test func firstNonEmptyCountsWhitespaceAsNonEmpty() {
-        // Codec parity pin: the nine private copies test `isEmpty` only.
+        // Codec parity pin: every codec's copy tests `isEmpty` only.
         // This deliberately differs from FileToolPath.firstPresent.
         #expect(firstNonEmpty("  ", "x") == "  ")
         #expect(FileToolPath.firstPresent("  ", "x")?.rawValue == "x")
