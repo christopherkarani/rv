@@ -16,11 +16,28 @@ Usage: Scripts/sign-macos.sh [--dry-run] [--keychain-from-env] STAGE
 Bare Mach-O files cannot be stapled: Gatekeeper fetches the ticket online.
 rv-agent-bin symlinks and *_RVPacks bundles are not code and are not signed.
 
+A staged RVApprovals.app (the MCP approvals custodian) is the one exception
+that carries entitlements: its data-protection keychain key needs the
+keychain-access-groups entitlement, which macOS only honors from a signed
+bundle whose embedded provisioning profile grants that group. Supply the
+profile with RV_CUSTODIAN_PROVISIONING_PROFILE; without it a real run skips
+custodian signing with a warning (a dry run still prints the full plan),
+and MCP approvals stay disabled on installs from that stage.
+
+  Portal step (operator, once): in the Apple Developer portal create the
+  App ID dev.rv.mcp-custodian with a keychain-access-groups capability for
+  the team-prefixed group <TEAMID>.dev.rv.mcp-custodian, then download a
+  Developer ID provisioning profile for it and point
+  RV_CUSTODIAN_PROVISIONING_PROFILE at the .provisionprofile file. No
+  profile is bundled with this repository.
+
 Environment (real runs):
   DEVELOPER_ID_APP     signing identity, "Developer ID Application: NAME (TEAM)"
   NOTARY_KEY_ID        App Store Connect API key id
   NOTARY_ISSUER_ID     App Store Connect issuer id
   NOTARY_KEY_P8        base64 of the AuthKey_*.p8 (or NOTARY_KEY_PATH: a file)
+  RV_CUSTODIAN_PROVISIONING_PROFILE
+                       Developer ID provisioning profile for dev.rv.mcp-custodian
   --keychain-from-env also needs, for a temporary keychain:
   MACOS_CERT_P12       base64 of the Developer ID Application .p12
   MACOS_CERT_PASSWORD  its password
@@ -72,6 +89,37 @@ for name in "${binaries[@]}"; do
   [[ ! -L "$path" ]] || fail "$name in the stage is a symlink; refusing to sign through it"
   [[ -f "$path" ]] || fail "stage is missing $name: $stage"
 done
+
+# The custodian bundle is optional in a stage (older stages lack it), but a
+# half-assembled bundle is a staging bug, not a cue to skip silently.
+custodian_app="$stage/RVApprovals.app"
+custodian_bin="$custodian_app/Contents/MacOS/rv-mcp-custodian"
+has_custodian=0
+if [[ -e "$custodian_app" || -L "$custodian_app" ]]; then
+  [[ ! -L "$custodian_app" && ! -L "$custodian_bin" ]] \
+    || fail "RVApprovals.app in the stage is a symlink; refusing to sign through it"
+  [[ -f "$custodian_bin" ]] || fail "RVApprovals.app is missing Contents/MacOS/rv-mcp-custodian: $stage"
+  [[ -f "$custodian_app/Contents/Info.plist" ]] || fail "RVApprovals.app is missing Contents/Info.plist: $stage"
+  has_custodian=1
+fi
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+custodian_entitlements="$script_dir/custodian/RVApprovals.entitlements"
+custodian_profile="${RV_CUSTODIAN_PROVISIONING_PROFILE:-}"
+if [[ "$dry_run" -eq 0 && -n "$custodian_profile" && ! -f "$custodian_profile" ]]; then
+  fail "RV_CUSTODIAN_PROVISIONING_PROFILE is not a file: $custodian_profile"
+fi
+# Without a profile a real run cannot sign the custodian (amfid kills an
+# entitlement-carrying binary with no matching profile); a dry run still
+# prints every custodian command with a placeholder profile path.
+custodian_signable=0
+if [[ "$has_custodian" -eq 1 ]]; then
+  if [[ "$dry_run" -eq 1 || -n "$custodian_profile" ]]; then
+    custodian_signable=1
+  fi
+fi
+if [[ "$dry_run" -eq 1 && -z "$custodian_profile" ]]; then
+  custodian_profile="<RV_CUSTODIAN_PROVISIONING_PROFILE>"
+fi
 
 if [[ "$dry_run" -eq 0 ]]; then
   missing=()
@@ -195,6 +243,42 @@ for name in "${binaries[@]}"; do
   fi
 done
 
+if [[ "$has_custodian" -eq 1 && "$custodian_signable" -eq 0 ]]; then
+  say "sign: warning: RVApprovals.app left unsigned: RV_CUSTODIAN_PROVISIONING_PROFILE is not set (see --help for the one-time portal step); MCP approvals stay disabled for this stage"
+fi
+if [[ "$custodian_signable" -eq 1 ]]; then
+  say "Signing RVApprovals.app (approvals custodian)"
+  # codesign does not expand $(TeamIdentifierPrefix); expand it from the
+  # identity's team suffix into a scratch entitlements file.
+  team_prefix="<TEAM_ID>."
+  if [[ "$dry_run" -eq 0 ]]; then
+    team_id="${identity##*\(}"
+    team_id="${team_id%\)*}"
+    [[ -n "$team_id" && "$team_id" != "$identity" ]] \
+      || fail "cannot read the team id from DEVELOPER_ID_APP"
+    team_prefix="$team_id."
+    sed "s/\$(TeamIdentifierPrefix)/$team_prefix/" \
+      "$custodian_entitlements" > "$work/RVApprovals.entitlements"
+  else
+    run sed "s/\$(TeamIdentifierPrefix)/$team_prefix/" \
+      "$custodian_entitlements"
+  fi
+  expanded_entitlements="$work/RVApprovals.entitlements"
+  run cp -p "$custodian_profile" "$custodian_app/Contents/embedded.provisionprofile"
+  if [[ -f "$custodian_app/Contents/MacOS/libswiftCompatibilitySpan.dylib" ]]; then
+    run codesign --force --options runtime --timestamp ${keychain_args[@]+"${keychain_args[@]}"} \
+      --identifier dev.rv.libswiftCompatibilitySpan --sign "$identity" \
+      "$custodian_app/Contents/MacOS/libswiftCompatibilitySpan.dylib"
+  fi
+  run codesign --force --options runtime --timestamp ${keychain_args[@]+"${keychain_args[@]}"} \
+    --entitlements "$expanded_entitlements" \
+    --identifier dev.rv.mcp-custodian --sign "$identity" "$custodian_bin"
+  run codesign --force --options runtime --timestamp ${keychain_args[@]+"${keychain_args[@]}"} \
+    --entitlements "$expanded_entitlements" \
+    --identifier dev.rv.mcp-custodian --sign "$identity" "$custodian_app"
+  run codesign --verify --deep --strict --verbose=2 "$custodian_app"
+fi
+
 say "Notarizing"
 if [[ "$dry_run" -eq 0 && -z "${NOTARY_KEY_PATH:-}" ]]; then
   printf '%s' "$NOTARY_KEY_P8" | base64 --decode > "$key_file"
@@ -203,6 +287,9 @@ run mkdir -p "$work/rv-notarize"
 for name in "${binaries[@]}"; do
   run cp -p "$stage/$name" "$work/rv-notarize/$name"
 done
+if [[ "$custodian_signable" -eq 1 ]]; then
+  run cp -R -p "$custodian_app" "$work/rv-notarize/RVApprovals.app"
+fi
 run ditto -c -k --keepParent "$work/rv-notarize" "$work/rv-notarize.zip"
 if [[ "$dry_run" -eq 1 ]]; then
   run xcrun notarytool submit "$work/rv-notarize.zip" --key "$key_file" --key-id "$key_id" \
@@ -225,6 +312,10 @@ else
   say "Notarization accepted (submission $submission)"
 fi
 say "Stapling: bare Mach-O binaries cannot be stapled; Gatekeeper fetches the ticket online"
+if [[ "$custodian_signable" -eq 1 ]]; then
+  run xcrun stapler staple "$custodian_app"
+  run xcrun stapler validate "$custodian_app"
+fi
 
 say "Assessing"
 for name in "${binaries[@]}"; do
@@ -250,6 +341,15 @@ for name in "${binaries[@]}"; do
   done
   [[ "$accepted" -eq 1 ]] || fail "Gatekeeper does not accept $name as notarized: $verdict"
 done
+if [[ "$custodian_signable" -eq 1 ]]; then
+  if [[ "$dry_run" -eq 1 ]]; then
+    run spctl -a -t open --context context:primary-signature -vv "$custodian_app"
+  else
+    # The ticket is stapled onto the bundle, so no online wait is needed.
+    verdict="$(spctl -a -t open --context context:primary-signature -vv "$custodian_app" 2>&1)" \
+      || fail "Gatekeeper does not accept RVApprovals.app as notarized: $verdict"
+  fi
+fi
 if [[ "$dry_run" -eq 1 ]]; then
   say "Dry run: nothing was signed"
 else

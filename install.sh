@@ -652,7 +652,7 @@ verify_release_signatures() {
   unsigned=""
   for name in "$@"; do
     file="$dir/$name"
-    [ -f "$file" ] || continue
+    [ -f "$file" ] || [ -d "$file" ] || continue
     # A newline in the path is a new line in codesign and spctl output.
     # Refuse before trusting any field, and name only the basename.
     case "$file" in
@@ -673,7 +673,12 @@ verify_release_signatures() {
         continue
         ;;
     esac
-    if ! "$codesign" --verify --strict "$file" >/dev/null 2>&1; then
+    case "$name" in
+      *.app) verify_flags="--verify --deep --strict" ;;
+      *) verify_flags="--verify --strict" ;;
+    esac
+    # shellcheck disable=SC2086 # verify_flags is a fixed two-word flag set
+    if ! "$codesign" $verify_flags "$file" >/dev/null 2>&1; then
       echo "rv: refusing to install: $name has an invalid code signature" >&2
       exit 1
     fi
@@ -793,12 +798,14 @@ else
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks-$target.tar.gz")")"
   size_span=0
   size_claim=0
+  size_approvals=0
   if [ "$os" = "Darwin" ]; then
     size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
     size_claim="$(normalize_size "$(content_length "$release_base/rv-pty-claim-$target")")"
+    size_approvals="$(normalize_size "$(content_length "$release_base/rv-approvals-darwin-arm64.zip")")"
   fi
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_approvals))
   size_isolation=0
   size_swiftlibs=0
   if [ "$os" = "Linux" ]; then
@@ -823,6 +830,12 @@ else
     download_release_asset "$tmp_fetch" "rv-pty-claim-$target" "$size_claim" "rv-pty-claim"
     chmod 755 "$tmp_fetch/rv-pty-claim"
   fi
+  # Optional: releases without a provisioned custodian bundle omit the asset.
+  if [ "$os" = "Darwin" ] && [ "$size_approvals" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "rv-approvals-darwin-arm64.zip" "$size_approvals"
+    ditto -x -k "$tmp_fetch/rv-approvals-darwin-arm64.zip" "$tmp_fetch"
+    rm -f "$tmp_fetch/rv-approvals-darwin-arm64.zip"
+  fi
   if [ "$os" = "Linux" ]; then
     download_release_asset "$tmp_fetch" "rv-isolation-exec-$target" "$size_isolation" "rv-isolation-exec"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
@@ -843,7 +856,7 @@ else
   }
   if [ "$os" = "Darwin" ]; then
     verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
-      rv rv-cli rvd rv-workspace-host rv-pty-claim
+      rv rv-cli rvd rv-workspace-host rv-pty-claim RVApprovals.app
   fi
 fi
 
@@ -942,5 +955,18 @@ for lib in "$src"/*.so; do
   cp "$lib" "$bin/$name"
   chmod 755 "$bin/$name"
 done
+
+# The approvals custodian bundle lands in ~/Applications with the same
+# stage-then-swap discipline as the binaries: setup registers it only when
+# the executable is present there.
+if [ "$os" = "Darwin" ] && [ -d "$src/RVApprovals.app" ]; then
+  apps_dir="$HOME/Applications"
+  mkdir -p "$apps_dir"
+  tmp_app="$apps_dir/.RVApprovals.app.installing"
+  rm -rf "$tmp_app"
+  cp -R "$src/RVApprovals.app" "$tmp_app"
+  rm -rf "$apps_dir/RVApprovals.app"
+  mv -f "$tmp_app" "$apps_dir/RVApprovals.app"
+fi
 
 RV_FROM_INSTALL=1 exec "$bin/rv" setup

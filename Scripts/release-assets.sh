@@ -16,7 +16,8 @@ Usage: Scripts/release-assets.sh <stage-dir> <out-dir> <target>
   libswiftCompatibilitySpan.dylib under its plain name when staged, tars
   the staged *_RVPacks bundle/resources directory as
   rv_RVPacks-<target>.tar.gz, and (Linux targets only) tars the staged
-  Swift runtime libraries as rv-swiftlibs-<target>.tar.gz.
+  Swift runtime libraries as rv-swiftlibs-<target>.tar.gz. On darwin-arm64,
+  a staged RVApprovals.app is zipped as rv-approvals-darwin-arm64.zip.
 EOF
 }
 
@@ -88,6 +89,11 @@ done
 if [[ "$packed" -eq 0 ]]; then
   printf 'release-assets: no *_RVPacks bundle or resources in %s\n' "$STAGE" >&2
   exit 1
+fi
+
+# The custodian bundle is a directory asset; ditto preserves the signature.
+if [[ "$TARGET" == darwin-arm64 && -d "$STAGE/RVApprovals.app" ]]; then
+  ditto -c -k --keepParent "$STAGE/RVApprovals.app" "$OUT/rv-approvals-darwin-arm64.zip"
 fi
 
 printf 'Release assets for %s in %s\n' "$TARGET" "$OUT"

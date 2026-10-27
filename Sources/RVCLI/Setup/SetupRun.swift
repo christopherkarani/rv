@@ -13,6 +13,7 @@ import RVPresentation
 
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
+    static let custodianLaunchAgentLabel = "dev.rv.mcp-custodian"
 
     static func setup(
         _ env: SetupEnvironment,
