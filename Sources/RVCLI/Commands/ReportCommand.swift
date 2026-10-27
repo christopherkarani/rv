@@ -22,7 +22,7 @@ enum ReportRun {
         var userName: String
         var userID: UInt32
         var fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
-        var approvalKeys: MCPApprovalKeyStore = .unavailable
+        var approvalSigning: MCPApprovalSigning = .unavailable
     }
 
     struct Report: Encodable, Equatable {
@@ -143,7 +143,7 @@ enum ReportRun {
             configDirectory: inputs.configDirectory, home: inputs.home, processEnvironment: inputs.processEnvironment,
             keychain: SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false }),
             managed: inputs.managed,
-            approvalKeys: inputs.approvalKeys)
+            approvalSigning: inputs.approvalSigning)
         switch MCPRun.configuration(environment) {
         case .failure(let failure):
             return Report.MCPSummary(ok: false, error: failure.message, servers: 0, counts: [:], failing: [], plaintextCredentials: 0)
@@ -274,7 +274,7 @@ struct ReportCommand: AsyncParsableCommand {
             hostName: ProcessInfo.processInfo.hostName,
             userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
             userID: getuid(),
-            approvalKeys: .live(configDirectory: configDirectory, home: home.rawValue)))
+            approvalSigning: .live(configDirectory: configDirectory, home: home.rawValue)))
         ctx.writeStdout(ctx.explicitRobot ? ReportRun.json(report) : ReportRun.text(report))
         if strict, report.compliant == false { throw ExitCode(1) }
     }

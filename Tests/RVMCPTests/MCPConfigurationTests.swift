@@ -83,8 +83,8 @@ struct MCPConfigurationTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let configuration = try decode(Self.ruled).get()
-        let signer = try #require(MCPApprovalKeyStore.file(configDirectory: directory).loadOrCreate())
-        _ = try configuration.write(configDirectory: directory, signer: signer).get()
+        _ = try configuration.write(
+            configDirectory: directory, signing: MCPApprovalSigning.file(configDirectory: directory)).get()
         #expect(try MCPConfiguration.load(configDirectory: directory).get() == configuration)
         #expect(configuration.encoded().compactText.contains(#""deny":["drop_*",{"tool":"query","when":{"/sql":{"glob":"DROP *"}}}]"#))
 
@@ -333,8 +333,8 @@ struct MCPConfigurationTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let configuration = try decode(Self.example).get()
-        let signer = try #require(MCPApprovalKeyStore.file(configDirectory: directory).loadOrCreate())
-        _ = try configuration.write(configDirectory: directory, signer: signer).get()
+        _ = try configuration.write(
+            configDirectory: directory, signing: MCPApprovalSigning.file(configDirectory: directory)).get()
         var info = stat()
         #expect(stat(MCPConfiguration.fileURL(configDirectory: directory).path, &info) == 0)
         #expect(info.st_mode & 0o777 == 0o600)

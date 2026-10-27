@@ -42,60 +42,99 @@ public struct MCPSigner: Sendable {
     }
 }
 
-/// Where the signing key lives. Verifiers call `load` only, so checking a
-/// grant or mcp.json never writes the Keychain; signers call `loadOrCreate`.
-public struct MCPApprovalKeyStore: Sendable {
+/// Names for where the approvals key lives, shared by the custodian that
+/// holds the key and by client-side diagnostics. Key material itself
+/// never travels with these names.
+public enum MCPApprovalKeyIdentity {
     public static let keychainService = "rv.approvals"
     public static let keychainAccount = "hmac-key"
     /// Seal key for the macOS enrollment. It is a keychain item, not a file.
     public static let anchorAccount = "hmac-anchor"
     public static let fileName = "approvals.key"
+}
 
-    public var load: @Sendable () -> MCPSigner?
-    public var loadOrCreate: @Sendable () -> MCPSigner?
+/// Whether an approvals key exists to MAC or verify with. `.unavailable`
+/// means the holder of the key could not be reached or could not answer;
+/// callers fail closed on it exactly as on `.notEnrolled`.
+public enum MCPApprovalKeyStatus: String, Sendable, Equatable, Codable {
+    case enrolled
+    case notEnrolled
+    case unavailable
+}
+
+/// The only thing callers may do with the approvals key: ask for a MAC or
+/// ask whether a MAC verifies. Key bytes never leave the implementation
+/// behind this struct. `verify` never creates a key, and its nil means
+/// "no key to judge with" — distinct from false, "judged and forged".
+/// Only `mac` with `createIfMissing` may enroll a new key.
+public struct MCPApprovalSigning: Sendable {
     /// Whether a grant MAC'd under this key proves a person approved.
-    /// Only a key whose every read requires the person present (the macOS
-    /// data-protection keychain) qualifies. A same-user-readable key file
-    /// proves nothing: any process running as the user can mint grants.
-    /// The key still seals integrity state either way.
+    /// Only a key whose every use requires the person present (the macOS
+    /// data-protection keychain, held by its custodian) qualifies. A
+    /// same-user-readable key file proves nothing: any process running as
+    /// the user can mint grants. The key still seals integrity state either way.
     public var honorsGrants: Bool
+    public var status: @Sendable () -> MCPApprovalKeyStatus
+    public var mac: @Sendable (_ purpose: String, _ fields: [String], _ createIfMissing: Bool) -> String?
+    public var verify: @Sendable (_ candidate: String?, _ purpose: String, _ fields: [String]) -> Bool?
 
     public init(
-        load: @escaping @Sendable () -> MCPSigner?, loadOrCreate: @escaping @Sendable () -> MCPSigner?,
-        honorsGrants: Bool = true
+        honorsGrants: Bool = true,
+        status: @escaping @Sendable () -> MCPApprovalKeyStatus,
+        mac: @escaping @Sendable (String, [String], Bool) -> String?,
+        verify: @escaping @Sendable (String?, String, [String]) -> Bool?
     ) {
-        self.load = load
-        self.loadOrCreate = loadOrCreate
         self.honorsGrants = honorsGrants
+        self.status = status
+        self.mac = mac
+        self.verify = verify
     }
 
-    public static let unavailable = MCPApprovalKeyStore(load: { nil }, loadOrCreate: { nil }, honorsGrants: false)
+    public static let unavailable = MCPApprovalSigning(
+        honorsGrants: false, status: { .unavailable }, mac: { _, _, _ in nil }, verify: { _, _, _ in nil })
 
-    /// macOS keeps the key in the data-protection keychain and requires the
-    /// user to be present for every read. Linux has no OS secret store, so
-    /// the key is a 0600 file in the rv config directory, which a process
-    /// running as the same user can read; approvals there fail closed
-    /// instead of trusting MACs anyone could mint.
-    public static func live(configDirectory: URL, home: String) -> MCPApprovalKeyStore {
+    /// Custodian-side adapter over a signer held by this process. Every
+    /// operation loads the signer fresh, so what is judged is the key as
+    /// read for that operation, never a cached copy.
+    public static func inProcess(
+        honorsGrants: Bool = true,
+        status: (@Sendable () -> MCPApprovalKeyStatus)? = nil,
+        load: @escaping @Sendable () -> MCPSigner?,
+        loadOrCreate: @escaping @Sendable () -> MCPSigner?
+    ) -> MCPApprovalSigning {
+        MCPApprovalSigning(
+            honorsGrants: honorsGrants,
+            status: status ?? { load() == nil ? .notEnrolled : .enrolled },
+            mac: { purpose, fields, createIfMissing in
+                (createIfMissing ? loadOrCreate() : load())?.mac(purpose, fields)
+            },
+            verify: { candidate, purpose, fields in
+                load().map { $0.verify(candidate, purpose, fields) }
+            })
+    }
+
+    /// macOS keeps the key in the data-protection keychain, held by the
+    /// approvals custodian, and requires the user to be present for every
+    /// use. Linux has no OS secret store, so the key is a 0600 file in the
+    /// rv config directory, which a process running as the same user can
+    /// read; approvals there fail closed instead of trusting MACs anyone
+    /// could mint.
+    public static func live(configDirectory: URL, home: String) -> MCPApprovalSigning {
         #if os(macOS)
         _ = home
-        return MCPApprovalKeyStore(
-            load: { ApprovalKeychain.read(configDirectory: configDirectory) },
-            loadOrCreate: {
-                ApprovalKeychain.read(configDirectory: configDirectory) ?? ApprovalKeychain.create(configDirectory: configDirectory)
-            })
+        return .custodian(
+            transport: MCPCustodianKeyService(signing: .keychain(configDirectory: configDirectory)).transport)
         #else
         _ = home
-        var store = file(configDirectory: configDirectory)
-        store.honorsGrants = false
-        return store
+        return .file(configDirectory: configDirectory, honorsGrants: false)
         #endif
     }
 
-    /// `approvals.key` (0600) in the rv config directory.
-    public static func file(configDirectory: URL) -> MCPApprovalKeyStore {
-        let url = configDirectory.appendingPathComponent(fileName, isDirectory: false)
-        return MCPApprovalKeyStore(
+    /// `approvals.key` (0600) in the rv config directory, re-read per operation.
+    public static func file(configDirectory: URL, honorsGrants: Bool = true) -> MCPApprovalSigning {
+        let url = configDirectory.appendingPathComponent(MCPApprovalKeyIdentity.fileName, isDirectory: false)
+        return inProcess(
+            honorsGrants: honorsGrants,
             load: { readKeyFile(url) },
             loadOrCreate: { readKeyFile(url) ?? createKeyFile(url, directory: configDirectory) })
     }
@@ -373,9 +412,9 @@ enum ApprovalKeyMAC {
 enum ApprovalKeychain {
     static func read(configDirectory: URL) -> MCPSigner? {
         deleteUnprotectedItem()
-        deleteUnprotectedItem(account: MCPApprovalKeyStore.anchorAccount)
+        deleteUnprotectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
         guard protectedStoreEnabled else { return nil }
-        switch copyProtectedItem(account: MCPApprovalKeyStore.keychainAccount) {
+        switch copyProtectedItem(account: MCPApprovalKeyIdentity.keychainAccount) {
         case .absent, .failed:
             return nil
         case .item(let data, let inspection):
@@ -422,7 +461,7 @@ enum ApprovalKeychain {
     /// The seal key from the data-protection item. A missing or non-presence
     /// item is `.absent` (not a seal). A cancelled prompt is `.failed`.
     private static func copyAnchor() -> AnchorCopy {
-        switch copyProtectedItem(account: MCPApprovalKeyStore.anchorAccount) {
+        switch copyProtectedItem(account: MCPApprovalKeyIdentity.anchorAccount) {
         case .absent:
             return .absent
         case .failed:
@@ -437,7 +476,7 @@ enum ApprovalKeychain {
                 guard MCPHex.decode(Array(pinned.utf8))?.count == 32 else { return .absent }
                 return .value(anchor, pinned)
             case .rejectAndDelete:
-                deleteProtectedItem(account: MCPApprovalKeyStore.anchorAccount)
+                deleteProtectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
                 return .absent
             case .absent, .rejectKeep:
                 return .failed
@@ -492,23 +531,23 @@ enum ApprovalKeychain {
         // or its ACL could not be read. Do not replace a key we did not inspect.
         if protectedItemExists() != false { return nil }
         deleteUnprotectedItem()
-        deleteUnprotectedItem(account: MCPApprovalKeyStore.anchorAccount)
-        deleteProtectedItem(account: MCPApprovalKeyStore.anchorAccount)
+        deleteUnprotectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
+        deleteProtectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
         ApprovalKeyAnchor.remove(configDirectory)
-        let raw = MCPApprovalKeyStore.newKey()
-        let anchor = MCPApprovalKeyStore.newKey()
+        let raw = MCPApprovalSigning.newKey()
+        let anchor = MCPApprovalSigning.newKey()
         guard protectedStoreEnabled,
             let enrollment = ApprovalKeyEnrollment.issue(key: raw, anchor: anchor),
             let keyQuery = addQuery(value: Data(MCPHex.encode(raw).utf8)),
             let anchorQuery = addQuery(
                 value: Data((MCPHex.encode(anchor) + RVDigest.sha256Hex(raw)).utf8),
-                account: MCPApprovalKeyStore.anchorAccount),
+                account: MCPApprovalKeyIdentity.anchorAccount),
             SecItemAdd(keyQuery as CFDictionary, nil) == errSecSuccess,
             SecItemAdd(anchorQuery as CFDictionary, nil) == errSecSuccess,
             enrollment.save(configDirectory: configDirectory)
         else {
             deleteProtectedItem()
-            deleteProtectedItem(account: MCPApprovalKeyStore.anchorAccount)
+            deleteProtectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
             ApprovalKeyEnrollment.remove(configDirectory)
             ApprovalKeyAnchor.remove(configDirectory)
             return nil
@@ -518,12 +557,23 @@ enum ApprovalKeychain {
             signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"])
         else {
             deleteProtectedItem()
-            deleteProtectedItem(account: MCPApprovalKeyStore.anchorAccount)
+            deleteProtectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
             ApprovalKeyEnrollment.remove(configDirectory)
             ApprovalKeyAnchor.remove(configDirectory)
             return nil
         }
         return signer
+    }
+
+    /// Prompt-free enrollment state: the silent existence query plus the
+    /// enrollment file. An item that exists without its enrollment cannot
+    /// be judged enrolled, and a failed query cannot be judged at all.
+    static func keyStatus(configDirectory: URL) -> MCPApprovalKeyStatus {
+        switch protectedItemExists() {
+        case .none: .unavailable
+        case .some(false): .notEnrolled
+        case .some(true): ApprovalKeyEnrollment.load(configDirectory) == nil ? .unavailable : .enrolled
+        }
     }
 
     /// True when the data-protection item is present. False when it is not.
@@ -537,10 +587,10 @@ enum ApprovalKeychain {
         return nil
     }
 
-    static func existenceQuery(account: String = MCPApprovalKeyStore.keychainAccount) -> [String: Any] {
+    static func existenceQuery(account: String = MCPApprovalKeyIdentity.keychainAccount) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrService as String: MCPApprovalKeyIdentity.keychainService,
             kSecAttrAccount as String: account,
             kSecUseDataProtectionKeychain as String: true,
             kSecReturnAttributes as String: true,
@@ -557,14 +607,14 @@ enum ApprovalKeychain {
 
     static var liveUsesSilentCopy: Bool { ApprovalKeyProtection.allowsSilentCopy }
 
-    static func addQuery(value: Data, account: String = MCPApprovalKeyStore.keychainAccount) -> [String: Any]? {
+    static func addQuery(value: Data, account: String = MCPApprovalKeyIdentity.keychainAccount) -> [String: Any]? {
         guard protectedStoreEnabled else { return nil }
         var error: Unmanaged<CFError>?
         guard let control = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlocked, .userPresence, &error)
         else { return nil }
         return [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrService as String: MCPApprovalKeyIdentity.keychainService,
             kSecAttrAccount as String: account,
             kSecValueData as String: value,
             kSecAttrAccessControl as String: control,
@@ -574,10 +624,10 @@ enum ApprovalKeychain {
 
     /// `silent` is the second-process copy that must not succeed. The live
     /// read leaves authentication UI at its default, which prompts.
-    static func copyQuery(silent: Bool, account: String = MCPApprovalKeyStore.keychainAccount) -> [String: Any] {
+    static func copyQuery(silent: Bool, account: String = MCPApprovalKeyIdentity.keychainAccount) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrService as String: MCPApprovalKeyIdentity.keychainService,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecUseDataProtectionKeychain as String: true,
@@ -591,7 +641,7 @@ enum ApprovalKeychain {
     /// Live read. Attributes travel with the secret so the user-presence ACL
     /// is judged on the same item that would be adopted. Authentication UI
     /// stays at its default, which prompts.
-    static func readQuery(account: String = MCPApprovalKeyStore.keychainAccount) -> [String: Any] {
+    static func readQuery(account: String = MCPApprovalKeyIdentity.keychainAccount) -> [String: Any] {
         var query = copyQuery(silent: false, account: account)
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -600,24 +650,40 @@ enum ApprovalKeychain {
 
     /// Removes a pre-presence item from the file-based login keychain. Delete
     /// does not return the secret. The data-protection item is a different store.
-    static func deleteUnprotectedItem(account: String = MCPApprovalKeyStore.keychainAccount) {
+    static func deleteUnprotectedItem(account: String = MCPApprovalKeyIdentity.keychainAccount) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrService as String: MCPApprovalKeyIdentity.keychainService,
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
     }
 
     /// Removes a data-protection item that is not rv's user-presence key.
-    static func deleteProtectedItem(account: String = MCPApprovalKeyStore.keychainAccount) {
+    static func deleteProtectedItem(account: String = MCPApprovalKeyIdentity.keychainAccount) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrService as String: MCPApprovalKeyIdentity.keychainService,
             kSecAttrAccount as String: account,
             kSecUseDataProtectionKeychain as String: true,
         ]
         SecItemDelete(query as CFDictionary)
+    }
+}
+
+extension MCPApprovalSigning {
+    /// Custodian-side signing over the data-protection keychain item.
+    /// Each mac/verify reads the item fresh (one user-presence prompt per
+    /// operation, as a direct key load always did); `status` never prompts.
+    /// Key bytes exist only inside this adapter's signer loads.
+    static func keychain(configDirectory: URL) -> MCPApprovalSigning {
+        inProcess(
+            status: { ApprovalKeychain.keyStatus(configDirectory: configDirectory) },
+            load: { ApprovalKeychain.read(configDirectory: configDirectory) },
+            loadOrCreate: {
+                ApprovalKeychain.read(configDirectory: configDirectory)
+                    ?? ApprovalKeychain.create(configDirectory: configDirectory)
+            })
     }
 }
 #endif
