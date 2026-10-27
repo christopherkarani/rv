@@ -69,10 +69,7 @@ public struct EvaluateSession: Sendable {
     /// Pack-only evaluate. Product decisions use `evaluateWithSemantics`.
     package func evaluate(
         _ request: EvaluationRequest,
-        safety: SafetyLevel = .normal,
-        allowPaths: SecretAllowPathSet = .empty,
-        home: HomePath? = nil,
-        pathResolution: SecretPathResolution? = nil
+        secretPaths: SecretPathDecider = .dayOne
     ) -> EvaluationResult {
         if !corePacksReady {
             return EvaluationResult(
@@ -83,10 +80,7 @@ public struct EvaluateSession: Sendable {
         return engineEvaluate(
             request,
             packs: snapshots,
-            safety: safety,
-            allowPaths: allowPaths,
-            home: home,
-            pathResolution: pathResolution,
+            secretPaths: secretPaths,
             engine: engine,
             compiled: compiled
         )
@@ -102,10 +96,7 @@ public struct EvaluateSession: Sendable {
     /// unwrap / probe / analyze attach; the session then floors the outcome.
     public func evaluateWithSemantics(
         _ request: EvaluationRequest,
-        safety: SafetyLevel = .normal,
-        allowPaths: SecretAllowPathSet = .empty,
-        home: HomePath? = nil,
-        pathResolution: SecretPathResolution? = nil,
+        secretPaths: SecretPathDecider = .dayOne,
         workingDirectory: WorkingDirectory? = nil,
         gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
         filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
@@ -114,10 +105,7 @@ public struct EvaluateSession: Sendable {
         let result = engineEvaluateWithSemantics(
             request,
             packs: snapshots,
-            safety: safety,
-            allowPaths: allowPaths,
-            home: home,
-            pathResolution: pathResolution,
+            secretPaths: secretPaths,
             engine: engine,
             compiled: compiled,
             workingDirectory: workingDirectory,
@@ -142,20 +130,14 @@ public struct EvaluateSession: Sendable {
 private func engineEvaluate(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
-    safety: SafetyLevel,
-    allowPaths: SecretAllowPathSet,
-    home: HomePath?,
-    pathResolution: SecretPathResolution?,
+    secretPaths: SecretPathDecider,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>
 ) -> EvaluationResult {
     evaluate(
         request,
         packs: packs,
-        safety: safety,
-        allowPaths: allowPaths,
-        home: home,
-        pathResolution: pathResolution,
+        secretPaths: secretPaths,
         engine: engine,
         compiled: compiled
     )
@@ -164,10 +146,7 @@ private func engineEvaluate(
 private func engineEvaluateWithSemantics(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
-    safety: SafetyLevel,
-    allowPaths: SecretAllowPathSet,
-    home: HomePath?,
-    pathResolution: SecretPathResolution?,
+    secretPaths: SecretPathDecider,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>,
     workingDirectory: WorkingDirectory?,
@@ -178,10 +157,7 @@ private func engineEvaluateWithSemantics(
     evaluateWithSemantics(
         request,
         packs: packs,
-        safety: safety,
-        allowPaths: allowPaths,
-        home: home,
-        pathResolution: pathResolution,
+        secretPaths: secretPaths,
         engine: engine,
         compiled: compiled,
         workingDirectory: workingDirectory,
