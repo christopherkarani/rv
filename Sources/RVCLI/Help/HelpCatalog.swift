@@ -71,7 +71,7 @@ enum HelpCatalog {
                 HelpRow(name: "packs", description: "List and enable or disable packs"),
                 HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
-                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
+                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
                 HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
                 HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
@@ -246,7 +246,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv hook [--host <host>]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex, cursor, antigravity"),
+                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex, cursor, antigravity, muse"),
             ]),
             HelpSection(heading: "Platform", rows: [
                 HelpRow(name: "platform", description: "Hook guard works on Linux and macOS. Contained runtime (rv opencode / rv workspace) is macOS-only today; on Linux it refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),

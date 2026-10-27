@@ -46,7 +46,7 @@ run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
 installer anytime to pick up the weights.
 
 Works with **Claude Code, Codex, Cursor, Grok, OpenCode, Pi, Hermes,
-OpenClaw, and Antigravity**. Hooks are only written for hosts already
+OpenClaw, Antigravity, and Muse**. Hooks are only written for hosts already
 on your machine. Requires macOS 15+ (Apple Silicon) or Linux
 (aarch64/x86_64).
 

@@ -1072,7 +1072,7 @@ struct WorkspaceHostTests {
         #expect(legacyLaunchHookSelection(nil) == .success(nil))
         #expect(legacyLaunchHookSelection("agent-A") == .success(nil))
         #expect(legacyLaunchHookSelection("agent-B") == .success(nil))
-        #expect(legacyLaunchHookSelection("muse") == .success(nil))
+        #expect(legacyLaunchHookSelection("muse") == .success(.muse))
         #expect(legacyLaunchHookSelection("codex") == .success(.codex))
         #expect(legacyLaunchHookSelection("opencode") == .success(.opencode))
         #expect(legacyLaunchHookSelection("not a tag!") == .failure(.invalidRequest))

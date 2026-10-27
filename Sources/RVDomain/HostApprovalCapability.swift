@@ -5,7 +5,7 @@
 /// `HookHost` selects a different row, and every row fails closed because
 /// no row manufactures ALLOW.
 ///
-/// Step 8B ground truth (all 9 hosts): no host offers a trustworthy native
+/// Step 8B ground truth (all 10 hosts): no host offers a trustworthy native
 /// approval (a same-user process can replay any host attestation), and no
 /// host can block for a human (hook budgets are seconds; RV's own IPC
 /// budget is 700ms). Every host therefore routes human-required operations
@@ -25,7 +25,7 @@ public struct HostApprovalCapability: Sendable, Equatable {
     public static func capability(for host: HookHost) -> HostApprovalCapability {
         switch host {
         case .pi, .opencode, .claude, .openclaw, .hermes,
-             .grok, .codex, .cursor, .antigravity:
+             .grok, .codex, .cursor, .antigravity, .muse:
             return HostApprovalCapability(
                 route: .rvOperatorUI,
                 nativeAskAuthoritative: false,

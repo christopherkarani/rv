@@ -35,6 +35,9 @@ struct OwnedPaths: Equatable, Sendable {
     var cursorHooksJSON: String { home.rawValue + "/.cursor/hooks.json" }
     var antigravityDirectory: String { home.rawValue + "/.gemini/antigravity-cli" }
     var antigravityHooksJSON: String { home.rawValue + "/.gemini/config/hooks.json" }
+    var museDirectory: String { home.rawValue + "/.config/muse" }
+    var museSettings: String { home.rawValue + "/.config/muse/settings.json" }
+    var museHooks: String { home.rawValue + "/.config/muse/rv-hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
@@ -109,6 +112,13 @@ struct OwnedPaths: Equatable, Sendable {
                 detectionDirectory: antigravityDirectory,
                 executableName: "agy",
                 destination: antigravityHooksJSON
+            )
+        case .muse:
+            OwnedHostAdapterPath(
+                host: .muse,
+                detectionDirectory: museDirectory,
+                executableName: "muse",
+                destination: museHooks
             )
         }
     }

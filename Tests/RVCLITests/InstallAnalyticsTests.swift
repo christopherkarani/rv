@@ -32,6 +32,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, Sendable {
             "codex": "skipped",
             "cursor": "skipped",
             "antigravity": "skipped",
+            "muse": "skipped",
         ])
 }
 
@@ -58,6 +59,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, Sendable {
             "codex": "skipped",
             "cursor": "skipped",
             "antigravity": "skipped",
+            "muse": "skipped",
         ]])
         let paths = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)

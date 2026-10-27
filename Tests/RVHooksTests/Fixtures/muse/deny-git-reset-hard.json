@@ -1,0 +1,1 @@
+{"cwd":"/tmp/ws","hook_event_name":"PreToolUse","model":"muse-spark-1.3","model_provider":"meta","permission_mode":"default","session_id":"sess-muse-1","tool_input":{"command":"git reset --hard","description":"Run git reset","workdir":"/tmp/ws"},"tool_name":"bash","tool_use_id":"call_muse_deny_1","transcript_path":null,"turn_id":"turn-muse-1"}

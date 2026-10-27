@@ -302,6 +302,10 @@ private func askStdin(_ host: HookHost) -> String {
         return """
         {"toolName":"terminal","cwd":"/tmp/ws","sessionId":"sess-hermes","args":{"command":"git reset --hard"}}
         """
+    case .muse:
+        return """
+        {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","session_id":"sess-muse","tool_name":"bash","tool_input":{"command":"git reset --hard","workdir":"/tmp/ws"}}
+        """
     }
 }
 

@@ -5,7 +5,7 @@ import RVDomain
 /// Host wire vocabulary: per-host closed-known + open-other tables with
 /// explicit strict (hook-codec) and loose (scan-adapter) policies.
 ///
-/// Each row pins today's matching behavior exactly (see the 9
+/// Each row pins today's matching behavior exactly (see the 10
 /// `*HostCodec.decode` bodies and the 8 `*StoreAdapter.extract` paths);
 /// T3b/T3c adopt these tables without redesigning them. Plain
 /// `import RVDomain` (not `@testable`) proves the API is public, as the
@@ -21,7 +21,7 @@ struct HostWireVocabularyTests {
     }
 
     @Test func firstNonEmptyCountsWhitespaceAsNonEmpty() {
-        // Codec parity pin: the nine private copies test `isEmpty` only.
+        // Codec parity pin: every codec's copy tests `isEmpty` only.
         // This deliberately differs from FileToolPath.firstPresent.
         #expect(firstNonEmpty("  ", "x") == "  ")
         #expect(FileToolPath.firstPresent("  ", "x")?.rawValue == "x")
@@ -350,6 +350,31 @@ struct HostWireVocabularyTests {
         )
     }
 
+    @Test func museToolNames() {
+        let parsed = MuseToolName(wireValue: "bash")
+        #expect(parsed == .bash)
+        #expect(parsed.wireValue == "bash")
+        #expect(parsed.strictMatch == .shell)
+        #expect(parsed.looseMatch == .shell)
+        #expect(parsed.match(policy: .strict) == .shell)
+        #expect(parsed.match(policy: .loose) == .shell)
+        #expect(MuseToolName(wireValue: Optional("bash")) == .bash)
+        // v1 is shell-only: the capitalized spelling and file tools stay foreign.
+        for unknown in ["Bash", "shell", "read_file", "submit_reminder_decision"] {
+            let carried = MuseToolName(wireValue: unknown)
+            #expect(carried == .other(unknown))
+            #expect(carried.strictMatch == .foreign)
+            #expect(carried.looseMatch == .foreign)
+        }
+        #expect(MuseToolName(wireValue: nil) == nil)
+    }
+
+    @Test func museToolNamesCodeAsWireStrings() throws {
+        let encoded = try JSONEncoder().encode(MuseToolName.bash)
+        #expect(String(data: encoded, encoding: .utf8) == "\"bash\"")
+        #expect(try JSONDecoder().decode(MuseToolName.self, from: encoded) == .bash)
+    }
+
     @Test func grokEventNames() throws {
         let parsed = GrokEventName(wireValue: "pre_tool_use")
         #expect(parsed == .preToolUse)
@@ -393,6 +418,21 @@ struct HostWireVocabularyTests {
         #expect(CodexEventName(wireValue: nil) == nil)
         let encoded = try JSONEncoder().encode(CodexEventName.preToolUse)
         #expect(try JSONDecoder().decode(CodexEventName.self, from: encoded) == .preToolUse)
+    }
+
+    @Test func museEventNames() throws {
+        let parsed = MuseEventName(wireValue: "PreToolUse")
+        #expect(parsed == .preToolUse)
+        #expect(parsed.wireValue == "PreToolUse")
+        #expect(parsed.strictMatch)
+        #expect(parsed.looseMatch)
+        #expect(parsed.match(policy: .strict))
+        #expect(parsed.match(policy: .loose))
+        #expect(MuseEventName(wireValue: "preToolUse") == .other("preToolUse"))
+        #expect(MuseEventName(wireValue: "PostToolUse") == .other("PostToolUse"))
+        #expect(MuseEventName(wireValue: nil) == nil)
+        let encoded = try JSONEncoder().encode(MuseEventName.preToolUse)
+        #expect(try JSONDecoder().decode(MuseEventName.self, from: encoded) == .preToolUse)
     }
 
     @Test func cursorEventNames() throws {

@@ -267,6 +267,69 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_museOnly_writesHooksFileAndMergesManagedKey() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.museDirectory, withIntermediateDirectories: true)
+        let settings = """
+        {"schema_version":1,"provider":"meta"}
+        """
+        try settings.write(toFile: layout.museSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let body = try String(contentsOfFile: layout.museHooks, encoding: .utf8)
+        #expect(body == (try HookHost.muse.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let merged = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.museSettings))
+            ) as? [String: Any]
+        )
+        #expect(merged["managed_hooks_path"] as? String == layout.museHooks)
+        #expect(merged["provider"] as? String == "meta")
+        #expect(merged["schema_version"] as? Int == 1)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.museHooks) == false)
+        let after = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.museSettings))
+            ) as? [String: Any]
+        )
+        #expect(after["managed_hooks_path"] == nil)
+        #expect(after["provider"] as? String == "meta")
+        #expect(FileManager.default.fileExists(atPath: layout.museSettings))
+    }
+}
+
+@Test func setup_museForeignKey_skipsWithoutWriting() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.museDirectory, withIntermediateDirectories: true)
+        let settings = """
+        {"schema_version":1,"managed_hooks_path":"/other/hooks.json"}
+        """
+        try settings.write(toFile: layout.museSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.museHooks) == false)
+        #expect(try String(contentsOfFile: layout.museSettings, encoding: .utf8) == settings)
+    }
+}
+
+@Test func setup_museWithoutSettings_skipsWithoutSeeding() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.museDirectory, withIntermediateDirectories: true)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.museHooks) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.museSettings) == false)
+    }
+}
+
 @Test func setup_cursorOnly_writesAdapterAndMergesHooksJSON() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.cursorDirectory, withIntermediateDirectories: true)

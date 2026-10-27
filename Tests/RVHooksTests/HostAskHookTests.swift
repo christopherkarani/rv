@@ -31,6 +31,11 @@ struct HostAskHookTests {
         } else if host == .claude {
             let specific = json["hookSpecificOutput"] as? [String: Any]
             #expect(specific?["permissionDecision"] as? String == "deny")
+        } else if host == .muse {
+            let specific = json["hookSpecificOutput"] as? [String: Any]
+            #expect(specific?["hookEventName"] as? String == "PreToolUse")
+            #expect(specific?["permissionDecision"] as? String == "deny")
+            #expect((specific?["permissionDecisionReason"] as? String)?.isEmpty == false)
         } else {
             #expect(json["decision"] as? String == "deny")
         }
@@ -272,6 +277,10 @@ private func hostAskStdin(_ host: HookHost) -> String {
         return """
         {"conversationId":"sess-antigravity","toolCall":{"name":"run_command","args":{"CommandLine":"git reset --hard","Cwd":"/tmp/ws"}},"workspacePaths":["/tmp/ws"]}
         """
+    case .muse:
+        return """
+        {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","session_id":"sess-muse","tool_name":"bash","tool_input":{"command":"git reset --hard","workdir":"/tmp/ws"}}
+        """
     }
 }
 
@@ -286,5 +295,6 @@ private func codec(for host: HookHost) -> any HostCodec {
     case .codex: CodexHostCodec()
     case .cursor: CursorHostCodec()
     case .antigravity: AntigravityHostCodec()
+    case .muse: MuseHostCodec()
     }
 }

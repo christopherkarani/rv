@@ -45,7 +45,8 @@ import Testing
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -66,6 +67,7 @@ import Testing
         .skipUndetected(.codex),
         .skipUndetected(.cursor),
         .skipUndetected(.antigravity),
+        .skipUndetected(.muse),
         .writeLaunchAgent,
     ])
     #expect(
@@ -86,7 +88,8 @@ import Testing
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -109,6 +112,7 @@ import Testing
         .skipUndetected(.codex),
         .skipUndetected(.cursor),
         .skipUndetected(.antigravity),
+        .skipUndetected(.muse),
         .skipLaunchAgent,
     ])
     #expect(
@@ -128,7 +132,8 @@ import Testing
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -157,6 +162,7 @@ import Testing
         .skipUndetected(.codex),
         .skipUndetected(.cursor),
         .skipUndetected(.antigravity),
+        .skipUndetected(.muse),
         .writeLaunchAgent,
     ])
 }
@@ -173,7 +179,8 @@ import Testing
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -207,7 +214,8 @@ import Testing
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -241,7 +249,8 @@ import Testing
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -264,6 +273,56 @@ import Testing
         .packageManifest(path: directory + "/package.json"),
     ])
     #expect(plan.steps.contains(.write(write)))
+}
+
+@Test func workPlan_museWrite_carriesSettingsKeyCompanionFromTable() throws {
+    let layout = OwnedPaths(home: try #require(HomeDirectory(validating: "/tmp")))
+    let installations = HostAdapterInstallationSnapshot(
+        grok: .missing(layout.hostAdapter(for: .grok)),
+        pi: .missing(layout.hostAdapter(for: .pi)),
+        openCode: .missing(layout.hostAdapter(for: .opencode)),
+        claude: .missing(layout.hostAdapter(for: .claude)),
+        openClaw: .missing(layout.hostAdapter(for: .openclaw)),
+        hermes: .missing(layout.hostAdapter(for: .hermes)),
+        codex: .missing(layout.hostAdapter(for: .codex)),
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .absentFile(layout.hostAdapter(for: .muse))
+    )
+
+    let plan = SetupWorkPlanBuilder.make(
+        installations: installations,
+        layout: layout,
+        force: false,
+        rvdIsExecutable: true
+    )
+    let write = HostArtifacts.attach(
+        host: .muse,
+        layout: layout,
+        existingData: nil,
+        forceClear: false
+    )
+    let directory = (write.destination as NSString).deletingLastPathComponent
+
+    #expect(write.adapter == .writeOwnedRendered)
+    #expect(write.companions == [
+        .museSettingsKey(
+            settingsPath: directory + "/settings.json",
+            hooksPath: write.destination
+        ),
+    ])
+    #expect(plan.steps.contains(.write(write)))
+
+    let detach = HostArtifacts.detach(host: .muse, layout: layout)
+    #expect(detach.remove == [
+        .removeFile(write.destination),
+        .removeMuseSettingsKey(
+            settingsPath: directory + "/settings.json",
+            hooksPath: write.destination
+        ),
+    ])
+    #expect(detach.leaveOccupied.isEmpty)
+    #expect(detach.removedOnlyWhenChanged == false)
 }
 
 @Test func hostArtifacts_attach_definedForEveryHost() throws {

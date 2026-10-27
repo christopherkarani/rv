@@ -89,6 +89,7 @@ private func missingHosts() throws -> HostAdapterInstallationSnapshot {
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
         cursor: .missing(layout.hostAdapter(for: .cursor)),
-        antigravity: .missing(layout.hostAdapter(for: .antigravity))
+        antigravity: .missing(layout.hostAdapter(for: .antigravity)),
+        muse: .missing(layout.hostAdapter(for: .muse))
     )
 }

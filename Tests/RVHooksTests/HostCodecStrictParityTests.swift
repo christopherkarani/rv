@@ -137,6 +137,23 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
     }
 }
 
+@Test func strictParity_museEventGateAndLowercaseBash() {
+    let codec = MuseHostCodec()
+    #expect(shellCommand(of: codec.decode(
+        #"{"hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    for event in ["pre_tool_use", "preToolUse", "PostToolUse", ""] {
+        #expect(codec.decode(
+            #"{"hook_event_name":"\#(event)","tool_name":"bash","tool_input":{"command":"git status"}}"#) == .foreign)
+    }
+    #expect(codec.decode(#"{"tool_name":"bash","tool_input":{"command":"git status"}}"#) == .foreign)
+    // The observed shell spelling is lowercase only; file tools and the
+    // capitalized Claude spelling stay foreign under the strict policy.
+    for tool in ["Bash", "Shell", "shell", "read_file", "submit_reminder_decision"] {
+        #expect(codec.decode(
+            #"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#) == .foreign)
+    }
+}
+
 @Test func strictParity_cursorEventDispatch() {
     let codec = CursorHostCodec()
     // beforeShellExecution and the missing/empty event are the shell door.

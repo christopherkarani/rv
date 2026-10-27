@@ -160,6 +160,31 @@ extension SetupRun {
         try writeLaunchAgent(env: env, layout: layout, files: files, keepAlive: false)
     }
 
+    /// Strips the rv-owned `managed_hooks_path` key only when it points at our
+    /// hooks file. Foreign keys, malformed bytes, and symlinks are left
+    /// untouched; `settings.json` itself is never removed. Returns whether
+    /// anything changed.
+    static func removeMuseSettingsKey(
+        at path: String,
+        hooksPath: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        guard let data = files.readData(path) else { return false }
+        let stripped = MuseSettingsMerge.strip(existingData: data, hooksPath: hooksPath)
+        if stripped.changed == false {
+            return false
+        }
+        do {
+            try files.writeData(stripped.data, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.muse)
+        }
+        return true
+    }
+
     /// Removes rv-fingerprinted Claude handlers only. Returns whether anything changed.
     static func removeClaudeRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
         try applyClaudeUninstall(at: path, files: files, unreadable: .fail)

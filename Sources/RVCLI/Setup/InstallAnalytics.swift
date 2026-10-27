@@ -61,6 +61,7 @@ enum InstallAnalyticsHosts {
             "codex": status(slots.codex),
             "cursor": status(slots.cursor),
             "antigravity": status(slots.antigravity),
+            "muse": status(slots.muse),
         ]
     }
 

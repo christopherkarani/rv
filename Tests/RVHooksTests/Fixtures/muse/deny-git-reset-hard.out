@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."}}

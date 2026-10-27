@@ -38,6 +38,11 @@ enum HostWiring {
                 return .notApplicable
             }
             return GrokHookInspect.hasFileToolDoor(in: adapterBytes) ? .wired : .shellOnly
+        case .muse:
+            guard adapterBytes != nil else {
+                return .notApplicable
+            }
+            return .shellOnly
         case .cursor:
             guard adapterBytes != nil else {
                 return .notApplicable

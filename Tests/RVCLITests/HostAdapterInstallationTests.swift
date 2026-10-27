@@ -40,6 +40,17 @@ private func writeWiredAdapter(
             force: false
         )
         try merged.data.write(to: URL(fileURLWithPath: destination))
+    } else if host == .muse {
+        let body = try host.adapterResource().rendered(rvPath: rvPath)
+        try body.write(toFile: destination, atomically: true, encoding: .utf8)
+        // The Muse slot is a pair: the owned hooks file plus the
+        // `managed_hooks_path` key. Wired fixtures stage both halves.
+        let settings = MuseSettingsMerge.settingsPath(hooksPath: destination)
+        let merged = MuseSettingsMerge.merge(
+            existingData: Data(#"{"schema_version":1}"#.utf8),
+            hooksPath: destination
+        )
+        try merged.data.write(to: URL(fileURLWithPath: settings))
     } else {
         let body = try host.adapterResource().rendered(rvPath: rvPath)
         try body.write(toFile: destination, atomically: true, encoding: .utf8)
@@ -62,7 +73,10 @@ func hostInstallation_missingIsReadOnly(_ host: HookHost) throws {
     }
 }
 
-@Test(arguments: HookHost.setupSlotOrder)
+// Muse is excluded: a detected directory without settings.json is
+// occupied-by-policy (setup refuses to seed settings it did not create),
+// pinned by hostInstallation_museDetectedWithoutSettingsIsOccupied.
+@Test(arguments: HookHost.setupSlotOrder.filter { $0 != .muse })
 func hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
@@ -515,6 +529,159 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     }
 }
 
+@Test func hostInstallation_museDetectedWithoutSettingsIsOccupied() throws {
+    try withInstallationHome { home, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        let before = try FileManager.default.contentsOfDirectory(atPath: home.path)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        // No settings.json to merge into: setup refuses to seed it.
+        #expect(snapshot.state(for: .muse) == .occupied)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
+    }
+}
+
+@Test func hostInstallation_museForeignKeyIsOccupiedAndUnchanged() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: .muse, destination: owned.destination, rvPath: "/nonexistent/rv")
+        let settings = MuseSettingsMerge.settingsPath(hooksPath: owned.destination)
+        let foreign = Data(#"{"schema_version":1,"managed_hooks_path":"/other/hooks.json"}"#.utf8)
+        try foreign.write(to: URL(fileURLWithPath: settings))
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .muse) == .occupied)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: settings)) == foreign)
+    }
+}
+
+@Test func hostInstallation_museMalformedSettingsIsOccupied() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: .muse, destination: owned.destination, rvPath: "/nonexistent/rv")
+        let settings = MuseSettingsMerge.settingsPath(hooksPath: owned.destination)
+        try Data("not-json".utf8).write(to: URL(fileURLWithPath: settings))
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .muse) == .occupied)
+    }
+}
+
+@Test func hostInstallation_museMissingKeyIsBrokenRepair() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: .muse, destination: owned.destination, rvPath: "/nonexistent/rv")
+        let settings = MuseSettingsMerge.settingsPath(hooksPath: owned.destination)
+        try Data(#"{"schema_version":1}"#.utf8).write(to: URL(fileURLWithPath: settings))
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        // Owned file current but unpointed: setup merges the key.
+        #expect(snapshot.state(for: .muse) == .broken)
+    }
+}
+
+@Test func hostInstallation_museAbsentOwnedFileWithKeylessSettingsIsAbsentFile() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        let settings = MuseSettingsMerge.settingsPath(hooksPath: owned.destination)
+        try Data(#"{"schema_version":1}"#.utf8).write(to: URL(fileURLWithPath: settings))
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .muse) == .absentFile)
+        #expect(FileManager.default.fileExists(atPath: owned.destination) == false)
+    }
+}
+
+@Test func hostInstallation_museSymlinkedSettingsIsOccupiedWithoutFollowing() throws {
+    try withInstallationHome { home, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        let target = home.appendingPathComponent("foreign-settings.json")
+        try Data(#"{"schema_version":1}"#.utf8).write(to: target)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: MuseSettingsMerge.settingsPath(hooksPath: owned.destination),
+            withDestinationPath: target.path
+        )
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .muse) == .occupied)
+    }
+}
+
+@Test func hostInstallation_museWiredPairIsShellOnlyFileTools() throws {
+    try withInstallationHome { home, paths in
+        let owned = paths.hostAdapter(for: .muse)
+        let executable = try makeWiredMissPath(home: home)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: .muse, destination: owned.destination, rvPath: executable.path)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .muse) == .wired)
+        #expect(snapshot.fileTools(for: .muse) == .shellOnly)
+    }
+}
+
 @Test func hostInstallation_fileToolsNotApplicableWhenMissing() throws {
     try withInstallationHome { _, paths in
         let snapshot = try HostAdapterInstallation.inspect(
@@ -758,6 +925,7 @@ private func cursorFileToolsSnapshot(
         codex: missing(.codex),
         cursor: cursor,
         antigravity: missing(.antigravity),
+        muse: missing(.muse),
         cursorHooksJSON: cursorHooksJSON
     )
 }

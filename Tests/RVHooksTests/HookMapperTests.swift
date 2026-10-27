@@ -78,7 +78,7 @@ import RVDomain
     #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex, .cursor, .antigravity])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex, .cursor, .antigravity, .muse])
 func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
@@ -114,6 +114,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         wire = hookWire(from: result, command: command, using: CursorHostCodec(), intent: intent)
     case .antigravity:
         wire = hookWire(from: result, command: command, using: AntigravityHostCodec(), intent: intent)
+    case .muse:
+        wire = hookWire(from: result, command: command, using: MuseHostCodec(), intent: intent)
     }
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -148,6 +150,18 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"block\"") == false)
         #expect(wire.exitCode == 0)
+    } else if host == .muse {
+        #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+        let parsed = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        let hook = try #require(parsed["hookSpecificOutput"] as? [String: Any])
+        #expect(hook["hookEventName"] as? String == "PreToolUse")
+        #expect(hook["permissionDecision"] as? String == "deny")
+        #expect(hook["permissionDecisionReason"] as? String == resetHardHostDeny)
+        #expect(parsed["decision"] == nil)
+        #expect(wire.stdout.contains("\"decision\":\"block\"") == false)
+        #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+        #expect(wire.exitCode == 0)
+        #expect(wire.stderr.isEmpty)
     } else {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["decision"] as? String == "deny")

@@ -36,7 +36,7 @@ struct HostSpendRemovedTests {
             return """
             {"toolName":"terminal","cwd":"/tmp/ws","args":{"command":"\(command)"},"hostAsk":"spend"}
             """
-        case .grok, .codex, .cursor, .antigravity:
+        case .grok, .codex, .cursor, .antigravity, .muse:
             return command
         }
     }

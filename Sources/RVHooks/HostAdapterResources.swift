@@ -157,6 +157,8 @@ package enum HostAdapterResources {
             bytes = PackageResources.rv_guard_claude_py_tmpl
         case .antigravity:
             bytes = PackageResources.rv_guard_antigravity_py_tmpl
+        case .muse:
+            bytes = PackageResources.rv_hooks_muse_json_tmpl
         }
         guard let text = String(bytes: bytes, encoding: .utf8),
               text.isEmpty == false,
@@ -176,7 +178,7 @@ package enum HostAdapterResources {
             return try loadCompanion(PackageResources.openclaw_plugin_json, host: host)
         case .hermes:
             return try loadCompanion(PackageResources.hermes_plugin_yaml, host: host)
-        case .grok, .pi, .opencode, .claude, .codex, .cursor, .antigravity:
+        case .grok, .pi, .opencode, .claude, .codex, .cursor, .antigravity, .muse:
             throw HostAdapterResourceError.missingTemplate(host)
         }
     }

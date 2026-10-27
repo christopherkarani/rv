@@ -70,6 +70,7 @@ public func setupCeremonyFrames(
     codex: SetupSlotKind = .skipped,
     cursor: SetupSlotKind = .skipped,
     antigravity: SetupSlotKind = .skipped,
+    muse: SetupSlotKind = .skipped,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
@@ -84,6 +85,7 @@ public func setupCeremonyFrames(
             codex: codex,
             cursor: cursor,
             antigravity: antigravity,
+            muse: muse,
             wrote: wrote
         ),
         kind: kind

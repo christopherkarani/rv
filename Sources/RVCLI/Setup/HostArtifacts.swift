@@ -41,6 +41,7 @@ enum HostCompanionWrite: Equatable, Sendable {
     case openCodeAskPackage
     case codexHooksJSON(adapterPath: String, hooksPath: String)
     case cursorHooksJSON(adapterPath: String, hooksPath: String)
+    case museSettingsKey(settingsPath: String, hooksPath: String)
 }
 
 /// Inverse of one attach row. The executor folds this; it does not recover
@@ -61,6 +62,7 @@ enum HostDetachOperation: Equatable, Sendable {
     case stripAntigravityFingerprintLeavingOccupied(String)
     case removeCodexRVHooks(String)
     case removeCursorRVHooks(String)
+    case removeMuseSettingsKey(settingsPath: String, hooksPath: String)
     case stripOpenCodeAskPlugin
     case removeEmptyDirectory(String)
 }
@@ -173,6 +175,8 @@ enum HostArtifacts {
             return [.removeCodexRVHooks(hooksPath)]
         case .cursorHooksJSON(_, let hooksPath):
             return [.removeCursorRVHooks(hooksPath)]
+        case .museSettingsKey(let settingsPath, let hooksPath):
+            return [.removeMuseSettingsKey(settingsPath: settingsPath, hooksPath: hooksPath)]
         }
     }
 
@@ -272,6 +276,18 @@ enum HostArtifacts {
                 kind: .antigravityHooksMerge,
                 companions: [],
                 forcePrelude: .occupiedIfDestinationSymlink,
+                emptyDirectories: []
+            )
+        case .muse:
+            return Row(
+                kind: .writeOwnedRendered,
+                companions: [
+                    .museSettingsKey(
+                        settingsPath: directory + "/settings.json",
+                        hooksPath: destination
+                    ),
+                ],
+                forcePrelude: .backupAndClearOwnedPath,
                 emptyDirectories: []
             )
         }
