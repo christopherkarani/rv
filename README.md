@@ -106,13 +106,19 @@ tightens everything to deny-by-default for generated-output deletes.
 
 ## Beyond the shell
 
-rv is one binary, 24 commands. The rest of the surface:
+rv is one binary, 25 commands. The rest of the surface:
 
 - **Secrets without exposure** — agents see placeholders, never values.
   Real bytes are injected at the boundary from Keychain, 1Password,
   Vault, AWS/GCP/Azure, Infisical, or Bitwarden, then scrubbed from
   everything that comes back. `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
+- **App logins, once** — `rv login connect vercel` imports the Vercel or
+  GitHub login you already have (CLI auth file, token variable, or
+  `gh auth token`; paste as fallback) into the Keychain as a gateway
+  secret, so agents use it through rv instead of logging in again.
+  `rv login list` / `check` report status and fingerprints, never values;
+  `rv login logout <app>` removes it.
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.

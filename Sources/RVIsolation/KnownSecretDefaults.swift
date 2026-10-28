@@ -42,6 +42,10 @@ public enum KnownSecretDefaults {
             Gateway(
                 upstream: "https://api.github.com", baseURLEnv: "GH_API_URL",
                 placeholderPrefix: "")
+        case "VERCEL_TOKEN":
+            Gateway(
+                upstream: "https://api.vercel.com", baseURLEnv: "VERCEL_BASE_URL",
+                placeholderPrefix: "")
         default:
             nil
         }

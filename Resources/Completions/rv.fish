@@ -18,6 +18,7 @@ complete -c rv -n "__fish_use_subcommand" -a "safety" -d "Show or set normal or 
 complete -c rv -n "__fish_use_subcommand" -a "blocks" -d "List recent denials"
 complete -c rv -n "__fish_use_subcommand" -a "audit" -d "Unified audit trail"
 complete -c rv -n "__fish_use_subcommand" -a "secrets" -d "Secrets agents use through placeholders"
+complete -c rv -n "__fish_use_subcommand" -a "login" -d "App logins agents use through rv"
 complete -c rv -n "__fish_use_subcommand" -a "mcp" -d "Find, review, and govern MCP servers"
 complete -c rv -n "__fish_use_subcommand" -a "managed" -d "Organization policy: status, verify, keygen, sign"
 complete -c rv -n "__fish_use_subcommand" -a "report" -d "Governance posture of this machine (MDM, --json)"
