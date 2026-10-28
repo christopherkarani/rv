@@ -63,6 +63,7 @@ enum HelpCatalog {
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
+                HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
                 HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
                 HelpRow(name: "egress", description: "Review blocked network egress"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
