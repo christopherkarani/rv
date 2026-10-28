@@ -524,12 +524,22 @@ enum ApprovalKeychain {
     /// Removes a pre-presence item from the file-based login keychain. Delete
     /// does not return the secret. The data-protection item is a different store.
     static func deleteUnprotectedItem(account: String = MCPApprovalKeyIdentity.keychainAccount) {
-        let query: [String: Any] = [
+        SecItemDelete(unprotectedDeleteQuery(account: account) as CFDictionary)
+    }
+
+    /// Legacy-keychain scope must be explicit: an unflagged delete also
+    /// matches the data-protection item (observed live: the delete in
+    /// `read` destroyed the key `create` had just added, so the read-back
+    /// copy reported the item missing and enrollment always failed).
+    static func unprotectedDeleteQuery(
+        account: String = MCPApprovalKeyIdentity.keychainAccount
+    ) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: MCPApprovalKeyIdentity.keychainService,
             kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: false,
         ]
-        SecItemDelete(query as CFDictionary)
     }
 
     static func deleteQuery(

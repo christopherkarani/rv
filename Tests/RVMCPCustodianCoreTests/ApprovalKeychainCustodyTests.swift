@@ -259,6 +259,16 @@ struct ApprovalKeychainCustodyTests {
             #expect(groupedAdd[kSecAttrAccessGroup as String] as? String == group)
         }
         #expect(add[kSecAttrAccessGroup as String] as? String == group)
+
+        // The legacy cleanup delete must stay out of the data-protection
+        // store: an unflagged SecItemDelete matches the protected item
+        // too (observed live), which made every read destroy the key.
+        for account in [MCPApprovalKeyIdentity.keychainAccount, MCPApprovalKeyIdentity.anchorAccount] {
+            let legacy = ApprovalKeychain.unprotectedDeleteQuery(account: account)
+            #expect(legacy[kSecUseDataProtectionKeychain as String] as? Bool == false)
+            #expect(legacy[kSecAttrAccessGroup as String] == nil)
+            #expect(legacy[kSecAttrAccount as String] as? String == account)
+        }
     }
     #endif
 }
