@@ -153,7 +153,7 @@ struct AllowOnceGrantHonorTests {
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
         let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok))
+        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .serviceUnreachable))
         #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
         #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
 
@@ -200,7 +200,7 @@ struct AllowOnceGrantHonorTests {
         {"hook_event_name":"beforeShellExecution","cwd":"/tmp/ws","command":"git reset --hard"}
         """
         let wire = await client.hookEvaluate(host: .cursor, stdin: stdin)
-        #expect(wire == LocalControlBoundary.deniedHook(host: .cursor))
+        #expect(wire == LocalControlBoundary.deniedHook(host: .cursor, cause: .serviceUnreachable))
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
         #expect(json["agent_message"] as? String == cursorAgentStopLine)
