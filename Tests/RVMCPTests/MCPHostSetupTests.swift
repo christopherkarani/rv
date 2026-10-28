@@ -296,6 +296,37 @@ struct MCPHostSetupTests {
         #expect(try MCPHostSetup.undo(host: .claudeCode, servers: nil, configDirectory: box.config).get().changed.isEmpty)
     }
 
+    @Test func setupMusePreservesTransportAndMode() throws {
+        // Muse entries carry host metadata rv does not model; the
+        // gateway rewrite must change the command and nothing else, and
+        // unrelated top-level settings keys must survive.
+        let box = Sandbox()
+        let original = """
+            {"schema_version": 1, "model": "x", "mcpServers": {"wax": {"command": "wax-mcp", "args": ["--store-path", "/x"], "env": {}, "transport": "stdio", "mode": "optional"}}}
+            """
+        let file = try box.write(".config/muse/settings.json", original)
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.muse), configuration: configuration, servers: ["wax"], rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 1)
+
+        let rewritten = try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64)
+        #expect(rewritten["schema_version"] == .int(1))
+        #expect(rewritten["model"] == .string("x"))
+        #expect(rewritten["mcpServers"]?["wax"] == .object([
+            "command": .string("/opt/rv"),
+            "args": .array(["mcp", "serve", "--server", "wax"].map(JSONValue.string)),
+            "transport": .string("stdio"),
+            "mode": .string("optional"),
+        ]))
+
+        let undone = try MCPHostSetup.undo(host: .muse, servers: nil, configDirectory: box.config).get()
+        #expect(undone.changed.count == 1)
+        #expect(try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64) == JSONValue.parse(Data(original.utf8), maximumDepth: 64))
+    }
+
     @Test func undoLeavesEntriesTheUserChanged() throws {
         let box = Sandbox()
         let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)

@@ -15,6 +15,7 @@ public enum MCPHost: String, CaseIterable, Sendable, Equatable {
     case antigravity
     case vscode
     case windsurf
+    case muse
 }
 
 public enum MCPEntryScope: Sendable, Equatable {
@@ -181,6 +182,7 @@ public struct MCPHostFile: Sendable, Equatable {
                 host: .vscode, scope: .user, path: vscodeUser,
                 format: .json(keyPath: ["servers"], lenient: true, opencode: false)),
             MCPHostFile(host: .windsurf, scope: .user, path: at(home, ".codeium/windsurf/mcp_config.json"), format: standard),
+            MCPHostFile(host: .muse, scope: .user, path: at(home, ".config/muse/settings.json"), format: standard),
         ]
         guard let project else { return files }
         let projectPath = project.standardizedFileURL.path
