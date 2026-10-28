@@ -255,7 +255,7 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
 }
 
 @Test func hookMalformed_failsClosedWithDenyJSONWithoutEvaluating() async throws {
@@ -288,7 +288,7 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
     #expect(wire.stdout.contains(malformedHookSentence(.unreadable)) == false)
 }
 
@@ -307,7 +307,7 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
@@ -318,7 +318,7 @@ private func runHonorHook(
     )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
@@ -475,7 +475,7 @@ private func runHonorHook(
     )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
 }
 
 @Test func hookClaudeXPCDown_stillAskDeniesResetHard() async throws {
@@ -827,7 +827,7 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permission\":\"deny\""))
     #expect(wire.stdout.contains("\"permissionDecision\"") == false)
-    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
 }
 
 @Test func hookCursorMalformed_deniesWithoutEvaluating() async throws {

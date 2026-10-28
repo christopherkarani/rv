@@ -305,12 +305,11 @@ public struct ServiceClient: Sendable {
     }
 
     /// Authority-bearing hooks never retry through the local evaluation door.
+    /// Every failure still denies; the cause only changes the guidance so
+    /// "the service is down" stops reading as a policy verdict.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
-        func unavailable() -> HookWire {
-            LocalControlBoundary.deniedHook(host: host)
-        }
         guard let transport else {
-            return unavailable()
+            return LocalControlBoundary.deniedHook(host: host, cause: .serviceUnreachable)
         }
         do {
             let reply = try await send(
@@ -333,14 +332,74 @@ public struct ServiceClient: Sendable {
                 return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
             case .inProcess:
                 transport.invalidate()
-                return unavailable()
+                return LocalControlBoundary.deniedHook(
+                    host: host,
+                    cause: .versionSkew(
+                        clientSemver: ProtocolVersion.serviceSemver,
+                        serviceSemver: reply.serviceSemver
+                    )
+                )
             }
-        } catch is IPCCallError {
+        } catch let transportError as ServiceTransportError where transportError == .timeout {
             transport.invalidate()
-            return unavailable()
+            return LocalControlBoundary.deniedHook(host: host, cause: .serviceTimeout)
+        } catch let callError as IPCCallError {
+            transport.invalidate()
+            return LocalControlBoundary.deniedHook(host: host, cause: Self.hookCallFailure(callError))
         } catch {
-            return unavailable()
+            return LocalControlBoundary.deniedHook(host: host, cause: Self.hookTransportFailure(error))
         }
+    }
+
+    /// A daemon-declared protocol skew names skew; every other malformed or
+    /// refused reply reads as unreachable — the daemon is not usable either way.
+    private static func hookCallFailure(_ error: IPCCallError) -> HookUnavailability {
+        if case .service(.protocolSkew) = error {
+            return .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: nil)
+        }
+        return .serviceUnreachable
+    }
+
+#if canImport(XPC)
+    /// A daemon that fails verification is a different problem from a daemon
+    /// that is gone: the installed service is stale or foreign, not absent.
+    private static func hookTransportFailure(_ error: Error) -> HookUnavailability {
+        if let xpcError = error as? XPCEvaluateClientError,
+            xpcError == .authenticationFailed
+        {
+            return .daemonRejected
+        }
+        return .serviceUnreachable
+    }
+#else
+    private static func hookTransportFailure(_ error: Error) -> HookUnavailability {
+        _ = error
+        return .serviceUnreachable
+    }
+#endif
+
+    /// Hook-door liveness over the same consult transport hooks use: a
+    /// read-only snapshot, never an evaluation. Retried so a freshly
+    /// bootstrapped daemon still starting does not read as down.
+    func verifyHookService(attempts: Int = 3, retryDelayNanoseconds: UInt64 = 1_000_000_000) async -> Bool {
+        guard let transport else { return false }
+        let tries = max(1, attempts)
+        for attempt in 0..<tries {
+            do {
+                _ = try await send(
+                    DoctorSnapshotCall(),
+                    using: transport,
+                    timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                    hookConsult: true
+                )
+                return true
+            } catch {
+                if attempt + 1 < tries, retryDelayNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+                }
+            }
+        }
+        return false
     }
 
     public func status() async -> ServiceStatusReport {

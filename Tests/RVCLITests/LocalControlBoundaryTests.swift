@@ -5,6 +5,7 @@ import RVDomain
 import RVHooks
 import RVIPC
 import RVPolicy
+import RVService
 @testable import RVCLI
 
 struct LocalControlBoundaryTests {
@@ -12,13 +13,16 @@ struct LocalControlBoundaryTests {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
             let wire = await client.hookEvaluate(host: host, stdin: "{}")
-            #expect(wire == LocalControlBoundary.deniedHook(host: host))
+            #expect(wire == LocalControlBoundary.deniedHook(host: host, cause: .serviceUnreachable))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
                 #expect(!wire.stderr.isEmpty)
             }
         }
+        let museWire = await client.hookEvaluate(host: .muse, stdin: "{}")
+        #expect(museWire.stdout.contains("not reachable"))
+        #expect(museWire.stdout.contains("rv doctor"))
     }
 
     @Test func protocolFailureDeniesWithoutLocalHookAuthority() async throws {
@@ -28,9 +32,60 @@ struct LocalControlBoundaryTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok))
+        #expect(wire == LocalControlBoundary.deniedHook(
+            host: .grok,
+            cause: .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: nil)
+        ))
+        #expect(wire.stdout.contains("disagree"))
         #expect(transport.invalidationCount == 1)
     }
+
+    @Test func hookTimeoutDeniesWithTimeoutCause() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: .timeout
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
+        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .serviceTimeout))
+        #expect(wire.stdout.contains("did not answer in time"))
+        #expect(transport.invalidationCount == 1)
+    }
+
+    @Test func skewedHookReplyDeniesWithVersionSkewCause() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0, serviceSemver: "0.0.0"))
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
+        #expect(wire == LocalControlBoundary.deniedHook(
+            host: .grok,
+            cause: .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: "0.0.0")
+        ))
+        #expect(wire.stdout.contains("0.0.0"))
+        #expect(wire.stdout.contains(ProtocolVersion.serviceSemver))
+        #expect(transport.invalidationCount == 1)
+    }
+
+    @Test func hookUnavailabilityReasonsAreActionable() {
+        #expect(HookUnavailability.serviceUnreachable.reason.contains("not reachable"))
+        #expect(HookUnavailability.serviceUnreachable.reason.contains("rv doctor"))
+        #expect(HookUnavailability.serviceTimeout.reason.contains("did not answer in time"))
+        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: "0.9.0").reason.contains("1.2.3"))
+        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: "0.9.0").reason.contains("0.9.0"))
+        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: nil).reason.contains("unknown"))
+        #expect(HookUnavailability.daemonRejected.reason.contains("identity check"))
+    }
+
+#if canImport(XPC)
+    @Test func daemonAuthenticationFailureDeniesWithRejectedCause() async throws {
+        let client = try isolatedClient(transport: DaemonAuthFailingTransport())
+        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
+        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .daemonRejected))
+        #expect(wire.stdout.contains("identity check"))
+    }
+#endif
 
     @Test func diagnosticFallbackCannotHonorOrConsumeExistingGrant() async throws {
         let directory = try isolatedAllowOnceDirectory()
@@ -134,8 +189,8 @@ struct LocalControlBoundaryTests {
         let layout = OwnedPaths(home: home)
         let environment = ["HOME": home.rawValue, "PATH": "/usr/bin:/bin"]
         try await withCLIProcess(environment: environment) {
-            #expect(throws: ExitCode(0)) {
-                try Setup.parse(["--robot"]).run()
+            await #expect(throws: ExitCode(0)) {
+                try await Setup.parse(["--robot"]).run()
             }
             #expect(FileManager.default.fileExists(atPath: layout.configDirectory))
         }
@@ -161,4 +216,98 @@ struct LocalControlBoundaryTests {
         }
     }
 
+    @Test func hookServiceLivenessTrueWhenSnapshotAnswers() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            responseResult: .doctorSnapshot(DoctorSnapshotReply(
+                serviceSemver: "1.0.0",
+                state: .running,
+                idleExitSeconds: 300,
+                packsEnabled: [],
+                checks: []
+            ))
+        )
+        let client = try isolatedClient(transport: transport)
+        #expect(await client.verifyHookService(attempts: 1, retryDelayNanoseconds: 0) == true)
+        #expect(transport.sendCount == 1)
+    }
+
+    @Test func hookServiceLivenessFalseWithoutTransport() async throws {
+        let client = try isolatedClient(transport: nil)
+        #expect(await client.verifyHookService(attempts: 1, retryDelayNanoseconds: 0) == false)
+    }
+
+    @Test func hookServiceLivenessRetriesThenGivesUp() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: .timeout
+        )
+        let client = try isolatedClient(transport: transport)
+        #expect(await client.verifyHookService(attempts: 3, retryDelayNanoseconds: 0) == false)
+        #expect(transport.sendCount == 3)
+    }
+
+    @Test func setupServiceWarningGating() {
+        #expect(SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: false) == true)
+        #expect(SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: true) == false)
+        #expect(SetupServiceWarning.needed(hasWiredHosts: false, serviceUp: false) == false)
+        #expect(SetupServiceWarning.needed(hasWiredHosts: false, serviceUp: true) == false)
+        #expect(SetupServiceWarning.text.contains("rv doctor"))
+    }
+
+    @Test func setupWarnsWhenWiredHostsOutliveTheService() async throws {
+        // A wired slot with no daemon is exactly the deny-everything trap:
+        // setup stays green (files are written) but the outcome must carry
+        // the service warning on stderr, where robot stdout stays parseable.
+        // Asserted on the outcome, not a captured fd: fd capture deadlocks
+        // under parallel test execution.
+        let home = try isolatedHome()
+        let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
+        try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
+        try #"{"schema_version":1}"#.write(
+            to: museDir.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8
+        )
+        // A slot only reads `.wired` when the baked rv path and its rv-cli
+        // sibling are executable. Stubbed, never executed: no rvd on
+        // purpose, so the daemon is down exactly like the real trap.
+        let binDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".local/bin")
+        try writeExecutableScript(at: binDir.appendingPathComponent("rv"), source: "#!/bin/sh\nexit 0\n")
+        try writeExecutableScript(at: binDir.appendingPathComponent("rv-cli"), source: "#!/bin/sh\nexit 0\n")
+        let environment = ["HOME": home.rawValue, "PATH": "/usr/bin:/bin"]
+        let outcome = try await withCLIProcess(environment: environment) {
+            await Setup().setupOutcome(
+                intent: SetupIntent(
+                    kind: .install,
+                    force: false,
+                    appearance: .robot,
+                    animate: false,
+                    ceremonyKind: .setup
+                ),
+                clock: LiveSetupCeremonyClock(),
+                write: CeremonyCLI.stdoutWriter()
+            )
+        }
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.contains("rv doctor"))
+    }
+
 }
+
+#if canImport(XPC)
+/// Hook consult connects, then the daemon fails verification.
+private struct DaemonAuthFailingTransport: ServiceTransport {
+    func hello(clientSemver: String) async throws -> HelloAckView {
+        HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
+    }
+
+    func send(_ body: Data) async throws -> Data {
+        Data()
+    }
+
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        throw XPCEvaluateClientError.authenticationFailed
+    }
+
+    func invalidate() {}
+}
+#endif
