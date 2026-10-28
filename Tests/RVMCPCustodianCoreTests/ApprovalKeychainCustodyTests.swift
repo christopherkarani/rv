@@ -260,6 +260,14 @@ struct ApprovalKeychainCustodyTests {
         }
         #expect(add[kSecAttrAccessGroup as String] as? String == group)
 
+        // Promptable reads share one authentication context (short Touch ID
+        // reuse window so one onboard burst prompts once); the silent ACL
+        // probe must never carry it or presence detection would lie.
+        #expect(read[kSecUseAuthenticationContext as String] != nil)
+        #expect(silent[kSecUseAuthenticationContext as String] == nil)
+        #expect(live[kSecUseAuthenticationContext as String] == nil)
+        #expect(ApprovalKeychain.authReuseDuration == 30)
+
         // The legacy cleanup delete must stay out of the data-protection
         // store: an unflagged SecItemDelete matches the protected item
         // too (observed live), which made every read destroy the key.

@@ -4,9 +4,13 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+#if canImport(LocalAuthentication)
+import LocalAuthentication
+#endif
 #if canImport(Security)
 import Security
 #endif
+import Synchronization
 import RVDomain
 import RVIsolation
 import RVMCP
@@ -518,8 +522,30 @@ enum ApprovalKeychain {
         var query = copyQuery(silent: false, account: account, accessGroup: accessGroup)
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        #if canImport(LocalAuthentication)
+        query[kSecUseAuthenticationContext as String] = sharedAuthContext.withLock { $0 }
+        #endif
         return query
     }
+
+    #if canImport(LocalAuthentication)
+    /// One authentication context for every promptable read, with a short
+    /// reuse window: a burst of reads inside one operator flow (onboard:
+    /// key + anchor per read, several reads in seconds) prompts once, not
+    /// 3-7 times. Presence is still proven by the person seconds earlier
+    /// in the same flow; the silent ACL probe deliberately never uses
+    /// this context, so presence detection is unchanged. Callers reach
+    /// the custodian only as the pinned CLI peer, so the window cannot
+    /// be ridden by an unrelated process.
+    static let authReuseDuration: TimeInterval = 30
+    private static let sharedAuthContext = Mutex<LAContext>(makeAuthContext())
+
+    private static func makeAuthContext() -> LAContext {
+        let context = LAContext()
+        context.touchIDAuthenticationAllowableReuseDuration = authReuseDuration
+        return context
+    }
+    #endif
 
     /// Removes a pre-presence item from the file-based login keychain. Delete
     /// does not return the secret. The data-protection item is a different store.
