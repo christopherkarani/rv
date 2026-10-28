@@ -77,9 +77,16 @@ public struct MCPHostEntry: Sendable, Equatable {
     }
 
     /// True when this entry's command is the same file as `rvExecutable`.
+    /// The installed layout is a shim (`rv`) that execs `rv-cli` next to
+    /// it: setup writes the shim path into host configs while the process
+    /// answering `rv mcp list` is `rv-cli`, so the sibling shim of an
+    /// `rv-cli` executable also counts as a launch of this rv.
     public func launches(_ rvExecutable: String) -> Bool {
         guard case .stdio(let command, _) = transport else { return false }
-        return MCPFileIdentity.sameFile(command, rvExecutable)
+        if MCPFileIdentity.sameFile(command, rvExecutable) { return true }
+        guard (rvExecutable as NSString).lastPathComponent == "rv-cli" else { return false }
+        let shim = (rvExecutable as NSString).deletingLastPathComponent + "/rv"
+        return MCPFileIdentity.sameFile(command, shim)
     }
 
     static func gatewayServerName(_ args: [String]) -> String? {

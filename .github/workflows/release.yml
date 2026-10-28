@@ -55,7 +55,7 @@ jobs:
             RVDomainTests RVEngineTests RVPacksTests RVPolicyTests \
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
-            RVCorpusTests
+            RVCorpusTests RVMCPTests RVMCPCustodianCoreTests
           Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
 
       - name: Isolation tests (A-E)
@@ -83,10 +83,19 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          # Optional: Developer ID provisioning profile for the approvals
+          # custodian (base64). Unset leaves RVApprovals.app unsigned with a
+          # warning; see Scripts/sign-macos.sh --help for the portal step.
+          RV_CUSTODIAN_PROVISIONING_PROFILE_B64: ${{ secrets.RV_CUSTODIAN_PROVISIONING_PROFILE_B64 }}
           REQUIRE_SIGNED: ${{ vars.RV_REQUIRE_SIGNED_RELEASE }}
         run: |
           set -euo pipefail
           stage="$GITHUB_WORKSPACE/.build/release-stage"
+          if [ -n "${RV_CUSTODIAN_PROVISIONING_PROFILE_B64:-}" ]; then
+            profile_file="$(mktemp -d)/rv-custodian.provisionprofile"
+            printf '%s' "$RV_CUSTODIAN_PROVISIONING_PROFILE_B64" | base64 --decode > "$profile_file"
+            export RV_CUSTODIAN_PROVISIONING_PROFILE="$profile_file"
+          fi
           if [ -n "$DEVELOPER_ID_APP" ] && [ -n "$MACOS_CERT_P12" ] && [ -n "$MACOS_CERT_PASSWORD" ] \
             && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER_ID" ] && [ -n "$NOTARY_KEY_P8" ]; then
             Scripts/sign-macos.sh --keychain-from-env "$stage"

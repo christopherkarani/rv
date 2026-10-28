@@ -241,3 +241,71 @@ private func lines(_ text: String, containing needle: String) -> [String] {
     #expect(text.contains("sign-macos.sh"))
     #expect(text.contains("Does not codesign") == false)
 }
+
+private func makeCustodianBundle(in stage: URL) throws {
+    let macOS = stage.appendingPathComponent("RVApprovals.app/Contents/MacOS", isDirectory: true)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    let binary = macOS.appendingPathComponent("rv-mcp-custodian")
+    try Data("fixture custodian\n".utf8).write(to: binary)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+    try Data("fixture plist\n".utf8).write(
+        to: stage.appendingPathComponent("RVApprovals.app/Contents/Info.plist"))
+}
+
+@Test func signDryRunPrintsCustodianPlanWithoutAProfile() throws {
+    let stage = try makeStage()
+    defer { try? FileManager.default.removeItem(at: stage) }
+    try makeCustodianBundle(in: stage)
+
+    let run = try runSignScript(["--dry-run", stage.path])
+
+    #expect(run.status == 0, "\(run.output)")
+    #expect(run.stdout.contains("RVApprovals.app/Contents/embedded.provisionprofile"))
+    let custodianSign = try #require(
+        lines(run.stdout, containing: "codesign --force").first { $0.contains("rv-mcp-custodian") })
+    #expect(custodianSign.contains("--entitlements"))
+    #expect(custodianSign.contains("RVApprovals.entitlements"))
+    #expect(custodianSign.contains("--identifier dev.rv.mcp-custodian"))
+    for name in ["rv", "rv-cli", "rvd", "rv-workspace-host", "rv-pty-claim"] {
+        let line = try #require(
+            lines(run.stdout, containing: "codesign --force").first { $0.hasSuffix("/\(name)") })
+        #expect(line.contains("--entitlements") == false)
+    }
+    #expect(run.stdout.contains("codesign --verify --deep --strict"))
+    #expect(run.stdout.contains("stapler staple"))
+    #expect(run.stdout.contains("RV_CUSTODIAN_PROVISIONING_PROFILE"))
+}
+
+@Test func signDryRunUsesTheSuppliedCustodianProfile() throws {
+    let stage = try makeStage()
+    defer { try? FileManager.default.removeItem(at: stage) }
+    try makeCustodianBundle(in: stage)
+
+    let run = try runSignScript(
+        ["--dry-run", stage.path],
+        environment: ["RV_CUSTODIAN_PROVISIONING_PROFILE": "/profiles/rv-custodian.provisionprofile"])
+
+    #expect(run.status == 0, "\(run.output)")
+    #expect(run.stdout.contains("/profiles/rv-custodian.provisionprofile"))
+    #expect(run.stdout.contains("RVApprovals.app/Contents/embedded.provisionprofile"))
+}
+
+@Test func signDryRunWithoutACustodianBundlePrintsNoCustodianLines() throws {
+    let stage = try makeStage()
+    defer { try? FileManager.default.removeItem(at: stage) }
+
+    let run = try runSignScript(["--dry-run", stage.path])
+
+    #expect(run.status == 0, "\(run.output)")
+    #expect(run.stdout.contains("RVApprovals") == false)
+    #expect(lines(run.stdout, containing: "--entitlements").isEmpty)
+}
+
+@Test func releaseScriptAssemblesTheCustodianBundle() throws {
+    let scripts = signScriptURL().deletingLastPathComponent()
+    let release = try String(contentsOf: scripts.appendingPathComponent("release.sh"), encoding: .utf8)
+    #expect(release.contains("RVApprovals.app"))
+    #expect(release.contains("custodian/Info.plist"))
+    let assets = try String(contentsOf: scripts.appendingPathComponent("release-assets.sh"), encoding: .utf8)
+    #expect(assets.contains("rv-approvals-darwin-arm64.zip"))
+}

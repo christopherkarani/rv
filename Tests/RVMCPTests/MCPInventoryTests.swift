@@ -197,6 +197,17 @@ struct MCPInventoryTests {
             host: .cursor, scope: .user, configPath: "/x", name: "github",
             transport: .stdio(command: fake.rv.path, args: ["mcp", "serve", "--server=github"]))
         #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: fake.rv.path) == .governed)
+
+        // Installed layout: setup writes the `rv` shim path while the
+        // answering process is its `rv-cli` sibling — still governed.
+        let rvCLI = fake.home.appendingPathComponent("bin/rv-cli")
+        #expect(FileManager.default.createFile(atPath: rvCLI.path, contents: Data()))
+        #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: rvCLI.path) == .governed)
+        // A different directory's binary named rv-cli does not inherit that.
+        let foreign = fake.home.appendingPathComponent("elsewhere/rv-cli")
+        try FileManager.default.createDirectory(at: foreign.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(FileManager.default.createFile(atPath: foreign.path, contents: Data()))
+        #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: foreign.path) == .bypass)
     }
 
     @Test func unreadableAndOversizedHostFilesFailTheInventory() throws {

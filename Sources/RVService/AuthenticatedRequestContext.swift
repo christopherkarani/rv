@@ -113,7 +113,7 @@ public enum ServiceMethodAuthorization {
             switch context.componentRole {
             case .service, .workspaceHost:
                 return context.peer != nil
-            case .cli, .operatorUI, nil:
+            case .cli, .operatorUI, .mcpCustodian, nil:
                 return false
             }
         case .ownerMutation:
@@ -126,7 +126,7 @@ public enum ServiceMethodAuthorization {
             switch context.componentRole {
             case .cli:
                 return context.peer != nil
-            case .service, .workspaceHost, .operatorUI, nil:
+            case .service, .workspaceHost, .operatorUI, .mcpCustodian, nil:
                 return false
             }
         case .ttyAttestation:
@@ -142,7 +142,7 @@ public enum ServiceMethodAuthorization {
             switch context.componentRole {
             case .cli:
                 return context.peer != nil
-            case .service, .workspaceHost, .operatorUI, nil:
+            case .service, .workspaceHost, .operatorUI, .mcpCustodian, nil:
                 return false
             }
         }

@@ -12,6 +12,10 @@ public enum TrustedRVComponentRole: String, Sendable, Codable, CaseIterable, Has
     /// UI code — never that the human authorized anything. Least privilege:
     /// review ceremonies only; no execution, policy, approval, or secret access.
     case operatorUI
+    /// The MCP approvals custodian (`rv-mcp-custodian` in RVApprovals.app).
+    /// It alone may hold the approvals keychain item; the role proves code
+    /// identity to its clients, never human authorization.
+    case mcpCustodian
 }
 
 public struct PeerCodeIdentity: Sendable, Equatable {
@@ -328,12 +332,19 @@ public enum MacOSPeerCodeVerifier {
     /// the live peer must be the exact on-disk sibling bytes (same canonical
     /// executable path, same CDHash). Any lookup failure is a mismatch.
     public static func matchesSibling(peer: PeerCodeIdentity, siblingPath: String) -> Bool {
+        matches(peer: peer, path: siblingPath)
+    }
+
+    /// Path-pin check: the live peer must be the exact on-disk bytes at
+    /// `path` (same canonical executable path, same CDHash). Used for the
+    /// sibling `rvd` and for the bundled approvals custodian alike.
+    public static func matches(peer: PeerCodeIdentity, path: String) -> Bool {
         guard !peer.cdHash.isEmpty,
               let peerPath = posixRealpath(peer.executablePath),
-              let expectedPath = posixRealpath(siblingPath),
+              let expectedPath = posixRealpath(path),
               peerPath == expectedPath,
-              let sibling = try? staticIdentity(ofPath: siblingPath) else { return false }
-        return peer.cdHash == sibling.cdHash
+              let onDisk = try? staticIdentity(ofPath: path) else { return false }
+        return peer.cdHash == onDisk.cdHash
     }
 
     public static func capture(

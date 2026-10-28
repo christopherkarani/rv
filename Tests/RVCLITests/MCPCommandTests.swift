@@ -26,11 +26,11 @@ struct MCPCommandTests {
 
         func environment(
             keychain writer: SecretKeychainWriter? = nil, presence: UserPresence = MCPCommandTests.present,
-            approvalKeys: MCPApprovalKeyStore? = nil
+            approvalSigning: MCPApprovalSigning? = nil
         ) -> MCPEnvironment {
             MCPEnvironment(
                 configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer,
-                approvalKeys: approvalKeys ?? .file(configDirectory: config), presence: presence,
+                approvalSigning: approvalSigning ?? .file(configDirectory: config), presence: presence,
                 oauthTokens: .file(configDirectory: config))
         }
 
@@ -209,8 +209,8 @@ struct MCPCommandTests {
     }
 
     private func signedConfiguration(_ fixture: Fixture, _ configuration: MCPConfiguration) throws {
-        let signer = try #require(MCPApprovalKeyStore.file(configDirectory: fixture.config).loadOrCreate())
-        _ = try configuration.write(configDirectory: fixture.config, signer: signer).get()
+        _ = try configuration.write(
+            configDirectory: fixture.config, signing: MCPApprovalSigning.file(configDirectory: fixture.config)).get()
     }
 
     @Test func importRefusesWithoutDeviceOwnerPresenceAndWritesNothing() async throws {
@@ -230,6 +230,29 @@ struct MCPCommandTests {
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
+    }
+
+    @Test func importWithCustodianSigningSkipsSeparatePresence() async throws {
+        // Custodian-backed signing authenticates at the key itself, so the
+        // import must not ALSO demand device-owner presence (the one
+        // authentication in an onboard is the custodian's). It still ends
+        // any stale auth window first via beginFreshAuth.
+        let fixture = Fixture()
+        try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let freshAuths = Mutex(0)
+        let backing = MCPApprovalSigning.file(configDirectory: fixture.config)
+        let signing = MCPApprovalSigning(
+            honorsGrants: true, presenceAtSigning: true,
+            status: backing.status, mac: backing.mac, verify: backing.verify,
+            beginFreshAuth: { freshAuths.withLock { $0 += 1 } })
+
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, dryRun: false,
+            environment: fixture.environment(presence: Self.absent, approvalSigning: signing)
+        ).get()
+
+        #expect(imported.contains("wrote mcp.json"))
+        #expect(freshAuths.withLock { $0 } == 1)
     }
 
     @Test func importShowsEveryServerURLAndSecretBindingBeforeWriting() async throws {
@@ -4920,14 +4943,13 @@ struct MCPCommandTests {
 
         let fixture = Fixture()
         chmod(fixture.config.path, 0o700)
-        let keys = MCPApprovalKeyStore.file(configDirectory: fixture.config)
-        let signer = try #require(keys.loadOrCreate())
-        _ = try control.write(configDirectory: fixture.config, signer: signer).get()
-        #expect(MCPIntegrity.status(configDirectory: fixture.config, keys: keys).isTrusted)
+        let signing = MCPApprovalSigning.file(configDirectory: fixture.config)
+        _ = try control.write(configDirectory: fixture.config, signing: signing).get()
+        #expect(MCPIntegrity.status(configDirectory: fixture.config, signing: signing).isTrusted)
         let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
         try literal.encoded().prettyText.write(to: url, atomically: true, encoding: .utf8)
         chmod(url.path, 0o600)
-        #expect(MCPIntegrity.status(configDirectory: fixture.config, keys: keys).isTrusted == false)
+        #expect(MCPIntegrity.status(configDirectory: fixture.config, signing: signing).isTrusted == false)
     }
 
     /// Last file-read rule that matches `path`. Seatbelt uses the last match.
@@ -5367,7 +5389,7 @@ struct MCPCommandTests {
         #expect(early.server(named: "fs")?.command == "evil-binary")
         let restoredDuringPrompt = keysReplacing(fixture, with: trusted, onCall: 1)
         let duringPrompt = MCPRun.upstreamLaunches(
-            names: ["fs"], configuration: early, environment: fixture.environment(approvalKeys: restoredDuringPrompt),
+            names: ["fs"], configuration: early, environment: fixture.environment(approvalSigning: restoredDuringPrompt),
             secrets: secrets, resolver: resolver)
         #expect(duringPrompt.failureMessage?.contains("edited outside rv") == true)
         #expect(duringPrompt.failureMessage?.contains("not launching MCP servers") == true)
@@ -5375,10 +5397,10 @@ struct MCPCommandTests {
 
         try plant(trustedReplacing("fs-mcp", with: "evil-binary", in: trusted), at: url)
         let swapping = keysReplacing(fixture, with: trusted, onCall: 1)
-        let captured = try MCPRun.configuration(fixture.environment(approvalKeys: swapping)).get()
+        let captured = try MCPRun.configuration(fixture.environment(approvalSigning: swapping)).get()
         #expect(captured.server(named: "fs")?.command == "evil-binary")
         let later = MCPRun.upstreamLaunches(
-            names: ["fs"], configuration: captured, environment: fixture.environment(approvalKeys: swapping),
+            names: ["fs"], configuration: captured, environment: fixture.environment(approvalSigning: swapping),
             secrets: secrets, resolver: resolver)
         #expect(later.failureMessage?.contains("changed while it was being checked") == true)
         #expect(later.failureMessage?.contains("not launching MCP servers") == true)
@@ -5400,7 +5422,7 @@ struct MCPCommandTests {
         let swapping = keysReplacing(fixture, with: evil, onCall: 1)
         let approved = try await MCPRun.approve(
             id: ticket.id, always: true,
-            environment: fixture.environment(presence: Self.typing { code }, approvalKeys: swapping)
+            environment: fixture.environment(presence: Self.typing { code }, approvalSigning: swapping)
         ).get()
         #expect(approved.contains("always"))
         let text = fixture.text(".config/rv/mcp.json")
@@ -5417,7 +5439,7 @@ struct MCPCommandTests {
             server: "fs", tool: "write_file", argumentsHash: "h3", argumentKeys: [])?.id)
         let restoring = keysReplacing(fixture, with: trusted, onCall: 1)
         let refused = await MCPRun.approve(
-            id: again, always: true, environment: fixture.environment(approvalKeys: restoring))
+            id: again, always: true, environment: fixture.environment(approvalSigning: restoring))
         #expect(refused.failureMessage?.contains("edited outside rv") == true)
         let after = try MCPRun.configuration(fixture.environment()).get()
         #expect(after.server(named: "fs")?.command == "fs-mcp")
@@ -5436,7 +5458,7 @@ struct MCPCommandTests {
         let swapping = keysReplacing(fixture, with: evil, onCall: 1)
         let imported = try await MCPRun.importServers(
             host: .cursor, names: ["seq"], project: nil, dryRun: false,
-            environment: fixture.environment(approvalKeys: swapping)
+            environment: fixture.environment(approvalSigning: swapping)
         ).get()
         #expect(imported.contains("wrote mcp.json"))
         let text = fixture.text(".config/rv/mcp.json")
@@ -5452,7 +5474,7 @@ struct MCPCommandTests {
         let restoring = keysReplacing(fixture, with: trusted, onCall: 1)
         let refused = await MCPRun.importServers(
             host: .cursor, names: ["github"], project: nil, dryRun: false,
-            environment: fixture.environment(approvalKeys: restoring))
+            environment: fixture.environment(approvalSigning: restoring))
         #expect(refused.failureMessage?.contains("edited outside rv") == true)
         #expect(refused.failureMessage?.contains("nothing imported") == true)
         #expect(fixture.text(".config/rv/mcp.json").contains("\"github\"") == false)
@@ -5937,8 +5959,8 @@ struct MCPCommandTests {
         #expect(relative.hasPrefix("/") && relative.hasSuffix("/rv") && relative.contains("./") == false)
     }
 
-    private func keysReplacing(_ fixture: Fixture, with replacement: Data, onCall call: Int) -> MCPApprovalKeyStore {
-        let backing = MCPApprovalKeyStore.file(configDirectory: fixture.config)
+    private func keysReplacing(_ fixture: Fixture, with replacement: Data, onCall call: Int) -> MCPApprovalSigning {
+        let backing = MCPApprovalSigning.file(configDirectory: fixture.config)
         let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
         let seen = Mutex(0)
         let swap: @Sendable () -> Void = {
@@ -5950,14 +5972,18 @@ struct MCPCommandTests {
             try? replacement.write(to: url, options: .atomic)
             chmod(url.path, 0o600)
         }
-        return MCPApprovalKeyStore(
-            load: {
+        return MCPApprovalSigning(
+            status: {
                 swap()
-                return backing.load()
+                return backing.status()
             },
-            loadOrCreate: {
+            mac: { purpose, fields, createIfMissing in
                 swap()
-                return backing.loadOrCreate()
+                return backing.mac(purpose, fields, createIfMissing)
+            },
+            verify: { candidate, purpose, fields in
+                swap()
+                return backing.verify(candidate, purpose, fields)
             })
     }
 

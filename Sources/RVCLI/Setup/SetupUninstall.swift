@@ -29,11 +29,15 @@ extension SetupRun {
 
         let servicePath = evaluateServicePath(layout: layout, supervisor: env.supervisor)
         let launchAgentExisted = files.fileExists(servicePath)
+        let custodianAgentExisted = files.fileExists(layout.custodianLaunchAgent)
         let binariesExisted = files.fileExists(layout.localRv)
             || files.fileExists(layout.localRvCli)
             || files.fileExists(layout.localRvd)
         removedPaths.append(
-            contentsOf: [servicePath, layout.localRv, layout.localRvCli, layout.localRvd]
+            contentsOf: [
+                servicePath, layout.custodianLaunchAgent,
+                layout.localRv, layout.localRvCli, layout.localRvd,
+            ]
         )
 
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -55,6 +59,12 @@ extension SetupRun {
 
         if env.supervisor == .launchd, env.touchLaunchd {
             let uid = env.uid()
+            if custodianAgentExisted {
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.user(uid), label: custodianLaunchAgentLabel)
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.gui(uid), label: custodianLaunchAgentLabel)
+            }
             try? env.launchctl.bootout(domain: LaunchdDomain.user(uid), label: launchAgentLabel)
             do {
                 try env.launchctl.bootout(domain: LaunchdDomain.gui(uid), label: launchAgentLabel)

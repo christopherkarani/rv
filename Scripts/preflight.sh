@@ -110,6 +110,10 @@ check_value_types() {
   #            (NSObject subclasses); the rest of RVMCP stays value-only.
   #   RVMCP/MCPSandbox.swift HeldDirectory — owns one directory fd and
   #            closes it on deinit; arrays of held ancestors rely on that.
+  #   RVMCPCustodianCore — the custodian service edge (XPC listener,
+  #            idle watchdog), mirroring RVService; and
+  #            RVMCP/CustodianXPCClient.swift — its libxpc client handle,
+  #            mirroring XPCEvaluateClient. The key logic stays value-only.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/internal/…/final) must not hide a declaration, so we match
   # the keyword on a line that may start with any run of those tokens.
@@ -118,8 +122,10 @@ check_value_types() {
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
     | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' | grep -v 'Sources/RVLaya/' \
-    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
+    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCPCustodianCore/' \
+    | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
+    | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
@@ -371,7 +377,8 @@ check_no_main_in_library() {
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' || true)
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
+    | grep -v 'Sources/rv-mcp-custodian/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
@@ -386,7 +393,8 @@ check_no_main_in_library() {
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' || true)
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
+    | grep -v 'Sources/rv-mcp-custodian/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then

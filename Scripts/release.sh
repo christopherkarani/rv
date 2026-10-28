@@ -20,6 +20,7 @@ Usage: Scripts/release.sh
   one swift build -c release (all products) → stage rv-cli, rvd,
     rv-workspace-host (+ rv-pty-claim on Darwin,
     rv-isolation-exec on Linux) (strip -x)
+  Darwin also assembles RVApprovals.app (rv-mcp-custodian + Info.plist)
   copy *_RVPacks.bundle (Darwin) or *_RVPacks.resources (Linux)
     into .build/release-stage (override with RV_RELEASE_STAGE)
 
@@ -27,6 +28,9 @@ RV_RELEASE_SKIP_C_UNITS=1 skips the C unit run (CI runs it separately).
 RV_RELEASE_SIGN=1 runs Scripts/sign-macos.sh on the Darwin stage (Developer
 ID identity from the login keychain; see its --help for the environment);
 RV_RELEASE_SIGN=dry-run prints its commands. Unset leaves the stage unsigned.
+RV_CUSTODIAN_PROVISIONING_PROFILE (Developer ID profile for the App ID
+dev.rv.mcp-custodian, created once in the Apple Developer portal) is passed
+through to sign-macos.sh; without it RVApprovals.app is left unsigned.
 Does not write $HOME/.local/bin.
 C is not an SPM product. SPM product rv stays the Swift operator (rv-cli).
 EOF
@@ -195,8 +199,23 @@ if [[ "$OS" == "Darwin" ]]; then
   chmod 755 "$STAGE/rv-judge"
   strip -x "$STAGE/rv-judge"
 
+  # The MCP approvals custodian ships only inside its app bundle: the
+  # data-protection keychain requires the bundle's provisioning profile and
+  # keychain-access-groups entitlement (see Scripts/sign-macos.sh --help).
+  if [[ ! -x "$BIN_DIR/rv-mcp-custodian" ]]; then
+    printf "release: expected executable rv-mcp-custodian in %s\n" "$BIN_DIR" >&2
+    exit 1
+  fi
+  CUSTODIAN_APP="$STAGE/RVApprovals.app"
+  rm -rf "$CUSTODIAN_APP"
+  mkdir -p "$CUSTODIAN_APP/Contents/MacOS"
+  cp "$BIN_DIR/rv-mcp-custodian" "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian"
+  chmod 755 "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian"
+  strip -x "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian"
+  cp "$ROOT/Scripts/custodian/Info.plist" "$CUSTODIAN_APP/Contents/Info.plist"
+
   needs_span=0
-  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim" "$STAGE/rv-judge"; do
+  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim" "$STAGE/rv-judge" "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian"; do
     if otool -L "$staged" | grep -q 'libswiftCompatibilitySpan.dylib'; then
       needs_span=1
     fi
@@ -224,6 +243,15 @@ if [[ "$OS" == "Darwin" ]]; then
         install_name_tool -add_rpath @loader_path "$staged"
       fi
     done
+    # The custodian resolves @loader_path inside its bundle, so it needs its
+    # own copy of the span runtime when it links one.
+    if otool -L "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian" | grep -q 'libswiftCompatibilitySpan.dylib'; then
+      cp "$span_runtime" "$CUSTODIAN_APP/Contents/MacOS/libswiftCompatibilitySpan.dylib"
+      chmod 755 "$CUSTODIAN_APP/Contents/MacOS/libswiftCompatibilitySpan.dylib"
+      if ! otool -l "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian" | grep -A3 'cmd LC_RPATH' | grep -Fq 'path @loader_path '; then
+        install_name_tool -add_rpath @loader_path "$CUSTODIAN_APP/Contents/MacOS/rv-mcp-custodian"
+      fi
+    fi
   fi
   # `Claude` on PATH is not always Anthropic's: Meta's installer also
   # claims the name for its launcher. Verify the codesign identity and

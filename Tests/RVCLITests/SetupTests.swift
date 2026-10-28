@@ -800,6 +800,37 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_custodianLaunchAgentTemplate_rendersEmbeddedResource() throws {
+    let plist = try LaunchAgentTemplate.renderedCustodian(custodianPath: "/opt/RVApprovals.app/Contents/MacOS/rv-mcp-custodian")
+    #expect(plist.contains("/opt/RVApprovals.app/Contents/MacOS/rv-mcp-custodian"))
+    #expect(plist.contains("@CUSTODIAN_PATH@") == false)
+    let keys = try launchdPlist(plist)
+    #expect(keys["Label"] as? String == "dev.rv.mcp-custodian")
+    #expect(keys["KeepAlive"] as? Bool == false)
+    #expect(keys["RunAtLoad"] as? Bool == false)
+    let services = try #require(keys["MachServices"] as? [String: Bool])
+    #expect(services["dev.rv.mcp-custodian"] == true)
+}
+
+@Test func setup_writesCustodianLaunchAgentOnlyWhenBundleExists() throws {
+    try withTempHome { home, layout, launchctl in
+        let absent = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(absent.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.custodianLaunchAgent) == false)
+
+        let macOS = (layout.custodianAppExecutable as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: macOS, withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(toFile: layout.custodianAppExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: layout.custodianAppExecutable)
+
+        let present = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(present.exitCode == 0)
+        let plist = try String(contentsOfFile: layout.custodianLaunchAgent, encoding: .utf8)
+        #expect(plist.contains(layout.custodianAppExecutable))
+    }
+}
+
 @Test func setup_launchAgentTemplate_rendersEmbeddedResource() throws {
     let plist = try LaunchAgentTemplate.rendered(rvdPath: "/opt/rvd")
     #expect(plist.contains("/opt/rvd"))
