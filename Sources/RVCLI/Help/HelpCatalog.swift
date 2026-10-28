@@ -538,7 +538,7 @@ enum HelpCatalog {
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",
-                    description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf"
+                    description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf, Muse"
                 ),
                 HelpRow(name: "redaction", description: "Env and header values never shown; credential-like args masked"),
                 HelpRow(name: "audit", description: "rv audit tail --kind mcp.call shows every tool call"),

@@ -287,6 +287,10 @@ public enum MCPHostSetup {
             return .object(entry)
         }
         if original["type"] != nil { entry["type"] = .string("stdio") }
+        // Hosts with entry metadata rv does not model (Muse: transport +
+        // mode) keep it: the rewrite changes the command, nothing else.
+        if let transport = original["transport"] { entry["transport"] = transport }
+        if let mode = original["mode"] { entry["mode"] = mode }
         entry["command"] = .string(rvPath)
         entry["args"] = .array(["mcp", "serve", "--server", server].map(JSONValue.string))
         return .object(entry)
