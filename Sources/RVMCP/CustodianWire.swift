@@ -7,6 +7,10 @@ public enum MCPCustodianRequest: Sendable, Equatable, Codable {
     case status
     case mac(purpose: String, fields: [String], createIfMissing: Bool)
     case verify(candidate: String?, purpose: String, fields: [String])
+    /// Invalidate any reusable authentication in the custodian, so the
+    /// next key use in this operation prompts exactly once. Prompt-free
+    /// itself; answers with `.status`.
+    case beginFreshAuth
 }
 
 public enum MCPCustodianError: String, Sendable, Equatable, Codable {
@@ -61,7 +65,7 @@ public struct MCPCustodianHelloAck: Sendable, Equatable, Codable {
 /// Bounds on every custodian request, enforced on both sides of the seam.
 /// The `enrollment` purpose is custodian-internal and never crosses it.
 public enum MCPCustodianWire {
-    public static let protocolVersion = "rv.mcp-custodian.v1"
+    public static let protocolVersion = "rv.mcp-custodian.v2"
     /// Mach service, bundle id, and LaunchAgent label are one name.
     public static let machServiceName = "dev.rv.mcp-custodian"
     /// XPC dictionary key carrying hello/request/response JSON.
@@ -78,7 +82,7 @@ public enum MCPCustodianWire {
 
     public static func isValid(_ request: MCPCustodianRequest) -> Bool {
         switch request {
-        case .status: true
+        case .status, .beginFreshAuth: true
         case .mac(let purpose, let fields, _): isValid(purpose: purpose, fields: fields, candidate: nil)
         case .verify(let candidate, let purpose, let fields): isValid(purpose: purpose, fields: fields, candidate: candidate)
         }

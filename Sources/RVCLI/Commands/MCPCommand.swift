@@ -584,6 +584,9 @@ enum MCPRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let decoded): configuration = decoded
         }
+        if environment.approvalSigning.presenceAtSigning {
+            environment.approvalSigning.beginFreshAuth()
+        }
         if MCPIntegrity.status(of: data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) == .trusted {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
@@ -593,10 +596,17 @@ enum MCPRun {
             return .failure("trust review omitted a literal value; nothing signed")
         }
         show(review + "\n")
-        let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)\n\(review)", .deviceOwner)
-        guard case .confirmed(let method) = outcome else {
-            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
-            return .failure(CommandFailure("not trusted: \(refusal)"))
+        let method: String
+        if environment.approvalSigning.presenceAtSigning {
+            // The custodian's key use below is the one authentication.
+            method = "custodian user presence"
+        } else {
+            let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)\n\(review)", .deviceOwner)
+            guard case .confirmed(let confirmedBy) = outcome else {
+                let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
+                return .failure(CommandFailure("not trusted: \(refusal)"))
+            }
+            method = confirmedBy
         }
         guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
             return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
@@ -987,6 +997,12 @@ enum MCPRun {
             return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
         }
         if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
+        // Custodian-backed signing authenticates at the key itself: end
+        // any reuse window now so this onboard prompts exactly once (at
+        // its first key use) and needs no separate presence confirmation.
+        if environment.approvalSigning.presenceAtSigning {
+            environment.approvalSigning.beginFreshAuth()
+        }
         let integrity = MCPIntegrity.status(
             of: base.bytes, configDirectory: environment.configDirectory, signing: environment.approvalSigning)
         if let problem = integrity.problem {
@@ -1007,10 +1023,12 @@ enum MCPRun {
             return .failure(CommandFailure("import review omitted a literal value; nothing imported"))
         }
         show(review.shown)
-        let outcome = await environment.presence.confirm(review.reason, .deviceOwner)
-        guard case .confirmed = outcome else {
-            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
-            return .failure(CommandFailure("not imported: \(refusal); nothing imported"))
+        if environment.approvalSigning.presenceAtSigning == false {
+            let outcome = await environment.presence.confirm(review.reason, .deviceOwner)
+            guard case .confirmed = outcome else {
+                let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
+                return .failure(CommandFailure("not imported: \(refusal); nothing imported"))
+            }
         }
         var stored: [String] = []
         func rollback() -> Bool {

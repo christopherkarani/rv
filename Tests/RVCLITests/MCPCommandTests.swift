@@ -232,6 +232,29 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
     }
 
+    @Test func importWithCustodianSigningSkipsSeparatePresence() async throws {
+        // Custodian-backed signing authenticates at the key itself, so the
+        // import must not ALSO demand device-owner presence (the one
+        // authentication in an onboard is the custodian's). It still ends
+        // any stale auth window first via beginFreshAuth.
+        let fixture = Fixture()
+        try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let freshAuths = Mutex(0)
+        let backing = MCPApprovalSigning.file(configDirectory: fixture.config)
+        let signing = MCPApprovalSigning(
+            honorsGrants: true, presenceAtSigning: true,
+            status: backing.status, mac: backing.mac, verify: backing.verify,
+            beginFreshAuth: { freshAuths.withLock { $0 += 1 } })
+
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, dryRun: false,
+            environment: fixture.environment(presence: Self.absent, approvalSigning: signing)
+        ).get()
+
+        #expect(imported.contains("wrote mcp.json"))
+        #expect(freshAuths.withLock { $0 } == 1)
+    }
+
     @Test func importShowsEveryServerURLAndSecretBindingBeforeWriting() async throws {
         let fixture = Fixture()
         let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"

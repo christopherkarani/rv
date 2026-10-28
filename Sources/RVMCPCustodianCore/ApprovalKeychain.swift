@@ -545,6 +545,16 @@ enum ApprovalKeychain {
         context.touchIDAuthenticationAllowableReuseDuration = authReuseDuration
         return context
     }
+
+    /// Ends the reuse window (invalidates the authenticated context), so
+    /// the next promptable read authenticates fresh. An operation such as
+    /// onboard calls this once at its start and then prompts exactly once.
+    static func resetAuthContext() {
+        sharedAuthContext.withLock { context in
+            context.invalidate()
+            context = makeAuthContext()
+        }
+    }
     #endif
 
     /// Removes a pre-presence item from the file-based login keychain. Delete
@@ -602,7 +612,8 @@ extension MCPApprovalSigning {
             loadOrCreate: {
                 ApprovalKeychain.read(configDirectory: configDirectory)
                     ?? ApprovalKeychain.create(configDirectory: configDirectory)
-            })
+            },
+            beginFreshAuth: { ApprovalKeychain.resetAuthContext() })
     }
 }
 #endif

@@ -62,7 +62,7 @@ public final class MCPCustodianXPCClient: Sendable {
         for request: MCPCustodianRequest, hello helloTimeout: TimeInterval, request requestTimeout: TimeInterval
     ) -> TimeInterval {
         switch request {
-        case .status: helloTimeout
+        case .status, .beginFreshAuth: helloTimeout
         case .mac, .verify: requestTimeout
         }
     }

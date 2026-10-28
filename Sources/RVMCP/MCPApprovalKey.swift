@@ -71,20 +71,33 @@ public struct MCPApprovalSigning: Sendable {
     /// same-user-readable key file proves nothing: any process running as
     /// the user can mint grants. The key still seals integrity state either way.
     public var honorsGrants: Bool
+    /// True when using the key itself prompts for user presence at
+    /// signing time (the custodian's data-protection keychain item), so
+    /// flows can skip a separate presence confirmation: the one
+    /// authentication in the operation is the key use.
+    public var presenceAtSigning: Bool
     public var status: @Sendable () -> MCPApprovalKeyStatus
     public var mac: @Sendable (_ purpose: String, _ fields: [String], _ createIfMissing: Bool) -> String?
     public var verify: @Sendable (_ candidate: String?, _ purpose: String, _ fields: [String]) -> Bool?
+    /// Ends any reusable authentication window so the next key use in
+    /// this operation prompts exactly once. No-op where key use does not
+    /// authenticate (file store) or cannot reuse (in-process test fakes).
+    public var beginFreshAuth: @Sendable () -> Void
 
     public init(
         honorsGrants: Bool = true,
+        presenceAtSigning: Bool = false,
         status: @escaping @Sendable () -> MCPApprovalKeyStatus,
         mac: @escaping @Sendable (String, [String], Bool) -> String?,
-        verify: @escaping @Sendable (String?, String, [String]) -> Bool?
+        verify: @escaping @Sendable (String?, String, [String]) -> Bool?,
+        beginFreshAuth: @escaping @Sendable () -> Void = {}
     ) {
         self.honorsGrants = honorsGrants
+        self.presenceAtSigning = presenceAtSigning
         self.status = status
         self.mac = mac
         self.verify = verify
+        self.beginFreshAuth = beginFreshAuth
     }
 
     public static let unavailable = MCPApprovalSigning(
@@ -97,7 +110,8 @@ public struct MCPApprovalSigning: Sendable {
         honorsGrants: Bool = true,
         status: (@Sendable () -> MCPApprovalKeyStatus)? = nil,
         load: @escaping @Sendable () -> MCPSigner?,
-        loadOrCreate: @escaping @Sendable () -> MCPSigner?
+        loadOrCreate: @escaping @Sendable () -> MCPSigner?,
+        beginFreshAuth: @escaping @Sendable () -> Void = {}
     ) -> MCPApprovalSigning {
         MCPApprovalSigning(
             honorsGrants: honorsGrants,
@@ -107,7 +121,8 @@ public struct MCPApprovalSigning: Sendable {
             },
             verify: { candidate, purpose, fields in
                 load().map { $0.verify(candidate, purpose, fields) }
-            })
+            },
+            beginFreshAuth: beginFreshAuth)
     }
 
     /// macOS keeps the key in the data-protection keychain, held only by

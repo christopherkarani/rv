@@ -12,6 +12,7 @@ extension MCPApprovalSigning {
     ) -> MCPApprovalSigning {
         MCPApprovalSigning(
             honorsGrants: honorsGrants,
+            presenceAtSigning: true,
             status: {
                 guard case .status(let status)? = transport(.status) else { return .unavailable }
                 return status
@@ -26,7 +27,8 @@ extension MCPApprovalSigning {
                 let request = MCPCustodianRequest.verify(candidate: candidate, purpose: purpose, fields: fields)
                 guard MCPCustodianWire.isValid(request), case .verify(let valid)? = transport(request) else { return nil }
                 return valid
-            })
+            },
+            beginFreshAuth: { _ = transport(.beginFreshAuth) })
     }
 }
 
@@ -44,6 +46,9 @@ public struct MCPCustodianKeyService: Sendable {
         guard MCPCustodianWire.isValid(request) else { return .error(.badRequest) }
         switch request {
         case .status: return .status(signing.status())
+        case .beginFreshAuth:
+            signing.beginFreshAuth()
+            return .status(signing.status())
         case .mac(let purpose, let fields, let createIfMissing):
             return .mac(signing.mac(purpose, fields, createIfMissing))
         case .verify(let candidate, let purpose, let fields):

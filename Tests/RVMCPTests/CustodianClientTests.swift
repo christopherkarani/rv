@@ -54,6 +54,24 @@ struct CustodianClientTests {
         #expect(calls.withLock { $0 } == 0)
     }
 
+    @Test func beginFreshAuthRoundTripsAndMarksPresenceAtSigning() {
+        let resets = Mutex(0)
+        let key = [UInt8](repeating: 7, count: 32)
+        let backing = MCPApprovalSigning.inProcess(
+            status: { .enrolled },
+            load: { MCPSigner(key: key) },
+            loadOrCreate: { MCPSigner(key: key) },
+            beginFreshAuth: { resets.withLock { $0 += 1 } })
+        let service = MCPCustodianKeyService(signing: backing)
+        let signing = MCPApprovalSigning.custodian(transport: service.transport)
+
+        #expect(signing.presenceAtSigning)
+        signing.beginFreshAuth()
+        #expect(resets.withLock { $0 } == 1)
+        #expect(MCPApprovalSigning.unavailable.presenceAtSigning == false)
+        #expect(MCPApprovalSigning.file(configDirectory: Self.scratch()).presenceAtSigning == false)
+    }
+
     @Test func custodianServiceRejectsBadRequests() {
         let service = MCPCustodianKeyService(signing: .unavailable)
         #expect(service.handle(.mac(purpose: "enrollment", fields: ["check"], createIfMissing: true)) == .error(.badRequest))
