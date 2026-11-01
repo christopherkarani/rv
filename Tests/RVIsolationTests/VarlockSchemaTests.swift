@@ -286,6 +286,26 @@ struct VarlockSchemaTests {
         #expect(plan.notes.contains { $0.hasPrefix("note OPTIONED:") && $0.contains("preventLeaks") })
         #expect(plan.notes.contains("skip DISABLED: not sensitive"))
     }
+
+    // MARK: Lines the importer cannot use must not leak comments forward
+
+    @Test func exportAndDottedKeysConsumeTheirOwnComments() throws {
+        let plan = try VarlockSchema.plan("""
+            # @defaultSensitive=false
+            # ---
+            # Exported
+            # @sensitive
+            export EXPORTED=op(op://v/i/e)
+            # Dotted note
+            # @sensitive
+            my.dotted-key=op(op://v/i/d)
+            NEXT=op(op://v/i/n)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["EXPORTED"])
+        #expect(plan.secrets.first?.description == "Exported")
+        #expect(plan.notes.contains("skip my.dotted-key: not an environment variable name"))
+        #expect(plan.notes.contains("skip NEXT: not sensitive"))
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {

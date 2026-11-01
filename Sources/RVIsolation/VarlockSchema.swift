@@ -151,8 +151,10 @@ public enum VarlockSchema {
                 document.items.append(Item(
                     name: item.name, value: item.value, decorators: decorators,
                     description: description(comments)))
-                comments = []
             }
+            // A line that is no item still ends its comment block, so its
+            // decorators never attach to the next item.
+            comments = []
             index += 1
         }
         return document
@@ -579,12 +581,23 @@ public enum VarlockSchema {
         return depth
     }
 
+    /// `[export ]KEY=value` with Varlock's key grammar `[a-zA-Z_][a-zA-Z0-9_.-]*`
+    /// (grammar.peggy:28-45). Keys that are not variable names still parse, so
+    /// they keep their own comments; `definition` skips them.
     private static func assignment(_ line: String) -> (name: String, value: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let eq = trimmed.firstIndex(of: "=") else { return nil }
-        let name = String(trimmed[..<eq]).trimmingCharacters(in: .whitespaces)
-        guard SecretsConfiguration.isVariableName(name) else { return nil }
-        return (name, String(trimmed[trimmed.index(after: eq)...]))
+        if trimmed.hasPrefix("export "), let exported = assignment(key: trimmed.dropFirst(7)) { return exported }
+        return assignment(key: Substring(trimmed))
+    }
+
+    private static func assignment(key line: Substring) -> (name: String, value: String)? {
+        guard let eq = line.firstIndex(of: "=") else { return nil }
+        let name = line[..<eq].trimmingCharacters(in: .whitespaces)
+        func letter(_ byte: UInt8) -> Bool { (65...90).contains(byte) || (97...122).contains(byte) || byte == 95 }
+        guard let first = name.utf8.first, letter(first),
+            name.utf8.allSatisfy({ letter($0) || (48...57).contains($0) || $0 == 46 || $0 == 45 })
+        else { return nil }
+        return (name, String(line[line.index(after: eq)...]))
     }
 
     private static func stripTrailingComment(_ value: String) -> String {
