@@ -55,6 +55,24 @@ struct LocalTerminalRestoreTests {
         let endpoint = host.server.endpoint
 
         try expectRestored(endpoint: endpoint) { client, pty in
+            // A failed launch throws before raw mode and still detaches.
+            var engaged = false
+            #expect(throws: WorkspaceTerminalSessionFailure.launch(.workspaceClosed)) {
+                try WorkspaceTerminalSession.run(
+                    client: client,
+                    launch: { _ in .failure(.workspaceClosed) },
+                    rows: 24, columns: 80, abandonOnInputEnd: false,
+                    input: pty.master, output: pty.slave,
+                    rawMode: { _ in
+                        engaged = true
+                        return nil
+                    }
+                )
+            }
+            #expect(engaged == false)
+        }
+
+        try expectRestored(endpoint: endpoint) { client, pty in
             // A fast exit can win the race with acquire. The status is still
             // on the stream, and the session still has to put the terminal back.
             let box = SessionBox()

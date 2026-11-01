@@ -74,16 +74,16 @@ struct WorkspaceTerminalSessionTests {
 
     /// Only an owned, interactive input that ended abandons the run. A pipe
     /// or /dev/null EOFs at once and must not cut a slow command short.
-    static let inputEndCases: [InputEndCase] = [false, true].flatMap { owns in
-        [false, true].flatMap { abandon in
-            [false, true].map { ended in
-                InputEndCase(
-                    ownsInput: owns, abandonOnInputEnd: abandon, inputEnded: ended,
-                    ends: owns && abandon && ended
-                )
-            }
-        }
-    }
+    static let inputEndCases: [InputEndCase] = [
+        InputEndCase(ownsInput: false, abandonOnInputEnd: false, inputEnded: false, ends: false),
+        InputEndCase(ownsInput: false, abandonOnInputEnd: false, inputEnded: true, ends: false),
+        InputEndCase(ownsInput: false, abandonOnInputEnd: true, inputEnded: false, ends: false),
+        InputEndCase(ownsInput: false, abandonOnInputEnd: true, inputEnded: true, ends: false),
+        InputEndCase(ownsInput: true, abandonOnInputEnd: false, inputEnded: false, ends: false),
+        InputEndCase(ownsInput: true, abandonOnInputEnd: false, inputEnded: true, ends: false),
+        InputEndCase(ownsInput: true, abandonOnInputEnd: true, inputEnded: false, ends: false),
+        InputEndCase(ownsInput: true, abandonOnInputEnd: true, inputEnded: true, ends: true),
+    ]
 
     @Test(arguments: inputEndCases)
     func endsOnInputOnlyForOwnedInteractiveEOF(_ row: InputEndCase) {
@@ -94,11 +94,6 @@ struct WorkspaceTerminalSessionTests {
                 inputEnded: row.inputEnded
             ) == row.ends
         )
-    }
-
-    @Test func endsOnInputTruthTableHasOneTrueRow() {
-        #expect(Self.inputEndCases.count == 8)
-        #expect(Self.inputEndCases.filter(\.ends).count == 1)
     }
 }
 #endif
