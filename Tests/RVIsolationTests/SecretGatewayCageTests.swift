@@ -92,6 +92,61 @@ struct SecretGatewayCageTests {
         #expect(fixture.auditText.contains(Self.realKey) == false)
     }
 
+    @Test func aHostProcessHoldingTheCagesPlaceholderIsRefusedWhileTheCageIsServed() throws {
+        let fixture = try SecretsFixture(SecretsFixture.standard)
+        defer { fixture.tearDown() }
+        let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver,
+            transport: upstream.transport, workspace: "cage-test")
+        let opened = try open(broker: broker)
+        defer {
+            _ = opened.supervisor.close()
+            opened.tree.tearDown()
+        }
+        let profile = RuntimeResourceProfile(
+            id: "agents", projects: [opened.supervisor.snapshot.originalPath.rawValue], secrets: ["OPENAI_API_KEY"])
+        // The runtime stays alive, so its placeholder stays live, until the host has tried it.
+        let script = """
+            printf '%s' "$OPENAI_API_KEY" > key.txt
+            while [ ! -f go.txt ]; do /bin/sleep 0.1; done
+            /usr/bin/curl -sS -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models" \
+              > reply.txt 2> curl-err.txt
+            echo done > done.txt
+            """
+        let running = try opened.supervisor.launch(
+            host: nil, stagingAgent: cageStagingTag("codex"),
+            command: try #require(IsolatedCommand(executable: "/bin/sh", arguments: ["-c", script])),
+            plan: compileContainedPlan(workspace: opened.supervisor.snapshot.policyWorkspace),
+            io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog),
+            keychainReader: KeychainReader(read: { _, _ in nil })
+        ).get()
+        #expect(cageWait { read(opened, "key.txt").hasPrefix("sk-rvph_") })
+
+        // This test process is outside the runtime's process group.
+        let placeholder = read(opened, "key.txt")
+        let port = try #require(broker.gatewayPort)
+        let stolen = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder)\r\n\r\n")
+        #expect(stolen.status == 403)
+        #expect(upstream.requests.isEmpty)
+
+        try Data().write(to: opened.tree.workspaceURL.appendingPathComponent("go.txt"))
+        #expect(cageWait { FileManager.default.fileExists(
+            atPath: opened.tree.workspaceURL.appendingPathComponent("done.txt").path) })
+        #expect(read(opened, "curl-err.txt") == "")
+        #expect(read(opened, "reply.txt") == "ok")
+        #expect(upstream.requests.count == 1)
+
+        let runtime = running.session.id.rawValue.uuidString
+        let misuse = fixture.auditLines.filter { $0["kind"] as? String == "secret.misuse" }
+        #expect(misuse.count == 1)
+        #expect(misuse.first?["runtime"] as? String == runtime)
+        #expect((misuse.first?["detail"] as? [String: String])?["refusal"] == "runtimeMismatch")
+        #expect(fixture.auditText.contains(placeholder) == false)
+    }
+
     @Test func undefinedSecretFailsTheLaunchBeforeSpawn() throws {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
