@@ -414,10 +414,6 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
-                    name: "surfaces",
-                    description: "Off its surfaces, or twice on one (a second header), a placeholder is refused with 403"
-                ),
-                HelpRow(
                     name: "sources",
                     description: "Joins every rv ledger in ~/.config/rv into one rv.audit.v1 stream"
                 ),
@@ -476,6 +472,10 @@ enum HelpCatalog {
                 HelpRow(
                     name: "basic",
                     description: "Basic user:placeholder is decoded and swapped (git over https); encoded placeholders are refused"
+                ),
+                HelpRow(
+                    name: "surfaces",
+                    description: "Off its surfaces, or twice on one (a second header), a placeholder is refused with 403"
                 ),
                 HelpRow(
                     name: "sources",
