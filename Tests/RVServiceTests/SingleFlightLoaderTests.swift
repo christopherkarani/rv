@@ -139,6 +139,43 @@ struct SingleFlightLoaderTests {
         #expect(makes.count == 2)
     }
 
+    @Test func cachedFailureExpiresSoATransientFailureRetries() {
+        let clock = ManualInstant()
+        let loader = SingleFlightLoader<Box>(retryFailuresAfter: .seconds(60), now: { clock.now })
+        let makes = Counter()
+        _ = loader.value(key: key, stamp: 1, wait: nil) {
+            makes.hit()
+            throw Broken()
+        }
+        clock.advance(.seconds(30))
+        let cached = loader.value(key: key, stamp: 1, wait: nil) {
+            makes.hit()
+            return Box(id: 8)
+        }
+        guard case .cachedFailure = cached else {
+            Issue.record("inside the retry window the failure stays cached, got \(cached)")
+            return
+        }
+        #expect(makes.count == 1)
+
+        // Same stamp (model unchanged), but e.g. memory pressure has passed.
+        clock.advance(.seconds(31))
+        let retried = loader.value(key: key, stamp: 1, wait: nil) {
+            makes.hit()
+            return Box(id: 8)
+        }
+        guard case .ready(let box) = retried else {
+            Issue.record("an expired negative cache must retry the load, got \(retried)")
+            return
+        }
+        #expect(box.id == 8)
+        #expect(makes.count == 2)
+    }
+
+    @Test func defaultFailureRetryIsAMinute() {
+        #expect(SingleFlightLoader<Box>.defaultFailureRetry == .seconds(60))
+    }
+
     @Test func anotherBundleReloads() {
         let loader = SingleFlightLoader<Box>()
         _ = loader.value(key: key, stamp: 1, wait: nil) { Box(id: 1) }
@@ -176,6 +213,12 @@ private final class Box: Sendable {
 }
 
 private struct Broken: Error {}
+
+private final class ManualInstant: Sendable {
+    private let box = Mutex(ContinuousClock.now)
+    var now: ContinuousClock.Instant { box.withLock { $0 } }
+    func advance(_ by: Duration) { box.withLock { $0 = $0.advanced(by: by) } }
+}
 
 private final class Counter: Sendable {
     private let box = Mutex(0)

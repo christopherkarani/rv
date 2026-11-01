@@ -655,7 +655,8 @@ enum JudgeLoadError: Error {
 /// fine-tuned single-pass judge load different bundles and must not share
 /// a slot. Cache entries are keyed by bundle dir, so an upgraded bundle
 /// is picked up; a load failure is cached only against the bundle's
-/// model modification time, so repairing the bundle retries the load.
+/// model modification time, so repairing the bundle retries the load, and
+/// for a minute at most, so a transient failure retries too.
 /// Loads are single-flight (concurrent requests join one load) and run off
 /// the caller, which waits at most `wait` (nil: until done).
 final class JudgeSlot: Sendable {

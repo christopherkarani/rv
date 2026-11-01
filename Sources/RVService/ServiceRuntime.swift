@@ -520,7 +520,11 @@ public actor ServiceRuntime {
     ) async -> EvaluateReply {
         let started = DispatchTime.now()
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: params.request.enabledPacks))
-        let reply = EvaluateReply(result: gated.evaluateAgent(params.request, cwd: params.cwd, home: configHome))
+        let (gated, home) = (gated, configHome)
+        // Off the actor: the judge path blocks (load wait, inference).
+        let reply = EvaluateReply(result: await JudgeOffload.run {
+            gated.evaluateAgent(params.request, cwd: params.cwd, home: home)
+        })
         log?.record(ServiceLogEvent(method: "agentEvaluate", elapsedMs:
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
             requestID: requestID, principal: context.reference))
