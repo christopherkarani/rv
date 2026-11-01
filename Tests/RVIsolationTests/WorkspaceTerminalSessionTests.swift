@@ -1,7 +1,6 @@
 #if os(macOS)
 import Darwin
 import Foundation
-import RVDomain
 import Testing
 @testable import RVIsolation
 
@@ -98,46 +97,31 @@ struct WorkspaceTerminalSessionTests {
         )
     }
 
-    /// A client with no host behind it. The bridge is never started, so
-    /// nothing writes through it; `stop()` takes its 2s bound, then drains.
-    private static func unconnectedClient() -> WorkspaceClient {
-        WorkspaceClient(
-            fd: -1,
-            endpoint: WorkspaceEndpoint(
-                host: WorkspaceHostID(),
-                workspace: UUID(),
-                canonicalPath: "/nonexistent",
-                socketPath: "/nonexistent",
-                socketDevice: 0,
-                socketInode: 0,
-                ownerToken: UUID(),
-                uid: UInt32(getuid())
-            )
-        )
-    }
-
-    /// Runs `stop()` off-thread so a hang fails the test instead of the run.
-    /// On a hang, `/dev/null` replaces `input` so the stuck drain sees EOF.
-    private static func stopReturnsPromptly(input: Int32) -> Bool {
-        let bridge = TerminalStdinBridge(client: unconnectedClient(), runtime: UUID(), input: input)
-        let done = DispatchSemaphore(value: 0)
-        Thread {
-            bridge.stop()
-            done.signal()
-        }.start()
-        if done.wait(timeout: .now() + 5) == .success { return true }
-        let null = open("/dev/null", O_RDONLY)
-        _ = dup2(null, input)
-        close(null)
-        done.wait()
-        return false
-    }
-
-    @Test func stopReturnsWhenInputNeverRunsDry() throws {
+    /// `stop()` drains through this. A source that never runs dry used to
+    /// hold teardown forever; it is not a terminal, so nothing is read.
+    @Test func drainSkipsInputThatIsNotATerminal() throws {
         let zero = open("/dev/zero", O_RDONLY)
         try #require(zero >= 0)
         defer { close(zero) }
-        #expect(Self.stopReturnsPromptly(input: zero))
+        #expect(TerminalStdinBridge.drain(zero) == 0)
+    }
+
+    @Test func drainDiscardsPendingTerminalInputWithinItsLimit() throws {
+        var master: Int32 = -1
+        var slave: Int32 = -1
+        try #require(openpty(&master, &slave, nil, nil, nil) == 0)
+        defer {
+            close(master)
+            close(slave)
+        }
+        let line = Array("typed\n".utf8)
+        try #require(write(master, line, line.count) == line.count)
+        var ready = pollfd(fd: slave, events: Int16(POLLIN), revents: 0)
+        try #require(poll(&ready, 1, 1000) == 1)
+
+        #expect(TerminalStdinBridge.drain(slave, limit: 0) == 0)
+        #expect(TerminalStdinBridge.drain(slave) == line.count)
+        #expect(TerminalStdinBridge.drain(slave) == 0)
     }
 }
 #endif

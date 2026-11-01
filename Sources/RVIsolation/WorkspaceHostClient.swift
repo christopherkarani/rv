@@ -160,7 +160,7 @@ public final class WorkspaceClient: Sendable {
         var supportsIdentityAgentLaunch: Bool
     }
 
-    init(fd: Int32, endpoint: WorkspaceEndpoint) {
+    private init(fd: Int32, endpoint: WorkspaceEndpoint) {
         self.endpoint = endpoint
         self.io = Mutex(
             ClientState(

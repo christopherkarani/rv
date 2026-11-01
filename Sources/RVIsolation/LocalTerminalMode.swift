@@ -253,22 +253,28 @@ public final class TerminalStdinBridge: Sendable {
     /// `stop()` forever.
     static let maximumDrainBytes = 1 << 20
 
-    /// Discards keystrokes typed while raw before the terminal is restored.
-    /// Only a terminal needs this: a file or pipe such as `/dev/zero` may
-    /// never run dry, and its unread bytes are not keystrokes.
     private func drainInput() {
-        guard isatty(input) == 1 else { return }
+        _ = Self.drain(input)
+    }
+
+    /// Discards keystrokes typed while raw before the terminal is restored,
+    /// and returns how many bytes it discarded. Only a terminal needs this:
+    /// a file or pipe such as `/dev/zero` may never run dry, and its unread
+    /// bytes are not keystrokes. Stops once `limit` is reached.
+    static func drain(_ input: Int32, limit: Int = maximumDrainBytes) -> Int {
+        guard isatty(input) == 1 else { return 0 }
         let flags = fcntl(input, F_GETFL)
-        guard flags >= 0 else { return }
-        guard fcntl(input, F_SETFL, flags | O_NONBLOCK) >= 0 else { return }
+        guard flags >= 0 else { return 0 }
+        guard fcntl(input, F_SETFL, flags | O_NONBLOCK) >= 0 else { return 0 }
         var buffer = [UInt8](repeating: 0, count: 4096)
         var drained = 0
-        while drained < Self.maximumDrainBytes {
+        while drained < limit {
             let count = Darwin.read(input, &buffer, buffer.count)
             if count <= 0 { break }
             drained += count
         }
         _ = fcntl(input, F_SETFL, flags)
+        return drained
     }
 
     private func read() {
