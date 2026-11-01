@@ -1345,18 +1345,20 @@ private func visibleSessionPIDs(root: pid_t) -> Set<pid_t> {
     return found
 }
 
-private func listedPIDs(
+/// `proc_listchildpids` and `proc_listpgrppids` return a pid count, not
+/// bytes like `proc_listpids`.
+func listedPIDs(
     _ call: (pid_t, UnsafeMutableRawPointer?, Int32) -> Int32,
     _ pid: pid_t
 ) -> [pid_t] {
     let capacity = 512
     var buffer = [Int32](repeating: 0, count: capacity)
-    let bytes = buffer.withUnsafeMutableBytes { raw -> Int32 in
+    let listed = buffer.withUnsafeMutableBytes { raw -> Int32 in
         guard let base = raw.baseAddress else { return -1 }
         return call(pid, base, Int32(raw.count))
     }
-    guard bytes > 0 else { return [] }
-    let count = min(Int(bytes) / MemoryLayout<Int32>.size, capacity)
+    guard listed > 0 else { return [] }
+    let count = min(Int(listed), capacity)
     return buffer.prefix(count).compactMap { value in
         value > 1 ? pid_t(value) : nil
     }
