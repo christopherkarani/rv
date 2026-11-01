@@ -124,4 +124,37 @@ struct VarlockSchemaTests {
         let decoded = try SecretsConfiguration.decode(SecretsConfiguration(secrets: [secret]).encoded()).get()
         #expect(decoded.secrets == [secret])
     }
+
+    private static func encoded(_ plan: VarlockImportPlan) -> String {
+        String(decoding: SecretsConfiguration(secrets: plan.secrets).encoded(), as: UTF8.self)
+    }
+
+    // MARK: Commented-out items (Varlock classes.ts:454-468)
+
+    @Test func commentedOutItemsNeverReachTheDescription() throws {
+        let plan = try VarlockSchema.plan("""
+            # Stripe key
+            # OLD_KEY=sk-live-oldvalue
+            # # export LEGACY.KEY = sk-live-legacy
+            # @sensitive
+            STRIPE=op(op://v/i/f)
+
+            # Kept
+            # PEM="-----BEGIN
+            # sk-live-continued
+            # -----END"
+            # @sensitive
+            PEM_KEY=op(op://v/i/pem)
+            """).get()
+        #expect(plan.secrets.first { $0.name == "STRIPE" }?.description == "Stripe key")
+        #expect(plan.secrets.first { $0.name == "PEM_KEY" }?.description == "Kept")
+        #expect(Self.encoded(plan).contains("sk-live") == false)
+    }
+}
+
+extension Result where Failure == VarlockSchemaError {
+    fileprivate var failureMessage: String? {
+        if case .failure(let error) = self { return error.message }
+        return nil
+    }
 }

@@ -124,16 +124,93 @@ public enum VarlockSchema {
                     decorators.removeAll { rootDecorator($0.name) }
                     pastHeader = true
                 }
-                let prose = comments.filter { decoratorLine($0) == false }.joined(separator: " ")
-                    .trimmingCharacters(in: .whitespaces)
                 document.items.append(Item(
                     name: item.name, value: item.value, decorators: decorators,
-                    description: prose.isEmpty ? nil : prose))
+                    description: description(comments)))
                 comments = []
             }
             index += 1
         }
         return document
+    }
+
+    /// Prose above an item, minus commented-out items such as `# OLD_KEY=value`,
+    /// which often hold real values. One that opens a multi-line value hides
+    /// where it ends, so the rest of the block is dropped (Varlock classes.ts:454-468).
+    private static func description(_ comments: [String]) -> String? {
+        var lines: [String] = []
+        for comment in comments where decoratorLine(comment) == false {
+            if let value = commentedOutValue(comment) {
+                if valueContinues(value) { break }
+                continue
+            }
+            lines.append(comment)
+        }
+        let prose = lines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return prose.isEmpty ? nil : prose
+    }
+
+    /// The value of a commented-out item, matching Varlock's
+    /// `^[#\s]*(?:export\s+)?[a-zA-Z_][a-zA-Z0-9_.-]*\s*=`, or nil.
+    private static func commentedOutValue(_ body: String) -> Substring? {
+        var rest = Substring(body).drop { $0 == "#" || $0.isWhitespace }
+        if rest.hasPrefix("export"), rest.dropFirst(6).first?.isWhitespace == true {
+            rest = rest.dropFirst(6).drop(while: \.isWhitespace)
+        }
+        guard let first = rest.first, first.isASCII, first.isLetter || first == "_" else { return nil }
+        let key = rest.prefix { $0.isASCII && ($0.isLetter || $0.isNumber || "_.-".contains($0)) }
+        let after = rest.dropFirst(key.count).drop(while: \.isWhitespace)
+        guard after.first == "=" else { return nil }
+        return after.dropFirst().drop(while: \.isWhitespace)
+    }
+
+    /// Whether a commented-out value opens a quote, literal, or call that does
+    /// not close on its own line (Varlock `commentedOutValueContinues`).
+    private static func valueContinues(_ value: Substring) -> Bool {
+        guard let first = value.first else { return false }
+        let opensCall = (first.isLetter || first == "_")
+            && value.drop { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }.first == "("
+        guard "\"'`[{".contains(first) || opensCall else { return false }
+        guard let end = closingIndex(value) else { return true }
+        let rest = value[end...].drop(while: \.isWhitespace)
+        return rest.isEmpty == false && rest.first != "#"
+    }
+
+    /// The index just past the quoted string or balanced brackets that start
+    /// `value`, or nil when they do not close.
+    private static func closingIndex(_ value: Substring) -> Substring.Index? {
+        if let quote = value.first, "\"'`".contains(quote) {
+            let triple = String(repeating: quote, count: 3)
+            let fence = quote != "'" && value.hasPrefix(triple) ? triple : String(quote)
+            var cursor = value.index(value.startIndex, offsetBy: fence.count)
+            while cursor < value.endIndex {
+                if value[cursor] == "\\" {
+                    cursor = value.index(cursor, offsetBy: 2, limitedBy: value.endIndex) ?? value.endIndex
+                    continue
+                }
+                if value[cursor...].hasPrefix(fence) { return value.index(cursor, offsetBy: fence.count) }
+                cursor = value.index(after: cursor)
+            }
+            return nil
+        }
+        var depth = 0
+        var quote: Character?
+        var cursor = value.startIndex
+        while cursor < value.endIndex {
+            let character = value[cursor]
+            cursor = value.index(after: cursor)
+            if let open = quote {
+                if character == open { quote = nil }
+            } else if "\"'`".contains(character) {
+                quote = character
+            } else if "([{".contains(character) {
+                depth += 1
+            } else if ")]}".contains(character) {
+                depth -= 1
+                if depth == 0 { return cursor }
+            }
+        }
+        return nil
     }
 
     private static func applyHeader(_ comments: [String], to document: inout Document) {
