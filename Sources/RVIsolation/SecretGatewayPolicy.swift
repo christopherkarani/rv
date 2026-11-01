@@ -116,6 +116,14 @@ public enum GatewayAllowance: Sendable, Hashable {
         }
     }
 
+    /// The CLI form `init?(_:)` reads, methods sorted.
+    public var text: String {
+        switch self {
+        case .preset(let preset): preset.rawValue
+        case .rule(let rule): (rule.methods.map { $0.sorted().joined(separator: ",") } ?? "*") + " " + rule.path
+        }
+    }
+
     /// CLI form: a preset name, or `METHODS PATH` such as `GET,HEAD /repos/**`
     /// or `* /v1/**`.
     public init?(_ text: String) {

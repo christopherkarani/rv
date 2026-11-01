@@ -252,6 +252,41 @@ struct SecretsCommandTests {
         #expect(text.contains("sk-x-12345678") == false)
     }
 
+    @Test func listAndDescribeShowGatewaySurfacesAndAllowRules() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        _ = SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-12345678".utf8),
+            definition: .gateway(
+                upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: "",
+                surfaces: [.header, .query], allow: try SecretsRun.allowances(["github-read", "POST,PUT /graphql"]).get()),
+            agents: [], description: nil, environment: environment)
+        _ = SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8),
+            definition: .gateway(upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: ""),
+            agents: [], description: nil, environment: environment)
+        _ = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-87654321".utf8), definition: .environment, agents: [],
+            description: nil, environment: environment)
+        let configuration = try SecretsRun.configuration(environment).get()
+        let report = SecretsRun.list(configuration, profiles: [])
+        #expect(report.secrets.map(\.surfaces) == [["header", "query"], ["header"], nil])
+        #expect(report.secrets.map(\.allow) == [["github-read", "POST,PUT /graphql"], [], nil])
+        let text = SecretsRun.listText(report)
+        #expect(text.contains("profiles: -  surfaces: header,query  allow: github-read; POST,PUT /graphql\n"))
+        #expect(text.contains("profiles: -  surfaces: header  allow: any method and path\n"))
+        #expect(text.contains("GH_TOKEN") && text.contains("[weaker]\n"))
+
+        let described = SecretsRun.describe(configuration)
+        #expect(described.secrets.map(\.surfaces) == [["header", "query"], ["header"], nil])
+        #expect(described.secrets.map(\.allow) == [["github-read", "POST,PUT /graphql"], [], nil])
+        let describedText = SecretsRun.describeText(described)
+        #expect(describedText.contains("GITHUB_TOKEN  keychain  gateway\n  surfaces: header,query\n  allow: github-read; POST,PUT /graphql\n"))
+        #expect(describedText.contains("ACME_KEY  keychain  gateway\n  surfaces: header\n  allow: any method and path\n"))
+        #expect(describedText.contains("ghp-") == false)
+    }
+
     @Test func checkShowsFingerprintsNeverValues() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
