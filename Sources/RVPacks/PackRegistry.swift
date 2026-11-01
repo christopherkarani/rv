@@ -76,7 +76,7 @@ public enum PackRegistry {
 enum PackResourceBundle {
     static let bundleName = "rv_RVPacks"
 
-    static let located: Bundle? = locate(candidates: defaultCandidates())
+    static let located: Bundle? = locate(lazyCandidates: defaultCandidates())
 
     static func require(_ bundle: Bundle?) throws -> Bundle {
         guard let bundle else { throw PackLoadError.missingResource(bundleName) }
@@ -84,8 +84,14 @@ enum PackResourceBundle {
     }
 
     static func locate(candidates: [URL?]) -> Bundle? {
-        for candidate in candidates {
-            guard let url = candidate?.appendingPathComponent(bundleDirectoryName) else { continue }
+        locate(lazyCandidates: candidates.map { candidate in { candidate } })
+    }
+
+    /// Candidates are evaluated in order and only until one matches: the
+    /// framework probe enumerates loaded bundles and is not free.
+    private static func locate(lazyCandidates: [() -> URL?]) -> Bundle? {
+        for candidate in lazyCandidates {
+            guard let url = candidate()?.appendingPathComponent(bundleDirectoryName) else { continue }
             if let bundle = Bundle(url: url) {
                 return bundle
             }
@@ -104,23 +110,23 @@ enum PackResourceBundle {
     /// bundle's resources (app), this module's bundle (framework), and the
     /// main bundle URL (command-line tools: the executable's directory).
     /// Linux SwiftPM looks for `<name>.resources` beside the executable.
-    private static func defaultCandidates() -> [URL?] {
-        var overrides: [URL?] = []
+    private static func defaultCandidates() -> [() -> URL?] {
+        var overrides: [() -> URL?] = []
         #if DEBUG
         let environment = ProcessInfo.processInfo.environment
         if let override = environment["PACKAGE_RESOURCE_BUNDLE_PATH"]
             ?? environment["PACKAGE_RESOURCE_BUNDLE_URL"] {
-            overrides = [URL(fileURLWithPath: override)]
+            overrides = [{ URL(fileURLWithPath: override) }]
         }
         #endif
         #if canImport(Darwin)
         return overrides + [
-            Bundle.main.resourceURL,
-            imageBundle().resourceURL,
-            Bundle.main.bundleURL,
+            { Bundle.main.resourceURL },
+            { imageBundle().resourceURL },
+            { Bundle.main.bundleURL },
         ]
         #else
-        return overrides + [Bundle.main.bundleURL]
+        return overrides + [{ Bundle.main.bundleURL }]
         #endif
     }
 
