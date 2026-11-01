@@ -475,7 +475,9 @@ public final class SecretGateway: @unchecked Sendable {
         }
         var forwarded = head
         forwarded.headers = GatewayHeaders.forwardable(head.headers)
-        func substitute() -> Result<(head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>), GatewayRefusal> {
+        func substitute() -> Result<
+            (head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>), GatewayRefusal
+        > {
             presented = []
             return GatewaySubstitution.apply(forwarded, route: route) { token in
                 let found = entry(token)

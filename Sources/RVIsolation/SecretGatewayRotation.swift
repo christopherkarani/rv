@@ -188,7 +188,7 @@ extension SecretGateway {
                 entry.previous = Array(([entry.value] + entry.previous).prefix(Self.historyDepth))
                 entry.value = refreshed.value
                 entry.generation += 1
-                record = (.refreshed, "value rotated from the provider")
+                record = (.refreshed, "value rotated from the provider (generation \(entry.generation))")
             }
             entry.fingerprint = refreshed.fingerprint
             entry.expires = refreshed.expires
