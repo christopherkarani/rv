@@ -29,6 +29,12 @@ public enum VarlockSchema {
                 return .failure(VarlockSchemaError("\(item.name): decorator @\(repeated) is used twice"))
             }
         }
+        switch document.disable {
+        case .no: break
+        case .yes: return .success(VarlockImportPlan(notes: ["schema is turned off by @disable; nothing imported"]))
+        case .conditional:
+            return .success(VarlockImportPlan(notes: ["schema has a conditional @disable rv cannot evaluate; nothing imported"]))
+        }
         var plan = VarlockImportPlan()
         var seen = Set<String>()
         for item in document.items {
@@ -88,7 +94,15 @@ public enum VarlockSchema {
     private struct Document {
         var inits: [String: [Init]] = [:]
         var defaultSensitive: Sensitivity = .all
+        var disable: Disable = .no
         var items: [Item] = []
+    }
+
+    /// Root `@disable` turns the whole file off in Varlock (data-source.ts:341-359).
+    private enum Disable {
+        case no
+        case yes
+        case conditional
     }
 
     private enum Sensitivity {
@@ -257,7 +271,7 @@ public enum VarlockSchema {
 
     private static func rootDecorator(_ name: String) -> Bool {
         [
-            "defaultSensitive", "plugin", "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws",
+            "defaultSensitive", "disable", "plugin", "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws",
             "initHcpVault", "initOp",
         ].contains(name)
     }
@@ -267,6 +281,12 @@ public enum VarlockSchema {
             switch decorator.name {
             case "defaultSensitive":
                 document.defaultSensitive = sensitivity(decorator)
+            case "disable":
+                document.disable = switch decorator.value {
+                case nil, "true": .yes
+                case "false": .no
+                default: .conditional
+                }
             case "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws", "initHcpVault", "initOp":
                 let fields = arguments(decorator.arguments ?? "")
                 document.inits[decorator.name, default: []].append(Init(

@@ -318,6 +318,19 @@ struct VarlockSchemaTests {
         let functions = VarlockSchema.plan("# @docs(a) @docs(b) @sensitive\nKEY=op(op://v/i/f)\n")
         #expect(functions.failureMessage == nil)
     }
+
+    // MARK: Root decorators
+
+    @Test func disabledSchemaImportsNothing() throws {
+        let disabled = try VarlockSchema.plan("# @disable\n# ---\nKEY=op(op://v/i/f)\n").get()
+        #expect(disabled.secrets.isEmpty)
+        #expect(disabled.notes.contains { $0.contains("@disable") })
+        let conditional = try VarlockSchema.plan("# @disable=forEnv(test)\n# ---\nKEY=op(op://v/i/f)\n").get()
+        #expect(conditional.secrets.isEmpty)
+        #expect(conditional.notes.contains { $0.contains("@disable") })
+        let enabled = try VarlockSchema.plan("# @disable=false\n# ---\nKEY=op(op://v/i/f)\n").get()
+        #expect(enabled.secrets.map(\.name) == ["KEY"])
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {
