@@ -145,11 +145,13 @@ private final class HookBridgeEnv {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
+        let dayOne = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         ceremonies = HookReviewCeremonyService(
             pending: pending,
             allowOnce: AllowOnceStore(baseDirectory: allowOnceDirectory),
             grants: EphemeralAllowOnceTable(),
             home: home,
+            gated: { dayOne },
             clock: { now }
         )
         let code = PeerCodeIdentity(

@@ -23,7 +23,14 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private var gated: GatedEvaluate
+    /// Live compile set, replaced by `rebuildGated`. Boxed so the hook
+    /// ceremony, built in `init` before `self` can be captured, reads the
+    /// same value at peek time.
+    private let liveGated: UnfairLock<GatedEvaluate>
+    private var gated: GatedEvaluate {
+        get { liveGated.withLock { $0 } }
+        set { liveGated.withLock { $0 = newValue } }
+    }
     private var catalog: PackCatalog
     private var lastUncoveredWanted: Set<PackID> = []
     private var lastCoverageRebuildAt: UInt64 = 0
@@ -116,7 +123,8 @@ public actor ServiceRuntime {
         self.compiledPackIDs = session.compiledPackIDs
         self.compiledPackIDSet = Set(session.compiledPackIDs)
         let gated = GatedEvaluate(session)
-        self.gated = gated
+        let liveGated = UnfairLock(gated)
+        self.liveGated = liveGated
         self.corePacksReady = gated.corePacksReady
         if let allowOnce {
             self.allowOnce = allowOnce
@@ -144,16 +152,14 @@ public actor ServiceRuntime {
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
         self.ceremonies = ceremonies
         self.actionCeremonies = actionCeremonies ?? ActionApprovalCeremonyService()
-        let liveGated = LiveGatedHandle(fallback: gated)
         self.hookCeremonies = hookCeremonies ?? HookReviewCeremonyService(
             pending: self.pendingApprovals,
             allowOnce: self.allowOnce,
             grants: self.grants,
             home: resolvedHome,
-            clock: clock,
-            gated: { await liveGated.current() }
+            gated: { liveGated.withLock { $0 } },
+            clock: clock
         )
-        liveGated.bind(self)
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -559,33 +565,6 @@ public actor ServiceRuntime {
     /// time so allow-once does not snapshot `gated` across the ApprovalRuntime hop.
     private func currentGated() -> GatedEvaluate {
         gated
-    }
-
-    /// Weak late-bound handle to `currentGated()` for the default hook
-    /// ceremony. It is built inside `init`, before `self` may be captured,
-    /// yet its allow-once peek must see a `setPackEnabled` rebuild.
-    private final class LiveGatedHandle: Sendable {
-        private struct Ref {
-            weak var runtime: ServiceRuntime?
-        }
-
-        private let ref = UnfairLock(Ref())
-        private let fallback: GatedEvaluate
-
-        init(fallback: GatedEvaluate) {
-            self.fallback = fallback
-        }
-
-        func bind(_ runtime: ServiceRuntime) {
-            ref.withLock { $0.runtime = runtime }
-        }
-
-        func current() async -> GatedEvaluate {
-            guard let runtime = ref.withLock({ $0.runtime }) else {
-                return fallback
-            }
-            return await runtime.currentGated()
-        }
     }
 
     private func runEvaluate(

@@ -456,16 +456,7 @@ struct HookReviewCeremonyTests {
         // AC-001: the ceremony peek runs on the gated the runtime holds at
         // peek time, not a per-peek `EvaluationWorld.assemble` from disk.
         let source = SwappableGated(GatedEvaluate(EvaluateSession(enabledPacks: [])))
-        let env = try HookCeremonyEnv(now: now) { pending, allowOnce, home, clock in
-            HookReviewCeremonyService(
-                pending: pending,
-                allowOnce: allowOnce,
-                grants: EphemeralAllowOnceTable(),
-                home: home,
-                clock: clock,
-                gated: { source.resolve() }
-            )
-        }
+        let env = try HookCeremonyEnv(now: now, gated: { source.resolve() })
         defer { env.tearDown() }
         let ui = AuthenticatedOperatorUIConnectionID()
 
@@ -603,10 +594,6 @@ private final class SwappableGated: Sendable {
 }
 
 private final class HookCeremonyEnv {
-    typealias MakeCeremonies = (
-        PendingApprovalStore, AllowOnceStore, HomeDirectory, @escaping @Sendable () -> Date
-    ) -> HookReviewCeremonyService
-
     private let homeURL: URL
     private let allowOnceDirectory: URL
     private let frozen: FrozenClock
@@ -616,7 +603,9 @@ private final class HookCeremonyEnv {
     let pending: PendingApprovalStore
     let grants: AllowOnceStore
 
-    init(now: Date, makeCeremonies: MakeCeremonies? = nil) throws {
+    /// `gated` defaults to the day-one compile set for this isolated home,
+    /// assembled once (as the daemon holds it), not per peek.
+    init(now: Date, gated: (@Sendable () -> GatedEvaluate)? = nil) throws {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
@@ -627,17 +616,15 @@ private final class HookCeremonyEnv {
         grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         let clock: @Sendable () -> Date = { frozen.now }
         self.clock = clock
-        if let makeCeremonies {
-            ceremonies = makeCeremonies(pending, grants, home, clock)
-        } else {
-            ceremonies = HookReviewCeremonyService(
-                pending: pending,
-                allowOnce: grants,
-                grants: EphemeralAllowOnceTable(),
-                home: home,
-                clock: clock
-            )
-        }
+        let dayOne = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
+        ceremonies = HookReviewCeremonyService(
+            pending: pending,
+            allowOnce: grants,
+            grants: EphemeralAllowOnceTable(),
+            home: home,
+            gated: gated ?? { dayOne },
+            clock: clock
+        )
     }
 
     func tearDown() {
