@@ -311,7 +311,14 @@ public enum VarlockSchema {
             SecretsDecoding.reservedVariables.contains(item.name) == false
         else { return .skip("not an environment variable name") }
         guard isSensitive(item, defaultSensitive: defaultSensitive) else { return .skip("not sensitive") }
-        let type = item.decorators.last { $0.name == "type" }.flatMap { $0.value ?? $0.arguments }
+        var type = item.decorators.last { $0.name == "type" }.flatMap { $0.value ?? $0.arguments }
+        var notes: [String] = []
+        // secrets.json holds a short single-line type; one that does not fit
+        // is dropped rather than failing the whole import on write.
+        if let text = type, SecretsDecoding.label(text, max: 128) == false {
+            type = nil
+            notes.append("@type is not stored: longer than 128 bytes or not single-line text")
+        }
         let description = item.description.flatMap { clipped($0, max: 256) }
         let value = stripTrailingComment(item.value).trimmingCharacters(in: .whitespaces)
         if value.isEmpty { return .skip("no provider reference") }
@@ -324,7 +331,7 @@ public enum VarlockSchema {
                 SecretDefinition(
                     name: item.name, description: description, source: resolved.source, delivery: .environment,
                     type: type),
-                notes: resolved.notes + [droppedSensitiveOptions(item)].compactMap { $0 })
+                notes: notes + resolved.notes + [droppedSensitiveOptions(item)].compactMap { $0 })
         } catch {
             return .skip(error.reason)
         }
@@ -574,7 +581,13 @@ public enum VarlockSchema {
     }
 
     private static func clipped(_ text: String, max: Int) -> String? {
-        let clean = text.unicodeScalars.filter { $0.properties.generalCategory != .control }
+        // The same scalars `SecretsDecoding.label` rejects, so the clipped text always decodes.
+        let clean = text.unicodeScalars.filter { scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator: false
+            default: true
+            }
+        }
         guard clean.isEmpty == false else { return nil }
         var bytes = 0
         var kept = String.UnicodeScalarView()

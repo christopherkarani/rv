@@ -347,6 +347,21 @@ struct VarlockSchemaTests {
         #expect(plan.secrets.map(\.name) == ["KEY"])
         #expect(plan.secrets.first?.source == .infisical(name: "KEY", project: "proj", environment: "dev", path: nil))
     }
+
+    // MARK: Values that secrets.json cannot hold degrade, not abort
+
+    @Test func overlongTypeIsDroppedWithANote() throws {
+        let long = "string(startsWith=" + String(repeating: "a", count: 150) + ")"
+        let plan = try VarlockSchema.plan("""
+            # Zero\u{200B}width description
+            # @sensitive @type=\(long)
+            KEY=op(op://v/i/f)
+            """).get()
+        let secret = try #require(plan.secrets.first)
+        #expect(secret.type == nil)
+        #expect(plan.notes.contains { $0.hasPrefix("note KEY:") && $0.contains("type") })
+        #expect(throws: Never.self) { try SecretsConfiguration.decode(SecretsConfiguration(secrets: plan.secrets).encoded()).get() }
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {
