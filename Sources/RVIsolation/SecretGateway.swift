@@ -97,6 +97,9 @@ public final class SecretGateway: @unchecked Sendable {
         public var surfaces: Set<GatewaySurface> = GatewaySurface.defaults
         /// Expanded allow rules; empty allows any method and path.
         public var rules: [GatewayAccessRule] = []
+        /// The runtime's process group, set once it is spawned. Only a
+        /// connection from inside it may spend the value; nil refuses all.
+        var processGroup: ProcessGroupFact?
     }
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
@@ -106,6 +109,7 @@ public final class SecretGateway: @unchecked Sendable {
     static let socketFloor: Int32 = 64
 
     private let transport: SecretUpstreamTransport
+    private let peers: GatewayPeerCheck
     /// Returns false when the record did not land; a forward record that
     /// does not land stops the request.
     private let audit: @Sendable (SecretUseRecord) -> Bool
@@ -126,11 +130,20 @@ public final class SecretGateway: @unchecked Sendable {
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
 
-    public init(
+    public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
         audit: @escaping @Sendable (SecretUseRecord) -> Bool
     ) {
+        self.init(transport: transport, peers: .processGroup, audit: audit)
+    }
+
+    init(
+        transport: SecretUpstreamTransport,
+        peers: GatewayPeerCheck,
+        audit: @escaping @Sendable (SecretUseRecord) -> Bool
+    ) {
         self.transport = transport
+        self.peers = peers
         self.audit = audit
     }
 
@@ -157,6 +170,12 @@ public final class SecretGateway: @unchecked Sendable {
     public func bind(_ placeholders: [SecretPlaceholder], runtime: String) {
         lock.lock()
         for placeholder in placeholders { entries[placeholder.token]?.runtime = runtime }
+        lock.unlock()
+    }
+
+    func bind(_ placeholders: [SecretPlaceholder], processGroup: ProcessGroupFact) {
+        lock.lock()
+        for placeholder in placeholders { entries[placeholder.token]?.processGroup = processGroup }
         lock.unlock()
     }
 
@@ -421,8 +440,13 @@ public final class SecretGateway: @unchecked Sendable {
             refuse(client, .unknownRoute, method: head.method, path: path, secret: nil, started: started)
             return
         }
+        // Every live entry the request names, so a refusal can name the
+        // runtime the placeholder was leased to.
+        var presented: [Entry] = []
         func deny(_ refusal: GatewayRefusal) {
-            refuse(client, refusal, method: head.method, path: path, secret: route.secret, started: started)
+            refuse(
+                client, refusal, method: head.method, path: path, secret: route.secret,
+                runtime: presented.first?.runtime, started: started)
         }
         guard GatewayHeaders.echoMethods.contains(head.method) == false else {
             deny(.echoMethod)
@@ -431,7 +455,9 @@ public final class SecretGateway: @unchecked Sendable {
         var forwarded = head
         forwarded.headers = GatewayHeaders.forwardable(head.headers)
         let substituted = GatewaySubstitution.apply(forwarded, route: route) { token in
-            entry(token).map {
+            let found = entry(token)
+            if let found { presented.append(found) }
+            return found.map {
                 GatewaySubstitution.Live(
                     token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces,
                     rules: $0.rules,
@@ -455,6 +481,10 @@ public final class SecretGateway: @unchecked Sendable {
             let url = upstreamRoute.upstreamURL(base: live.upstream)
         else {
             deny(.unknownPlaceholder)
+            return
+        }
+        if let refusal = verifyPeer(client, presented) {
+            deny(refusal)
             return
         }
         if head.header("Expect")?.lowercased() == "100-continue" {
@@ -520,12 +550,32 @@ public final class SecretGateway: @unchecked Sendable {
         return framed
     }
 
+    /// Loopback is open to every process on the host, so a placeholder alone
+    /// is not enough: the connection must come from each named entry's
+    /// runtime. Fails closed when that cannot be shown.
+    private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> GatewayRefusal? {
+        guard let peer = GatewayPeer.of(client) else { return .runtimeUnverified }
+        var checked: [ProcessGroupFact] = []
+        for entry in presented {
+            guard let group = entry.processGroup else { return .runtimeUnverified }
+            guard checked.contains(group) == false else { continue }
+            checked.append(group)
+            switch peers.verify(peer, group) {
+            case .member: continue
+            case .outsider: return .runtimeMismatch
+            case .unverifiable: return .runtimeUnverified
+            }
+        }
+        return nil
+    }
+
     private func refuse(
-        _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?, started: DispatchTime
+        _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
+        runtime: String? = nil, started: DispatchTime
     ) {
         GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
         _ = audit(SecretUseRecord(
-            secret: secret, runtime: nil, upstreamHost: nil, method: method, path: path, status: refusal.status,
+            secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil, activity: refusal.isMisuse ? .blocked : .refused, refusal: refusal.code,
             reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete

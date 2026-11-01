@@ -221,6 +221,10 @@ enum GatewayRefusal: Error, Equatable {
     case ambiguousPath
     /// The forward record did not reach the audit log.
     case auditUnavailable
+    /// The connection came from outside the runtime the placeholder was leased to.
+    case runtimeMismatch
+    /// The gateway could not tie the connection to the placeholder's runtime.
+    case runtimeUnverified
 
     /// The case name, a stable code for audit records.
     var code: String { "\(self)" }
@@ -230,10 +234,10 @@ enum GatewayRefusal: Error, Equatable {
     var isMisuse: Bool {
         switch self {
         case .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules, .encodedPlaceholder,
-            .ambiguousPath, .echoMethod:
+            .ambiguousPath, .echoMethod, .runtimeMismatch:
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
-            .auditUnavailable:
+            .auditUnavailable, .runtimeUnverified:
             false
         }
     }
@@ -244,7 +248,8 @@ enum GatewayRefusal: Error, Equatable {
         case .auditUnavailable: 503
         case .unknownRoute: 404
         case .noPlaceholder: 401
-        case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules:
+        case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
+            .runtimeMismatch, .runtimeUnverified:
             403
         case .tooLarge: 413
         case .echoMethod: 405
@@ -267,6 +272,8 @@ enum GatewayRefusal: Error, Equatable {
         case .outsideAllowRules: "method and path are outside this secret's allow rules"
         case .ambiguousPath: "path has encoded separators, dot segments, or ;; send it plainly"
         case .auditUnavailable: "the audit log could not record this request, so it was not forwarded"
+        case .runtimeMismatch: "placeholder was presented from outside the runtime it was issued to"
+        case .runtimeUnverified: "the gateway could not confirm this connection comes from the placeholder's runtime"
         }
     }
 }

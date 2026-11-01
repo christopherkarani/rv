@@ -1718,7 +1718,7 @@ final class WorkspaceSessionSupervisor: Sendable {
                     return .failure(.apply(.sessionRecordFailed))
                 }
             }
-            switch recordProcessGroup(child, spawnFault: request.spawnFault) {
+            switch recordProcessGroup(child, lease: lease, spawnFault: request.spawnFault) {
             case .failure(let error):
                 retireUnrecorded(child)
                 return .failure(error)
@@ -1780,6 +1780,7 @@ final class WorkspaceSessionSupervisor: Sendable {
 
     private func recordProcessGroup(
         _ child: WorkspaceChild,
+        lease: SecretLease,
         spawnFault: RuntimeSpawnFault?
     ) -> Result<Void, WorkspaceSessionError> {
         // Request-scoped: a global flag here would fail parallel sibling
@@ -1791,6 +1792,8 @@ final class WorkspaceSessionSupervisor: Sendable {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
         child.provenGroup = fact
+        // Before resume: the gateway honors the lease only from this group.
+        secretBroker?.bind(lease, processGroup: fact)
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .runtimeStarted,

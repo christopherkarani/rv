@@ -144,13 +144,13 @@ struct SecretGatewayTests {
         upstream: RecordingUpstream, value: String = "sk-live-REAL-0123456789", prefix: String = "sk-",
         surfaces: Set<GatewaySurface> = [.header], rules: [GatewayAccessRule] = [], audit: AuditRecords
     ) throws -> (SecretGateway, Int, SecretPlaceholder) {
-        let gateway = SecretGateway(transport: upstream.transport, audit: audit.record)
+        let gateway = SecretGateway(transport: upstream.transport, peers: .fixed(.member), audit: audit.record)
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: prefix)
         gateway.register(placeholder, entry: SecretGateway.Entry(
             secret: "OPENAI_API_KEY", prefix: prefix, value: try #require(SecretValue(value)),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
-            surfaces: surfaces, rules: rules))
+            surfaces: surfaces, rules: rules, processGroup: testProcessGroup))
         return (gateway, port, placeholder)
     }
 
@@ -416,12 +416,13 @@ struct SecretGatewayTests {
 
         let failing = AuditRecords()
         let broken = SecretGateway(transport: SecretUpstreamTransport { _, sink in sink.fail("connection reset") },
-            audit: failing.record)
+            peers: .fixed(.member), audit: failing.record)
         defer { broken.stop() }
         let brokenPort = try broken.start().get()
         broken.register(placeholder, entry: SecretGateway.Entry(
             secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
-            upstream: try #require(URL(string: "https://api.example.com")), fingerprint: nil, runtime: nil))
+            upstream: try #require(URL(string: "https://api.example.com")), fingerprint: nil, runtime: nil,
+            processGroup: testProcessGroup))
         let response = try gatewayExchange(port: brokenPort,
             "GET /s/OPENAI_API_KEY/m HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
         #expect(response.status == 502)

@@ -1,0 +1,184 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import Foundation
+import Synchronization
+import Testing
+@testable import RVIsolation
+
+/// A stand-in runtime group; the stub checks below never query the kernel.
+let testProcessGroup = ProcessGroupFact(pgid: ValidatedPGID(4242)!, startSeconds: 1, startMicroseconds: 2)
+
+extension GatewayPeerCheck {
+    static func fixed(_ verdict: GatewayPeerVerdict) -> GatewayPeerCheck {
+        GatewayPeerCheck { _, _ in verdict }
+    }
+}
+
+final class PeerChecks: Sendable {
+    let seen = Mutex<[(peer: GatewayPeer, group: ProcessGroupFact)]>([])
+    let answer: @Sendable (ProcessGroupFact) -> GatewayPeerVerdict
+
+    init(answer: @escaping @Sendable (ProcessGroupFact) -> GatewayPeerVerdict = { _ in .member }) {
+        self.answer = answer
+    }
+
+    var check: GatewayPeerCheck {
+        GatewayPeerCheck { peer, group in
+            self.seen.withLock { $0.append((peer, group)) }
+            return self.answer(group)
+        }
+    }
+}
+
+@Suite("SecretGatewayRuntimeBinding")
+struct SecretGatewayRuntimeBindingTests {
+    private func gateway(
+        _ check: GatewayPeerCheck, upstream: RecordingUpstream, audit: AuditRecords,
+        group: ProcessGroupFact? = testProcessGroup, surfaces: Set<GatewaySurface> = [.header]
+    ) throws -> (SecretGateway, Int, SecretPlaceholder) {
+        let gateway = SecretGateway(transport: upstream.transport, peers: check, audit: audit.record)
+        let port = try gateway.start().get()
+        let placeholder = SecretPlaceholder.mint(prefix: "sk-")
+        gateway.register(placeholder, entry: try entry(runtime: "R1", group: group, surfaces: surfaces))
+        return (gateway, port, placeholder)
+    }
+
+    private func entry(
+        runtime: String, group: ProcessGroupFact?, surfaces: Set<GatewaySurface> = [.header]
+    ) throws -> SecretGateway.Entry {
+        SecretGateway.Entry(
+            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: runtime,
+            surfaces: surfaces, processGroup: group)
+    }
+
+    private func bearer(_ placeholder: SecretPlaceholder) -> String {
+        "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n"
+    }
+
+    @Test func aPlaceholderFromOutsideItsRuntimeIsRefusedAsMisuseNamingTheRuntime() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try gateway(.fixed(.outsider), upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+
+        let response = try gatewayExchange(port: port, bearer(placeholder))
+        #expect(response.status == 403)
+        #expect(response.body.contains("outside the runtime"))
+        #expect(upstream.requests.isEmpty)
+        let record = try #require(audit.items.withLock { $0.last })
+        #expect(audit.items.withLock { $0.count } == 1)
+        #expect(record.refusal == "runtimeMismatch")
+        #expect(record.activity == .blocked)
+        #expect(record.runtime == "R1")
+        #expect(record.secret == "OPENAI_API_KEY")
+    }
+
+    @Test func anUnverifiablePeerIsRefusedWithoutAMisuseFinding() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try gateway(.fixed(.unverifiable), upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+
+        #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 403)
+        #expect(upstream.requests.isEmpty)
+        let record = try #require(audit.items.withLock { $0.last })
+        #expect(record.refusal == "runtimeUnverified")
+        #expect(record.activity == .refused)
+        #expect(record.runtime == "R1")
+    }
+
+    @Test func anEntryWithoutAProcessGroupIsRefusedBeforeAnyCheck() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let checks = PeerChecks()
+        let (gateway, port, placeholder) = try gateway(checks.check, upstream: upstream, audit: audit, group: nil)
+        defer { gateway.stop() }
+
+        #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 403)
+        #expect(upstream.requests.isEmpty)
+        #expect(checks.seen.withLock { $0.isEmpty })
+        #expect(audit.items.withLock { $0.last?.refusal } == "runtimeUnverified")
+    }
+
+    @Test func theCheckSeesThisConnectionsPortPairAndTheEntrysGroup() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let checks = PeerChecks()
+        let (gateway, port, placeholder) = try gateway(checks.check, upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+
+        #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 200)
+        let seen = try #require(checks.seen.withLock { $0.first })
+        #expect(seen.peer.gatewayPort == UInt16(port))
+        #expect(seen.peer.port != 0 && seen.peer.port != UInt16(port))
+        #expect(seen.group == testProcessGroup)
+        #expect(upstream.requests.count == 1)
+    }
+
+    @Test func everyPlaceholderInTheRequestMustBelongToThePeersRuntime() throws {
+        let other = ProcessGroupFact(pgid: ValidatedPGID(5353)!, startSeconds: 3, startMicroseconds: 4)
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let checks = PeerChecks { $0 == testProcessGroup ? .member : .outsider }
+        let (gateway, port, own) = try gateway(
+            checks.check, upstream: upstream, audit: audit, surfaces: [.header, .query])
+        defer { gateway.stop() }
+        let stolen = SecretPlaceholder.mint(prefix: "sk-")
+        gateway.register(stolen, entry: try entry(runtime: "R2", group: other, surfaces: [.header, .query]))
+
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models?key=\(stolen.text) HTTP/1.1\r\nAuthorization: Bearer \(own.text)\r\n\r\n")
+        #expect(response.status == 403)
+        #expect(upstream.requests.isEmpty)
+        let record = try #require(audit.items.withLock { $0.last })
+        #expect(record.refusal == "runtimeMismatch")
+        #expect(record.runtime == "R2")
+    }
+
+    @Test func policyRefusalsNameTheRuntimeThePlaceholderWasLeasedTo() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try gateway(.fixed(.member), upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models?key=\(placeholder.text) HTTP/1.1\r\n\r\n")
+        #expect(response.status == 403)
+        let record = try #require(audit.items.withLock { $0.last })
+        #expect(record.refusal == "surfaceNotAllowed")
+        #expect(record.runtime == "R1")
+        // No live placeholder, so no runtime to name.
+        _ = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\n\r\n")
+        #expect(audit.items.withLock { $0.last?.runtime } == nil)
+    }
+
+    #if os(macOS)
+    /// The real libproc scan against this test process's own group: the
+    /// connection the gateway accepted is found; any other port pair is not.
+    @Test func processGroupScanFindsTheClientSocketInItsGroupAndNothingElse() throws {
+        let group = try #require(ProcessGroupRecovery.capture(pid: getpgrp()))
+        let verdicts = Mutex<[GatewayPeerVerdict]>([])
+        let live = GatewayPeerCheck { peer, group in
+            let verdict = GatewayPeerCheck.processGroup.verify(peer, group)
+            verdicts.withLock { $0.append(verdict) }
+            return verdict
+        }
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try gateway(live, upstream: upstream, audit: audit, group: group)
+        defer { gateway.stop() }
+
+        #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 200)
+        #expect(verdicts.withLock { $0 } == [.member])
+        #expect(GatewayPeerCheck.processGroup.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), group) == .outsider)
+        var stale = group
+        stale.startMicroseconds += 1
+        #expect(GatewayPeerCheck.processGroup.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), stale)
+            == .unverifiable)
+    }
+    #endif
+}
