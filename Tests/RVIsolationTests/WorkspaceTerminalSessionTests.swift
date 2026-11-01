@@ -176,37 +176,94 @@ struct WorkspaceTerminalSessionTests {
         #expect(WorkspaceTerminalSession.writeOutput(Data(), to: -1) == .written)
     }
 
+    /// Inherited O_NONBLOCK on stdout makes a full pipe or terminal return
+    /// EAGAIN. That is back-pressure, not a closed reader: the helper waits
+    /// for room and finishes the write.
+    @Test func writeOutputWaitsOutANonBlockingFullPipe() throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        try #require(fcntl(ends[1], F_SETFL, fcntl(ends[1], F_GETFL) | O_NONBLOCK) == 0)
+        let payload = Data((0..<(1 << 20)).map { UInt8(truncatingIfNeeded: $0) })
+        let readEnd = ends[0]
+        let received = Mutex(Data())
+        let reader = Thread {
+            var chunk = [UInt8](repeating: 0, count: 4 * 1024)
+            while true {
+                let count = read(readEnd, &chunk, chunk.count)
+                if count <= 0 { break }
+                received.withLock { $0.append(contentsOf: chunk[0..<count]) }
+                usleep(100)
+            }
+        }
+        reader.start()
+
+        let result = WorkspaceTerminalSession.writeOutput(payload, to: ends[1])
+        close(ends[1])
+
+        #expect(result == .written)
+        let drained = waitUntil(seconds: 10) { received.withLock { $0.count } == payload.count }
+        #expect(drained)
+        #expect(received.withLock { $0 } == payload)
+        close(readEnd)
+    }
+
     /// What the session does: while SIGPIPE is ignored, a closed pipe is an
     /// EPIPE the process survives. The disposition is process-wide, so this
-    /// is the only ungated test that changes it. Overlapping holders keep it
-    /// ignored until the last one restores the disposition the first saved.
+    /// is the only test in this bundle that changes it. It installs its own
+    /// SA_SIGINFO handler first, so the check does not depend on what the
+    /// runner inherited, and puts the inherited action back at the end.
+    /// Overlapping holders keep SIGPIPE ignored until the last restore puts
+    /// back the whole action the first saved; an unmatched restore is inert.
     @Test func brokenPipeIgnoreIsScopedAndRestoresThePriorDisposition() throws {
         var ends: [Int32] = [-1, -1]
         try #require(pipe(&ends) == 0)
         defer { close(ends[1]) }
         close(ends[0])
-        let before = Self.pipeHandler()
-        #expect(before != Self.ignoredHandler)
+        var inherited = sigaction()
+        try #require(sigaction(SIGPIPE, nil, &inherited) == 0)
+        defer { sigaction(SIGPIPE, &inherited, nil) }
+        var installed = sigaction()
+        installed.__sigaction_u.__sa_sigaction = { _, _, _ in }
+        sigemptyset(&installed.sa_mask)
+        sigaddset(&installed.sa_mask, SIGUSR2)
+        installed.sa_flags = SA_SIGINFO | SA_RESTART
+        try #require(sigaction(SIGPIPE, &installed, nil) == 0)
+        let before = Self.pipeAction()
+
+        WorkspaceTerminalSession.BrokenPipe.restore()
+        #expect(Self.pipeAction() == before)
 
         WorkspaceTerminalSession.BrokenPipe.ignore()
-        #expect(Self.pipeHandler() == Self.ignoredHandler)
+        #expect(Self.pipeAction().handler == Self.ignoredHandler)
         #expect(
             WorkspaceTerminalSession.writeOutput(Data("y\n".utf8), to: ends[1]) == .failed(errno: EPIPE)
         )
         WorkspaceTerminalSession.BrokenPipe.ignore()
         WorkspaceTerminalSession.BrokenPipe.restore()
-        #expect(Self.pipeHandler() == Self.ignoredHandler)
+        #expect(Self.pipeAction().handler == Self.ignoredHandler)
         WorkspaceTerminalSession.BrokenPipe.restore()
 
-        #expect(Self.pipeHandler() == before)
+        #expect(Self.pipeAction() == before)
+        #expect(before.handler != Self.ignoredHandler)
+        #expect(before.flags == SA_SIGINFO | SA_RESTART)
+    }
+
+    private struct PipeAction: Equatable {
+        var handler: Int
+        var mask: sigset_t
+        var flags: Int32
     }
 
     private static let ignoredHandler = unsafeBitCast(SIG_IGN, to: Int.self)
 
-    private static func pipeHandler() -> Int {
+    private static func pipeAction() -> PipeAction {
         var current = sigaction()
         sigaction(SIGPIPE, nil, &current)
-        return unsafeBitCast(current.__sigaction_u.__sa_handler, to: Int.self)
+        return PipeAction(
+            handler: unsafeBitCast(current.__sigaction_u.__sa_handler, to: Int.self),
+            mask: current.sa_mask,
+            flags: current.sa_flags
+        )
     }
 
     private func waitUntil(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {

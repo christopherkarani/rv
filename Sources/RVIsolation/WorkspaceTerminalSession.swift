@@ -165,6 +165,8 @@ public enum WorkspaceTerminalSession {
     /// Writes all of `data` to `fd`, continuing after short writes and EINTR.
     /// Unlike `FileHandle.write`, a failure is returned rather than raised;
     /// with SIGPIPE ignored, a closed pipe is `.failed(errno: EPIPE)`.
+    /// EAGAIN from an inherited `O_NONBLOCK` descriptor waits for room, as a
+    /// blocking write would; a gone reader then surfaces as EPIPE.
     static func writeOutput(_ data: Data, to fd: Int32) -> OutputWrite {
         data.withUnsafeBytes { buffer -> OutputWrite in
             var offset = 0
@@ -174,6 +176,9 @@ public enum WorkspaceTerminalSession {
                     offset += count
                 } else if count < 0, errno == EINTR {
                     continue
+                } else if count < 0, errno == EAGAIN {
+                    var ready = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    if poll(&ready, 1, -1) < 0, errno != EINTR { return .failed(errno: errno) }
                 } else {
                     return .failed(errno: count < 0 ? errno : EIO)
                 }
