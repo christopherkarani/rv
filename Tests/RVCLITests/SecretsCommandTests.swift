@@ -156,6 +156,44 @@ struct SecretsCommandTests {
         #expect(surfaces("OPENAI_API_KEY") == [.header])
     }
 
+    @Test func setStoresAllowRulesAndNotesWhenThereAreNone() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let allow = try SecretsRun.allowances(["github-read", "POST /graphql"]).get()
+        #expect(allow == [.preset(.githubRead), .rule(try #require(GatewayAccessRule(methods: ["POST"], path: "/graphql")))])
+        guard case .failure(let failure) = SecretsRun.allowances(["GET /a/../b"]) else {
+            Issue.record("a traversal glob must be refused")
+            return
+        }
+        #expect(failure.message.contains("--allow must be a preset (read-only, github-clone, github-read)"))
+        let scoped = SecretsRun.definitionForSet(
+            name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+            environment: false, allow: allow)
+        let text = try SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-1234".utf8), definition: scoped.definition, agents: [],
+            description: nil, environment: environment).get()
+        #expect(text.contains("note:") == false)
+        guard case .gateway(let binding) = try SecretsRun.configuration(environment).get()
+            .secret(named: "GITHUB_TOKEN")?.delivery
+        else {
+            Issue.record("expected gateway delivery")
+            return
+        }
+        #expect(binding.allow == allow)
+
+        let open = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-1234".utf8),
+            definition: .gateway(upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: ""),
+            agents: [], description: nil, environment: environment).get()
+        #expect(open.hasSuffix(
+            "note: ACME_KEY may be used with any method and path on api.acme.example; narrow it with --allow, e.g. --allow read-only.\n"))
+        let rotated = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-5678".utf8), definition: nil, agents: [], description: nil,
+            environment: environment).get()
+        #expect(rotated.contains("note:") == false)
+    }
+
     @Test func setRefusesAmbiguousOrForeignSecrets() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
