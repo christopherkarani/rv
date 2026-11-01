@@ -109,6 +109,12 @@ struct EgressAdmissionTests {
         Case(
             name: "absolute loopback :443 forwarded when credentialed", target: target("127.0.0.1", 443),
             shape: .absoluteHTTP, credential: .granted(allowlist), expected: .forward(external: false)),
+        // Loopback names never satisfy `allows` (IP literals and single
+        // labels are not canonical DNS names), so plaintext-443 and the
+        // loopback fallback are disjoint: their relative order is moot.
+        Case(
+            name: "absolute localhost:443 forwarded, granted publicHTTPS", target: target("localhost", 443),
+            shape: .absoluteHTTP, credential: .granted(.publicHTTPS), expected: .forward(external: false)),
 
         // Admitted CONNECT: SNI required only for credentialed allowlist :443 external.
         Case(
