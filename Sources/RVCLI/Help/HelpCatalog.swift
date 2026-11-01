@@ -507,7 +507,18 @@ enum HelpCatalog {
                 ),
                 HelpRow(name: "describe", description: "Names, descriptions, types, delivery, surfaces, and allow rules for agents; never a value"),
                 HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, @proxy, and provider refs; @proxy(domain=) imports as gateway, literals are skipped"),
-                HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
+                HelpRow(
+                    name: "hook",
+                    description: "Adds an rv block to pre-commit that scans staged blobs and prints path:line:rule; the rest of the hook is kept"
+                ),
+                HelpRow(
+                    name: "rules",
+                    description: "scan and hook match resolved values plus built-in token patterns (AWS, GitHub, Slack, Stripe, OpenAI, Anthropic, Google, keys, JWT)"
+                ),
+                HelpRow(
+                    name: "allow",
+                    description: "Silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false"
+                ),
                 HelpRow(
                     name: "audit",
                     description: "rv audit --kind secret.use: forward and outcome records per request; secret.misuse flags policy and runtime refusals (high)"
