@@ -1,5 +1,7 @@
 #if os(macOS)
+import Darwin
 import Foundation
+import RVDomain
 import Testing
 @testable import RVIsolation
 
@@ -94,6 +96,48 @@ struct WorkspaceTerminalSessionTests {
                 inputEnded: row.inputEnded
             ) == row.ends
         )
+    }
+
+    /// A client with no host behind it. The bridge is never started, so
+    /// nothing writes through it; `stop()` takes its 2s bound, then drains.
+    private static func unconnectedClient() -> WorkspaceClient {
+        WorkspaceClient(
+            fd: -1,
+            endpoint: WorkspaceEndpoint(
+                host: WorkspaceHostID(),
+                workspace: UUID(),
+                canonicalPath: "/nonexistent",
+                socketPath: "/nonexistent",
+                socketDevice: 0,
+                socketInode: 0,
+                ownerToken: UUID(),
+                uid: UInt32(getuid())
+            )
+        )
+    }
+
+    /// Runs `stop()` off-thread so a hang fails the test instead of the run.
+    /// On a hang, `/dev/null` replaces `input` so the stuck drain sees EOF.
+    private static func stopReturnsPromptly(input: Int32) -> Bool {
+        let bridge = TerminalStdinBridge(client: unconnectedClient(), runtime: UUID(), input: input)
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            bridge.stop()
+            done.signal()
+        }.start()
+        if done.wait(timeout: .now() + 5) == .success { return true }
+        let null = open("/dev/null", O_RDONLY)
+        _ = dup2(null, input)
+        close(null)
+        done.wait()
+        return false
+    }
+
+    @Test func stopReturnsWhenInputNeverRunsDry() throws {
+        let zero = open("/dev/zero", O_RDONLY)
+        try #require(zero >= 0)
+        defer { close(zero) }
+        #expect(Self.stopReturnsPromptly(input: zero))
     }
 }
 #endif
