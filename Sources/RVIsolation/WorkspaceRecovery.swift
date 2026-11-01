@@ -666,9 +666,8 @@ extension WorkspaceRecovery {
         case .markComplete:
             break
         case .act(let action):
-            if let stopped = execute(action, workspace, identity: identity) {
-                return stopped
-            }
+            let outcome = execute(action, workspace, identity: identity)
+            guard case .done = outcome else { return outcome }
         }
         guard mark(WorkspaceRecoveryPlan.completion(of: step), workspace, log: log, progress: &progress) else {
             return .failed
@@ -676,12 +675,12 @@ extension WorkspaceRecovery {
         return .done
     }
 
-    /// Performs one admitted recovery action. Nil means it succeeded.
+    /// Performs one admitted recovery action; `.done` means it succeeded.
     private static func execute(
         _ action: RecoveryAction,
         _ workspace: WorkspaceReconstruction,
         identity: WorkspaceDurableIdentity
-    ) -> Step? {
+    ) -> Step {
         switch action {
         case .publishOwnedMount:
             guard case .success(let snapshot) = loadSnapshot(identity) else { return .failed }
@@ -703,7 +702,7 @@ extension WorkspaceRecovery {
                 case .failure:
                     return .failed
                 case .success:
-                    return nil
+                    return .done
                 }
             }
         case .detachOwnedMount:
@@ -720,7 +719,7 @@ extension WorkspaceRecovery {
                 case .failure:
                     return .failed
                 case .success:
-                    return nil
+                    return .done
                 }
             }
         case .removeOwnedImage:
@@ -729,7 +728,7 @@ extension WorkspaceRecovery {
                 device: identity.imageDevice,
                 inode: identity.imageInode
             ) else { return .failed }
-            return nil
+            return .done
         case .restoreHiddenOriginal:
             switch WorkspaceInodeBoundary.restoreHiddenOriginal(
                 project: workspace.originalPath,
@@ -738,7 +737,7 @@ extension WorkspaceRecovery {
             case .failure:
                 return .failed
             case .success:
-                return nil
+                return .done
             }
         }
     }
@@ -1175,7 +1174,7 @@ extension WorkspaceRecovery {
 }
 
 /// Mount observation shared by recovery and the inode boundary.
-enum WorkspaceMountObservation: Equatable, Sendable {
+enum WorkspaceMountObservation: CaseIterable, Equatable, Sendable {
     case ownedMount
     case missingMount
     case originalRestored

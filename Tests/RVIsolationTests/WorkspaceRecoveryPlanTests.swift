@@ -16,9 +16,7 @@ struct WorkspaceRecoveryPlanTests {
         var testDescription: String { "\(step) × \(observation) → \(expected)" }
     }
 
-    static let observations: [WorkspaceMountObservation] = [
-        .ownedMount, .missingMount, .originalRestored, .unrelatedMount, .savedTreeMismatch, .ambiguous,
-    ]
+    static let observations = WorkspaceMountObservation.allCases
 
     static let steps: [Step] = [.publish, .detach, .restore]
 
