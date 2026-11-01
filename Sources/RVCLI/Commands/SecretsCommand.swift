@@ -753,6 +753,9 @@ struct SecretsSet: AsyncParsableCommand {
               rv secrets set OPENAI_API_KEY --resource-profile main
               rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
               printf %s "$TOKEN" | rv secrets set GH_TOKEN --environment
+            Setting a new value reaches running sessions that use the gateway on their next
+            request. Environment-delivered values only change for new sessions.
+              rv secrets set GITHUB_TOKEN --expires 2027-01-31
             """
     )
 

@@ -173,6 +173,48 @@ Not covered: double encodings (percent inside JSON, base64 of an escaped
 value), hex, HTML entities, and payloads that are themselves archives
 (`application/zip`, `application/gzip`).
 
+## Expiry and rotation
+
+`expires` (an ISO-8601 date or a date-time with a zone; a date alone means
+00:00 UTC that day) stops a secret from being delivered. Set it with
+`rv secrets set NAME --expires 2026-12-31`, or `--expires none` to clear it.
+
+- At launch an expired secret fails the launch, as an unresolvable one does.
+  Nothing from that lease is staged.
+- In a running session the gateway refuses requests past expiry with `403`
+  (`refusal: expired`).
+- `rv secrets list` and `describe` warn when a secret has expired or expires
+  within 7 days.
+
+A gateway entry no longer has to hold its launch value for the runtime's
+life:
+
+- **Keychain sources** (including everything `rv secrets set` stores) are
+  checked on the request path, at most every 2 seconds, for a changed
+  modification date. Only the item's attributes are read, so the check never
+  prompts. A change makes the next request wait for a re-read, so
+  `rv secrets set NAME` reaches running sessions without a restart.
+- **`refresh`** (`rv secrets set NAME --refresh 15m`, from 1m to 30d)
+  re-resolves any source on a timer. Once the interval has passed, the next
+  request starts a refresh in the background and is served the current value.
+  If the refresh fails, the current value is still used for a grace of one
+  more interval, with retries no more often than a quarter interval. After
+  that, requests wait for a refresh and are refused with `503`
+  (`refusal: refreshFailed`) while it keeps failing.
+- One refresh runs per entry at a time; concurrent requests share it.
+- A refresh re-reads `secrets.json` and takes the expiry on file. If the
+  secret's source or delivery has changed, the refresh fails, because a live
+  placeholder must not receive a value it was not bound to. Start a new
+  session to use the new definition.
+- The previous 8 values stay in the response scrubber, so an upstream that
+  echoes a pre-rotation value still has it redacted.
+
+Environment-delivered secrets cannot rotate: the value is in the process
+environment from launch, and `refresh` is refused for them. Restart the
+session to pick up a new value. Removing a secret does not revoke it from a
+running session; end the session. Dynamic secrets with leases and
+revoke-on-exit are not supported, since rv has no dynamic sources.
+
 ## Audit
 
 Every gateway request writes `secret.use` events to `audit.jsonl`. None of
@@ -188,8 +230,10 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed` | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
+  | `refreshed` | `event: refresh`; a refresh swapped in a new value (new `fingerprint`) | info |
+  | `refreshFailed` | `event: refresh`; a refresh could not read the provider (`reason`) | failed |
 
 - Other `detail` fields: `refusal` (code), `method`, `path` (placeholders
   redacted, a percent-encoded placeholder decoded and then redacted),
@@ -211,4 +255,5 @@ placeholder was copied out of its runtime. In
 `is_alert: true`. `rv audit --kind secret` shows both kinds.
 
 `rv secrets list` and `rv secrets describe` show each gateway secret's
-surfaces and allow rules (`allow: any method and path` when it has none).
+surfaces and allow rules (`allow: any method and path` when it has none),
+and any expiry and refresh interval.

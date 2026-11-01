@@ -444,6 +444,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
+                HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
@@ -459,6 +460,8 @@ enum HelpCatalog {
                 HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
                 HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
                 HelpRow(name: "--resource-profile", description: "Wire the secret (or every imported name) into this runtime profile (see `rv init`)"),
+                HelpRow(name: "--expires", description: "2026-12-31 or 2026-12-31T18:00:00Z; past it launches fail and the gateway refuses"),
+                HelpRow(name: "--refresh", description: "Gateway only: re-read the value this often in running sessions, e.g. 15m"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
@@ -489,6 +492,10 @@ enum HelpCatalog {
                 HelpRow(
                     name: "allow",
                     description: "Without rules any method and path is allowed; outside them 403, ambiguous paths 400"
+                ),
+                HelpRow(
+                    name: "rotation",
+                    description: "set reaches running gateway sessions on the next request; environment values need a restart"
                 ),
                 HelpRow(
                     name: "sources",
