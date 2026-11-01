@@ -237,7 +237,7 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
         try stageHealthyInstall(fixture)
         let down = ServiceDiagnosticResult.local(ServiceFallbackDiagnostic(cause: .down, corePacksReady: true))
         let outcome = doctorPretty(fixture, down)
-        #expect(outcome.stdout.contains("fix: rv service restart"))
+        #expect(outcome.stdout.contains("fix: \(DoctorRun.restartCommand)"))
         #expect(outcome.stdout.contains("\(fixture.paths.localRv) setup"))
         #expect(outcome.stdout.lowercased().contains("fallback") == false)
         #expect(outcome.exitCode == 1)
@@ -261,7 +261,7 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
         )
         let outcome = doctorPretty(fixture, rejected)
         #expect(outcome.stdout.contains("daemon identity rejected"))
-        #expect(outcome.stdout.contains("fix: run \(fixture.paths.localRv) setup, then rv service restart"))
+        #expect(outcome.stdout.contains("fix: run \(fixture.paths.localRv) setup, then \(DoctorRun.restartCommand)"))
     }
 }
 

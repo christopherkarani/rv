@@ -170,19 +170,28 @@ enum DoctorRun {
 
     /// One-line repair for a service that is not running cleanly. Hooks have
     /// no in-process fallback, so every non-running state needs one.
+    /// The restart a `fix:` line may name. `rv service restart` drives
+    /// launchd only; under systemd it refuses and points at systemctl.
+    #if os(macOS)
+    static let restartCommand = "rv service restart"
+    #else
+    static let restartCommand = "systemctl --user restart \(SystemdUserTemplate.unitName)"
+    #endif
+
     static func serviceFix(_ health: ServiceHealth, paths: OwnedPaths) -> String? {
         let setup = "run \(paths.localRv) setup"
+        let restart = restartCommand
         switch health {
         case .reachable:
             return nil
         case .notInstalled:
             return setup
         case .requestFailed(.daemonRejected, _):
-            return "\(setup), then rv service restart"
+            return "\(setup), then \(restart)"
         case .down, .requestFailed:
-            return "rv service restart; if it stays down, \(setup)"
+            return "\(restart); if it stays down, \(setup)"
         case .skew:
-            return "rv service restart (loads the installed rvd); if it persists, reinstall rv"
+            return "\(restart) (loads the installed rvd); if it persists, reinstall rv"
         }
     }
 
