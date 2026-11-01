@@ -250,7 +250,9 @@ public struct TypedRuleStore: Sendable {
     /// `transform` sees the live document under the same locks the save
     /// takes, so concurrent updates serialize instead of losing one. A
     /// throwing `transform` leaves `policy.toml` and the JSONL log
-    /// untouched. Returns the saved document.
+    /// untouched. Returns the saved document. `transform` must not call
+    /// back into this store's saves, rollbacks, or history reads: the
+    /// flock-based locks are not reentrant and would self-deadlock.
     @discardableResult
     public func updateMachine(
         _ transform: (PolicyDocument) throws -> PolicyDocument
@@ -525,7 +527,7 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// Read-modify-write of repo `.rv/policy.toml` under one `.policy.lock`
-    /// hold. Same contract as `updateMachine`.
+    /// hold. Same contract as `updateMachine`, including the no-reentry rule.
     @discardableResult
     public func updateRepo(
         workspace: URL,
