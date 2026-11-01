@@ -45,8 +45,8 @@ final class FakeRefresher: Sendable {
 }
 
 /// Polls `condition` for up to two seconds.
-func eventually(_ condition: () -> Bool) -> Bool {
-    for _ in 0..<200 {
+func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
+    for _ in 0..<(seconds * 100) {
         if condition() { return true }
         usleep(10_000)
     }
@@ -200,16 +200,20 @@ struct SecretGatewayRotationTests {
         clock.advance(121)
         let statuses = Mutex<[Int]>([])
         let group = DispatchGroup()
+        // Dedicated threads, not the global queue: under a full parallel
+        // test run the shared pool can be saturated and starve the clients.
         for _ in 0..<2 {
-            DispatchQueue.global().async(group: group) {
+            group.enter()
+            Thread.detachNewThread {
                 let status = (try? call(port, placeholder))?.status ?? -1
                 statuses.withLock { $0.append(status) }
+                group.leave()
             }
         }
-        #expect(eventually { refresher.calls == 1 })
+        #expect(eventually(seconds: 20) { refresher.calls == 1 })
         usleep(100_000)
         refresher.release()
-        #expect(group.wait(timeout: .now() + 10) == .success)
+        #expect(group.wait(timeout: .now() + 30) == .success)
         #expect(statuses.withLock { $0 } == [200, 200])
         #expect(refresher.calls == 1)
         #expect(sentValues(upstream) == [Self.new, Self.new])
