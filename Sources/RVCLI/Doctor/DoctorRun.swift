@@ -16,17 +16,23 @@ struct DoctorEnvironment {
     var fileManager: FileManager
     var launchAgentLoaded: Bool
     var leftovers: DoctorLeftoversView? = nil
+    /// Install probes (launchd domains, trust manifest, owned files). Nil
+    /// skips the install-problem checks entirely.
+    var install: DoctorInstallProbes? = nil
 
     static func live(
         environment: [String: String] = CLIProcess.environment()
     ) -> DoctorEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
+        let install = DoctorInstallProbes.live()
         return DoctorEnvironment(
             home: home,
             pathEntries: (environment["PATH"] ?? "").split(separator: ":").map(String.init),
             fileManager: .default,
-            launchAgentLoaded: LaunchAgentProbe.isLoaded(label: SetupRun.launchAgentLabel),
-            leftovers: liveLeftovers()
+            launchAgentLoaded: install.launchd.map { $0.loadedInGui || $0.loadedInUser }
+                ?? LaunchAgentProbe.isLoaded(label: SetupRun.launchAgentLabel),
+            leftovers: liveLeftovers(),
+            install: install
         )
     }
 
@@ -128,8 +134,10 @@ enum DoctorRun {
                 )
             )
         )
+        var service = snapshot.health.service
+        service.fix = serviceFix(snapshot.health, paths: paths)
         return DoctorViewModel(
-            service: snapshot.health.service,
+            service: service,
             packs: packsView(
                 snapshot.packs,
                 packCheckReady: snapshot.health.packCheckReady
@@ -153,8 +161,29 @@ enum DoctorRun {
             blocksEnabled: DenialLedgerPreferences.isEnabled(
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             ),
-            leftovers: environment.leftovers
+            leftovers: environment.leftovers,
+            problems: environment.install.map {
+                DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
+            } ?? []
         )
+    }
+
+    /// One-line repair for a service that is not running cleanly. Hooks have
+    /// no in-process fallback, so every non-running state needs one.
+    static func serviceFix(_ health: ServiceHealth, paths: OwnedPaths) -> String? {
+        let setup = "run \(paths.localRv) setup"
+        switch health {
+        case .reachable:
+            return nil
+        case .notInstalled:
+            return setup
+        case .requestFailed(.daemonRejected, _):
+            return "\(setup), then rv service restart"
+        case .down, .requestFailed:
+            return "rv service restart; if it stays down, \(setup)"
+        case .skew:
+            return "rv service restart (loads the installed rvd); if it persists, reinstall rv"
+        }
     }
 
     /// HOME config is the pack enablement source. A failed read is a broken
