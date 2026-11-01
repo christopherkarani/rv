@@ -8,12 +8,35 @@ import RVPolicy
 
 /// Server-side host codec door. Maps host stdin through gated evaluate to host wire.
 public struct HookDoor: Sendable {
+    /// Deny reason when the daemon ran past `HookDeadline.budget`: the client
+    /// has already given up, so nothing was committed on its behalf.
+    static let timeoutReason = "rv timed out evaluating this action and committed nothing; retry it."
+
+    /// `deadline` defaults to a budget starting now. The daemon passes one
+    /// started at frame receipt. Pass it with a `deadlineGuarded` world (as
+    /// `live` builds) so mint and pending ports honor it too.
     public static func run(
         host: HookHost,
         stdin: String,
-        world: HookEvaluateWorld
+        world: HookEvaluateWorld,
+        deadline: HookDeadline = HookDeadline()
     ) async throws -> HookEvaluateReply {
-        reply(await hookWire(host: host, stdin: stdin, world: world))
+        guard deadline.permitsSideEffects() else {
+            return timeoutReply(host: host)
+        }
+        let wire = await HookDeadline.$current.withValue(deadline) {
+            await hookWire(host: host, stdin: stdin, world: world)
+        }
+        // A skipped side effect means the wire may promise a pending row or
+        // unlock code that does not exist; the client gave up anyway.
+        if deadline.hasTripped {
+            return timeoutReply(host: host)
+        }
+        return reply(wire)
+    }
+
+    private static func timeoutReply(host: HookHost) -> HookEvaluateReply {
+        reply(productionHostCodec(host).encodeDeny(reason: timeoutReason, rule: nil, next: .none))
     }
 
     /// Create one awaiting row for a product Ask. Missing session is a no-op.
@@ -71,7 +94,7 @@ extension HookEvaluateWorld {
         recordDecision: (@Sendable (EvaluationResult) -> Void)? = nil
     ) -> HookEvaluateWorld {
         let ledger = LedgerHost.hook(host)
-        return HookEvaluateWorld(
+        return deadlineGuarded(HookEvaluateWorld(
             evaluate: { command, cwd in
                 let result = await world.apply(command: command, cwd: cwd, host: ledger)
                 recordDecision?(result)
@@ -104,6 +127,32 @@ extension HookEvaluateWorld {
                     invocationDisplay: Normalize.invocationDisplay(of: command)
                 )
             }
+        ))
+    }
+
+    /// Gates the ports whose effects only make sense if the client sees the
+    /// reply (unlock-code mint, pending-approval row) on the task's bound
+    /// `HookDeadline`. Grant spend and the denial ledger are gated inside
+    /// `GatedEvaluate`, where they happen.
+    package static func deadlineGuarded(_ world: HookEvaluateWorld) -> HookEvaluateWorld {
+        let mintWithCommand = world.mintOnDenyWithCommand.map { mint in
+            { @Sendable (result: EvaluationResult, cwd: WorkingDirectory?, command: ShellCommand) in
+                guard HookDeadline.permitsSideEffects() else { return AllowOnceUnlockMint?.none }
+                return await mint(result, cwd, command)
+            }
+        }
+        return HookEvaluateWorld(
+            evaluate: world.evaluate,
+            evaluateFile: world.evaluateFile,
+            mintOnDeny: { result, cwd in
+                guard HookDeadline.permitsSideEffects() else { return nil }
+                return await world.mintOnDeny(result, cwd)
+            },
+            recordHostAsk: { request, action in
+                guard HookDeadline.permitsSideEffects() else { return }
+                try await world.recordHostAsk(request, action)
+            },
+            mintOnDenyWithCommand: mintWithCommand
         )
     }
 }

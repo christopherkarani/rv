@@ -255,6 +255,14 @@ public actor EphemeralAllowOnceTable {
         }
     }
 
+    /// True while any grant is unexpired at `now`. `rvd` asks before an idle
+    /// exit: exiting drops the table, so a human's outstanding approvals
+    /// would silently die with the process.
+    public func hasLiveGrants(now: Date) -> Bool {
+        prune(now: now)
+        return grants.isEmpty == false
+    }
+
     /// M-07 spend rule. Salted-bound grants require an equal salted
     /// digest; content-bound (TTY attested) grants require an equal
     /// content digest. Unbound (legacy) grants allow unknown/unmasked

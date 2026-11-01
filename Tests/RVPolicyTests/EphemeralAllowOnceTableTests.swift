@@ -9,6 +9,27 @@ import RVDomain
 struct EphemeralAllowOnceTableTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    /// rvd idle exit asks this before dropping the table: live grants keep
+    /// the daemon (and the human's approvals) alive.
+    @Test func hasLiveGrantsTracksPlantConsumeAndExpiry() async {
+        let table = EphemeralAllowOnceTable()
+        #expect(await table.hasLiveGrants(now: now) == false)
+        #expect(await table.plant(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
+            codeHash: "live-1", now: now, ttl: 60
+        ) == .planted)
+        #expect(await table.hasLiveGrants(now: now))
+        #expect(await table.hasLiveGrants(now: now.addingTimeInterval(59)))
+        #expect(await table.hasLiveGrants(now: now.addingTimeInterval(60)) == false)
+
+        #expect(await table.plant(
+            matchingView: "git stash drop", cwd: wd("/tmp/ws"),
+            codeHash: "live-2", now: now
+        ) == .planted)
+        #expect(await table.consume(matchingView: "git stash drop", cwd: wd("/tmp/ws"), now: now))
+        #expect(await table.hasLiveGrants(now: now.addingTimeInterval(60)) == false)
+    }
+
     @Test func plantThenConsumeAllowsOnce() async {
         let table = EphemeralAllowOnceTable()
         let planted = await table.plant(

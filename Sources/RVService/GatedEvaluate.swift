@@ -103,6 +103,7 @@ public struct GatedEvaluate: Sendable {
                 analysis: result.analysis
             )
         }
+        guard HookDeadline.permitsSideEffects() else { return result }
         recordDenialIfNeeded(
             result,
             path: action.path.rawValue,
@@ -313,6 +314,10 @@ public struct GatedEvaluate: Sendable {
         case .deny:
             if HookAuthorization.policyGateAccess(for: candidate) == .skip {
                 finished = candidate
+            } else if verb == .apply, HookDeadline.permitsSideEffects() == false {
+                // The hook client already gave up: spending the human's
+                // allow-once grant on a reply nobody reads would burn it.
+                finished = candidate
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
@@ -334,7 +339,7 @@ public struct GatedEvaluate: Sendable {
                 )
             }
         }
-        if verb.recordsDenial {
+        if verb.recordsDenial, HookDeadline.permitsSideEffects() {
             recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
         }
         return finished
