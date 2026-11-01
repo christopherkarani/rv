@@ -515,6 +515,11 @@ static xpc_object_t xpc_exchange(
      * authority-bearing results from an unverified daemon. */
     if (!rv_verify_daemon_reply(reply)) {
         *failure = RV_HOOK_FAIL_UNTRUSTED;
+        /* A stale rvd (binary replaced by an upgrade) answers once and then
+         * exits; launchd starts the new binary on the next connect. Callers
+         * zero this after the hookEvaluate exchange, so it only retries
+         * Hellos. */
+        *retryable = 1;
         xpc_release(reply);
         return NULL;
     }
@@ -628,6 +633,7 @@ static int xpc_hook_evaluate(
     }
     if (!hello_ack_ok((const char *)data, n)) {
         failure = RV_HOOK_FAIL_UNTRUSTED;
+        *retryable = 1;
         goto out;
     }
     endpoint_obj = xpc_dictionary_get_value(reply, RV_ACTION_ENDPOINT_KEY);
@@ -662,6 +668,7 @@ static int xpc_hook_evaluate(
     }
     if (!hello_ack_ok((const char *)data, n)) {
         failure = RV_HOOK_FAIL_UNTRUSTED;
+        *retryable = 1;
         goto out;
     }
     xpc_release(reply);
@@ -841,6 +848,8 @@ static int unix_hook_evaluate(
      * is the sibling rvd before sending any action bytes. */
     if (!rv_verify_unix_daemon(fd)) {
         close(fd);
+        /* Nothing sent yet; a stale rvd drains and exits on its own. */
+        *retryable = 1;
         return RV_HOOK_FAIL_UNTRUSTED;
     }
 

@@ -13,9 +13,9 @@ static const char kUnreachableMessage[] =
 static const char kTimeoutMessage[] =
     "RV daemon did not answer in time. Retry; if it persists run `rv doctor`.";
 static const char kUntrustedMessage[] =
-    "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv setup`, then `rv doctor`.";
+    "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
 static const char kProtocolMessage[] =
-    "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv setup`, then `rv doctor`.";
+    "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
 
 /* Existing Cursor deny `agent_message`; down-case asks never use it. */
 static const char kCursorDenyAgentLine[] = "RV blocked this command. Wait for the human.";
@@ -26,9 +26,6 @@ enum RvWhenDown rv_when_down_parse(const char *value) {
     }
     if (strcmp(value, "deny") == 0) {
         return RV_WHEN_DOWN_DENY;
-    }
-    if (strcmp(value, "allow") == 0) {
-        return RV_WHEN_DOWN_ALLOW;
     }
     return RV_WHEN_DOWN_ASK;
 }
@@ -121,12 +118,13 @@ int rv_hook_fallback_render(
     out->err[0] = '\0';
     out->exit_code = 0;
     msg = rv_hook_failure_message(failure);
-    if (failure == RV_HOOK_FAIL_INPUT) {
+    /* Only an absent or slow daemon is configurable. Malformed input, a
+     * daemon that fails identity verification (possible impersonation) and
+     * a malformed reply always deny. */
+    if (failure != RV_HOOK_FAIL_UNREACHABLE && failure != RV_HOOK_FAIL_TIMEOUT) {
         return render_deny(host, msg, out);
     }
     switch (mode) {
-    case RV_WHEN_DOWN_ALLOW:
-        return 0;
     case RV_WHEN_DOWN_DENY:
         return render_deny(host, msg, out);
     case RV_WHEN_DOWN_ASK:

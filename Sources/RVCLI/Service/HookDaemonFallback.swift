@@ -3,11 +3,13 @@ import RVDomain
 import RVHooks
 import RVService
 
-/// `RV_HOOK_WHEN_DOWN`: how a hook renders when rvd gives no verdict.
-/// Unset or any other value is `.ask`. `.allow` prints nothing and exits 0,
-/// deferring to the host's own permission system — never an RV allow.
+/// `RV_HOOK_WHEN_DOWN`: how a hook renders when rvd is absent or slow
+/// (`.unreachable` / `.timeout`). Exactly `deny` is `.deny`; unset or any
+/// other value is `.ask`. There is deliberately no allow/bypass value: the
+/// variable can reach the hook from project-scoped host config an agent
+/// can write. Identity and protocol failures always deny.
 public enum HookWhenDown: String, Sendable, Equatable {
-    case ask, deny, allow
+    case ask, deny
 
     public static let environmentKey = "RV_HOOK_WHEN_DOWN"
 
@@ -34,17 +36,20 @@ enum HookDaemonFallback {
         case .timeout:
             "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
         case .untrusted:
-            "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv setup`, then `rv doctor`."
+            "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
         case .protocol:
-            "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv setup`, then `rv doctor`."
+            "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
         }
     }
 
     static func wire(host: HookHost, failure: HookDaemonFailure, mode: HookWhenDown) -> HookWire {
         let message = message(for: failure)
+        // A daemon that fails identity verification may be an impostor, and a
+        // malformed reply carries no trustworthy verdict: never soften those.
+        guard failure == .unreachable || failure == .timeout else {
+            return deny(host: host, message: message)
+        }
         switch mode {
-        case .allow:
-            return HookWire(stdout: "", exitCode: 0)
         case .deny:
             return deny(host: host, message: message)
         case .ask:
@@ -69,7 +74,9 @@ enum HookDaemonFallback {
             }
         }
 #endif
-        return .protocol
+        // Unrecognized transport failure: treat as an absent daemon (ask by
+        // default). Identity failures are typed above and always deny.
+        return .unreachable
     }
 
     private static func deny(host: HookHost, message: String) -> HookWire {

@@ -19,7 +19,8 @@ struct HookDaemonFallbackTests {
         #expect(HookWhenDown(environmentValue: nil) == .ask)
         #expect(HookWhenDown(environmentValue: "") == .ask)
         #expect(HookWhenDown(environmentValue: "deny") == .deny)
-        #expect(HookWhenDown(environmentValue: "allow") == .allow)
+        // No bypass value: "allow" can come from agent-writable host config.
+        #expect(HookWhenDown(environmentValue: "allow") == .ask)
         #expect(HookWhenDown(environmentValue: "ALLOW") == .ask)
         #expect(HookWhenDown(environmentValue: "1") == .ask)
     }
@@ -62,11 +63,13 @@ struct HookDaemonFallbackTests {
             let message = HookDaemonFallback.message(for: failure)
             let codecDeny = productionHostCodec(host).encodeDeny(reason: message, rule: nil, next: .none)
 
-            #expect(HookDaemonFallback.wire(host: host, failure: failure, mode: .allow) == HookWire(stdout: "", exitCode: 0))
             #expect(HookDaemonFallback.wire(host: host, failure: failure, mode: .deny) == codecDeny)
 
             let ask = HookDaemonFallback.wire(host: host, failure: failure, mode: .ask)
-            if host == .claude || host == .cursor {
+            if failure == .untrusted || failure == .protocol {
+                // Impersonation and malformed replies never soften.
+                #expect(ask == codecDeny)
+            } else if host == .claude || host == .cursor {
                 #expect(ask.stdout.contains("\"ask\""))
                 #expect(ask.stdout.contains(message))
                 #expect(ask.exitCode == 0)
@@ -82,7 +85,7 @@ struct HookDaemonFallbackTests {
         #expect(HookDaemonFallback.classify(ServiceTransportError.connectFailed) == .unreachable)
         #expect(HookDaemonFallback.classify(ServiceTransportError.interrupted) == .unreachable)
         #expect(HookDaemonFallback.classify(ServiceTransportError.decodeFailed) == .protocol)
-        #expect(HookDaemonFallback.classify(CocoaError(.coderReadCorrupt)) == .protocol)
+        #expect(HookDaemonFallback.classify(CocoaError(.coderReadCorrupt)) == .unreachable)
 #if canImport(XPC)
         #expect(HookDaemonFallback.classify(XPCEvaluateClientError.authenticationFailed) == .untrusted)
         #expect(HookDaemonFallback.classify(XPCEvaluateClientError.connectFailed) == .unreachable)
@@ -96,8 +99,9 @@ struct HookDaemonFallbackTests {
         let deny = await client.hookEvaluate(host: .codex, stdin: "{}", whenDown: .deny)
         #expect(deny.exitCode == 2)
         #expect(deny.stderr.contains(Self.unreachable))
-        let allow = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .allow)
-        #expect(allow == HookWire(stdout: "", exitCode: 0))
+        let grok = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .ask)
+        #expect(grok == HookDaemonFallback.wire(host: .grok, failure: .unreachable, mode: .deny),
+                "hosts without an ask primitive deny")
     }
 
     @Test func defaultModeComesFromTheProcessEnvironment() async throws {
@@ -133,7 +137,9 @@ struct HookDaemonFallbackTests {
         )
         let client = try isolatedClient(transport: transport)
         let wire = await client.hookEvaluate(host: .cursor, stdin: "{}", whenDown: .ask)
-        #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .protocol, mode: .ask))
+        #expect(wire == HookDaemonFallback.wire(host: .cursor, failure: .protocol, mode: .deny),
+                "a protocol failure denies even in ask mode")
+        #expect(wire.stdout.contains("\"deny\""))
         #expect(transport.invalidationCount == 1)
     }
 }

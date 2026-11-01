@@ -7,15 +7,17 @@
  * through rv_when_down_parse and writes the rendered bytes itself.
  *
  * - INPUT (unreadable / oversized / NUL / invalid UTF-8 stdin, request
- *   build failure): always the host's deny shape and deny exit code.
- * - UNREACHABLE / TIMEOUT / UNTRUSTED / PROTOCOL ("rv daemon unavailable"):
- *   RV_HOOK_WHEN_DOWN selects the rendering.
- *     ask (default, also any unknown value): Claude and Cursor get their
- *       native ask wire (exit 0) so the human decides in the host;
+ *   build failure), UNTRUSTED (daemon identity verification failed or
+ *   HelloAck refused) and PROTOCOL (malformed reply): always the host's
+ *   deny shape and deny exit code. Impersonation must never soften.
+ * - UNREACHABLE / TIMEOUT (daemon absent or slow): RV_HOOK_WHEN_DOWN
+ *   selects the rendering.
+ *     ask (default, also any value but "deny"): Claude and Cursor get
+ *       their native ask wire (exit 0) so the human decides in the host;
  *       hosts without an ask primitive get their deny shape.
  *     deny: the host's deny shape.
- *     allow: empty stdout, exit 0 — defers to the host's own permission
- *       system. Never an RV allow verdict.
+ *   There is deliberately no allow/bypass value: the variable can reach
+ *   the hook from project-scoped host config an agent can write.
  * Every case carries a distinct, actionable message. Mirrored by
  * `RVCLI/Service/HookDaemonFallback.swift`.
  */
@@ -32,8 +34,7 @@ enum RvHookFailure {
 
 enum RvWhenDown {
     RV_WHEN_DOWN_ASK = 0,
-    RV_WHEN_DOWN_DENY = 1,
-    RV_WHEN_DOWN_ALLOW = 2
+    RV_WHEN_DOWN_DENY = 1
 };
 
 #define RV_HOOK_FALLBACK_OUT_MAX 1024
@@ -45,7 +46,7 @@ struct RvHookFallback {
     int exit_code;
 };
 
-/* NULL, empty, or anything but exactly "ask" / "deny" / "allow" is ask. */
+/* Exactly "deny" is deny; NULL, empty, or anything else is ask. */
 enum RvWhenDown rv_when_down_parse(const char *value);
 
 /* Constant, JSON-safe sentence for the failure class (never NULL). */

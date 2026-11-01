@@ -17,13 +17,22 @@ static const char *const kHosts[] = {
 };
 #define HOST_COUNT (sizeof kHosts / sizeof kHosts[0])
 
+/* Absent or slow daemon: RV_HOOK_WHEN_DOWN decides. */
 static const enum RvHookFailure kDown[] = {
     RV_HOOK_FAIL_UNREACHABLE,
     RV_HOOK_FAIL_TIMEOUT,
+};
+#define DOWN_COUNT (sizeof kDown / sizeof kDown[0])
+
+/* Malformed input, impersonation and malformed replies: deny in every mode. */
+static const enum RvHookFailure kHard[] = {
+    RV_HOOK_FAIL_INPUT,
     RV_HOOK_FAIL_UNTRUSTED,
     RV_HOOK_FAIL_PROTOCOL,
 };
-#define DOWN_COUNT (sizeof kDown / sizeof kDown[0])
+#define HARD_COUNT (sizeof kHard / sizeof kHard[0])
+static const enum RvWhenDown kModes[] = { RV_WHEN_DOWN_ASK, RV_WHEN_DOWN_DENY };
+#define MODE_COUNT (sizeof kModes / sizeof kModes[0])
 
 static int deny_exit(const char *host) {
     if (strcmp(host, "codex") == 0) {
@@ -79,7 +88,8 @@ static void test_mode_parse(void) {
     if (rv_when_down_parse("") != RV_WHEN_DOWN_ASK) fail("parse_empty", "not ask");
     if (rv_when_down_parse("ask") != RV_WHEN_DOWN_ASK) fail("parse_ask", "not ask");
     if (rv_when_down_parse("deny") != RV_WHEN_DOWN_DENY) fail("parse_deny", "not deny");
-    if (rv_when_down_parse("allow") != RV_WHEN_DOWN_ALLOW) fail("parse_allow", "not allow");
+    /* No bypass value exists: "allow" can come from agent-writable config. */
+    if (rv_when_down_parse("allow") != RV_WHEN_DOWN_ASK) fail("parse_allow", "not ask");
     if (rv_when_down_parse("ALLOW") != RV_WHEN_DOWN_ASK) fail("parse_upper", "not ask");
     if (rv_when_down_parse("allow ") != RV_WHEN_DOWN_ASK) fail("parse_space", "not ask");
     if (rv_when_down_parse("1") != RV_WHEN_DOWN_ASK) fail("parse_junk", "not ask");
@@ -172,7 +182,6 @@ static void test_exact_wires(void) {
              "{\"systemMessage\":\"%s\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\","
              "\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n",
              input, input);
-    expect_exact("claude_input_allow_mode", "claude", RV_HOOK_FAIL_INPUT, RV_WHEN_DOWN_ALLOW, want, "", 0);
     expect_exact("claude_input_ask_mode", "claude", RV_HOOK_FAIL_INPUT, RV_WHEN_DOWN_ASK, want, "", 0);
 }
 
@@ -187,12 +196,6 @@ static void test_matrix(void) {
 
         for (f = 0; f < DOWN_COUNT; f++) {
             const char *msg = rv_hook_failure_message(kDown[f]);
-
-            snprintf(name, sizeof name, "%s_allow_%d", host, (int)kDown[f]);
-            render(name, host, kDown[f], RV_WHEN_DOWN_ALLOW, &r);
-            if (r.out[0] != '\0' || r.err[0] != '\0' || r.exit_code != 0) {
-                fail(name, "allow must print nothing and exit 0");
-            }
 
             snprintf(name, sizeof name, "%s_deny_%d", host, (int)kDown[f]);
             render(name, host, kDown[f], RV_WHEN_DOWN_DENY, &r);
@@ -220,10 +223,17 @@ static void test_matrix(void) {
             }
         }
 
-        snprintf(name, sizeof name, "%s_input", host);
-        render(name, host, RV_HOOK_FAIL_INPUT, RV_WHEN_DOWN_ALLOW, &r);
-        if (r.exit_code != deny_exit(host) || r.out[0] == '\0' || strstr(r.out, "\"ask\"") != NULL) {
-            fail(name, "input must deny in every mode");
+        for (f = 0; f < HARD_COUNT; f++) {
+            size_t m;
+            for (m = 0; m < MODE_COUNT; m++) {
+                snprintf(name, sizeof name, "%s_hard_%d_mode_%d", host, (int)kHard[f], (int)kModes[m]);
+                render(name, host, kHard[f], kModes[m], &r);
+                if (r.exit_code != deny_exit(host) || r.out[0] == '\0'
+                    || strstr(r.out, "\"ask\"") != NULL
+                    || strstr(r.out, rv_hook_failure_message(kHard[f])) == NULL) {
+                    fail(name, "input/untrusted/protocol must deny in every mode");
+                }
+            }
         }
     }
 }

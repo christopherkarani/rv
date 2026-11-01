@@ -315,14 +315,15 @@ if [[ "$down_ready" -eq 1 ]]; then
   expect_down claude-junk claude "bogus" 0 '"permissionDecision":"ask"'
   expect_down cursor-default cursor "" 0 '"permission":"ask"'
   expect_down claude-deny claude deny 0 '"permissionDecision":"deny"'
-  expect_down claude-allow claude allow 0 ''
+  # "allow" is not a bypass: it parses as the default ask.
+  expect_down claude-allow claude allow 0 '"permissionDecision":"ask"'
   expect_down codex-default codex "" 2 '"decision":"block"'
   expect_down opencode-default opencode "" 1 '"decision":"deny"'
   if [[ ! -s "$OUT/down-codex-default.err" ]]; then
     printf 'rv-c tests: Codex down fallback requires blocking stderr\n' >&2
     exit 1
   fi
-  # Malformed input stays a deny even when the operator chose allow.
+  # Malformed input stays a deny whatever RV_HOOK_WHEN_DOWN says.
   set +e
   printf 'a\0b' | RV_HOOK_WHEN_DOWN=allow "$PROBE/rv" hook --host claude >"$OUT/input-allow.json" 2>/dev/null
   st=$?
@@ -332,7 +333,7 @@ if [[ "$down_ready" -eq 1 ]]; then
     printf 'rv-c tests: malformed input must deny regardless of RV_HOOK_WHEN_DOWN\n' >&2
     exit 1
   fi
-  printf 'rv-c daemon-down fallback: ask/deny/allow rendering passed\n'
+  printf 'rv-c daemon-down fallback: ask/deny rendering passed\n'
 fi
 
 printf 'rv-c hook fallback boundary: 9 host denial cases and oversized input passed\n'

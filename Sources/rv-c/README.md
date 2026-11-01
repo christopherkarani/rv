@@ -16,8 +16,9 @@ execute the installed sibling CLI.
 Budgets: each Hello exchange 3000 ms (covers a launchd cold spawn), the
 hookEvaluate exchange 8000 ms (rvd enforces its own shorter deadline).
 A transient failure before the hookEvaluate request is sent (timeout, XPC
-connection invalid/interrupted, `ENOENT`/`ECONNREFUSED` on Linux) retries
-the whole sequence once after 200 ms; the request itself is never resent.
+connection invalid/interrupted, `ENOENT`/`ECONNREFUSED` on Linux, or a
+failed daemon identity check) retries the whole sequence once after 200 ms;
+the request itself is never resent.
 
 Every failure is classified and rendered by `hook_fallback.{h,c}` with a
 distinct, actionable message. Nothing ever replays to `rv-cli`.
@@ -27,18 +28,21 @@ distinct, actionable message. Nothing ever replays to `rv-cli`.
 | `input` | stdin unreadable, over 1 MiB, NUL, invalid UTF-8, request build failure | host deny, always |
 | `unreachable` | service not registered / connection invalid / refused / missing socket | per `RV_HOOK_WHEN_DOWN` |
 | `timeout` | an exchange exceeded its budget | per `RV_HOOK_WHEN_DOWN` |
-| `untrusted` | daemon identity check failed, HelloAck not ok / skew | per `RV_HOOK_WHEN_DOWN` |
-| `protocol` | bad reply JSON, id mismatch, version skew | per `RV_HOOK_WHEN_DOWN` |
+| `untrusted` | daemon identity check failed, HelloAck not ok / skew (retried once before send: a stale rvd exits after answering) | host deny, always |
+| `protocol` | bad reply JSON, id mismatch, version skew | host deny, always |
 
-`RV_HOOK_WHEN_DOWN` (read from the hook's environment):
+`RV_HOOK_WHEN_DOWN` (read from the hook's environment; applies only to
+`unreachable` and `timeout`):
 
 - `ask` (default; also any unrecognized value): Claude and Cursor get their
   native ask wire (exit 0) so the human decides in the host; hosts without
   an ask primitive get their deny shape.
 - `deny`: the host's deny shape and deny exit code (Codex: `decision:
   block` + stderr + exit 2; Pi/OpenCode/OpenClaw/Hermes exit 1; others 0).
-- `allow`: empty stdout, exit 0 — defers to the host's own permission
-  system. It is never an RV allow verdict.
+
+There is deliberately no `allow`/bypass value (it parses as `ask`): the
+variable can reach the hook from project-scoped host config that an agent
+can write, and a same-user agent can make rvd unreachable on purpose.
 
 The Swift hook path (`RVCLI/Service/HookDaemonFallback.swift`, used for
 hosts not piped here) mirrors the classes, messages and modes.
