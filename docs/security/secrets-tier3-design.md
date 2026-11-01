@@ -63,16 +63,21 @@ the cage.
       public var endpointEnv: String  // AWS_ENDPOINT_URL or AWS_ENDPOINT_URL_<SVC>
   }
   ```
-- **Gateway entry.** Generalize `Entry.value` into
-  `enum GatewayCredential { case bearer(SecretValue); case aws(AWSCredentials) }`.
-  `AWSCredentials` holds three `SecretValue`s and an expiry.
+- **Gateway entry.** *Corrected when built (t3-04):* `Entry.value` stays a
+  single `SecretValue` holding the profile's raw JSON, and
+  `Entry.signing: AWSSigningBinding?` marks an AWS entry. A `GatewayCredential`
+  enum would have forked PR 14's rotation, history, and fingerprints, which
+  compare and store one value. `AWSCredentialSet` parses the three keys and
+  `Expiration` from that value when signing, refreshing, and scrubbing.
 - **Pure signer.** A new `SecretGatewaySigV4.swift`. It builds the canonical
   request and string-to-sign, and derives the key with `RVDigest.hmacSHA256`,
   which works on both platforms. Signed bodies use the SHA-256 of the
   buffered body (the gateway already buffers up to 32 MiB). Chunked uploads
   use UNSIGNED-PAYLOAD.
-- **Hook point in `handle`.** For an `.aws` entry, skip
-  `GatewaySubstitution` for `Authorization`. Instead:
+- **Hook point in `handle`.** *As built:* a request whose `Authorization`
+  starts with `AWS4-` takes `admitAWS` instead of `GatewaySubstitution`, and
+  an AWS entry offers no substitution surface, so its placeholder spent as a
+  bearer token is `surfaceNotAllowed`. Then:
   1. Parse the SigV4 `Credential=` access-key id.
   2. Require that it equals the placeholder.
   3. Drop `Authorization`, `X-Amz-Date`, `X-Amz-Security-Token`, and
@@ -117,12 +122,14 @@ the cage.
 **Size.** M. About 300 lines for the signer, 200 for the endpoint and wiring,
 and 300 for tests.
 
-**Open questions.**
-- S3 virtual-host addressing behind a custom endpoint may need
-  `AWS_S3_FORCE_PATH_STYLE`, or per-bucket upstreams.
-- One upstream per secret fights multi-region use. Should
-  `upstream` become a host pattern restricted to `*.amazonaws.com`?
-- Should event-stream signing (Bedrock, Transcribe) be refused, or supported?
+**Open questions (decided 2026-11-02).**
+- S3 addressing: path-style. `AWS_S3_FORCE_PATH_STYLE` is not an
+  environment variable SDKs read; it is an endpoint-ruleset builtin. The S3
+  ruleset already forces path-style for an IP endpoint, and the gateway is
+  `127.0.0.1`, so nothing is staged.
+- One `upstream` per secret (one region). A host pattern is deferred.
+- Signed-chunk and event-stream payloads are refused (`awsSignedStreaming`,
+  400). `UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` pass.
 
 ---
 

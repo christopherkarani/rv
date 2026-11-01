@@ -692,6 +692,41 @@ struct SecretsCommandTests {
         #expect(resolved.withLock { $0 } == 0)
     }
 
+    @Test func awsProfilesAreCheckedScannedAndDescribedAsCredentialSets() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let realSecret = "awsSecretKeyForScan/0000+1111"
+        try Data("aws_secret_access_key = \(realSecret)\n".utf8).write(to: work.appendingPathComponent("creds.ini"))
+        let binding = AWSSigningBinding(
+            upstream: URL(string: "https://s3.us-east-1.amazonaws.com")!, region: "us-east-1", service: "s3",
+            endpointEnv: "AWS_ENDPOINT_URL_S3", allow: [.preset(.readOnly)])
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "AWS_DEV", source: .awsProfile(profile: "dev"), delivery: .awsSigV4(binding))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let output = Mutex(#"{"Version":1,"AccessKeyId":"AKIASCANKEY000000001","SecretAccessKey":"\#(realSecret)"}"#)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in .success(SecretValue(output.withLock { $0 })!) }
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.findings.map(\.secret) == ["AWS_DEV"])
+        #expect(try SecretsRun.check(configuration, names: [], environment: environment).get().map(\.ok) == [true])
+        let described = SecretsRun.describe(configuration).secrets
+        #expect(described.map(\.delivery) == ["awsSigV4"])
+        #expect(described.first?.allow == ["read-only"])
+
+        output.withLock { $0 = "not credentials" }
+        let unusable = "AWS_DEV: the AWS profile did not return usable credentials"
+        #expect(try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get().skipped
+            == [unusable])
+        let check = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(check.map(\.ok) == [false])
+        #expect(check.first?.error == "the AWS profile did not return usable credentials")
+    }
+
     private func git(_ work: URL, _ args: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")

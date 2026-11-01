@@ -28,6 +28,7 @@ extension SecretSource {
             "gcp \(project.map { "\($0)/" } ?? "")\(secret)@\(version)"
         case .azure(let vault, let name, let version):
             "azure \(vault)/\(name)\(version.map { "@\($0)" } ?? "")"
+        case .awsProfile(let profile): "aws profile \(DisplayedText.field(profile))"
         }
     }
 }
@@ -37,6 +38,9 @@ extension SecretDelivery {
         switch self {
         case .gateway(let binding): "gateway → \(binding.upstream.host ?? binding.upstream.absoluteString) via $\(binding.baseURLEnv)"
         case .environment: "environment (real value in the cage)"
+        case .awsSigV4(let binding):
+            "AWS SigV4 → \(binding.upstream.host ?? binding.upstream.absoluteString) "
+                + "(\(binding.service), \(binding.region)) via $\(binding.endpointEnv)"
         }
     }
 }
@@ -143,6 +147,17 @@ extension SecretsConfiguration {
                 var fields: [String: Any] = ["vault": vault, "name": name]
                 if let version { fields["version"] = version }
                 entry["source"] = ["azure": fields]
+            case .awsProfile(let profile):
+                entry["source"] = ["awsProfile": ["profile": profile]]
+            }
+            func allowList(_ allow: [GatewayAllowance]) -> [Any] {
+                allow.map { allowance -> Any in
+                    switch allowance {
+                    case .preset(let preset): return preset.rawValue
+                    case .rule(let rule):
+                        return ["methods": rule.methods.map { $0.sorted() as Any } ?? "*", "path": rule.path]
+                    }
+                }
             }
             switch secret.delivery {
             case .environment:
@@ -155,16 +170,15 @@ extension SecretsConfiguration {
                 if binding.surfaces != GatewaySurface.defaults {
                     fields["surfaces"] = GatewaySurface.ordered(binding.surfaces).map(\.rawValue)
                 }
-                if binding.allow.isEmpty == false {
-                    fields["allow"] = binding.allow.map { allowance -> Any in
-                        switch allowance {
-                        case .preset(let preset): return preset.rawValue
-                        case .rule(let rule):
-                            return ["methods": rule.methods.map { $0.sorted() as Any } ?? "*", "path": rule.path]
-                        }
-                    }
-                }
+                if binding.allow.isEmpty == false { fields["allow"] = allowList(binding.allow) }
                 entry["delivery"] = ["gateway": fields]
+            case .awsSigV4(let binding):
+                var fields: [String: Any] = [
+                    "upstream": binding.upstream.absoluteString, "region": binding.region,
+                    "service": binding.service, "endpointEnv": binding.endpointEnv,
+                ]
+                if binding.allow.isEmpty == false { fields["allow"] = allowList(binding.allow) }
+                entry["delivery"] = ["awsSigV4": fields]
             }
             return entry
         }

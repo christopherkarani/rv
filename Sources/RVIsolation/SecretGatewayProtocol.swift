@@ -229,6 +229,11 @@ enum GatewayRefusal: Error, Equatable {
     case expired
     /// The refresh interval and its grace have passed without a successful refresh.
     case refreshFailed
+    /// A SigV4 request whose access key id is not the secret's placeholder.
+    case awsKeyMismatch
+    /// A signed-chunk or event-stream payload: each chunk signature chains to
+    /// the agent's seed signature, which the gateway replaces.
+    case awsSignedStreaming
 
     /// The case name, a stable code for audit records.
     var code: String { "\(self)" }
@@ -238,22 +243,22 @@ enum GatewayRefusal: Error, Equatable {
     var isMisuse: Bool {
         switch self {
         case .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules, .encodedPlaceholder,
-            .ambiguousPath, .echoMethod, .runtimeMismatch:
+            .ambiguousPath, .echoMethod, .runtimeMismatch, .awsKeyMismatch:
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
-            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed:
+            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming:
             false
         }
     }
 
     var status: Int {
         switch self {
-        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath: 400
+        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath, .awsSignedStreaming: 400
         case .auditUnavailable, .refreshFailed: 503
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
-            .runtimeMismatch, .runtimeUnverified, .expired:
+            .runtimeMismatch, .runtimeUnverified, .expired, .awsKeyMismatch:
             403
         case .tooLarge: 413
         case .echoMethod: 405
@@ -280,6 +285,9 @@ enum GatewayRefusal: Error, Equatable {
         case .runtimeUnverified: "the gateway could not confirm this connection comes from the placeholder's runtime"
         case .expired: "the secret has expired; store a new value with `rv secrets set` and a later --expires"
         case .refreshFailed: "the secret could not be refreshed from its provider, so it was not used"
+        case .awsKeyMismatch: "the request is signed with an access key other than this secret's AWS_ACCESS_KEY_ID"
+        case .awsSignedStreaming:
+            "signed streaming payloads cannot be re-signed; send UNSIGNED-PAYLOAD or STREAMING-UNSIGNED-PAYLOAD-TRAILER"
         }
     }
 }

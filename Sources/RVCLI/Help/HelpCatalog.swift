@@ -499,7 +499,15 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "sources",
-                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile"
+                ),
+                HelpRow(
+                    name: "aws",
+                    description: "awsProfile source + awsSigV4 delivery {upstream, region, service, endpointEnv, allow}: the cage gets a placeholder key id; rv re-signs"
+                ),
+                HelpRow(
+                    name: "aws refusals",
+                    description: "Another key id is 403 (misuse); signed-chunk uploads 400 (use UNSIGNED-PAYLOAD); re-read every 5m or refresh, expiring at Expiration"
                 ),
                 HelpRow(
                     name: "defaults",

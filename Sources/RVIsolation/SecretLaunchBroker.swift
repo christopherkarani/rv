@@ -19,6 +19,10 @@ enum SecretLeaseError: Error, Sendable, Equatable {
     case environmentValueUnusable(String)
     case organizationPolicy(String)
     case expired(secret: String, at: Date)
+    /// The profile's output is not a usable credential set. Never quotes it.
+    case awsCredentialsUnusable(String)
+    /// Two secrets in one launch would set the same variable, e.g. two AWS profiles.
+    case variableCollision(variable: String, secrets: [String])
 
     var message: String {
         switch self {
@@ -32,6 +36,11 @@ enum SecretLeaseError: Error, Sendable, Equatable {
         case .expired(let name, let date):
             "secret \(name) expired at \(SecretExpiry.text(date)); store a new value and expiry with "
                 + "`rv secrets set \(name) --expires DATE`, or update its expires in secrets.json"
+        case .awsCredentialsUnusable(let name):
+            "secret \(name): \(AWSSigningBinding.unusableCredentials) "
+                + "(expected credential_process JSON with AccessKeyId, SecretAccessKey, and a valid Expiration)"
+        case .variableCollision(let variable, let secrets):
+            "secrets \(secrets.joined(separator: " and ")) would both set \(variable); stage one per launch"
         }
     }
 }
@@ -40,6 +49,10 @@ enum SecretLeaseError: Error, Sendable, Equatable {
 /// placeholders; they die with the runtime.
 final class SecretLaunchBroker: @unchecked Sendable {
     static let maximumEnvironmentValueBytes = 8_192
+    /// How often AWS credentials are re-read when `refresh` is unset: well
+    /// inside the shortest STS session (15 minutes), so the gateway does not
+    /// sign with an expired one.
+    static let awsRefreshInterval: TimeInterval = 300
 
     private let configDirectory: URL
     private let resolver: SecretResolver
@@ -125,6 +138,14 @@ final class SecretLaunchBroker: @unchecked Sendable {
             }
             definitions.append(definition)
         }
+        var stagedBy: [String: String] = [:]
+        for definition in definitions {
+            for variable in definition.stagedVariables {
+                if let other = stagedBy.updateValue(definition.name, forKey: variable) {
+                    return .failure(.variableCollision(variable: variable, secrets: [other, definition.name]))
+                }
+            }
+        }
         var placeholders: [SecretPlaceholder] = []
         var environment: [(name: String, value: String)] = []
         var staged: [AuditEvent] = []
@@ -163,6 +184,24 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
+            case .awsSigV4(let binding):
+                guard let credentials = AWSCredentialSet(value) else { return fail(.awsCredentialsUnusable(name)) }
+                let expires = [definition.expires, credentials.expires].compactMap { $0 }.min()
+                if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
+                guard case .success = gateway.start(), let baseURL = gateway.baseURL(secret: name) else {
+                    return fail(.gatewayUnavailable)
+                }
+                // The SDK signs with these; the gateway discards that signature.
+                let placeholder = SecretPlaceholder.mint(prefix: "")
+                gateway.register(placeholder, entry: SecretGateway.Entry(
+                    secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
+                    runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
+                    refresh: refreshPolicy(definition, marker: marker), signing: binding))
+                placeholders.append(placeholder)
+                environment.append(("AWS_ACCESS_KEY_ID", placeholder.text))
+                environment.append(("AWS_SECRET_ACCESS_KEY", Self.throwawaySecret()))
+                environment.append(("AWS_REGION", binding.region))
+                environment.append((binding.endpointEnv, baseURL))
             }
             staged.append(AuditEvent(
                 time: Date(), kind: .secretUse, decision: .info, subject: name,
@@ -220,8 +259,11 @@ final class SecretLaunchBroker: @unchecked Sendable {
             let resolver = resolver
             probe = { resolver.version(launched.source) }
         }
-        guard launched.refresh != nil || probe != nil else { return nil }
-        return SecretRefreshPolicy(interval: launched.refresh?.timeInterval, marker: marker, probe: probe) {
+        var interval = launched.refresh?.timeInterval
+        // Session credentials expire, so an AWS profile is always re-read.
+        if case .awsSigV4 = launched.delivery { interval = interval ?? Self.awsRefreshInterval }
+        guard interval != nil || probe != nil else { return nil }
+        return SecretRefreshPolicy(interval: interval, marker: marker, probe: probe) {
             [weak self] in
             guard let self else { return .failure(.providerUnavailable("the workspace secret broker has stopped")) }
             return self.reresolve(launched)
@@ -252,9 +294,24 @@ final class SecretLaunchBroker: @unchecked Sendable {
         case .none:
             break
         }
-        return resolver.resolve(current.source).map {
-            SecretRefreshed(value: $0, fingerprint: fingerprint($0), expires: current.expires)
+        return resolver.resolve(current.source).flatMap { value in
+            var expires = current.expires
+            if case .awsSigV4 = current.delivery {
+                guard let credentials = AWSCredentialSet(value) else {
+                    return .failure(.invalidValue(AWSSigningBinding.unusableCredentials))
+                }
+                expires = [expires, credentials.expires].compactMap { $0 }.min()
+            }
+            return .success(SecretRefreshed(value: value, fingerprint: fingerprint(value), expires: expires))
         }
+    }
+
+    /// A random stand-in for `AWS_SECRET_ACCESS_KEY`: SDKs need one to sign,
+    /// and the signature it makes is discarded.
+    static func throwawaySecret() -> String {
+        var generator = SystemRandomNumberGenerator()
+        return "rv-unused-" + (0..<20).map { _ in String(format: "%02x", UInt8.random(in: 0...255, using: &generator)) }
+            .joined()
     }
 
     private func fingerprint(_ value: SecretValue) -> String? {
@@ -339,6 +396,7 @@ extension SecretDelivery {
         switch self {
         case .gateway: "gateway"
         case .environment: "environment"
+        case .awsSigV4: "awsSigV4"
         }
     }
 }

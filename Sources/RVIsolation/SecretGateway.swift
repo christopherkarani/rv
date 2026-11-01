@@ -108,6 +108,9 @@ public final class SecretGateway: @unchecked Sendable {
         public var expires: Date?
         /// How the value is re-resolved while the runtime lives; nil keeps the launch value.
         public var refresh: SecretRefreshPolicy?
+        /// Set for AWS SigV4 delivery: `value` is a credential set, and the
+        /// gateway re-signs instead of substituting.
+        var signing: AWSSigningBinding?
         /// Bumped each time a refresh swaps the value.
         var generation = 0
         /// Values this entry held before, newest first, still scrubbed from responses.
@@ -212,7 +215,7 @@ public final class SecretGateway: @unchecked Sendable {
         return entries.count
     }
 
-    private func entry(_ token: String) -> Entry? {
+    func entry(_ token: String) -> Entry? {
         lock.lock()
         defer { lock.unlock() }
         return entries[token]
@@ -479,15 +482,13 @@ public final class SecretGateway: @unchecked Sendable {
             (head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>), GatewayRefusal
         > {
             presented = []
+            if let authorization = forwarded.header("Authorization"), AWSSigV4.isSigV4(authorization) {
+                return admitAWS(forwarded, route: route, authorization: authorization, presented: &presented)
+            }
             return GatewaySubstitution.apply(forwarded, route: route) { token in
                 let found = entry(token)
                 if let found { presented.append(found) }
-                return found.map {
-                    GatewaySubstitution.Live(
-                        token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces,
-                        rules: $0.rules,
-                        basePath: URLComponents(url: $0.upstream, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "")
-                }
+                return found.map { Self.live($0, token: token) }
             }
         }
         var substituted = substitute()
@@ -531,6 +532,18 @@ public final class SecretGateway: @unchecked Sendable {
             deny(.tooLarge)
             return
         }
+        var headers = rewritten.headers
+        if let signing = live.signing {
+            switch awsSigned(
+                live, binding: signing, method: head.method, url: url, headers: headers, body: body,
+                payloadMode: forwarded.header("X-Amz-Content-Sha256"))
+            {
+            case .failure(let refusal):
+                deny(refusal)
+                return
+            case .success(let signed): headers = signed
+            }
+        }
         var record = SecretUseRecord(
             secret: live.secret, runtime: live.runtime, upstreamHost: url.host, method: head.method, path: path,
             status: 0, upstreamStatus: nil, activity: .brokered, refusal: nil, reason: nil, surfaces: surfaces,
@@ -544,12 +557,12 @@ public final class SecretGateway: @unchecked Sendable {
             fd: client,
             method: head.method,
             // Earlier generations too: an upstream may still echo a value it held before rotation.
-            scrub: ([live.value] + live.previous).map {
+            scrub: live.scrubbed.map {
                 ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
             }
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
-        let headers = rewritten.headers + [GatewayHeaders.identityEncoding]
+        headers.append(GatewayHeaders.identityEncoding)
         transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: headers, body: body), sink)
         record.stage = .complete
         record.status = sink.status
