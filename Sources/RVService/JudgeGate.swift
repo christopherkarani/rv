@@ -367,10 +367,11 @@ public enum JudgeRuntime {
             )
             return result
         }
-        switch runJudge(
+        let run = runJudge(
             command: command.rawValue, context: context,
             engine: resolved.engine, bundle: resolved.bundle
-        ) {
+        )
+        switch run {
         case .unavailable(let note):
             log(
                 home: home, live: result, wouldBe: nil, verdict: nil, action: nil,
@@ -379,12 +380,12 @@ public enum JudgeRuntime {
                 now: now, isPeek: isPeek
             )
             return result
-        case .failed:
-            let raised = raise(result, verdict: nil, action: .review)
+        case .failed, .warming:
+            let (raised, note) = failClosed(run, over: result)
             log(
                 home: home, live: raised, wouldBe: nil, verdict: nil, action: .review,
                 engine: resolved.engine,
-                note: noteFor("prediction-failed", contextPartial: partial),
+                note: noteFor(note, contextPartial: partial),
                 now: now, isPeek: isPeek
             )
             return raised
@@ -426,10 +427,11 @@ public enum JudgeRuntime {
         var note: String? = safe ? "safe-lane" : nil
         if !safe, let resolved = resolvedJudge(home: home), case .allow = result.decision {
             engine = resolved.engine
-            switch runJudge(
+            let run = runJudge(
                 command: command.rawValue, context: context,
                 engine: resolved.engine, bundle: resolved.bundle
-            ) {
+            )
+            switch run {
             case .verdict(let v):
                 verdict = v
                 let t = thresholds(provenance: provenance)
@@ -440,10 +442,9 @@ public enum JudgeRuntime {
                 if v.truncated { note = "truncated" }
             case .unavailable(let n):
                 note = "judge-unavailable: \(n)"
-            case .failed:
+            case .failed, .warming:
                 action = .review
-                wouldBeFinal = raise(result, verdict: nil, action: .review)
-                note = "prediction-failed"
+                (wouldBeFinal, note) = failClosed(run, over: result)
             }
         }
         log(
@@ -461,30 +462,38 @@ public enum JudgeRuntime {
     /// Load failure is distinct from prediction failure: the first is a
     /// broken install (packs-only, doctor-visible), the second is a
     /// loaded judge that cannot answer this input (fail-closed Ask).
+    ///
+    /// `warming` is a load still in progress past the bounded wait. It goes
+    /// to a human (review), never packs-only: a same-user agent could
+    /// otherwise kill rvd to buy an unjudged window.
     enum JudgeRun {
         case verdict(LayaVerdict)
         case unavailable(String)
         case failed
+        case warming
     }
 
     static func runJudge(
         command: String,
         context: JudgeContext,
         engine: JudgeEngine,
-        bundle: URL
+        bundle: URL,
+        wait: Duration? = loadWait
     ) -> JudgeRun {
         #if canImport(CoreML)
         do {
             switch engine {
             case .laya:
-                let judge = try slot.stockJudge(bundleDir: bundle)
+                let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
                 do { return .verdict(try judge.judge(command)) }
                 catch { return .failed }
             case .ft:
-                let judge = try slot.ftJudge(bundleDir: bundle)
+                let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
                 do { return .verdict(try judge.judge(command, context: context)) }
                 catch { return .failed }
             }
+        } catch JudgeLoadError.warming {
+            return .warming
         } catch let error as LayaError {
             switch error {
             case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
@@ -495,6 +504,51 @@ public enum JudgeRuntime {
         }
         #else
         return .unavailable("CoreML unavailable on this platform")
+        #endif
+    }
+
+    /// A judge that cannot answer this request (prediction failed, or still
+    /// warming past the bounded wait) fails closed to human review.
+    static func failClosed(
+        _ run: JudgeRun, over result: EvaluationResult
+    ) -> (result: EvaluationResult, note: String) {
+        let note: String
+        switch run {
+        case .warming: note = "judge-warming"
+        case .failed, .unavailable, .verdict: note = "prediction-failed"
+        }
+        return (raise(result, verdict: nil, action: .review), note)
+    }
+
+    /// RVServiceTests seam (no RVLaya edge): the warming outcome over `result`.
+    static func warmingOutcomeSeam(over result: EvaluationResult) -> (EvaluationResult, String) {
+        let raised = failClosed(.warming, over: result)
+        return (raised.result, raised.note)
+    }
+
+    /// The daemon's bound on waiting for an in-progress judge load. Past it
+    /// the request goes to review (`judge-warming`); the load keeps going.
+    public static let daemonLoadWait: Duration = .seconds(5)
+
+    private static let loadWaitBox = UnfairLock<Duration?>(nil)
+
+    /// Current wait for an in-progress load; nil waits for completion (the
+    /// short-lived CLI in-process path, which has no hook deadline to meet).
+    static var loadWait: Duration? { loadWaitBox.withLock { $0 } }
+
+    /// `rvd` binds `daemonLoadWait` at startup.
+    public static func bindLoadWait(_ wait: Duration?) {
+        loadWaitBox.withLock { $0 = wait }
+    }
+
+    /// Starts loading the judge this home would run, in the background, so
+    /// the first judged request does not pay the model load. No-op when no
+    /// bundle is installed or the platform has no CoreML. Cheap: resolves
+    /// config and bundle paths, then hands the load to a utility queue.
+    public static func prewarm(home: HomeDirectory?) {
+        #if canImport(CoreML)
+        guard let resolved = resolvedJudge(home: home) else { return }
+        slot.prewarm(engine: resolved.engine, bundleDir: resolved.bundle)
         #endif
     }
 
@@ -591,20 +645,22 @@ public enum JudgeRuntime {
     }
 }
 
+/// The judge's load is still running past the caller's bounded wait.
+enum JudgeLoadError: Error {
+    case warming
+}
+
 #if canImport(CoreML)
 /// One cached judge per engine: the stock three-question judge and the
 /// fine-tuned single-pass judge load different bundles and must not share
 /// a slot. Cache entries are keyed by bundle dir, so an upgraded bundle
 /// is picked up; a load failure is cached only against the bundle's
 /// model modification time, so repairing the bundle retries the load.
-/// Compilation runs outside the lock (a racing duplicate load is wasted
-/// work, not a stalled evaluate door).
-final class JudgeSlot: @unchecked Sendable {
-    private var stock: (dir: URL, judge: LayaCoreMLJudge)?
-    private var ft: (dir: URL, judge: FineTunedJudge)?
-    private var failedStock: (dir: URL, stamp: TimeInterval)?
-    private var failedFT: (dir: URL, stamp: TimeInterval)?
-    private let lock = NSLock()
+/// Loads are single-flight (concurrent requests join one load) and run off
+/// the caller, which waits at most `wait` (nil: until done).
+final class JudgeSlot: Sendable {
+    private let stock = SingleFlightLoader<LayaCoreMLJudge>()
+    private let ft = SingleFlightLoader<FineTunedJudge>()
 
     private static func stamp(_ bundleDir: URL) -> TimeInterval {
         let package = bundleDir.appendingPathComponent("model.mlpackage")
@@ -612,58 +668,40 @@ final class JudgeSlot: @unchecked Sendable {
         return date?.timeIntervalSince1970 ?? 0
     }
 
-    func stockJudge(bundleDir: URL) throws -> LayaCoreMLJudge {
+    func stockJudge(bundleDir: URL, wait: Duration?) throws -> LayaCoreMLJudge {
+        try Self.unwrap(stock.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
+            try LayaCoreMLJudge(bundleDir: bundleDir)
+        })
+    }
+
+    func ftJudge(bundleDir: URL, wait: Duration?) throws -> FineTunedJudge {
+        try Self.unwrap(ft.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
+            try FineTunedJudge(bundleDir: bundleDir)
+        })
+    }
+
+    /// Starts the engine's load in the background; never blocks.
+    func prewarm(engine: JudgeEngine, bundleDir: URL) {
         let stamp = Self.stamp(bundleDir)
-        lock.lock()
-        if let stock, stock.dir == bundleDir { lock.unlock(); return stock.judge }
-        if let failedStock, failedStock.dir == bundleDir, failedStock.stamp == stamp {
-            lock.unlock()
-            throw LayaError.modelUnavailable("cached load failure")
-        }
-        lock.unlock()
-        do {
-            let judge = try LayaCoreMLJudge(bundleDir: bundleDir)
-            lock.lock()
-            if let stock, stock.dir == bundleDir { lock.unlock(); return stock.judge }
-            stock = (bundleDir, judge)
-            failedStock = nil
-            lock.unlock()
-            return judge
-        } catch {
-            lock.lock()
-            failedStock = (bundleDir, stamp)
-            lock.unlock()
-            throw error
+        switch engine {
+        case .laya:
+            stock.prewarm(key: bundleDir, stamp: stamp) { try LayaCoreMLJudge(bundleDir: bundleDir) }
+        case .ft:
+            ft.prewarm(key: bundleDir, stamp: stamp) { try FineTunedJudge(bundleDir: bundleDir) }
         }
     }
 
-    func ftJudge(bundleDir: URL) throws -> FineTunedJudge {
-        let stamp = Self.stamp(bundleDir)
-        lock.lock()
-        if let ft, ft.dir == bundleDir { lock.unlock(); return ft.judge }
-        if let failedFT, failedFT.dir == bundleDir, failedFT.stamp == stamp {
-            lock.unlock()
-            throw LayaError.modelUnavailable("cached load failure")
-        }
-        lock.unlock()
-        do {
-            let judge = try FineTunedJudge(bundleDir: bundleDir)
-            lock.lock()
-            if let ft, ft.dir == bundleDir { lock.unlock(); return ft.judge }
-            ft = (bundleDir, judge)
-            failedFT = nil
-            lock.unlock()
-            return judge
-        } catch {
-            lock.lock()
-            failedFT = (bundleDir, stamp)
-            lock.unlock()
-            throw error
+    private static func unwrap<Judge>(_ outcome: SingleFlightLoader<Judge>.Outcome) throws -> Judge {
+        switch outcome {
+        case .ready(let judge): return judge
+        case .failed(let error): throw error
+        case .cachedFailure: throw LayaError.modelUnavailable("cached load failure")
+        case .warming: throw JudgeLoadError.warming
         }
     }
 }
 #else
 /// Linux seam: no CoreML judge exists, every load is unavailable and
 /// the gate runs packs-only. Referenced unconditionally above.
-final class JudgeSlot: @unchecked Sendable {}
+final class JudgeSlot: Sendable {}
 #endif
