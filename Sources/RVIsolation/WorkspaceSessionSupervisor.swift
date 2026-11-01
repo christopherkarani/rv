@@ -1838,8 +1838,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
         // The staged private home holds credential copies; the watch path
         // removes it on the normal teardown, so the retire path must too.
-        // `remove` is `try? rm -rf`: idempotent if a watcher also fires.
-        child.live.resources?.remove()
+        // Removal is idempotent if a watcher also fires; a failure is
+        // reported, not swallowed.
+        child.live.resources?.removeReportingFailure()
         noteRuntimeEnded(session, reason: .spawnFailed)
     }
 
