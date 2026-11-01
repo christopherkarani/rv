@@ -18,6 +18,7 @@ enum SecretLeaseError: Error, Sendable, Equatable {
     case gatewayUnavailable
     case environmentValueUnusable(String)
     case organizationPolicy(String)
+    case expired(secret: String, at: Date)
 
     var message: String {
         switch self {
@@ -28,6 +29,9 @@ enum SecretLeaseError: Error, Sendable, Equatable {
         case .environmentValueUnusable(let name):
             "secret \(name) cannot be delivered as an environment variable (not UTF-8 text or over 8 KiB)"
         case .organizationPolicy(let reason): "organization policy: \(reason)"
+        case .expired(let name, let date):
+            "secret \(name) expired at \(SecretExpiry.text(date)); store a new value and expiry with "
+                + "`rv secrets set \(name) --expires DATE`, or update its expires in secrets.json"
         }
     }
 }
@@ -42,6 +46,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
     private let gateway: SecretGateway
     private let workspace: String?
     private let managed: @Sendable () -> ManagedPolicyState
+    private let now: @Sendable () -> Date
     private let lock = NSLock()
     private var fingerprinter: SecretFingerprinter??
     private var byRuntime: [String: [SecretPlaceholder]] = [:]
@@ -52,20 +57,26 @@ final class SecretLaunchBroker: @unchecked Sendable {
         transport: SecretUpstreamTransport = .urlSession,
         peers: GatewayPeerCheck = .runtime,
         workspace: String?,
-        managed: (@Sendable () -> ManagedPolicyState)? = nil
+        managed: (@Sendable () -> ManagedPolicyState)? = nil,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.configDirectory = configDirectory
         self.resolver = resolver
         self.workspace = workspace
         self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
+        self.now = now
         let directory = configDirectory
-        gateway = SecretGateway(transport: transport, peers: peers) { record in
-            let landed = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)
-            if let finding = Self.misuseEvent(record, workspace: workspace) {
-                _ = AuditLog.append(finding, configDirectory: directory)
-            }
-            return landed
-        }
+        gateway = SecretGateway(
+            transport: transport,
+            peers: peers,
+            audit: { record in
+                let landed = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)
+                if let finding = Self.misuseEvent(record, workspace: workspace) {
+                    _ = AuditLog.append(finding, configDirectory: directory)
+                }
+                return landed
+            },
+            now: now)
     }
 
     static func production(workspace: String?) -> SecretLaunchBroker? {
@@ -108,6 +119,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
             if let reason = SecretOrganizationRules.violation(definition, policy: organization) {
                 return .failure(.organizationPolicy(reason))
             }
+            // Like an unresolvable secret, an expired one fails the launch rather than being dropped.
+            if let expires = definition.expires, now() >= expires {
+                return .failure(.expired(secret: name, at: expires))
+            }
             definitions.append(definition)
         }
         var placeholders: [SecretPlaceholder] = []
@@ -119,6 +134,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
         }
         for definition in definitions {
             let name = definition.name
+            // Read before the value, so a write in between shows up as a change.
+            let marker = resolver.version(definition.source)
             let value: SecretValue
             switch resolver.resolve(definition.source) {
             case .failure(let error): return fail(.resolution(secret: name, error))
@@ -139,7 +156,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: binding.placeholderPrefix, value: value,
                     upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
-                    surfaces: binding.surfaces, rules: binding.rules))
+                    surfaces: binding.surfaces, rules: binding.rules, expires: definition.expires,
+                    refresh: refreshPolicy(definition, marker: marker)))
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
@@ -193,6 +211,50 @@ final class SecretLaunchBroker: @unchecked Sendable {
 
     var liveCount: Int { gateway.liveCount }
 
+    /// Keychain sources are probed for changes; a `refresh` interval re-reads any source.
+    private func refreshPolicy(_ launched: SecretDefinition, marker: String?) -> SecretRefreshPolicy? {
+        var probe: (@Sendable () -> String?)?
+        if case .keychain = launched.source {
+            let resolver = resolver
+            probe = { resolver.version(launched.source) }
+        }
+        guard launched.refresh != nil || probe != nil else { return nil }
+        return SecretRefreshPolicy(interval: launched.refresh?.timeInterval, marker: marker, probe: probe) {
+            [weak self] in
+            guard let self else { return .failure(.providerUnavailable("the workspace secret broker has stopped")) }
+            return self.reresolve(launched)
+        }
+    }
+
+    /// The definition on file now, if it still names the launch source and
+    /// delivery. A different one would hand a running placeholder a value
+    /// it was never bound to; that needs a new session.
+    private func reresolve(_ launched: SecretDefinition) -> Result<SecretRefreshed, SecretResolutionError> {
+        let name = launched.name
+        guard case .success(let configuration) = SecretsConfiguration.load(configDirectory: configDirectory) else {
+            return .failure(.failed("secrets.json could not be read"))
+        }
+        guard let current = configuration.secret(named: name) else {
+            return .failure(.notFound("\(name) is no longer defined in secrets.json"))
+        }
+        guard current.source == launched.source, current.delivery == launched.delivery else {
+            return .failure(.failed("\(name) now has a different source or delivery; start a new session to use it"))
+        }
+        switch managed() {
+        case .invalid(let reason):
+            return .failure(.failed("organization policy is invalid: \(reason)"))
+        case .active(let bundle):
+            if let reason = SecretOrganizationRules.violation(current, policy: bundle.policy) {
+                return .failure(.failed("organization policy: \(reason)"))
+            }
+        case .none:
+            break
+        }
+        return resolver.resolve(current.source).map {
+            SecretRefreshed(value: $0, fingerprint: fingerprint($0), expires: current.expires)
+        }
+    }
+
     private func fingerprint(_ value: SecretValue) -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -207,8 +269,20 @@ final class SecretLaunchBroker: @unchecked Sendable {
             switch record.activity {
             case .brokered: .allowed
             case .blocked, .refused: .denied
-            case .error: .failed
+            case .error, .refreshFailed: .failed
+            case .refreshed: .info
             }
+        if record.activity == .refreshed || record.activity == .refreshFailed {
+            return AuditEvent(
+                time: Date(), kind: .secretUse, decision: decision, subject: record.secret ?? "unknown",
+                reason: record.reason, workspace: workspace, runtime: record.runtime, source: "secret-gateway",
+                detail: compact([
+                    "event": "refresh",
+                    "activity": record.activity.rawValue,
+                    "upstream": record.upstreamHost,
+                    "fingerprint": record.fingerprint,
+                ]))
+        }
         return AuditEvent(
             time: Date(),
             kind: .secretUse,

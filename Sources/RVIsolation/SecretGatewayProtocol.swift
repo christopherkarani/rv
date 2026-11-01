@@ -225,6 +225,10 @@ enum GatewayRefusal: Error, Equatable {
     case runtimeMismatch
     /// The gateway could not tie the connection to the placeholder's runtime.
     case runtimeUnverified
+    /// The secret's `expires` has passed.
+    case expired
+    /// The refresh interval and its grace have passed without a successful refresh.
+    case refreshFailed
 
     /// The case name, a stable code for audit records.
     var code: String { "\(self)" }
@@ -237,7 +241,7 @@ enum GatewayRefusal: Error, Equatable {
             .ambiguousPath, .echoMethod, .runtimeMismatch:
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
-            .auditUnavailable, .runtimeUnverified:
+            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed:
             false
         }
     }
@@ -245,11 +249,11 @@ enum GatewayRefusal: Error, Equatable {
     var status: Int {
         switch self {
         case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath: 400
-        case .auditUnavailable: 503
+        case .auditUnavailable, .refreshFailed: 503
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
-            .runtimeMismatch, .runtimeUnverified:
+            .runtimeMismatch, .runtimeUnverified, .expired:
             403
         case .tooLarge: 413
         case .echoMethod: 405
@@ -274,6 +278,8 @@ enum GatewayRefusal: Error, Equatable {
         case .auditUnavailable: "the audit log could not record this request, so it was not forwarded"
         case .runtimeMismatch: "placeholder was presented from outside the runtime it was issued to"
         case .runtimeUnverified: "the gateway could not confirm this connection comes from the placeholder's runtime"
+        case .expired: "the secret has expired; store a new value with `rv secrets set` and a later --expires"
+        case .refreshFailed: "the secret could not be refreshed from its provider, so it was not used"
         }
     }
 }

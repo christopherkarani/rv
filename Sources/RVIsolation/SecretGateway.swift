@@ -19,6 +19,10 @@ public enum SecretGatewayActivity: String, Sendable, Equatable {
     case refused
     /// Forwarded, but no upstream response arrived.
     case error
+    /// A refresh swapped in a new value from the provider.
+    case refreshed
+    /// A refresh could not read the provider; the previous value stays until its grace ends.
+    case refreshFailed
 }
 
 /// What one gateway request did. Carries names and a fingerprint, never a
@@ -100,6 +104,15 @@ public final class SecretGateway: @unchecked Sendable {
         /// The runtime leader's process group, set once it is spawned. Only
         /// a connection from that runtime may spend the value; nil refuses all.
         var processGroup: ProcessGroupFact?
+        /// From this instant requests are refused.
+        public var expires: Date?
+        /// How the value is re-resolved while the runtime lives; nil keeps the launch value.
+        public var refresh: SecretRefreshPolicy?
+        /// Bumped each time a refresh swaps the value.
+        var generation = 0
+        /// Values this entry held before, newest first, still scrubbed from responses.
+        var previous: [SecretValue] = []
+        var rotation: SecretRotationState?
     }
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
@@ -112,9 +125,10 @@ public final class SecretGateway: @unchecked Sendable {
     private let peers: GatewayPeerCheck
     /// Returns false when the record did not land; a forward record that
     /// does not land stops the request.
-    private let audit: @Sendable (SecretUseRecord) -> Bool
-    private let lock = NSLock()
-    private var entries: [String: Entry] = [:]
+    let audit: @Sendable (SecretUseRecord) -> Bool
+    let now: @Sendable () -> Date
+    let lock = NSLock()
+    var entries: [String: Entry] = [:]
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
     private var listenFDs: [Int32] = []
     /// Signaled when that fd's accept loop has left the socket, so `stop`
@@ -132,19 +146,22 @@ public final class SecretGateway: @unchecked Sendable {
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
-        audit: @escaping @Sendable (SecretUseRecord) -> Bool
+        audit: @escaping @Sendable (SecretUseRecord) -> Bool,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.init(transport: transport, peers: .runtime, audit: audit)
+        self.init(transport: transport, peers: .runtime, audit: audit, now: now)
     }
 
     init(
         transport: SecretUpstreamTransport,
         peers: GatewayPeerCheck,
-        audit: @escaping @Sendable (SecretUseRecord) -> Bool
+        audit: @escaping @Sendable (SecretUseRecord) -> Bool,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.peers = peers
         self.audit = audit
+        self.now = now
     }
 
     deinit {
@@ -162,6 +179,10 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     public func register(_ placeholder: SecretPlaceholder, entry: Entry) {
+        var entry = entry
+        if let refresh = entry.refresh {
+            entry.rotation = SecretRotationState(resolvedAt: now(), marker: refresh.marker)
+        }
         lock.lock()
         entries[placeholder.token] = entry
         lock.unlock()
@@ -454,15 +475,33 @@ public final class SecretGateway: @unchecked Sendable {
         }
         var forwarded = head
         forwarded.headers = GatewayHeaders.forwardable(head.headers)
-        let substituted = GatewaySubstitution.apply(forwarded, route: route) { token in
-            let found = entry(token)
-            if let found { presented.append(found) }
-            return found.map {
-                GatewaySubstitution.Live(
-                    token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces,
-                    rules: $0.rules,
-                    basePath: URLComponents(url: $0.upstream, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "")
+        func substitute() -> Result<(head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>), GatewayRefusal> {
+            presented = []
+            return GatewaySubstitution.apply(forwarded, route: route) { token in
+                let found = entry(token)
+                if let found { presented.append(found) }
+                return found.map {
+                    GatewaySubstitution.Live(
+                        token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces,
+                        rules: $0.rules,
+                        basePath: URLComponents(url: $0.upstream, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "")
+                }
             }
+        }
+        var substituted = substitute()
+        // Expiry and refresh apply once the placeholder has passed its own
+        // policy, so a misuse is never reported as an expiry.
+        if case .success(let result) = substituted {
+            // Only the placeholder's own runtime may trigger a refresh.
+            if let refusal = verifyPeer(client, presented) {
+                deny(refusal)
+                return
+            }
+            if let refusal = prepare(result.used.token) {
+                deny(refusal)
+                return
+            }
+            if entry(result.used.token)?.value != result.used.value { substituted = substitute() }
         }
         let rewritten: GatewayRequestHead
         let token: String
@@ -481,10 +520,6 @@ public final class SecretGateway: @unchecked Sendable {
             let url = upstreamRoute.upstreamURL(base: live.upstream)
         else {
             deny(.unknownPlaceholder)
-            return
-        }
-        if let refusal = verifyPeer(client, presented) {
-            deny(refusal)
             return
         }
         if head.header("Expect")?.lowercased() == "100-continue" {
@@ -506,7 +541,10 @@ public final class SecretGateway: @unchecked Sendable {
         let sink = GatewayResponseWriter(
             fd: client,
             method: head.method,
-            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))]
+            // Earlier generations too: an upstream may still echo a value it held before rotation.
+            scrub: ([live.value] + live.previous).map {
+                ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
+            }
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         let headers = rewritten.headers + [GatewayHeaders.identityEncoding]
