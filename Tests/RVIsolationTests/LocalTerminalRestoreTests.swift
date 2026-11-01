@@ -54,147 +54,86 @@ struct LocalTerminalRestoreTests {
         defer { host.close() }
         let endpoint = host.server.endpoint
 
-        try expectRestored(host: host, endpoint: endpoint, onError: { error in
-            guard let driveError = error as? WorkspaceTerminalDriveError,
-                case .exited(let status) = driveError
-            else {
-                Issue.record("an exiting runtime must report its status, got \(error)")
-                return
-            }
-            #expect(status == 9)
-        }) { client, restorer, pty in
-            let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "printf ready; exit 9"])
-            try #require(client.subscribeTerminal(runtime).get() == ())
+        try expectRestored(endpoint: endpoint) { client, pty in
             // A fast exit can win the race with acquire. The status is still
-            // on the stream, and drive still has to put the terminal back.
-            _ = client.acquireTerminalInput(runtime)
-            try drive(client, runtime: runtime, pty: pty, restorer: restorer)
-            Issue.record("an exiting runtime must throw its status")
+            // on the stream, and the session still has to put the terminal back.
+            let box = SessionBox()
+            box.run(client, command: ["/bin/sh", "-c", "printf ready; exit 9"], pty: pty, input: pty.master)
+            #expect(box.result == .success(.exited(9)))
         }
 
-        try expectRestored(host: host, endpoint: endpoint) { client, restorer, pty in
-            let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "/bin/sleep 30"])
-            try #require(client.subscribeTerminal(runtime).get() == ())
-            try #require(client.acquireTerminalInput(runtime).get() == ())
+        try expectRestored(endpoint: endpoint) { client, pty in
             let input = Pipe()
-            let box = DriveBox()
-            let thread = Thread {
-                box.finish {
-                    try WorkspaceTerminalDriver.drive(
-                        client: client,
-                        runtime: runtime,
-                        rows: 24,
-                        columns: 80,
-                        input: input.fileHandleForReading.fileDescriptor,
-                        output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-                        restorer: restorer
-                    )
-                }
-            }
-            thread.start()
             try input.fileHandleForWriting.close()
-            let deadline = Date().addingTimeInterval(5)
-            while box.isFinished == false, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.02)
-            }
-            #expect(box.isFinished)
+            let box = SessionBox()
+            box.run(
+                client, command: ["/bin/sh", "-c", "/bin/sleep 30"], pty: pty,
+                input: input.fileHandleForReading.fileDescriptor, abandonOnInputEnd: true
+            )
+            #expect(box.isEngaged)
+            #expect(box.result == .success(.inputEnded))
+            let runtime = try #require(box.runtime)
             let listed = try WorkspaceClient.connect(endpoint).get()
             #expect(try listed.listRuntimes().get().contains { $0.runtime == runtime && $0.running })
             _ = listed.detach()
         }
 
-        try expectRestored(host: host, endpoint: endpoint) { client, restorer, pty in
-            let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "/bin/sleep 30"])
-            try #require(client.subscribeTerminal(runtime).get() == ())
-            try #require(client.acquireTerminalInput(runtime).get() == ())
+        try expectRestored(endpoint: endpoint) { client, pty in
+            // Without abandonOnInputEnd a pipe EOF keeps waiting for the exit.
+            let input = Pipe()
+            try input.fileHandleForWriting.close()
+            let box = SessionBox()
+            box.run(
+                client, command: ["/bin/sh", "-c", "/bin/sleep 0.5; exit 3"], pty: pty,
+                input: input.fileHandleForReading.fileDescriptor, abandonOnInputEnd: false
+            )
+            #expect(box.result == .success(.exited(3)))
+        }
+
+        try expectRestored(endpoint: endpoint) { client, pty in
             let closer = try WorkspaceClient.connect(endpoint).get()
-            let box = DriveBox()
-            let thread = Thread {
-                box.finish {
-                    try WorkspaceTerminalDriver.drive(
-                        client: client,
-                        runtime: runtime,
-                        rows: 24,
-                        columns: 80,
-                        input: pty.master,
-                        output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-                        restorer: restorer
-                    )
-                }
-            }
-            thread.start()
+            let box = SessionBox()
+            box.start(client, command: ["/bin/sh", "-c", "/bin/sleep 30"], pty: pty, input: pty.master)
+            try #require(waitUntil(seconds: 10) { box.isEngaged })
             #expect(try closer.closeWorkspace().get().phase == .closed)
-            let deadline = Date().addingTimeInterval(20)
-            while box.error == nil, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.02)
+            let result = try #require(waitFor(seconds: 20) { box.result })
+            // Close kills the child, so its signal status can reach the
+            // session before `workspaceClosed`. Either ends the session.
+            switch result {
+            case .failure(.client(.workspaceClosed)), .failure(.client(.disconnected)), .success(.exited):
+                break
+            default:
+                Issue.record("workspace close must end the session, got \(result)")
             }
-            let error = try #require(box.error)
-            guard let driveError = error as? WorkspaceTerminalDriveError,
-                case .client(let failure) = driveError
-            else {
-                Issue.record("workspace close must fail the driver, got \(error)")
-                return
-            }
-            #expect(failure == .workspaceClosed || failure == .disconnected)
         }
     }
 
     @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func disconnectAndProtocolErrorRestoreRawMode() throws {
         let disconnectHost = try PTYWorkspaceHost()
         defer { disconnectHost.close() }
-        try expectRestored(host: disconnectHost, endpoint: disconnectHost.server.endpoint) { client, restorer, pty in
-            let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "/bin/sleep 30"])
-            try #require(client.subscribeTerminal(runtime).get() == ())
-            try #require(client.acquireTerminalInput(runtime).get() == ())
-            let box = DriveBox()
-            let thread = Thread {
-                box.finish {
-                    try drive(client, runtime: runtime, pty: pty, restorer: restorer)
-                }
-            }
-            thread.start()
+        try expectRestored(endpoint: disconnectHost.server.endpoint) { client, pty in
+            let box = SessionBox()
+            box.start(client, command: ["/bin/sh", "-c", "/bin/sleep 30"], pty: pty, input: pty.master)
+            try #require(waitUntil(seconds: 10) { box.isEngaged })
             Thread.sleep(forTimeInterval: 0.2)
             disconnectHost.server.stop()
-            let deadline = Date().addingTimeInterval(5)
-            while box.error == nil, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.02)
-            }
-            let error = try #require(box.error)
-            guard let driveError = error as? WorkspaceTerminalDriveError,
-                case .client(.disconnected) = driveError
-            else {
-                Issue.record("disconnect must fail the driver, got \(error)")
-                return
-            }
+            let result = try #require(waitFor(seconds: 5) { box.result })
+            #expect(result == .failure(.client(.disconnected)))
+            let runtime = try #require(box.runtime)
             #expect(disconnectHost.supervisor.runtimeFacts().contains { $0.id == runtime && $0.running })
         }
 
         let protocolHost = try PTYWorkspaceHost()
         defer { protocolHost.close() }
-        try expectRestored(host: protocolHost, endpoint: protocolHost.server.endpoint) { client, restorer, pty in
-            let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "/bin/sleep 30"])
-            try #require(client.subscribeTerminal(runtime).get() == ())
-            try #require(client.acquireTerminalInput(runtime).get() == ())
-            let box = DriveBox()
-            let thread = Thread {
-                box.finish {
-                    try drive(client, runtime: runtime, pty: pty, restorer: restorer)
-                }
-            }
-            thread.start()
+        try expectRestored(endpoint: protocolHost.server.endpoint) { client, pty in
+            let box = SessionBox()
+            box.start(client, command: ["/bin/sh", "-c", "/bin/sleep 30"], pty: pty, input: pty.master)
+            try #require(waitUntil(seconds: 10) { box.isEngaged })
             Thread.sleep(forTimeInterval: 0.2)
             #expect(protocolHost.server.testingInjectMalformedTerminalFrame())
-            let deadline = Date().addingTimeInterval(5)
-            while box.error == nil, Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.02)
-            }
-            let error = try #require(box.error)
-            guard let driveError = error as? WorkspaceTerminalDriveError,
-                case .client(.malformed) = driveError
-            else {
-                Issue.record("a bad terminal frame must fail the driver, got \(error)")
-                return
-            }
+            let result = try #require(waitFor(seconds: 5) { box.result })
+            #expect(result == .failure(.client(.malformed)))
+            let runtime = try #require(box.runtime)
             let again = try WorkspaceClient.connect(protocolHost.server.endpoint).get()
             #expect(try again.listRuntimes().get().contains { $0.runtime == runtime && $0.running })
             _ = again.detach()
@@ -314,81 +253,100 @@ private func builtProbe() throws -> URL {
         return found
     }
     Issue.record("missing built product rv-terminal-probe")
-    throw WorkspaceTerminalDriveError.client(.disconnected)
+    throw MissingProbe()
 }
 
-private func launchTerminal(_ client: WorkspaceClient, command: [String]) throws -> UUID {
-    let report = try client.launchRuntime(
-        executable: command[0],
-        arguments: Array(command.dropFirst()),
-        terminalRows: 24,
-        terminalColumns: 80
-    ).get()
-    #expect(report.terminal)
-    return report.runtime
+private struct MissingProbe: Error {}
+
+/// Runs one `WorkspaceTerminalSession` against a host. Raw mode goes on the
+/// PTY slave, which is also the output, so `expectRestored` can check it.
+private final class SessionBox: Sendable {
+    private let state = Mutex<State>(State())
+
+    private struct State {
+        var runtime: UUID?
+        var engaged = false
+        var result: Result<WorkspaceTerminalOutcome, WorkspaceTerminalSessionFailure>?
+    }
+
+    func run(
+        _ client: WorkspaceClient,
+        command: [String],
+        pty: OpenedPTY,
+        input: Int32,
+        abandonOnInputEnd: Bool = false
+    ) {
+        let result = Result { () throws(WorkspaceTerminalSessionFailure) -> WorkspaceTerminalOutcome in
+            try WorkspaceTerminalSession.run(
+                client: client,
+                launch: { client in
+                    let launched = client.launchRuntime(
+                        executable: command[0],
+                        arguments: Array(command.dropFirst()),
+                        terminalRows: 24,
+                        terminalColumns: 80
+                    )
+                    if case .success(let report) = launched {
+                        self.state.withLock { $0.runtime = report.runtime }
+                    }
+                    return launched
+                },
+                rows: 24,
+                columns: 80,
+                abandonOnInputEnd: abandonOnInputEnd,
+                input: input,
+                output: pty.slave,
+                rawMode: { _ in
+                    let restorer = LocalTerminalRestorer.engage(pty.slave, signals: false)
+                    self.state.withLock { $0.engaged = restorer != nil }
+                    return restorer
+                }
+            )
+        }
+        state.withLock { $0.result = result }
+    }
+
+    func start(_ client: WorkspaceClient, command: [String], pty: OpenedPTY, input: Int32) {
+        let thread = Thread {
+            self.run(client, command: command, pty: pty, input: input)
+        }
+        thread.start()
+    }
+
+    var runtime: UUID? { state.withLock { $0.runtime } }
+    var isEngaged: Bool { state.withLock { $0.engaged } }
+    var result: Result<WorkspaceTerminalOutcome, WorkspaceTerminalSessionFailure>? {
+        state.withLock { $0.result }
+    }
 }
 
-private func drive(
-    _ client: WorkspaceClient,
-    runtime: UUID,
-    pty: OpenedPTY,
-    restorer: LocalTerminalRestorer?
-) throws {
-    try WorkspaceTerminalDriver.drive(
-        client: client,
-        runtime: runtime,
-        rows: 24,
-        columns: 80,
-        input: pty.master,
-        output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-        restorer: restorer
-    )
+private func waitFor<T>(seconds: TimeInterval, _ value: () -> T?) -> T? {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if let found = value() { return found }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return value()
 }
 
+private func waitUntil(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
+    waitFor(seconds: seconds) { condition() ? true : nil } ?? false
+}
+
+/// Checks the PTY slave's mode is back after `body`, and that the session
+/// detached its client.
 private func expectRestored(
-    host: PTYWorkspaceHost,
     endpoint: WorkspaceEndpoint,
-    onError: ((Error) throws -> Void)? = nil,
-    body: (WorkspaceClient, LocalTerminalRestorer, OpenedPTY) throws -> Void
+    body: (WorkspaceClient, OpenedPTY) throws -> Void
 ) throws {
     let pty = try OpenedPTY()
     defer { pty.close() }
     let before = try terminalFlags(pty.slave)
     let client = try WorkspaceClient.connect(endpoint).get()
-    let restorer = try #require(LocalTerminalRestorer.engage(pty.slave, signals: false))
-    do {
-        try body(client, restorer, pty)
-    } catch {
-        try onError?(error)
-    }
+    try body(client, pty)
     #expect(try terminalFlags(pty.slave) == before)
-}
-
-private final class DriveBox: Sendable {
-    private let state = Mutex<State>(State())
-
-    private struct State {
-        var stored: (any Error)?
-        var finished = false
-    }
-
-    func finish(_ body: () throws -> Void) {
-        defer {
-            state.withLock { $0.finished = true }
-        }
-        do {
-            try body()
-        } catch {
-            state.withLock { $0.stored = error }
-        }
-    }
-
-    var isFinished: Bool {
-        state.withLock { $0.finished }
-    }
-
-    var error: Error? {
-        state.withLock { $0.stored }
+    if case .success = client.ping() {
+        Issue.record("the session must detach its client")
     }
 }
 #endif
