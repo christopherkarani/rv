@@ -121,6 +121,7 @@ private struct BoundaryMutable: Sendable {
     /// finish. `restoreOriginalDirectory` must not rename that tree onto
     /// the workspace.
     var blockWorkspaceRename = false
+    var publishOutcome: WorkspacePublishOutcome = .notRun
 }
 
 /// Mounts the workspace path on a fresh volume before a contained process runs.
@@ -138,7 +139,7 @@ private struct BoundaryMutable: Sendable {
 /// is dead. Force-unmount is not claimed as closed.
 final class WorkspaceInodeBoundary: Sendable {
     let workspacePath: String
-    private let savedPath: String
+    let savedPath: String
     private let quarantinePath: String
     private let imagePath: String?
     private let disk: String
@@ -451,65 +452,19 @@ final class WorkspaceInodeBoundary: Sendable {
         guard let volumeEntries = collectTree(root: fds.0, checkDevice: volumeDevice) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        let present = volumeEntries.keys.sorted { pathDepth($0) < pathDepth($1) }
-        for relative in present {
-            if cancelClockAllowsTreeCopy() == false {
-                return .failure(.workspaceInodeBoundaryFailed)
-            }
-            guard let entry = volumeEntries[relative] else { continue }
-            let decision = workspacePublishDecision(
-                snapshot: snapshot[relative],
-                saved: savedStamp(relative),
-                onVolume: true
-            )
-            switch decision {
-            case .update:
-                if writing {
-                    wrote = true
-                    if updateSaved(relative, from: entry) == false {
-                        rejected = true
-                    }
-                }
-            case .create:
-                if writing {
-                    wrote = true
-                    if createSaved(relative, from: entry) == false {
-                        rejected = true
-                    }
-                }
-            case .remove, .leave, .reject:
-                rejected = true
-            }
-        }
-        let missing = snapshot.keys.filter { volumeEntries[$0] == nil }
-            .sorted { pathDepth($0) > pathDepth($1) }
-        for relative in missing {
-            if cancelClockAllowsTreeCopy() == false {
-                return .failure(.workspaceInodeBoundaryFailed)
-            }
-            let decision = workspacePublishDecision(
-                snapshot: snapshot[relative],
-                saved: savedStamp(relative),
-                onVolume: false
-            )
-            switch decision {
-            case .remove:
-                if writing {
-                    wrote = true
-                    if removeSaved(relative) == false {
-                        rejected = true
-                    }
-                }
-            case .leave:
-                break
-            case .update, .create, .reject:
-                rejected = true
-            }
-        }
-        if rejected {
+        // Every entry is validated before anything is written, so one
+        // rejected name leaves the saved tree untouched.
+        switch planPublish(volumeEntries) {
+        case .stopped:
             return .failure(.workspaceInodeBoundaryFailed)
+        case .rejected(let rejections):
+            rejected = true
+            mutable.withLock { $0.publishOutcome = .rejected(rejections) }
+            return .failure(.workspaceInodeBoundaryFailed)
+        case .planned(let steps):
+            guard writing else { return .success(()) }
+            return commitPublish(steps, wrote: &wrote, rejected: &rejected)
         }
-        return .success(())
     }
 
     private func restoreOriginalDirectory() -> Result<Void, IsolationApplyError> {
@@ -675,60 +630,506 @@ final class WorkspaceInodeBoundary: Sendable {
         return result == true
     }
 
-    /// Remove a just-created saved entry whose copy did not finish.
-    /// Anything short of a finished unlink — a parked unlink, a
-    /// skipped unlink, or a finished failure — leaves a partial entry
-    /// in the saved tree, so the rename onto the workspace is fenced.
-    private func discardNewSaved(_ dirfd: Int32, _ name: String) {
-        if savedMutation(unlinkatWithinCopyClock(dirfd, name, 0)) == false {
-            mutable.withLock { $0.blockWorkspaceRename = true }
+    // MARK: Transactional publish
+
+    /// One planned mutation of the saved tree. Steps run in this order:
+    /// new directories, staged new files, in-place updates, installs of
+    /// staged files and new symlinks, retirement of removed names, then
+    /// directory modes deepest first. A directory therefore stays writable
+    /// while its children change.
+    private enum PublishStep {
+        case makeDirectory(String)
+        case stageFile(String, mode_t)
+        case updateFile(String, mode_t)
+        case replaceSymlink(String, target: String)
+        case installFile(String)
+        case createSymlink(String, target: String)
+        case retire(String)
+        case setDirectoryMode(String, mode_t)
+
+        var relative: String {
+            switch self {
+            case .makeDirectory(let relative), .stageFile(let relative, _),
+                .updateFile(let relative, _), .replaceSymlink(let relative, _),
+                .installFile(let relative), .createSymlink(let relative, _),
+                .retire(let relative), .setDirectoryMode(let relative, _):
+                return relative
+            }
         }
     }
 
-    private func updateSaved(_ relative: String, from entry: TreeEntry) -> Bool {
-        // A resumed create has no snapshot stamp. Its authority is the
-        // live saved stamp, re-verified against the opened inode below.
-        guard let captured = snapshot[relative] ?? savedStamp(relative) else { return false }
-        switch entry.kind {
-        case .directory:
-            guard let fd = openSaved(relative, directory: true), fd >= 0 else { return false }
+    /// How to put one applied step back. Each undo re-verifies the inode it
+    /// touches before it mutates anything.
+    private enum PublishUndo {
+        case removeEmptyDirectory(String)
+        case discardStage(String)
+        case restoreFile(String, backup: String, mode: mode_t, stamp: WorkspaceInodeStamp)
+        case restoreMode(String, mode: mode_t, stamp: WorkspaceInodeStamp)
+        case restoreSymlink(String, target: String)
+        case removeCreated(String, WorkspaceInodeStamp)
+        case removeLink(String, target: String)
+        case unretire(String, retired: String)
+
+        var relative: String {
+            switch self {
+            case .removeEmptyDirectory(let relative), .discardStage(let relative),
+                .restoreFile(let relative, _, _, _), .restoreMode(let relative, _, _),
+                .restoreSymlink(let relative, _), .removeCreated(let relative, _),
+                .removeLink(let relative, _), .unretire(let relative, _):
+                return relative
+            }
+        }
+    }
+
+    private enum PublishPlan {
+        case planned([PublishStep])
+        case rejected([WorkspacePublishRejection])
+        case stopped
+    }
+
+    private struct PublishJournal {
+        var undo: [PublishUndo] = []
+        var rollbackReady = false
+    }
+
+    /// What the last publish left in the saved tree.
+    var publishOutcome: WorkspacePublishOutcome {
+        mutable.withLock { $0.publishOutcome }
+    }
+
+    /// Host directory beside the saved tree that holds removed names until
+    /// the publish commits. Deterministic, so a resumed publish purges it.
+    private var rollbackPath: String {
+        let parent = (savedPath as NSString).deletingLastPathComponent
+        let name = (savedPath as NSString).lastPathComponent
+        let token = name.hasPrefix(".rv-saved-") ? String(name.dropFirst(".rv-saved-".count)) : name
+        return (parent as NSString).appendingPathComponent(".rv-rollback-\(token)")
+    }
+
+    /// Decide every name without writing. Inode checks, kind checks, the
+    /// symlink policy, and the removed-subtree check all run here.
+    private func planPublish(_ volumeEntries: [String: TreeEntry]) -> PublishPlan {
+        var rejections: [WorkspacePublishRejection] = []
+        func reject(_ relative: String, _ reason: WorkspacePublishRejection.Reason) {
+            rejections.append(WorkspacePublishRejection(relative: relative, reason: reason))
+        }
+        var links: [String: String] = [:]
+        for (relative, entry) in volumeEntries where entry.kind == .symlink {
+            if cancelClockAllowsTreeCopy() == false { return .stopped }
+            guard let target = readVolumeLink(relative) else {
+                reject(relative, .unreadable)
+                continue
+            }
+            links[relative] = target
+        }
+        var makes: [PublishStep] = []
+        var stages: [PublishStep] = []
+        var updates: [PublishStep] = []
+        var installs: [PublishStep] = []
+        var modes: [PublishStep] = []
+        let present = volumeEntries.keys.sorted { (pathDepth($0), $0) < (pathDepth($1), $1) }
+        for relative in present {
+            if cancelClockAllowsTreeCopy() == false { return .stopped }
+            guard let entry = volumeEntries[relative] else { continue }
+            let saved = savedStamp(relative)
+            switch workspacePublishDecision(snapshot: snapshot[relative], saved: saved, onVolume: true) {
+            case .update:
+                guard let saved, saved.kind == entry.kind else {
+                    reject(relative, .kindChanged)
+                    continue
+                }
+                switch entry.kind {
+                case .directory:
+                    modes.append(.setDirectoryMode(relative, entry.mode))
+                case .regular:
+                    updates.append(.updateFile(relative, entry.mode))
+                case .symlink:
+                    guard let target = links[relative] else { continue }
+                    guard let current = readSavedLink(relative) else {
+                        reject(relative, .unreadable)
+                        continue
+                    }
+                    // An untouched link is not rewritten, so a link the
+                    // project already had is never judged by the policy.
+                    if current == target { continue }
+                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: links) else {
+                        reject(relative, .symlinkEscapesWorkspace)
+                        continue
+                    }
+                    updates.append(.replaceSymlink(relative, target: target))
+                }
+            case .create:
+                switch entry.kind {
+                case .directory:
+                    makes.append(.makeDirectory(relative))
+                    modes.append(.setDirectoryMode(relative, entry.mode))
+                case .regular:
+                    guard stageNameIsFree(relative, volumeEntries) else {
+                        reject(relative, .unreadable)
+                        continue
+                    }
+                    stages.append(.stageFile(relative, entry.mode))
+                    installs.append(.installFile(relative))
+                case .symlink:
+                    guard let target = links[relative] else { continue }
+                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: links) else {
+                        reject(relative, .symlinkEscapesWorkspace)
+                        continue
+                    }
+                    installs.append(.createSymlink(relative, target: target))
+                }
+            case .remove, .leave, .reject:
+                reject(relative, .inodeChanged)
+            }
+        }
+        var removed = Set<String>()
+        for relative in snapshot.keys.sorted() where volumeEntries[relative] == nil {
+            if cancelClockAllowsTreeCopy() == false { return .stopped }
+            switch workspacePublishDecision(
+                snapshot: snapshot[relative],
+                saved: savedStamp(relative),
+                onVolume: false
+            ) {
+            case .remove:
+                removed.insert(relative)
+            case .leave:
+                break
+            case .update, .create, .reject:
+                reject(relative, .inodeChanged)
+            }
+        }
+        var retires: [PublishStep] = []
+        for relative in removed.sorted() where removed.contains(parentRelative(relative)) == false {
+            if snapshot[relative]?.kind == .directory {
+                switch removedSubtreeIsOwned(relative, removed: removed) {
+                case nil:
+                    if cancelClockAllowsTreeCopy() == false { return .stopped }
+                    reject(relative, .unreadable)
+                    continue
+                case false:
+                    reject(relative, .unexpectedNameInRemovedDirectory)
+                    continue
+                case true:
+                    break
+                }
+            }
+            retires.append(.retire(relative))
+        }
+        guard rejections.isEmpty else {
+            return .rejected(rejections.sorted { $0.relative < $1.relative })
+        }
+        return .planned(makes + stages + updates + installs + retires + modes.reversed())
+    }
+
+    private func parentRelative(_ relative: String) -> String {
+        (relative as NSString).deletingLastPathComponent
+    }
+
+    private func stageNameIsFree(_ relative: String, _ volumeEntries: [String: TreeEntry]) -> Bool {
+        let parent = parentRelative(relative)
+        let stage = workspacePublishStageName(for: (relative as NSString).lastPathComponent)
+        let staged = parent.isEmpty ? stage : parent + "/" + stage
+        return snapshot[staged] == nil && volumeEntries[staged] == nil
+    }
+
+    /// Whether every saved name under a removed directory is itself a
+    /// removed snapshot name. Nil when the subtree could not be read.
+    private func removedSubtreeIsOwned(_ relative: String, removed: Set<String>) -> Bool? {
+        guard let fd = openSaved(relative, directory: true) else { return nil }
+        defer { close(fd) }
+        guard let entries = collectTree(root: fd, checkDevice: savedDevice) else { return nil }
+        return entries.keys.allSatisfy { removed.contains(relative + "/" + $0) }
+    }
+
+    private func readSavedLink(_ relative: String) -> String? {
+        guard let parent = savedParent(relative) else { return nil }
+        defer { close(parent.fd) }
+        return readlinkWithinCopyClock(parent.fd, parent.name)
+    }
+
+    /// Apply every planned step. A finished failure undoes the applied
+    /// steps in reverse. A clock stop leaves them for the resumable publish
+    /// and fences the workspace rename so a partial tree never lands.
+    private func commitPublish(
+        _ steps: [PublishStep],
+        wrote: inout Bool,
+        rejected: inout Bool
+    ) -> Result<Void, IsolationApplyError> {
+        // A stale rollback directory is from an interrupted earlier pass of
+        // this same publish. Resuming forward means its names stay removed.
+        switch diskImagePathExistsWithinCancelClock(rollbackPath) {
+        case nil:
+            return .failure(.workspaceInodeBoundaryFailed)
+        case true:
+            guard inodeCheckedDelete(rollbackPath) else {
+                rejected = true
+                mutable.withLock {
+                    $0.publishOutcome = .rejected([
+                        WorkspacePublishRejection(relative: rollbackPath, reason: .unreadable),
+                    ])
+                }
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
+        case false:
+            break
+        }
+        var journal = PublishJournal()
+        var failedAt: String?
+        for (index, step) in steps.enumerated() {
+            if cancelClockAllowsTreeCopy() == false || mutable.withLock({ $0.blockWorkspaceRename }) {
+                failedAt = step.relative
+                break
+            }
+            if let fault = WorkspacePublishFaults.commitFault, fault(index, step.relative) {
+                failedAt = step.relative
+                break
+            }
+            wrote = true
+            let applied = apply(step, index: index, journal: &journal)
+            journal.undo.append(contentsOf: applied.undo)
+            if applied.ok == false {
+                failedAt = step.relative
+                break
+            }
+        }
+        guard let failedAt else {
+            let leftovers = finishPublish(journal)
+            mutable.withLock { $0.publishOutcome = .committed(leftovers: leftovers) }
+            return .success(())
+        }
+        if cancelClockAllowsTreeCopy() == false || mutable.withLock({ $0.blockWorkspaceRename }) {
+            if wrote { mutable.withLock { $0.blockWorkspaceRename = true } }
+            mutable.withLock { $0.publishOutcome = .interrupted(at: failedAt) }
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        rejected = true
+        let unrestored = rollBack(journal)
+        mutable.withLock {
+            $0.publishOutcome = unrestored.isEmpty
+                ? .rolledBack(failedAt: failedAt)
+                : .residual(failedAt: failedAt, unrestored: unrestored)
+        }
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
+
+    /// Delete rollback material after a commit. Returns host paths that
+    /// could not be deleted.
+    private func finishPublish(_ journal: PublishJournal) -> [String] {
+        var leftovers: [String] = []
+        for case .restoreFile(_, let backup, _, _) in journal.undo
+        where diskImageUnlinkWithinCopyClock(backup) != true {
+            leftovers.append(backup)
+        }
+        if journal.rollbackReady, inodeCheckedDelete(rollbackPath) == false {
+            leftovers.append(rollbackPath)
+        }
+        return leftovers
+    }
+
+    /// Undo in reverse. Returns the saved names that could not be put back;
+    /// their backups (and the rollback directory) are kept.
+    private func rollBack(_ journal: PublishJournal) -> [String] {
+        var unrestored: [String] = []
+        for undo in journal.undo.reversed() {
+            if undoStep(undo) {
+                if case .restoreFile(_, let backup, _, _) = undo {
+                    _ = diskImageUnlinkWithinCopyClock(backup)
+                }
+            } else {
+                unrestored.append(undo.relative)
+            }
+        }
+        if journal.rollbackReady, unrestored.isEmpty {
+            _ = diskImageRmdirWithinCopyClock(rollbackPath)
+        }
+        return unrestored
+    }
+
+    private typealias StepResult = (ok: Bool, undo: [PublishUndo])
+
+    private func apply(_ step: PublishStep, index: Int, journal: inout PublishJournal) -> StepResult {
+        switch step {
+        case .makeDirectory(let relative):
+            guard let parent = savedParent(relative) else { return (false, []) }
+            defer { close(parent.fd) }
+            // Owner-writable until the final mode step, so children land.
+            guard savedMutation(mkdiratWithinCopyClock(parent.fd, parent.name, 0o700)) else {
+                return (false, [])
+            }
+            return (true, [.removeEmptyDirectory(relative)])
+        case .stageFile(let relative, let mode):
+            return stageNewFile(relative, mode: mode)
+        case .updateFile(let relative, let mode):
+            return updateSavedFile(relative, mode: mode)
+        case .replaceSymlink(let relative, let target):
+            return replaceSavedSymlink(relative, target: target)
+        case .installFile(let relative):
+            return installStagedFile(relative)
+        case .createSymlink(let relative, let target):
+            guard let parent = savedParent(relative) else { return (false, []) }
+            defer { close(parent.fd) }
+            guard savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target)) else {
+                return (false, [])
+            }
+            return (true, [.removeLink(relative, target: target)])
+        case .retire(let relative):
+            return retireSaved(relative, index: index, journal: &journal)
+        case .setDirectoryMode(let relative, let mode):
+            guard let fd = openSaved(relative, directory: true) else { return (false, []) }
             defer { close(fd) }
-            guard let status = fstatWithinCopyClock(fd), acceptableSavedInode(captured, status) else {
-                return false
+            guard let status = fstatWithinCopyClock(fd), let live = stamp(of: status) else {
+                return (false, [])
             }
-            return savedMutation(fchmodWithinCopyClock(fd, entry.mode))
-        case .regular:
-            guard let source = openVolume(relative, directory: false), source >= 0 else { return false }
-            defer { close(source) }
-            guard let dest = openSaved(relative, directory: false, writable: true), dest >= 0 else {
-                return updateReadOnlySaved(relative, from: source, captured: captured, mode: entry.mode)
+            if let captured = snapshot[relative], acceptableSavedInode(captured, status) == false {
+                return (false, [])
             }
-            defer { close(dest) }
-            guard let status = fstatWithinCopyClock(dest), acceptableSavedInode(captured, status) else {
-                return false
-            }
-            let outcome = replaceOriginalOnlyAfterStagedCopy(
-                source: source,
-                original: dest,
-                originalPath: (savedPath as NSString).appendingPathComponent(relative),
-                mayContinue: publishCopyMayContinue,
-                copyXattr: copyExtendedAttributes
+            let old = modeBits(status.st_mode)
+            if old == mode { return (true, []) }
+            return (
+                savedMutation(fchmodWithinCopyClock(fd, mode)),
+                [.restoreMode(relative, mode: old, stamp: live)]
             )
-            if outcome.reachedTruncate && outcome.mayRenameOntoWorkspace == false {
+        }
+    }
+
+    /// Write a new file under its staging name in the destination's
+    /// directory. A stale stage from an interrupted pass is replaced.
+    private func stageNewFile(_ relative: String, mode: mode_t) -> StepResult {
+        guard let parent = savedParent(relative) else { return (false, []) }
+        defer { close(parent.fd) }
+        let stage = workspacePublishStageName(for: parent.name)
+        switch fstatatObservingCopyClock(parent.fd, stage) {
+        case .stopped:
+            return (false, [])
+        case .failed:
+            break
+        case .value(let status):
+            guard kind(of: status.st_mode) == .regular, status.st_nlink == 1,
+                savedMutation(unlinkatWithinCopyClock(parent.fd, stage, 0))
+            else { return (false, []) }
+        }
+        let opened = openatOutcomeWithinCopyClock(
+            parent.fd,
+            stage,
+            O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
+            mode
+        )
+        // A parked O_CREAT can still create the stage after the saved
+        // tree is renamed onto the workspace. Fence it.
+        if opened.stopped {
+            mutable.withLock { $0.blockWorkspaceRename = true }
+            return (false, [])
+        }
+        guard opened.fd >= 0 else { return (false, []) }
+        let dest = opened.fd
+        defer { close(dest) }
+        let undo: [PublishUndo] = [.discardStage(relative)]
+        guard let source = openVolume(relative, directory: false) else { return (false, undo) }
+        defer { close(source) }
+        let copied = copyFileDataOutcomeObservingCancelClock(from: source, to: dest)
+        guard copied == .finished else {
+            // A parked write still holds a duplicate of `dest`.
+            if copied == .stopped {
                 mutable.withLock { $0.blockWorkspaceRename = true }
             }
-            guard outcome.committed else { return false }
-            return savedMutation(fchmodWithinCopyClock(dest, entry.mode))
-        case .symlink:
-            guard let target = readVolumeLink(relative) else { return false }
-            guard let parent = savedParent(relative) else { return false }
-            defer { close(parent.fd) }
-            guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
-                acceptableSavedInode(captured, status)
-            else { return false }
-            guard savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, 0)) else { return false }
-            return savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target))
+            return (false, undo)
         }
+        return (true, undo)
+    }
+
+    /// Rename a finished stage onto its name. `RENAME_EXCL` never replaces
+    /// an inode that appeared at that name.
+    private func installStagedFile(_ relative: String) -> StepResult {
+        guard let parent = savedParent(relative) else { return (false, []) }
+        defer { close(parent.fd) }
+        let stage = workspacePublishStageName(for: parent.name)
+        guard let staged = fstatatWithinCopyClock(parent.fd, stage), let stamp = stamp(of: staged) else {
+            return (false, [])
+        }
+        let name = parent.name
+        let renamed = renameatWithinCopyClock(parent.fd) { fd in
+            stage.withCString { from in
+                name.withCString { to in renameatx_np(fd, from, fd, to, UInt32(RENAME_EXCL)) }
+            }
+        }
+        guard savedMutation(renamed) else { return (false, []) }
+        return (true, [.removeCreated(relative, stamp)])
+    }
+
+    /// Move a removed name into the rollback directory. The captured inode
+    /// is re-verified first; the move keeps it intact for undo.
+    private func retireSaved(_ relative: String, index: Int, journal: inout PublishJournal) -> StepResult {
+        guard let captured = snapshot[relative] else { return (false, []) }
+        if journal.rollbackReady == false {
+            guard savedMutation(diskImageMkdirWithinCopyClock(rollbackPath, 0o700)) else {
+                return (false, [])
+            }
+            journal.rollbackReady = true
+        }
+        guard let parent = savedParent(relative) else { return (false, []) }
+        defer { close(parent.fd) }
+        guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
+            acceptableSavedInode(captured, status)
+        else { return (false, []) }
+        let retired = String(index)
+        let destination = (rollbackPath as NSString).appendingPathComponent(retired)
+        let name = parent.name
+        let renamed = renameatWithinCopyClock(parent.fd) { fd in
+            name.withCString { from in
+                destination.withCString { to in
+                    renameatx_np(fd, from, AT_FDCWD, to, UInt32(RENAME_EXCL))
+                }
+            }
+        }
+        guard savedMutation(renamed) else { return (false, []) }
+        return (true, [.unretire(relative, retired: retired)])
+    }
+
+    private func replaceSavedSymlink(_ relative: String, target: String) -> StepResult {
+        guard let captured = snapshot[relative] ?? savedStamp(relative) else { return (false, []) }
+        guard let parent = savedParent(relative) else { return (false, []) }
+        defer { close(parent.fd) }
+        guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
+            acceptableSavedInode(captured, status),
+            let old = readlinkWithinCopyClock(parent.fd, parent.name)
+        else { return (false, []) }
+        guard savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, 0)) else { return (false, []) }
+        let undo: [PublishUndo] = [.restoreSymlink(relative, target: old)]
+        return (savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target)), undo)
+    }
+
+    /// Copy a volume file onto its captured saved inode. The pre-commit
+    /// bytes are retained until the whole publish commits.
+    private func updateSavedFile(_ relative: String, mode: mode_t) -> StepResult {
+        // A resumed create has no snapshot stamp. Its authority is the
+        // live saved stamp, re-verified against the opened inode below.
+        guard let captured = snapshot[relative] ?? savedStamp(relative) else { return (false, []) }
+        guard let source = openVolume(relative, directory: false), source >= 0 else { return (false, []) }
+        defer { close(source) }
+        guard let dest = openSaved(relative, directory: false, writable: true), dest >= 0 else {
+            return updateReadOnlySaved(relative, from: source, captured: captured, mode: mode)
+        }
+        defer { close(dest) }
+        guard let status = fstatWithinCopyClock(dest), acceptableSavedInode(captured, status),
+            let live = stamp(of: status)
+        else {
+            return (false, [])
+        }
+        let oldMode = modeBits(status.st_mode)
+        let outcome = replaceOriginalOnlyAfterStagedCopy(
+            source: source,
+            original: dest,
+            originalPath: (savedPath as NSString).appendingPathComponent(relative),
+            retainBackup: true,
+            mayContinue: publishCopyMayContinue,
+            copyXattr: copyExtendedAttributes
+        )
+        if outcome.reachedTruncate && outcome.mayRenameOntoWorkspace == false {
+            mutable.withLock { $0.blockWorkspaceRename = true }
+        }
+        guard outcome.committed, let backup = outcome.retainedBackup else { return (false, []) }
+        let undo: [PublishUndo] = [.restoreFile(relative, backup: backup, mode: oldMode, stamp: live)]
+        return (savedMutation(fchmodWithinCopyClock(dest, mode)), undo)
     }
 
     /// Copy back onto a saved file that refuses `O_RDWR`, such as the mode-444
@@ -736,50 +1137,145 @@ final class WorkspaceInodeBoundary: Sendable {
     /// all; edited content takes a momentary owner-write bit that the final
     /// chmod restores, so the mode survives the round trip. The inode is
     /// never replaced, and every open re-verifies the captured identity, so
-    /// the authority check keeps its meaning. A failure after the mode bit
-    /// is set leaves content intact with owner-write added; the next publish
-    /// takes the writable path and restores the volume mode.
+    /// the authority check keeps its meaning.
     private func updateReadOnlySaved(
         _ relative: String,
         from source: Int32,
         captured: WorkspaceInodeStamp,
         mode: mode_t
-    ) -> Bool {
-        guard let parent = savedParent(relative) else { return false }
+    ) -> StepResult {
+        guard let parent = savedParent(relative) else { return (false, []) }
         defer { close(parent.fd) }
         let readOnly = openatWithinCopyClock(
             parent.fd,
             parent.name,
             O_RDONLY | O_NOFOLLOW | O_CLOEXEC
         )
-        guard readOnly >= 0 else { return false }
+        guard readOnly >= 0 else { return (false, []) }
         defer { close(readOnly) }
-        guard let status = fstatWithinCopyClock(readOnly), acceptableSavedInode(captured, status) else {
-            return false
+        guard let status = fstatWithinCopyClock(readOnly), acceptableSavedInode(captured, status),
+            let live = stamp(of: status)
+        else {
+            return (false, [])
         }
-        guard let same = savedContentsEqual(source, readOnly) else { return false }
+        let oldMode = modeBits(status.st_mode)
+        let restoreMode: [PublishUndo] = [.restoreMode(relative, mode: oldMode, stamp: live)]
+        guard let same = savedContentsEqual(source, readOnly) else { return (false, []) }
         if same {
-            if modeBits(status.st_mode) == mode { return true }
-            return savedMutation(fchmodWithinCopyClock(readOnly, mode))
+            if oldMode == mode { return (true, []) }
+            return (savedMutation(fchmodWithinCopyClock(readOnly, mode)), restoreMode)
         }
-        guard savedMutation(fchmodWithinCopyClock(readOnly, modeBits(status.st_mode) | 0o200)) else { return false }
+        guard savedMutation(fchmodWithinCopyClock(readOnly, oldMode | 0o200)) else {
+            return (false, restoreMode)
+        }
         let dest = openatWithinCopyClock(
             parent.fd,
             parent.name,
             O_RDWR | O_NOFOLLOW | O_CLOEXEC
         )
-        guard dest >= 0 else { return false }
+        guard dest >= 0 else { return (false, restoreMode) }
         defer { close(dest) }
         guard let fresh = fstatWithinCopyClock(dest), acceptableSavedInode(captured, fresh) else {
-            return false
+            return (false, restoreMode)
         }
-        guard lseek(source, 0, SEEK_SET) == 0 else { return false }
+        guard lseek(source, 0, SEEK_SET) == 0 else { return (false, restoreMode) }
         let outcome = replaceOriginalOnlyAfterStagedCopy(
             source: source,
             original: dest,
             originalPath: (savedPath as NSString).appendingPathComponent(relative),
+            retainBackup: true,
             mayContinue: publishCopyMayContinue,
             copyXattr: copyExtendedAttributes
+        )
+        if outcome.reachedTruncate && outcome.mayRenameOntoWorkspace == false {
+            mutable.withLock { $0.blockWorkspaceRename = true }
+        }
+        guard outcome.committed, let backup = outcome.retainedBackup else { return (false, restoreMode) }
+        let undo: [PublishUndo] = [.restoreFile(relative, backup: backup, mode: oldMode, stamp: live)]
+        return (savedMutation(fchmodWithinCopyClock(dest, mode)), undo)
+    }
+
+    private func undoStep(_ undo: PublishUndo) -> Bool {
+        guard let parent = savedParent(undo.relative) else { return false }
+        defer { close(parent.fd) }
+        switch undo {
+        case .removeEmptyDirectory:
+            return savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, AT_REMOVEDIR))
+        case .discardStage:
+            let stage = workspacePublishStageName(for: parent.name)
+            switch fstatatObservingCopyClock(parent.fd, stage) {
+            case .stopped:
+                mutable.withLock { $0.blockWorkspaceRename = true }
+                return false
+            case .failed:
+                return true
+            case .value:
+                return savedMutation(unlinkatWithinCopyClock(parent.fd, stage, 0))
+            }
+        case .restoreFile(_, let backup, let mode, let stamp):
+            return restoreSavedFile(parent: parent, backup: backup, mode: mode, stamp: stamp)
+        case .restoreMode(_, let mode, let stamp):
+            let fd = openatWithinCopyClock(parent.fd, parent.name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else { return false }
+            defer { close(fd) }
+            guard let status = fstatWithinCopyClock(fd), sameInode(stamp, status) else { return false }
+            return savedMutation(fchmodWithinCopyClock(fd, mode))
+        case .restoreSymlink(_, let target):
+            if let status = fstatatWithinCopyClock(parent.fd, parent.name) {
+                guard kind(of: status.st_mode) == .symlink,
+                    savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, 0))
+                else { return false }
+            }
+            return savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target))
+        case .removeCreated(_, let stamp):
+            guard let status = fstatatWithinCopyClock(parent.fd, parent.name), sameInode(stamp, status) else {
+                return false
+            }
+            return savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, 0))
+        case .removeLink(_, let target):
+            guard readlinkWithinCopyClock(parent.fd, parent.name) == target else { return false }
+            return savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, 0))
+        case .unretire(_, let retired):
+            let source = (rollbackPath as NSString).appendingPathComponent(retired)
+            let name = parent.name
+            let renamed = renameatWithinCopyClock(parent.fd) { fd in
+                source.withCString { from in
+                    name.withCString { to in
+                        renameatx_np(AT_FDCWD, from, fd, to, UInt32(RENAME_EXCL))
+                    }
+                }
+            }
+            return savedMutation(renamed)
+        }
+    }
+
+    /// Write retained pre-commit bytes back onto the same inode, then its
+    /// mode. Extended attributes the publish changed are not restored.
+    private func restoreSavedFile(
+        parent: (fd: Int32, name: String),
+        backup: String,
+        mode: mode_t,
+        stamp: WorkspaceInodeStamp
+    ) -> Bool {
+        let readOnly = openatWithinCopyClock(parent.fd, parent.name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard readOnly >= 0 else { return false }
+        defer { close(readOnly) }
+        guard let status = fstatWithinCopyClock(readOnly), sameInode(stamp, status),
+            savedMutation(fchmodWithinCopyClock(readOnly, mode | 0o600))
+        else { return false }
+        let dest = openatWithinCopyClock(parent.fd, parent.name, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+        guard dest >= 0 else { return false }
+        defer { close(dest) }
+        guard let fresh = fstatWithinCopyClock(dest), sameInode(stamp, fresh) else { return false }
+        guard let opened = diskImageOpenPathWithinCopyClock(backup, O_RDONLY | O_NOFOLLOW | O_CLOEXEC),
+            opened >= 0
+        else { return false }
+        defer { close(opened) }
+        let outcome = replaceOriginalOnlyAfterStagedCopy(
+            source: opened,
+            original: dest,
+            mayContinue: publishCopyMayContinue,
+            copyXattr: { _, _ in true }
         )
         if outcome.reachedTruncate && outcome.mayRenameOntoWorkspace == false {
             mutable.withLock { $0.blockWorkspaceRename = true }
@@ -829,63 +1325,6 @@ final class WorkspaceInodeBoundary: Sendable {
             }
             return read.count
         }
-    }
-
-    private func createSaved(_ relative: String, from entry: TreeEntry) -> Bool {
-        guard let parent = savedParent(relative) else { return false }
-        defer { close(parent.fd) }
-        switch entry.kind {
-        case .directory:
-            return savedMutation(mkdiratWithinCopyClock(parent.fd, parent.name, entry.mode))
-        case .regular:
-            let opened = openatOutcomeWithinCopyClock(
-                parent.fd,
-                parent.name,
-                O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
-                entry.mode
-            )
-            // A parked O_CREAT can still create the entry after the
-            // saved tree is renamed onto the workspace. Fence it; do
-            // not unlink a name the parked open has not created yet.
-            if opened.stopped {
-                mutable.withLock { $0.blockWorkspaceRename = true }
-                return false
-            }
-            let dest = opened.fd
-            guard dest >= 0 else { return false }
-            defer { close(dest) }
-            guard let source = openVolume(relative, directory: false), source >= 0 else {
-                discardNewSaved(parent.fd, parent.name)
-                return false
-            }
-            defer { close(source) }
-            let copied = copyFileDataOutcomeObservingCancelClock(from: source, to: dest)
-            guard copied == .finished else {
-                // A parked write still holds a duplicate of `dest`
-                // and can land in this inode after a rename.
-                if copied == .stopped {
-                    mutable.withLock { $0.blockWorkspaceRename = true }
-                }
-                discardNewSaved(parent.fd, parent.name)
-                return false
-            }
-            return true
-        case .symlink:
-            guard let target = readVolumeLink(relative) else { return false }
-            return savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target))
-        }
-    }
-
-    private func removeSaved(_ relative: String) -> Bool {
-        guard let captured = snapshot[relative], let parent = savedParent(relative) else {
-            return false
-        }
-        defer { close(parent.fd) }
-        guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
-            acceptableSavedInode(captured, status)
-        else { return false }
-        let flags: Int32 = captured.kind == .directory ? AT_REMOVEDIR : 0
-        return savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, flags))
     }
 
     private func savedStamp(_ relative: String) -> WorkspaceInodeStamp? {
@@ -1985,6 +2424,35 @@ private func copyExtendedAttributes(_ source: Int32, _ destination: Int32) -> Bo
 }
 
 
+
+/// A rename relative to `dirfd`, off the caller. `body` gets a duplicate of
+/// `dirfd` and returns the syscall's result. Nil is a clock stop with the
+/// rename possibly still in flight.
+private func renameatWithinCopyClock(
+    _ dirfd: Int32,
+    _ body: @escaping @Sendable (Int32) -> Int32
+) -> Bool? {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return nil }
+    return diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
+        let renamed = body(copy) == 0
+        close(copy)
+        return renamed
+    }
+}
+
+/// Same device, inode, and kind. Link count is not compared.
+private func sameInode(_ stamp: WorkspaceInodeStamp, _ status: stat) -> Bool {
+    stamp.device == device(of: status)
+        && stamp.inode == UInt64(status.st_ino)
+        && kind(of: status.st_mode) == stamp.kind
+}
 
 private func unlinkatWithinCopyClock(_ dirfd: Int32, _ name: String, _ flags: Int32) -> Bool? {
     let allowance = diskImageTreeSyscallAllowance(
