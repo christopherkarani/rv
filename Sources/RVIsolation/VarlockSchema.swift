@@ -33,7 +33,9 @@ public enum VarlockSchema {
             }
             switch definition(item, inits: document.inits, defaultSensitive: document.defaultSensitive) {
             case .skip(let reason): plan.notes.append("skip \(item.name): \(reason)")
-            case .secret(let secret): plan.secrets.append(secret)
+            case .secret(let secret, let notes):
+                plan.secrets.append(secret)
+                plan.notes += notes.map { "note \(item.name): \($0)" }
             }
         }
         return .success(plan)
@@ -52,9 +54,23 @@ public enum VarlockSchema {
         var description: String?
     }
 
+    /// One `@initX(...)` provider instance.
     private struct Init {
+        var decorator: String
         var id: String?
         var fields: [String: String]
+        /// Fields set to a `$REF` or a call, which Varlock resolves at load time and rv cannot.
+        var references: Set<String>
+
+        func has(_ key: String) -> Bool { fields[key] != nil || references.contains(key) }
+
+        /// A literal field. A reference is never taken as its own text.
+        func literal(_ key: String) throws(Skip) -> String? {
+            guard references.contains(key) == false else {
+                throw Skip("@\(decorator) \(key) is a reference rv cannot resolve")
+            }
+            return fields[key]
+        }
     }
 
     private struct Document {
@@ -70,14 +86,22 @@ public enum VarlockSchema {
     }
 
     private enum Mapped {
-        case secret(SecretDefinition)
+        case secret(SecretDefinition, notes: [String])
         case skip(String)
     }
 
-    private enum SourceMapped {
-        case resolved(SecretSource)
-        case skip(String)
+    /// Why an item is not imported. Names schema fields, never values.
+    private struct Skip: Error {
+        var reason: String
+        init(_ reason: String) { self.reason = reason }
     }
+
+    private struct Resolved {
+        var source: SecretSource
+        var notes: [String] = []
+    }
+
+    private static let unsupported = Skip("no supported provider reference")
 
     private static func parse(_ text: String) -> Document {
         var document = Document()
@@ -218,7 +242,10 @@ public enum VarlockSchema {
     }
 
     private static func rootDecorator(_ name: String) -> Bool {
-        ["defaultSensitive", "plugin", "initInfisical", "initGsm", "initAzure", "initBitwarden"].contains(name)
+        [
+            "defaultSensitive", "plugin", "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws",
+            "initHcpVault", "initOp",
+        ].contains(name)
     }
 
     private static func apply(_ found: [Decorator], to document: inout Document) {
@@ -226,10 +253,11 @@ public enum VarlockSchema {
             switch decorator.name {
             case "defaultSensitive":
                 document.defaultSensitive = sensitivity(decorator)
-            case "initInfisical", "initGsm", "initAzure", "initBitwarden":
+            case "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws", "initHcpVault", "initOp":
                 let fields = arguments(decorator.arguments ?? "")
-                let id = fields.named["id"]
-                document.inits[decorator.name, default: []].append(Init(id: id, fields: fields.named))
+                document.inits[decorator.name, default: []].append(Init(
+                    decorator: decorator.name, id: fields.named["id"], fields: fields.named,
+                    references: fields.references))
             default:
                 break
             }
@@ -259,97 +287,188 @@ public enum VarlockSchema {
         if value.hasPrefix("op://") == false, functionCall(value) == nil {
             return .skip("literal value not copied")
         }
-        switch source(item, inits: inits) {
-        case .skip(let reason): return .skip(reason)
-        case .resolved(let resolved):
-            return .secret(SecretDefinition(
-                name: item.name, description: description, source: resolved, delivery: .environment, type: type))
+        do {
+            let resolved = try source(item, inits: inits)
+            return .secret(
+                SecretDefinition(
+                    name: item.name, description: description, source: resolved.source, delivery: .environment,
+                    type: type),
+                notes: resolved.notes)
+        } catch {
+            return .skip(error.reason)
         }
     }
 
     /// A literal value is never a provider reference, so it is not imported.
-    private static func source(_ item: Item, inits: [String: [Init]]) -> SourceMapped {
+    /// Calls follow each Varlock plugin's resolver `process()`.
+    private static func source(_ item: Item, inits: [String: [Init]]) throws(Skip) -> Resolved {
         let value = stripTrailingComment(item.value).trimmingCharacters(in: .whitespaces)
         if value.hasPrefix("op://") {
-            guard let resolved = onePassword(value) else { return .skip("no supported provider reference") }
-            return .resolved(resolved)
+            guard let resolved = onePassword(value) else { throw unsupported }
+            return Resolved(source: resolved)
         }
-        guard let call = functionCall(value) else { return .skip("no supported provider reference") }
-        let providerInits = inits[initName(call.name)] ?? []
-        let instance = call.positional.first.flatMap { token in
-            providerInits.contains { $0.id == token } ? token : nil
-        }
-        // With named instances declared, a leading positional that matches
-        // none of them followed by another positional reads as
-        // (instance, name) with a mistyped instance. Binding it as the
-        // secret name would silently point at the wrong secret.
-        if instance == nil, call.positional.count >= 2, providerInits.contains(where: { $0.id != nil }),
-            let first = call.positional.first
-        {
-            return .skip("instance \(first) is not one of the declared instances")
-        }
-        let positional = instance == nil ? call.positional : Array(call.positional.dropFirst())
-        let chosen = pick(providerInits, id: instance)
+        guard let call = functionCall(value) else { throw unsupported }
+        guard call.arguments.hasReference == false else { throw Skip("an argument is a reference rv cannot resolve") }
+        let declared = inits[initName(call.name)] ?? []
         switch call.name {
-        case "op":
-            guard let resolved = positional.first(where: { $0.hasPrefix("op://") }).flatMap(onePassword) else {
-                return .skip("no supported provider reference")
-            }
-            return .resolved(resolved)
-        case "infisical":
-            let name = call.named["secretName"] ?? positional.first ?? item.name
-            guard SecretsDecoding.cliToken(name) else { return .skip("no supported provider reference") }
-            return .resolved(.infisical(
-                name: name, project: chosen?["projectId"], environment: chosen?["environment"],
-                path: call.named["secretPath"] ?? call.named["path"] ?? chosen?["path"]))
+        case "op": return try op(call, declared)
+        case "infisical": return try infisical(item, call, declared)
         case "bitwarden":
-            guard let id = positional.first, SecretsDecoding.uuid(id) else {
-                return .skip("no supported provider reference")
+            guard let id = try instance(call, declared, maximum: 2).rest.first, SecretsDecoding.uuid(id) else {
+                throw unsupported
             }
-            return .resolved(.bitwarden(id: id.lowercased()))
+            return Resolved(source: .bitwarden(id: id.lowercased()))
         case "gsm":
-            guard let resolved = gcp(positional.first ?? item.name, project: chosen?["projectId"]) else {
-                return .skip("no supported provider reference")
-            }
-            return .resolved(resolved)
-        case "azureSecret":
-            guard let resolved = azure(positional.first ?? kebab(item.name), vaultURL: chosen?["vaultUrl"]) else {
-                return .skip("no supported provider reference")
-            }
-            return .resolved(resolved)
-        case "vaultSecret":
-            guard let path = positional.first, SecretsDecoding.vaultPath(path),
-                let field = call.named["field"], SecretsDecoding.label(field, max: 128)
-            else { return .skip("no supported provider reference") }
-            return .resolved(.vault(path: path, field: field, address: nil))
-        case "awsSecretsManager":
-            guard let id = positional.first, SecretsDecoding.cliToken(id), id.hasPrefix("-") == false else {
-                return .skip("no supported provider reference")
-            }
-            let field = call.named["field"]
-            guard field == nil || SecretsDecoding.label(field ?? "", max: 128) else {
-                return .skip("no supported provider reference")
-            }
-            return .resolved(.awsSecretsManager(secretID: id, field: field, region: call.named["region"]))
-        default:
-            return .skip("no supported provider reference")
+            let (config, rest) = try instance(call, declared, maximum: 2)
+            let reference = rest.first ?? item.name
+            let project = if reference.hasPrefix("projects/") { nil as String? } else { try config?.literal("projectId") }
+            guard let resolved = gcp(reference, project: project) else { throw unsupported }
+            return Resolved(source: resolved)
+        case "azureSecret": return try azureSecret(item, call, declared)
+        case "vaultSecret": return try vaultSecret(item, call, declared)
+        case "awsSecret": return try awsSecret(item, call, declared)
+        case "awsParam": throw Skip("rv has no AWS Parameter Store provider")
+        default: throw unsupported
         }
     }
 
     private static func initName(_ call: String) -> String {
         switch call {
+        case "op": "initOp"
         case "infisical": "initInfisical"
         case "gsm": "initGsm"
         case "azureSecret": "initAzure"
         case "bitwarden": "initBitwarden"
+        case "vaultSecret": "initHcpVault"
+        case "awsSecret": "initAws"
         default: ""
         }
     }
 
-    private static func pick(_ inits: [Init], id: String?) -> [String: String]? {
-        if let id { return inits.first { $0.id == id }?.fields }
-        if inits.count == 1 { return inits[0].fields }
-        return inits.first { $0.id == nil }?.fields
+    /// Splits off Varlock's leading instance id: with more than one positional,
+    /// the first names an `@initX(id=...)`. Otherwise the instance is the one
+    /// declared without an id. A mistyped id is skipped, never rebound as a name.
+    private static func instance(
+        _ call: Call, _ declared: [Init], maximum: Int
+    ) throws(Skip) -> (config: Init?, rest: [String]) {
+        let positional = call.arguments.positional
+        guard positional.count <= maximum else { throw Skip("\(call.name)() takes at most \(maximum) arguments") }
+        guard positional.count > 1 else {
+            let config = declared.first { $0.id == nil }
+            if config == nil, declared.isEmpty == false {
+                throw Skip("no @\(initName(call.name)) without an id; name the instance")
+            }
+            return (config, positional)
+        }
+        guard let config = declared.first(where: { $0.id == positional[0] }) else {
+            throw Skip("instance \(positional[0]) is not one of the declared instances")
+        }
+        return (config, Array(positional.dropFirst()))
+    }
+
+    /// `op(ref)` or `op(id, ref)`. rv runs `op read`, which has no account
+    /// selector, so a declared account is reported rather than dropped silently.
+    private static func op(_ call: Call, _ declared: [Init]) throws(Skip) -> Resolved {
+        let positional = call.arguments.positional
+        guard let resolved = positional.first(where: { $0.hasPrefix("op://") }).flatMap(onePassword) else {
+            throw unsupported
+        }
+        let id = positional.count > 1 ? positional[0] : nil
+        guard declared.first(where: { $0.id == id })?.has("account") == true else { return Resolved(source: resolved) }
+        return Resolved(source: resolved, notes: ["@initOp account is not carried over; `op read` uses OP_ACCOUNT"])
+    }
+
+    /// `infisical()`, `infisical(name)`, `infisical(id, name)`, or
+    /// `infisical(id, name, path)`. Varlock reads a static first argument of
+    /// two as an instance id; its `(name, path)` form needs a `$REF` name.
+    private static func infisical(_ item: Item, _ call: Call, _ declared: [Init]) throws(Skip) -> Resolved {
+        let (config, rest) = try instance(call, declared, maximum: 3)
+        let name = rest.first ?? item.name
+        let path = try rest.count > 1 ? rest[1] : config?.literal("secretPath")
+        let project = try config?.literal("projectId")
+        let environment = try config?.literal("environment")
+        guard SecretsDecoding.cliToken(name),
+            [project, environment, path].allSatisfy({ $0.map(SecretsDecoding.cliToken) ?? true })
+        else { throw unsupported }
+        return Resolved(source: .infisical(name: name, project: project, environment: environment, path: path))
+    }
+
+    /// `azureSecret(name[@version])` with named `version=` and `key=`. rv's
+    /// Azure source returns the whole value, so a JSON key is not imported.
+    private static func azureSecret(_ item: Item, _ call: Call, _ declared: [Init]) throws(Skip) -> Resolved {
+        let (config, rest) = try instance(call, declared, maximum: 2)
+        var reference = rest.first ?? kebab(item.name)
+        guard reference.contains("#") == false, call.arguments.named["key"] == nil else {
+            throw Skip("rv's Azure source cannot pick a JSON key")
+        }
+        if let version = call.arguments.named["version"] {
+            reference = String(reference.prefix { $0 != "@" }) + "@" + version
+        }
+        guard let resolved = azure(reference, vaultURL: try config?.literal("vaultUrl")) else { throw unsupported }
+        return Resolved(source: resolved)
+    }
+
+    /// `vaultSecret([id,] [path[#KEY]], key=)` against KV v2. The key defaults
+    /// to the item name and the path to `@initHcpVault(defaultPath=)`.
+    private static func vaultSecret(_ item: Item, _ call: Call, _ declared: [Init]) throws(Skip) -> Resolved {
+        let (config, rest) = try instance(call, declared, maximum: 2)
+        guard call.arguments.named["raw"] == nil else { throw Skip("raw=true reads a whole secret; rv reads one key") }
+        guard config?.has("namespace") != true else { throw Skip("@initHcpVault namespace has no rv equivalent") }
+        var path = rest.first ?? ""
+        var key = item.name
+        if let hash = path.firstIndex(of: "#") {
+            let explicit = String(path[path.index(after: hash)...])
+            if explicit.isEmpty == false { key = explicit }
+            path = String(path[..<hash])
+        }
+        if let named = call.arguments.named["key"] { key = named }
+        if path.isEmpty { path = try config?.literal("defaultPath") ?? "" }
+        if let prefix = try config?.literal("pathPrefix") {
+            path = String(prefix.reversed().drop { $0 == "/" }.reversed()) + "/" + path.drop { $0 == "/" }
+        }
+        // Varlock reads KV v2 `mount/rest` at `/v1/mount/data/rest`; rv's path is the API path.
+        let mount = path.prefix { $0 != "/" }
+        let apiPath = String(mount) + "/data" + path.dropFirst(mount.count)
+        guard SecretsDecoding.vaultPath(apiPath), SecretsDecoding.label(key, max: 128) else { throw unsupported }
+        var notes: [String] = []
+        var address: URL?
+        if config?.references.contains("url") == true {
+            notes.append("@initHcpVault url is a reference; rv reads VAULT_ADDR")
+        } else if let url = config?.fields["url"] {
+            guard let origin = SecretsDecoding.httpsOrigin(url) else {
+                throw Skip("@initHcpVault url is not an https origin")
+            }
+            address = origin
+        }
+        return Resolved(source: .vault(path: apiPath, field: key, address: address), notes: notes)
+    }
+
+    /// `awsSecret([id,] [secretId[#key]], key=)`, with `namePrefix` and
+    /// `region` from `@initAws`. The id defaults to the item name.
+    private static func awsSecret(_ item: Item, _ call: Call, _ declared: [Init]) throws(Skip) -> Resolved {
+        let (config, rest) = try instance(call, declared, maximum: 2)
+        guard config?.has("profile") != true else { throw Skip("@initAws profile has no rv equivalent") }
+        var id = rest.first ?? item.name
+        var field: String?
+        if let hash = id.firstIndex(of: "#") {
+            field = String(id[id.index(after: hash)...])
+            id = String(id[..<hash])
+        }
+        if let named = call.arguments.named["key"] { field = named }
+        if field?.isEmpty == true { field = nil }
+        id = try (config?.literal("namePrefix") ?? "") + id
+        guard SecretsDecoding.cliToken(id), field.map({ SecretsDecoding.label($0, max: 128) }) ?? true else {
+            throw unsupported
+        }
+        var notes: [String] = []
+        var region: String?
+        if config?.references.contains("region") == true {
+            notes.append("@initAws region is a reference; the AWS CLI picks the region")
+        } else if let text = config?.fields["region"] {
+            guard SecretsDecoding.regionName(text) else { throw Skip("@initAws region is not a region name") }
+            region = text
+        }
+        return Resolved(source: .awsSecretsManager(secretID: id, field: field, region: region), notes: notes)
     }
 
     private static func onePassword(_ reference: String) -> SecretSource? {
@@ -526,15 +645,22 @@ public enum VarlockSchema {
     private struct Arguments {
         var positional: [String] = []
         var named: [String: String] = [:]
+        /// Named keys whose value is a reference.
+        var references: Set<String> = []
+        var hasReference = false
     }
 
-    private static func functionCall(_ value: String) -> (name: String, positional: [String], named: [String: String])? {
+    private struct Call {
+        var name: String
+        var arguments: Arguments
+    }
+
+    private static func functionCall(_ value: String) -> Call? {
         guard let open = value.firstIndex(of: "("), value.hasSuffix(")"), value.startIndex < open else { return nil }
         let name = String(value[..<open])
         guard name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }), name.isEmpty == false else { return nil }
         let inside = String(value[value.index(after: open)..<value.index(before: value.endIndex)])
-        let parsed = arguments(inside)
-        return (name, parsed.positional, parsed.named)
+        return Call(name: name, arguments: arguments(inside))
     }
 
     private static func arguments(_ text: String) -> Arguments {
@@ -544,10 +670,13 @@ public enum VarlockSchema {
             guard part.isEmpty == false else { continue }
             if let eq = part.firstIndex(of: "="), part[..<eq].allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) {
                 let key = String(part[..<eq])
-                result.named[key] = unquote(String(part[part.index(after: eq)...]).trimmingCharacters(in: .whitespaces))
+                let raw = String(part[part.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+                result.named[key] = unquote(raw)
+                if isReference(raw) { result.references.insert(key) }
             } else {
                 result.positional.append(unquote(part))
             }
+            result.hasReference = result.hasReference || isReference(part)
         }
         return result
     }
@@ -575,6 +704,14 @@ public enum VarlockSchema {
         }
         parts.append(current)
         return parts
+    }
+
+    /// `$REF`, `${REF}`, or a nested call such as `fallback(...)`. Single
+    /// quotes do not expand in Varlock, so a single-quoted value is literal.
+    private static func isReference(_ raw: String) -> Bool {
+        guard raw.hasPrefix("'") == false else { return false }
+        if raw.contains("$") { return true }
+        return raw.hasPrefix("\"") == false && raw.hasPrefix("`") == false && raw.contains("(")
     }
 
     private static func unquote(_ text: String) -> String {
