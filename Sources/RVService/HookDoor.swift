@@ -28,8 +28,9 @@ public struct HookDoor: Sendable {
             await hookWire(host: host, stdin: stdin, world: world)
         }
         // A skipped side effect means the wire may promise a pending row or
-        // unlock code that does not exist; the client gave up anyway.
-        if deadline.hasTripped {
+        // unlock code that does not exist; the client gave up anyway. A
+        // grant spent in time is the exception: its allow is delivered.
+        if deadline.requiresTimeoutReply {
             return timeoutReply(host: host)
         }
         return reply(wire)

@@ -21,26 +21,54 @@ public final class HookDeadline: Sendable {
     @TaskLocal static var current: HookDeadline?
 
     private let expiresAt: ContinuousClock.Instant
-    private let tripped = Mutex(false)
+    private let now: @Sendable () -> ContinuousClock.Instant
+    private struct State {
+        var tripped = false
+        var grantSpent = false
+    }
 
-    public init(receivedAt: ContinuousClock.Instant = .now, budget: Duration = HookDeadline.budget) {
-        self.expiresAt = receivedAt.advanced(by: budget)
+    private let state = Mutex(State())
+
+    public convenience init(
+        receivedAt: ContinuousClock.Instant = .now,
+        budget: Duration = HookDeadline.budget
+    ) {
+        self.init(expiresAt: receivedAt.advanced(by: budget), now: { .now })
+    }
+
+    init(expiresAt: ContinuousClock.Instant, now: @escaping @Sendable () -> ContinuousClock.Instant) {
+        self.expiresAt = expiresAt
+        self.now = now
     }
 
     /// True while a client-visible side effect may still commit. Sticky:
     /// the first check past the budget trips it for the rest of the request,
     /// so a later step cannot commit after an earlier one was skipped.
     public func permitsSideEffects() -> Bool {
-        tripped.withLock { tripped in
-            if tripped { return false }
-            if ContinuousClock.now >= expiresAt { tripped = true }
-            return tripped == false
+        let current = now()
+        return state.withLock { state in
+            if state.tripped { return false }
+            if current >= expiresAt { state.tripped = true }
+            return state.tripped == false
         }
     }
 
     /// True once any check found the budget spent: the reply must not claim
     /// effects (pending row, unlock code) that were skipped.
-    public var hasTripped: Bool { tripped.withLock { $0 } }
+    public var hasTripped: Bool { state.withLock { $0.tripped } }
+
+    /// Records that an allow-once grant was spent (inside the budget) and
+    /// the reply now carries that allow. It must reach the client: swapping
+    /// in the timeout deny would burn the human's approval for nothing.
+    func recordGrantSpent() {
+        state.withLock { $0.grantSpent = true }
+    }
+
+    /// True when the reply must be replaced by the timeout deny: a side
+    /// effect was skipped and no grant was spent on this request.
+    var requiresTimeoutReply: Bool {
+        state.withLock { $0.tripped && $0.grantSpent == false }
+    }
 
     /// The bound deadline's verdict; true when no hookEvaluate budget applies.
     static func permitsSideEffects() -> Bool {

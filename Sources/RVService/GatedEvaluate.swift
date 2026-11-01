@@ -432,7 +432,7 @@ public struct GatedEvaluate: Sendable {
                 invocationPrefix: invocationPrefix
             ).result
         case .apply:
-            return await PolicyGate.consumingGrant(
+            let decision = await PolicyGate.consumingGrant(
                 for: result,
                 cwd: cwd,
                 allowlist: snapshot,
@@ -442,7 +442,13 @@ public struct GatedEvaluate: Sendable {
                 safety: safety,
                 maskedSegments: maskedSegments,
                 invocationPrefix: invocationPrefix
-            ).result
+            )
+            if decision.override == .allowOnce {
+                // Spent: this allow must reach the client even if the
+                // hook deadline passes during the remaining steps.
+                HookDeadline.current?.recordGrantSpent()
+            }
+            return decision.result
         }
     }
 
