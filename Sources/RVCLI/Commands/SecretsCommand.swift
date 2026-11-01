@@ -427,17 +427,38 @@ enum SecretsRun {
 
     static func scan(
         root: URL, configuration: SecretsConfiguration, environment: SecretsEnvironment
-    ) -> ScanReport {
+    ) -> Result<ScanReport, CommandFailure> {
+        let values: [(name: String, value: SecretValue)]
+        let skipped: [String]
+        switch scannableValues(configuration, environment: environment, skippedPrefix: "") {
+        case .failure(let failure): return .failure(failure)
+        case .success(let resolved): (values, skipped) = resolved
+        }
+        let report = SecretLeakScanner.scan(root: root, secrets: values)
+        return .success(ScanReport(findings: report.findings, skipped: skipped, tooLarge: report.tooLarge))
+    }
+
+    /// Values a leak scan looks for. Organization policy applies first: a
+    /// source it forbids is never resolved, and an invalid policy fails.
+    private static func scannableValues(
+        _ configuration: SecretsConfiguration, environment: SecretsEnvironment, skippedPrefix: String
+    ) -> Result<(values: [(name: String, value: SecretValue)], skipped: [String]), CommandFailure> {
+        if let reason = environment.managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid: \(reason)"))
+        }
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
+            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
+                skipped.append("\(skippedPrefix)\(secret.name): organization policy: \(reason)")
+                continue
+            }
             switch environment.resolver.resolve(secret.source) {
             case .success(let value): values.append((secret.name, value))
-            case .failure(let error): skipped.append("\(secret.name): \(error.message)")
+            case .failure(let error): skipped.append("\(skippedPrefix)\(secret.name): \(error.message)")
             }
         }
-        let report = SecretLeakScanner.scan(root: root, secrets: values)
-        return ScanReport(findings: report.findings, skipped: skipped, tooLarge: report.tooLarge)
+        return .success((values, skipped))
     }
 
     /// Human refusal when `rv secrets scan` is pointed at a file, not a directory.
@@ -621,13 +642,11 @@ enum SecretsRun {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): configuration = loaded
         }
-        var values: [(name: String, value: SecretValue)] = []
-        var skipped: [String] = []
-        for secret in configuration.secrets {
-            switch environment.resolver.resolve(secret.source) {
-            case .success(let value): values.append((secret.name, value))
-            case .failure(let error): skipped.append("could not check \(secret.name): \(error.message)")
-            }
+        let values: [(name: String, value: SecretValue)]
+        let skipped: [String]
+        switch scannableValues(configuration, environment: environment, skippedPrefix: "could not check ") {
+        case .failure(let failure): return .failure(failure)
+        case .success(let resolved): (values, skipped) = resolved
         }
         let report: SecretLeakReport
         switch SecretGitHook.scan(workTree: workTree, secrets: values) {
@@ -911,7 +930,11 @@ struct SecretsScan: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv secrets scan: \(failure.message)\n")
         case .success(let loaded): configuration = loaded
         }
-        let report = SecretsRun.scan(root: root, configuration: configuration, environment: environment)
+        let report: SecretsRun.ScanReport
+        switch SecretsRun.scan(root: root, configuration: configuration, environment: environment) {
+        case .failure(let failure): try ctx.fail("rv secrets scan: \(failure.message)\n")
+        case .success(let scanned): report = scanned
+        }
         let text = ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.scanText(report)
         if report.findings.isEmpty {
             ctx.writeStdout(text)

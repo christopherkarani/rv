@@ -206,10 +206,23 @@ enum AuditForwardRun {
         return .success("forwarded \(sent) events in \(batches) batch\(batches == 1 ? "" : "es") to \(options.url.absoluteString)\n")
     }
 
+    /// The endpoint to forward to. An invalid organization policy fails even
+    /// when `--to` names the endpoint, so a broken policy cannot be routed around.
+    static func target(to: String?, managed: ManagedPolicyState) -> Result<String, CommandFailure> {
+        if let reason = managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid: \(reason)"))
+        }
+        guard let target = to ?? managed.policy?.auditForward?.url else {
+            return .failure("pass --to URL (no audit.forward in the organization policy)")
+        }
+        return .success(target)
+    }
+
     /// `${secret:NAME}` in header values, resolved through secrets.json.
+    /// Organization policy applies before a value is read.
     static func resolveHeaders(
         _ headers: [String: String], secrets: () -> Result<SecretsConfiguration, SecretsConfigurationError>,
-        resolver: SecretResolver
+        resolver: SecretResolver, policy: ManagedPolicy?
     ) -> Result<[String: String], CommandFailure> {
         let names = Set(headers.values.flatMap { MCPSecretReference.names(in: $0) ?? [] })
         guard names.isEmpty == false else { return .success(headers) }
@@ -222,6 +235,9 @@ enum AuditForwardRun {
         for name in names.sorted() {
             guard let secret = configuration.secret(named: name) else {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
+            }
+            if let reason = SecretOrganizationRules.violation(secret, policy: policy) {
+                return .failure(CommandFailure("header secret \(DisplayedText.field(name)): organization policy: \(reason)"))
             }
             switch resolver.resolve(secret.source) {
             case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
@@ -302,11 +318,10 @@ struct AuditForward: AsyncParsableCommand {
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
         guard (1...5_000).contains(batchSize) else { try ctx.fail("rv audit forward: --batch-size must be 1-5000\n") }
         let managed = ManagedRun.installed(home: home)
-        if let reason = managed.invalidReason, to == nil {
-            try ctx.fail("rv audit forward: organization policy is invalid: \(reason)\n")
-        }
-        guard let target = to ?? managed.policy?.auditForward?.url else {
-            try ctx.fail("rv audit forward: pass --to URL (no audit.forward in the organization policy)\n")
+        let target: String
+        switch AuditForwardRun.target(to: to, managed: managed) {
+        case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
+        case .success(let resolved): target = resolved
         }
         var headerMap = to == nil ? managed.policy?.auditForward?.headers ?? [:] : [:]
         switch AuditForwardRun.parseHeaders(headers) {
@@ -349,7 +364,7 @@ struct AuditForward: AsyncParsableCommand {
         }
         switch AuditForwardRun.resolveHeaders(
             headerMap, secrets: { SecretsConfiguration.load(configDirectory: configDirectory) },
-            resolver: .live(home: home.rawValue))
+            resolver: .live(home: home.rawValue), policy: managed.policy)
         {
         case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
         case .success(let resolved): options.headers = resolved
