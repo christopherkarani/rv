@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Compile and run C JSON-escape unit tests. Not an SPM target.
 set -euo pipefail
+# Cases below pin the default fallback posture; an operator's own setting
+# must not leak in.
+unset RV_HOOK_WHEN_DOWN
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/Sources/rv-c"
@@ -50,6 +53,14 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
 
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
+  -o "$OUT/hook_fallback_test" \
+  "$SRC/tests/hook_fallback_test.c" \
+  "$SRC/json_escape.c" \
+  "$SRC/hook_fallback.c"
+"$OUT/hook_fallback_test"
+
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+  -I "$SRC" \
   -o "$OUT/evaluation_route_test" \
   "$SRC/tests/evaluation_route_test.c"
 # Shared vectors: the same file drives EvaluationRouteTests.sharedVectorsMatchC
@@ -77,6 +88,7 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/json_escape.c" \
   "$SRC/json_reply.c" \
   "$SRC/daemon_trust.c" \
+  "$SRC/hook_fallback.c" \
   "$SRC/rv.c"
 
 # Pipe hosts must match HookHost.setupSlotOrder. Invalid hosts exec rv-cli
@@ -245,6 +257,73 @@ if ! grep -q "rv-cli not found" "$BROKEN/err"; then
   printf "rv-c tests: broken-sibling operator argv must explain the missing sibling on stderr\n" >&2
   cat "$BROKEN/err" >&2
   exit 1
+fi
+
+# Daemon down: RV_HOOK_WHEN_DOWN rendering at the process boundary. Linux
+# points XDG_RUNTIME_DIR at an empty dir (ENOENT); Darwin relies on
+# dev.rv.evaluate being unregistered for this user and skips otherwise —
+# a live service must never be poked by unit tests.
+DOWN_ENV=()
+down_ready=1
+if [[ "$OS" == "Linux" ]]; then
+  mkdir -p "$OUT/empty-xdg"
+  DOWN_ENV=(XDG_RUNTIME_DIR="$OUT/empty-xdg")
+elif launchctl print "gui/$(id -u)/dev.rv.evaluate" >/dev/null 2>&1; then
+  down_ready=0
+  printf 'rv-c tests: dev.rv.evaluate is registered; skipping daemon-down cases\n'
+fi
+
+expect_down() {
+  local name="$1" host="$2" mode="$3" want_status="$4" marker="$5"
+  local st
+  rm -f "$OUT/down-$name.argv"
+  set +e
+  printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
+    | env ${DOWN_ENV[@]+"${DOWN_ENV[@]}"} ${mode:+RV_HOOK_WHEN_DOWN="$mode"} \
+      RV_C_ARGV_LOG="$OUT/down-$name.argv" "$PROBE/rv" hook --host "$host" \
+      >"$OUT/down-$name.json" 2>"$OUT/down-$name.err"
+  st=$?
+  set -e
+  if [[ "$st" -ne "$want_status" || -e "$OUT/down-$name.argv" ]]; then
+    printf 'rv-c tests: down %s expected exit %s without CLI, got %s\n' "$name" "$want_status" "$st" >&2
+    exit 1
+  fi
+  if [[ -z "$marker" ]]; then
+    if [[ -s "$OUT/down-$name.json" ]]; then
+      printf 'rv-c tests: down %s must print nothing\n' "$name" >&2
+      exit 1
+    fi
+  elif ! grep -q "$marker" "$OUT/down-$name.json" \
+    || ! grep -q 'RV daemon is not reachable' "$OUT/down-$name.json"; then
+    printf 'rv-c tests: down %s missing %s / unreachable reason\n' "$name" "$marker" >&2
+    cat "$OUT/down-$name.json" >&2
+    exit 1
+  fi
+}
+
+if [[ "$down_ready" -eq 1 ]]; then
+  expect_down claude-default claude "" 0 '"permissionDecision":"ask"'
+  expect_down claude-junk claude "bogus" 0 '"permissionDecision":"ask"'
+  expect_down cursor-default cursor "" 0 '"permission":"ask"'
+  expect_down claude-deny claude deny 0 '"permissionDecision":"deny"'
+  expect_down claude-allow claude allow 0 ''
+  expect_down codex-default codex "" 2 '"decision":"block"'
+  expect_down opencode-default opencode "" 1 '"decision":"deny"'
+  if [[ ! -s "$OUT/down-codex-default.err" ]]; then
+    printf 'rv-c tests: Codex down fallback requires blocking stderr\n' >&2
+    exit 1
+  fi
+  # Malformed input stays a deny even when the operator chose allow.
+  set +e
+  printf 'a\0b' | RV_HOOK_WHEN_DOWN=allow "$PROBE/rv" hook --host claude >"$OUT/input-allow.json" 2>/dev/null
+  st=$?
+  set -e
+  if [[ "$st" -ne 0 ]] || ! grep -q '"permissionDecision":"deny"' "$OUT/input-allow.json" \
+    || ! grep -q 'could not read this hook request' "$OUT/input-allow.json"; then
+    printf 'rv-c tests: malformed input must deny regardless of RV_HOOK_WHEN_DOWN\n' >&2
+    exit 1
+  fi
+  printf 'rv-c daemon-down fallback: ask/deny/allow rendering passed\n'
 fi
 
 printf 'rv-c hook fallback boundary: 9 host denial cases and oversized input passed\n'
