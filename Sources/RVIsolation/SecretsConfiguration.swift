@@ -84,6 +84,10 @@ public struct SecretDefinition: Sendable, Equatable {
     public var delivery: SecretDelivery
     /// Varlock `@type`, when the secret was imported from a schema. Not a value.
     public var type: String?
+    /// From this instant the value is not delivered: launches fail and the gateway refuses.
+    public var expires: Date?
+    /// Gateway only: re-resolve from the provider this often while a runtime lives.
+    public var refresh: SecretRefreshInterval?
 
     public init(
         name: String,
@@ -91,7 +95,9 @@ public struct SecretDefinition: Sendable, Equatable {
         agents: [String]? = nil,
         source: SecretSource,
         delivery: SecretDelivery,
-        type: String? = nil
+        type: String? = nil,
+        expires: Date? = nil,
+        refresh: SecretRefreshInterval? = nil
     ) {
         self.name = name
         self.description = description
@@ -99,6 +105,8 @@ public struct SecretDefinition: Sendable, Equatable {
         self.source = source
         self.delivery = delivery
         self.type = type
+        self.expires = expires
+        self.refresh = refresh
     }
 
     func stages(forAgent agent: String?) -> Bool {
@@ -233,7 +241,8 @@ enum SecretsDecoding {
     static func secret(_ value: Any, index: Int) throws -> SecretDefinition {
         let place = "secrets[\(index)]"
         guard let object = value as? [String: Any] else { throw Failure("\(place) must be an object") }
-        try onlyKeys(object, ["name", "description", "agents", "source", "delivery", "type"], at: place)
+        try onlyKeys(
+            object, ["name", "description", "agents", "source", "delivery", "type", "expires", "refresh"], at: place)
         guard let name = object["name"] as? String, variable(name), reservedVariables.contains(name) == false else {
             throw Failure("\(place).name must be an environment variable name")
         }
@@ -260,8 +269,28 @@ enum SecretsDecoding {
         }
         let source = try self.source(object["source"], secret: name)
         let delivery = try self.delivery(object["delivery"], secret: name)
+        var expires: Date?
+        if let raw = object["expires"] {
+            guard let text = raw as? String, let date = SecretExpiry.parse(text) else {
+                throw Failure(
+                    "\(name).expires must be an ISO-8601 date (2026-12-31) or date-time with a zone (2026-12-31T18:00:00Z)")
+            }
+            expires = date
+        }
+        var refresh: SecretRefreshInterval?
+        if let raw = object["refresh"] {
+            guard let text = raw as? String, let interval = SecretRefreshInterval(text) else {
+                throw Failure("\(name).refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m")
+            }
+            guard case .gateway = delivery else {
+                throw Failure(
+                    "\(name).refresh applies to gateway delivery; a value in the environment cannot change after launch")
+            }
+            refresh = interval
+        }
         return SecretDefinition(
-            name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName)
+            name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName,
+            expires: expires, refresh: refresh)
     }
 
     static func single(_ value: Any?, secret: String, field: String) throws -> (String, [String: Any]) {
