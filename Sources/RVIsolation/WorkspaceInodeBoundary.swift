@@ -106,12 +106,12 @@ func workspacePublishDecision(
 ///
 /// The lock serializes number assignment, not fd lifetime: a number read
 /// under the lock can be closed (and its value reused) by teardown before
-/// the reader's `fstat`/`dup`/`openat` runs. Readers must therefore be
-/// externally serialized against close/detach. Today that holds: launch
-/// reads under the supervisor state lock that close also takes, and
-/// `heldDescriptors`/`savedFileData` have no production callers outside
-/// that discipline. A future concurrent reader must pin lifetime (dup
-/// under the lock) instead of trusting a bare number.
+/// the reader's `fstat`/`openat` runs. The path walkers (`savedParent`,
+/// `volumeParent`) therefore dup under the lock and work on their own fd.
+/// Other bare-number readers must be externally serialized against
+/// close/detach. Today that holds: launch reads under the supervisor state
+/// lock that close also takes, and `heldDescriptors`/`savedFileData` have
+/// no production callers outside that discipline.
 private struct BoundaryMutable: Sendable {
     var volumeFD: Int32
     var savedFD: Int32
@@ -901,7 +901,7 @@ final class WorkspaceInodeBoundary: Sendable {
     private func savedParent(_ relative: String) -> (fd: Int32, name: String)? {
         let parts = relative.split(separator: "/").map(String.init)
         guard let name = parts.last else { return nil }
-        var current = dup(mutable.withLock { $0.savedFD })
+        var current = mutable.withLock { dup($0.savedFD) }
         guard current >= 0 else { return nil }
         var walked = ""
         for part in parts.dropLast() {
@@ -949,7 +949,7 @@ final class WorkspaceInodeBoundary: Sendable {
     private func volumeParent(_ relative: String) -> (fd: Int32, name: String)? {
         let parts = relative.split(separator: "/").map(String.init)
         guard let name = parts.last else { return nil }
-        var current = dup(mutable.withLock { $0.volumeFD })
+        var current = mutable.withLock { dup($0.volumeFD) }
         guard current >= 0 else { return nil }
         for part in parts.dropLast() {
             let next = openatWithinCopyClock(
@@ -1143,12 +1143,13 @@ enum OrphanedSavedRecovery: Equatable, Sendable {
 }
 
 /// Find a `.rv-saved-*` sibling whose orphan marker names this
-/// workspace and put it back. Blocked when the marker is ambiguous or
-/// the workspace name now holds a non-empty directory: never clobber.
+/// workspace and put it back. Blocked when the marker is ambiguous, the
+/// workspace name now holds a non-empty directory (never clobber), or the
+/// parent cannot be listed: an orphan that cannot be ruled out fails closed.
 func recoverOrphanedSavedTree(at workspacePath: String) -> OrphanedSavedRecovery {
     let parent = (workspacePath as NSString).deletingLastPathComponent
     guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent) else {
-        return .none
+        return .blocked
     }
     var matches: [String] = []
     for name in names where name.hasPrefix(".rv-saved-") {
@@ -1624,9 +1625,11 @@ private func fstatatObservingCopyClock(_ dirfd: Int32, _ name: String) -> Clocke
     )
     if let allowance, allowance <= 0 { return .stopped }
     let box = TreeStatBox()
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    let ok = diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let stated = name.withCString {
             fstatat(copy, $0, &box.status, AT_SYMLINK_NOFOLLOW) == 0
         }
@@ -1651,9 +1654,11 @@ private func fchmodWithinCopyClock(_ fd: Int32, _ mode: mode_t) -> Bool? {
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
-    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    return diskImageWaitForStat(
+        duplicating: fd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let changed = fchmod(copy, mode) == 0
         close(copy)
         return changed
@@ -1666,9 +1671,11 @@ private func fstatWithinCopyClock(_ fd: Int32) -> stat? {
     )
     if let allowance, allowance <= 0 { return nil }
     let box = TreeStatBox()
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImageWaitForStat(
+        duplicating: fd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let stated = fstat(copy, &box.status) == 0
         close(copy)
         return stated
@@ -1684,9 +1691,11 @@ private func ownersIgnoredWithinCopyClock(_ dirfd: Int32) -> Bool? {
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    let ok = diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         var status = statfs()
         let stated = fstatfs(copy, &status) == 0
         close(copy)
@@ -1707,9 +1716,11 @@ private func readlinkWithinCopyClock(_ dirfd: Int32, _ name: String) -> String? 
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    let ok = diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         var buffer = [CChar](repeating: 0, count: 4096)
         let count = name.withCString { readlinkat(copy, $0, &buffer, buffer.count - 1) }
         close(copy)
@@ -1729,9 +1740,11 @@ private func symlinkWithinCopyClock(_ dirfd: Int32, _ name: String, _ target: St
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
-    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    return diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let linked = name.withCString { item in
             target.withCString { link in
                 symlinkat(link, copy, item) == 0
@@ -1747,9 +1760,11 @@ private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
-    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    return diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let created = name.withCString { mkdirat(copy, $0, mode) == 0 }
         close(copy)
         return created
@@ -1772,9 +1787,11 @@ private func openatOutcomeWithinCopyClock(
     )
     if let allowance, allowance <= 0 { return (-1, false) }
     let box = TreeFDBox()
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    let ok = diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let fd = name.withCString { openat(copy, $0, flags, mode) }
         close(copy)
         box.fd = fd
@@ -1974,9 +1991,11 @@ private func unlinkatWithinCopyClock(_ dirfd: Int32, _ name: String, _ flags: In
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
-    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    return diskImageWaitForStat(
+        duplicating: dirfd,
+        allowance: allowance,
+        liveDeadline: { treeSyscallLiveStop() }
+    ) { copy in
         let removed = name.withCString { unlinkat(copy, $0, flags) == 0 }
         close(copy)
         return removed
