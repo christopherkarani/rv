@@ -224,6 +224,121 @@ struct SecretsCommandTests {
             == .failure("GH reads from host $GH; rv secrets set only stores values it reads from rv.secrets"))
     }
 
+    @Test func setStoresExpiryAndRefreshAndUpdatesThemWhenTheValueRotates() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let now = try #require(SecretExpiry.parse("2026-11-01T12:00:00Z"))
+        let gateway = SecretsRun.Definition.gateway(
+            upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: "")
+        let december = try #require(SecretExpiry.parse("2026-12-31"))
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: gateway, agents: [], description: nil,
+            environment: environment, expires: .some(december), refresh: .some(SecretRefreshInterval("15m")), now: now
+        ).get()
+        var secret = try #require(try SecretsRun.configuration(environment).get().secret(named: "ACME_KEY"))
+        #expect(secret.expires == december)
+        #expect(secret.refresh?.text == "15m")
+
+        // Rotating the value may move the expiry; flags left out keep what is on file.
+        let january = try #require(SecretExpiry.parse("2027-01-31T09:00:00Z"))
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-87654321".utf8), definition: nil, agents: [], description: nil,
+            environment: environment, expires: .some(january), now: now
+        ).get()
+        secret = try #require(try SecretsRun.configuration(environment).get().secret(named: "ACME_KEY"))
+        #expect(secret.expires == january)
+        #expect(secret.refresh?.text == "15m")
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-87654321".utf8))
+
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-87654321".utf8), definition: nil, agents: [], description: nil,
+            environment: environment, expires: .some(nil), refresh: .some(nil), now: now
+        ).get()
+        secret = try #require(try SecretsRun.configuration(environment).get().secret(named: "ACME_KEY"))
+        #expect(secret.expires == nil)
+        #expect(secret.refresh == nil)
+
+        let past = try #require(SecretExpiry.parse("2026-10-31"))
+        #expect(SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-0000".utf8), definition: nil, agents: [], description: nil,
+            environment: environment, expires: .some(past), now: now)
+            == .failure("--expires 2026-10-31 is already past"))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-87654321".utf8))
+        guard case .failure(let failure) = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: environment, refresh: .some(SecretRefreshInterval("1h")), now: now)
+        else {
+            Issue.record("refresh must be refused for environment delivery")
+            return
+        }
+        #expect(failure.message.contains("refresh applies to gateway delivery"))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == nil)
+    }
+
+    @Test func expiresAndRefreshFlagsParseStrictly() throws {
+        #expect(SecretsRun.expiry(nil) == .success(nil))
+        #expect(SecretsRun.expiry("none") == .success(.some(nil)))
+        #expect(SecretsRun.expiry("2026-12-31") == .success(.some(SecretExpiry.parse("2026-12-31"))))
+        #expect(SecretsRun.expiry("12/31/2026") == .failure(
+            "--expires must be an ISO-8601 date (2026-12-31), a date-time with a zone (2026-12-31T18:00:00Z), or none"))
+        #expect(SecretsRun.refresh(nil) == .success(nil))
+        #expect(SecretsRun.refresh("none") == .success(.some(nil)))
+        #expect(SecretsRun.refresh("15m") == .success(.some(SecretRefreshInterval("15m"))))
+        #expect(SecretsRun.refresh("10s") == .failure(
+            "--refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m, or none"))
+
+        let parsed = try SecretsSet.parse(["ACME_KEY", "--expires", "2026-12-31", "--refresh", "15m"])
+        #expect(parsed.expires == "2026-12-31")
+        #expect(parsed.refresh == "15m")
+        #expect(throws: (any Error).self) { try SecretsSet.parse(["ACME_KEY", "--expires", "soon"]) }
+        #expect(throws: (any Error).self) { try SecretsSet.parse(["ACME_KEY", "--refresh", "5s"]) }
+        #expect(throws: (any Error).self) { try SecretsSet.parse(["ACME_KEY", "--environment", "--refresh", "15m"]) }
+    }
+
+    @Test func listAndDescribeShowExpiryAndWarnWithinAWeek() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let now = try #require(SecretExpiry.parse("2026-11-01T12:00:00Z"))
+        for (name, expires) in [("SOON", "2026-11-04"), ("LATER", "2026-12-31"), ("TODAY", "2026-11-02")] {
+            let gateway = SecretsRun.Definition.gateway(
+                upstream: "https://api.acme.example", baseURLEnv: "\(name)_URL", placeholderPrefix: "")
+            _ = try SecretsRun.set(
+                name: name, value: Data("value-12345678".utf8), definition: gateway, agents: [], description: nil,
+                environment: environment, expires: .some(SecretExpiry.parse(expires)),
+                refresh: name == "SOON" ? .some(SecretRefreshInterval("15m")) : nil, now: now
+            ).get()
+        }
+        _ = try SecretsRun.set(
+            name: "GONE", value: Data("value-12345678".utf8), definition: .environment, agents: [], description: nil,
+            environment: environment, now: now
+        ).get()
+        var configuration = try SecretsRun.configuration(environment).get()
+        configuration.secrets[3].expires = SecretExpiry.parse("2026-10-30")
+        _ = configuration.write(configDirectory: fixture.directory)
+
+        let report = SecretsRun.list(configuration, profiles: [], now: now)
+        #expect(report.secrets.map(\.expires) == ["2026-11-04", "2026-12-31", "2026-11-02", "2026-10-30"])
+        #expect(report.secrets.map(\.refresh) == ["15m", nil, nil, nil])
+        #expect(report.warnings == [
+            "SOON expires in 2 days (2026-11-04); rotate it with rv secrets set SOON --expires DATE",
+            "TODAY expires within a day (2026-11-02); rotate it with rv secrets set TODAY --expires DATE",
+            "GONE expired at 2026-10-30; launches that use it fail until it is rotated",
+        ])
+        let text = SecretsRun.listText(report)
+        #expect(text.contains("expires: 2026-11-04  refresh: 15m"))
+        #expect(text.contains("warning: SOON expires in 2 days"))
+
+        let described = SecretsRun.describe(configuration, now: now)
+        #expect(described.secrets.map(\.expires) == ["2026-11-04", "2026-12-31", "2026-11-02", "2026-10-30"])
+        #expect(described.warnings == report.warnings)
+        let describedText = SecretsRun.describeText(described)
+        #expect(describedText.contains("SOON  keychain  gateway\n  surfaces: header\n  allow: any method and path\n"
+            + "  expires: 2026-11-04\n  refresh: 15m\n"))
+        #expect(describedText.contains("warning: GONE expired at 2026-10-30"))
+    }
+
     @Test func listShowsSourcesDeliveryProfilesAndDanglingReferences() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
