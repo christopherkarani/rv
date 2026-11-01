@@ -357,25 +357,46 @@ enum BoundedProcess {
         _ executable: String,
         _ arguments: [String],
         environment: [String: String],
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30,
+        maximumOutputBytes: Int = 1_048_576,
+        input: [UInt8]? = nil
     ) -> Outcome? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
+        let stdin = input.map { _ in Pipe() }
+        process.standardInput = stdin ?? FileHandle.nullDevice
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
         process.standardError = err
-        let stdout = Collector()
-        let stderr = Collector()
+        let stdout = Collector(limit: maximumOutputBytes)
+        let stderr = Collector(limit: 1_048_576)
         // terminationHandler, not a GCD block: the global pool can starve
         // for longer than the deadline under full-suite parallel load, and
         // a finished child then looks like a timeout.
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
+        if let stdin, let input {
+            // Fed through a pipe, never a file. A detached writer keeps a
+            // child that does not read stdin from deadlocking the wait, and
+            // blocking SIGPIPE on that thread only turns an early child exit
+            // into EPIPE instead of killing rv.
+            let writer = stdin.fileHandleForWriting
+            #if canImport(Darwin)
+            _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+            #endif
+            Thread.detachNewThread {
+                var blocked = sigset_t()
+                sigemptyset(&blocked)
+                sigaddset(&blocked, SIGPIPE)
+                pthread_sigmask(SIG_BLOCK, &blocked, nil)
+                try? writer.write(contentsOf: Data(input))
+                try? writer.close()
+            }
+        }
         // Drain both pipes on dedicated threads while waiting: polling
         // isRunning plus a post-exit readDataToEndOfFile never observes the
         // exit under swift-corelibs, so a finished child looked like a
@@ -409,10 +430,12 @@ enum BoundedProcess {
 
     private final class Collector: @unchecked Sendable {
         private let lock = NSLock()
+        private let limit: Int
         private var data: [UInt8] = []
+        init(limit: Int) { self.limit = limit }
         func append(_ chunk: Data) {
             lock.lock()
-            if data.count < 1_048_576 { data.append(contentsOf: chunk.prefix(1_048_576 - data.count)) }
+            if data.count < limit { data.append(contentsOf: chunk.prefix(limit - data.count)) }
             lock.unlock()
         }
         var bytes: [UInt8] { lock.lock(); defer { lock.unlock() }; return data }
