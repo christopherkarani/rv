@@ -176,7 +176,8 @@ static int is_valid_host(const char *s) {
         || strcmp(s, "hermes") == 0
         || strcmp(s, "codex") == 0
         || strcmp(s, "cursor") == 0
-        || strcmp(s, "antigravity") == 0;
+        || strcmp(s, "antigravity") == 0
+        || strcmp(s, "muse") == 0;
 }
 
 /* 0 = pipe, 1 = exec rv-cli with the same argv. */
@@ -276,6 +277,9 @@ static void deny_hook(const char *host) {
         printf("{\"systemMessage\":\"%s\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", reason, reason);
     } else if (strcmp(host, "cursor") == 0) {
         printf("{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"RV blocked this command. Wait for the human.\"}\n", reason);
+    } else if (strcmp(host, "muse") == 0) {
+        /* Muse ignores generic decision JSON; only this probed shape blocks (exit 0). */
+        printf("{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", reason);
     } else {
         printf("{\"decision\":\"deny\",\"reason\":\"%s\"}\n", reason);
         if (strcmp(host, "grok") != 0 && strcmp(host, "antigravity") != 0) status = 1;

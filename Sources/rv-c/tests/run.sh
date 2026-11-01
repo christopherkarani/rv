@@ -81,18 +81,21 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
 
 # Pipe hosts must match HookHost.setupSlotOrder. Invalid hosts exec rv-cli
 # before the socket/XPC door, so a missing name is silent miss-as-operator.
-if ! awk '
-  /static int is_valid_host/,/^}/ { body = body $0 "\n" }
-  END {
-    n = split("grok pi opencode claude openclaw hermes codex cursor antigravity", want, " ")
-    for (i = 1; i <= n; i++) {
-      if (index(body, "\"" want[i] "\"") == 0) exit 1
-    }
-  }
-' "$SRC/rv.c"; then
-  printf "rv-c tests: is_valid_host must include every setupSlotOrder host\n" >&2
+# The list is read from Swift, never hardcoded here, so a new host cannot
+# land without the C front door (and its deny wire below) following it.
+HOSTS="$(awk '/static let setupSlotOrder/,/^[[:space:]]*\]/' "$ROOT/Sources/RVDomain/HookHost.swift" \
+  | grep -oE '\.[a-z]+' | tr -d . | LC_ALL=C sort | tr '\n' ' ')"
+C_HOSTS="$(awk '/static int is_valid_host/,/^}/' "$SRC/rv.c" \
+  | grep -oE 'strcmp\(s, "[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"' | LC_ALL=C sort | tr '\n' ' ')"
+if [[ -z "$HOSTS" ]]; then
+  printf "rv-c tests: could not read HookHost.setupSlotOrder\n" >&2
   exit 1
 fi
+if [[ "$HOSTS" != "$C_HOSTS" ]]; then
+  printf "rv-c tests: is_valid_host must equal HookHost.setupSlotOrder\n  swift: %s\n  c:     %s\n" "$HOSTS" "$C_HOSTS" >&2
+  exit 1
+fi
+HOST_COUNT=0
 
 if [[ "$OS" == "Darwin" ]]; then
   if otool -L "$OUT/rv" | grep -E 'Frameworks/Foundation\.framework|CFNetwork' >/dev/null; then
@@ -174,27 +177,45 @@ fi
 
 # Every host denies malformed input directly; an executable CLI sibling must
 # never receive authority-bearing fallback input.
-for host in grok pi opencode claude openclaw hermes codex cursor antigravity; do
+for host in $HOSTS; do
+  HOST_COUNT=$((HOST_COUNT + 1))
   log="$OUT/deny-$host.argv"
   rm -f "$log"
   set +e
   printf 'a\0b' | RV_C_ARGV_LOG="$log" "$PROBE/rv" hook --host "$host" >"$OUT/deny-$host.json" 2>"$OUT/deny-$host.err"
   status=$?
   set -e
-  expected=1
-  case "$host" in grok|claude|cursor|antigravity) expected=0 ;; codex) expected=2 ;; esac
+  case "$host" in
+    grok|claude|cursor|antigravity|muse) expected=0 ;;
+    codex) expected=2 ;;
+    pi|opencode|openclaw|hermes) expected=1 ;;
+    *)
+      printf 'rv-c tests: %s has no expected deny exit status; add it here\n' "$host" >&2
+      exit 1
+      ;;
+  esac
   if [[ "$status" -ne "$expected" || -e "$log" ]]; then
     printf 'rv-c tests: %s fallback must deny without invoking CLI\n' "$host" >&2
     exit 1
   fi
   case "$host" in
-    claude) marker='"permissionDecision":"deny"' ;;
+    claude|muse) marker='"permissionDecision":"deny"' ;;
     cursor) marker='"permission":"deny"' ;;
     codex) marker='"decision":"block"' ;;
-    *) marker='"decision":"deny"' ;;
+    grok|pi|opencode|openclaw|hermes|antigravity) marker='"decision":"deny"' ;;
+    *)
+      printf 'rv-c tests: %s has no known deny wire; add a deny_hook branch and marker\n' "$host" >&2
+      exit 1
+      ;;
   esac
   if ! grep -q "$marker" "$OUT/deny-$host.json"; then
     printf 'rv-c tests: %s missing host denial wire\n' "$host" >&2
+    exit 1
+  fi
+  # Muse honors only its probed minimal shape; a Claude-style systemMessage
+  # is not part of it.
+  if [[ "$host" == muse ]] && grep -q '"systemMessage"' "$OUT/deny-$host.json"; then
+    printf 'rv-c tests: Muse deny must not carry systemMessage\n' >&2
     exit 1
   fi
   if [[ "$host" == codex && ! -s "$OUT/deny-$host.err" ]]; then
@@ -247,4 +268,4 @@ if ! grep -q "rv-cli not found" "$BROKEN/err"; then
   exit 1
 fi
 
-printf 'rv-c hook fallback boundary: 9 host denial cases and oversized input passed\n'
+printf 'rv-c hook fallback boundary: %s host denial cases and oversized input passed\n' "$HOST_COUNT"
