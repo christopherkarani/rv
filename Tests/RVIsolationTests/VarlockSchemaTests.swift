@@ -416,6 +416,108 @@ struct VarlockSchemaTests {
         let parsed = VarlockSchema.plan("A=op(op://v/i/f)\nB=\"sk-live-unclosed\nC=1\n")
         #expect(parsed.failureMessage == "line 2 is not valid .env.schema syntax")
     }
+
+    // @proxy/@placeholder/@type semantics follow Varlock (MIT):
+    // decorators.ts:1063-1085, placeholder.ts:25-127, config-item.ts:700-717.
+    private static func gateway(_ upstream: String, _ baseURLEnv: String, _ prefix: String = "") -> SecretDelivery {
+        .gateway(SecretGatewayBinding(upstream: URL(string: upstream)!, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
+    }
+
+    @Test func proxyDomainBecomesGatewayDelivery() throws {
+        let plan = try VarlockSchema.plan("""
+            # @proxy(domain="API.Example.com") @type=string(startsWith=ak_)
+            ACME_KEY=op(op://Eng/Acme/key)
+            # @proxy(domain=api.anthropic.com)
+            ANTHROPIC_API_KEY=op(op://Eng/Anthropic/key)
+            # @proxy(domain=api.openai.com) @type=string(startsWith=sk-proj-)
+            OPENAI_API_KEY=op(op://Eng/OpenAI/key)
+            # @proxy(domain=openai.internal.example.com)
+            GITHUB_TOKEN=op(op://Eng/GitHub/token)
+            # @sensitive
+            PLAIN=op(op://Eng/Plain/key)
+            """).get()
+        let delivery = Dictionary(uniqueKeysWithValues: plan.secrets.map { ($0.name, $0.delivery) })
+        #expect(delivery["ACME_KEY"] == Self.gateway("https://api.example.com", "ACME_KEY_BASE_URL", "ak_"))
+        #expect(delivery["ANTHROPIC_API_KEY"] == Self.gateway("https://api.anthropic.com", "ANTHROPIC_BASE_URL", "sk-ant-"))
+        // A known name keeps its curated path when the domain matches; startsWith wins over the curated prefix.
+        #expect(delivery["OPENAI_API_KEY"] == Self.gateway("https://api.openai.com/v1", "OPENAI_BASE_URL", "sk-proj-"))
+        #expect(delivery["GITHUB_TOKEN"] == Self.gateway("https://openai.internal.example.com", "GITHUB_API_URL"))
+        #expect(delivery["PLAIN"] == .environment)
+        #expect(plan.notes.contains("note ACME_KEY: point the client at $ACME_KEY_BASE_URL; rv sends the value only to api.example.com"))
+        #expect(plan.notes.contains { $0.hasPrefix("note ANTHROPIC_API_KEY") } == false)
+    }
+
+    @Test func proxyMakesAnItemSensitive() throws {
+        let plan = try VarlockSchema.plan("""
+            # @defaultSensitive=false
+            # ---
+            # @public @proxy(domain=api.example.com)
+            ACME_KEY=op(op://Eng/Acme/key)
+            # @proxy=passthrough
+            PASSED=op(op://Eng/Passed/key)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["ACME_KEY"])
+        #expect(plan.notes.contains("skip PASSED: not sensitive"))
+    }
+
+    @Test func proxyValueFormsKeepOrWithholdTheValue() throws {
+        let plan = try VarlockSchema.plan("""
+            # @sensitive @proxy=passthrough
+            PASSED=op(op://Eng/Passed/key)
+            # @sensitive @proxy=omit
+            OMITTED=op(op://Eng/Omitted/key)
+            # @sensitive @proxy
+            BARE=op(op://Eng/Bare/key)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["PASSED"])
+        #expect(plan.secrets.first?.delivery == .environment)
+        #expect(plan.notes.contains("skip OMITTED: @proxy=omit withholds it from the agent"))
+        #expect(plan.notes.contains("skip BARE: @proxy needs domain=, passthrough, or omit"))
+    }
+
+    @Test func proxyDomainsAreStrictHttpsHosts() throws {
+        let rejected = [
+            "\"*.amazonaws.com\"", "10.0.0.1", "\"[::1]\"", "\"api.example.com:8443\"", "\"https://api.example.com\"",
+            "localhost", "\"api.example.com/v1\"", "\"api.example.com.\"", "\"-bad.example.com\"", "\"api.exämple.com\"",
+            "$HOST",
+        ]
+        for domain in rejected {
+            let plan = try VarlockSchema.plan("""
+                # @proxy(domain=\(domain))
+                KEY=op(op://Eng/Key/key)
+                """).get()
+            #expect(plan.secrets.isEmpty, "\(domain) should not import")
+            #expect(plan.notes.count == 1)
+            #expect(plan.notes.first?.contains("api.example") == false, "a rejected domain is never echoed")
+        }
+    }
+
+    @Test func proxyKeepsTheFirstDomainAndNotesWhatRvDrops() throws {
+        let plan = try VarlockSchema.plan("""
+            # @proxy(domain=[api.a.example, api.b.example], path="/v1/**", method=POST)
+            # @proxy(domain=api.c.example)
+            # @placeholder=ak_test_000 @type=string(startsWith="ak.", endsWith=_x)
+            ACME_KEY=op(op://Eng/Acme/key)
+            """).get()
+        let secret = try #require(plan.secrets.first)
+        #expect(secret.delivery == Self.gateway("https://api.a.example", "ACME_KEY_BASE_URL"))
+        #expect(plan.notes.contains("note ACME_KEY: rv sends to api.a.example only; 2 more @proxy domains are not carried over"))
+        #expect(plan.notes.contains("note ACME_KEY: @proxy options method, path are not carried over; the gateway allows any method and path"))
+        #expect(plan.notes.contains("note ACME_KEY: @placeholder is not carried over; rv makes a fresh placeholder each launch"))
+        #expect(plan.notes.contains("note ACME_KEY: @type startsWith is not a usable placeholder prefix (up to 32 of A-Z a-z 0-9 _ -)"))
+        #expect(plan.notes.contains("note ACME_KEY: @type endsWith/isLength do not shape rv's placeholder"))
+    }
+
+    @Test func importedSecretsNeverExportTheSameVariable() throws {
+        let plan = try VarlockSchema.plan("""
+            # @proxy(domain=api.example.com)
+            ACME=op(op://Eng/Acme/key)
+            # @sensitive
+            ACME_BASE_URL=op(op://Eng/Acme/url)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["ACME"])
+        #expect(plan.notes.contains("skip ACME_BASE_URL: another imported secret already sets $ACME_BASE_URL"))
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {

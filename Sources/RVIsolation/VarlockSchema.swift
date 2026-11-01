@@ -41,6 +41,7 @@ public enum VarlockSchema {
         }
         var plan = VarlockImportPlan()
         var seen = Set<String>()
+        var exported = Set<String>()
         for item in document.items {
             guard seen.insert(item.name).inserted else {
                 plan.notes.append("skip \(item.name): named more than once; kept the first")
@@ -49,6 +50,12 @@ public enum VarlockSchema {
             switch definition(item, inits: document.inits, defaultSensitive: document.defaultSensitive) {
             case .skip(let reason): plan.notes.append("skip \(item.name): \(reason)")
             case .secret(let secret, let notes):
+                // secrets.json refuses two secrets setting one variable.
+                if let taken = secret.exportedVariables.first(where: exported.contains) {
+                    plan.notes.append("skip \(item.name): another imported secret already sets $\(taken)")
+                    continue
+                }
+                exported.formUnion(secret.exportedVariables)
                 plan.secrets.append(secret)
                 plan.notes += notes.map { "note \(item.name): \($0)" }
             }
@@ -318,11 +325,12 @@ public enum VarlockSchema {
         guard let target = reference(value) else { return .skip("literal value not copied") }
         do {
             let resolved = try source(item, target, inits: inits)
+            let routed = try delivery(item)
             return .secret(
                 SecretDefinition(
-                    name: item.name, description: description, source: resolved.source, delivery: .environment,
+                    name: item.name, description: description, source: resolved.source, delivery: routed.delivery,
                     type: type),
-                notes: notes + resolved.notes + [droppedSensitiveOptions(item)].compactMap { $0 })
+                notes: notes + resolved.notes + routed.notes + [droppedSensitiveOptions(item)].compactMap { $0 })
         } catch {
             return .skip(error.reason)
         }
@@ -549,10 +557,110 @@ public enum VarlockSchema {
         name.lowercased().replacingOccurrences(of: "_", with: "-")
     }
 
+    /// Item-attached `@proxy(domain=...)` (decorators.ts:1063-1085) becomes
+    /// gateway delivery: the agent holds a placeholder and rv sends the value
+    /// only to that host. `@proxy=passthrough` and no `@proxy` stay
+    /// environment delivery; `@proxy=omit` keeps the value from the agent.
+    private static func delivery(_ item: Item) throws(Skip) -> (delivery: SecretDelivery, notes: [String]) {
+        var rules: [[EnvSpec.Argument]] = []
+        var passthrough = false
+        for decorator in item.decorators where decorator.name == "proxy" {
+            switch decorator.form {
+            case .call(let arguments): rules.append(arguments)
+            case .value(let value) where literal(value) == "passthrough": passthrough = true
+            case .value(let value) where literal(value) == "omit": throw Skip("@proxy=omit withholds it from the agent")
+            default: throw Skip("@proxy needs domain=, passthrough, or omit")
+            }
+        }
+        guard rules.isEmpty == false else { return (.environment, []) }
+        guard passthrough == false else { throw Skip("@proxy cannot both route and pass through") }
+        var domains: [String] = []
+        var dropped = Set<String>()
+        for arguments in rules {
+            for argument in arguments {
+                guard argument.key == "domain" else {
+                    dropped.insert(argument.key ?? "positional")
+                    continue
+                }
+                let values = if case .array(let list) = argument.value { list } else { [argument.value] }
+                for value in values {
+                    guard let text = literal(value) else { throw Skip("@proxy domain is a reference rv cannot resolve") }
+                    domains.append(text)
+                }
+            }
+        }
+        // Rejected text is never echoed: it comes from the repo, not the user.
+        guard let first = domains.first else { throw Skip("@proxy has no domain") }
+        guard let host = proxyHost(first) else {
+            throw Skip("@proxy domain is not a plain DNS host (no wildcard, IP, port, scheme, or path)")
+        }
+        let known = KnownSecretDefaults.gateway(for: item.name)
+        let curated = known.flatMap { URL(string: $0.upstream)?.host == host ? $0.upstream : nil }
+        let baseURLEnv = known?.baseURLEnv ?? item.name + "_BASE_URL"
+        guard let upstream = SecretsDecoding.httpsUpstream(curated ?? "https://" + host),
+            SecretsDecoding.variable(baseURLEnv)
+        else { throw Skip("name is too long for a gateway base-URL variable") }
+        var notes: [String] = []
+        var prefix = known?.placeholderPrefix ?? ""
+        if known == nil {
+            notes.append("point the client at $\(baseURLEnv); rv sends the value only to \(host)")
+        }
+        if domains.count > 1 {
+            notes.append("rv sends to \(host) only; \(domains.count - 1) more @proxy domain\(domains.count == 2 ? " is" : "s are") not carried over")
+        }
+        if dropped.isEmpty == false {
+            notes.append(
+                "@proxy options \(dropped.sorted().joined(separator: ", ")) are not carried over; the gateway allows any method and path")
+        }
+        if item.decorators.contains(where: { $0.name == "placeholder" }) {
+            notes.append("@placeholder is not carried over; rv makes a fresh placeholder each launch")
+        }
+        if let startsWith = typeOption(item, "startsWith"), startsWith.isEmpty == false {
+            if startsWith.utf8.count <= 32, startsWith.utf8.allSatisfy(SecretsDecoding.placeholderByte) {
+                prefix = startsWith
+            } else {
+                notes.append("@type startsWith is not a usable placeholder prefix (up to 32 of A-Z a-z 0-9 _ -)")
+            }
+        }
+        if typeOption(item, "endsWith") != nil || typeOption(item, "isLength") != nil {
+            notes.append("@type endsWith/isLength do not shape rv's placeholder")
+        }
+        return (.gateway(SecretGatewayBinding(upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix)), notes)
+    }
+
+    /// A lowercase DNS name of two or more labels. rv binds one https origin,
+    /// so wildcards, IP literals, ports, schemes, and paths are refused.
+    private static func proxyHost(_ text: String) -> String? {
+        let host = text.lowercased()
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard host.utf8.count <= 253, labels.count >= 2,
+            labels.allSatisfy({ label in
+                (1...63).contains(label.utf8.count) && label.first != "-" && label.last != "-"
+                    && label.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
+            }),
+            labels.last?.allSatisfy(\.isNumber) == false
+        else { return nil }
+        return host
+    }
+
+    /// A static named option of the item's `@type=kind(...)`, such as `startsWith`.
+    private static func typeOption(_ item: Item, _ key: String) -> String? {
+        guard let type = item.decorators.last(where: { $0.name == "type" }),
+            case .value(.call(_, let arguments)) = type.form
+        else { return nil }
+        return arguments.first { $0.key == key }.flatMap { literal($0.value) }
+    }
+
     /// The first `@sensitive` or `@public` decides (config-item.ts:724-765);
     /// `@public=false` means sensitive. A value rv cannot evaluate, such as
     /// `forEnv(prod)`, counts as sensitive: importing only hands it to rv.
     private static func isSensitive(_ item: Item, defaultSensitive: Sensitivity) -> Bool {
+        // A routed `@proxy(...)` item is always sensitive (config-item.ts:704-717).
+        if item.decorators.contains(where: { decorator in
+            if case .call = decorator.form { decorator.name == "proxy" } else { false }
+        }) {
+            return true
+        }
         if let explicit = item.decorators.first(where: { $0.name == "sensitive" || $0.name == "public" }) {
             let enabled: Bool? = if case .value(.object(let options)) = explicit.form {
                 options.first { $0.key == "enabled" }.flatMap { literal($0.value) } != "false"
