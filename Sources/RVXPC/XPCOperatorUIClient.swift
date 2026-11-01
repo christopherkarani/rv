@@ -25,7 +25,7 @@ public final class XPCOperatorUIClient: Sendable {
         var connecting: Task<xpc_connection_t, Error>?
     }
 
-    public init(serviceName: String = RVService.machServiceName) {
+    public init(serviceName: String = RVMachService.name) {
         self.serviceName = serviceName
         self.state = Mutex(ClientState())
     }
