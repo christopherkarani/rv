@@ -135,3 +135,40 @@ a response with a body still carries a `Content-Encoding` other than
 Not covered: double encodings (percent inside JSON, base64 of an escaped
 value), hex, HTML entities, and payloads that are themselves archives
 (`application/zip`, `application/gzip`).
+
+## Audit
+
+Every gateway request writes `secret.use` events to `audit.jsonl`. None of
+them carries the value, the placeholder, or the query string.
+
+- A forwarded request is recorded twice: `event: forward` before it leaves
+  rv, and `event: request` with the outcome. **If the forward record cannot
+  be appended, the request is not forwarded.** The agent gets `503` ("the
+  audit log could not record this request").
+- `detail.activity` is one of:
+
+  | activity   | meaning                                                         | decision |
+  |------------|-----------------------------------------------------------------|----------|
+  | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
+  | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable | denied |
+  | `error`    | forwarded, but no upstream response arrived                     | failed   |
+
+- Other `detail` fields: `refusal` (code), `method`, `path` (placeholders
+  redacted, a percent-encoded placeholder decoded and then redacted),
+  `surfaces` the value was placed on, `status` sent to the agent,
+  `upstreamStatus` (it differs after the 401 to 502 rewrite or a refused
+  compressed response), `durationMs`, `upstream`, and the value's
+  `fingerprint`.
+
+A `blocked` request also writes a `secret.misuse` event with
+`detail.severity: high`: the refusal code, method, and redacted path. The
+codes are `foreignPlaceholder`, `surfaceNotAllowed`, `repeatedPlaceholder`,
+`outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, and
+`echoMethod`. A client using its placeholder as configured never triggers
+one, so it usually means a prompt-injected agent is probing. In
+`--format ocsf` it is a Detection Finding (2004), severity High,
+`is_alert: true`. `rv audit --kind secret` shows both kinds.
+
+`rv secrets list` and `rv secrets describe` show each gateway secret's
+surfaces and allow rules (`allow: any method and path` when it has none).
