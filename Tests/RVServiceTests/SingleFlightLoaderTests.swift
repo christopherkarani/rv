@@ -16,10 +16,16 @@ struct SingleFlightLoaderTests {
         let outcomes = await withTaskGroup(of: Box?.self) { group in
             for _ in 0..<6 {
                 group.addTask {
-                    let outcome = loader.value(key: key, stamp: 1, wait: .seconds(10)) {
-                        makes.hit()
-                        gate.wait()
-                        return Box(id: 7)
+                    // `value` blocks its caller until the load lands. Call it
+                    // off the cooperative pool, as rvd does: six blocked pool
+                    // threads would starve the release below (and every other
+                    // test in the process) on a small CI runner.
+                    let outcome = await JudgeOffload.run {
+                        loader.value(key: key, stamp: 1, wait: .seconds(10)) {
+                            makes.hit()
+                            gate.wait()
+                            return Box(id: 7)
+                        }
                     }
                     if case .ready(let box) = outcome { return box }
                     return nil
