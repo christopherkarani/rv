@@ -296,6 +296,35 @@ struct MCPHostSetupTests {
         #expect(try MCPHostSetup.undo(host: .claudeCode, servers: nil, configDirectory: box.config).get().changed.isEmpty)
     }
 
+    @Test func setupAndUndoBackUpEachReplacedVersionAndKeepLayout() throws {
+        let box = Sandbox()
+        let original = #"{"zeta": 1.0, "big": 12345678901234567890, "mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let file = try box.write(".cursor/mcp.json", original)
+        let backups = {
+            try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
+                .filter { $0.hasPrefix("mcp.json.rv-backup-") }
+                .map { file.deletingLastPathComponent().appendingPathComponent($0).path }
+        }
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        let setupBackup = try #require(result.backups.first)
+        #expect(result.backups.count == 1)
+        #expect(try backups() == [setupBackup])
+        #expect(FileManager.default.contents(atPath: setupBackup) == Data(original.utf8))
+        let routed = try String(contentsOf: file, encoding: .utf8)
+        #expect(routed.hasPrefix("{\n  \"zeta\": 1.0,\n  \"big\": 12345678901234567890,\n  \"mcpServers\""))
+
+        let undone = try MCPHostSetup.undo(host: .cursor, servers: nil, configDirectory: box.config).get()
+        let undoBackup = try #require(undone.backups.first)
+        #expect(undoBackup != setupBackup)
+        #expect(Set(try backups()) == [setupBackup, undoBackup])
+        #expect(FileManager.default.contents(atPath: setupBackup) == Data(original.utf8))
+        #expect(FileManager.default.contents(atPath: undoBackup) == Data(routed.utf8))
+    }
+
     @Test func undoLeavesEntriesTheUserChanged() throws {
         let box = Sandbox()
         let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)

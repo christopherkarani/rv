@@ -256,6 +256,8 @@ public struct MCPSetupResult: Sendable, Equatable {
     public var changed: [String] = []
     public var skipped: [String] = []
     public var manualSteps: [String] = []
+    /// Copies of host config files taken before rv rewrote them.
+    public var backups: [String] = []
 }
 
 public enum MCPSetupError: Error, Sendable, Equatable {
@@ -352,7 +354,7 @@ public enum MCPHostSetup {
                     return .failure(.writeFailed(file.path.path))
                 }
                 guard saveManifest(records, configDirectory) else { return .failure(.manifest("could not save")) }
-                guard writePreservingMode(Data(updated.prettyText.utf8), to: file.path) else {
+                guard writePreservingMode(Data(updated.prettyText.utf8), to: file.path, backups: &result.backups) else {
                     return .failure(.writeFailed(file.path.path))
                 }
             }
@@ -397,7 +399,7 @@ public enum MCPHostSetup {
                 changed = true
                 result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
             }
-            if changed, writePreservingMode(Data(root.prettyText.utf8), to: url) == false {
+            if changed, writePreservingMode(Data(root.prettyText.utf8), to: url, backups: &result.backups) == false {
                 return .failure(.writeFailed(path))
             }
         }
@@ -430,9 +432,17 @@ public enum MCPHostSetup {
     }
 
     /// Temp file + rename in the same directory, keeping the original mode.
-    static func writePreservingMode(_ data: Data, to url: URL) -> Bool {
+    /// The replaced bytes are kept first (`ConfigBackup`); that copy's path
+    /// is appended to `backups`.
+    static func writePreservingMode(_ data: Data, to url: URL, backups: inout [String]) -> Bool {
         var info = stat()
         let mode = lstat(url.path, &info) == 0 ? info.st_mode & 0o777 : 0o600
+        let backup: String?
+        do {
+            backup = try ConfigBackup.preserve(url.path, before: data)
+        } catch {
+            return false
+        }
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).rv-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: mode]),
             rename(temporary.path, url.path) == 0
@@ -440,6 +450,7 @@ public enum MCPHostSetup {
             unlink(temporary.path)
             return false
         }
+        if let backup { backups.append(backup) }
         return true
     }
 

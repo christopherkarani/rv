@@ -91,6 +91,7 @@ struct MCPCommandTests {
             host: .cursor, names: [], project: nil, undo: false, rvPath: rv.path, environment: fixture.environment()
         ).get()
         #expect(setup.contains("routed through rv: github"))
+        #expect(setup.contains("previous version kept at \(fixture.home.appendingPathComponent(".cursor/mcp.json").path).rv-backup-"))
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)

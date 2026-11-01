@@ -163,7 +163,7 @@ private func backups(of path: String) throws -> [String] {
     #expect(try backups(of: path).isEmpty)
 }
 
-@Test func sharedConfig_backupKeepsOriginalMode() throws {
+@Test func sharedConfig_backupIsOwnerOnlyAndLiveFileKeepsMode() throws {
     let directory = try scratchDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let path = directory.appendingPathComponent("opencode.json").path
@@ -173,6 +173,7 @@ private func backups(of path: String) throws -> [String] {
     let backup = try #require(try files.writeData(Data("v2".utf8), to: path))
     let backupMode = try FileManager.default.attributesOfItem(atPath: backup)[.posixPermissions] as? NSNumber
     let mode = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
-    #expect(backupMode?.intValue == 0o640)
+    // Host configs can hold credentials `rv mcp import` moved out; the copy is 0600.
+    #expect(backupMode?.intValue == 0o600)
     #expect(mode?.intValue == 0o640)
 }
