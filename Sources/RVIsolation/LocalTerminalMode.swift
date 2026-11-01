@@ -197,8 +197,9 @@ private enum LocalTerminalSignal {
 }
 
 /// Reads one file descriptor on `rv-terminal-stdin` and writes those bytes
-/// to the runtime. `WorkspaceTerminalSession` starts one while it owns the
-/// runtime's input, so the CLI module stays free of classes.
+/// to the runtime. `rv workspace run` and `WorkspaceTerminalSession` each
+/// start one while they own the runtime's input. It lives here so the CLI
+/// module stays free of classes.
 public final class TerminalStdinBridge: Sendable {
     private let client: WorkspaceClient
     private let runtime: UUID
