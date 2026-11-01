@@ -53,6 +53,12 @@ struct MachineConfigJSONConcurrencyTests {
         let attrs = try FileManager.default.attributesOfItem(atPath: lockURL.path)
         #expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
+
+    @Test func uninstallArtifactsIncludeConfigLock() {
+        let root = URL(fileURLWithPath: "/tmp/rv-config", isDirectory: true)
+        let lockURL = MachineConfigJSON.lockURL(for: root.appendingPathComponent("config.json"))
+        #expect(RVPolicyPaths.uninstallArtifacts(inConfigDir: root).contains(lockURL))
+    }
 }
 
 private final class FailureCounter: @unchecked Sendable {

@@ -31,7 +31,7 @@ enum MachineConfigJSON {
         }
     }
 
-    static func write(_ root: [String: JSONValue], to file: URL) throws {
+    private static func write(_ root: [String: JSONValue], to file: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         guard let data = try? encoder.encode(JSONValue.object(root)) else {
