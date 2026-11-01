@@ -126,6 +126,47 @@ struct SecretsConfigurationTests {
         #expect(invalidReason(gatewayJSON(#","surfaces":["Header"]"#)) == refusal)
     }
 
+    @Test func gatewayAllowRulesDecodeExpandAndRoundTrip() throws {
+        #expect(try binding(gatewayJSON("")).allow.isEmpty)
+        let json = gatewayJSON(
+            #","allow":["github-clone",{"methods":["POST","GET"],"path":"/graphql"},{"methods":"*","path":"/v1/**"}]"#)
+        let scoped = try binding(json)
+        #expect(scoped.allow == [
+            .preset(.githubClone),
+            .rule(try #require(GatewayAccessRule(methods: ["GET", "POST"], path: "/graphql"))),
+            .rule(try #require(GatewayAccessRule(methods: nil, path: "/v1/**"))),
+        ])
+        #expect(scoped.rules.count == 4)
+        let configuration = try decode(json).get()
+        let encoded = String(decoding: configuration.encoded(), as: UTF8.self)
+        #expect(encoded.contains(#""github-clone""#))
+        #expect(try SecretsConfiguration.decode(configuration.encoded()).get() == configuration)
+        let plain = String(decoding: try decode(gatewayJSON("")).get().encoded(), as: UTF8.self)
+        #expect(plain.contains("allow") == false)
+    }
+
+    @Test func gatewayAllowRulesAreStrict() {
+        let place = "A.delivery.gateway.allow"
+        let methods = "\(place)[0].methods must be \"*\" or a list of distinct upper-case HTTP methods"
+        let path = "\(place)[0].path must be a /-rooted glob without . or .. segments, //, %, ?, #, ;, or \\, "
+            + "and at most two **"
+        #expect(invalidReason(gatewayJSON(#","allow":[]"#)) == "\(place) must list 1 to 32 presets or rules")
+        #expect(invalidReason(gatewayJSON(#","allow":"read-only""#)) == "\(place) must list 1 to 32 presets or rules")
+        #expect(invalidReason(gatewayJSON(#","allow":["write-all"]"#))
+            == "\(place)[0] preset write-all is unknown; use read-only, github-clone, github-read")
+        #expect(invalidReason(gatewayJSON(#","allow":[7]"#)) == "\(place)[0] must be a preset name or {methods, path}")
+        #expect(invalidReason(gatewayJSON(#","allow":[{"methods":"*","path":"/x","query":{}}]"#))
+            == "unknown key query in \(place)[0]")
+        #expect(invalidReason(gatewayJSON(#","allow":[{"methods":["get"],"path":"/x"}]"#)) == methods)
+        #expect(invalidReason(gatewayJSON(#","allow":[{"methods":[],"path":"/x"}]"#)) == methods)
+        #expect(invalidReason(gatewayJSON(#","allow":[{"methods":["GET","GET"],"path":"/x"}]"#)) == methods)
+        #expect(invalidReason(gatewayJSON(#","allow":[{"methods":"GET","path":"/x"}]"#)) == methods)
+        #expect(invalidReason(gatewayJSON(#","allow":[{"methods":"*"}]"#)) == "\(place)[0].path must be a /-rooted glob")
+        for bad in ["x", "/a/../b", "/a/./b", "/a//b", "/a%2fb", "/a?b", "/a#b", "/a\\\\b", "/a;b", "/a**", "/**/**/**"] {
+            #expect(invalidReason(gatewayJSON(#","allow":[{"methods":"*","path":"\#(bad)"}]"#)) == path, "\(bad)")
+        }
+    }
+
     @Test func providerFieldsAreTypeChecked() {
         func source(_ body: String) -> String? {
             invalidReason(

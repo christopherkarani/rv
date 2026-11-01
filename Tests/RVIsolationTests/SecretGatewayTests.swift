@@ -131,7 +131,7 @@ final class AuditRecords: Sendable {
 struct SecretGatewayTests {
     private func harness(
         upstream: RecordingUpstream, value: String = "sk-live-REAL-0123456789", prefix: String = "sk-",
-        surfaces: Set<GatewaySurface> = [.header], audit: AuditRecords
+        surfaces: Set<GatewaySurface> = [.header], rules: [GatewayAccessRule] = [], audit: AuditRecords
     ) throws -> (SecretGateway, Int, SecretPlaceholder) {
         let gateway = SecretGateway(transport: upstream.transport) { record in audit.items.withLock { $0.append(record) } }
         let port = try gateway.start().get()
@@ -139,7 +139,7 @@ struct SecretGatewayTests {
         gateway.register(placeholder, entry: SecretGateway.Entry(
             secret: "OPENAI_API_KEY", prefix: prefix, value: try #require(SecretValue(value)),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
-            surfaces: surfaces))
+            surfaces: surfaces, rules: rules))
         return (gateway, port, placeholder)
     }
 
@@ -247,6 +247,34 @@ struct SecretGatewayTests {
         let header = try gatewayExchange(port: port,
             "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
         #expect(header.status == 200)
+    }
+
+    @Test func requestsOutsideAllowRulesAreRefusedBeforeTheBodyIsRead() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(
+            upstream: upstream, prefix: "", surfaces: [.header, .path], rules: GatewayAccessPreset.readOnly.rules,
+            audit: audit)
+        defer { gateway.stop() }
+        // Content-Length promises a body that never arrives: a refusal that
+        // waited for it would hit the 30 s read timeout instead.
+        let started = Date()
+        let delete = try gatewayExchange(port: port,
+            "DELETE /s/OPENAI_API_KEY/bot\(placeholder.text)/repo HTTP/1.1\r\nContent-Length: 100\r\n\r\n")
+        #expect(delete.status == 403)
+        #expect(Date().timeIntervalSince(started) < 10)
+        let traversal = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/a/%2e%2e/admin HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(traversal.status == 400)
+        #expect(upstream.requests.isEmpty)
+        let records = audit.items.withLock { $0 }
+        #expect(records.count == 2 && records.allSatisfy { $0.allowed == false })
+        #expect(records.first?.method == "DELETE")
+        #expect(records.first?.path == "/s/OPENAI_API_KEY/botrvph_[redacted]/repo")
+        #expect(records.first?.reason == GatewayRefusal.outsideAllowRules.reason)
+        let read = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(read.status == 200)
     }
 
     @Test func echoMethodsAreRefusedBeforeTheCredentialIsInjected() throws {

@@ -64,6 +64,8 @@ public final class SecretGateway: @unchecked Sendable {
         public var fingerprint: String?
         public var runtime: String?
         public var surfaces: Set<GatewaySurface> = GatewaySurface.defaults
+        /// Expanded allow rules; empty allows any method and path.
+        public var rules: [GatewayAccessRule] = []
     }
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
@@ -380,7 +382,7 @@ public final class SecretGateway: @unchecked Sendable {
             refuse(client, .malformed, method: "?", path: "?", secret: nil)
             return
         }
-        let path = String(head.target.prefix { $0 != "?" })
+        let path = SecretPlaceholder.redacted(String(head.target.prefix { $0 != "?" }))
         guard let route = GatewayRoute(target: head.target) else {
             refuse(client, .unknownRoute, method: head.method, path: path, secret: nil)
             return
@@ -394,7 +396,9 @@ public final class SecretGateway: @unchecked Sendable {
         let substituted = GatewaySubstitution.apply(forwarded, route: route) { token in
             entry(token).map {
                 GatewaySubstitution.Live(
-                    token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces)
+                    token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces,
+                    rules: $0.rules,
+                    basePath: URLComponents(url: $0.upstream, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "")
             }
         }
         let rewritten: GatewayRequestHead
