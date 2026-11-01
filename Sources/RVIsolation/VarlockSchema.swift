@@ -151,13 +151,10 @@ public enum VarlockSchema {
                 continue
             }
             if raw.trimmingCharacters(in: .whitespaces).isEmpty || body == "---" {
-                if pastHeader == false, body == "---" || comments.isEmpty == false {
-                    applyHeader(comments, to: &document)
-                    comments = []
-                    pastHeader = true
-                } else {
-                    comments = []
-                }
+                // Every comment block before the first item is header
+                // (Varlock classes.ts:497-528), not only the first one.
+                if pastHeader == false { applyHeader(comments, to: &document) }
+                comments = []
                 index += 1
                 continue
             }

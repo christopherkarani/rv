@@ -331,6 +331,22 @@ struct VarlockSchemaTests {
         let enabled = try VarlockSchema.plan("# @disable=false\n# ---\nKEY=op(op://v/i/f)\n").get()
         #expect(enabled.secrets.map(\.name) == ["KEY"])
     }
+
+    @Test func everyCommentBlockBeforeTheFirstItemIsHeader() throws {
+        let plan = try VarlockSchema.plan("""
+            # @plugin(@varlock/infisical-plugin)
+            # @initInfisical(projectId=proj, environment=dev)
+
+            # @defaultSensitive=false
+            # ---
+
+            PORT=op(op://v/i/port)
+            # @sensitive
+            KEY=infisical()
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["KEY"])
+        #expect(plan.secrets.first?.source == .infisical(name: "KEY", project: "proj", environment: "dev", path: nil))
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {
