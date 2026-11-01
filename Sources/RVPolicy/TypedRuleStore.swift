@@ -254,7 +254,7 @@ public struct TypedRuleStore: Sendable {
     /// back into this store's saves, rollbacks, or history reads: the
     /// flock-based locks are not reentrant and would self-deadlock.
     @discardableResult
-    public func updateMachine(
+    func updateMachine(
         _ transform: (PolicyDocument) throws -> PolicyDocument
     ) throws -> PolicyDocument {
         try commitMachine { try transform(try loadMachineDocument()) }
@@ -529,7 +529,7 @@ public struct TypedRuleStore: Sendable {
     /// Read-modify-write of repo `.rv/policy.toml` under one `.policy.lock`
     /// hold. Same contract as `updateMachine`, including the no-reentry rule.
     @discardableResult
-    public func updateRepo(
+    func updateRepo(
         workspace: URL,
         _ transform: (PolicyDocument) throws -> PolicyDocument
     ) throws -> PolicyDocument {
