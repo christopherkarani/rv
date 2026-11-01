@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVHistory
 import RVLaya
 import RVPolicy
@@ -365,7 +366,7 @@ public enum JudgeRuntime {
                 engine: selectedEngine(home: home),
                 note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
             )
-            return result
+            return packsOnlyFloor(result, command: command)
         }
         switch runJudge(
             command: command.rawValue, context: context,
@@ -378,7 +379,7 @@ public enum JudgeRuntime {
                 note: noteFor("judge-unavailable: \(note)", contextPartial: partial),
                 now: now, isPeek: isPeek
             )
-            return result
+            return packsOnlyFloor(result, command: command)
         case .failed:
             let raised = raise(result, verdict: nil, action: .review)
             log(
@@ -403,6 +404,18 @@ public enum JudgeRuntime {
             )
             return outcome
         }
+    }
+
+    /// Packs-only (no judge could score): an inline interpreter program the
+    /// packs masked as data, carrying spawn/eval/delete/secret markers, is
+    /// indeterminate rather than an unreviewed allow.
+    static func packsOnlyFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        guard InlineProgramGuard.requiresJudge(command) else { return result }
+        return EvaluationResult(
+            outcome: .indeterminate(.inlineProgramNeedsJudge),
+            matchingView: result.matchingView,
+            analysis: result.analysis
+        )
     }
 
     /// Observe path: log the would-be verdict, always allow.
