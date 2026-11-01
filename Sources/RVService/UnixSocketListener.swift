@@ -109,6 +109,8 @@ public final class UnixSocketListener: Sendable {
     private let runtime: ServiceRuntime
     private let watchdog: IdleWatchdog
     public let socketURL: URL
+    private let limits: UnixConnectionLimits
+    private let slots: UnixConnectionSlots
     private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-socket")
     /// Connections serve here, never on `queue`: each `serve` loop blocks in
@@ -134,10 +136,17 @@ public final class UnixSocketListener: Sendable {
         let source: DispatchSourceRead
     }
 
-    public init(runtime: ServiceRuntime, watchdog: IdleWatchdog, socketURL: URL) {
+    public init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        socketURL: URL,
+        limits: UnixConnectionLimits = .standard
+    ) {
         self.runtime = runtime
         self.watchdog = watchdog
         self.socketURL = socketURL
+        self.limits = limits
+        self.slots = UnixConnectionSlots(limit: limits.maxConnections)
     }
 
     public func start() throws {
@@ -203,7 +212,14 @@ public final class UnixSocketListener: Sendable {
             return
         }
         DarwinFrameIO.ignorePipe(client)
-        connections.async { self.serve(client) }
+        guard limits.applyReceiveTimeout(to: client), slots.acquire() else {
+            Darwin.close(client)
+            return
+        }
+        connections.async {
+            defer { self.slots.release() }
+            self.serve(client)
+        }
     }
 
     private func serve(_ fd: Int32) {
