@@ -25,14 +25,40 @@ struct FileOps {
         try contents.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
-    func writeData(_ data: Data, to path: String) throws {
+    /// Atomically replaces a shared user config. When different bytes are
+    /// already there, they are first copied to a new timestamped sibling
+    /// (`<path>.rv-backup-<UTC>[-n]`) that never overwrites an earlier one.
+    /// Returns that backup path, or nil when nothing was replaced.
+    @discardableResult
+    func writeData(_ data: Data, to path: String) throws -> String? {
         try createDirectory(atPath: (path as NSString).deletingLastPathComponent)
         if isSymbolicLink(path) {
             throw FileOpsError.symbolicLink
         }
         let mode = posixMode(at: path) ?? 0o600
+        let backup = try backupSharedConfig(path, replacingWith: data)
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         try fileManager.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+        return backup
+    }
+
+    private func backupSharedConfig(_ path: String, replacingWith data: Data) throws -> String? {
+        guard let existing = readData(path), existing != data else {
+            return nil
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        let stem = path + ".rv-backup-" + formatter.string(from: Date())
+        var backup = stem
+        var suffix = 1
+        while fileManager.fileExists(atPath: backup) || isSymbolicLink(backup) {
+            backup = stem + "-\(suffix)"
+            suffix += 1
+        }
+        try fileManager.copyItem(atPath: path, toPath: backup)
+        return backup
     }
 
     func isSymbolicLink(_ path: String) -> Bool {
