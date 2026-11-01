@@ -469,6 +469,10 @@ enum HelpCatalog {
                     description: "An upstream 401 reaches the agent as 502 with no challenge; update the value with set"
                 ),
                 HelpRow(
+                    name: "basic",
+                    description: "Basic user:placeholder is decoded and swapped (git over https); encoded placeholders are refused"
+                ),
+                HelpRow(
                     name: "sources",
                     description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
                 ),
