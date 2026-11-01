@@ -823,79 +823,19 @@ func diskImageMountStatAllowance(sharedDeadline: Date?, now: Date) -> DiskImageR
     )
 }
 
-/// A timed-out worker may still be inside a syscall Darwin will not
-/// interrupt. Keep the `Thread` so it is not released while that call runs.
-/// Parked objects stay alive too: releasing a directory enumerator while
-/// `nextObject` is still inside `getattrlistbulk` would free it under the call.
-private final class DiskImageParkedCalls: @unchecked Sendable {
-    static let shared = DiskImageParkedCalls()
-    private let lock = NSLock()
-    private var threads: [Thread] = []
-    /// An object is needed only while a worker parked at its retain
-    /// time may still be inside a call using it, so each entry carries
-    /// the then-unfinished threads and is dropped once they all finish.
-    private var objects: [(object: AnyObject, workers: [Thread])] = []
-
-    private func prune() {
-        threads.removeAll { $0.isFinished }
-        objects.removeAll { $0.workers.allSatisfy { $0.isFinished } }
-    }
-
-    func keep(_ thread: Thread) {
-        lock.lock()
-        // A finished parked worker is no longer inside its syscall, so
-        // its Thread need not be retained. Pruning here bounds retention
-        // to workers that are still wedged, instead of every worker that
-        // ever timed out.
-        prune()
-        threads.append(thread)
-        lock.unlock()
-    }
-
-    func keepObject(_ object: AnyObject) {
-        lock.lock()
-        prune()
-        objects.append((object, threads.filter { $0.isFinished == false }))
-        lock.unlock()
-    }
-}
-
-/// Retains `object` until every worker parked at retain time has
-/// finished. Used when a clock stop returns while a worker may still
-/// be inside a call that uses `object`.
+/// Retains `object` until every call wedged at retain time has
+/// returned. Used when a clock stop returns while a worker may still be
+/// inside a call that uses `object`: releasing a directory enumerator
+/// while `nextObject` is inside `getattrlistbulk` would free it under
+/// the call.
 func diskImageRetainAcrossPark(_ object: AnyObject) {
-    DiskImageParkedCalls.shared.keepObject(object)
+    DiskImageSyscallPool.shared.retainAcrossWedged(object)
 }
 
-private final class DiskImageStatWorker: @unchecked Sendable {
-    private let lock = NSLock()
-    private var result = false
-    private var finished = false
-    private let body: @Sendable () -> Bool
-    /// Signalled once when `finished` is set, so the waiter wakes on
-    /// completion instead of paying a poll interval per syscall.
-    let completion = DispatchSemaphore(value: 0)
-
-    init(body: @escaping @Sendable () -> Bool) {
-        self.body = body
-    }
-
-    func run() {
-        let value = body()
-        lock.lock()
-        result = value
-        finished = true
-        lock.unlock()
-        completion.signal()
-    }
-
-    func snapshot() -> (finished: Bool, result: Bool) {
-        lock.lock()
-        let state = (finished, result)
-        lock.unlock()
-        return state
-    }
-}
+/// How quickly a stop that arms during a call (the shared cancel clock
+/// has no wake-up of its own) is noticed. Completion wakes the waiter at
+/// once; this only bounds the wait for a stop that arrives mid-call.
+private let diskImageLiveStopRecheck: TimeInterval = 0.005
 
 /// Wait for one blocking call. `nil` allowance is the non-cancelled path:
 /// the call still runs off the caller, and a shared clock that arms during
@@ -903,37 +843,20 @@ private final class DiskImageStatWorker: @unchecked Sendable {
 /// gone. `stat`, `statfs`, `fstatat`, `mkdir`, `readdir`, `read`, and
 /// `write` blocked on a vnode lock do not fail with `EINTR`, so this does
 /// not wait for the call to return. The caller is back by the stop. The
-/// worker may still be inside the call; it is parked, not joined. Zero does
-/// not start the call.
+/// worker may still be inside the call; it is quarantined, not joined.
+/// Zero does not start the call. A pool already holding its cap of
+/// wedged workers starts nothing and returns nil (fail closed).
 func diskImageWaitForStat(
     allowance: TimeInterval?,
     liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
+    pool: DiskImageSyscallPool = .shared,
     stat: @escaping @Sendable () -> Bool
 ) -> Bool? {
     if let allowance, allowance <= 0 { return nil }
-    let worker = DiskImageStatWorker(body: stat)
-    let thread = Thread { worker.run() }
     let started = Date()
-    thread.start()
-    while true {
-        let state = worker.snapshot()
-        if state.finished { return state.result }
-        let now = Date()
-        var slice: TimeInterval = 0.005
-        if let stopAt = diskImageWaitStop(
-            started: started,
-            allowance: allowance,
-            liveDeadline: liveDeadline()
-        ) {
-            if now >= stopAt {
-                DiskImageParkedCalls.shared.keep(thread)
-                return nil
-            }
-            // Wake no later than the stop; the slice cap only bounds how
-            // quickly a deadline arming during the wait is noticed.
-            slice = min(slice, stopAt.timeIntervalSince(now))
-        }
-        _ = worker.completion.wait(timeout: .now() + slice)
+    guard let call = pool.submit(stat) else { return nil }
+    return pool.wait(for: call, recheck: diskImageLiveStopRecheck) {
+        diskImageWaitStop(started: started, allowance: allowance, liveDeadline: liveDeadline())
     }
 }
 
@@ -946,12 +869,21 @@ func diskImageWaitForStat(
     duplicating fd: Int32,
     allowance: TimeInterval?,
     liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
+    pool: DiskImageSyscallPool = .shared,
     _ body: @escaping @Sendable (Int32) -> Bool
 ) -> Bool? {
     if let allowance, allowance <= 0 { return nil }
     let copy = diskImageDuplicateDescriptor(fd)
     guard copy >= 0 else { return false }
-    return diskImageWaitForStat(allowance: allowance, liveDeadline: liveDeadline) { body(copy) }
+    let started = Date()
+    // A refused call never reaches `body`, so the copy is still ours.
+    guard let call = pool.submit({ body(copy) }) else {
+        close(copy)
+        return nil
+    }
+    return pool.wait(for: call, recheck: diskImageLiveStopRecheck) {
+        diskImageWaitStop(started: started, allowance: allowance, liveDeadline: liveDeadline())
+    }
 }
 
 /// Tree and publish syscalls use the copy budget, which reserves `detachCap`.
