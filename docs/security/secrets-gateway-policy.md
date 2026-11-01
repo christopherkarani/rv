@@ -104,6 +104,33 @@ Enforcement:
   after one decode (`%252e`). A path such as GitLab's
   `projects/group%2Fproject` therefore needs no rules on its binding.
 
+## Runtime binding
+
+The gateway listens on `127.0.0.1`, and the cage may reach any loopback port
+(dev servers bind ephemeral ports, so the Seatbelt profile cannot name
+them). Loopback is shared by every process on the host. A placeholder is
+therefore honored only on a connection from the runtime it was leased to.
+
+- Each runtime is one process group: the cage denies `setpgid`, `setsid`,
+  and `posix_spawn`, so descendants cannot leave it. rv records the group
+  (its leader's pid and start time) after spawn and before the runtime runs.
+- On each request, rv takes the connection's port pair and looks, with
+  libproc, for a member of that group holding the client socket. Only that
+  group's processes are scanned. Every placeholder in the request is
+  checked, so one runtime cannot spend another's placeholder beside its own.
+- Not a member: `403`, refusal `runtimeMismatch`, and a `secret.misuse`
+  finding. Another runtime, a host shell, or any other local process
+  holding a copied placeholder lands here.
+- Cannot tell: `403`, refusal `runtimeUnverified`, no misuse finding. This
+  covers a libproc failure, a group whose leader is gone or was reused, and
+  a placeholder whose runtime has no recorded group. The gateway fails
+  closed.
+
+Limits: the check binds to the runtime, not to a binary inside it; any
+process in the group may spend the placeholder. Linux has no check (no
+libproc), so every gateway request there is `runtimeUnverified`. Contained
+launches on Linux are already refused before exec.
+
 ## Response scrubbing
 
 The real value never goes back to the agent. Before any response header or
@@ -151,7 +178,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
 
 - Other `detail` fields: `refusal` (code), `method`, `path` (placeholders
@@ -164,9 +191,12 @@ them carries the value, the placeholder, or the query string.
 A `blocked` request also writes a `secret.misuse` event with
 `detail.severity: high`: the refusal code, method, and redacted path. The
 codes are `foreignPlaceholder`, `surfaceNotAllowed`, `repeatedPlaceholder`,
-`outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, and
-`echoMethod`. A client using its placeholder as configured never triggers
-one, so it usually means a prompt-injected agent is probing. In
+`outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, `echoMethod`,
+and `runtimeMismatch`. The event's `runtime` is the runtime the presented
+placeholder was leased to (absent for a percent-encoded placeholder, which
+is never looked up). A client using its placeholder as configured never
+triggers one, so it usually means a prompt-injected agent is probing, or a
+placeholder was copied out of its runtime. In
 `--format ocsf` it is a Detection Finding (2004), severity High,
 `is_alert: true`. `rv audit --kind secret` shows both kinds.
 
