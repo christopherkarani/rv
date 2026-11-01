@@ -377,7 +377,12 @@ public enum MCPHostSetup {
             (host == nil || records[index].host == host?.rawValue) && wanted(records[index].name, filter)
         }
         var done = Set<Int>()
-        for path in Set(selected.map { records[$0].configPath }).sorted() {
+        let paths = Set(selected.map { records[$0].configPath }).sorted()
+        // Refuse up front so a later linked file cannot strand earlier restores outside the manifest.
+        if let linked = paths.first(where: { isSymbolicLink(URL(fileURLWithPath: $0)) }) {
+            return .failure(.symbolicLink(linked))
+        }
+        for path in paths {
             let url = URL(fileURLWithPath: path)
             let mine = selected.filter { records[$0].configPath == path }
             guard case .data(let data) = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
@@ -402,7 +407,6 @@ public enum MCPHostSetup {
                 changed = true
                 result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
             }
-            if changed, isSymbolicLink(url) { return .failure(.symbolicLink(path)) }
             if changed, writePreservingMode(Data(root.prettyText.utf8), to: url) == false {
                 return .failure(.writeFailed(path))
             }

@@ -370,6 +370,26 @@ struct MCPHostSetupTests {
         #expect(MCPHostSetup.loadManifest(box.config).map(\.name) == ["wax"])
     }
 
+    @Test func undoRefusesBeforeRestoringAnyFileWhenOneIsASymlink() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let claude = try box.write(".claude.json", text)
+        let cursor = try box.write(".cursor/mcp.json", text)
+        _ = try MCPHostSetup.setup(
+            files: box.files(.claudeCode) + box.files(.cursor), configuration: configuration, servers: nil,
+            rvPath: "/opt/rv", configDirectory: box.config
+        ).get()
+        let rewritten = try Data(contentsOf: claude)
+        let target = try box.write("dotfiles/mcp.json", String(decoding: try Data(contentsOf: cursor), as: UTF8.self))
+        try FileManager.default.removeItem(at: cursor)
+        try FileManager.default.createSymbolicLink(at: cursor, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.undo(host: nil, servers: nil, configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(cursor.path)))
+        #expect(try Data(contentsOf: claude) == rewritten)
+        #expect(MCPHostSetup.loadManifest(box.config).map(\.host).sorted() == ["claude-code", "cursor"])
+    }
+
     @Test func writerRefusesToReplaceASymbolicLink() throws {
         let box = Sandbox()
         let target = try box.write("dotfiles/mcp.json", "{}")
