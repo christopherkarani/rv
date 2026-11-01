@@ -1215,6 +1215,209 @@ struct RuntimeTerminalTests {
         #expect(try recovered.closeWorkspace().get().phase == .closed)
         restarted.waitUntilExit()
     }
+
+    // Lifecycle contract: three independent axes (exit, reader, master).
+    // These pin behavior that must survive the phase-enum representation.
+
+    @Test func finishIsIdempotentAndKeepsTheFirstStatus() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        let early = NoticeBox()
+        let earlyID = UUID()
+        #expect(terminal.subscribe(client: earlyID, emit: early.append).isSuccess)
+        terminal.activate(client: earlyID)
+        terminal.finish(status: 7)
+        terminal.finish(status: 9)
+        let late = NoticeBox()
+        let lateID = UUID()
+        #expect(terminal.subscribe(client: lateID, emit: late.append).isSuccess)
+        terminal.activate(client: lateID)
+        #expect(waitUntil(seconds: 2) { early.exitStatus == 7 && late.exitStatus == 7 })
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(exitNotices(early) == [7])
+        #expect(exitNotices(late) == [7])
+        terminal.detach(client: earlyID)
+        terminal.detach(client: lateID)
+    }
+
+    @Test func concurrentFinishDeliversOneExitNotice() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        let box = NoticeBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: box.append).isSuccess)
+        terminal.activate(client: id)
+        let done = DoneCounter()
+        for status in Int32(1)...4 {
+            let thread = Thread {
+                terminal.finish(status: status)
+                done.increment()
+            }
+            thread.start()
+        }
+        #expect(waitUntil(seconds: 5) { done.value == 4 })
+        #expect(waitUntil(seconds: 2) { box.exitStatus != nil })
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(exitNotices(box).count == 1)
+        #expect(terminal.hasExited)
+        #expect(terminal.masterFD == -1)
+        terminal.detach(client: id)
+    }
+
+    @Test func finishedTerminalRefusesInputAndReportsExited() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        let box = NoticeBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: box.append).isSuccess)
+        terminal.activate(client: id)
+        #expect(terminal.acquireInput(client: id).isSuccess)
+        #expect(terminal.hasExited == false)
+        #expect(terminal.masterFD >= 0)
+        terminal.finish(status: 0)
+        #expect(terminal.hasExited)
+        #expect(terminal.hasInputOwner == false)
+        #expect(terminal.masterFD == -1)
+        #expect(controlFailure(terminal.acquireInput(client: id)) == .unavailable)
+        #expect(controlFailure(terminal.writeInput(client: id, bytes: Data([0x61]))) == .unavailable)
+        #expect(controlFailure(terminal.resize(client: id, rows: 30, columns: 90)) == .unavailable)
+        #expect(terminal.foregroundProcessGroup() == nil)
+        #expect(waitUntil(seconds: 2) { box.exitStatus == 0 })
+        // The owner release is queued before the exit notice.
+        let tail = box.notices.filter {
+            switch $0 {
+            case .inputOwner, .exited: true
+            default: false
+            }
+        }
+        #expect(tail == [.inputOwner(true), .inputOwner(false), .exited(0)])
+        terminal.detach(client: id)
+    }
+
+    @Test func nilStatusDeliversMinusOne() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        let early = NoticeBox()
+        let earlyID = UUID()
+        #expect(terminal.subscribe(client: earlyID, emit: early.append).isSuccess)
+        terminal.activate(client: earlyID)
+        terminal.finish(status: nil)
+        let late = NoticeBox()
+        let lateID = UUID()
+        #expect(terminal.subscribe(client: lateID, emit: late.append).isSuccess)
+        terminal.activate(client: lateID)
+        #expect(waitUntil(seconds: 2) { early.exitStatus == -1 && late.exitStatus == -1 })
+        terminal.detach(client: earlyID)
+        terminal.detach(client: lateID)
+    }
+
+    @Test func shutdownWithoutFinishLeavesExitRunning() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        let box = NoticeBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: box.append).isSuccess)
+        terminal.activate(client: id)
+        terminal.shutdownMaster()
+        #expect(terminal.hasExited == false)
+        #expect(terminal.masterFD == -1)
+        #expect(controlFailure(terminal.resize(client: id, rows: 30, columns: 90)) == .unavailable)
+        // Input admission follows the exit axis, not the master axis.
+        #expect(terminal.acquireInput(client: id).isSuccess)
+        #expect(controlFailure(terminal.writeInput(client: id, bytes: Data([0x61]))) == .unavailable)
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(box.exitStatus == nil)
+        terminal.finish(status: 3)
+        #expect(terminal.hasExited)
+        #expect(terminal.hasInputOwner == false)
+        #expect(waitUntil(seconds: 2) { box.exitStatus == 3 })
+        let late = NoticeBox()
+        let lateID = UUID()
+        #expect(terminal.subscribe(client: lateID, emit: late.append).isSuccess)
+        terminal.activate(client: lateID)
+        #expect(waitUntil(seconds: 2) { late.exitStatus == 3 })
+        terminal.detach(client: id)
+        terminal.detach(client: lateID)
+    }
+
+    @Test func startReaderAfterShutdownIsANoOp() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.shutdownMaster()
+        let done = FinishedFlag()
+        let thread = Thread {
+            terminal.startReader()
+            terminal.shutdownMaster()
+            terminal.finish(status: 0)
+            done.set()
+        }
+        thread.start()
+        #expect(waitUntil(seconds: 5) { done.isSet })
+        #expect(terminal.masterFD == -1)
+        #expect(terminal.hasExited)
+    }
+
+    @Test func shutdownMasterTwiceReturns() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        terminal.startReader()
+        let done = DoneCounter()
+        for _ in 0..<3 {
+            let thread = Thread {
+                terminal.shutdownMaster()
+                done.increment()
+            }
+            thread.start()
+        }
+        #expect(waitUntil(seconds: 5) { done.value == 3 })
+        let again = FinishedFlag()
+        let thread = Thread {
+            terminal.shutdownMaster()
+            again.set()
+        }
+        thread.start()
+        #expect(waitUntil(seconds: 5) { again.isSet })
+        #expect(terminal.masterFD == -1)
+        #expect(terminal.hasExited == false)
+    }
+
+    @Test func closingTheLastSlaveKeepsTheMasterOpenUntilFinish() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        let slave = try openSlave(terminal.slavePath)
+        terminal.startReader()
+        let box = NoticeBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: box.append).isSuccess)
+        terminal.activate(client: id)
+        let marker = Data("LAST".utf8)
+        #expect(writeAll(fd: slave, bytes: marker))
+        #expect(waitUntil(seconds: 5) { box.bytes == marker })
+        // The reader may stop on EOF here; only shutdown closes the master.
+        close(slave)
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(terminal.masterFD >= 0)
+        #expect(terminal.hasExited == false)
+        let done = FinishedFlag()
+        let thread = Thread {
+            terminal.finish(status: 5)
+            done.set()
+        }
+        thread.start()
+        #expect(waitUntil(seconds: 5) { done.isSet })
+        #expect(waitUntil(seconds: 2) { box.exitStatus == 5 })
+        #expect(terminal.masterFD == -1)
+        terminal.detach(client: id)
+    }
+}
+
+private func exitNotices(_ box: NoticeBox) -> [Int32] {
+    box.notices.compactMap { notice in
+        if case .exited(let status) = notice { return status }
+        return nil
+    }
+}
+
+private func controlFailure(_ result: Result<Void, TerminalControlError>) -> TerminalControlError? {
+    if case .failure(let error) = result { return error }
+    return nil
 }
 
 private let reattachScript = """
@@ -1480,6 +1683,18 @@ private final class NoticeBox: Sendable {
             if case .exited(let status) = notice { return status }
         }
         return nil
+    }
+}
+
+private final class DoneCounter: Sendable {
+    private let box = Mutex(0)
+
+    func increment() {
+        box.withLock { $0 += 1 }
+    }
+
+    var value: Int {
+        box.withLock { $0 }
     }
 }
 
