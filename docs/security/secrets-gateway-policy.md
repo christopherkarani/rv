@@ -111,23 +111,33 @@ The gateway listens on `127.0.0.1`, and the cage may reach any loopback port
 them). Loopback is shared by every process on the host. A placeholder is
 therefore honored only on a connection from the runtime it was leased to.
 
-- Each runtime is one process group: the cage denies `setpgid`, `setsid`,
-  and `posix_spawn`, so descendants cannot leave it. rv records the group
-  (its leader's pid and start time) after spawn and before the runtime runs.
+- rv records the runtime leader (its pid, which is also its process group,
+  and its start time) after spawn and before the runtime runs.
+- A runtime's processes are: its leader's process group; every live
+  descendant of the leader; and, when the leader leads its own session
+  (terminal runtimes), that session. The cage denies the `setsid` and
+  `setpgid` syscalls, but `posix_spawn` with `POSIX_SPAWN_SETSID` or
+  `POSIX_SPAWN_SETPGROUP` (Node's `detached: true`) moves a child out of the
+  group, and the descendant walk keeps those children in.
 - On each request, rv takes the connection's port pair and looks, with
-  libproc, for a member of that group holding the client socket. Only that
-  group's processes are scanned. Every placeholder in the request is
-  checked, so one runtime cannot spend another's placeholder beside its own.
+  libproc, for one of those processes holding the client socket: the group
+  first, then the descendants (at most 4096), then the session. Each match
+  is re-checked after the scan so a reused pid does not count. Every
+  placeholder in the request is checked, so one runtime cannot spend
+  another's placeholder beside its own.
 - Not a member: `403`, refusal `runtimeMismatch`, and a `secret.misuse`
   finding. Another runtime, a host shell, or any other local process
   holding a copied placeholder lands here.
 - Cannot tell: `403`, refusal `runtimeUnverified`, no misuse finding. This
-  covers a libproc failure, a group whose leader is gone or was reused, and
-  a placeholder whose runtime has no recorded group. The gateway fails
-  closed.
+  covers a libproc failure, a group whose leader is gone or was reused, a
+  descendant walk past its bound, and a placeholder whose runtime has no
+  recorded group. The gateway fails closed.
 
-Limits: the check binds to the runtime, not to a binary inside it; any
-process in the group may spend the placeholder. Linux has no check (no
+Limits: the check binds to the runtime, not to a binary inside it; any of
+its processes may spend the placeholder. A process that left the group and
+whose parent then exited (reparented to launchd) is no longer a descendant;
+unless it is in a terminal runtime's session, its requests are refused as
+`runtimeMismatch`. Linux has no check (no
 libproc), so every gateway request there is `runtimeUnverified`. Contained
 launches on Linux are already refused before exec.
 

@@ -46,15 +46,18 @@ struct GatewayPeer: Equatable, Sendable {
     }
 }
 
-/// Decides whether a peer belongs to a runtime's process group.
+/// Decides whether a peer belongs to a runtime.
 struct GatewayPeerCheck: Sendable {
     var verify: @Sendable (GatewayPeer, ProcessGroupFact) -> GatewayPeerVerdict
 
-    /// A runtime is one process group: the cage denies `setpgid`, `setsid`,
-    /// and `posix_spawn`, so every descendant stays in it. The peer is a
-    /// member when one of the group's processes holds the client socket,
-    /// found by its port pair. Only the group's processes are scanned.
-    static let processGroup = GatewayPeerCheck { peer, group in
+    /// The peer is a member when a process of the runtime holds the client
+    /// socket, found by its port pair. The cage denies the `setsid` and
+    /// `setpgid` syscalls but allows `posix_spawn`, whose `SETSID` and
+    /// `SETPGROUP` flags move a child out of the leader's group (Node's
+    /// `detached: true` does this). So a runtime's processes are its group,
+    /// the live descendants of its leader, and, when the leader leads a
+    /// session (terminal runtimes), that session.
+    static let runtime = GatewayPeerCheck { peer, group in
         #if os(macOS)
         GatewayPeerScan.verdict(peer, group: group)
         #else
@@ -67,24 +70,73 @@ struct GatewayPeerCheck: Sendable {
 
 #if os(macOS)
 enum GatewayPeerScan {
+    /// Bounds the descendant walk; past it the answer is `unverifiable`.
+    static let maximumDescendants = 4_096
+
     static func verdict(_ peer: GatewayPeer, group: ProcessGroupFact) -> GatewayPeerVerdict {
+        let leader = group.pgid.rawValue
         // A reused pgid is a different group, and a group whose leader is
         // gone belongs to a runtime that has returned.
-        guard case .found(let leader) = ProcessGroupRecovery.lookup(group.pgid.rawValue),
-            leader.pbi_pgid == UInt32(group.pgid.rawValue),
-            Int64(leader.pbi_start_tvsec) == group.startSeconds,
-            Int64(leader.pbi_start_tvusec) == group.startMicroseconds,
-            let members = groupMembers(group.pgid.rawValue)
+        guard case .found(let info) = ProcessGroupRecovery.lookup(leader),
+            info.pbi_pgid == UInt32(leader),
+            Int64(info.pbi_start_tvsec) == group.startSeconds,
+            Int64(info.pbi_start_tvusec) == group.startMicroseconds,
+            let members = groupMembers(leader)
         else { return .unverifiable }
+        var search = Search(peer: peer)
+        // Each match is re-checked after the scan, so a pid that exited and
+        // was reused mid-scan does not count.
+        if search.finds(members, still: { pgid(of: $0) == leader }) { return .member }
+        let (parents, complete) = descendants(of: leader)
+        if complete == false { search.incomplete = true }
+        if search.finds(Array(parents.keys), still: { parent(of: $0) == parents[$0] }) { return .member }
+        if getsid(leader) == leader {
+            let session = (userProcesses() ?? []).filter { getsid($0) == leader }
+            if search.finds(session, still: { getsid($0) == leader }) { return .member }
+        }
+        return search.incomplete ? .unverifiable : .outsider
+    }
+
+    private struct Search {
+        let peer: GatewayPeer
+        var scanned: Set<pid_t> = []
         var incomplete = false
-        for pid in members {
-            switch holdsSocket(pid, peer) {
-            case .some(true): return .member
-            case .some(false): continue
-            case .none: incomplete = true
+
+        mutating func finds(_ pids: [pid_t], still member: (pid_t) -> Bool) -> Bool {
+            for pid in pids where scanned.insert(pid).inserted {
+                switch GatewayPeerScan.holdsSocket(pid, peer) {
+                case .some(true): if member(pid) { return true }
+                case .some(false): continue
+                case .none: incomplete = true
+                }
+            }
+            return false
+        }
+    }
+
+    /// Child to parent for every live descendant of `root`; false when the
+    /// walk hit its bound.
+    private static func descendants(of root: pid_t) -> (parents: [pid_t: pid_t], complete: Bool) {
+        var parents: [pid_t: pid_t] = [:]
+        var pending = [root]
+        while let parent = pending.popLast() {
+            for child in listedPIDs(proc_listchildpids, parent) where child != root && parents[child] == nil {
+                guard parents.count < maximumDescendants else { return (parents, false) }
+                parents[child] = parent
+                pending.append(child)
             }
         }
-        return incomplete ? .unverifiable : .outsider
+        return (parents, true)
+    }
+
+    private static func pgid(of pid: pid_t) -> pid_t? {
+        guard case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return nil }
+        return pid_t(info.pbi_pgid)
+    }
+
+    private static func parent(of pid: pid_t) -> pid_t? {
+        guard case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return nil }
+        return pid_t(info.pbi_ppid)
     }
 
     /// `proc_listpgrppids` counts pids, unlike `proc_pidinfo`, which counts
@@ -96,6 +148,19 @@ enum GatewayPeerScan {
         let count = pids.withUnsafeMutableBytes { proc_listpgrppids(pgid, $0.baseAddress, Int32($0.count)) }
         guard count > 0 else { return nil }
         return pids.prefix(min(Int(count), pids.count)).filter { $0 > 1 }
+    }
+
+    /// This user's processes. Runtimes run as rv's user, and `proc_listpids`
+    /// counts bytes.
+    private static func userProcesses() -> [pid_t]? {
+        let uid = getuid()
+        let estimate = proc_listpids(UInt32(PROC_UID_ONLY), uid, nil, 0)
+        guard estimate > 0 else { return nil }
+        let stride = MemoryLayout<pid_t>.stride
+        var pids = [pid_t](repeating: 0, count: Int(estimate) / stride + 64)
+        let bytes = pids.withUnsafeMutableBytes { proc_listpids(UInt32(PROC_UID_ONLY), uid, $0.baseAddress, Int32($0.count)) }
+        guard bytes > 0 else { return nil }
+        return pids.prefix(min(Int(bytes) / stride, pids.count)).filter { $0 > 1 }
     }
 
     /// Nil when this process's descriptors could not be read; an exited

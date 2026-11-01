@@ -50,7 +50,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
         configDirectory: URL,
         resolver: SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
-        peers: GatewayPeerCheck = .processGroup,
+        peers: GatewayPeerCheck = .runtime,
         workspace: String?,
         managed: (@Sendable () -> ManagedPolicyState)? = nil
     ) {
@@ -167,7 +167,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
     }
 
     /// Called once the runtime is spawned and before it runs: from then on
-    /// only its process group may spend the lease.
+    /// only that runtime's processes may spend the lease.
     func bind(_ lease: SecretLease, processGroup: ProcessGroupFact) {
         guard lease.placeholders.isEmpty == false else { return }
         gateway.bind(lease.placeholders, processGroup: processGroup)

@@ -97,8 +97,8 @@ public final class SecretGateway: @unchecked Sendable {
         public var surfaces: Set<GatewaySurface> = GatewaySurface.defaults
         /// Expanded allow rules; empty allows any method and path.
         public var rules: [GatewayAccessRule] = []
-        /// The runtime's process group, set once it is spawned. Only a
-        /// connection from inside it may spend the value; nil refuses all.
+        /// The runtime leader's process group, set once it is spawned. Only
+        /// a connection from that runtime may spend the value; nil refuses all.
         var processGroup: ProcessGroupFact?
     }
 
@@ -134,7 +134,7 @@ public final class SecretGateway: @unchecked Sendable {
         transport: SecretUpstreamTransport = .urlSession,
         audit: @escaping @Sendable (SecretUseRecord) -> Bool
     ) {
-        self.init(transport: transport, peers: .processGroup, audit: audit)
+        self.init(transport: transport, peers: .runtime, audit: audit)
     }
 
     init(

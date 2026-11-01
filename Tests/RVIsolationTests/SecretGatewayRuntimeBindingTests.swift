@@ -163,7 +163,7 @@ struct SecretGatewayRuntimeBindingTests {
         let group = try #require(ProcessGroupRecovery.capture(pid: getpgrp()))
         let verdicts = Mutex<[GatewayPeerVerdict]>([])
         let live = GatewayPeerCheck { peer, group in
-            let verdict = GatewayPeerCheck.processGroup.verify(peer, group)
+            let verdict = GatewayPeerCheck.runtime.verify(peer, group)
             verdicts.withLock { $0.append(verdict) }
             return verdict
         }
@@ -174,11 +174,73 @@ struct SecretGatewayRuntimeBindingTests {
 
         #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 200)
         #expect(verdicts.withLock { $0 } == [.member])
-        #expect(GatewayPeerCheck.processGroup.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), group) == .outsider)
+        #expect(GatewayPeerCheck.runtime.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), group) == .outsider)
         var stale = group
         stale.startMicroseconds += 1
-        #expect(GatewayPeerCheck.processGroup.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), stale)
+        #expect(GatewayPeerCheck.runtime.verify(GatewayPeer(port: 9, gatewayPort: UInt16(port)), stale)
             == .unverifiable)
+    }
+
+    /// An orphan that left the leader's group still belongs to the runtime
+    /// when the leader leads its session, as a terminal runtime's does.
+    @Test func anOrphanInTheLeadersSessionIsServedAndOneOutsideItIsRefused() throws {
+        #expect(try orphanStatus(leaderFlags: Int32(POSIX_SPAWN_SETSID)) == "200")
+        #expect(try orphanStatus(leaderFlags: Int32(POSIX_SPAWN_SETPGROUP)) == "403")
+    }
+
+    /// Spawns `/bin/sh` as a runtime leader with `leaderFlags`. It starts a
+    /// curl in a new process group, orphaned before it connects, and the
+    /// gateway judges it against the leader. Returns curl's status code.
+    private func orphanStatus(leaderFlags: Int32) throws -> String {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-orphan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let go = directory.appendingPathComponent("go").path
+        let out = directory.appendingPathComponent("out").path
+        let done = directory.appendingPathComponent("done").path
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let gateway = SecretGateway(transport: upstream.transport, peers: .runtime, audit: audit.record)
+        defer { gateway.stop() }
+        let port = try gateway.start().get()
+        let script = """
+            while [ ! -f "$1" ]; do /bin/sleep 0.05; done
+            ( /usr/bin/perl -e 'setpgrp(0, 0); select(undef, undef, undef, 0.05) until getppid() == 1; exec @ARGV' \
+                /usr/bin/curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $2" "$3" > "$4" & )
+            while [ ! -f "$5" ]; do /bin/sleep 0.05; done
+            """
+        let placeholder = SecretPlaceholder.mint(prefix: "sk-")
+        let leader = try spawnShell(script, flags: leaderFlags, arguments: [
+            go, placeholder.text, "http://127.0.0.1:\(port)/s/OPENAI_API_KEY/models", out, done])
+        defer {
+            FileManager.default.createFile(atPath: done, contents: nil)
+            var status: Int32 = 0
+            waitpid(leader, &status, 0)
+        }
+        let group = try #require(ProcessGroupRecovery.capture(pid: leader))
+        gateway.register(placeholder, entry: try entry(runtime: "R1", group: group))
+        FileManager.default.createFile(atPath: go, contents: nil)
+        let deadline = Date().addingTimeInterval(20)
+        var status = ""
+        while Date() < deadline {
+            status = (try? String(contentsOfFile: out, encoding: .utf8)) ?? ""
+            if status.count == 3 { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return status
+    }
+
+    private func spawnShell(_ script: String, flags: Int32, arguments: [String]) throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(flags))
+        if flags & Int32(POSIX_SPAWN_SETPGROUP) != 0 { posix_spawnattr_setpgroup(&attributes, 0) }
+        let argv = (["/bin/sh", "-c", script, "sh"] + arguments).map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        try #require(posix_spawn(&pid, "/bin/sh", nil, &attributes, argv, environ) == 0)
+        return pid
     }
     #endif
 }

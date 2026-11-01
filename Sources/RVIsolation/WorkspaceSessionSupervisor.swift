@@ -1792,7 +1792,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
         child.provenGroup = fact
-        // Before resume: the gateway honors the lease only from this group.
+        // Before resume: the gateway honors the lease only from this runtime.
         secretBroker?.bind(lease, processGroup: fact)
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
