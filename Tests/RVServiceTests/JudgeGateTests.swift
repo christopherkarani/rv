@@ -424,6 +424,10 @@ struct JudgeGatePacksOnlyFloorTests {
         "sed -n '1e rm -rf ~' f",
         #"node -e 'require("fs").rmSync(process.env.HOME,{recursive:true})'"#,
         #"python3 -c "from os import system; system('rm -rf ~')""#,
+        "perl <<EOF\nsystem(\"rm -rf ~\");\nEOF",
+        #"python3 <<< "import os; os.system('id')""#,
+        #"printf 'system("rm -rf ~");' | perl"#,
+        "cat x.pl | perl",
     ])
     func spawnPayloadIndeterminate(command: String) throws {
         try Self.withEmptyHome { home in
@@ -435,6 +439,8 @@ struct JudgeGatePacksOnlyFloorTests {
         "awk '{print $1}' f",
         "perl -ne 'print if /x/' f",
         "python3 -c 'print(1)'",
+        "echo 'print(1)' | python3",
+        "cat f | perl -ne 'print if /x/'",
     ])
     func benignPayloadAllowed(command: String) throws {
         try Self.withEmptyHome { home in

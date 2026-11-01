@@ -16,7 +16,7 @@ public enum InlineProgramGuard {
         _ command: ShellCommand,
         secrets: SecretPathCatalog = .dayOne
     ) -> Bool {
-        launchedCommands(command.rawValue).contains { argv in
+        let inline = launchedCommands(command.rawValue).contains { argv in
             guard let payload = inlineProgram(argv) else { return false }
             switch payload {
             case .script(let kind, let text):
@@ -25,22 +25,23 @@ public enum InlineProgramGuard {
                 return scripts.contains { sedExecutes($0) || mentionsSecretPath($0, secrets: secrets) }
             }
         }
+        return inline || stdinProgramRequiresJudge(command.rawValue, secrets: secrets)
     }
 }
 
-private enum ProgramKind {
+enum ProgramKind {
     case shellQuoting // perl, ruby, php: backticks run a shell
     case plain // python, node, lua
     case awk
 }
 
-private enum InlineProgram {
+enum InlineProgram {
     case script(ProgramKind, String)
     case sed([String])
 }
 
 /// The inline program text an argv runs, or nil when it runs none.
-private func inlineProgram(_ argv: [String]) -> InlineProgram? {
+func inlineProgram(_ argv: [String]) -> InlineProgram? {
     guard let program = argv.first?.lowercased() else { return nil }
     let args = Array(argv.dropFirst())
     let body = args.joined(separator: " ")
@@ -138,7 +139,7 @@ private func substituteFlagRun(_ chars: [Character], endingAt index: Int) -> Boo
     return cursor >= 0 && chars[cursor] == "/"
 }
 
-private func scriptIsRisky(_ text: String, kind: ProgramKind, secrets: SecretPathCatalog) -> Bool {
+func scriptIsRisky(_ text: String, kind: ProgramKind, secrets: SecretPathCatalog) -> Bool {
     if identifierWords(text).contains(where: { riskyIdentifiers.contains($0) }) { return true }
     if riskySubstrings.contains(where: { text.contains($0) }) { return true }
     switch kind {
