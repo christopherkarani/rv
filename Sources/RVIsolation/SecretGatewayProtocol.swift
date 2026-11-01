@@ -184,6 +184,8 @@ enum GatewayRefusal: Error, Equatable {
     case tooLarge
     /// The value would change the request's shape where the placeholder sits.
     case unsafeValue
+    /// TRACE and TRACK make the upstream echo the request, credential included.
+    case echoMethod
 
     var status: Int {
         switch self {
@@ -192,6 +194,7 @@ enum GatewayRefusal: Error, Equatable {
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder: 403
         case .tooLarge: 413
+        case .echoMethod: 405
         }
     }
 
@@ -204,6 +207,7 @@ enum GatewayRefusal: Error, Equatable {
         case .foreignPlaceholder: "placeholder belongs to a different secret"
         case .tooLarge: "request too large"
         case .unsafeValue: "secret value cannot be placed safely at this placeholder's position"
+        case .echoMethod: "method would echo the brokered credential back"
         }
     }
 }
@@ -373,12 +377,31 @@ struct SecretScrubber {
 }
 
 enum GatewayHeaders {
+    static let echoMethods: Set<String> = ["TRACE", "TRACK"]
+
     /// RFC 9110 hop-by-hop plus framing headers the gateway re-derives.
+    /// `host` is dropped so the transport sets it from the bound upstream.
     static let dropOnRequest: Set<String> = [
         "connection", "keep-alive", "proxy-connection", "proxy-authorization", "proxy-authenticate",
         "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length", "expect",
         "accept-encoding",
     ]
+    /// Would let the agent run a different method than the one policy saw.
+    static let methodOverrides: Set<String> = ["x-http-method-override", "x-http-method", "x-method-override"]
+
+    /// The agent's headers that may go upstream. Runs before substitution, so
+    /// a placeholder in a hop-by-hop header, a `Proxy-*` header, or a header
+    /// `Connection` names is never swapped for the real value.
+    static func forwardable(_ headers: [(name: String, value: String)]) -> [(name: String, value: String)] {
+        let named = Set(headers.filter { $0.name.lowercased() == "connection" }.flatMap {
+            $0.value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        })
+        return headers.filter { header in
+            let name = header.name.lowercased()
+            return dropOnRequest.contains(name) == false && name.hasPrefix("proxy-") == false
+                && methodOverrides.contains(name) == false && named.contains(name) == false
+        }
+    }
     static let dropOnResponse: Set<String> = [
         "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "te", "trailer",
         "transfer-encoding", "upgrade", "content-length", "content-encoding",

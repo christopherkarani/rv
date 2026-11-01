@@ -384,7 +384,13 @@ public final class SecretGateway: @unchecked Sendable {
             refuse(client, .unknownRoute, method: head.method, path: path, secret: nil)
             return
         }
-        let substituted = GatewaySubstitution.apply(head, route: route) { token in
+        guard GatewayHeaders.echoMethods.contains(head.method) == false else {
+            refuse(client, .echoMethod, method: head.method, path: path, secret: route.secret)
+            return
+        }
+        var forwarded = head
+        forwarded.headers = GatewayHeaders.forwardable(head.headers)
+        let substituted = GatewaySubstitution.apply(forwarded, route: route) { token in
             entry(token).map {
                 GatewaySubstitution.Live(token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value)
             }
@@ -413,15 +419,12 @@ public final class SecretGateway: @unchecked Sendable {
             refuse(client, .tooLarge, method: head.method, path: path, secret: route.secret)
             return
         }
-        let headers = rewritten.headers.filter {
-            GatewayHeaders.dropOnRequest.contains($0.name.lowercased()) == false
-        }
         let sink = GatewayResponseWriter(
             fd: client,
             method: head.method,
             scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))]
         )
-        transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: headers, body: body), sink)
+        transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: rewritten.headers, body: body), sink)
         audit(SecretUseRecord(
             secret: live.secret,
             runtime: live.runtime,
@@ -497,6 +500,17 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         defer { lock.unlock() }
         guard wroteHead == false else { return }
         wroteHead = true
+        // Every forwarded request carries a brokered credential. Passing the
+        // 401 and its challenge on would start the agent's own auth flow
+        // for a credential only the operator can replace.
+        if status == 401 {
+            self.status = 502
+            failure = "upstream returned 401 for the brokered credential"
+            closed = true
+            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(
+                status: 502, reason: "the brokered credential was rejected upstream; update it with `rv secrets set`"))
+            return
+        }
         self.status = status
         framed = method != "HEAD" && status != 204 && status != 304 && (status < 100 || status >= 200)
         var text = "HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status).capitalized)\r\n"
@@ -538,7 +552,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     func fail(_ reason: String) {
         lock.lock()
         defer { lock.unlock() }
-        failure = reason
+        if failure == nil { failure = reason }
         guard closed == false else { return }
         closed = true
         if wroteHead == false {
