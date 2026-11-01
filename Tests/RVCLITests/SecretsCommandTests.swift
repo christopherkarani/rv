@@ -546,32 +546,28 @@ struct SecretsCommandTests {
         #expect(SecretsRun.profiles(fixture.environment()).first?.secrets == ["NEW_KEY", "OLD_KEY"])
     }
 
-    @Test func hookInstallIsIdempotentAndScansTheIndex() throws {
+    @Test func hookInstallKeepsTheExistingHookAndScansTheIndex() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
         let work = fixture.directory.appendingPathComponent("repo")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        func run(_ args: [String]) throws {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            process.arguments = args
-            try process.run()
-            process.waitUntilExit()
-            #expect(process.terminationStatus == 0)
-        }
-        try run(["-C", work.path, "init", "-q"])
+        try git(work, ["init", "-q"])
         let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
-        try Data("#!/bin/sh\necho foreign\n".utf8).write(to: foreign)
+        let original = "#!/bin/sh\necho foreign\n"
+        try Data(original.utf8).write(to: foreign)
         chmod(foreign.path, 0o755)
         let installed = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
         #expect(installed.contains("installed"))
         let hook = try String(contentsOf: foreign, encoding: .utf8)
-        #expect(hook.contains("# rv-secrets-hook"))
-        #expect(hook.contains("'/usr/bin/true'"))
-        let saved = try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8)
-        #expect(saved == "#!/bin/sh\necho foreign\n")
-        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
-        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == saved)
+        #expect(hook.hasPrefix("#!/bin/sh\n# >>> rv secrets >>>\n"))
+        #expect(hook.contains("'/usr/bin/true' secrets hook run"))
+        #expect(hook.hasSuffix("# <<< rv secrets <<<\necho foreign\n"))
+        #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved").path) == false)
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/opt/rv/bin/rv").get()
+        let reinstalled = try String(contentsOf: foreign, encoding: .utf8)
+        #expect(reinstalled.components(separatedBy: SecretGitHook.beginMarker).count == 2)
+        #expect(reinstalled.contains("'/opt/rv/bin/rv' secrets hook run"))
+        #expect(reinstalled.contains("/usr/bin/true") == false)
 
         let value = "hook-secret-value-xyz"
         var configuration = SecretsConfiguration(secrets: [
@@ -581,19 +577,79 @@ struct SecretsCommandTests {
         let environment = fixture.environment(host: ["GH_TOKEN": value])
         try Data("clean\n".utf8).write(to: work.appendingPathComponent("clean.txt"))
         try Data("\(value)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
-        try run(["-C", work.path, "add", "clean.txt"])
+        try git(work, ["add", "clean.txt"])
         let clean = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(clean.failed == false)
         #expect(clean.text.contains(value) == false)
-        try run(["-C", work.path, "add", "leak.txt"])
+        try git(work, ["add", "leak.txt"])
+        // The index is scanned, not the worktree: cleaning the file on disk does not hide the staged leak.
+        try Data("clean now\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
         let leaked = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(leaked.failed)
         #expect(leaked.text.contains("leak.txt:1:GH_TOKEN"))
+        #expect(leaked.text.contains("rv.secretsScan"))
         #expect(leaked.text.contains(value) == false)
 
         let removed = try SecretGitHook.uninstall(workTree: work).get()
-        #expect(removed.contains("restored"))
-        #expect(try String(contentsOf: foreign, encoding: .utf8) == saved)
+        #expect(removed.contains("removed rv's block"))
+        #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+    }
+
+    @Test func hookFindsPatternsPastTheFirstMebibyteAndReportsOversizedFiles() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-large")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        let padding = String(repeating: "filler line\n", count: 120_000)
+        try Data((padding + "key: \(token)\n").utf8).write(to: work.appendingPathComponent("big.txt"))
+        let huge = work.appendingPathComponent("huge.bin")
+        #expect(FileManager.default.createFile(atPath: huge.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: huge)
+        try handle.truncate(atOffset: UInt64(SecretLeakScanner.maximumFileBytes + 1))
+        try handle.close()
+        try git(work, ["add", "big.txt", "huge.bin"])
+        let result = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
+        #expect(result.failed)
+        #expect(result.text.contains("big.txt:120001:aws-access-key-id"))
+        #expect(result.text.contains("not scanned (over 8 MiB): huge.bin"))
+        #expect(result.text.contains(token) == false)
+
+        try git(work, ["rm", "-q", "--cached", "big.txt"])
+        let oversizedOnly = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
+        #expect(oversizedOnly.failed == false)
+        #expect(oversizedOnly.text.contains("not scanned (over 8 MiB): huge.bin"))
+    }
+
+    @Test func hookKillSwitchSkipsTheScanWithANotice() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-kill")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let finding = fixture.directory.appendingPathComponent("rv-finds")
+        try Data("#!/bin/sh\necho finding\nexit 1\n".utf8).write(to: finding)
+        chmod(finding.path, 0o755)
+        _ = try SecretGitHook.install(workTree: work, rvPath: finding.path).get()
+        func runHook() throws -> (status: Int32, stderr: String) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [work.appendingPathComponent(".git/hooks/pre-commit").path]
+            process.currentDirectoryURL = work
+            let err = Pipe()
+            process.standardError = err
+            process.standardOutput = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            return (process.terminationStatus, stderr)
+        }
+        #expect(try runHook().status == 1)
+        try git(work, ["config", "rv.secretsScan", "false"])
+        let skipped = try runHook()
+        #expect(skipped.status == 0)
+        #expect(skipped.stderr.contains("scan skipped"))
     }
 
     private func git(_ work: URL, _ args: [String]) throws {
@@ -628,20 +684,58 @@ struct SecretsCommandTests {
         #expect(FileManager.default.fileExists(atPath: main.appendingPathComponent(".git/hooks/pre-commit").path))
     }
 
-    @Test func hookMentioningTheMarkerIsBackedUpNotOverwritten() throws {
+    @Test func hookInstallRefusesHooksItCannotEditSafely() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
-        let work = fixture.directory.appendingPathComponent("repo-marker")
+        let work = fixture.directory.appendingPathComponent("repo-foreign")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         try git(work, ["init", "-q"])
-        let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
-        let original = "#!/bin/sh\n# rv-secrets-hook mentioned in a comment\necho foreign\n"
-        try Data(original.utf8).write(to: foreign)
-        chmod(foreign.path, 0o755)
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        let python = "#!/usr/bin/env python3\nprint('foreign')\n"
+        try Data(python.utf8).write(to: hook)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try String(contentsOf: hook, encoding: .utf8) == python)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.uninstall(workTree: work).get() }
+
+        try FileManager.default.removeItem(at: hook)
+        let target = fixture.directory.appendingPathComponent("shared-hook")
+        try Data("#!/bin/sh\n".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: hook, withDestinationURL: target)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try String(contentsOf: target, encoding: .utf8) == "#!/bin/sh\n")
+    }
+
+    @Test func hookInstallReplacesTheOldWholeFileHook() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-legacy")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        let saved = work.appendingPathComponent(".git/hooks/pre-commit.rv-saved")
+        try Data("#!/bin/sh\n# rv-secrets-hook\n'/usr/bin/true' secrets hook run\n".utf8).write(to: hook)
+        try Data("#!/bin/bash\necho previous\n".utf8).write(to: saved)
         _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
-        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == original)
+        let text = try String(contentsOf: hook, encoding: .utf8)
+        #expect(text.hasPrefix("#!/bin/bash\n# >>> rv secrets >>>"))
+        #expect(text.hasSuffix("echo previous\n"))
+        #expect(text.contains("# rv-secrets-hook") == false)
+        #expect(FileManager.default.fileExists(atPath: saved.path) == false)
         _ = try SecretGitHook.uninstall(workTree: work).get()
-        #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+        #expect(try String(contentsOf: hook, encoding: .utf8) == "#!/bin/bash\necho previous\n")
+    }
+
+    @Test func hookUninstallDeletesAHookThatOnlyHeldRvsBlock() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-fresh")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        #expect(try String(contentsOf: hook, encoding: .utf8).hasPrefix("#!/bin/sh\n# >>> rv secrets >>>"))
+        _ = try SecretGitHook.uninstall(workTree: work).get()
+        #expect(FileManager.default.fileExists(atPath: hook.path) == false)
     }
 
     @Test func secretsRobotJSONEscapesLineAndBidiScalars() throws {
