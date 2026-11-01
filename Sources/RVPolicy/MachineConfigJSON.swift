@@ -37,7 +37,6 @@ enum MachineConfigJSON {
         guard let data = try? encoder.encode(JSONValue.object(root)) else {
             throw SafetyStoreError.invalidFile
         }
-        try prepareDirectory(of: file)
         try data.write(to: file, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
