@@ -125,6 +125,17 @@ private func dechunk(_ text: String) -> String {
 
 final class AuditRecords: Sendable {
     let items = Mutex<[SecretUseRecord]>([])
+    /// What the audit sink reports back; false stands for a failed append.
+    let accepting: Bool
+
+    init(accepting: Bool = true) {
+        self.accepting = accepting
+    }
+
+    func record(_ record: SecretUseRecord) -> Bool {
+        items.withLock { $0.append(record) }
+        return accepting
+    }
 }
 
 @Suite("SecretGateway")
@@ -133,7 +144,7 @@ struct SecretGatewayTests {
         upstream: RecordingUpstream, value: String = "sk-live-REAL-0123456789", prefix: String = "sk-",
         surfaces: Set<GatewaySurface> = [.header], rules: [GatewayAccessRule] = [], audit: AuditRecords
     ) throws -> (SecretGateway, Int, SecretPlaceholder) {
-        let gateway = SecretGateway(transport: upstream.transport) { record in audit.items.withLock { $0.append(record) } }
+        let gateway = SecretGateway(transport: upstream.transport, audit: audit.record)
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: prefix)
         gateway.register(placeholder, entry: SecretGateway.Entry(
@@ -172,7 +183,7 @@ struct SecretGatewayTests {
         #expect(response.headers["content-length"] == nil)
         #expect(response.body.contains(secret) == false)
 
-        let record = try #require(audit.items.withLock { $0.first })
+        let record = try #require(audit.items.withLock { $0.last })
         #expect(record.allowed)
         #expect(record.secret == "OPENAI_API_KEY")
         #expect(record.runtime == "R1")
@@ -339,9 +350,85 @@ struct SecretGatewayTests {
         #expect(response.headers["www-authenticate"] == nil)
         #expect(response.body.contains("brokered credential was rejected"))
         #expect(response.body.contains("invalid_api_key") == false)
-        let record = try #require(audit.items.withLock { $0.first })
+        let record = try #require(audit.items.withLock { $0.last })
         #expect(record.status == 502)
+        #expect(record.upstreamStatus == 401)
+        #expect(record.activity == .brokered)
         #expect(record.reason?.contains("401") == true)
+    }
+
+    @Test func aFailedAuditAppendRefusesTheRequestBeforeItIsForwarded() throws {
+        let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
+        let audit = AuditRecords(accepting: false)
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 503)
+        #expect(response.body.contains("audit log"))
+        #expect(upstream.requests.isEmpty)
+        let records = audit.items.withLock { $0 }
+        #expect(records.map(\.stage) == [.forward, .complete])
+        #expect(records.last?.activity == .refused)
+        #expect(records.last?.refusal == "auditUnavailable")
+        #expect(records.last?.status == 503)
+    }
+
+    @Test func activityRecordsNameSecretSurfacesStatusAndDurationButNoValue() throws {
+        let upstream = RecordingUpstream(status: 201, chunks: [Data("ok".utf8)])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, surfaces: [.header, .query], audit: audit)
+        defer { gateway.stop() }
+        _ = try gatewayExchange(port: port,
+            "POST /s/OPENAI_API_KEY/chat?key=\(placeholder.text)&q=private HTTP/1.1\r\n"
+                + "Authorization: Bearer \(placeholder.text)\r\nContent-Length: 0\r\n\r\n")
+        let records = audit.items.withLock { $0 }
+        #expect(records.map(\.stage) == [.forward, .complete])
+        #expect(records.allSatisfy { $0.activity == .brokered && $0.secret == "OPENAI_API_KEY" })
+        #expect(records[0].upstreamStatus == nil)
+        let done = try #require(records.last)
+        #expect(done.surfaces == ["header", "query"])
+        #expect(done.method == "POST")
+        #expect(done.path == "/s/OPENAI_API_KEY/chat")
+        #expect(done.upstreamStatus == 201)
+        #expect(done.status == 201)
+        #expect(done.durationMilliseconds >= 0)
+        #expect(done.allowed)
+        for record in records {
+            let text = String(describing: record)
+            #expect(text.contains(placeholder.token) == false)
+            #expect(text.contains("sk-live-REAL") == false)
+            #expect(text.contains("private") == false)
+        }
+    }
+
+    @Test func policyRefusalsAreBlockedOtherRefusalsRefusedAndFailedExchangesErrors() throws {
+        let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        _ = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/m?k=\(placeholder.text) HTTP/1.1\r\n\r\n")
+        _ = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/m HTTP/1.1\r\n\r\n")
+        let records = audit.items.withLock { $0 }
+        #expect(records.map(\.activity) == [.blocked, .refused])
+        #expect(records.map(\.refusal) == ["surfaceNotAllowed", "noPlaceholder"])
+        #expect(records.allSatisfy { $0.allowed == false && $0.stage == .complete })
+
+        let failing = AuditRecords()
+        let broken = SecretGateway(transport: SecretUpstreamTransport { _, sink in sink.fail("connection reset") },
+            audit: failing.record)
+        defer { broken.stop() }
+        let brokenPort = try broken.start().get()
+        broken.register(placeholder, entry: SecretGateway.Entry(
+            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            upstream: try #require(URL(string: "https://api.example.com")), fingerprint: nil, runtime: nil))
+        let response = try gatewayExchange(port: brokenPort,
+            "GET /s/OPENAI_API_KEY/m HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 502)
+        let failed = try #require(failing.items.withLock { $0.last })
+        #expect(failed.activity == .error)
+        #expect(failed.upstreamStatus == nil)
+        #expect(failed.reason == "connection reset")
     }
 
     @Test func compressedResponsesAreRefusedBecauseTheyCannotBeScanned() throws {
@@ -359,7 +446,7 @@ struct SecretGatewayTests {
             #expect(response.status == 502, "\(coding)")
             #expect(response.body.contains("compressed"))
             #expect(response.body.utf8.contains(0x8b) == false)
-            let record = try #require(audit.items.withLock { $0.first })
+            let record = try #require(audit.items.withLock { $0.last })
             #expect(record.status == 502)
             #expect(record.reason?.contains("compressed") == true)
         }
@@ -519,7 +606,7 @@ struct SecretGatewayTests {
     }
 
     @Test func aSecondStartReusesThePublishedPort() throws {
-        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in }
+        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in true }
         let first = try gateway.start().get()
         let second = try gateway.start().get()
         defer { gateway.stop() }
@@ -529,7 +616,7 @@ struct SecretGatewayTests {
 
     @Test func overlappingStartsPublishOneListenerAndStopClosesIt() throws {
         let overlap = StartOverlap()
-        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in }
+        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in true }
         gateway.beforeListenerPublish = { overlap.waitForPeer() }
         let ports = Mutex<[Int]>([])
         let group = DispatchGroup()
@@ -558,7 +645,7 @@ struct SecretGatewayTests {
     }
 
     @Test func startBindingWhileStopRunsDoesNotPublishAListener() throws {
-        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in }
+        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in true }
         let entered = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
         gateway.beforeListenerPublish = {

@@ -196,3 +196,88 @@ struct SecretLaunchBrokerTests {
         #expect(fixture.auditText.contains("staged") == false)
     }
 }
+extension SecretLaunchBrokerTests {
+    private func leasedPlaceholder(_ broker: SecretLaunchBroker) throws -> (port: Int, text: String, token: String) {
+        let lease = try broker.lease(names: ["OPENAI_API_KEY"], agent: "codex").get()
+        let text = try #require(lease.environment.first { $0.name == "OPENAI_API_KEY" }?.value)
+        return (try #require(broker.gatewayPort), text, String(text.suffix(SecretPlaceholder.tokenLength)))
+    }
+
+    @Test func policyRefusalsAddAHighSeverityMisuseEventWithoutPlaceholderOrQuery() throws {
+        let fixture = try SecretsFixture(SecretsFixture.standard)
+        defer { fixture.tearDown() }
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver,
+            transport: RecordingUpstream().transport, workspace: "W1")
+        defer { broker.stop() }
+        let placeholder = try leasedPlaceholder(broker)
+        // The binding allows only the header surface.
+        let offSurface = try gatewayExchange(port: placeholder.port,
+            "GET /s/OPENAI_API_KEY/models?key=\(placeholder.text)&q=privatequery HTTP/1.1\r\n\r\n")
+        #expect(offSurface.status == 403)
+        let encoded = try gatewayExchange(port: placeholder.port,
+            "GET /s/OPENAI_API_KEY/rvph%5F\(placeholder.token)/x HTTP/1.1\r\n\r\n")
+        #expect(encoded.status == 400)
+        // Not a policy violation: no misuse event.
+        let bare = try gatewayExchange(port: placeholder.port, "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\n\r\n")
+        #expect(bare.status == 401)
+
+        let misuse = fixture.auditLines.filter { $0["kind"] as? String == "secret.misuse" }
+        #expect(misuse.count == 2)
+        #expect(misuse.allSatisfy { $0["decision"] as? String == "denied" && $0["subject"] as? String == "OPENAI_API_KEY" })
+        let refusals = misuse.compactMap { ($0["detail"] as? [String: String])?["refusal"] }
+        #expect(refusals == ["surfaceNotAllowed", "encodedPlaceholder"])
+        #expect(misuse.allSatisfy { ($0["detail"] as? [String: String])?["severity"] == "high" })
+        let denied = fixture.auditLines.filter {
+            $0["kind"] as? String == "secret.use" && ($0["detail"] as? [String: String])?["event"] == "request"
+        }
+        #expect(denied.compactMap { ($0["detail"] as? [String: String])?["activity"] } == ["blocked", "blocked", "refused"])
+        #expect(fixture.auditText.contains(placeholder.token) == false)
+        #expect(fixture.auditText.contains("privatequery") == false)
+        #expect(fixture.auditText.contains("sk-live-REAL") == false)
+    }
+
+    @Test func brokeredRequestsAreNotForwardedWhenTheAuditLogCannotBeWritten() throws {
+        let fixture = try SecretsFixture(SecretsFixture.standard)
+        defer { fixture.tearDown() }
+        let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver, transport: upstream.transport, workspace: nil)
+        defer { broker.stop() }
+        let placeholder = try leasedPlaceholder(broker)
+        let ledger = fixture.directory.appendingPathComponent("audit.jsonl")
+        try FileManager.default.removeItem(at: ledger)
+        try FileManager.default.createDirectory(at: ledger, withIntermediateDirectories: false)
+        let response = try gatewayExchange(port: placeholder.port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 503)
+        #expect(response.body.contains("audit log"))
+        #expect(upstream.requests.isEmpty)
+    }
+
+    @Test func activityEventsCarrySurfacesStatusAndDuration() {
+        let record = SecretUseRecord(
+            secret: "OPENAI_API_KEY", runtime: "R1", upstreamHost: "api.example.com", method: "POST",
+            path: "/s/OPENAI_API_KEY/chat", status: 502, upstreamStatus: 401, activity: .brokered, refusal: nil,
+            reason: "upstream returned 401 for the brokered credential", surfaces: ["header", "query"],
+            fingerprint: "abcd", responseBytes: 0, durationMilliseconds: 12, stage: .complete)
+        let event = SecretLaunchBroker.auditEvent(record, workspace: "W1")
+        #expect(event.kind == .secretUse)
+        #expect(event.decision == .allowed)
+        #expect(event.detail["event"] == "request")
+        #expect(event.detail["activity"] == "brokered")
+        #expect(event.detail["surfaces"] == "header,query")
+        #expect(event.detail["upstreamStatus"] == "401")
+        #expect(event.detail["status"] == "502")
+        #expect(event.detail["durationMs"] == "12")
+        #expect(SecretLaunchBroker.misuseEvent(record, workspace: "W1") == nil)
+
+        var failed = record
+        failed.activity = .error
+        failed.upstreamStatus = nil
+        #expect(SecretLaunchBroker.auditEvent(failed, workspace: nil).decision == .failed)
+        var forward = record
+        forward.stage = .forward
+        #expect(SecretLaunchBroker.auditEvent(forward, workspace: nil).detail["event"] == "forward")
+    }
+}

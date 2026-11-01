@@ -122,5 +122,20 @@ struct SecretGatewayAccessTests {
         let key = SecretPlaceholder.mint(prefix: "sk-")
         #expect(SecretPlaceholder.redacted("/s/K/bot\(key.text)/send") == "/s/K/botsk-rvph_[redacted]/send")
         #expect(SecretPlaceholder.redacted("/s/K/plain") == "/s/K/plain")
+        #expect(SecretPlaceholder.redactedPath("/s/K/rvph%5F\(key.token)/x?q=\(key.text)") == "/s/K/rvph_[redacted]/x")
+        #expect(SecretPlaceholder.redactedPath("/s/K/a%2Fb?q=1") == "/s/K/a%2Fb")
+    }
+
+    @Test func onlyPolicyRefusalsAreMisuse() {
+        let all: [GatewayRefusal] = [
+            .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .foreignPlaceholder, .tooLarge,
+            .unsafeValue, .echoMethod, .encodedPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder,
+            .outsideAllowRules, .ambiguousPath, .auditUnavailable,
+        ]
+        #expect(all.filter(\.isMisuse).map(\.code) == [
+            "foreignPlaceholder", "echoMethod", "encodedPlaceholder", "surfaceNotAllowed", "repeatedPlaceholder",
+            "outsideAllowRules", "ambiguousPath",
+        ])
+        #expect(GatewayRefusal.auditUnavailable.status == 503)
     }
 }

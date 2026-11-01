@@ -59,7 +59,11 @@ final class SecretLaunchBroker: @unchecked Sendable {
         self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
         let directory = configDirectory
         gateway = SecretGateway(transport: transport) { record in
-            _ = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)
+            let landed = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)
+            if let finding = Self.misuseEvent(record, workspace: workspace) {
+                _ = AuditLog.append(finding, configDirectory: directory)
+            }
+            return landed
         }
     }
 
@@ -191,24 +195,53 @@ final class SecretLaunchBroker: @unchecked Sendable {
     }
 
     static func auditEvent(_ record: SecretUseRecord, workspace: String?) -> AuditEvent {
-        AuditEvent(
+        let decision: AuditDecision =
+            switch record.activity {
+            case .brokered: .allowed
+            case .blocked, .refused: .denied
+            case .error: .failed
+            }
+        return AuditEvent(
             time: Date(),
             kind: .secretUse,
-            decision: record.allowed ? .allowed : .denied,
+            decision: decision,
             subject: record.secret ?? "unknown",
             reason: record.reason,
             workspace: workspace,
             runtime: record.runtime,
             source: "secret-gateway",
             detail: compact([
-                "event": "request",
+                "event": record.stage == .forward ? "forward" : "request",
+                "activity": record.activity.rawValue,
+                "refusal": record.refusal,
                 "method": record.method,
                 "path": record.path,
-                "status": String(record.status),
+                "surfaces": record.surfaces.isEmpty ? nil : record.surfaces.joined(separator: ","),
+                "status": record.stage == .forward ? nil : String(record.status),
+                "upstreamStatus": record.upstreamStatus.map(String.init),
                 "upstream": record.upstreamHost,
                 "fingerprint": record.fingerprint,
-                "responseBytes": String(record.responseBytes),
+                "responseBytes": record.stage == .forward ? nil : String(record.responseBytes),
+                "durationMs": record.stage == .forward ? nil : String(record.durationMilliseconds),
             ])
+        )
+    }
+
+    /// A high-severity finding for a request the secret's own policy refused.
+    /// Names the secret, refusal, method, and redacted path; never a value,
+    /// placeholder, or query string.
+    static func misuseEvent(_ record: SecretUseRecord, workspace: String?) -> AuditEvent? {
+        guard record.activity == .blocked, let refusal = record.refusal else { return nil }
+        return AuditEvent(
+            time: Date(),
+            kind: .secretMisuse,
+            decision: .denied,
+            subject: record.secret ?? "unknown",
+            reason: record.reason,
+            workspace: workspace,
+            runtime: record.runtime,
+            source: "secret-gateway",
+            detail: ["refusal": refusal, "method": record.method, "path": record.path, "severity": "high"]
         )
     }
 

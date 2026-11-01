@@ -55,6 +55,15 @@ public struct SecretPlaceholder: Sendable, Hashable {
         return String(decoding: output + bytes[cursor...], as: UTF8.self)
     }
 
+    /// The target's path for audit: no query, placeholders redacted, and
+    /// decoded once when that reveals a percent-encoded placeholder.
+    static func redactedPath(_ target: String) -> String {
+        let path = Array(target.utf8.prefix { $0 != UInt8(ascii: "?") })
+        let decoded = GatewaySubstitution.percentDecoded(path)
+        let encoded = occurrences(in: decoded).count != occurrences(in: path).count
+        return redacted(String(decoding: encoded ? decoded : path, as: UTF8.self))
+    }
+
     private static func isLowerHex(_ byte: UInt8) -> Bool {
         (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
     }
@@ -210,10 +219,29 @@ enum GatewayRefusal: Error, Equatable {
     /// With allow rules, a path an upstream could read differently from the
     /// matcher: encoded `/` or dots, `..`, `;`, `//`, or double encoding.
     case ambiguousPath
+    /// The forward record did not reach the audit log.
+    case auditUnavailable
+
+    /// The case name, a stable code for audit records.
+    var code: String { "\(self)" }
+
+    /// A request the secret's own policy forbids: worth an alert, since a
+    /// well-behaved client using the placeholder as documented never sends one.
+    var isMisuse: Bool {
+        switch self {
+        case .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules, .encodedPlaceholder,
+            .ambiguousPath, .echoMethod:
+            true
+        case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
+            .auditUnavailable:
+            false
+        }
+    }
 
     var status: Int {
         switch self {
         case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath: 400
+        case .auditUnavailable: 503
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules:
@@ -238,6 +266,7 @@ enum GatewayRefusal: Error, Equatable {
         case .repeatedPlaceholder: "placeholder may appear once per surface (header, query, path)"
         case .outsideAllowRules: "method and path are outside this secret's allow rules"
         case .ambiguousPath: "path has encoded separators, dot segments, or ;; send it plainly"
+        case .auditUnavailable: "the audit log could not record this request, so it was not forwarded"
         }
     }
 }
@@ -283,7 +312,7 @@ enum GatewaySubstitution {
         _ head: GatewayRequestHead,
         route: GatewayRoute,
         lookup: (String) -> Live?
-    ) -> Result<(head: GatewayRequestHead, used: Live), GatewayRefusal> {
+    ) -> Result<(head: GatewayRequestHead, used: Live, surfaces: Set<GatewaySurface>), GatewayRefusal> {
         var used: Live?
         var filled: Set<GatewaySurface> = []
         func rewrite(_ bytes: [UInt8], at position: Position) -> Result<[UInt8], GatewayRefusal> {
@@ -351,7 +380,7 @@ enum GatewaySubstitution {
             }
         }
         guard let used else { return .failure(.noPlaceholder) }
-        return .success((rewritten, used))
+        return .success((rewritten, used, filled))
     }
 
     /// The value as it may appear at `position`, or nil when no encoding keeps
