@@ -23,7 +23,11 @@ struct JudgeOffloadTests {
                 latency.withLock { $0 = ran - spawned }
             }
         }
-        DispatchQueue(label: "test.release").asyncAfter(deadline: .now() + .seconds(3)) {
+        // A starved pool cannot run the probe before the release, so its
+        // latency is at least release - probe (4.7 s). The bound sits well
+        // below that and well above scheduler noise from the other suites
+        // sharing this process on a small CI runner (1.35 s seen on Linux).
+        DispatchQueue(label: "test.release").asyncAfter(deadline: .now() + .seconds(5)) {
             for _ in 0..<waiters { release.signal() }
         }
         let finished = await withTaskGroup(of: Int.self) { group in
@@ -40,7 +44,7 @@ struct JudgeOffloadTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         let measured = latency.withLock { $0 } ?? .seconds(99)
-        #expect(measured < .seconds(1), "unrelated task waited \(measured) behind judge waits")
+        #expect(measured < .milliseconds(2500), "unrelated task waited \(measured) behind judge waits")
     }
 
     @Test func returnsTheBodysValue() async {
