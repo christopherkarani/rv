@@ -62,13 +62,13 @@ struct SecretGatewayRotationTests {
         upstream: RecordingUpstream, clock: TestClock, audit: AuditRecords, expires: Date? = nil,
         refresh: SecretRefreshPolicy? = nil
     ) throws -> (SecretGateway, Int, SecretPlaceholder) {
-        let gateway = SecretGateway(transport: upstream.transport, audit: audit.record, now: { clock.now })
+        let gateway = SecretGateway(transport: upstream.transport, peers: .fixed(.member), audit: audit.record, now: { clock.now })
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "sk-")
         gateway.register(placeholder, entry: SecretGateway.Entry(
             secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue(Self.old)),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "fp-old", runtime: "R1",
-            expires: expires, refresh: refresh))
+            processGroup: testProcessGroup, expires: expires, refresh: refresh))
         return (gateway, port, placeholder)
     }
 
@@ -395,9 +395,10 @@ struct SecretLaunchBrokerRotationTests {
         let upstream = RecordingUpstream(chunks: [Data("echo sk-live-OLD-0123456789".utf8)])
         let broker = SecretLaunchBroker(
             configDirectory: fixture.directory, resolver: keychain.resolver,
-            transport: upstream.transport, workspace: "W1", now: { clock.now })
+            transport: upstream.transport, peers: .fixed(.member), workspace: "W1", now: { clock.now })
         defer { broker.stop() }
         let lease = try broker.lease(names: ["OPENAI_API_KEY"], agent: nil).get()
+        broker.bind(lease, processGroup: testProcessGroup)
         let placeholder = try #require(lease.environment.first { $0.name == "OPENAI_API_KEY" }?.value)
         let port = try #require(broker.gatewayPort)
 
@@ -431,9 +432,10 @@ struct SecretLaunchBrokerRotationTests {
         let upstream = RecordingUpstream()
         let broker = SecretLaunchBroker(
             configDirectory: fixture.directory, resolver: keychain.resolver,
-            transport: upstream.transport, workspace: nil, now: { clock.now })
+            transport: upstream.transport, peers: .fixed(.member), workspace: nil, now: { clock.now })
         defer { broker.stop() }
         let lease = try broker.lease(names: ["OPENAI_API_KEY"], agent: nil).get()
+        broker.bind(lease, processGroup: testProcessGroup)
         let placeholder = try #require(lease.environment.first { $0.name == "OPENAI_API_KEY" }?.value)
         let port = try #require(broker.gatewayPort)
 
