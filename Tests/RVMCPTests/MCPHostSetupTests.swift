@@ -322,6 +322,66 @@ struct MCPHostSetupTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == text)
     }
 
+    private func isSymbolicLink(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    @Test func setupRefusesASymlinkedHostConfig() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let target = try box.write("dotfiles/mcp.json", text)
+        chmod(target.path, 0o600)
+        let link = box.home.appendingPathComponent(".cursor/mcp.json")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(link.path)))
+        #expect(isSymbolicLink(link))
+        #expect(try String(contentsOf: target, encoding: .utf8) == text)
+        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        #expect(MCPHostSetup.loadManifest(box.config).isEmpty)
+        guard case .failure(let error) = outcome else { return }
+        #expect(error.message.contains("symbolic link"))
+    }
+
+    @Test func undoRefusesASymlinkedHostConfig() throws {
+        let box = Sandbox()
+        let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
+        _ = try MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        let rewritten = try Data(contentsOf: file)
+        let target = box.home.appendingPathComponent("dotfiles/mcp.json")
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try rewritten.write(to: target)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.undo(host: .cursor, servers: nil, configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(file.path)))
+        #expect(isSymbolicLink(file))
+        #expect(try Data(contentsOf: target) == rewritten)
+        #expect(MCPHostSetup.loadManifest(box.config).map(\.name) == ["wax"])
+    }
+
+    @Test func writerRefusesToReplaceASymbolicLink() throws {
+        let box = Sandbox()
+        let target = try box.write("dotfiles/mcp.json", "{}")
+        let link = box.home.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        #expect(MCPHostSetup.writePreservingMode(Data("[]".utf8), to: link) == false)
+        #expect(isSymbolicLink(link))
+        #expect(try String(contentsOf: target, encoding: .utf8) == "{}")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: box.home.path)
+        #expect(leftovers.sorted() == ["dotfiles", "link.json"])
+    }
+
     @Test func rewritesOpencodeShapeAndPrintsCodexSteps() throws {
         let box = Sandbox()
         let file = try box.write(

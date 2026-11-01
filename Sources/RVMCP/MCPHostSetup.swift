@@ -263,6 +263,7 @@ public enum MCPSetupError: Error, Sendable, Equatable {
     case hasComments(String)
     case writeFailed(String)
     case manifest(String)
+    case symbolicLink(String)
 
     public var message: String {
         switch self {
@@ -270,6 +271,8 @@ public enum MCPSetupError: Error, Sendable, Equatable {
         case .hasComments(let path): "\(MCPDisplayedText.field(path)) has comments or trailing commas rv would lose; edit it by hand"
         case .writeFailed(let path): "could not write \(MCPDisplayedText.field(path))"
         case .manifest(let reason): "setup manifest: \(reason)"
+        case .symbolicLink(let path):
+            "\(MCPDisplayedText.field(path)) is a symbolic link; rv will not replace a symlinked config, so edit its target by hand"
         }
     }
 }
@@ -345,6 +348,8 @@ public enum MCPHostSetup {
                     changed = true
                 }
                 guard changed else { continue }
+                // Replacing a link would drop it and copy its target's bytes here.
+                guard isSymbolicLink(file.path) == false else { return .failure(.symbolicLink(file.path.path)) }
                 guard (try? JSONValue.parse(data, maximumDepth: 128)) != nil else {
                     return .failure(.hasComments(file.path.path))
                 }
@@ -397,6 +402,7 @@ public enum MCPHostSetup {
                 changed = true
                 result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
             }
+            if changed, isSymbolicLink(url) { return .failure(.symbolicLink(path)) }
             if changed, writePreservingMode(Data(root.prettyText.utf8), to: url) == false {
                 return .failure(.writeFailed(path))
             }
@@ -429,8 +435,16 @@ public enum MCPHostSetup {
         return .object(object)
     }
 
+    /// Whether the leaf itself is a link; links in parent directories are fine.
+    static func isSymbolicLink(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
+    }
+
     /// Temp file + rename in the same directory, keeping the original mode.
+    /// Refuses a symlinked leaf: the rename would replace the link itself.
     static func writePreservingMode(_ data: Data, to url: URL) -> Bool {
+        guard isSymbolicLink(url) == false else { return false }
         var info = stat()
         let mode = lstat(url.path, &info) == 0 ? info.st_mode & 0o777 : 0o600
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).rv-\(UUID().uuidString)")
