@@ -59,6 +59,15 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/hook_fallback.c"
 "$OUT/hook_fallback_test"
 
+if [[ "$OS" == "Darwin" ]]; then
+  # Trust manifest parsing is Darwin-only (Linux pins the sibling rvd).
+  clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+    -I "$SRC" \
+    -o "$OUT/daemon_trust_test" \
+    "$SRC/tests/daemon_trust_test.c"
+  "$OUT/daemon_trust_test"
+fi
+
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -o "$OUT/evaluation_route_test" \
