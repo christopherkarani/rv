@@ -304,13 +304,29 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    /// Authority-bearing hooks never retry through the local evaluation door.
+    /// Whole hook consult budget: two Hello exchanges (3000 ms each, covers
+    /// a launchd cold spawn) plus hookEvaluate (8000 ms; rvd enforces its
+    /// own shorter deadline). Mirrors the C client's per-exchange budgets.
+    static let hookEvaluateTimeoutMs = 14_000
+
+    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
-        func unavailable() -> HookWire {
-            LocalControlBoundary.deniedHook(host: host)
+        await hookEvaluate(
+            host: host,
+            stdin: stdin,
+            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey])
+        )
+    }
+
+    /// Authority-bearing hooks never retry through the local evaluation door,
+    /// and the request is never resent. A daemon miss is classified and
+    /// rendered per `whenDown` (`HookDaemonFallback`).
+    public func hookEvaluate(host: HookHost, stdin: String, whenDown: HookWhenDown) async -> HookWire {
+        func unavailable(_ failure: HookDaemonFailure) -> HookWire {
+            HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
         }
         guard let transport else {
-            return unavailable()
+            return unavailable(.unreachable)
         }
         do {
             let reply = try await send(
@@ -322,7 +338,7 @@ public struct ServiceClient: Sendable {
                     )
                 ),
                 using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                timeoutMs: Self.hookEvaluateTimeoutMs,
                 hookConsult: true
             )
             switch EvaluationRoute.path(for: .reply(
@@ -333,13 +349,13 @@ public struct ServiceClient: Sendable {
                 return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
             case .inProcess:
                 transport.invalidate()
-                return unavailable()
+                return unavailable(.protocol)
             }
         } catch is IPCCallError {
             transport.invalidate()
-            return unavailable()
+            return unavailable(.protocol)
         } catch {
-            return unavailable()
+            return unavailable(HookDaemonFallback.classify(error))
         }
     }
 
