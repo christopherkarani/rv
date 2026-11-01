@@ -382,6 +382,22 @@ struct MCPHostSetupTests {
         #expect(leftovers.sorted() == ["dotfiles", "link.json"])
     }
 
+    @Test func setupWritesThroughASymlinkedParentDirectory() throws {
+        let box = Sandbox()
+        let real = try box.write("dotfiles/cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
+        let linkedDirectory = box.home.appendingPathComponent(".cursor")
+        try FileManager.default.createSymbolicLink(at: linkedDirectory, withDestinationURL: real.deletingLastPathComponent())
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 1)
+        #expect(isSymbolicLink(linkedDirectory))
+        #expect(isSymbolicLink(real) == false)
+        #expect(try String(contentsOf: real, encoding: .utf8).contains("/opt/rv"))
+    }
+
     @Test func rewritesOpencodeShapeAndPrintsCodexSteps() throws {
         let box = Sandbox()
         let file = try box.write(
