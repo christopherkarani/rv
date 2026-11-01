@@ -292,7 +292,7 @@ enum HelpCatalog {
                 HelpRow(name: "--profile-id", description: "Profile id to create. Default: main"),
                 HelpRow(name: "--agent", description: "Serve this agent tag (repeatable). Default: detect installed agents"),
                 HelpRow(name: "--secret", description: "Wire this secret name into the profile (repeatable)"),
-                HelpRow(name: "--varlock", description: ".env.schema to import. Default: <project>/.env.schema when present"),
+                HelpRow(name: "--varlock", description: ".env.schema to import. A project .env.schema is only reported, never imported"),
                 HelpRow(name: "--dry-run", description: "Show the plan; write nothing"),
             ]),
             HelpSection(heading: "Notes", rows: [
@@ -447,7 +447,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
-                HelpRow(name: "rv secrets import --varlock <.env.schema> [--dry-run]"),
+                HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
             ]),
             HelpSection(heading: "Flags", rows: [
@@ -456,7 +456,7 @@ enum HelpCatalog {
                 HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
                 HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
                 HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
-                HelpRow(name: "--resource-profile", description: "Wire the secret into this runtime profile (see `rv init`)"),
+                HelpRow(name: "--resource-profile", description: "Wire the secret (or every imported name) into this runtime profile (see `rv init`)"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
