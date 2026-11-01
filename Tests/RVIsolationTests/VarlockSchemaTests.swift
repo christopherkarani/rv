@@ -306,6 +306,18 @@ struct VarlockSchemaTests {
         #expect(plan.notes.contains("skip my.dotted-key: not an environment variable name"))
         #expect(plan.notes.contains("skip NEXT: not sensitive"))
     }
+
+    // MARK: Schema errors (config-item.ts:332-345)
+
+    @Test func repeatedValueDecoratorIsASchemaError() {
+        let sameLine = VarlockSchema.plan("# @sensitive @sensitive=false\nKEY=op(op://v/i/f)\n")
+        #expect(sameLine.failureMessage?.contains("KEY") == true)
+        #expect(sameLine.failureMessage?.contains("@sensitive") == true)
+        let acrossLines = VarlockSchema.plan("# @type=string\n# @type=url\nKEY=op(op://v/i/f)\n")
+        #expect(acrossLines.failureMessage?.contains("@type") == true)
+        let functions = VarlockSchema.plan("# @docs(a) @docs(b) @sensitive\nKEY=op(op://v/i/f)\n")
+        #expect(functions.failureMessage == nil)
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {

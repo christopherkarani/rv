@@ -24,6 +24,11 @@ public enum VarlockSchema {
             return .failure(VarlockSchemaError("schema contains NUL"))
         }
         let document = parse(text)
+        for item in document.items {
+            if let repeated = repeatedDecorator(item) {
+                return .failure(VarlockSchemaError("\(item.name): decorator @\(repeated) is used twice"))
+            }
+        }
         var plan = VarlockImportPlan()
         var seen = Set<String>()
         for item in document.items {
@@ -39,6 +44,13 @@ public enum VarlockSchema {
             }
         }
         return .success(plan)
+    }
+
+    /// Varlock rejects a value decorator used twice on one item
+    /// (config-item.ts:332-345); call forms such as `@docs(...)` may repeat.
+    private static func repeatedDecorator(_ item: Item) -> String? {
+        var seen = Set<String>()
+        return item.decorators.first { $0.arguments == nil && seen.insert($0.name).inserted == false }?.name
     }
 
     private struct Decorator {
