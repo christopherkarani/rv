@@ -203,6 +203,30 @@ struct SecretGatewayTests {
         #expect(audit.items.withLock { $0.allSatisfy { $0.allowed == false } && $0.count == 4 })
     }
 
+    @Test func secretValuesCannotReshapeTheUpstreamRequest() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(
+            upstream: upstream, value: "x?admin=1&/../admin\r\nX-Injected: yes", prefix: "", audit: audit)
+        defer { gateway.stop() }
+
+        let query = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models?key=\(placeholder.text) HTTP/1.1\r\n\r\n")
+        #expect(query.status == 200)
+        let seen = try #require(upstream.requests.first)
+        #expect(seen.url == "https://api.example.com/v1/models?key=x%3Fadmin%3D1%26%2F..%2Fadmin%0D%0AX-Injected%3A%20yes")
+        #expect(seen.headers["x-injected"] == nil)
+
+        let path = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/bot\(placeholder.text)/send HTTP/1.1\r\n\r\n")
+        #expect(path.status == 400)
+        let header = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(header.status == 400)
+        #expect(header.body.contains("x?admin") == false)
+        #expect(upstream.requests.count == 1)
+    }
+
     @Test func acceptsChunkedBodiesAndExpectContinue() throws {
         let upstream = RecordingUpstream(status: 201, chunks: [Data("created".utf8)])
         let audit = AuditRecords()

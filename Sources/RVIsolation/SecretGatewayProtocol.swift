@@ -182,10 +182,12 @@ enum GatewayRefusal: Error, Equatable {
     case unknownPlaceholder
     case foreignPlaceholder
     case tooLarge
+    /// The value would change the request's shape where the placeholder sits.
+    case unsafeValue
 
     var status: Int {
         switch self {
-        case .malformed: 400
+        case .malformed, .unsafeValue: 400
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder: 403
@@ -201,12 +203,15 @@ enum GatewayRefusal: Error, Equatable {
         case .unknownPlaceholder: "placeholder is not live in this workspace"
         case .foreignPlaceholder: "placeholder belongs to a different secret"
         case .tooLarge: "request too large"
+        case .unsafeValue: "secret value cannot be placed safely at this placeholder's position"
         }
     }
 }
 
 /// Swaps this secret's placeholders for its real value in the target and
-/// header values. Body bytes pass through untouched.
+/// header values. Body bytes pass through untouched. The value is encoded or
+/// refused per position so it cannot change the request's shape: a path
+/// segment stays one segment, a query value one value, a header one line.
 enum GatewaySubstitution {
     struct Live {
         var token: String
@@ -215,21 +220,28 @@ enum GatewaySubstitution {
         var value: SecretValue
     }
 
+    /// Where a placeholder sits in the request head.
+    enum Position {
+        case path
+        case query
+        case header
+    }
+
     static func apply(
         _ head: GatewayRequestHead,
         route: GatewayRoute,
         lookup: (String) -> Live?
     ) -> Result<(head: GatewayRequestHead, used: Live), GatewayRefusal> {
         var used: Live?
-        func rewrite(_ text: String) -> Result<String, GatewayRefusal> {
-            let bytes = Array(text.utf8)
+        func rewrite(_ bytes: [UInt8], at position: Position) -> Result<[UInt8], GatewayRefusal> {
             let found = SecretPlaceholder.occurrences(in: bytes)
-            guard found.isEmpty == false else { return .success(text) }
+            guard found.isEmpty == false else { return .success(bytes) }
             var output: [UInt8] = []
             var cursor = 0
             for occurrence in found {
                 guard let live = lookup(occurrence.token) else { return .failure(.unknownPlaceholder) }
                 guard live.secret == route.secret else { return .failure(.foreignPlaceholder) }
+                guard let value = encode(live.value.bytes, at: position) else { return .failure(.unsafeValue) }
                 let prefix = Array(live.prefix.utf8)
                 var start = occurrence.start
                 if prefix.isEmpty == false, start >= prefix.count,
@@ -238,26 +250,71 @@ enum GatewaySubstitution {
                     start -= prefix.count
                 }
                 output += bytes[cursor..<start]
-                output += live.value.bytes
+                output += value
                 cursor = occurrence.start + SecretPlaceholder.marker.count + SecretPlaceholder.tokenLength
                 used = live
             }
             output += bytes[cursor...]
-            return .success(String(decoding: output, as: UTF8.self))
+            return .success(output)
         }
         var rewritten = head
-        switch rewrite(head.target) {
-        case .failure(let refusal): return .failure(refusal)
-        case .success(let target): rewritten.target = target
+        let target = Array(head.target.utf8)
+        let queryStart = target.firstIndex(of: UInt8(ascii: "?")) ?? target.endIndex
+        let path = rewrite(Array(target[..<queryStart]), at: .path)
+        let query = rewrite(Array(target[queryStart...]), at: .query)
+        switch (path, query) {
+        case (.failure(let refusal), _), (_, .failure(let refusal)): return .failure(refusal)
+        case (.success(let path), .success(let query)):
+            rewritten.target = String(decoding: path + query, as: UTF8.self)
         }
         for index in rewritten.headers.indices {
-            switch rewrite(rewritten.headers[index].value) {
+            switch rewrite(Array(rewritten.headers[index].value.utf8), at: .header) {
             case .failure(let refusal): return .failure(refusal)
-            case .success(let value): rewritten.headers[index].value = value
+            case .success(let value): rewritten.headers[index].value = String(decoding: value, as: UTF8.self)
             }
         }
         guard let used else { return .failure(.noPlaceholder) }
         return .success((rewritten, used))
+    }
+
+    /// The value as it may appear at `position`, or nil when no encoding keeps
+    /// the request's shape. A header value has no escape for a line break, so
+    /// CR or LF is refused there; env delivery still carries multi-line values.
+    static func encode(_ value: [UInt8], at position: Position) -> [UInt8]? {
+        switch position {
+        case .header:
+            return value.contains { $0 == 13 || $0 == 10 || $0 == 0 } ? nil : value
+        case .path:
+            // Refused rather than encoded: an upstream that decodes before
+            // routing would still see `/`, `\`, or `..` in the path.
+            let reshaping = Array("/\\?#\r\n\0".utf8)
+            guard value.contains(where: reshaping.contains) == false,
+                zip(value, value.dropFirst()).contains(where: { $0 == 46 && $1 == 46 }) == false
+            else { return nil }
+            return percentEncode(value) { isUnreserved($0) || Array("!$&'()*+,;=:@".utf8).contains($0) }
+        case .query:
+            return percentEncode(value, keeping: isUnreserved)
+        }
+    }
+
+    /// RFC 3986 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
+    private static func isUnreserved(_ byte: UInt8) -> Bool {
+        (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+            || byte == 45 || byte == 46 || byte == 95 || byte == 126
+    }
+
+    private static func percentEncode(_ bytes: [UInt8], keeping keep: (UInt8) -> Bool) -> [UInt8] {
+        let hex = Array("0123456789ABCDEF".utf8)
+        var output: [UInt8] = []
+        output.reserveCapacity(bytes.count)
+        for byte in bytes {
+            if keep(byte) {
+                output.append(byte)
+            } else {
+                output += [37, hex[Int(byte >> 4)], hex[Int(byte & 0x0F)]]
+            }
+        }
+        return output
     }
 }
 
