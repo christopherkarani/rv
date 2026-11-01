@@ -194,6 +194,51 @@ struct SecretGatewayProtocolTests {
             == .success("/s/KEY/x?k=-----BEGIN%20KEY-----%0Aabc%0A-----END%20KEY-----"))
     }
 
+    private func basic(_ credentials: String) -> String {
+        "Basic " + Data(credentials.utf8).base64EncodedString()
+    }
+
+    @Test func basicCredentialsAreDecodedSubstitutedAndReencoded() throws {
+        let key = SecretPlaceholder.mint(prefix: "")
+        func authorization(_ header: String, value: String = "ghp_real") throws -> Result<String?, GatewayRefusal> {
+            let parsed = try #require(head("GET /s/KEY/repo.git/info/refs HTTP/1.1\r\nAuthorization: \(header)"))
+            let route = try #require(GatewayRoute(target: parsed.target))
+            return GatewaySubstitution.apply(parsed, route: route) {
+                $0 == key.token ? live(key, secret: "KEY", value: value) : nil
+            }.map { $0.head.header("Authorization") }
+        }
+        #expect(try authorization(basic("x-access-token:\(key.text)")) == .success(basic("x-access-token:ghp_real")))
+        #expect(try authorization("basic " + Data("u:\(key.text)".utf8).base64EncodedString())
+            == .success(basic("u:ghp_real")))
+        #expect(try authorization(basic("\(key.text):x-oauth-basic")) == .success(basic("ghp_real:x-oauth-basic")))
+        #expect(try authorization(basic("\(key.text):x"), value: "user:pass") == .failure(.unsafeValue))
+        #expect(try authorization(basic("u:\(key.text)"), value: "a:b") == .success(basic("u:a:b")))
+        #expect(try authorization(basic("u:\(key.text)"), value: "a\r\nX-Injected: 1") == .failure(.unsafeValue))
+        #expect(try authorization(basic("u:\(SecretPlaceholder.mint(prefix: "").text)")) == .failure(.unknownPlaceholder))
+        #expect(try authorization(basic("u:plain")) == .failure(.noPlaceholder))
+    }
+
+    @Test func percentEncodedPlaceholdersAreRefused() throws {
+        let key = SecretPlaceholder.mint(prefix: "")
+        let marker = "%72%76%70%68%5F"
+        let fully = key.text.utf8.map { String(format: "%%%02X", $0) }.joined()
+        for request in [
+            "GET /s/KEY/x?k=%72vph_\(key.token) HTTP/1.1\r\nX: y",
+            "GET /s/KEY/x?k=\(marker)\(key.token) HTTP/1.1\r\nX: y",
+            "GET /s/KEY/\(fully)/x HTTP/1.1\r\nX: y",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer rvph%5f\(key.token)",
+            "GET /s/KEY/x?k=\(key.text) HTTP/1.1\r\nX-Other: rvph%5F\(key.token)",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: \(basic("u:rvph%5F\(key.token)"))",
+        ] {
+            let parsed = try #require(head(request))
+            let route = try #require(GatewayRoute(target: parsed.target))
+            let result = GatewaySubstitution.apply(parsed, route: route) {
+                $0 == key.token ? live(key, secret: "KEY", value: "v") : nil
+            }.map { $0.head }
+            #expect(result == .failure(.encodedPlaceholder), "\(request)")
+        }
+    }
+
     @Test func scrubberCatchesValuesSplitAtEveryBoundary() {
         let secret = Array("sk-live-SECRET-0123456789".utf8)
         let marker = Array("[rv]".utf8)

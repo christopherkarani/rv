@@ -186,10 +186,12 @@ enum GatewayRefusal: Error, Equatable {
     case unsafeValue
     /// TRACE and TRACK make the upstream echo the request, credential included.
     case echoMethod
+    /// A percent-encoded placeholder: never swapped, so never forwarded.
+    case encodedPlaceholder
 
     var status: Int {
         switch self {
-        case .malformed, .unsafeValue: 400
+        case .malformed, .unsafeValue, .encodedPlaceholder: 400
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder: 403
@@ -208,6 +210,7 @@ enum GatewayRefusal: Error, Equatable {
         case .tooLarge: "request too large"
         case .unsafeValue: "secret value cannot be placed safely at this placeholder's position"
         case .echoMethod: "method would echo the brokered credential back"
+        case .encodedPlaceholder: "placeholder is percent-encoded; send it as-is"
         }
     }
 }
@@ -229,6 +232,8 @@ enum GatewaySubstitution {
         case path
         case query
         case header
+        /// The user half of decoded Basic credentials, where `:` would move the split.
+        case basicUser
     }
 
     static func apply(
@@ -239,6 +244,10 @@ enum GatewaySubstitution {
         var used: Live?
         func rewrite(_ bytes: [UInt8], at position: Position) -> Result<[UInt8], GatewayRefusal> {
             let found = SecretPlaceholder.occurrences(in: bytes)
+            // Fail closed: an encoded placeholder would otherwise go upstream unswapped.
+            guard SecretPlaceholder.occurrences(in: percentDecoded(bytes)).count == found.count else {
+                return .failure(.encodedPlaceholder)
+            }
             guard found.isEmpty == false else { return .success(bytes) }
             var output: [UInt8] = []
             var cursor = 0
@@ -272,7 +281,20 @@ enum GatewaySubstitution {
             rewritten.target = String(decoding: path + query, as: UTF8.self)
         }
         for index in rewritten.headers.indices {
-            switch rewrite(Array(rewritten.headers[index].value.utf8), at: .header) {
+            let value = rewritten.headers[index].value
+            if let credentials = basicCredentials(value) {
+                // `user:password` behind `Basic`, e.g. git's token-as-password.
+                let colon = credentials.firstIndex(of: UInt8(ascii: ":")) ?? credentials.endIndex
+                let user = rewrite(Array(credentials[..<colon]), at: .basicUser)
+                let password = rewrite(Array(credentials[colon...]), at: .header)
+                switch (user, password) {
+                case (.failure(let refusal), _), (_, .failure(let refusal)): return .failure(refusal)
+                case (.success(let user), .success(let password)):
+                    rewritten.headers[index].value = "Basic " + Data(user + password).base64EncodedString()
+                }
+                continue
+            }
+            switch rewrite(Array(value.utf8), at: .header) {
             case .failure(let refusal): return .failure(refusal)
             case .success(let value): rewritten.headers[index].value = String(decoding: value, as: UTF8.self)
             }
@@ -288,6 +310,8 @@ enum GatewaySubstitution {
         switch position {
         case .header:
             return value.contains { $0 == 13 || $0 == 10 || $0 == 0 } ? nil : value
+        case .basicUser:
+            return value.contains { $0 == 13 || $0 == 10 || $0 == 0 || $0 == UInt8(ascii: ":") } ? nil : value
         case .path:
             // Refused rather than encoded: an upstream that decodes before
             // routing would still see `/`, `\`, or `..` in the path.
@@ -299,6 +323,45 @@ enum GatewaySubstitution {
         case .query:
             return percentEncode(value, keeping: isUnreserved)
         }
+    }
+
+    /// Decoded `Basic` credentials that hold a placeholder, raw or encoded.
+    /// Nil leaves the header to the plain rewrite.
+    static func basicCredentials(_ value: String) -> [UInt8]? {
+        let parts = value.split(separator: " ", maxSplits: 1)
+        guard parts.count == 2, parts[0].lowercased() == "basic",
+            let decoded = Data(base64Encoded: parts[1].trimmingCharacters(in: .whitespaces))
+        else { return nil }
+        let bytes = Array(decoded)
+        guard SecretPlaceholder.occurrences(in: percentDecoded(bytes)).isEmpty == false else { return nil }
+        return bytes
+    }
+
+    /// One pass of `%XX` decoding; malformed escapes stay as they are.
+    static func percentDecoded(_ bytes: [UInt8]) -> [UInt8] {
+        func nibble(_ byte: UInt8) -> UInt8? {
+            switch byte {
+            case 48...57: byte - 48
+            case 65...70: byte - 55
+            case 97...102: byte - 87
+            default: nil
+            }
+        }
+        var output: [UInt8] = []
+        output.reserveCapacity(bytes.count)
+        var index = 0
+        while index < bytes.count {
+            if bytes[index] == 37, index + 2 < bytes.count,
+                let high = nibble(bytes[index + 1]), let low = nibble(bytes[index + 2])
+            {
+                output.append(high << 4 | low)
+                index += 3
+            } else {
+                output.append(bytes[index])
+                index += 1
+            }
+        }
+        return output
     }
 
     /// RFC 3986 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".

@@ -294,6 +294,27 @@ struct SecretGatewayTests {
         #expect(record.reason?.contains("401") == true)
     }
 
+    @Test func basicAuthTokensWorkAndEncodedPlaceholdersNeverLeaveTheGateway() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, prefix: "", audit: audit)
+        defer { gateway.stop() }
+        let credentials = Data("x-access-token:\(placeholder.text)".utf8).base64EncodedString()
+        let clone = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/repo.git/info/refs?service=git-upload-pack HTTP/1.1\r\n"
+                + "Authorization: Basic \(credentials)\r\n\r\n")
+        #expect(clone.status == 200)
+        let seen = try #require(upstream.requests.first)
+        #expect(seen.headers["authorization"]
+            == "Basic " + Data("x-access-token:sk-live-REAL-0123456789".utf8).base64EncodedString())
+
+        let encoded = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models?key=rvph%5F\(placeholder.token) HTTP/1.1\r\n"
+                + "Authorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(encoded.status == 400)
+        #expect(upstream.requests.count == 1)
+    }
+
     @Test func acceptsChunkedBodiesAndExpectContinue() throws {
         let upstream = RecordingUpstream(status: 201, chunks: [Data("created".utf8)])
         let audit = AuditRecords()
