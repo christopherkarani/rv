@@ -455,6 +455,7 @@ enum HelpCatalog {
                 HelpRow(name: "--base-url-env", description: "Variable that receives the gateway base URL"),
                 HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
                 HelpRow(name: "--surface", description: "Where the placeholder is swapped: header (default), query, path; repeatable"),
+                HelpRow(name: "--allow", description: "read-only, github-clone, github-read, or \"GET,HEAD /repos/**\"; repeatable"),
                 HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
                 HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
                 HelpRow(name: "--resource-profile", description: "Wire the secret (or every imported name) into this runtime profile (see `rv init`)"),
@@ -476,6 +477,10 @@ enum HelpCatalog {
                 HelpRow(
                     name: "surfaces",
                     description: "Off its surfaces, or twice on one (a second header), a placeholder is refused with 403"
+                ),
+                HelpRow(
+                    name: "allow",
+                    description: "Without rules any method and path is allowed; outside them 403, ambiguous paths 400"
                 ),
                 HelpRow(
                     name: "sources",
