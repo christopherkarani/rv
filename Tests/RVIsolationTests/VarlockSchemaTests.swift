@@ -143,7 +143,7 @@ struct VarlockSchemaTests {
             # Kept
             # PEM="-----BEGIN
             # sk-live-continued
-            # -----END"
+            # sk-live-end"
             # @sensitive
             PEM_KEY=op(op://v/i/pem)
             """).get()
@@ -361,6 +361,60 @@ struct VarlockSchemaTests {
         #expect(secret.type == nil)
         #expect(plan.notes.contains { $0.hasPrefix("note KEY:") && $0.contains("type") })
         #expect(throws: Never.self) { try SecretsConfiguration.decode(SecretsConfiguration(secrets: plan.secrets).encoded()).get() }
+    }
+
+    @Test func postCommentDecoratorsApply() throws {
+        let plan = try VarlockSchema.plan("""
+            # @defaultSensitive=false
+            # ---
+            TOKEN=op(op://v/i/token) # @sensitive @type=string
+            PUBLIC=op(op://v/i/public) # just a note
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["TOKEN"])
+        #expect(plan.secrets.first?.type == "string")
+        #expect(plan.notes == ["skip PUBLIC: not sensitive"])
+    }
+
+    @Test func multiLineQuotedValueIsOneItem() throws {
+        let plan = try VarlockSchema.plan("""
+            NOTE="first line
+            HIDDEN=op(op://v/i/hidden)
+            # @public
+            last line"
+            BLOCK=```
+            RAW=op(op://v/i/raw)
+            ```
+            # @sensitive
+            REAL=op(op://v/i/real)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["REAL"])
+        #expect(plan.notes.allSatisfy { $0.contains("HIDDEN") == false && $0.contains("RAW") == false })
+    }
+
+    @Test func quotedValuesKeepAtSpacesAndHash() throws {
+        let plan = try VarlockSchema.plan("""
+            # @type="string(a @ b # c)" @sensitive # trailing comment
+            KEY=vaultSecret("secret/app#token") # @docs("https://example.com/#anchor")
+            """).get()
+        let secret = try #require(plan.secrets.first)
+        #expect(secret.type == "string(a @ b # c)")
+        #expect(secret.source == .vault(path: "secret/data/app", field: "token", address: nil))
+    }
+
+    @Test func escapedDollarIsLiteral() throws {
+        let plan = try VarlockSchema.plan(#"""
+            # @sensitive
+            ESCAPED=vaultSecret("secret/app", key="pa\$s")
+            # @sensitive
+            EXPANDED=vaultSecret("secret/app", key="pa$s")
+            """#).get()
+        #expect(plan.secrets.map(\.name) == ["ESCAPED"])
+        #expect(plan.secrets.first?.source == .vault(path: "secret/data/app", field: "pa$s", address: nil))
+    }
+
+    @Test func invalidSyntaxNamesTheLineButNoText() {
+        let parsed = VarlockSchema.plan("A=op(op://v/i/f)\nB=\"sk-live-unclosed\nC=1\n")
+        #expect(parsed.failureMessage == "line 2 is not valid .env.schema syntax")
     }
 }
 

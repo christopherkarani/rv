@@ -23,7 +23,11 @@ public enum VarlockSchema {
         guard text.utf8.allSatisfy({ $0 != 0 }) else {
             return .failure(VarlockSchemaError("schema contains NUL"))
         }
-        let document = parse(text)
+        let document: Document
+        switch parse(text) {
+        case .success(let parsed): document = parsed
+        case .failure(let error): return .failure(error)
+        }
         for item in document.items {
             if let repeated = repeatedDecorator(item) {
                 return .failure(VarlockSchemaError("\(item.name): decorator @\(repeated) is used twice"))
@@ -56,18 +60,18 @@ public enum VarlockSchema {
     /// (config-item.ts:332-345); call forms such as `@docs(...)` may repeat.
     private static func repeatedDecorator(_ item: Item) -> String? {
         var seen = Set<String>()
-        return item.decorators.first { $0.arguments == nil && seen.insert($0.name).inserted == false }?.name
+        return item.decorators.first { decorator in
+            if case .call = decorator.form { return false }
+            return seen.insert(decorator.name).inserted == false
+        }?.name
     }
 
-    private struct Decorator {
-        var name: String
-        var value: String?
-        var arguments: String?
-    }
+    private typealias Decorator = EnvSpec.Decorator
 
     private struct Item {
         var name: String
-        var value: String
+        var value: EnvSpec.Value?
+        /// Pre-comment decorators, then post-comment ones (`KEY=v # @sensitive`).
         var decorators: [Decorator]
         var description: String?
     }
@@ -129,71 +133,54 @@ public enum VarlockSchema {
 
     private static let unsupported = Skip("no supported provider reference")
 
-    private static func parse(_ text: String) -> Document {
-        var document = Document()
-        var comments: [String] = []
-        var pastHeader = false
-        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
-        var index = 0
-        while index < lines.count {
-            let raw = lines[index]
-            let body = commentBody(raw)
-            if let body, decoratorLine(body) {
-                var gathered = body
-                var depth = parenDepth(body)
-                while depth > 0, index + 1 < lines.count, let next = commentBody(lines[index + 1]) {
-                    index += 1
-                    gathered += next
-                    depth = parenDepth(gathered)
-                }
-                comments.append(gathered)
-                index += 1
-                continue
-            }
-            if raw.trimmingCharacters(in: .whitespaces).isEmpty || body == "---" {
-                // Every comment block before the first item is header
-                // (Varlock classes.ts:497-528), not only the first one.
-                if pastHeader == false { applyHeader(comments, to: &document) }
-                comments = []
-                index += 1
-                continue
-            }
-            if let body {
-                comments.append(body)
-                index += 1
-                continue
-            }
-            if let item = assignment(raw) {
-                var decorators = comments.filter(decoratorLine).flatMap(decorators(in:))
-                if pastHeader == false {
-                    let roots = decorators.filter { rootDecorator($0.name) }
-                    apply(roots, to: &document)
-                    decorators.removeAll { rootDecorator($0.name) }
-                    pastHeader = true
-                }
-                document.items.append(Item(
-                    name: item.name, value: item.value, decorators: decorators,
-                    description: description(comments)))
-            }
-            // A line that is no item still ends its comment block, so its
-            // decorators never attach to the next item.
-            comments = []
-            index += 1
-        }
-        return document
+    /// A provider reference that an item's value names.
+    private enum Reference {
+        case onePassword(String)
+        case call(Call)
     }
 
-    /// Prose above an item, minus commented-out items such as `# OLD_KEY=value`,
-    /// which often hold real values. One that opens a multi-line value hides
-    /// where it ends, so the rest of the block is dropped (Varlock classes.ts:454-468).
-    private static func description(_ comments: [String]) -> String? {
+    /// Every comment block before the first item is header (Varlock
+    /// classes.ts:497-528). Root decorators on the first item count too.
+    private static func parse(_ text: String) -> Result<Document, VarlockSchemaError> {
+        let file: EnvSpec.File
+        switch EnvSpec.parse(text) {
+        case .success(let parsed): file = parsed
+        case .failure(let error): return .failure(VarlockSchemaError("line \(error.line) is not valid .env.schema syntax"))
+        }
+        var document = Document()
+        for node in file.nodes {
+            switch node {
+            case .block(let comments) where document.items.isEmpty:
+                apply(decorators(comments), to: &document)
+            case .item(let item):
+                var found = decorators(item.preComments + [item.postComment].compactMap { $0 })
+                if document.items.isEmpty {
+                    apply(found.filter { rootDecorator($0.name) }, to: &document)
+                    found.removeAll { rootDecorator($0.name) }
+                }
+                document.items.append(Item(
+                    name: item.key, value: item.value, decorators: found, description: description(item.preComments)))
+            default:
+                break
+            }
+        }
+        return .success(document)
+    }
+
+    private static func decorators(_ comments: [EnvSpec.Comment]) -> [Decorator] {
+        comments.flatMap { comment -> [Decorator] in
+            if case .decorators(let found) = comment { found } else { [] }
+        }
+    }
+
+    private static func description(_ comments: [EnvSpec.Comment]) -> String? {
         var lines: [String] = []
-        for comment in comments where decoratorLine(comment) == false {
+        for case .text(let comment) in comments {
             if let value = commentedOutValue(comment) {
                 if valueContinues(value) { break }
                 continue
             }
-            lines.append(comment)
+            lines.append(comment.trimmingCharacters(in: .whitespaces))
         }
         let prose = lines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
         return prose.isEmpty ? nil : prose
@@ -262,10 +249,6 @@ public enum VarlockSchema {
         return nil
     }
 
-    private static func applyHeader(_ comments: [String], to document: inout Document) {
-        apply(comments.filter(decoratorLine).flatMap(decorators(in:)), to: &document)
-    }
-
     private static func rootDecorator(_ name: String) -> Bool {
         [
             "defaultSensitive", "disable", "plugin", "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws",
@@ -279,13 +262,13 @@ public enum VarlockSchema {
             case "defaultSensitive":
                 document.defaultSensitive = sensitivity(decorator)
             case "disable":
-                document.disable = switch decorator.value {
-                case nil, "true": .yes
-                case "false": .no
-                default: .conditional
+                document.disable = switch flag(decorator) {
+                case true?: .yes
+                case false?: .no
+                case nil: .conditional
                 }
             case "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws", "initHcpVault", "initOp":
-                let fields = arguments(decorator.arguments ?? "")
+                let fields = if case .call(let found) = decorator.form { arguments(found) } else { Arguments() }
                 document.inits[decorator.name, default: []].append(Init(
                     decorator: decorator.name, id: fields.named["id"], fields: fields.named,
                     references: fields.references))
@@ -296,14 +279,23 @@ public enum VarlockSchema {
     }
 
     private static func sensitivity(_ decorator: Decorator) -> Sensitivity {
-        let raw = decorator.value ?? decorator.arguments ?? "true"
-        if raw == "false" { return .none }
-        if raw.hasPrefix("inferFromPrefix("), raw.hasSuffix(")") {
-            let prefix = String(raw.dropFirst("inferFromPrefix(".count).dropLast())
-                .trimmingCharacters(in: .whitespaces)
+        if flag(decorator) == false { return .none }
+        if case .value(.call("inferFromPrefix", let found)) = decorator.form,
+            let prefix = found.first.flatMap({ literal($0.value) })
+        {
             return .unlessPrefix(prefix)
         }
         return .all
+    }
+
+    /// `@name`, `@name=true`, or `@name=false`; nil for a form rv cannot
+    /// evaluate. A quoted `"false"` is a non-empty string, so it is nil too.
+    private static func flag(_ decorator: Decorator) -> Bool? {
+        switch decorator.form {
+        case .flag, .value(.text("true", quote: nil)): true
+        case .value(.text("false", quote: nil)): false
+        default: nil
+        }
     }
 
     private static func definition(_ item: Item, inits: [String: [Init]], defaultSensitive: Sensitivity) -> Mapped {
@@ -311,7 +303,9 @@ public enum VarlockSchema {
             SecretsDecoding.reservedVariables.contains(item.name) == false
         else { return .skip("not an environment variable name") }
         guard isSensitive(item, defaultSensitive: defaultSensitive) else { return .skip("not sensitive") }
-        var type = item.decorators.last { $0.name == "type" }.flatMap { $0.value ?? $0.arguments }
+        var type = item.decorators.last { $0.name == "type" }.flatMap { decorator -> String? in
+            if case .value(let value) = decorator.form { render(value) } else { nil }
+        }
         var notes: [String] = []
         // secrets.json holds a short single-line type; one that does not fit
         // is dropped rather than failing the whole import on write.
@@ -320,13 +314,10 @@ public enum VarlockSchema {
             notes.append("@type is not stored: longer than 128 bytes or not single-line text")
         }
         let description = item.description.flatMap { clipped($0, max: 256) }
-        let value = stripTrailingComment(item.value).trimmingCharacters(in: .whitespaces)
-        if value.isEmpty { return .skip("no provider reference") }
-        if value.hasPrefix("op://") == false, functionCall(value) == nil {
-            return .skip("literal value not copied")
-        }
+        guard let value = item.value else { return .skip("no provider reference") }
+        guard let target = reference(value) else { return .skip("literal value not copied") }
         do {
-            let resolved = try source(item, inits: inits)
+            let resolved = try source(item, target, inits: inits)
             return .secret(
                 SecretDefinition(
                     name: item.name, description: description, source: resolved.source, delivery: .environment,
@@ -337,15 +328,29 @@ public enum VarlockSchema {
         }
     }
 
+    /// A provider reference, or nil for a literal. `KEY = op(...)` parses as
+    /// text because a call cannot follow a space; Varlock then rejects it as
+    /// a malformed call, and rv reads it as the call.
+    private static func reference(_ value: EnvSpec.Value) -> Reference? {
+        switch value {
+        case .text(let text, quote: nil) where text.hasPrefix("op://"): .onePassword(text)
+        case .text(let text, quote: nil): EnvSpec.functionCall(text).flatMap(reference)
+        case .call(let name, let found): .call(Call(name: name, arguments: arguments(found)))
+        default: nil
+        }
+    }
+
     /// A literal value is never a provider reference, so it is not imported.
     /// Calls follow each Varlock plugin's resolver `process()`.
-    private static func source(_ item: Item, inits: [String: [Init]]) throws(Skip) -> Resolved {
-        let value = stripTrailingComment(item.value).trimmingCharacters(in: .whitespaces)
-        if value.hasPrefix("op://") {
-            guard let resolved = onePassword(value) else { throw unsupported }
+    private static func source(_ item: Item, _ reference: Reference, inits: [String: [Init]]) throws(Skip) -> Resolved {
+        let call: Call
+        switch reference {
+        case .onePassword(let text):
+            guard let resolved = onePassword(text) else { throw unsupported }
             return Resolved(source: resolved)
+        case .call(let found):
+            call = found
         }
-        guard let call = functionCall(value) else { throw unsupported }
         guard call.arguments.hasReference == false else { throw Skip("an argument is a reference rv cannot resolve") }
         let declared = inits[initName(call.name)] ?? []
         switch call.name {
@@ -549,14 +554,13 @@ public enum VarlockSchema {
     /// `forEnv(prod)`, counts as sensitive: importing only hands it to rv.
     private static func isSensitive(_ item: Item, defaultSensitive: Sensitivity) -> Bool {
         if let explicit = item.decorators.first(where: { $0.name == "sensitive" || $0.name == "public" }) {
-            let flag: Bool? = switch explicit.value {
-            case nil, "true": true
-            case "false": false
-            case let value? where value.hasPrefix("{"): sensitiveOptions(value)["enabled"] != "false"
-            default: nil
+            let enabled: Bool? = if case .value(.object(let options)) = explicit.form {
+                options.first { $0.key == "enabled" }.flatMap { literal($0.value) } != "false"
+            } else {
+                flag(explicit)
             }
-            guard let flag else { return true }
-            return explicit.name == "public" ? flag == false : flag
+            guard let enabled else { return true }
+            return explicit.name == "public" ? enabled == false : enabled
         }
         switch defaultSensitive {
         case .all: return true
@@ -567,17 +571,26 @@ public enum VarlockSchema {
 
     /// `@sensitive={...}` options rv has no per-secret field for.
     private static func droppedSensitiveOptions(_ item: Item) -> String? {
-        guard let value = item.decorators.first(where: { $0.name == "sensitive" })?.value, value.hasPrefix("{") else {
-            return nil
-        }
-        let dropped = sensitiveOptions(value).keys.filter { $0 != "enabled" }.sorted()
+        guard let sensitive = item.decorators.first(where: { $0.name == "sensitive" }),
+            case .value(.object(let options)) = sensitive.form
+        else { return nil }
+        let dropped = Set(options.compactMap(\.key)).subtracting(["enabled"]).sorted()
         guard dropped.isEmpty == false else { return nil }
         return "@sensitive options \(dropped.joined(separator: ", ")) are not carried over"
     }
 
-    private static func sensitiveOptions(_ value: String) -> [String: String] {
-        guard value.hasPrefix("{"), value.hasSuffix("}") else { return [:] }
-        return arguments(String(value.dropFirst().dropLast())).named
+    /// Schema-like text for a value, such as `string(startsWith=sk-)`.
+    private static func render(_ value: EnvSpec.Value) -> String {
+        switch value {
+        case .text(let text, _): text
+        case .call(let name, let found): name + "(" + found.map(render).joined(separator: ", ") + ")"
+        case .object(let found): "{" + found.map(render).joined(separator: ", ") + "}"
+        case .array(let values): "[" + values.map(render).joined(separator: ", ") + "]"
+        }
+    }
+
+    private static func render(_ argument: EnvSpec.Argument) -> String {
+        argument.key.map { $0 + "=" + render(argument.value) } ?? render(argument.value)
     }
 
     private static func clipped(_ text: String, max: Int) -> String? {
@@ -600,127 +613,6 @@ public enum VarlockSchema {
         return kept.isEmpty ? nil : String(kept)
     }
 
-    private static func commentBody(_ line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("#") else { return nil }
-        return trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-    }
-
-    private static func decoratorLine(_ body: String) -> Bool {
-        body.first == "@"
-    }
-
-    private static func parenDepth(_ text: String) -> Int {
-        var depth = 0
-        var quote: Character?
-        for character in text {
-            if let open = quote, character == open { quote = nil; continue }
-            if quote != nil { continue }
-            if character == "\"" || character == "'" { quote = character; continue }
-            if character == "(" { depth += 1 }
-            if character == ")" { depth -= 1 }
-        }
-        return depth
-    }
-
-    /// `[export ]KEY=value` with Varlock's key grammar `[a-zA-Z_][a-zA-Z0-9_.-]*`
-    /// (grammar.peggy:28-45). Keys that are not variable names still parse, so
-    /// they keep their own comments; `definition` skips them.
-    private static func assignment(_ line: String) -> (name: String, value: String)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("export "), let exported = assignment(key: trimmed.dropFirst(7)) { return exported }
-        return assignment(key: Substring(trimmed))
-    }
-
-    private static func assignment(key line: Substring) -> (name: String, value: String)? {
-        guard let eq = line.firstIndex(of: "=") else { return nil }
-        let name = line[..<eq].trimmingCharacters(in: .whitespaces)
-        func letter(_ byte: UInt8) -> Bool { (65...90).contains(byte) || (97...122).contains(byte) || byte == 95 }
-        guard let first = name.utf8.first, letter(first),
-            name.utf8.allSatisfy({ letter($0) || (48...57).contains($0) || $0 == 46 || $0 == 45 })
-        else { return nil }
-        return (name, String(line[line.index(after: eq)...]))
-    }
-
-    private static func stripTrailingComment(_ value: String) -> String {
-        var quote: Character?
-        var index = value.startIndex
-        while index < value.endIndex {
-            let character = value[index]
-            if let open = quote {
-                if character == open { quote = nil }
-            } else if character == "\"" || character == "'" {
-                quote = character
-            } else if character == "#", index > value.startIndex, value[value.index(before: index)] == " " {
-                return String(value[..<index])
-            }
-            index = value.index(after: index)
-        }
-        return value
-    }
-
-    private static func decorators(in line: String) -> [Decorator] {
-        var found: [Decorator] = []
-        var index = line.startIndex
-        while index < line.endIndex {
-            guard line[index] == "@" else { index = line.index(after: index); continue }
-            let nameStart = line.index(after: index)
-            var cursor = nameStart
-            while cursor < line.endIndex, line[cursor].isLetter || line[cursor].isNumber { cursor = line.index(after: cursor) }
-            let name = String(line[nameStart..<cursor])
-            guard name.isEmpty == false else { index = line.index(after: index); continue }
-            if cursor < line.endIndex, line[cursor] == "=" {
-                let valueStart = line.index(after: cursor)
-                let valueEnd = tokenEnd(line, from: valueStart)
-                found.append(Decorator(name: name, value: String(line[valueStart..<valueEnd]), arguments: nil))
-                index = valueEnd
-            } else if cursor < line.endIndex, line[cursor] == "(" {
-                let close = matchingParen(line, open: cursor)
-                let arguments = String(line[line.index(after: cursor)..<close])
-                found.append(Decorator(name: name, value: nil, arguments: arguments))
-                index = close < line.endIndex ? line.index(after: close) : close
-            } else {
-                found.append(Decorator(name: name, value: nil, arguments: nil))
-                index = cursor
-            }
-        }
-        return found
-    }
-
-    private static func tokenEnd(_ line: String, from start: String.Index) -> String.Index {
-        var depth = 0
-        var cursor = start
-        while cursor < line.endIndex {
-            let character = line[cursor]
-            if "([{".contains(character) { depth += 1 }
-            if ")]}".contains(character) { depth = max(0, depth - 1) }
-            if depth == 0, character == " " || character == "@" { break }
-            cursor = line.index(after: cursor)
-        }
-        return cursor
-    }
-
-    private static func matchingParen(_ line: String, open: String.Index) -> String.Index {
-        var depth = 0
-        var cursor = open
-        var quote: Character?
-        while cursor < line.endIndex {
-            let character = line[cursor]
-            if let open = quote {
-                if character == open { quote = nil }
-            } else if character == "\"" || character == "'" {
-                quote = character
-            } else if character == "(" {
-                depth += 1
-            } else if character == ")" {
-                depth -= 1
-                if depth == 0 { return cursor }
-            }
-            cursor = line.index(after: cursor)
-        }
-        return line.endIndex
-    }
-
     private struct Arguments {
         var positional: [String] = []
         var named: [String: String] = [:]
@@ -734,70 +626,28 @@ public enum VarlockSchema {
         var arguments: Arguments
     }
 
-    private static func functionCall(_ value: String) -> Call? {
-        guard let open = value.firstIndex(of: "("), value.hasSuffix(")"), value.startIndex < open else { return nil }
-        let name = String(value[..<open])
-        guard name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }), name.isEmpty == false else { return nil }
-        let inside = String(value[value.index(after: open)..<value.index(before: value.endIndex)])
-        return Call(name: name, arguments: arguments(inside))
-    }
-
-    private static func arguments(_ text: String) -> Arguments {
+    private static func arguments(_ found: [EnvSpec.Argument]) -> Arguments {
         var result = Arguments()
-        for piece in splitArgs(text) {
-            let part = piece.trimmingCharacters(in: .whitespaces)
-            guard part.isEmpty == false else { continue }
-            if let eq = part.firstIndex(of: "="), part[..<eq].allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) {
-                let key = String(part[..<eq])
-                let raw = String(part[part.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
-                result.named[key] = unquote(raw)
-                if isReference(raw) { result.references.insert(key) }
-            } else {
-                result.positional.append(unquote(part))
+        for argument in found {
+            let text = literal(argument.value)
+            if let key = argument.key {
+                if let text { result.named[key] = text } else { result.references.insert(key) }
+            } else if let text {
+                result.positional.append(text)
             }
-            result.hasReference = result.hasReference || isReference(part)
+            result.hasReference = result.hasReference || text == nil
         }
         return result
     }
 
-    private static func splitArgs(_ text: String) -> [String] {
-        var parts: [String] = []
-        var current = ""
-        var depth = 0
-        var quote: Character?
-        for character in text {
-            if let open = quote {
-                current.append(character)
-                if character == open { quote = nil }
-                continue
-            }
-            if character == "\"" || character == "'" { quote = character; current.append(character); continue }
-            if character == "(" { depth += 1 }
-            if character == ")" { depth = max(0, depth - 1) }
-            if character == ",", depth == 0 {
-                parts.append(current)
-                current = ""
-            } else {
-                current.append(character)
-            }
-        }
-        parts.append(current)
-        return parts
-    }
-
-    /// `$REF`, `${REF}`, or a nested call such as `fallback(...)`. Single
-    /// quotes do not expand in Varlock, so a single-quoted value is literal.
-    private static func isReference(_ raw: String) -> Bool {
-        guard raw.hasPrefix("'") == false else { return false }
-        if raw.contains("$") { return true }
-        return raw.hasPrefix("\"") == false && raw.hasPrefix("`") == false && raw.contains("(")
-    }
-
-    private static func unquote(_ text: String) -> String {
-        guard text.count >= 2 else { return text }
-        if (text.hasPrefix("\"") && text.hasSuffix("\"")) || (text.hasPrefix("'") && text.hasSuffix("'")) {
-            return String(text.dropFirst().dropLast())
-        }
-        return text
+    /// The text of a static value, unescaped as Varlock's `unescapedValue`.
+    /// A `$REF` expansion, call, or literal is resolved by Varlock at load
+    /// time, so it is nil. Single quotes do not expand or unescape.
+    private static func literal(_ value: EnvSpec.Value) -> String? {
+        guard case .text(let text, let quote) = value else { return nil }
+        guard quote != .single else { return text }
+        guard text.replacingOccurrences(of: "\\$", with: "").contains("$") == false else { return nil }
+        let dollars = text.replacingOccurrences(of: "\\$", with: "$")
+        return quote == nil ? dollars : dollars.replacingOccurrences(of: "\\n", with: "\n")
     }
 }
