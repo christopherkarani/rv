@@ -293,7 +293,7 @@ public enum VarlockSchema {
                 SecretDefinition(
                     name: item.name, description: description, source: resolved.source, delivery: .environment,
                     type: type),
-                notes: resolved.notes)
+                notes: resolved.notes + [droppedSensitiveOptions(item)].compactMap { $0 })
         } catch {
             return .skip(error.reason)
         }
@@ -506,16 +506,40 @@ public enum VarlockSchema {
         name.lowercased().replacingOccurrences(of: "_", with: "-")
     }
 
+    /// The first `@sensitive` or `@public` decides (config-item.ts:724-765);
+    /// `@public=false` means sensitive. A value rv cannot evaluate, such as
+    /// `forEnv(prod)`, counts as sensitive: importing only hands it to rv.
     private static func isSensitive(_ item: Item, defaultSensitive: Sensitivity) -> Bool {
-        if let explicit = item.decorators.last(where: { $0.name == "sensitive" || $0.name == "public" }) {
-            if explicit.name == "public" { return false }
-            return explicit.value != "false"
+        if let explicit = item.decorators.first(where: { $0.name == "sensitive" || $0.name == "public" }) {
+            let flag: Bool? = switch explicit.value {
+            case nil, "true": true
+            case "false": false
+            case let value? where value.hasPrefix("{"): sensitiveOptions(value)["enabled"] != "false"
+            default: nil
+            }
+            guard let flag else { return true }
+            return explicit.name == "public" ? flag == false : flag
         }
         switch defaultSensitive {
         case .all: return true
         case .none: return false
         case .unlessPrefix(let prefix): return item.name.hasPrefix(prefix) == false
         }
+    }
+
+    /// `@sensitive={...}` options rv has no per-secret field for.
+    private static func droppedSensitiveOptions(_ item: Item) -> String? {
+        guard let value = item.decorators.first(where: { $0.name == "sensitive" })?.value, value.hasPrefix("{") else {
+            return nil
+        }
+        let dropped = sensitiveOptions(value).keys.filter { $0 != "enabled" }.sorted()
+        guard dropped.isEmpty == false else { return nil }
+        return "@sensitive options \(dropped.joined(separator: ", ")) are not carried over"
+    }
+
+    private static func sensitiveOptions(_ value: String) -> [String: String] {
+        guard value.hasPrefix("{"), value.hasSuffix("}") else { return [:] }
+        return arguments(String(value.dropFirst().dropLast())).named
     }
 
     private static func clipped(_ text: String, max: Int) -> String? {
@@ -613,8 +637,8 @@ public enum VarlockSchema {
         var cursor = start
         while cursor < line.endIndex {
             let character = line[cursor]
-            if character == "(" { depth += 1 }
-            if character == ")" { depth = max(0, depth - 1) }
+            if "([{".contains(character) { depth += 1 }
+            if ")]}".contains(character) { depth = max(0, depth - 1) }
             if depth == 0, character == " " || character == "@" { break }
             cursor = line.index(after: cursor)
         }

@@ -254,6 +254,38 @@ struct VarlockSchemaTests {
         #expect(plan.notes.contains { $0.hasPrefix("skip GSM:") && $0.contains("reference") })
         #expect(Self.encoded(plan).contains("$") == false)
     }
+
+    // MARK: Sensitivity (config-item.ts:724-765)
+
+    @Test func publicFalseMeansSensitive() throws {
+        let plan = try VarlockSchema.plan("""
+            # @defaultSensitive=false
+            # ---
+            # @public=false
+            HIDDEN=op(op://v/i/hidden)
+            # @public
+            SHOWN=op(op://v/i/shown)
+            # @public=true
+            SHOWN_TOO=op(op://v/i/shown2)
+            # @sensitive=false
+            PLAIN=op(op://v/i/plain)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["HIDDEN"])
+    }
+
+    @Test func sensitiveObjectFormKeepsSensitivityAndSaysWhatIsDropped() throws {
+        let plan = try VarlockSchema.plan("""
+            # @defaultSensitive=false
+            # ---
+            # @sensitive={preventLeaks=false, redact=true}
+            OPTIONED=op(op://v/i/a)
+            # @sensitive={enabled=false}
+            DISABLED=op(op://v/i/b)
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["OPTIONED"])
+        #expect(plan.notes.contains { $0.hasPrefix("note OPTIONED:") && $0.contains("preventLeaks") })
+        #expect(plan.notes.contains("skip DISABLED: not sensitive"))
+    }
 }
 
 extension Result where Failure == VarlockSchemaError {
