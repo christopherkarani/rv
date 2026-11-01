@@ -15,10 +15,13 @@ import Synchronization
 /// decided, every later request is refused rather than half-served.
 ///
 /// A replaced executable on disk overrides the idle rules: clients pin the
-/// on-disk binary's code identity, so a stale daemon can serve nobody. It
-/// stops admitting work, drains what is in flight, then exits.
+/// on-disk binary's code identity, so a stale daemon can serve nobody. It is
+/// checked after each request and every `staleCheckInterval`; once seen, the
+/// daemon stops admitting work, drains what is in flight, then exits.
 public final class IdleWatchdog: Sendable {
     public static let defaultSeconds = 1800
+    /// How often an idle daemon checks whether its binary was replaced.
+    public static let defaultStaleCheckInterval: Duration = .seconds(5)
 
     private struct State {
         var inFlight = 0
@@ -32,6 +35,7 @@ public final class IdleWatchdog: Sendable {
 
     private let state = Mutex(State())
     private let interval: Duration
+    private let staleCheckInterval: Duration
     private let hasLiveGrants: @Sendable () async -> Bool
     private let executableChanged: @Sendable () -> Bool
     private let onFire: @Sendable () -> Void
@@ -39,12 +43,14 @@ public final class IdleWatchdog: Sendable {
 
     public convenience init(
         seconds: Int = IdleWatchdog.defaultSeconds,
+        staleCheckInterval: Duration = IdleWatchdog.defaultStaleCheckInterval,
         hasLiveGrants: @escaping @Sendable () async -> Bool = { false },
         executableChanged: @escaping @Sendable () -> Bool = { false },
         onFire: @escaping @Sendable () -> Void = {}
     ) {
         self.init(
             interval: .seconds(seconds),
+            staleCheckInterval: staleCheckInterval,
             hasLiveGrants: hasLiveGrants,
             executableChanged: executableChanged,
             onFire: onFire
@@ -53,11 +59,13 @@ public final class IdleWatchdog: Sendable {
 
     init(
         interval: Duration,
+        staleCheckInterval: Duration = IdleWatchdog.defaultStaleCheckInterval,
         hasLiveGrants: @escaping @Sendable () async -> Bool = { false },
         executableChanged: @escaping @Sendable () -> Bool = { false },
         onFire: @escaping @Sendable () -> Void = {}
     ) {
         self.interval = interval
+        self.staleCheckInterval = staleCheckInterval
         self.hasLiveGrants = hasLiveGrants
         self.executableChanged = executableChanged
         self.onFire = onFire
@@ -76,6 +84,7 @@ public final class IdleWatchdog: Sendable {
             return state.generation
         }
         if let generation { schedule(generation) }
+        scheduleStaleCheck()
     }
 
     /// Admits one request. Call synchronously on receipt, before any work.
@@ -117,6 +126,32 @@ public final class IdleWatchdog: Sendable {
         queue.asyncAfter(deadline: .now() + dispatchInterval(interval)) { [self] in
             timerFired(generation)
         }
+    }
+
+    /// Clients verify the peer before sending a frame, so a stale daemon may
+    /// never be asked anything again; it must notice the replaced binary on
+    /// its own. A stat every few seconds; stops once the daemon is exiting
+    /// or the watchdog is gone.
+    private func scheduleStaleCheck() {
+        queue.asyncAfter(deadline: .now() + dispatchInterval(staleCheckInterval)) { [weak self] in
+            self?.staleCheckFired()
+        }
+    }
+
+    private func staleCheckFired() {
+        guard state.withLock({ $0.exiting }) == false else { return }
+        guard executableChanged() else {
+            scheduleStaleCheck()
+            return
+        }
+        let exit = state.withLock { state -> Bool in
+            state.draining = true
+            guard state.inFlight == 0, state.exiting == false else { return false }
+            state.exiting = true
+            return true
+        }
+        // With work in flight, the last `endRequest` exits (draining).
+        if exit { onFire() }
     }
 
     private func timerFired(_ generation: UInt64) {

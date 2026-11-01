@@ -7,12 +7,14 @@ import Synchronization
 ///
 /// Concurrent requests for the key being loaded join that one load instead
 /// of starting their own (a CoreML judge is ~600 MB; N duplicate loads are
-/// N × 600 MB). The load runs on a Dispatch queue, never on the caller or
-/// the cooperative pool, so a caller can stop waiting at a deadline while
+/// N × 600 MB). The load runs on a private Dispatch queue, never on the
+/// caller or the cooperative pool, so a caller can stop waiting at a deadline while
 /// the load finishes in the background for the next request.
 ///
 /// A failed load is cached against `stamp` (the bundle's model mtime), so a
-/// repaired bundle retries and an unchanged broken one does not.
+/// repaired bundle retries at once, and for `retryFailuresAfter` only, so a
+/// transient failure (memory pressure during prewarm) does not leave the
+/// daemon judge-less for its whole lifetime.
 final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
     enum Outcome {
         case ready(Value)
@@ -52,7 +54,7 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
         case empty
         case loading(key: URL, flight: Flight)
         case loaded(key: URL, value: Value)
-        case failed(key: URL, stamp: TimeInterval)
+        case failed(key: URL, stamp: TimeInterval, at: ContinuousClock.Instant)
     }
 
     private enum Step {
@@ -61,7 +63,20 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
         case launch(Flight)
     }
 
+    /// A failed load is retried after this long even if the stamp is unchanged.
+    static var defaultFailureRetry: Duration { .seconds(60) }
+
     private let slot = Mutex<Slot>(.empty)
+    private let retryFailuresAfter: Duration
+    private let now: @Sendable () -> ContinuousClock.Instant
+
+    init(
+        retryFailuresAfter: Duration = SingleFlightLoader.defaultFailureRetry,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }
+    ) {
+        self.retryFailuresAfter = retryFailuresAfter
+        self.now = now
+    }
 
     /// Returns the value for `key`, joining or starting its load, waiting at
     /// most `wait` (nil: until the load completes).
@@ -97,11 +112,14 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
     }
 
     private func step(key: URL, stamp: TimeInterval) -> Step {
-        slot.withLock { slot -> Step in
+        let current = self.now()
+        return slot.withLock { slot -> Step in
             switch slot {
             case .loaded(let loadedKey, let value) where loadedKey == key:
                 return .done(.ready(value))
-            case .failed(let failedKey, let failedStamp) where failedKey == key && failedStamp == stamp:
+            case .failed(let failedKey, let failedStamp, let failedAt)
+                where failedKey == key && failedStamp == stamp
+                    && current < failedAt.advanced(by: retryFailuresAfter):
                 return .done(.cachedFailure)
             case .loading(let loadingKey, let flight) where loadingKey == key:
                 return .join(flight)
@@ -120,14 +138,18 @@ final class SingleFlightLoader<Value: AnyObject & Sendable>: Sendable {
         qos: DispatchQoS.QoSClass,
         make: @escaping @Sendable () throws -> Value
     ) {
-        DispatchQueue.global(qos: qos).async { [self] in
+        // A private queue, not `global`: global queues share the
+        // cooperative pool's constrained thread budget, so a saturated pool
+        // could keep the load itself from ever starting.
+        DispatchQueue(label: "rv.judge-load", qos: DispatchQoS(qosClass: qos, relativePriority: 0)).async { [self] in
             let result = Result { try make() }
+            let finishedAt = self.now()
             slot.withLock { slot in
                 // A newer key replaced this flight: its result is not cached.
                 guard case .loading(_, let current) = slot, current === flight else { return }
                 switch result {
                 case .success(let value): slot = .loaded(key: key, value: value)
-                case .failure: slot = .failed(key: key, stamp: stamp)
+                case .failure: slot = .failed(key: key, stamp: stamp, at: finishedAt)
                 }
             }
             flight.finish(result)

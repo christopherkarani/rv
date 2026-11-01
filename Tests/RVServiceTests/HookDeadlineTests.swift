@@ -5,6 +5,7 @@ import RVHistory
 import RVHooks
 import RVIPC
 import RVPolicy
+import Synchronization
 @testable import RVService
 
 @Suite("Daemon-side hook deadline")
@@ -107,6 +108,41 @@ struct HookDeadlineTests {
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any])
         #expect(json["decision"] as? String == "deny")
         #expect(reply.stdout.contains("timed out"))
+    }
+
+    @Test func grantSpentInTimeIsDeliveredEvenIfTheDeadlinePassesAfter() async throws {
+        let env = try DeadlineEnv()
+        defer { env.tearDown() }
+        #expect(await env.plantResetHardGrant() == .planted)
+
+        // The budget runs out between the pre-spend check and the checks
+        // after it: the allowlist load is the last step before the spend.
+        let expired = Mutex(false)
+        let start = ContinuousClock.now
+        let deadline = HookDeadline(
+            expiresAt: start.advanced(by: .seconds(7)),
+            now: { expired.withLock { $0 } ? start.advanced(by: .seconds(8)) : start }
+        )
+        let live = LiveEvaluateWorld(
+            home: env.home,
+            store: AllowOnceStore(baseDirectory: env.allowOnceDirectory),
+            grants: env.grants,
+            clock: { Date(timeIntervalSince1970: 1_700_000_000) },
+            allowlist: { _, _ in
+                expired.withLock { $0 = true }
+                return .empty
+            }
+        )
+        let world = HookEvaluateWorld.live(
+            world: live, host: .pi, pending: nil,
+            clock: { Date(timeIntervalSince1970: 1_700_000_000) })
+        let reply = try await HookDoor.run(
+            host: .pi, stdin: Self.askStdin, world: world, deadline: deadline)
+
+        #expect(deadline.hasTripped, "the scenario needs the deadline to pass after the spend")
+        #expect(await env.grantStillLive() == false)
+        #expect(reply.stdout.contains("timed out") == false)
+        #expect(reply.stdout.contains("\"deny\"") == false)
     }
 
     @Test func inTimeHookEvaluateStillConsumesTheGrant() async throws {

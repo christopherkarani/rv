@@ -275,36 +275,42 @@ public struct GatedEvaluate: Sendable {
     ) async -> EvaluationResult {
         // Observe: evaluate everything, log the would-be verdict, allow.
         // Grants are never spent and denials never recorded on this path.
+        // The evaluation and judge steps block (model load wait,
+        // inference, file reads): run them off the cooperative pool.
+        let isPeek = verb == .peek
         if JudgeRuntime.guardMode(home: home) == .observe {
-            var wouldBe = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
-            var allowLane = true
-            if case .allow = wouldBe.decision {
-                switch scriptVerdict(for: request, cwd: cwd, home: home, now: now) {
-                case .deny(let hit):
-                    wouldBe = Self.projectScriptHit(hit, over: wouldBe)
-                case .unresolved:
-                    allowLane = false
-                case .clear:
-                    break
+            return await JudgeOffload.run { [self] in
+                var wouldBe = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
+                var allowLane = true
+                if case .allow = wouldBe.decision {
+                    switch scriptVerdict(for: request, cwd: cwd, home: home, now: now) {
+                    case .deny(let hit):
+                        wouldBe = Self.projectScriptHit(hit, over: wouldBe)
+                    case .unresolved:
+                        allowLane = false
+                    case .clear:
+                        break
+                    }
                 }
+                return JudgeRuntime.observe(
+                    wouldBe: wouldBe, command: request.command, home: home,
+                    provenance: request.provenance, now: now, cwd: cwd,
+                    allowSafeLane: allowLane, isPeek: isPeek
+                )
             }
-            return JudgeRuntime.observe(
-                wouldBe: wouldBe, command: request.command, home: home,
-                provenance: request.provenance, now: now, cwd: cwd,
-                allowSafeLane: allowLane, isPeek: verb == .peek
-            )
         }
-        let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
         // Order matters: the script check and the judge run BEFORE the
         // Policy gate, and the gate then sees the final deny exactly
         // once. A judge/script Ask can therefore redeem the grant its
         // approval plants (no infinite Ask loop), and an allow-once
         // grant for a pack deny is never spent on a result the judge
         // would have re-denied afterwards.
-        let candidate = applyScriptAndJudge(
-            to: result, request: request, cwd: cwd, home: home, now: now,
-            isPeek: verb == .peek
-        )
+        let candidate = await JudgeOffload.run { [self] in
+            applyScriptAndJudge(
+                to: evaluateWithSemantics(request, cwd: cwd, home: home, now: now),
+                request: request, cwd: cwd, home: home, now: now, isPeek: isPeek
+            )
+        }
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         let finished: EvaluationResult
@@ -426,7 +432,7 @@ public struct GatedEvaluate: Sendable {
                 invocationPrefix: invocationPrefix
             ).result
         case .apply:
-            return await PolicyGate.consumingGrant(
+            let decision = await PolicyGate.consumingGrant(
                 for: result,
                 cwd: cwd,
                 allowlist: snapshot,
@@ -436,7 +442,13 @@ public struct GatedEvaluate: Sendable {
                 safety: safety,
                 maskedSegments: maskedSegments,
                 invocationPrefix: invocationPrefix
-            ).result
+            )
+            if decision.override == .allowOnce {
+                // Spent: this allow must reach the client even if the
+                // hook deadline passes during the remaining steps.
+                HookDeadline.current?.recordGrantSpent()
+            }
+            return decision.result
         }
     }
 

@@ -148,6 +148,47 @@ struct IdleExitTests {
         #expect(await waitUntilIdleFired(watchdog))
     }
 
+    @Test func replacedExecutableExitsWithinTheStaleCheckWhileIdle() async {
+        // Clients verify the peer before sending a frame, so a stale daemon
+        // may never see another request; only a periodic check finds it.
+        let changed = Mutex(false)
+        let fired = FireCounter()
+        let watchdog = IdleWatchdog(
+            interval: .seconds(3600),
+            staleCheckInterval: .milliseconds(50),
+            executableChanged: { changed.withLock { $0 } },
+            onFire: { fired.hit() }
+        )
+        watchdog.start()
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(watchdog.hasFired == false)
+        changed.withLock { $0 = true }
+        #expect(await waitUntilIdleFired(watchdog, timeout: .seconds(5)))
+        #expect(fired.count == 1)
+    }
+
+    @Test func staleCheckDrainsAnInFlightRequestBeforeExit() async {
+        let fired = FireCounter()
+        let watchdog = IdleWatchdog(
+            interval: .seconds(3600),
+            staleCheckInterval: .milliseconds(50),
+            executableChanged: { true },
+            onFire: { fired.hit() }
+        )
+        #expect(watchdog.beginRequest())
+        watchdog.start()
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(fired.count == 0)
+        // Draining: no new work, and the in-flight request ends the process.
+        #expect(watchdog.beginRequest() == false)
+        watchdog.endRequest()
+        #expect(fired.count == 1)
+    }
+
+    @Test func defaultStaleCheckIsShort() {
+        #expect(IdleWatchdog.defaultStaleCheckInterval <= .seconds(5))
+    }
+
     @Test func executableProbeSeesReplacementAndRewrite() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-exe-probe-\(UUID().uuidString)", isDirectory: true)
