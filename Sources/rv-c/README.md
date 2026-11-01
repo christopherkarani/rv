@@ -16,8 +16,9 @@ enforced by `tests/run.sh`:
 
 - Apple Silicon + macOS 15 floor, or Linux aarch64/x86_64.
 - `-Wall` clean. No Foundation/CFNetwork linkage (Darwin).
-- `is_valid_host` must match `HookHost.setupSlotOrder` or a missing host
-  silently misses as operator.
+- `is_valid_host` must accept exactly the `HookHost` cases (derived from
+  `RVDomain/HookHost.swift`, not hard-coded) or a missing host silently
+  misses as operator.
 
 ## Swift mirrors — change both, or change the vectors
 
@@ -26,6 +27,7 @@ enforced by `tests/run.sh`:
 | `evaluation_route.h` (`rv_semver_major`, `rv_should_miss_replay`) | `RVIPC/EvaluationRoute.swift` + `ProtocolVersion.major(of:)` | `tests/evaluation_route_vectors.tsv` drives BOTH harnesses. Add cases there; never fork per-side cases. |
 | `json_reply.{h,c}` (hook-reply decode, recursion-capped) | `RVIPC/IPCEvaluate.swift` (`EvaluateReply`: `via` must be `"xpc"`) | Same wire rule: unexpected shape, `result.error`, missing `via`, or `via != "xpc"` is MISS. |
 | `json_escape.{h,c}` (request JSON building) | `RVIPC/IPCJSON.swift` + hook request encoders | Byte-level JSON escaping; covered by `json_escape_test.c`. |
+| `deny_hook` (fallback deny wire + cause reasons) | `RVHooks/*HostCodec.swift` `encodeDeny` + RVCLI `HookUnavailability` reasons (984ed7b8) | Same keys and exit code per host; the reason names the cause (unreachable, timeout, skew, identity rejection, bad reply/input). `tests/run.sh` checks every `HookHost`. |
 | `daemon_trust.{h,c}` (daemon-identity verification) | `RVService/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed. Linux has no Swift transport; C is the reference. |
 
 ## Test entry points

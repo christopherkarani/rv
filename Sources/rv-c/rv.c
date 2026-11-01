@@ -176,7 +176,8 @@ static int is_valid_host(const char *s) {
         || strcmp(s, "hermes") == 0
         || strcmp(s, "codex") == 0
         || strcmp(s, "cursor") == 0
-        || strcmp(s, "antigravity") == 0;
+        || strcmp(s, "antigravity") == 0
+        || strcmp(s, "muse") == 0;
 }
 
 /* 0 = pipe, 1 = exec rv-cli with the same argv. */
@@ -264,18 +265,99 @@ static void exec_same_argv(char **argv) {
     _exit(2);
 }
 
+/*
+ * Why a hook could not reach an authorized evaluation. Every cause still
+ * denies; the cause only changes the guidance, so "the service is down"
+ * does not read as a policy verdict. Wording mirrors the Swift
+ * HookUnavailability reasons (RVCLI, commit 984ed7b8) where they overlap.
+ */
+enum RvDenyCause {
+    RV_DENY_NONE = 0,
+    RV_DENY_UNREACHABLE,
+    RV_DENY_TIMEOUT,
+    RV_DENY_VERSION_SKEW,
+    RV_DENY_DAEMON_REJECTED,
+    RV_DENY_MALFORMED_REPLY,
+    RV_DENY_MALFORMED_INPUT,
+    RV_DENY_OVERSIZED_INPUT,
+    RV_DENY_INTERNAL
+};
+
+/* Reasons are embedded in JSON unescaped: keep them free of `"` and `\`. */
+static const char *deny_reason_text(enum RvDenyCause cause) {
+    switch (cause) {
+    case RV_DENY_TIMEOUT:
+        return "The RV background service (rvd) did not answer in time, so this command was blocked. Retry the command; if it keeps happening, run `rv doctor`.";
+    case RV_DENY_DAEMON_REJECTED:
+        return "The running rvd service failed its identity check, so this command was blocked. Run `rv setup` to restart the service.";
+    case RV_DENY_MALFORMED_REPLY:
+        return "The RV background service (rvd) sent a reply rv could not use, so this command was blocked. Run `rv doctor` to diagnose it.";
+    case RV_DENY_MALFORMED_INPUT:
+        return "The hook input was not readable UTF-8 text, so this command was blocked.";
+    case RV_DENY_OVERSIZED_INPUT:
+        return "The hook input is larger than the 1 MiB limit, so this command was blocked.";
+    case RV_DENY_INTERNAL:
+        return "rv could not prepare its request to the RV background service (rvd), so this command was blocked. Run `rv doctor` to diagnose it.";
+    case RV_DENY_NONE:
+    case RV_DENY_UNREACHABLE:
+    case RV_DENY_VERSION_SKEW:
+    default:
+        return "The RV background service (rvd) is not reachable, so this command was blocked. Run `rv doctor` to diagnose it.";
+    }
+}
+
+/* Daemon-supplied semver goes into the reason only when it is plain
+ * semver text; anything else reads as "unknown". */
+static void deny_reason(
+    enum RvDenyCause cause,
+    const char *service_semver,
+    char *out,
+    size_t cap
+) {
+    const char *service = "unknown";
+    size_t i;
+    if (cause != RV_DENY_VERSION_SKEW) {
+        (void)snprintf(out, cap, "%s", deny_reason_text(cause));
+        return;
+    }
+    if (service_semver != NULL && service_semver[0] != '\0'
+        && strlen(service_semver) <= 64)
+    {
+        service = service_semver;
+        for (i = 0; service_semver[i] != '\0'; i++) {
+            char c = service_semver[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                  || (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == '+'))
+            {
+                service = "unknown";
+                break;
+            }
+        }
+    }
+    (void)snprintf(
+        out,
+        cap,
+        "The rv CLI and the rvd service versions disagree (cli %s, service %s), so this command was blocked. Reinstall RV so both match.",
+        RV_CLIENT_SEMVER,
+        service);
+}
+
 /* No CLI replay: neither a transport failure nor malformed input grants authority. */
-static void deny_hook(const char *host) {
-    const char *reason = "Authenticated RV service and operation-bound owner authorization required.";
+static void deny_hook(const char *host, enum RvDenyCause cause, const char *service_semver) {
+    char reason[512];
     int status = 0;
+    deny_reason(cause, service_semver, reason, sizeof reason);
     if (strcmp(host, "codex") == 0) {
         printf("{\"decision\":\"block\",\"reason\":\"%s\"}\n", reason);
         fprintf(stderr, "%s\n", reason);
         status = 2;
     } else if (strcmp(host, "claude") == 0) {
         printf("{\"systemMessage\":\"%s\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", reason, reason);
+    } else if (strcmp(host, "muse") == 0) {
+        /* MuseHostCodec: `decision: block` is rejected on this event. */
+        printf("{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", reason);
     } else if (strcmp(host, "cursor") == 0) {
-        printf("{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"RV blocked this command. Wait for the human.\"}\n", reason);
+        printf("{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human.\"}\n", reason);
     } else {
         printf("{\"decision\":\"deny\",\"reason\":\"%s\"}\n", reason);
         if (strcmp(host, "grok") != 0 && strcmp(host, "antigravity") != 0) status = 1;
@@ -417,19 +499,22 @@ struct XpcWait {
 };
 
 /* One XPC request/reply round trip. Returns a retained reply dictionary,
- * or NULL on timeout, error reply, or non-dictionary reply. */
+ * or NULL on timeout, error reply, or non-dictionary reply, with *cause
+ * naming which. */
 static xpc_object_t xpc_exchange(
     xpc_connection_t conn,
     const void *json,
     size_t json_len,
     const void *stdin_bytes,
-    size_t stdin_len
+    size_t stdin_len,
+    enum RvDenyCause *cause
 ) {
     xpc_object_t msg;
     struct XpcWait *wait;
     long timed_out;
     xpc_object_t reply;
 
+    *cause = RV_DENY_INTERNAL;
     wait = (struct XpcWait *)calloc(1, sizeof *wait);
     if (wait == NULL) {
         return NULL;
@@ -476,32 +561,41 @@ static xpc_object_t xpc_exchange(
          * exit (_exit), bounded to one small allocation per timed-out
          * invocation.
          */
+        *cause = RV_DENY_TIMEOUT;
         return NULL;
     }
     reply = wait->reply;
     dispatch_release(wait->sem);
     free(wait);
+    /* An XPC error reply is a missing or interrupted service. */
+    *cause = RV_DENY_UNREACHABLE;
     if (reply == NULL) {
         return NULL;
     }
-    if (xpc_get_type(reply) == XPC_TYPE_ERROR
-        || xpc_get_type(reply) != XPC_TYPE_DICTIONARY)
-    {
+    if (xpc_get_type(reply) == XPC_TYPE_ERROR) {
         xpc_release(reply);
+        return NULL;
+    }
+    if (xpc_get_type(reply) != XPC_TYPE_DICTIONARY) {
+        xpc_release(reply);
+        *cause = RV_DENY_MALFORMED_REPLY;
         return NULL;
     }
     /* A Mach service name is not server identity. Do not consume
      * authority-bearing results from an unverified daemon. */
     if (!rv_verify_daemon_reply(reply)) {
         xpc_release(reply);
+        *cause = RV_DENY_DAEMON_REJECTED;
         return NULL;
     }
+    *cause = RV_DENY_NONE;
     return reply;
 }
 
 /* Strict HelloAck-ok scan: `"ok":true` outside strings, and no
- * `"skewReason"` outside strings. Anything else fails closed. */
-static int hello_ack_ok(const char *p, size_t n) {
+ * `"skewReason"` outside strings. A skew reason is version skew; anything
+ * else that is not ok is a malformed reply. Both fail closed. */
+static enum RvDenyCause hello_ack_cause(const char *p, size_t n) {
     size_t i = 0;
     int saw_ok_true = 0;
     while (i < n) {
@@ -517,10 +611,10 @@ static int hello_ack_ok(const char *p, size_t n) {
                 }
             }
             if (j >= n) {
-                return 0;
+                return RV_DENY_MALFORMED_REPLY;
             }
             if (j - start == 10 && memcmp(p + start, "skewReason", 10) == 0) {
-                return 0;
+                return RV_DENY_VERSION_SKEW;
             }
             if (j - start == 2 && memcmp(p + start, "ok", 2) == 0) {
                 size_t k = j + 1;
@@ -546,7 +640,7 @@ static int hello_ack_ok(const char *p, size_t n) {
             i++;
         }
     }
-    return saw_ok_true;
+    return saw_ok_true ? RV_DENY_NONE : RV_DENY_MALFORMED_REPLY;
 }
 
 #define RV_ACTION_ENDPOINT_KEY "rv.action-endpoint"
@@ -559,8 +653,9 @@ static const char kHelloJson[] =
  * discovery only; anything else there is authorizationDenied.
  *
  * Every reply's sender is verified in xpc_exchange (daemon_trust.h)
- * before any field is consumed, exactly like the Swift client. */
-static int xpc_hook_evaluate(
+ * before any field is consumed, exactly like the Swift client.
+ * Returns RV_DENY_NONE on success, else the cause to deny with. */
+static enum RvDenyCause xpc_hook_evaluate(
     const void *json,
     size_t json_len,
     const void *stdin_bytes,
@@ -575,11 +670,11 @@ static int xpc_hook_evaluate(
     const void *data;
     size_t n = 0;
     char *copy;
-    int rc = -1;
+    enum RvDenyCause cause = RV_DENY_UNREACHABLE;
 
     discovery = xpc_connection_create_mach_service(RV_MACH_SERVICE, NULL, 0);
     if (discovery == NULL) {
-        return -1;
+        return RV_DENY_UNREACHABLE;
     }
     xpc_connection_set_event_handler(discovery, ^(xpc_object_t event) {
         (void)event;
@@ -587,24 +682,29 @@ static int xpc_hook_evaluate(
     xpc_connection_resume(discovery);
 
     reply = xpc_exchange(
-        discovery, kHelloJson, sizeof kHelloJson - 1, NULL, 0);
+        discovery, kHelloJson, sizeof kHelloJson - 1, NULL, 0, &cause);
     if (reply == NULL) {
         goto out;
     }
     data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
-    if (data == NULL || n == 0 || !hello_ack_ok((const char *)data, n)) {
+    cause = data == NULL || n == 0
+        ? RV_DENY_MALFORMED_REPLY
+        : hello_ack_cause((const char *)data, n);
+    if (cause != RV_DENY_NONE) {
         goto out;
     }
     endpoint_obj = xpc_dictionary_get_value(reply, RV_ACTION_ENDPOINT_KEY);
     if (endpoint_obj == NULL
         || xpc_get_type(endpoint_obj) != XPC_TYPE_ENDPOINT)
     {
+        cause = RV_DENY_MALFORMED_REPLY;
         goto out;
     }
     actions = xpc_connection_create_from_endpoint(endpoint_obj);
     xpc_release(reply);
     reply = NULL;
     if (actions == NULL) {
+        cause = RV_DENY_UNREACHABLE;
         goto out;
     }
     xpc_connection_set_event_handler(actions, ^(xpc_object_t event) {
@@ -613,34 +713,39 @@ static int xpc_hook_evaluate(
     xpc_connection_resume(actions);
 
     reply = xpc_exchange(
-        actions, kHelloJson, sizeof kHelloJson - 1, NULL, 0);
+        actions, kHelloJson, sizeof kHelloJson - 1, NULL, 0, &cause);
     if (reply == NULL) {
         goto out;
     }
     data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
-    if (data == NULL || n == 0 || !hello_ack_ok((const char *)data, n)) {
+    cause = data == NULL || n == 0
+        ? RV_DENY_MALFORMED_REPLY
+        : hello_ack_cause((const char *)data, n);
+    if (cause != RV_DENY_NONE) {
         goto out;
     }
     xpc_release(reply);
     reply = NULL;
 
-    reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len);
+    reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len, &cause);
     if (reply == NULL) {
         goto out;
     }
     data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
     if (data == NULL || n == 0) {
+        cause = RV_DENY_MALFORMED_REPLY;
         goto out;
     }
     copy = (char *)malloc(n + 1);
     if (copy == NULL) {
+        cause = RV_DENY_INTERNAL;
         goto out;
     }
     memcpy(copy, data, n);
     copy[n] = '\0';
     *reply_json = copy;
     *reply_len = n;
-    rc = 0;
+    cause = RV_DENY_NONE;
 
 out:
     if (reply != NULL) {
@@ -654,7 +759,7 @@ out:
         xpc_connection_cancel(discovery);
         xpc_release(discovery);
     }
-    return rc;
+    return cause;
 }
 #else
 
@@ -672,6 +777,7 @@ static int send_nosig(int fd, const void *p, size_t n) {
             return -1;
         }
         if (w == 0) {
+            errno = EPIPE;
             return -1;
         }
         b += (size_t)w;
@@ -691,12 +797,21 @@ static int recv_exact(int fd, void *p, size_t n) {
             return -1;
         }
         if (r == 0) {
+            errno = ECONNRESET;
             return -1;
         }
         b += (size_t)r;
         n -= (size_t)r;
     }
     return 0;
+}
+
+/* SO_RCVTIMEO/SO_SNDTIMEO expiry is a timeout; any other socket I/O
+ * failure (reset, EOF, broken pipe) is a service that went away. */
+static enum RvDenyCause socket_io_cause(void) {
+    return errno == EAGAIN || errno == EWOULDBLOCK
+        ? RV_DENY_TIMEOUT
+        : RV_DENY_UNREACHABLE;
 }
 
 static void write_be32(unsigned char out[4], uint32_t v) {
@@ -725,7 +840,7 @@ static int unix_socket_path(char *out, size_t cap) {
     return 0;
 }
 
-static int unix_hook_evaluate(
+static enum RvDenyCause unix_hook_evaluate(
     const void *json,
     size_t json_len,
     char **reply_json,
@@ -740,15 +855,15 @@ static int unix_hook_evaluate(
     char *copy;
 
     if (json_len == 0 || json_len > RV_FRAME_MAX) {
-        return -1;
+        return RV_DENY_INTERNAL;
     }
     if (unix_socket_path(path, sizeof path) != 0) {
-        return -1;
+        return RV_DENY_UNREACHABLE;
     }
 
     fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-        return -1;
+        return RV_DENY_INTERNAL;
     }
     tv.tv_sec = RV_XPC_TIMEOUT_MS / 1000;
     tv.tv_usec = (RV_XPC_TIMEOUT_MS % 1000) * 1000;
@@ -760,44 +875,47 @@ static int unix_hook_evaluate(
     memcpy(addr.sun_path, path, strlen(path) + 1);
     if (connect(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
         close(fd);
-        return -1;
+        return RV_DENY_UNREACHABLE;
     }
     /* A socket path is not server identity. Verify the connected peer
      * is the sibling rvd before sending any action bytes. */
     if (!rv_verify_unix_daemon(fd)) {
         close(fd);
-        return -1;
+        return RV_DENY_DAEMON_REJECTED;
     }
 
     write_be32(header, (uint32_t)json_len);
     if (send_nosig(fd, header, 4) != 0 || send_nosig(fd, json, json_len) != 0) {
+        enum RvDenyCause cause = socket_io_cause();
         close(fd);
-        return -1;
+        return cause;
     }
     if (recv_exact(fd, header, 4) != 0) {
+        enum RvDenyCause cause = socket_io_cause();
         close(fd);
-        return -1;
+        return cause;
     }
     n = read_be32(header);
     if (n == 0 || n > RV_FRAME_MAX) {
         close(fd);
-        return -1;
+        return RV_DENY_MALFORMED_REPLY;
     }
     copy = (char *)malloc((size_t)n + 1);
     if (copy == NULL) {
         close(fd);
-        return -1;
+        return RV_DENY_INTERNAL;
     }
     if (recv_exact(fd, copy, (size_t)n) != 0) {
+        enum RvDenyCause cause = socket_io_cause();
         free(copy);
         close(fd);
-        return -1;
+        return cause;
     }
     close(fd);
     copy[n] = '\0';
     *reply_json = copy;
     *reply_len = (size_t)n;
-    return 0;
+    return RV_DENY_NONE;
 }
 #endif
 
@@ -810,6 +928,7 @@ int main(int argc, char **argv) {
     size_t reply_len = 0;
     char request_id[37];
     struct RvHookReply reply;
+    enum RvDenyCause transport_cause;
 
     /* Broken output pipes must not terminate RV before its denial path. */
     signal(SIGPIPE, SIG_IGN);
@@ -827,68 +946,74 @@ int main(int argc, char **argv) {
     int stdin_read = buf_read_fd_limited(&stdin_buf, STDIN_FILENO, RV_STDIN_XPC_MAX);
     if (stdin_read == BUF_READ_ERROR) {
         buf_free(&stdin_buf);
-        deny_hook(host);
+        deny_hook(host, RV_DENY_MALFORMED_INPUT, NULL);
     }
 
     if (stdin_read == BUF_READ_LIMIT) {
-        deny_hook(host);
+        deny_hook(host, RV_DENY_OVERSIZED_INPUT, NULL);
     }
 
     if (stdin_buf.has_nul
-        || stdin_buf.len > RV_STDIN_XPC_MAX
         || !rv_utf8_is_valid(stdin_buf.p, stdin_buf.len))
     {
-        deny_hook(host);
+        deny_hook(host, RV_DENY_MALFORMED_INPUT, NULL);
+    }
+    if (stdin_buf.len > RV_STDIN_XPC_MAX) {
+        deny_hook(host, RV_DENY_OVERSIZED_INPUT, NULL);
     }
 
     request = build_request(host, stdin_buf.p, stdin_buf.len, &request_len, request_id);
     if (request == NULL) {
-        deny_hook(host);
+        deny_hook(host, RV_DENY_INTERNAL, NULL);
     }
 
 #ifdef __APPLE__
-    if (xpc_hook_evaluate(
-            request,
-            request_len,
-            stdin_buf.p,
-            stdin_buf.len,
-            &reply_json,
-            &reply_len) != 0) {
-        free(request);
-        deny_hook(host);
-    }
+    transport_cause = xpc_hook_evaluate(
+        request,
+        request_len,
+        stdin_buf.p,
+        stdin_buf.len,
+        &reply_json,
+        &reply_len);
 #else
-    if (unix_hook_evaluate(request, request_len, &reply_json, &reply_len) != 0) {
-        free(request);
-        deny_hook(host);
-    }
+    transport_cause = unix_hook_evaluate(request, request_len, &reply_json, &reply_len);
 #endif
+    if (transport_cause != RV_DENY_NONE) {
+        free(request);
+        deny_hook(host, transport_cause, NULL);
+    }
     free(request);
 
     memset(&reply, 0, sizeof reply);
     if (rv_parse_hook_reply(reply_json, reply_len, &reply) != RV_HOOK_REPLY_OK) {
         free(reply_json);
-        deny_hook(host);
+        deny_hook(host, RV_DENY_MALFORMED_REPLY, NULL);
     }
     free(reply_json);
 
     if (!reply.has_id || strcasecmp(reply.id, request_id) != 0) {
         rv_hook_reply_free(&reply);
-        deny_hook(host);
+        deny_hook(host, RV_DENY_MALFORMED_REPLY, NULL);
     }
 
     if (rv_should_miss_replay(
             RV_CLIENT_SEMVER,
             reply.has_service_semver ? reply.service_semver : NULL))
     {
+        char service_semver[sizeof reply.service_semver];
+        memcpy(service_semver, reply.service_semver, sizeof service_semver);
+        service_semver[sizeof service_semver - 1] = '\0';
+        if (!reply.has_service_semver) {
+            service_semver[0] = '\0';
+        }
         rv_hook_reply_free(&reply);
-        deny_hook(host);
+        deny_hook(host, RV_DENY_VERSION_SKEW, service_semver);
     }
 
     if (write_all(STDOUT_FILENO, reply.stdout_bytes, reply.stdout_len) != 0) {
         rv_hook_reply_free(&reply);
         buf_free(&stdin_buf);
-        deny_hook(host);
+        deny_hook(host, RV_DENY_INTERNAL, NULL);
     }
     {
         int32_t code = reply.exit_code;

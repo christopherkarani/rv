@@ -80,7 +80,7 @@ linux_c_hook_proof() {
   if ! grep -q '"decision":"deny"' "$out/deny.out"; then
     fail "no-daemon deny missing decision JSON"
   fi
-  if ! grep -q 'operation-bound owner authorization' "$out/deny.out"; then
+  if ! grep -q 'is not reachable, so this command was blocked' "$out/deny.out"; then
     fail "no-daemon deny missing boundary reason"
   fi
   if grep -q 'git reset --hard' "$out/deny.out"; then
@@ -459,7 +459,7 @@ obj = json.loads(text)
 if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
 reason = obj.get("reason") or ""
-if "operation-bound owner authorization" not in reason:
+if "so this command was blocked" not in reason:
     raise SystemExit("reason=%r" % (reason,))
 if "git reset --hard" in reason:
     raise SystemExit("reason echoes command")
@@ -592,7 +592,7 @@ set -e
 [[ "$st" -eq 0 ]] || fail "staged rv deny must exit 0, got $st"
 grep -q '"decision":"deny"' "$PROOF_ROOT/staged-deny.out" \
   || fail "staged rv deny missing decision JSON"
-grep -q 'operation-bound owner authorization' "$PROOF_ROOT/staged-deny.out" \
+grep -q 'is not reachable, so this command was blocked' "$PROOF_ROOT/staged-deny.out" \
   || fail "staged rv deny missing boundary reason"
 if grep -q 'git reset --hard' "$PROOF_ROOT/staged-deny.out"; then
   fail "staged rv deny echoes the command"

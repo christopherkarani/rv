@@ -363,7 +363,7 @@ EOF
   done
   if [[ "$warm" -ne 1 ]]; then
     if [[ -f "/Library/Application Support/RV/peer-trust.json" ]] \
-      && grep -q 'operation-bound owner authorization' "$PROOF_ROOT/warm.out" 2>/dev/null; then
+      && grep -q 'failed its identity check' "$PROOF_ROOT/warm.out" 2>/dev/null; then
       fail "admin trust manifest is installed, so the unpinned proof rvd is correctly rejected; run this proof on a manifest-free machine (as CI does) or with an admin-pinned current daemon"
     fi
     printf 'host-attach-proof: rvd.err\n' >&2
