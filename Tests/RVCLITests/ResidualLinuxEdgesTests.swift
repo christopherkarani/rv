@@ -367,13 +367,7 @@ struct ResidualLinuxEdgesTests {
     }
 
     @Test func environmentAndFileOps_edges() throws {
-        #expect(SetupEnvironment.resolveRvd(nextTo: nil, home: "/tmp/rv-no-rvd-\(UUID().uuidString)") == nil)
-        #expect(
-            SetupEnvironment.resolveRvd(
-                nextTo: "/tmp/missing-rv-bin/rv",
-                home: "/tmp/rv-no-rvd-\(UUID().uuidString)"
-            ) == nil
-        )
+        #expect(SetupEnvironment.resolveRvd(home: "/tmp/rv-no-rvd") == "/tmp/rv-no-rvd/.local/bin/rvd")
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-fileops-\(UUID().uuidString)", isDirectory: true)
