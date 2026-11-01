@@ -1,6 +1,7 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -122,6 +123,99 @@ struct WorkspaceTerminalSessionTests {
         #expect(TerminalStdinBridge.drain(slave, limit: 0) == 0)
         #expect(TerminalStdinBridge.drain(slave) == line.count)
         #expect(TerminalStdinBridge.drain(slave) == 0)
+    }
+
+    /// A large write to a pipe returns short; the helper keeps going until
+    /// every byte is out.
+    @Test func writeOutputWritesEveryByteThroughShortWrites() throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        let payload = Data((0..<(1 << 20)).map { UInt8(truncatingIfNeeded: $0) })
+        let readEnd = ends[0]
+        let received = Mutex(Data())
+        let reader = Thread {
+            var chunk = [UInt8](repeating: 0, count: 16 * 1024)
+            while true {
+                let count = read(readEnd, &chunk, chunk.count)
+                if count <= 0 { break }
+                received.withLock { $0.append(contentsOf: chunk[0..<count]) }
+            }
+        }
+        reader.start()
+
+        let result = WorkspaceTerminalSession.writeOutput(payload, to: ends[1])
+        close(ends[1])
+
+        #expect(result == .written)
+        let drained = waitUntil(seconds: 5) { received.withLock { $0.count } == payload.count }
+        #expect(drained)
+        #expect(received.withLock { $0 } == payload)
+        close(readEnd)
+    }
+
+    /// `rv workspace run -- yes | head -1`: the reader is gone. The write
+    /// reports EPIPE instead of raising. The descriptor opts out of SIGPIPE
+    /// here so this test leaves the process-wide disposition alone.
+    @Test func writeOutputReportsAClosedPipeInsteadOfRaising() throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        defer { close(ends[1]) }
+        close(ends[0])
+        try #require(fcntl(ends[1], F_SETNOSIGPIPE, 1) == 0)
+
+        #expect(
+            WorkspaceTerminalSession.writeOutput(Data("y\n".utf8), to: ends[1]) == .failed(errno: EPIPE)
+        )
+    }
+
+    @Test func writeOutputReportsOtherWriteErrors() {
+        #expect(WorkspaceTerminalSession.writeOutput(Data("y".utf8), to: -1) == .failed(errno: EBADF))
+    }
+
+    @Test func writeOutputOfNothingSucceeds() {
+        #expect(WorkspaceTerminalSession.writeOutput(Data(), to: -1) == .written)
+    }
+
+    /// What the session does: while SIGPIPE is ignored, a closed pipe is an
+    /// EPIPE the process survives. The disposition is process-wide, so this
+    /// is the only ungated test that changes it. Overlapping holders keep it
+    /// ignored until the last one restores the disposition the first saved.
+    @Test func brokenPipeIgnoreIsScopedAndRestoresThePriorDisposition() throws {
+        var ends: [Int32] = [-1, -1]
+        try #require(pipe(&ends) == 0)
+        defer { close(ends[1]) }
+        close(ends[0])
+        let before = Self.pipeHandler()
+        #expect(before != Self.ignoredHandler)
+
+        WorkspaceTerminalSession.BrokenPipe.ignore()
+        #expect(Self.pipeHandler() == Self.ignoredHandler)
+        #expect(
+            WorkspaceTerminalSession.writeOutput(Data("y\n".utf8), to: ends[1]) == .failed(errno: EPIPE)
+        )
+        WorkspaceTerminalSession.BrokenPipe.ignore()
+        WorkspaceTerminalSession.BrokenPipe.restore()
+        #expect(Self.pipeHandler() == Self.ignoredHandler)
+        WorkspaceTerminalSession.BrokenPipe.restore()
+
+        #expect(Self.pipeHandler() == before)
+    }
+
+    private static let ignoredHandler = unsafeBitCast(SIG_IGN, to: Int.self)
+
+    private static func pipeHandler() -> Int {
+        var current = sigaction()
+        sigaction(SIGPIPE, nil, &current)
+        return unsafeBitCast(current.__sigaction_u.__sa_handler, to: Int.self)
+    }
+
+    private func waitUntil(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if condition() { return true }
+            usleep(10_000)
+        }
+        return condition()
     }
 }
 #endif
