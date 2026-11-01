@@ -30,6 +30,20 @@ struct EphemeralAllowOnceTableTests {
         #expect(await table.hasLiveGrants(now: now.addingTimeInterval(60)) == false)
     }
 
+    /// A refused claim (the hook deadline passed) must leave the grant
+    /// live for the retry instead of burning it.
+    @Test func refusedClaimLeavesTheGrantLive() async {
+        let table = EphemeralAllowOnceTable()
+        #expect(await table.plant(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
+            codeHash: "claim-1", now: now
+        ) == .planted)
+        #expect(await table.consume(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now, claim: { false }
+        ) == false)
+        #expect(await table.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now))
+    }
+
     @Test func plantThenConsumeAllowsOnce() async {
         let table = EphemeralAllowOnceTable()
         let planted = await table.plant(

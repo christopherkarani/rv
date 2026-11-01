@@ -57,11 +57,20 @@ public final class HookDeadline: Sendable {
     /// effects (pending row, unlock code) that were skipped.
     public var hasTripped: Bool { state.withLock { $0.tripped } }
 
-    /// Records that an allow-once grant was spent (inside the budget) and
-    /// the reply now carries that allow. It must reach the client: swapping
-    /// in the timeout deny would burn the human's approval for nothing.
-    func recordGrantSpent() {
-        state.withLock { $0.grantSpent = true }
+    /// Claims the right to spend an allow-once grant: false (and tripped)
+    /// once the budget has passed, so the grant stays live for the retry.
+    /// True marks the grant spent; its allow must then reach the client,
+    /// since swapping in the timeout deny would burn the human's approval.
+    /// The table calls this inside the actor, right before removal, so the
+    /// deadline check and the spend cannot be separated by a suspension.
+    func claimGrantSpend() -> Bool {
+        let current = now()
+        return state.withLock { state in
+            if state.tripped == false, current >= expiresAt { state.tripped = true }
+            guard state.tripped == false else { return false }
+            state.grantSpent = true
+            return true
+        }
     }
 
     /// True when the reply must be replaced by the timeout deny: a side

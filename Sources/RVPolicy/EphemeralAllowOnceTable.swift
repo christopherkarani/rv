@@ -219,13 +219,16 @@ public actor EphemeralAllowOnceTable {
 
     /// Atomically spends one live grant for the exact (view, cwd,
     /// payload, invocation). Actor isolation makes concurrent consumers
-    /// have exactly one winner.
+    /// have exactly one winner. `claim` runs inside the actor after a match
+    /// is found and before removal; false leaves the grant live (rvd uses
+    /// it to refuse a spend past the hook deadline).
     public func consume(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         now: Date,
         maskedSegments: [String]? = nil,
-        invocationPrefix: [String] = []
+        invocationPrefix: [String] = [],
+        claim: @Sendable () -> Bool = { true }
     ) -> Bool {
         prune(now: now)
         let fingerprint = grantFingerprint(matchingView, invocationPrefix: invocationPrefix)
@@ -235,6 +238,7 @@ public actor EphemeralAllowOnceTable {
         })?.key else {
             return false
         }
+        guard claim() else { return false }
         grants.removeValue(forKey: id)
         return true
     }

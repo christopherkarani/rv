@@ -33,6 +33,28 @@ struct HookDeadlineTests {
         #expect(stale.permitsSideEffects() == false)
     }
 
+    /// The deadline check and the grant spend are one step: a claim past
+    /// the budget refuses (and trips), a claim in time marks the grant
+    /// spent so a later trip still delivers its allow.
+    @Test func grantClaimIsAtomicWithTheDeadline() {
+        let stale = HookDeadline(receivedAt: .now - .seconds(30))
+        #expect(stale.claimGrantSpend() == false)
+        #expect(stale.hasTripped)
+        #expect(stale.requiresTimeoutReply)
+
+        let fresh = HookDeadline()
+        #expect(fresh.claimGrantSpend())
+        #expect(fresh.hasTripped == false)
+
+        let clock = Mutex(ContinuousClock.now)
+        let expiresAt = clock.withLock { $0 }.advanced(by: .seconds(1))
+        let late = HookDeadline(expiresAt: expiresAt, now: { clock.withLock { $0 } })
+        #expect(late.claimGrantSpend())
+        clock.withLock { $0 = expiresAt.advanced(by: .seconds(1)) }
+        #expect(late.permitsSideEffects() == false)
+        #expect(late.requiresTimeoutReply == false)
+    }
+
     @Test func lateHookEvaluateDoesNotConsumeTheAllowOnceGrant() async throws {
         let env = try DeadlineEnv()
         defer { env.tearDown() }
@@ -110,13 +132,17 @@ struct HookDeadlineTests {
         #expect(reply.stdout.contains("timed out"))
     }
 
-    @Test func grantSpentInTimeIsDeliveredEvenIfTheDeadlinePassesAfter() async throws {
+    /// The budget runs out after the pre-spend check but before the spend:
+    /// the allowlist load is the last step before it. The table's claim
+    /// re-checks the deadline atomically with removal, so the grant stays
+    /// live for the retry instead of being spent on a reply past the budget.
+    /// (Delivery of a grant spent in time, with the deadline passing after,
+    /// is pinned by `grantClaimIsAtomicWithTheDeadline`.)
+    @Test func expiryJustBeforeTheSpendKeepsTheGrantLive() async throws {
         let env = try DeadlineEnv()
         defer { env.tearDown() }
         #expect(await env.plantResetHardGrant() == .planted)
 
-        // The budget runs out between the pre-spend check and the checks
-        // after it: the allowlist load is the last step before the spend.
         let expired = Mutex(false)
         let start = ContinuousClock.now
         let deadline = HookDeadline(
@@ -139,10 +165,9 @@ struct HookDeadlineTests {
         let reply = try await HookDoor.run(
             host: .pi, stdin: Self.askStdin, world: world, deadline: deadline)
 
-        #expect(deadline.hasTripped, "the scenario needs the deadline to pass after the spend")
-        #expect(await env.grantStillLive() == false)
-        #expect(reply.stdout.contains("timed out") == false)
-        #expect(reply.stdout.contains("\"deny\"") == false)
+        #expect(deadline.hasTripped)
+        #expect(await env.grantStillLive())
+        #expect(reply.stdout.contains("timed out"))
     }
 
     @Test func inTimeHookEvaluateStillConsumesTheGrant() async throws {

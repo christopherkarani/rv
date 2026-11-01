@@ -432,7 +432,12 @@ public struct GatedEvaluate: Sendable {
                 invocationPrefix: invocationPrefix
             ).result
         case .apply:
-            let decision = await PolicyGate.consumingGrant(
+            // The claim runs inside the grant table, atomically with the
+            // spend: past the deadline the grant stays live for the retry,
+            // and a grant spent in time keeps its allow even if the
+            // deadline passes during the remaining steps.
+            let deadline = HookDeadline.current
+            return await PolicyGate.consumingGrant(
                 for: result,
                 cwd: cwd,
                 allowlist: snapshot,
@@ -441,14 +446,9 @@ public struct GatedEvaluate: Sendable {
                 rebaseInProgress: rebaseInProgress,
                 safety: safety,
                 maskedSegments: maskedSegments,
-                invocationPrefix: invocationPrefix
-            )
-            if decision.override == .allowOnce {
-                // Spent: this allow must reach the client even if the
-                // hook deadline passes during the remaining steps.
-                HookDeadline.current?.recordGrantSpent()
-            }
-            return decision.result
+                invocationPrefix: invocationPrefix,
+                claim: { deadline?.claimGrantSpend() ?? true }
+            ).result
         }
     }
 
