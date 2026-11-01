@@ -63,6 +63,7 @@ public final class SecretGateway: @unchecked Sendable {
         public var upstream: URL
         public var fingerprint: String?
         public var runtime: String?
+        public var surfaces: Set<GatewaySurface> = GatewaySurface.defaults
     }
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
@@ -392,7 +393,8 @@ public final class SecretGateway: @unchecked Sendable {
         forwarded.headers = GatewayHeaders.forwardable(head.headers)
         let substituted = GatewaySubstitution.apply(forwarded, route: route) { token in
             entry(token).map {
-                GatewaySubstitution.Live(token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value)
+                GatewaySubstitution.Live(
+                    token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value, surfaces: $0.surfaces)
             }
         }
         let rewritten: GatewayRequestHead

@@ -103,10 +103,70 @@ struct SecretGatewayProtocolTests {
         #expect(GatewayRoute(target: "/s/K/@evil.example")?.upstreamURL(base: base)?.host == "api.example.com")
     }
 
-    private func live(_ placeholder: SecretPlaceholder, secret: String, value: String) -> GatewaySubstitution.Live {
+    private func live(
+        _ placeholder: SecretPlaceholder, secret: String, value: String,
+        surfaces: Set<GatewaySurface> = Set(GatewaySurface.allCases)
+    ) -> GatewaySubstitution.Live {
         GatewaySubstitution.Live(
             token: placeholder.token, secret: secret, prefix: placeholder.prefix,
-            value: SecretValue(value)!)
+            value: SecretValue(value)!, surfaces: surfaces)
+    }
+
+    private func surfaced(
+        _ request: String, surfaces: Set<GatewaySurface>
+    ) throws -> Result<GatewayRequestHead, GatewayRefusal> {
+        let key = SecretPlaceholder.mint(prefix: "")
+        // `BASIC<user:password>` becomes a Basic header value after PH is swapped in.
+        var text = request.replacingOccurrences(of: "PH", with: key.text)
+        while let open = text.range(of: "BASIC<"), let close = text[open.upperBound...].firstIndex(of: ">") {
+            let credentials = String(text[open.upperBound..<close])
+            text.replaceSubrange(open.lowerBound...close, with: "Basic " + Data(credentials.utf8).base64EncodedString())
+        }
+        let parsed = try #require(head(text))
+        let route = try #require(GatewayRoute(target: parsed.target))
+        return GatewaySubstitution.apply(parsed, route: route) {
+            $0 == key.token ? live(key, secret: "KEY", value: "real", surfaces: surfaces) : nil
+        }.map { $0.head }
+    }
+
+    @Test func placeholdersAreSwappedOnlyOnTheirAllowedSurfaces() throws {
+        let header: Set<GatewaySurface> = [.header]
+        #expect(try surfaced("GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: header)
+            .map { $0.header("Authorization") } == .success("Bearer real"))
+        #expect(try surfaced("GET /s/KEY/x?key=PH HTTP/1.1\r\nX: y", surfaces: header) == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/botPH/x HTTP/1.1\r\nX: y", surfaces: header) == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/x?key=PH HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: header)
+            == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/x?key=PH HTTP/1.1\r\nX: y", surfaces: [.query]).map(\.target)
+            == .success("/s/KEY/x?key=real"))
+        #expect(try surfaced("GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: [.query])
+            == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/botPH/x HTTP/1.1\r\nX: y", surfaces: [.path]).map(\.target)
+            == .success("/s/KEY/botreal/x"))
+        #expect(try surfaced("GET /s/KEY/x HTTP/1.1\r\nAuthorization: BASIC<u:PH>", surfaces: [.query])
+            == .failure(.surfaceNotAllowed))
+    }
+
+    @Test func eachSurfaceIsFilledAtMostOnce() throws {
+        let all = Set(GatewaySurface.allCases)
+        for request in [
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH\r\nX-Echo: PH",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH PH",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: BASIC<PH:PH>",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: BASIC<u:PH>\r\nX-Api-Key: PH",
+            "GET /s/KEY/x?a=PH&b=PH HTTP/1.1\r\nX: y",
+            "GET /s/KEY/PH/PH HTTP/1.1\r\nX: y",
+        ] {
+            #expect(try surfaced(request, surfaces: all) == .failure(.repeatedPlaceholder), "\(request)")
+        }
+        let spread = try surfaced("GET /s/KEY/botPH/x?key=PH HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: all)
+        #expect(spread.map(\.target) == .success("/s/KEY/botreal/x?key=real"))
+        #expect(spread.map { $0.header("Authorization") } == .success("Bearer real"))
+        let clone = try surfaced(
+            "GET /s/KEY/r.git/info/refs HTTP/1.1\r\nAuthorization: BASIC<x-access-token:PH>\r\nUser-Agent: git/2",
+            surfaces: [.header])
+        #expect(clone.map { $0.header("Authorization") }
+            == .success("Basic " + Data("x-access-token:real".utf8).base64EncodedString()))
     }
 
     @Test func substitutesOwnPlaceholdersInTargetAndHeaders() throws {
