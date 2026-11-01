@@ -27,7 +27,7 @@ struct RobotJSONEscapeTests {
         let raw = robot.unicodeScalars.filter { $0.value >= 0x80 && DisplayedText.needsEscape($0) }
         #expect(raw.isEmpty, "raw scalars: \(raw.map { String(format: "U+%04X", $0.value) })")
         // Byte match: `String.contains` is grapheme-aware, and the combining
-        // mark kept after ` ` fuses with its final `8`.
+        // mark kept after the `\u2028` escape fuses with its final `8`.
         let bytes = Data(robot.utf8)
         for escape in ["\\u202a", "\\u2066", "\\u0085", "\\u200f", "\\udb40\\udc41", "\\u2028", "\\u202e"] {
             #expect(bytes.range(of: Data(escape.utf8)) != nil, "missing \(escape)")
