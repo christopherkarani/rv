@@ -358,9 +358,17 @@ enum SecretsRun {
         }.joined(separator: "\n") + "\n"
     }
 
-    static func importVarlock(
-        path: URL, dryRun: Bool, environment: SecretsEnvironment
-    ) -> Result<String, CommandFailure> {
+    /// A varlock import read and checked, before anything is written.
+    struct VarlockImport {
+        /// Notes, skips, and one `import` line per fresh secret.
+        var lines: [String]
+        /// Every secret the schema maps, defined already or not; a profile wires all of them.
+        var names: [String]
+        var fresh: [SecretDefinition]
+        var current: SecretsConfiguration
+    }
+
+    static func planVarlockImport(path: URL, environment: SecretsEnvironment) -> Result<VarlockImport, CommandFailure> {
         guard let data = try? Data(contentsOf: path), data.count <= VarlockSchema.maximumBytes else {
             return .failure("could not read \(path.path) (limit 1 MiB)")
         }
@@ -375,35 +383,88 @@ enum SecretsRun {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): current = loaded
         }
-        var lines = imported.notes.map { $0 }
+        var lines = imported.notes
         let fresh = imported.secrets.filter { secret in
             if current.secret(named: secret.name) != nil {
                 lines.append("skip \(secret.name): secrets.json already defines it")
                 return false
             }
-            lines.append("import \(secret.name): \(secret.source.kind)\(secret.type.map { " (type \($0))" } ?? "")")
+            lines.append(importLine(secret))
             return true
         }
-        guard fresh.isEmpty == false else {
-            return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
+        return .success(VarlockImport(lines: lines, names: imported.secrets.map(\.name), fresh: fresh, current: current))
+    }
+
+    /// Names where the value comes from and where it goes, never the value.
+    static func importLine(_ secret: SecretDefinition) -> String {
+        "import \(secret.name): provider \(secret.source.kind), delivery \(secret.delivery.summary)"
+            + (secret.type.map { ", type \($0)" } ?? "")
+    }
+
+    /// Writes the fresh secrets of a planned import, after org policy allows each.
+    static func commitVarlockImport(
+        _ pending: VarlockImport, environment: SecretsEnvironment
+    ) -> Result<String, CommandFailure> {
+        guard pending.fresh.isEmpty == false else {
+            return .success((pending.lines + ["nothing to import"]).joined(separator: "\n") + "\n")
         }
-        if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
-        var updated = current
-        updated.secrets += fresh
         if let reason = environment.managed.invalidReason {
             return .failure("organization policy is invalid: \(reason); nothing imported")
         }
-        for secret in fresh {
+        for secret in pending.fresh {
             if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
                 return .failure("organization policy: \(reason); nothing imported")
             }
         }
+        var updated = pending.current
+        updated.secrets += pending.fresh
         switch updated.write(configDirectory: environment.configDirectory) {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success:
-            lines.append("wrote secrets.json (\(fresh.count) \(fresh.count == 1 ? "secret" : "secrets"); delivery environment)")
+            let count = pending.fresh.count
+            let lines = pending.lines + ["wrote secrets.json (\(count) \(count == 1 ? "secret" : "secrets"); delivery environment)"]
             return .success(lines.joined(separator: "\n") + "\n")
         }
+    }
+
+    /// `rv secrets import --varlock`. With `profile`, every schema name is
+    /// also wired into that existing profile, as `rv init --varlock` does.
+    static func importVarlock(
+        path: URL, dryRun: Bool, profile: String? = nil, environment: SecretsEnvironment
+    ) -> Result<String, CommandFailure> {
+        if let profile, dryRun == false,
+            SecretsRun.profiles(environment).contains(where: { $0.id == profile }) == false
+        {
+            return .failure("profile \(DisplayedText.field(profile)) does not exist; run `rv init` to create it")
+        }
+        let pending: VarlockImport
+        switch planVarlockImport(path: path, environment: environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let planned): pending = planned
+        }
+        if dryRun {
+            let tail = pending.fresh.isEmpty ? "nothing to import" : "dry run: nothing written"
+            return .success((pending.lines + [tail]).joined(separator: "\n") + "\n")
+        }
+        var text: String
+        switch commitVarlockImport(pending, environment: environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let written): text = written
+        }
+        guard let profile, pending.names.isEmpty == false else { return .success(text) }
+        var wired: [String] = []
+        for name in pending.names {
+            switch InitRun.attachSecret(name, profileID: profile, configDirectory: environment.configDirectory) {
+            case .failure(let failure):
+                return .success(text + "warning: imported but not wired into profile \(DisplayedText.field(profile)): \(failure.message)\n")
+            case .success(true): wired.append(name)
+            case .success(false): break
+            }
+        }
+        if wired.isEmpty == false {
+            text += "wired \(wired.joined(separator: ", ")) into profile \(DisplayedText.field(profile))\n"
+        }
+        return .success(text)
     }
 
     static func hookRun(workTree: URL, environment: SecretsEnvironment) -> Result<(text: String, failed: Bool), CommandFailure> {
@@ -698,12 +759,14 @@ struct SecretsImport: AsyncParsableCommand {
 
     @Option(name: .customLong("varlock"), help: "Path to a .env.schema file.") var varlock: String
     @Flag(name: .customLong("dry-run"), help: "Show what would be imported.") var dryRun = false
+    @Option(name: .customLong("resource-profile"), help: "Also wire every schema secret into this existing profile.")
+    var profile: String?
 
     func run() throws {
         let ctx = CommandContext.current(command: "secrets import", json: false, robot: false, plain: true, noColor: true)
         let environment = SecretsEnvironment.live(home: try ctx.requireHome())
         let path = URL(fileURLWithPath: varlock).standardizedFileURL
-        switch SecretsRun.importVarlock(path: path, dryRun: dryRun, environment: environment) {
+        switch SecretsRun.importVarlock(path: path, dryRun: dryRun, profile: profile, environment: environment) {
         case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)
         }

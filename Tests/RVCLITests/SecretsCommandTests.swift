@@ -257,7 +257,9 @@ struct SecretsCommandTests {
             PORT=3000
             """.utf8).write(to: schema)
         let imported = try SecretsRun.importVarlock(path: schema, dryRun: true, environment: fixture.environment()).get()
-        #expect(imported.contains("import OPENAI_API_KEY: onePassword (type string(startsWith=sk-))"))
+        #expect(imported.contains(
+            "import OPENAI_API_KEY: provider onePassword, delivery environment (real value in the cage), "
+                + "type string(startsWith=sk-)"))
         #expect(imported.contains("dry run: nothing written"))
         #expect(imported.contains(literal) == false)
         #expect(FileManager.default.fileExists(atPath: fixture.secretsFile.path) == false)
@@ -278,6 +280,28 @@ struct SecretsCommandTests {
         #expect(text.contains("OPENAI_API_KEY  onePassword  environment"))
         let json = SecretsRun.json(report)
         #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
+    }
+
+    @Test func varlockImportWiresEveryNameIntoAnExistingProfile() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            NEW_KEY=op(op://Eng/New/credential)
+            OLD_KEY=op(op://Eng/Old/credential)
+            """.utf8).write(to: schema)
+        try SecretsConfiguration(secrets: [
+            SecretDefinition(name: "OLD_KEY", source: .onePassword(reference: "op://Eng/Old/credential"), delivery: .environment),
+        ]).write(configDirectory: fixture.directory).get()
+        let missing = SecretsRun.importVarlock(
+            path: schema, dryRun: false, profile: "main", environment: fixture.environment())
+        #expect(missing.failureMessage?.contains("profile main does not exist") == true)
+        #expect(try SecretsRun.configuration(fixture.environment()).get().secret(named: "NEW_KEY") == nil)
+        try fixture.writeProfiles(#"{"version":1,"profiles":[{"id":"main","projects":["/tmp"],"executableLinks":[],"readFiles":[],"readTrees":[],"writeTrees":[],"credentials":[],"environment":[],"secrets":[]}]}"#)
+        let text = try SecretsRun.importVarlock(
+            path: schema, dryRun: false, profile: "main", environment: fixture.environment()).get()
+        #expect(text.contains("wired NEW_KEY, OLD_KEY into profile main"))
+        #expect(SecretsRun.profiles(fixture.environment()).first?.secrets == ["NEW_KEY", "OLD_KEY"])
     }
 
     @Test func hookInstallIsIdempotentAndScansTheIndex() throws {
