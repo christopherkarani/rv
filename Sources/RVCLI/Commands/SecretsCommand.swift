@@ -422,7 +422,7 @@ enum SecretsRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success:
             let count = pending.fresh.count
-            let lines = pending.lines + ["wrote secrets.json (\(count) \(count == 1 ? "secret" : "secrets"); delivery environment)"]
+            let lines = pending.lines + ["wrote secrets.json (\(count) \(count == 1 ? "secret" : "secrets"))"]
             return .success(lines.joined(separator: "\n") + "\n")
         }
     }

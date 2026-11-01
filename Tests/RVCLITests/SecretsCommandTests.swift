@@ -282,6 +282,22 @@ struct SecretsCommandTests {
         #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
     }
 
+    @Test func varlockProxyImportsAsGatewayDelivery() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com) @type=string(startsWith=ak_)
+            ACME_KEY=op(op://Eng/Acme/key)
+            """.utf8).write(to: schema)
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("import ACME_KEY: provider onePassword, delivery gateway → api.example.com via $ACME_KEY_BASE_URL"))
+        #expect(text.contains("wrote secrets.json (1 secret)\n"))
+        let stored = try #require(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_KEY"))
+        #expect(stored.delivery == .gateway(SecretGatewayBinding(
+            upstream: URL(string: "https://api.example.com")!, baseURLEnv: "ACME_KEY_BASE_URL", placeholderPrefix: "ak_")))
+    }
+
     @Test func varlockImportWiresEveryNameIntoAnExistingProfile() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
