@@ -414,6 +414,10 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
+                    name: "surfaces",
+                    description: "Off its surfaces, or twice on one (a second header), a placeholder is refused with 403"
+                ),
+                HelpRow(
                     name: "sources",
                     description: "Joins every rv ledger in ~/.config/rv into one rv.audit.v1 stream"
                 ),
@@ -454,6 +458,7 @@ enum HelpCatalog {
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
                 HelpRow(name: "--base-url-env", description: "Variable that receives the gateway base URL"),
                 HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
+                HelpRow(name: "--surface", description: "Where the placeholder is swapped: header (default), query, path; repeatable"),
                 HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
                 HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
                 HelpRow(name: "--resource-profile", description: "Wire the secret (or every imported name) into this runtime profile (see `rv init`)"),
