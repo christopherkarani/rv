@@ -83,10 +83,12 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
 # before the socket/XPC door, so a missing name is silent miss-as-operator.
 # The list is read from Swift, never hardcoded here, so a new host cannot
 # land without the C front door (and its deny wire below) following it.
+# `|| true`: under pipefail a no-match grep would exit silently, skipping
+# the diagnostics below.
 HOSTS="$(awk '/static let setupSlotOrder/,/^[[:space:]]*\]/' "$ROOT/Sources/RVDomain/HookHost.swift" \
-  | grep -oE '\.[a-z]+' | tr -d . | LC_ALL=C sort | tr '\n' ' ')"
+  | grep -oE '\.[a-z]+' | tr -d . | LC_ALL=C sort | tr '\n' ' ' || true)"
 C_HOSTS="$(awk '/static int is_valid_host/,/^}/' "$SRC/rv.c" \
-  | grep -oE 'strcmp\(s, "[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"' | LC_ALL=C sort | tr '\n' ' ')"
+  | grep -oE 'strcmp\(s, "[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"' | LC_ALL=C sort | tr '\n' ' ' || true)"
 if [[ -z "$HOSTS" ]]; then
   printf "rv-c tests: could not read HookHost.setupSlotOrder\n" >&2
   exit 1

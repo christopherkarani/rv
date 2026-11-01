@@ -31,6 +31,8 @@ import RVDomain
 
         let literals = try captures(of: #"printf\("((?:[^"\\]|\\.)*)", reason\);"#, in: branch)
         #expect(literals.count == 1, "muse branch must print exactly one reply")
+        // The branch inherits deny_hook's default status; tie it to Swift's.
+        #expect(body.contains("int status = \(HookHost.muse.denyExitCode);"))
         #expect(!branch.contains("status"), "Muse deny must exit 0")
         #expect(!branch.contains("stderr"), "Muse deny carries no stderr")
         let literal = try #require(literals.first)

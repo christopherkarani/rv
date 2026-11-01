@@ -26,6 +26,7 @@ enforced by `tests/run.sh`:
 | `evaluation_route.h` (`rv_semver_major`, `rv_should_miss_replay`) | `RVIPC/EvaluationRoute.swift` + `ProtocolVersion.major(of:)` | `tests/evaluation_route_vectors.tsv` drives BOTH harnesses. Add cases there; never fork per-side cases. |
 | `json_reply.{h,c}` (hook-reply decode, recursion-capped) | `RVIPC/IPCEvaluate.swift` (`EvaluateReply`: `via` must be `"xpc"`) | Same wire rule: unexpected shape, `result.error`, missing `via`, or `via != "xpc"` is MISS. |
 | `json_escape.{h,c}` (request JSON building) | `RVIPC/IPCJSON.swift` + hook request encoders | Byte-level JSON escaping; covered by `json_escape_test.c`. |
+| `rv.c` `is_valid_host` + `deny_hook` (per-host fallback deny wire, exit status) | `RVDomain/HookHost.swift` + `RVHooks/HookDenyJSON.swift` + `HookHost.denyExitCode` | Host set and the Muse literal are locked by `Tests/RVHooksTests/CFrontDoorHostParityTests`; each host's marker and exit status by `tests/run.sh`. A host without its own branch gets generic `decision: deny`, which Muse ignores (fail open). |
 | `daemon_trust.{h,c}` (daemon-identity verification) | `RVService/XPCEvaluateClient.swift` + `RVIsolation/WorkspacePeerAuthenticator.swift` (`MacOSPeerCodeVerifier`, `ProtectedPeerTrustConfiguration.hookTrustSource`) | Same trust decision: valid manifest requires `.service`; missing manifest pins sibling `rvd` (hook consult only); invalid manifest fails closed. Linux has no Swift transport; C is the reference. |
 
 ## Test entry points
