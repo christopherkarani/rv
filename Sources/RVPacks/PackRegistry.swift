@@ -91,25 +91,32 @@ enum PackResourceBundle {
     /// framework probe enumerates loaded bundles and is not free.
     private static func locate(lazyCandidates: [() -> URL?]) -> Bundle? {
         for candidate in lazyCandidates {
-            guard let url = candidate()?.appendingPathComponent(bundleDirectoryName) else { continue }
-            if let bundle = Bundle(url: url) {
-                return bundle
+            guard let base = candidate() else { continue }
+            for directoryName in bundleDirectoryNames {
+                if let bundle = Bundle(url: base.appendingPathComponent(directoryName)) {
+                    return bundle
+                }
             }
         }
         return nil
     }
 
+    /// Swift Build (the SwiftPM default since 6.4) names the bundle
+    /// `<name>.bundle` on every platform. The legacy native build system
+    /// still emits `<name>.resources` on Linux, which release staging also
+    /// accepts, so non-Darwin falls back to it.
     #if canImport(Darwin)
-    private static let bundleDirectoryName = bundleName + ".bundle"
+    private static let bundleDirectoryNames = [bundleName + ".bundle"]
     #else
-    private static let bundleDirectoryName = bundleName + ".resources"
+    private static let bundleDirectoryNames = [bundleName + ".bundle", bundleName + ".resources"]
     #endif
 
     /// Mirrors `resource_bundle_accessor.swift`: the DEBUG-only
     /// `PACKAGE_RESOURCE_BUNDLE_PATH` / `_URL` override, then the main
     /// bundle's resources (app), this module's bundle (framework), and the
     /// main bundle URL (command-line tools: the executable's directory).
-    /// Linux SwiftPM looks for `<name>.resources` beside the executable.
+    /// Off Darwin the modules link statically, so the framework candidate
+    /// is the main bundle and is left out.
     private static func defaultCandidates() -> [() -> URL?] {
         var overrides: [() -> URL?] = []
         #if DEBUG
@@ -126,7 +133,7 @@ enum PackResourceBundle {
             { Bundle.main.bundleURL },
         ]
         #else
-        return overrides + [{ Bundle.main.bundleURL }]
+        return overrides + [{ Bundle.main.resourceURL }, { Bundle.main.bundleURL }]
         #endif
     }
 

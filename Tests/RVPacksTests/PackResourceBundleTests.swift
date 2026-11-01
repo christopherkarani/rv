@@ -16,6 +16,19 @@ struct PackResourceBundleTests {
         #expect(PackResourceBundle.locate(candidates: [empty, nil]) == nil)
     }
 
+    /// Swift Build emits `<name>.bundle` on Linux too; looking only for the
+    /// legacy `.resources` name failed every pack load on Linux CI.
+    @Test func dotBundleIsFoundOnEveryPlatform() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-packs-\(UUID().uuidString)", isDirectory: true)
+        let bundleURL = root.appendingPathComponent(PackResourceBundle.bundleName + ".bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let found = try #require(PackResourceBundle.locate(candidates: [nil, root]))
+        #expect(found.bundleURL.standardizedFileURL.resolvingSymlinksInPath()
+            == bundleURL.standardizedFileURL.resolvingSymlinksInPath())
+    }
+
     @Test func missingBundleThrowsMissingResource() {
         #expect(throws: PackLoadError.missingResource(PackResourceBundle.bundleName)) {
             _ = try PackResourceBundle.require(nil)
