@@ -16,6 +16,7 @@ public enum HelpTopic: Equatable, Sendable {
     case explain
     case service
     case serviceStatus
+    case serviceRestart
     case hook
     case setup
     case initialize
@@ -115,6 +116,9 @@ public enum HelpDispatch {
             if rest.isEmpty { return .service }
             if rest[0] == "status" {
                 return rest.dropFirst().allSatisfy(isFormatFlag) ? .serviceStatus : nil
+            }
+            if rest[0] == "restart" {
+                return rest.count == 1 ? .serviceRestart : nil
             }
             return rest.allSatisfy(isFormatFlag) ? .service : nil
         case "hook":

@@ -147,20 +147,26 @@ public struct PolicyWorkspace: Sendable {
         _ = try mergeIncoming(PolicyDocument(rules: [rule]), layer: layer, save: true)
     }
 
+    /// Merges `incoming` rules into the layer. With `save`, the load, merge,
+    /// and write run under the store's save locks, so concurrent merges on
+    /// one layer serialize and none is lost.
     public func mergeIncoming(
         _ incoming: PolicyDocument,
         layer: PolicyDocumentLayer,
         save: Bool
     ) throws -> PolicyDocument {
-        var existing = try loadWritableDocument(layer)
-        existing.rules = PolicyDocumentTOML.mergeLayer(
-            existing: existing.rules,
-            incoming: incoming.rules
-        )
-        if save {
-            try saveDocument(existing, layer: layer)
+        let merge = { (existing: PolicyDocument) -> PolicyDocument in
+            var merged = existing
+            merged.rules = PolicyDocumentTOML.mergeLayer(
+                existing: existing.rules,
+                incoming: incoming.rules
+            )
+            return merged
         }
-        return existing
+        guard save else {
+            return merge(try loadWritableDocument(layer))
+        }
+        return try updateDocument(layer: layer, merge)
     }
 
     private var machineDirectory: URL? {
@@ -201,18 +207,22 @@ public struct PolicyWorkspace: Sendable {
         }
     }
 
-    private func saveDocument(_ document: PolicyDocument, layer: PolicyDocumentLayer) throws {
+    private func updateDocument(
+        layer: PolicyDocumentLayer,
+        _ transform: (PolicyDocument) throws -> PolicyDocument
+    ) throws -> PolicyDocument {
         switch layer {
         case .machine:
             guard let directory = machineDirectory else {
                 throw PolicyWorkspaceError.missingLayer(.machine)
             }
-            try TypedRuleStore(baseDirectory: directory).saveMachine(document)
+            return try TypedRuleStore(baseDirectory: directory).updateMachine(transform)
         case .repo:
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
-            try revisionRepoStore(workspace: workspace).saveRepo(document, workspace: workspace)
+            return try revisionRepoStore(workspace: workspace)
+                .updateRepo(workspace: workspace, transform)
         }
     }
 }

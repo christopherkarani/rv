@@ -2,7 +2,7 @@
 
 Top finding: rv enforces process-level containment (macOS Seatbelt, deny-default) with hook-grade policy, while OpenShell enforces kernel- and network-level containment (Landlock + seccomp + `network_mode=none` + supervisor proxy) with formally checked policy. OpenShell's boundary is strictly stronger on Linux; rv's strengths are its restrict-only policy merge, fail-closed stores, and refusal to run a weak Linux sandbox.
 
-All claims below are grounded in primary sources: rv source and `docs/security`, NVIDIA's OpenShell docs (v0.1.3) and the [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) repo. The existing `rv-vs-openshell.html` at the repo root is editorial, not evidence, and is not cited.
+All claims below are grounded in primary sources: rv source and `docs/security`, NVIDIA's OpenShell docs (v0.1.3) and the [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) repo. The existing `docs/reports/rv-vs-openshell.html` is editorial, not evidence, and is not cited.
 
 ## 1. How rv isolation works
 
