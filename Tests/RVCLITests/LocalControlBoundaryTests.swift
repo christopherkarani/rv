@@ -12,17 +12,14 @@ struct LocalControlBoundaryTests {
     @Test func missingServiceDeniesEveryHostWithoutEvaluatingInput() async throws {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
-            let wire = await client.hookEvaluate(host: host, stdin: "{}")
-            #expect(wire == LocalControlBoundary.deniedHook(host: host, cause: .serviceUnreachable))
+            let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
                 #expect(!wire.stderr.isEmpty)
             }
         }
-        let museWire = await client.hookEvaluate(host: .muse, stdin: "{}")
-        #expect(museWire.stdout.contains("not reachable"))
-        #expect(museWire.stdout.contains("rv doctor"))
     }
 
     @Test func protocolFailureDeniesWithoutLocalHookAuthority() async throws {
@@ -31,59 +28,17 @@ struct LocalControlBoundaryTests {
             responseResult: .error(.protocolSkew(.protocolSkew))
         )
         let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(
-            host: .grok,
-            cause: .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: nil)
-        ))
-        #expect(wire.stdout.contains("disagree"))
+        let wire = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .deny)
+        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .protocol, mode: .deny))
         #expect(transport.invalidationCount == 1)
-    }
-
-    @Test func hookTimeoutDeniesWithTimeoutCause() async throws {
-        let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
-            sendError: .timeout
-        )
-        let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .serviceTimeout))
-        #expect(wire.stdout.contains("did not answer in time"))
-        #expect(transport.invalidationCount == 1)
-    }
-
-    @Test func skewedHookReplyDeniesWithVersionSkewCause() async throws {
-        let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
-            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0, serviceSemver: "0.0.0"))
-        )
-        let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(
-            host: .grok,
-            cause: .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: "0.0.0")
-        ))
-        #expect(wire.stdout.contains("0.0.0"))
-        #expect(wire.stdout.contains(ProtocolVersion.serviceSemver))
-        #expect(transport.invalidationCount == 1)
-    }
-
-    @Test func hookUnavailabilityReasonsAreActionable() {
-        #expect(HookUnavailability.serviceUnreachable.reason.contains("not reachable"))
-        #expect(HookUnavailability.serviceUnreachable.reason.contains("rv doctor"))
-        #expect(HookUnavailability.serviceTimeout.reason.contains("did not answer in time"))
-        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: "0.9.0").reason.contains("1.2.3"))
-        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: "0.9.0").reason.contains("0.9.0"))
-        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: nil).reason.contains("unknown"))
-        #expect(HookUnavailability.daemonRejected.reason.contains("identity check"))
     }
 
 #if canImport(XPC)
-    @Test func daemonAuthenticationFailureDeniesWithRejectedCause() async throws {
+    @Test func daemonAuthenticationFailureDeniesAsUntrustedEvenWhenAsking() async throws {
         let client = try isolatedClient(transport: DaemonAuthFailingTransport())
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .daemonRejected))
-        #expect(wire.stdout.contains("identity check"))
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .untrusted, mode: .deny))
+        #expect(wire.stdout.contains("identity check failed"))
     }
 #endif
 

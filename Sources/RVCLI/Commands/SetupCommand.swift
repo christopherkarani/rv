@@ -72,7 +72,7 @@ struct Setup: AsyncParsableCommand {
         guard outcome.exitCode == 0 else { return }
         guard let home = CLIProcess.home() else { return }
         guard hasWiredHosts(home: home) else { return }
-        let serviceUp = await ServiceClient(home: home).verifyHookService()
+        let serviceUp = await ServiceClient.probing(home: home).verifyHookService()
         guard SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: serviceUp) else { return }
         if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
             outcome.stderr += "\n"
