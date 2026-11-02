@@ -168,7 +168,9 @@ struct MacVMWorkspaceEndToEndTests {
         #expect(e2eWait(seconds: 60) { macVMProcesses(workspace: tree.workspaceURL.path).isEmpty })
         // A cancel SIGKILLs rv-macvm, so its clone stays behind until the
         // next `status` (which rv runs before every launch) sweeps it.
-        let runs = URL(fileURLWithPath: MicroVMHelper.stateRoot(home: NSHomeDirectory(), guest: .macOS)).appendingPathComponent("runs")
+        // rv-macvm finds its state root from HOME, so look where it does.
+        let home = try #require(ProcessInfo.processInfo.environment["HOME"])
+        let runs = URL(fileURLWithPath: MicroVMHelper.stateRoot(home: home, guest: .macOS)).appendingPathComponent("runs")
         func clones() -> [String] {
             ((try? FileManager.default.contentsOfDirectory(atPath: runs.path)) ?? []).filter { $0.hasPrefix("\(pid)-") }
         }
