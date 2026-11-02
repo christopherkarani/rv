@@ -722,6 +722,7 @@ final class WorkspaceInodeBoundary: Sendable {
             }
             links[relative] = target
         }
+        let linkTable = WorkspaceLinkTable(links)
         var makes: [PublishStep] = []
         var stages: [PublishStep] = []
         var updates: [PublishStep] = []
@@ -752,7 +753,7 @@ final class WorkspaceInodeBoundary: Sendable {
                     // An untouched link is not rewritten, so a link the
                     // project already had is never judged by the policy.
                     if current == target { continue }
-                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: links) else {
+                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: linkTable) else {
                         reject(relative, .symlinkEscapesWorkspace)
                         continue
                     }
@@ -772,7 +773,7 @@ final class WorkspaceInodeBoundary: Sendable {
                     installs.append(.installFile(relative))
                 case .symlink:
                     guard let target = links[relative] else { continue }
-                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: links) else {
+                    guard workspaceSymlinkTargetStaysInside(link: relative, target: target, links: linkTable) else {
                         reject(relative, .symlinkEscapesWorkspace)
                         continue
                     }

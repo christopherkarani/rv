@@ -46,28 +46,56 @@ enum WorkspacePublishFaults {
     @TaskLocal static var commitFault: (@Sendable (_ index: Int, _ relative: String) -> Bool)?
 }
 
+/// The symlinks of the tree being published (workspace-relative name to
+/// target), with the case-folded names kept for the case-collision check.
+struct WorkspaceLinkTable: Sendable {
+    let targets: [String: String]
+    private let foldedNames: Set<String>
+
+    init(_ targets: [String: String]) {
+        self.targets = targets
+        foldedNames = Set(targets.keys.map { $0.lowercased() })
+    }
+
+    /// True when `path` names no link exactly but would on a case-insensitive
+    /// volume. The saved tree is usually APFS, so there it IS that link.
+    func collidesOnlyByCase(_ path: String) -> Bool {
+        targets[path] == nil && foldedNames.contains(path.lowercased())
+    }
+}
+
 /// Whether `target`, stored in the symlink at workspace-relative `link`,
 /// resolves inside the workspace root.
 ///
 /// Resolution is lexical from the link's directory. A component that names
 /// another symlink in `links` (workspace-relative name to target, the tree
 /// being published) is resolved through that link, so `y -> p/..` with
-/// `p -> .` is refused. Absolute targets, empty targets, a `..` above the
-/// root, and more than 32 link hops are refused.
+/// `p -> .` is refused. A component that matches a link only by case is
+/// refused too: the saved tree may be case-insensitive, where `P/..` goes
+/// through `p`. Absolute targets, empty targets, a `..` above the root, and
+/// more than 32 link hops are refused.
 func workspaceSymlinkTargetStaysInside(
     link: String,
     target: String,
-    links: [String: String]
+    links: WorkspaceLinkTable
 ) -> Bool {
     var hops = 32
     let base = link.split(separator: "/").dropLast().map(String.init)
     return resolveInsideWorkspace(base: base, target: target, links: links, hops: &hops) != nil
 }
 
+func workspaceSymlinkTargetStaysInside(
+    link: String,
+    target: String,
+    links: [String: String]
+) -> Bool {
+    workspaceSymlinkTargetStaysInside(link: link, target: target, links: WorkspaceLinkTable(links))
+}
+
 private func resolveInsideWorkspace(
     base: [String],
     target: String,
-    links: [String: String],
+    links: WorkspaceLinkTable,
     hops: inout Int
 ) -> [String]? {
     guard target.isEmpty == false, target.hasPrefix("/") == false else { return nil }
@@ -81,7 +109,9 @@ private func resolveInsideWorkspace(
             stack.removeLast()
         default:
             stack.append(part)
-            guard let next = links[stack.joined(separator: "/")] else { continue }
+            let path = stack.joined(separator: "/")
+            guard links.collidesOnlyByCase(path) == false else { return nil }
+            guard let next = links.targets[path] else { continue }
             hops -= 1
             guard hops > 0 else { return nil }
             stack.removeLast()
