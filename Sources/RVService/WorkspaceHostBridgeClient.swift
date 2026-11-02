@@ -4,6 +4,7 @@ import RVDomain
 import RVIPC
 import RVIsolation
 import Synchronization
+import RVXPC
 @preconcurrency import XPC
 
 /// A workspace host's persistent, bidirectional, authenticated service channel.

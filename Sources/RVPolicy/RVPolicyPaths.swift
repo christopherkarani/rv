@@ -141,6 +141,13 @@ public enum RVPolicyPaths: Sendable {
             .map { configDir.appendingPathComponent($0, isDirectory: false) }
     }
 
+    /// Writer lock for `config.json`, owned by `MachineConfigJSON.update`.
+    public static func machineConfigLockFile(inConfigDir configDir: URL) -> URL {
+        MachineConfigJSON.lockURL(
+            for: configDir.appendingPathComponent("config.json", isDirectory: false)
+        )
+    }
+
     public static func runtimeResourcesFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent("runtime-resources.json", isDirectory: false)
     }
@@ -180,6 +187,7 @@ public enum RVPolicyPaths: Sendable {
             policyRevisionLogLockFile(inConfigDir: configDir),
             runtimeResourcesFile(inConfigDir: configDir),
             agentDefinitionsFile(inConfigDir: configDir),
+            machineConfigLockFile(inConfigDir: configDir),
         ]
     }
 

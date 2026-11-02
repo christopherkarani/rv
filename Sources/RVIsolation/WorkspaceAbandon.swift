@@ -138,9 +138,7 @@ enum WorkspaceVolumeDiffer {
     private static func onDevice(_ fd: Int32, _ expected: UInt64) -> Bool {
         final class Box: @unchecked Sendable { var status = stat() }
         let box = Box()
-        let stated = diskImagePerformWithinCopyClock {
-            let copy = diskImageDuplicateDescriptor(fd)
-            guard copy >= 0 else { return false }
+        let stated = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
             let ok = fstat(copy, &box.status) == 0
             close(copy)
             return ok
@@ -210,9 +208,7 @@ enum WorkspaceVolumeDiffer {
             }
             final class Box: @unchecked Sendable { var text: String? }
             let box = Box()
-            let read = diskImagePerformWithinCopyClock {
-                let copy = diskImageDuplicateDescriptor(parent)
-                guard copy >= 0 else { return false }
+            let read = diskImagePerformWithinCopyClock(duplicating: parent) { copy in
                 var buffer = [CChar](repeating: 0, count: 4096)
                 let count = leaf.withCString { readlinkat(copy, $0, &buffer, buffer.count - 1) }
                 close(copy)
@@ -341,9 +337,7 @@ enum WorkspaceVolumeDiffer {
     private static func isRegular(_ fd: Int32) -> RegularFile {
         final class Box: @unchecked Sendable { var status = stat() }
         let box = Box()
-        let stated = diskImagePerformWithinCopyClock {
-            let copy = diskImageDuplicateDescriptor(fd)
-            guard copy >= 0 else { return false }
+        let stated = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
             let ok = fstat(copy, &box.status) == 0
             close(copy)
             return ok
@@ -366,12 +360,7 @@ enum WorkspaceVolumeDiffer {
             var ok = false
         }
         let box = Box()
-        let finished = diskImagePerformWithinCopyClock {
-            let copy = diskImageDuplicateDescriptor(dirfd)
-            guard copy >= 0 else {
-                box.err = errno
-                return false
-            }
+        let finished = diskImagePerformWithinCopyClock(duplicating: dirfd) { copy in
             let stated = name.withCString {
                 fstatat(copy, $0, &box.status, AT_SYMLINK_NOFOLLOW) == 0
             }
@@ -393,12 +382,7 @@ enum WorkspaceVolumeDiffer {
             var err: Int32 = 0
         }
         let box = Box()
-        let finished = diskImagePerformWithinCopyClock {
-            let copy = diskImageDuplicateDescriptor(dirfd)
-            guard copy >= 0 else {
-                box.err = errno
-                return false
-            }
+        let finished = diskImagePerformWithinCopyClock(duplicating: dirfd) { copy in
             let opened = name.withCString { openat(copy, $0, flags) }
             if opened < 0 { box.err = errno }
             close(copy)

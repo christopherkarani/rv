@@ -141,9 +141,8 @@ struct ControlAuthorizationTests {
 
     @Test func rowMutationDuringAuthenticationRejects() async throws {
         let stored = try row()
-        var changed = stored
-        changed.continuation = .resume(ApprovalResumeToken(rawValue: "different"))
-        let replacement = changed
+        let replacement = stored.rebuilt(
+            continuation: .resume(ApprovalResumeToken(rawValue: "different")), subject: stored.subject)
         let operation = try #require(ApprovalOperation(row: stored, decision: .deny))
         let broker = ControlAuthorizationBroker(authenticator: Authenticator(accepted: true))
         await #expect(throws: ControlAuthorizationError.changed) {
@@ -201,14 +200,12 @@ struct ControlAuthorizationTests {
     }
 
     @Test func legacyRowsCannotCreateOwnerOperation() throws {
-        var legacy = try row()
-        legacy.subject = nil
+        let legacy = try row().rebuilt(subject: nil)
         #expect(ApprovalOperation(row: legacy, decision: .allowOnce) == nil)
     }
 
     @Test func legacyAllowCannotBeDeliveredToHost() throws {
-        var stored = try row()
-        stored.subject = nil
+        let stored = try row().rebuilt(subject: nil)
         let (_, resolved) = try PendingApprovalLedger.resolve(
             records: [stored], id: stored.id, decision: .allowOnce,
             fingerprint: stored.fingerprint, identity: stored.identity, now: Date()
@@ -223,5 +220,17 @@ struct ControlAuthorizationTests {
         let stored = try row()
         let decoded = try JSONDecoder().decode(PendingApproval.self, from: JSONEncoder().encode(stored))
         #expect(decoded.subject == stored.subject)
+    }
+}
+
+private extension PendingApproval {
+    /// Rows are immutable; tests model store drift by rebuilding one.
+    func rebuilt(continuation: ApprovalContinuation? = nil, subject: ApprovalSubject?) -> PendingApproval {
+        PendingApproval(
+            id: id, identity: identity, action: action, reason: reason,
+            continuation: continuation ?? self.continuation, timeoutPolicy: timeoutPolicy,
+            createdAt: createdAt, expiresAt: expiresAt, state: state,
+            subject: subject, payloadDigest: payloadDigest
+        )
     }
 }
