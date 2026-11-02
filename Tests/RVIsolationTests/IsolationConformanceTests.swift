@@ -789,6 +789,8 @@ private func expectPlatformContainedFamily(
             "id=\(id.rawValue) Darwin deny/allow-in must be seatbelt, not mediated",
             sourceLocation: sourceLocation
         )
+    case .microvm:
+        Issue.record("must not establish a micro-VM", sourceLocation: sourceLocation)
     }
     #elseif os(Linux)
     switch established {
@@ -818,6 +820,8 @@ private func recordMintedContained(id: IsolationConformanceID, established: Esta
         Issue.record("id=\(id.rawValue) fail-closed must be Result.failure, got observed")
     case .mediated:
         Issue.record("id=\(id.rawValue) fail-closed must be Result.failure, got mediated")
+    case .microvm:
+        Issue.record("must not establish a micro-VM")
     }
 }
 
@@ -914,7 +918,9 @@ private func formatProbe(
         family = "none"
     case .seatbelt:
         established = "seatbelt"
-        family = "seatbelt"
+        family = "seatbelt"    case .microvm:
+        established = "microvm"
+        family = "microvm"
     }
     return formatProbe(
         id: id,

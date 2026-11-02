@@ -657,6 +657,8 @@ private func runIsolated(
         }
     case .observed, .mediated:
         Issue.record("contained run must establish seatbelt")
+    case .microvm:
+        Issue.record("must not establish a micro-VM")
     }
     return run
 }
@@ -722,6 +724,8 @@ private func assertProbeCannotSurvive(_ tree: ContainmentTree, executable: Strin
             #expect(run.session?.id == session.id)
         case .observed, .mediated:
             Issue.record("probe must establish seatbelt")
+        case .microvm:
+            Issue.record("must not establish a micro-VM")
         }
     case .failure(let error):
         Issue.record("probe must run under Seatbelt, got \(error)")

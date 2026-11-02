@@ -1381,3 +1381,59 @@ machine HMAC log — can forge). Follow-up: per-workspace sealed
 log or machine-anchored repo lineage. A crash between the
 `.jsonl` append and the HMAC append now fails loud
 (`logCorrupted`, recover via reinit) rather than silent.
+
+## Micro-VM contained launches (2026-11-02)
+
+`rv workspace run --microvm IMAGE [--cpus N] [--memory-mib M] -- CMD` runs one Linux micro-VM per runtime through `rv-microvm`, a separate binary built from `Packages/rv-microvm` on apple/containerization 0.54.0 (Virtualization.framework). It replaces `sandbox-exec` in the contained spawn. The session record, private workspace volume, PTY claim, process group, per-runtime credentialed egress proxy, secret lease and publish-on-close are the same code paths as the Seatbelt launch. Requirements: Apple silicon and macOS 26. Design and checklist: `docs/plans/vm-isolation/`.
+
+This is the "VM backend" extension named in [the remediation plan](runtime-remediation-plan.md). It still needs its own security review before it counts as release evidence.
+
+### What it enforces
+
+- **No guest network interface.** The VM has no NIC. Only rv's loopback services reach the guest: the egress proxy port and, when the lease has placeholders, the secret gateway port. Each is relayed over vsock to the same `127.0.0.1` port inside the guest, by `rv-guest-relay`, a static Linux binary running as the container init. Outbound traffic therefore goes only through the credentialed proxy. An anonymous `CONNECT` gets `407`. Egress policy is enforced at the proxy, exactly as for Seatbelt.
+- **Filesystem.** Only the protected workspace volume is shared into the guest. It is shared over virtiofs at the same absolute path. Host paths outside it do not exist in the guest. Guest writes land on the private volume and publish only when the workspace closes.
+- **Workspace control paths.** This matches Seatbelt's `workspaceControlDenies`. `.git/hooks`, `.git/config`, `.rv` and `.config/rv` are bind-mounted read-only over themselves. Non-empty `.git` and `.config` directories are bind-mounted read-write over themselves, which makes them mount points: they cannot be renamed aside or deleted. Guest processes lack `CAP_SYS_ADMIN` (Containerization's default OCI capability set), so they cannot unmount any of this.
+  - **Missing paths.** Before the first micro-VM run in a workspace, `MicroVMControlPlaceholders` creates each missing control path as an empty placeholder. An empty `.git` or `.config` is mounted read-only whole.
+  - **Cleanup.** Placeholders are reference-counted across concurrent runs. They are removed when the last run's process group is dead, before publish, and only while still empty.
+  - **Refused.** A symlinked or special control path refuses the launch.
+- **Environment.** Guest variables (profile env, keychain entries, proxy URLs and their credential) travel only in the `rv-microvm` process environment and are forwarded into the guest by name. They are never placed in argv or a file.
+  - Each value is carried as `RV_GUEST_<NAME>`, so a guest value never configures the entitled helper under its own name (for example `SSL_CERT_FILE` or `DYLD_*`).
+  - A staged keychain or secret entry replaces a profile value of the same name, as in the Seatbelt cage.
+  - The runtime-managed name set and any `*_PROXY` name are not forwardable from profiles.
+- **Host relay budget.** `rv-microvm` bridges at most 128 concurrent guest connections and refuses any beyond that, so a guest looping `connect` cannot exhaust host threads or descriptors.
+- **Lifetime.** Killing the process group kills `rv-microvm`, and the Virtualization XPC service exits with its client. Cancel and close therefore tear down the VM. `rv-microvm` writes the handshake before the guest command starts, so a failed handshake never follows agent activity.
+- **Offline launch.** The CLI checks the image with `rv-microvm status` and runs `prepare` before it asks the host to launch, so the launch itself never pulls. An unprepared image fails before the handshake (exit 125). The kernel (Kata 3.32.0, sha256-pinned) and `vminit:0.54.0` are pinned in `MicroVMPins`.
+
+### What it refuses (fail closed)
+
+- Resource profiles that grant host paths (executable links, read files and trees, write trees, credential files): `resourceStagingFailed`. Env, keychain and secret entries are supported.
+- Agent-definition launches (`launch` with an agent definition): `backendMismatch`.
+- `ensureTerminal` requests carrying micro-VM options: `invalidRequest`.
+- Hosts without `microVMLaunchV1`: the client reports `incompatibleProtocol` instead of sending the field.
+- Non-contained plans: `profileNotApplicable`.
+
+### What it does not guarantee
+
+- **No admission broker in the guest.** fds 4/5 are not forwarded. Admitted-action flows are unavailable, and binary-scoped egress rules cannot match a guest binary, so they deny.
+- **The guest is root inside the VM.** The VM boundary is the isolation. A Virtualization.framework escape lands in the user-privileged `rv-microvm` / VZ XPC context on the host. `rv-microvm` runs outside Seatbelt as trusted rv code, and it is the only rv binary with `com.apple.security.virtualization`.
+- **Image contents are not vetted.** Images are pulled by reference (tag or digest) into `~/.config/rv/microvm`. rv does not pin or scan the user's image. That cache, like the rest of `~/.config/rv`, is writable by the same uid.
+- **Guest processes share guest loopback.** Every process in the VM can reach the relayed proxy and gateway ports. The proxy credential is per runtime, not per guest process.
+- **Placeholders can be left behind.** If the host process dies mid-run, or a run's process group outlives the watch's death budget, empty control placeholders stay in the project and publish with it. An empty `.rv`, `.config/rv` or `.git/hooks` has no effect on rv or git.
+- **Host leftovers on SIGKILL.** A killed `rv-microvm` leaves its `/tmp/rvmvm.*` relay directory and its `containers/rv-<pid>-*` rootfs clone. Clones are swept on a later run once the pid is dead. Relay directories are not swept yet.
+
+### Verification
+
+- **Unit tests.** `MicroVMLaunchTests`, `MicroVMControlPlaceholderTests` (4), `MicroVMLaunchWireTests`, the `WorkspaceHostTests` gate assertion, `WorkspaceMicroVMTests` (CLI), and `signDryRunSignsTheMicroVMBackendWithItsEntitlement`. The `Packages/rv-microvm` package has 27 tests. `Sources/rv-guest-relay/tests/run.sh` runs 16 checks. The relay and package suites run in the `macos-microvm` PR job and from `Scripts/gate.sh` when their files change.
+- **End to end.** `Scripts/microvm-proof.sh` builds, prepares `alpine:3.20`, and runs `MicroVMWorkspaceEndToEndTests` (opt-in, `RV_MICROVM_E2E=1`). The tests drive a real VM through `WorkspaceSessionSupervisor` and assert:
+  - the guest is Linux with only `lo`, and an outside ping fails;
+  - the guest sees the workspace at its path but not a sibling host file;
+  - the PTY size is the requested 30x100, with no `\r\r\n`;
+  - an authenticated `CONNECT` through the relayed proxy reaches a host stub, while an anonymous one gets `407`;
+  - the guest exit status (7) is reported;
+  - a guest write publishes on close;
+  - cancel removes the `rv-microvm` process;
+  - a guest cannot write `.git/hooks`, `.git/config`, `.rv` or `.config/rv`, or rename or delete `.git` and `.config`, while git's own writes inside `.git` still work;
+  - in a plain folder, the guest cannot create `.rv/policy.toml`, `.git/hooks/*`, `.git/config` or `.config/rv`, and no placeholder publishes;
+  - an unprepared image fails.
+  Hosted CI runners lack nested virtualization, so this suite runs on developer machines.
+- **Not exercised end to end.** The CLI → workspace-host socket hop with debug builds: peer trust only admits the Developer ID-signed `rv-cli` and the installed host. That hop is covered by the protocol and host unit tests.

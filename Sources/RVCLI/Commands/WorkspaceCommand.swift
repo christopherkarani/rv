@@ -93,6 +93,15 @@ struct WorkspaceRun: AsyncParsableCommand {
     @Option(name: .long, help: "Hook protocol host (e.g. opencode). Tags that name no host select nothing; tags never stage credentials.")
     var hook: String?
 
+    @Option(name: .long, help: "Run inside a network-less Linux micro-VM from this OCI image (e.g. alpine:3.20). The executable is a path inside the image.")
+    var microvm: String?
+
+    @Option(name: .long, help: "Micro-VM virtual CPUs (with --microvm).")
+    var cpus: Int?
+
+    @Option(name: .long, help: "Micro-VM memory in MiB (with --microvm).")
+    var memoryMib: Int?
+
     @Argument(parsing: .captureForPassthrough, help: "Absolute executable and arguments.")
     var command: [String] = []
 
@@ -100,7 +109,8 @@ struct WorkspaceRun: AsyncParsableCommand {
         let argv = command.first == "--" ? Array(command.dropFirst()) : command
         try WorkspaceCommandRun.run(
             path.workspace, rows: rows, columns: columns, command: argv,
-            resourceProfileID: resourceProfile, hook: hook
+            resourceProfileID: resourceProfile, hook: hook,
+            microVM: WorkspaceMicroVM.options(image: microvm, cpus: cpus, memoryMiB: memoryMib)
         )
     }
 }
@@ -462,7 +472,8 @@ enum WorkspaceCommandRun {
 
     static func run(
         _ raw: String?, rows: Int?, columns: Int?, command: [String],
-        resourceProfileID: String? = nil, hook: String? = nil
+        resourceProfileID: String? = nil, hook: String? = nil,
+        microVM: MicroVMLaunchOptions? = nil
     ) throws {
         #if !os(macOS)
         throw ValidationError(ContainedRuntimeRefusal.message)
@@ -481,6 +492,9 @@ enum WorkspaceCommandRun {
         if resourceProfileID == nil {
             FileHandle.standardError.write(Data(missingProfileWarning.utf8))
         }
+        if let microVM {
+            try WorkspaceMicroVM.ensurePrepared(microVM, project: project)
+        }
         try runInteractive(
             project: project,
             executable: executable,
@@ -488,7 +502,8 @@ enum WorkspaceCommandRun {
             hook: hook.flatMap(HookHost.init(rawValue:)),
             rows: rows,
             columns: columns,
-            resourceProfileID: resourceProfileID
+            resourceProfileID: resourceProfileID,
+            microVM: microVM
         )
         #endif
     }
@@ -556,12 +571,14 @@ enum WorkspaceCommandRun {
         hook: HookHost?,
         rows: Int?,
         columns: Int?,
-        resourceProfileID: String? = nil
+        resourceProfileID: String? = nil,
+        microVM: MicroVMLaunchOptions? = nil
     ) throws {
         try runInteractiveSelection(
             project: project,
             selection: .legacy(executable: executable, hook: hook),
-            arguments: arguments, rows: rows, columns: columns, resourceProfileID: resourceProfileID
+            arguments: arguments, rows: rows, columns: columns, resourceProfileID: resourceProfileID,
+            microVM: microVM
         )
     }
 
@@ -571,7 +588,8 @@ enum WorkspaceCommandRun {
         arguments: [String],
         rows: Int?,
         columns: Int?,
-        resourceProfileID: String? = nil
+        resourceProfileID: String? = nil,
+        microVM: MicroVMLaunchOptions? = nil
     ) throws {
         // Identity launch requires a scoped operator permit, which the
         // ceremony cannot issue yet. Fail before spawning or contacting a
@@ -603,7 +621,8 @@ enum WorkspaceCommandRun {
             launched = client.launchRuntime(
                 executable: executable, arguments: arguments, hookHost: hook,
                 terminalRows: rows, terminalColumns: columns,
-                resourceProfileID: resourceProfileID
+                resourceProfileID: resourceProfileID,
+                microVM: microVM
             )
         case .named(let definitionID):
             launched = client.launchAgentRuntime(

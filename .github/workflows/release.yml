@@ -67,6 +67,11 @@ jobs:
       - name: Isolation tests (N-Z)
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[N-Zn-z]'
 
+      # rv-guest-relay (micro-VM backend) is a static Linux binary built
+      # with zig's bundled musl.
+      - name: Install zig
+        run: brew install zig
+
       - name: Stage release binaries
         run: Scripts/release.sh
 

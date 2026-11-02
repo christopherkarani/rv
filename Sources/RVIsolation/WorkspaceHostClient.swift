@@ -152,12 +152,17 @@ public final class WorkspaceClient: Sendable {
         io.withLock { $0.supportsIdentityAgentLaunch }
     }
 
+    var supportsMicroVMLaunch: Bool {
+        io.withLock { $0.supportsMicroVMLaunch }
+    }
+
     private struct ClientState {
         var fd: Int32
         var open: Bool
         var supportsEnsureTerminalRuntime: Bool
         var supportsResourceProfiles: Bool
         var supportsIdentityAgentLaunch: Bool
+        var supportsMicroVMLaunch: Bool = false
     }
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
@@ -241,6 +246,9 @@ public final class WorkspaceClient: Sendable {
                     $0.supportsResourceProfiles = features.contains(
                         WorkspaceControlFeature.runtimeResourceProfilesV1
                     )
+                    $0.supportsMicroVMLaunch = features.contains(
+                        WorkspaceControlFeature.microVMLaunchV1
+                    )
                 }
                 client.events.setSupportsReplayBatches(
                     features.contains(WorkspaceControlFeature.terminalReplayBatchesV1)
@@ -282,7 +290,8 @@ public final class WorkspaceClient: Sendable {
         hookHost: HookHost? = nil,
         terminalRows: Int? = nil,
         terminalColumns: Int? = nil,
-        resourceProfileID: String? = nil
+        resourceProfileID: String? = nil,
+        microVM: MicroVMLaunchOptions? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
             return .failure(.requestTooLarge)
@@ -293,12 +302,17 @@ public final class WorkspaceClient: Sendable {
         if resourceProfileID != nil, supportsResourceProfiles == false {
             return .failure(.incompatibleProtocol)
         }
+        // An older host refuses the unknown field as malformed; say why.
+        if microVM != nil, supportsMicroVMLaunch == false {
+            return .failure(.incompatibleProtocol)
+        }
         var message = WorkspaceControlRequest(
             operation: .launchRuntime,
             id: UUID(),
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
+            microvm: microVM,
             hook: hookHost?.rawValue
         )
         switch (terminalRows, terminalColumns) {

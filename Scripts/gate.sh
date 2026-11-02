@@ -15,6 +15,8 @@ QUIET=0
 EXPLICIT=0
 FILTERS=""
 RUN_C_UNITS=0
+RUN_GUEST_RELAY_UNITS=0
+RUN_MICROVM_PACKAGE=0
 
 usage() {
   cat <<'EOF'
@@ -112,6 +114,9 @@ infer_filters() {
       Package.swift)
         package_touched=1
         ;;
+      Packages/rv-microvm/*)
+        RUN_MICROVM_PACKAGE=1
+        ;;
       Sources/*|Tests/*)
         case "$f" in
           Sources/*/*|Tests/*/*) ;;
@@ -127,6 +132,7 @@ infer_filters() {
             add_filter "CHookPipeTests"
             RUN_C_UNITS=1
             ;;
+          rv-guest-relay) RUN_GUEST_RELAY_UNITS=1 ;;
           *Tests) add_filter "$m" ;;
           *) add_filter "${m}Tests" ;;
         esac
@@ -155,7 +161,8 @@ if [[ "$EXPLICIT" -eq 0 ]]; then
 fi
 
 # Explicit empty --filter / blank names must not green-exit after preflight alone.
-if [[ -z "$FILTERS" ]]; then
+# Non-SPM suites (guest relay, rv-microvm package) count as tests.
+if [[ -z "$FILTERS" && "$RUN_GUEST_RELAY_UNITS" -eq 0 && "$RUN_MICROVM_PACKAGE" -eq 0 ]]; then
   if [[ "$EXPLICIT" -eq 1 ]]; then
     printf "gate: empty filter list; pass e.g. Scripts/gate.sh RVDomainTests\n" >&2
   else
@@ -168,12 +175,28 @@ fi
 # graph, so a dozen filters cost a dozen plannings. The alternation matches
 # the same union the loop ran.
 fail=0
-FILTER_REGEX="${FILTERS// /|}"
-if [[ "$QUIET" -eq 0 ]]; then
-  printf "gate: Scripts/swift-6.4 test --filter %s\n" "$FILTER_REGEX"
+if [[ -n "$FILTERS" ]]; then
+  FILTER_REGEX="${FILTERS// /|}"
+  if [[ "$QUIET" -eq 0 ]]; then
+    printf "gate: Scripts/swift-6.4 test --filter %s\n" "$FILTER_REGEX"
+  fi
+  if ! "$SWIFT_WRAP" test --filter "$FILTER_REGEX"; then
+    fail=1
+  fi
 fi
-if ! "$SWIFT_WRAP" test --filter "$FILTER_REGEX"; then
-  fail=1
+
+if [[ "$RUN_GUEST_RELAY_UNITS" -eq 1 ]]; then
+  [[ "$QUIET" -eq 1 ]] || printf "gate: Sources/rv-guest-relay/tests/run.sh\n"
+  if ! "$ROOT/Sources/rv-guest-relay/tests/run.sh"; then
+    fail=1
+  fi
+fi
+
+if [[ "$RUN_MICROVM_PACKAGE" -eq 1 ]]; then
+  [[ "$QUIET" -eq 1 ]] || printf "gate: Scripts/swift-6.4 test --package-path Packages/rv-microvm\n"
+  if ! "$SWIFT_WRAP" test --package-path "$ROOT/Packages/rv-microvm"; then
+    fail=1
+  fi
 fi
 
 if [[ "$RUN_C_UNITS" -eq 1 ]]; then

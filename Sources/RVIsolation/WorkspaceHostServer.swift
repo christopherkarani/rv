@@ -259,6 +259,7 @@ final class WorkspaceHostServer: Sendable {
                 WorkspaceControlFeature.resizeLeaseAuthority,
                 WorkspaceControlFeature.runtimeResourceProfilesV1,
                 WorkspaceControlFeature.terminalReplayBatchesV1,
+                WorkspaceControlFeature.microVMLaunchV1,
             ],
             admission: admission,
             listenFD: listened.0,
@@ -735,6 +736,7 @@ final class WorkspaceHostServer: Sendable {
             plan: plan,
             io: payload.io,
             resourceProfile: payload.resourceProfile,
+            microVM: payload.microVM,
             admission: admission,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes

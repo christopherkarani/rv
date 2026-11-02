@@ -20,6 +20,8 @@ Usage: Scripts/release.sh
   one swift build -c release (all products) → stage rv-cli, rvd,
     rv-workspace-host (+ rv-pty-claim on Darwin,
     rv-isolation-exec on Linux) (strip -x)
+  Darwin also stages rv-microvm + rv-guest-relay (Scripts/build-microvm.sh;
+    needs zig)
   copy *_RVPacks.bundle (Darwin) or *_RVPacks.resources (Linux)
     into .build/release-stage (override with RV_RELEASE_STAGE)
 
@@ -185,6 +187,11 @@ if [[ "$OS" == "Darwin" ]]; then
   cp "$BIN_DIR/rv-pty-claim" "$STAGE/rv-pty-claim"
   chmod 755 "$STAGE/rv-pty-claim"
   strip -x "$STAGE/rv-pty-claim"
+
+  # Micro-VM launch backend (`rv workspace run --microvm`): rv-microvm and
+  # the static Linux rv-guest-relay, next to the host that execs them.
+  # Needs zig for the guest relay.
+  "$ROOT/Scripts/build-microvm.sh" "$STAGE" release
 
   # Bench/diagnostics CLI for the Laya judge bundles (CoreML; Darwin only).
   if [[ ! -x "$BIN_DIR/rv-judge" ]]; then

@@ -468,6 +468,8 @@ private func expectContainedPlatform(
         Issue.record("contained run must not establish observed", sourceLocation: sourceLocation)
     case .mediated:
         Issue.record("contained run must not establish mediated", sourceLocation: sourceLocation)
+    case .microvm:
+        Issue.record("must not establish a micro-VM", sourceLocation: sourceLocation)
     }
     #elseif os(Linux)
     switch established {

@@ -170,6 +170,8 @@ struct DescriptorHygieneTests {
             #expect(report.run.session?.id == session.id)
         case .observed, .mediated:
             Issue.record("probe must establish seatbelt")
+        case .microvm:
+            Issue.record("must not establish a micro-VM")
         }
     }
 
@@ -527,6 +529,8 @@ private func runProbe(
         break
     case .observed, .mediated:
         Issue.record("probe must establish seatbelt")
+    case .microvm:
+        Issue.record("must not establish a micro-VM")
     }
     let text = try String(contentsOf: reportURL, encoding: .utf8)
     return try parseProbeReport(text, run: run)

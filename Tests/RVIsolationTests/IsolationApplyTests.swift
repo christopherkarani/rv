@@ -755,6 +755,8 @@ struct IsolationApplyTests {
                 break
             case .landlock:
                 break
+            case .microvm:
+                Issue.record("must not establish a micro-VM")
             }
         }
     }
@@ -1063,6 +1065,8 @@ struct IsolationApplyTests {
             Issue.record("Darwin platform() must be family seatbelt")
         case .landlock:
             Issue.record("Darwin platform() must be family seatbelt, not landlock")
+        case .microvm:
+            Issue.record("must not establish a micro-VM")
         }
         #elseif os(Linux)
         switch backend.family {
@@ -1152,6 +1156,8 @@ struct IsolationApplyTests {
                     break
                 case .observed, .mediated:
                     Issue.record("contained \(label) must establish seatbelt")
+                case .microvm:
+                    Issue.record("must not establish a micro-VM")
                 }
             case .failure(let error):
                 Issue.record("contained \(label) must run, got \(error)")
@@ -1382,6 +1388,9 @@ private func probeLine(
         case .seatbelt:
             established = "seatbelt"
             family = "seatbelt"
+        case .microvm:
+            established = "microvm"
+            family = "microvm"
         }
         return
             "requested=\(requestedLabel) established=\(established) family=\(family) exit=\(run.exitStatus) error=none"
