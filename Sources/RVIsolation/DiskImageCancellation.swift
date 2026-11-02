@@ -1967,6 +1967,9 @@ struct SavedReplaceOutcome: Equatable, Sendable {
     var reachedTruncate: Bool
     var originalIntact: Bool
     var mayRenameOntoWorkspace: Bool
+    /// With `retainBackup`, the host path of the pre-commit bytes after a
+    /// commit. The caller owns and unlinks it.
+    var retainedBackup: String? = nil
 }
 
 func savedTreeMayRenameOntoWorkspace(originalIntact: Bool, restoreFinished: Bool) -> Bool {
@@ -1984,6 +1987,7 @@ func replaceOriginalOnlyAfterStagedCopy(
     original: Int32,
     originalPath: String? = nil,
     stagedDirectory: URL = FileManager.default.temporaryDirectory,
+    retainBackup: Bool = false,
     mayContinue: (CopyClockPoint) -> Bool,
     copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
 ) -> SavedReplaceOutcome {
@@ -2079,11 +2083,13 @@ func replaceOriginalOnlyAfterStagedCopy(
         copyXattr: copyXattr
     )
     if committed {
+        if retainBackup { consumedBackup = true }
         return SavedReplaceOutcome(
             committed: true,
             reachedTruncate: true,
             originalIntact: true,
-            mayRenameOntoWorkspace: true
+            mayRenameOntoWorkspace: true,
+            retainedBackup: retainBackup ? backupURL.path : nil
         )
     }
     return restoreBackupAfterTruncate(
