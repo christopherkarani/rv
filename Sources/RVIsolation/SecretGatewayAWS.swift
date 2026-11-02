@@ -135,6 +135,11 @@ extension SecretGateway {
         {
             return .failure(.awsSignedStreaming)
         }
+        if let mode = head.header("X-Amz-Content-Sha256"), Self.unsignedPayloadModes.contains(mode),
+            live.signing?.isS3 != true
+        {
+            return .failure(.awsUnsignedPayload)
+        }
         var stripped = head
         stripped.headers = head.headers.filter { AWSSigV4.ownedHeaders.contains($0.name.lowercased()) == false }
         // The key id is the one place an AWS placeholder belongs. Elsewhere
@@ -171,7 +176,7 @@ extension SecretGateway {
                 method: method, path: components?.percentEncodedPath ?? "/", query: components?.percentEncodedQuery,
                 headers: signedInput, payloadHash: payloadHash),
             credentials: credentials.signing, scope: AWSSigV4.Scope(region: binding.region, service: binding.service),
-            at: now(), options: binding.service == "s3" ? .s3 : AWSSigV4.Options())
+            at: now(), options: binding.isS3 ? .s3 : AWSSigV4.Options())
         else { return .failure(.malformed) }
         return .success(headers + signed.headers)
     }

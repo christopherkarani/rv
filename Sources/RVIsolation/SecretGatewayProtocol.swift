@@ -241,6 +241,12 @@ enum GatewayRefusal: Error, Equatable {
     /// No approval service can be asked: no admission channel, no live agent
     /// principal, or the service declined to file it.
     case approvalUnavailable
+    /// An unsigned-payload mode on a service other than S3, whose signature
+    /// the gateway cannot produce for it.
+    case awsUnsignedPayload
+    /// The upstream's answer carried a `SecretAccessKey`: credentials minted
+    /// by the call, which would otherwise reach the agent unscrubbed.
+    case awsCredentialsInResponse
 
     /// Seconds a client should wait before retrying, sent as `Retry-After`.
     var retryAfter: Int? { self == .approvalPending ? 5 : nil }
@@ -256,16 +262,19 @@ enum GatewayRefusal: Error, Equatable {
             .ambiguousPath, .echoMethod, .runtimeMismatch, .awsKeyMismatch:
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
-            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .approvalPending,
-            .approvalDenied, .approvalUnavailable:
+            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .awsUnsignedPayload,
+            .awsCredentialsInResponse, .approvalPending, .approvalDenied, .approvalUnavailable:
             false
         }
     }
 
     var status: Int {
         switch self {
-        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath, .awsSignedStreaming: 400
+        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath, .awsSignedStreaming,
+            .awsUnsignedPayload:
+            400
         case .auditUnavailable, .refreshFailed: 503
+        case .awsCredentialsInResponse: 502
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
@@ -305,6 +314,10 @@ enum GatewayRefusal: Error, Equatable {
         case .approvalDenied: "the approval for this request was denied, expired, or already used"
         case .approvalUnavailable:
             "this request needs a human's approval, and no approver is available for this runtime"
+        case .awsUnsignedPayload:
+            "unsigned payload modes are accepted for S3 only; send the body with a payload hash for this service"
+        case .awsCredentialsInResponse:
+            "the AWS response carried new credentials, which are never passed to the agent"
         }
     }
 }
