@@ -121,6 +121,7 @@ public struct GatedEvaluate: Sendable {
         case .observed(let observed):
             return observed
         case .enforced(let enforced):
+            guard HookDeadline.permitsSideEffects() else { return enforced }
             recordDenialIfNeeded(
                 enforced,
                 path: action.path.rawValue,
@@ -291,7 +292,9 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
-    /// Gated evaluate with inputs already gathered for this evaluation.
+    /// Gated evaluate. `inputs` is gathered exactly once per evaluation,
+    /// off the cooperative pool together with the evaluation, script check
+    /// and judge (the shell doors pass a live gather; tests pass a value).
     func gated(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
@@ -302,7 +305,7 @@ public struct GatedEvaluate: Sendable {
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
         tool: LedgerTool,
-        inputs: EvaluationInputs
+        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> EvaluationResult {
         let verb: PolicyVerb
         switch intent {
@@ -311,22 +314,36 @@ public struct GatedEvaluate: Sendable {
         case .apply:
             verb = .apply
         }
-        let result = evaluateWithSemantics(request, cwd: cwd, home: home, store: inputs.store, now: now)
+        let isPeek = verb == .peek
         // Order matters: the script check and the judge run BEFORE the
         // Policy gate, and the gate then sees the final deny exactly
         // once. A judge/script Ask can therefore redeem the grant its
         // approval plants (no infinite Ask loop), and an allow-once
         // grant for a pack deny is never spent on a result the judge
         // would have re-denied afterwards.
+        // The input reads, evaluation and judge steps block (file reads,
+        // model load wait, inference): run them off the cooperative pool.
+        // The Policy gate and every `HookDeadline` check stay here, where
+        // the task-local deadline is bound.
+        let (screened, safety) = await JudgeOffload.run { [self] in
+            let gathered = inputs()
+            let result = evaluateWithSemantics(
+                request, cwd: cwd, home: home, store: gathered.store, now: now
+            )
+            return (
+                posture(
+                    result,
+                    door: .shell(request, inputs: gathered, isPeek: isPeek),
+                    guardMode: gathered.guardMode,
+                    cwd: cwd,
+                    home: home,
+                    now: now
+                ),
+                gathered.store.safety
+            )
+        }
         let candidate: EvaluationResult
-        switch posture(
-            result,
-            door: .shell(request, inputs: inputs, isPeek: verb == .peek),
-            guardMode: inputs.guardMode,
-            cwd: cwd,
-            home: home,
-            now: now
-        ) {
+        switch screened {
         case .observed(let observed):
             return observed
         case .enforced(let enforced):
@@ -341,6 +358,10 @@ public struct GatedEvaluate: Sendable {
         case .deny:
             if HookAuthorization.policyGateAccess(for: candidate) == .skip {
                 finished = candidate
+            } else if verb == .apply, HookDeadline.permitsSideEffects() == false {
+                // The hook client already gave up: spending the human's
+                // allow-once grant on a reply nobody reads would burn it.
+                finished = candidate
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
@@ -352,13 +373,13 @@ public struct GatedEvaluate: Sendable {
                     grants: grants,
                     now: now,
                     rebaseInProgress: rebasing,
-                    safety: inputs.store.safety,
+                    safety: safety,
                     maskedSegments: Normalize.maskedSegments(of: request.command),
                     invocationPrefix: Normalize.invocationPrefix(of: request.command)
                 )
             }
         }
-        if verb.recordsDenial {
+        if verb.recordsDenial, HookDeadline.permitsSideEffects() {
             recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
         }
         return finished
@@ -508,6 +529,11 @@ public struct GatedEvaluate: Sendable {
                 invocationPrefix: invocationPrefix
             ).result
         case .apply:
+            // The claim runs inside the grant table, atomically with the
+            // spend: past the deadline the grant stays live for the retry,
+            // and a grant spent in time keeps its allow even if the
+            // deadline passes during the remaining steps.
+            let deadline = HookDeadline.current
             return await PolicyGate.consumingGrant(
                 for: result,
                 cwd: cwd,
@@ -517,7 +543,8 @@ public struct GatedEvaluate: Sendable {
                 rebaseInProgress: rebaseInProgress,
                 safety: safety,
                 maskedSegments: maskedSegments,
-                invocationPrefix: invocationPrefix
+                invocationPrefix: invocationPrefix,
+                claim: { deadline?.claimGrantSpend() ?? true }
             ).result
         }
     }

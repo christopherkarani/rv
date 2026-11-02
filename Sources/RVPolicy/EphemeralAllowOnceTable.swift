@@ -219,13 +219,16 @@ public actor EphemeralAllowOnceTable {
 
     /// Atomically spends one live grant for the exact (view, cwd,
     /// payload, invocation). Actor isolation makes concurrent consumers
-    /// have exactly one winner.
+    /// have exactly one winner. `claim` runs inside the actor after a match
+    /// is found and before removal; false leaves the grant live (rvd uses
+    /// it to refuse a spend past the hook deadline).
     public func consume(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         now: Date,
         maskedSegments: [String]? = nil,
-        invocationPrefix: [String] = []
+        invocationPrefix: [String] = [],
+        claim: @Sendable () -> Bool = { true }
     ) -> Bool {
         prune(now: now)
         let fingerprint = grantFingerprint(matchingView, invocationPrefix: invocationPrefix)
@@ -235,6 +238,7 @@ public actor EphemeralAllowOnceTable {
         })?.key else {
             return false
         }
+        guard claim() else { return false }
         grants.removeValue(forKey: id)
         return true
     }
@@ -253,6 +257,14 @@ public actor EphemeralAllowOnceTable {
             $0.fingerprint == fingerprint && $0.cwd == cwd
                 && payloadMatches(grant: $0, spend: maskedSegments)
         }
+    }
+
+    /// True while any grant is unexpired at `now`. `rvd` asks before an idle
+    /// exit: exiting drops the table, so a human's outstanding approvals
+    /// would silently die with the process.
+    public func hasLiveGrants(now: Date) -> Bool {
+        prune(now: now)
+        return grants.isEmpty == false
     }
 
     /// M-07 spend rule. Salted-bound grants require an equal salted

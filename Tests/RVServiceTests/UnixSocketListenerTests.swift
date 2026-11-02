@@ -250,6 +250,89 @@ struct UnixSocketListenerTests {
         #expect(err.contains("HOME is required"))
     }
 
+    /// On macOS XPC is the production transport: a socket base the daemon
+    /// refuses (group-writable `~/.config`) must not take XPC down with it.
+    @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() throws {
+        let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let home = try makeIsolatedHome("gw")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent(".config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o770], ofItemAtPath: config.path)
+        let process = Process()
+        process.executableURL = rvd
+        process.environment = [
+            "HOME": home.path,
+            "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "",
+        ]
+        let stderr = Pipe()
+        process.standardError = stderr
+        process.standardOutput = Pipe()
+        try process.run()
+        Darwin.usleep(1_500_000)
+        let survived = process.isRunning
+        process.terminate()
+        process.waitUntilExit()
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        #expect(survived, "rvd must keep running without its Unix socket; stderr: \(err)")
+        #expect(err.contains("rvd: unix socket unavailable"))
+        #expect(err.contains("continuing with XPC only"))
+        #expect(err.contains("launch failed") == false)
+    }
+
+    /// A rebuilt/upgraded rvd on disk leaves the old process serving replies
+    /// every client rejects (cdhash pin). The stale daemon must exit after
+    /// its next request so launchd starts the new binary. The copy also has
+    /// no `rv_RVPacks.bundle` beside it: it must answer, not trap.
+    @Test func rvdProcessExitsAfterItsBinaryIsReplaced() throws {
+        let built = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let home = try makeIsolatedHome("swap")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let binDir = home.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let rvd = binDir.appendingPathComponent("rvd")
+        try FileManager.default.copyItem(at: built, to: rvd)
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let process = Process()
+        process.executableURL = rvd
+        process.environment = [
+            "HOME": home.path,
+            "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "",
+        ]
+        process.standardError = Pipe()
+        process.standardOutput = Pipe()
+        try process.run()
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+        }
+
+        let first = try retryDarwinConnect(path: socketURL.path, attempts: 80)
+        defer { first.close() }
+        let ack = try IPCJSON.decode(HelloAck.self, from: first.send(body: try IPCJSON.encode(Hello())))
+        #expect(ack.status == .skew(.corePacksUnavailable))
+        Darwin.usleep(200_000)
+        #expect(process.isRunning)
+
+        let staged = binDir.appendingPathComponent("rvd.new")
+        try Data("replacement".utf8).write(to: staged)
+        _ = try FileManager.default.replaceItemAt(rvd, withItemAt: staged)
+
+        let second = try retryDarwinConnect(path: socketURL.path, attempts: 80)
+        defer { second.close() }
+        _ = try? second.send(body: try IPCJSON.encode(Hello()))
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning, Date() < deadline {
+            Darwin.usleep(50_000)
+        }
+        #expect(process.isRunning == false)
+        if process.isRunning == false {
+            #expect(process.terminationStatus == 0)
+        }
+    }
+
     @Test func concurrentConnectionsAreBothServed() throws {
         let home = try makeIsolatedHome("conc")
         defer { try? FileManager.default.removeItem(at: home) }

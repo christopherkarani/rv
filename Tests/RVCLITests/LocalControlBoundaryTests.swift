@@ -11,8 +11,8 @@ struct LocalControlBoundaryTests {
     @Test func missingServiceDeniesEveryHostWithoutEvaluatingInput() async throws {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
-            let wire = await client.hookEvaluate(host: host, stdin: "{}")
-            #expect(wire == LocalControlBoundary.deniedHook(host: host))
+            let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
@@ -27,8 +27,8 @@ struct LocalControlBoundaryTests {
             responseResult: .error(.protocolSkew(.protocolSkew))
         )
         let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok))
+        let wire = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .deny)
+        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .protocol, mode: .deny))
         #expect(transport.invalidationCount == 1)
     }
 

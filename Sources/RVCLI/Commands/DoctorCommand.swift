@@ -15,7 +15,7 @@ struct Doctor: AsyncParsableCommand {
         guard let environment = DoctorEnvironment.live() else {
             try ctx.failHomeMissing()
         }
-        let diagnostics = await ServiceClient(home: ctx.home).diagnostics()
+        let diagnostics = await ServiceClient.probing(home: ctx.home).diagnostics()
         let outcome = DoctorRun.run(
             environment: environment,
             diagnostics: diagnostics,

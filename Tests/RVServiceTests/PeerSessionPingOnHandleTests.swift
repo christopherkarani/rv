@@ -6,7 +6,7 @@ import Testing
 @testable import RVService
 
 struct PeerSessionPingOnHandleTests {
-    @Test func dictionaryHandlePingsInjectedWatchdog() async throws {
+    @Test func dictionaryHandleCountsRequestOnInjectedWatchdog() async throws {
         let watchdog = IdleWatchdog(seconds: 300)
         let probe = TransactionProbe()
         let session = XPCPeerSession(
@@ -21,7 +21,8 @@ struct PeerSessionPingOnHandleTests {
         #expect(probe.beginCount == 1)
         await task.value
 
-        #expect(await watchdog.pingCount == 1)
+        #expect(watchdog.requestCount == 1)
+        #expect(watchdog.inFlight == 0)
         #expect(probe.beginCount == 1)
         #expect(probe.endCount == 1)
     }
@@ -41,7 +42,8 @@ struct PeerSessionPingOnHandleTests {
         let task = try #require(session.handle(message))
         await task.value
 
-        #expect(await watchdog.pingCount == 1)
+        #expect(watchdog.requestCount == 1)
+        #expect(watchdog.inFlight == 0)
         #expect(probe.beginCount == 1)
         #expect(probe.endCount == 1)
     }
@@ -60,7 +62,7 @@ struct PeerSessionPingOnHandleTests {
         #expect(session.handle(xpc_int64_create(0)) == nil)
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        #expect(await watchdog.pingCount == 0)
+        #expect(watchdog.requestCount == 0)
         #expect(probe.beginCount == 0)
         #expect(probe.endCount == 0)
     }
@@ -74,7 +76,7 @@ struct PeerSessionPingOnHandleTests {
         #expect(XPCIPCWire.stdin(from: message) == payload)
     }
 
-    @Test func twoDictionaryHandlesPingTheSameWatchdog() async throws {
+    @Test func twoDictionaryHandlesCountOnTheSameWatchdog() async throws {
         let watchdog = IdleWatchdog(seconds: 300)
         let probe = TransactionProbe()
         let session = XPCPeerSession(
@@ -89,7 +91,8 @@ struct PeerSessionPingOnHandleTests {
         let second = try #require(session.handle(xpc_dictionary_create_empty()))
         await second.value
 
-        #expect(await watchdog.pingCount == 2)
+        #expect(watchdog.requestCount == 2)
+        #expect(watchdog.inFlight == 0)
         #expect(probe.beginCount == 2)
         #expect(probe.endCount == 2)
     }
