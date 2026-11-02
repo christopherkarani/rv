@@ -6,6 +6,8 @@ enum ServiceDiagnosticFailure: Sendable, Equatable {
     case invalidResponse
     case unexpectedResponse
     case service(IPCError)
+    /// rvd answered but failed the identity check hooks apply.
+    case daemonRejected
 
     /// Operator-facing status string with no peer-supplied detail.
     var statusMessage: String {
@@ -18,6 +20,8 @@ enum ServiceDiagnosticFailure: Sendable, Equatable {
             "unexpected response"
         case .service:
             "service error"
+        case .daemonRejected:
+            "daemon identity rejected"
         }
     }
 }

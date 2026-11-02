@@ -58,21 +58,37 @@ struct Setup: AsyncParsableCommand {
     func setupOutcome(
         intent: SetupIntent,
         clock: LiveSetupCeremonyClock,
-        write: @escaping (String) -> Void
+        write: @escaping (String) -> Void,
+        probeService: (HomeDirectory) async -> Bool = Setup.liveServiceProbe
     ) async -> SetupOutcome {
         var outcome = SetupFlow.live().run(intent, clock: clock, write: write)
-        await appendHookServiceWarningIfNeeded(to: &outcome)
+        await appendHookServiceWarningIfNeeded(to: &outcome, probeService: probeService)
         return outcome
     }
 
-    /// After a green setup, a wired slot with a dead service denies every
-    /// command. Say so on stderr (robot stdout stays parseable) instead of
+    /// Liveness of the service the installed hooks talk to. Only the XPC
+    /// door can be probed from the Swift client; Linux hooks reach rvd over
+    /// a unix socket this client does not speak, so liveness is unknown
+    /// there and "unknown" must not print a false "rvd is down" warning.
+    static func liveServiceProbe(home: HomeDirectory) async -> Bool {
+        #if canImport(XPC)
+        return await ServiceClient.probing(home: home).verifyHookService()
+        #else
+        return true
+        #endif
+    }
+
+    /// After a green setup, a wired slot with a dead service blocks or prompts
+    /// on every command. Say so on stderr (robot stdout stays parseable) instead of
     /// leaving the user to discover it one blocked command at a time.
-    private func appendHookServiceWarningIfNeeded(to outcome: inout SetupOutcome) async {
+    private func appendHookServiceWarningIfNeeded(
+        to outcome: inout SetupOutcome,
+        probeService: (HomeDirectory) async -> Bool
+    ) async {
         guard outcome.exitCode == 0 else { return }
         guard let home = CLIProcess.home() else { return }
         guard hasWiredHosts(home: home) else { return }
-        let serviceUp = await ServiceClient(home: home).verifyHookService()
+        let serviceUp = await probeService(home)
         guard SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: serviceUp) else { return }
         if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
             outcome.stderr += "\n"
@@ -98,11 +114,11 @@ struct Setup: AsyncParsableCommand {
     }
 }
 
-/// Post-setup service warning: hooks without a reachable daemon deny
-/// every command, so a green setup with a down service must say so.
+/// Post-setup service warning: hooks without a reachable daemon block or
+/// prompt on every command, so a green setup with a down service must say so.
 enum SetupServiceWarning {
     static let text =
-        "Warning: the RV background service (rvd) is not answering. Installed hooks will deny every command until it is up. Run `rv doctor`."
+        "Warning: the RV background service (rvd) is not answering. Installed hooks will block or prompt on every command until it is up. Run `rv doctor`."
 
     static func needed(hasWiredHosts: Bool, serviceUp: Bool) -> Bool {
         hasWiredHosts && serviceUp == false

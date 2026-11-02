@@ -12,17 +12,14 @@ struct LocalControlBoundaryTests {
     @Test func missingServiceDeniesEveryHostWithoutEvaluatingInput() async throws {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
-            let wire = await client.hookEvaluate(host: host, stdin: "{}")
-            #expect(wire == LocalControlBoundary.deniedHook(host: host, cause: .serviceUnreachable))
+            let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
                 #expect(!wire.stderr.isEmpty)
             }
         }
-        let museWire = await client.hookEvaluate(host: .muse, stdin: "{}")
-        #expect(museWire.stdout.contains("not reachable"))
-        #expect(museWire.stdout.contains("rv doctor"))
     }
 
     @Test func protocolFailureDeniesWithoutLocalHookAuthority() async throws {
@@ -31,59 +28,17 @@ struct LocalControlBoundaryTests {
             responseResult: .error(.protocolSkew(.protocolSkew))
         )
         let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(
-            host: .grok,
-            cause: .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: nil)
-        ))
-        #expect(wire.stdout.contains("disagree"))
+        let wire = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .deny)
+        #expect(wire == HookDaemonFallback.wire(host: .grok, failure: .protocol, mode: .deny))
         #expect(transport.invalidationCount == 1)
-    }
-
-    @Test func hookTimeoutDeniesWithTimeoutCause() async throws {
-        let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
-            sendError: .timeout
-        )
-        let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .serviceTimeout))
-        #expect(wire.stdout.contains("did not answer in time"))
-        #expect(transport.invalidationCount == 1)
-    }
-
-    @Test func skewedHookReplyDeniesWithVersionSkewCause() async throws {
-        let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
-            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0, serviceSemver: "0.0.0"))
-        )
-        let client = try isolatedClient(transport: transport)
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(
-            host: .grok,
-            cause: .versionSkew(clientSemver: ProtocolVersion.serviceSemver, serviceSemver: "0.0.0")
-        ))
-        #expect(wire.stdout.contains("0.0.0"))
-        #expect(wire.stdout.contains(ProtocolVersion.serviceSemver))
-        #expect(transport.invalidationCount == 1)
-    }
-
-    @Test func hookUnavailabilityReasonsAreActionable() {
-        #expect(HookUnavailability.serviceUnreachable.reason.contains("not reachable"))
-        #expect(HookUnavailability.serviceUnreachable.reason.contains("rv doctor"))
-        #expect(HookUnavailability.serviceTimeout.reason.contains("did not answer in time"))
-        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: "0.9.0").reason.contains("1.2.3"))
-        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: "0.9.0").reason.contains("0.9.0"))
-        #expect(HookUnavailability.versionSkew(clientSemver: "1.2.3", serviceSemver: nil).reason.contains("unknown"))
-        #expect(HookUnavailability.daemonRejected.reason.contains("identity check"))
     }
 
 #if canImport(XPC)
-    @Test func daemonAuthenticationFailureDeniesWithRejectedCause() async throws {
+    @Test func daemonAuthenticationFailureDeniesAsUntrustedEvenWhenAsking() async throws {
         let client = try isolatedClient(transport: DaemonAuthFailingTransport())
-        let wire = await client.hookEvaluate(host: .grok, stdin: "{}")
-        #expect(wire == LocalControlBoundary.deniedHook(host: .grok, cause: .daemonRejected))
-        #expect(wire.stdout.contains("identity check"))
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .untrusted, mode: .deny))
+        #expect(wire.stdout.contains("identity check failed"))
     }
 #endif
 
@@ -256,11 +211,34 @@ struct LocalControlBoundaryTests {
     }
 
     @Test func setupWarnsWhenWiredHostsOutliveTheService() async throws {
-        // A wired slot with no daemon is exactly the deny-everything trap:
+        // A wired slot with no daemon is the block-or-prompt-everything trap:
         // setup stays green (files are written) but the outcome must carry
         // the service warning on stderr, where robot stdout stays parseable.
-        // Asserted on the outcome, not a captured fd: fd capture deadlocks
-        // under parallel test execution.
+        // The probe is injected so the result never depends on a real rvd.
+        let outcome = try await wiredSetupOutcome(serviceUp: false)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.contains("rv doctor"))
+    }
+
+    @Test func setupStaysQuietWhenWiredHostsHaveALiveService() async throws {
+        let outcome = try await wiredSetupOutcome(serviceUp: true)
+        #expect(outcome.exitCode == 0)
+        #expect(!outcome.stderr.contains("rv doctor"))
+    }
+
+    #if !canImport(XPC)
+    @Test func linuxServiceProbeNeverClaimsTheServiceIsDown() async throws {
+        // Linux hooks use a unix socket the Swift client cannot probe, so the
+        // live probe must report "not down" rather than warn falsely.
+        let home = try isolatedHome()
+        #expect(await Setup.liveServiceProbe(home: home) == true)
+    }
+    #endif
+
+    /// Runs setup against a home with one wired host and a stubbed probe.
+    /// Asserted on the outcome, not a captured fd: fd capture deadlocks
+    /// under parallel test execution.
+    private func wiredSetupOutcome(serviceUp: Bool) async throws -> SetupOutcome {
         let home = try isolatedHome()
         let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
         try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
@@ -268,13 +246,12 @@ struct LocalControlBoundaryTests {
             to: museDir.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8
         )
         // A slot only reads `.wired` when the baked rv path and its rv-cli
-        // sibling are executable. Stubbed, never executed: no rvd on
-        // purpose, so the daemon is down exactly like the real trap.
+        // sibling are executable. Stubbed, never executed.
         let binDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".local/bin")
         try writeExecutableScript(at: binDir.appendingPathComponent("rv"), source: "#!/bin/sh\nexit 0\n")
         try writeExecutableScript(at: binDir.appendingPathComponent("rv-cli"), source: "#!/bin/sh\nexit 0\n")
         let environment = ["HOME": home.rawValue, "PATH": "/usr/bin:/bin"]
-        let outcome = try await withCLIProcess(environment: environment) {
+        return try await withCLIProcess(environment: environment) {
             await Setup().setupOutcome(
                 intent: SetupIntent(
                     kind: .install,
@@ -284,11 +261,10 @@ struct LocalControlBoundaryTests {
                     ceremonyKind: .setup
                 ),
                 clock: LiveSetupCeremonyClock(),
-                write: CeremonyCLI.stdoutWriter()
+                write: CeremonyCLI.stdoutWriter(),
+                probeService: { _ in serviceUp }
             )
         }
-        #expect(outcome.exitCode == 0)
-        #expect(outcome.stderr.contains("rv doctor"))
     }
 
 }
