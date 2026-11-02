@@ -1399,10 +1399,10 @@ private func expectedClaudeHookCommand(
         #expect(outcome.exitCode == 0)
         let settings = try claudeSettingsObject(at: layout.claudeSettings)
         let entries = try claudePreToolUseEntries(settings)
-        #expect(entries.count == 5)
+        #expect(entries.count == 9)
         // Step 8: setup mutations are fail-closed (WIP owner boundary),
         // so the merge below may be absent. Record, don't crash.
-        guard entries.count == 5 else { return }
+        guard entries.count == 9 else { return }
         #expect(entries[0]["matcher"] as? String == "Bash")
         let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(foreignHooks.count == 1)
@@ -1412,6 +1412,10 @@ private func expectedClaudeHookCommand(
         #expect(entries[2]["matcher"] as? String == "Read")
         #expect(entries[3]["matcher"] as? String == "Edit")
         #expect(entries[4]["matcher"] as? String == "Write")
+        #expect(entries[5]["matcher"] as? String == "Grep")
+        #expect(entries[6]["matcher"] as? String == "Glob")
+        #expect(entries[7]["matcher"] as? String == "NotebookEdit")
+        #expect(entries[8]["matcher"] as? String == "MultiEdit")
         let rvHooks = try #require(entries[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks.count == 1)
         guard rvHooks.count == 1 else { return }
@@ -1586,16 +1590,20 @@ private func expectedClaudeHookCommand(
 
         #expect(outcome.exitCode == 0)
         let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
-        #expect(entries.count == 5)
+        #expect(entries.count == 9)
         // Step 8: setup mutations are fail-closed (WIP owner boundary),
         // so the merge below may be absent. Record, don't crash.
-        guard entries.count == 5 else { return }
+        guard entries.count == 9 else { return }
         let shared = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(shared.map { $0["command"] as? String } == ["other-guard evaluate"])
         #expect(entries[1]["matcher"] as? String == "Bash")
         #expect(entries[2]["matcher"] as? String == "Read")
         #expect(entries[3]["matcher"] as? String == "Edit")
         #expect(entries[4]["matcher"] as? String == "Write")
+        #expect(entries[5]["matcher"] as? String == "Grep")
+        #expect(entries[6]["matcher"] as? String == "Glob")
+        #expect(entries[7]["matcher"] as? String == "NotebookEdit")
+        #expect(entries[8]["matcher"] as? String == "MultiEdit")
         let command = try #require((entries[1]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
         #expect(command == expectedClaudeHookCommand(layout: layout))
         #expect((entries[1]["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int == 90)

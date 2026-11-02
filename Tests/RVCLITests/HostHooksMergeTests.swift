@@ -48,6 +48,46 @@ private let claudeFreshBytes = """
           }
         ],
         "matcher": "Write"
+      },
+      {
+        "hooks": [
+          {
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
+          }
+        ],
+        "matcher": "Grep"
+      },
+      {
+        "hooks": [
+          {
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
+          }
+        ],
+        "matcher": "Glob"
+      },
+      {
+        "hooks": [
+          {
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
+          }
+        ],
+        "matcher": "NotebookEdit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
+          }
+        ],
+        "matcher": "MultiEdit"
       }
     ]
   }
@@ -576,4 +616,31 @@ private let cursorForeignPretty = """
     #expect(try CodexHooksMerge.uninstall(existingData: codex.data) == nil)
     let cursor = try CursorHooksMerge.merge(existingData: nil, adapterPath: "/u/rv-guard.py")
     #expect(try CursorHooksMerge.uninstall(existingData: cursor.data) == nil)
+}
+
+@Test func mergeEngine_claudeOldFourMatcherSettingsMigrateIdempotently() throws {
+    let legacy = ["Bash", "Read", "Edit", "Write"].map { matcher in
+        """
+        {"matcher":"\(matcher)","hooks":[{"type":"command","timeout":90,"command":"RV_BINARY=/old/rv python3 /h/hooks/rv-guard.py"}]}
+        """
+    }.joined(separator: ",")
+    let old = Data("{\"hooks\":{\"PreToolUse\":[\(legacy)]}}".utf8)
+    let first = try ClaudeSettingsMerge.merge(
+        existingData: old, rvPath: "/r", adapterPath: "/h/hooks/rv-guard.py", force: false
+    )
+    #expect(first.wrote)
+    let located = HostHooksMergeEngine.locateFingerprintedHooks(
+        in: try HostHooksMergeEngine.parseRoot(first.data),
+        descriptor: ClaudeSettingsMerge.wiringDescriptor
+    )
+    #expect(located.compactMap(\.matcher) == ClaudeSettingsMerge.matchers)
+    #expect(located.count == 8)
+    let again = try ClaudeSettingsMerge.merge(
+        existingData: first.data, rvPath: "/r", adapterPath: "/h/hooks/rv-guard.py", force: false
+    )
+    #expect(again.wrote == false)
+    #expect(again.data == first.data)
+    let oldRoot = try HostHooksMergeEngine.parseRoot(old)
+    #expect(ClaudeSettingsMerge.hasFileToolMatchers(in: oldRoot) == false)
+    #expect(ClaudeSettingsMerge.hasFileToolMatchers(in: try HostHooksMergeEngine.parseRoot(first.data)))
 }
