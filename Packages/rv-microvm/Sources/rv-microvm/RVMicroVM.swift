@@ -102,7 +102,7 @@ struct Run: AsyncParsableCommand {
     @Option(help: "Virtual CPUs.")
     var cpus: Int = RunOptions.defaultCPUs
 
-    @Option(help: "Guest memory in MiB.")
+    @Option(name: .customLong("memory-mib"), help: "Guest memory in MiB.")
     var memoryMiB: Int = RunOptions.defaultMemoryMiB
 
     @Option(help: "Host loopback TCP port to expose at guest 127.0.0.1 (repeatable).")

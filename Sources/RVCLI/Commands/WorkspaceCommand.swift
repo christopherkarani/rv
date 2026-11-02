@@ -96,10 +96,13 @@ struct WorkspaceRun: AsyncParsableCommand {
     @Option(name: .long, help: "Run inside a network-less Linux micro-VM from this OCI image (e.g. alpine:3.20). The executable is a path inside the image.")
     var microvm: String?
 
-    @Option(name: .long, help: "Micro-VM virtual CPUs (with --microvm).")
+    @Option(name: .long, help: "Run inside a network-less macOS VM cloned from this image (built once with rv-macvm prepare --image NAME). The executable is a path inside the guest.")
+    var macvm: String?
+
+    @Option(name: .long, help: "VM virtual CPUs (with --microvm or --macvm).")
     var cpus: Int?
 
-    @Option(name: .long, help: "Micro-VM memory in MiB (with --microvm).")
+    @Option(name: .long, help: "VM memory in MiB (with --microvm or --macvm).")
     var memoryMib: Int?
 
     @Argument(parsing: .captureForPassthrough, help: "Absolute executable and arguments.")
@@ -110,7 +113,7 @@ struct WorkspaceRun: AsyncParsableCommand {
         try WorkspaceCommandRun.run(
             path.workspace, rows: rows, columns: columns, command: argv,
             resourceProfileID: resourceProfile, hook: hook,
-            microVM: WorkspaceMicroVM.options(image: microvm, cpus: cpus, memoryMiB: memoryMib)
+            microVM: WorkspaceMicroVM.options(image: microvm, macOSImage: macvm, cpus: cpus, memoryMiB: memoryMib)
         )
     }
 }

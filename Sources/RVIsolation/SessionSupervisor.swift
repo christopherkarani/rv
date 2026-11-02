@@ -539,7 +539,8 @@ func spawnSeatbeltProcessBody(
         // The guest sees only the shared workspace: no host staging, no
         // agent homes, no host cage environment. Guest values ride
         // rv-microvm's environment and are forwarded by name.
-        guard let helper = MicroVMHelper.locate(workspace: workspace) else {
+        let guestKind = microVM.options.guest
+        guard let helper = MicroVMHelper.locate(workspace: workspace, guest: guestKind) else {
             return .failure(.lifetimeBoundaryFailed)
         }
         let claim: (path: String, slave: String)?
@@ -562,16 +563,20 @@ func spawnSeatbeltProcessBody(
             egressProxyCredential: egressProxyCredential,
             keychain: keychain
         )
-        if case .failure(let error) = MicroVMControlPlaceholders.shared.acquire(workspace: workspace) {
-            return .failure(error)
+        // A macOS guest enforces the control rules itself (Seatbelt in the
+        // guest), so missing control paths need no placeholders there.
+        if guestKind == .linux {
+            if case .failure(let error) = MicroVMControlPlaceholders.shared.acquire(workspace: workspace) {
+                return .failure(error)
+            }
+            placeholdersHeld = true
         }
-        placeholdersHeld = true
         let relayPorts = [egressProxyPort, secretGatewayPort].compactMap { $0 }
         let command = microVMSpawnCommand(
             helper: helper,
             claim: claim,
             profile: microVM,
-            stateRoot: MicroVMHelper.stateRoot(home: home),
+            stateRoot: MicroVMHelper.stateRoot(home: home, guest: guestKind),
             relayPorts: Array(Set(relayPorts)).sorted(),
             forwardedNames: guest.forwardedNames,
             nonce: nonce,
@@ -579,7 +584,7 @@ func spawnSeatbeltProcessBody(
         )
         spawnPath = command.path
         arguments = command.arguments
-        environment = guest.environment
+        environment = microVMHelperEnvironment(guest.environment, profile: microVM)
         productive = nil
     } else if let profile {
         let seatbelt = seatbeltSpawnSetup(

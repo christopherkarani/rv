@@ -78,7 +78,9 @@ public struct RunOptions: Sendable, Equatable {
         handshakeDescriptor: Int32?,
         nonce: String?,
         hostCPUs: Int,
-        hostMemoryMiB: Int
+        hostMemoryMiB: Int,
+        imageNormalizer: (String) -> Result<String, MicroVMOptionError> = ImageReference.normalize,
+        minimumMemoryMiB: Int = RunOptions.minimumMemoryMiB
     ) -> Result<RunOptions, MicroVMOptionError> {
         let all = [root, image, workspace] + command + forwardedEnvironment + [nonce ?? ""]
         guard all.allSatisfy({ !$0.contains("\0") }) else { return .failure(.containsNUL) }
@@ -87,7 +89,7 @@ public struct RunOptions: Sendable, Equatable {
         guard let executable = command.first else { return .failure(.commandMissing) }
         guard executable.hasPrefix("/") else { return .failure(.commandMustBeAbsolute(executable)) }
         let normalized: String
-        switch ImageReference.normalize(image) {
+        switch imageNormalizer(image) {
         case .failure(let error): return .failure(error)
         case .success(let reference): normalized = reference
         }
@@ -160,7 +162,12 @@ public enum GuestEnvironment {
         image: [String],
         forwarded names: [String],
         host: [String: String],
-        terminal: Bool
+        terminal: Bool,
+        defaults base: [(String, String)] = [
+            ("PATH", MicroVMGuest.defaultPath),
+            ("HOME", MicroVMGuest.home),
+            ("LANG", "C.UTF-8"),
+        ]
     ) -> [String] {
         var order: [String] = []
         var values: [String: String] = [:]
@@ -174,11 +181,7 @@ public enum GuestEnvironment {
             guard isValidName(name) else { continue }
             set(name, String(entry[entry.index(after: equals)...]))
         }
-        var defaults: [(String, String)] = [
-            ("PATH", MicroVMGuest.defaultPath),
-            ("HOME", MicroVMGuest.home),
-            ("LANG", "C.UTF-8"),
-        ]
+        var defaults = base
         if terminal { defaults.append(("TERM", "xterm-256color")) }
         for (name, value) in defaults where values[name] == nil {
             set(name, value)

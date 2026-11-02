@@ -235,7 +235,7 @@ struct MicroVMWorkspaceEndToEndTests {
     }
 }
 
-private func openE2EWorkspace(_ tree: ContainmentTree) throws -> WorkspaceSessionSupervisor {
+func openE2EWorkspace(_ tree: ContainmentTree) throws -> WorkspaceSessionSupervisor {
     let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
     return try WorkspaceSessionSupervisor.open(
         directory,
@@ -261,7 +261,7 @@ private func microVMProcesses(workspace: String) -> [String] {
         .filter { $0.contains("rv-microvm run") && $0.contains("--workspace \(posixRealpath(workspace) ?? workspace) ") }
 }
 
-private func e2eWait(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
+func e2eWait(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(seconds)
     while Date() < deadline {
         if condition() { return true }
@@ -270,7 +270,7 @@ private func e2eWait(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
     return condition()
 }
 
-private final class E2ETranscript: Sendable {
+final class E2ETranscript: Sendable {
     private let state = Mutex<(bytes: Data, exit: Int32?)>((Data(), nil))
 
     func record(_ notice: TerminalNotice) {
@@ -299,7 +299,7 @@ private final class E2ETranscript: Sendable {
 }
 
 /// Loopback TCP server that writes `reply` to every connection.
-private final class E2EStubServer: @unchecked Sendable {
+final class E2EStubServer: @unchecked Sendable {
     let port: Int
     private let listenFD: Int32
     private let reply: [UInt8]

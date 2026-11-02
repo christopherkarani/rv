@@ -311,3 +311,112 @@ struct MicroVMControlPlaceholderTests {
         #expect(exists(ws, ".git") == false && exists(ws, ".rv") == false)
     }
 }
+
+@Suite("macOS guest launch")
+struct MacOSGuestLaunchTests {
+    private let command = IsolatedCommand(executable: "/usr/bin/swift", arguments: ["build"])!
+
+    @Test("macOS guests take a prepared image name and at least 4 GiB")
+    func options() {
+        #expect(MicroVMLaunchOptions(image: "dev", guest: .macOS)?.guest == .macOS)
+        #expect(MicroVMLaunchOptions(image: "xcode-26", guest: .macOS, cpus: 4, memoryMiB: 8192) != nil)
+        #expect(MicroVMLaunchOptions(image: "Dev", guest: .macOS) == nil)
+        #expect(MicroVMLaunchOptions(image: "alpine:3.20", guest: .macOS) == nil)
+        #expect(MicroVMLaunchOptions(image: "dev", guest: .macOS, memoryMiB: 2048) == nil)
+        #expect(MicroVMLaunchOptions(image: "alpine:3.20")?.guest == .linux)
+    }
+
+    @Test("the guest round-trips on the wire; absent means Linux; unknown guests are refused")
+    func codec() throws {
+        let options = try #require(MicroVMLaunchOptions(image: "dev", guest: .macOS, cpus: 4))
+        let decoded = try JSONDecoder().decode(MicroVMLaunchOptions.self, from: try JSONEncoder().encode(options))
+        #expect(decoded == options)
+        let linux = try JSONDecoder().decode(MicroVMLaunchOptions.self, from: Data(#"{"image":"alpine"}"#.utf8))
+        #expect(linux.guest == .linux)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MicroVMLaunchOptions.self, from: Data(#"{"image":"dev","guest":"windows"}"#.utf8))
+        }
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MicroVMLaunchOptions.self, from: Data(#"{"image":"Dev","guest":"macOS"}"#.utf8))
+        }
+    }
+
+    @Test("each guest has its own helper and state root")
+    func helpers() {
+        #expect(MicroVMHelper.executableName(for: .linux) == "rv-microvm")
+        #expect(MicroVMHelper.executableName(for: .macOS) == "rv-macvm")
+        #expect(MicroVMHelper.stateRoot(home: "/Users/dev", guest: .macOS) == "/Users/dev/.config/rv/macvm")
+        #expect(MicroVMHelper.stateRoot(home: "/Users/dev", guest: .linux) == "/Users/dev/.config/rv/microvm")
+    }
+
+    @Test("the guest sandbox profile is the host cage's workspace control rules")
+    func guestProfile() {
+        let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n"))
+        #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
+    }
+
+    /// The guest profile allows everything but the control paths, so it
+    /// must not leave a way to start a process outside the sandbox: such a
+    /// process could write `.git/hooks`. Seatbelt itself refuses launchd
+    /// job bootstraps from sandboxed callers and exec of setuid binaries.
+    @Test("nothing under the guest profile can start an unsandboxed process")
+    func guestProfileHasNoEscape() throws {
+        let scratch = try #require(posixRealpath(NSTemporaryDirectory()))
+        let directory = URL(fileURLWithPath: scratch).appendingPathComponent("rv-guest-escape-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let label = "dev.rv.guest-escape-probe-\(getpid())"
+        let marker = directory.appendingPathComponent("escaped")
+        let plist = directory.appendingPathComponent("\(label).plist")
+        let job: [String: Any] = ["Label": label, "ProgramArguments": ["/usr/bin/touch", marker.path], "RunAtLoad": true]
+        try PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
+        let profile = macOSGuestSandboxProfile(workspacePath: directory.path)
+        func sandboxed(_ arguments: [String]) throws -> Int32 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
+            process.arguments = ["-p", profile] + arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        }
+        #expect(try sandboxed(["/usr/bin/true"]) == 0)
+        let domain = "gui/\(getuid())"
+        #expect(try sandboxed(["/bin/launchctl", "bootstrap", domain, plist.path]) != 0)
+        #expect(try sandboxed(["/bin/launchctl", "bootstrap", "user/\(getuid())", plist.path]) != 0)
+        #expect(try sandboxed(["/usr/bin/crontab", "-l"]) != 0)
+        #expect(try sandboxed(["/usr/bin/sudo", "-n", "/usr/bin/true"]) != 0)
+        Thread.sleep(forTimeInterval: 1)
+        let leaked = FileManager.default.fileExists(atPath: marker.path)
+        if leaked {
+            let cleanup = Process()
+            cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            cleanup.arguments = ["bootout", "\(domain)/\(label)"]
+            try? cleanup.run()
+            cleanup.waitUntilExit()
+        }
+        #expect(leaked == false)
+    }
+
+    @Test("a macOS launch hands rv-macvm the guest profile in its environment, not argv")
+    func helperEnvironment() throws {
+        let options = try #require(MicroVMLaunchOptions(image: "dev", guest: .macOS, memoryMiB: 8192))
+        let profile = MicroVMProfile(workspacePath: "/Users/dev/p", options: options)
+        let environment = microVMHelperEnvironment(["PATH=/usr/bin:/bin", "RV_GUEST_TOKEN=t"], profile: profile)
+        let entry = try #require(environment.first { $0.hasPrefix("\(MicroVMHelper.guestProfileVariable)=") })
+        #expect(entry == "\(MicroVMHelper.guestProfileVariable)=\(macOSGuestSandboxProfile(workspacePath: "/Users/dev/p"))")
+        #expect(environment.contains("RV_GUEST_TOKEN=t"))
+        let spawn = microVMSpawnCommand(
+            helper: "/opt/rv/rv-macvm", claim: nil, profile: profile, stateRoot: "/s",
+            relayPorts: [41000], forwardedNames: ["TOKEN"], nonce: "n", command: command
+        )
+        #expect(spawn.arguments.contains { $0.contains("allow default") } == false)
+        #expect(spawn.arguments.prefix(8) == ["/opt/rv/rv-macvm", "run", "--root", "/s", "--image", "dev", "--workspace", "/Users/dev/p"])
+        #expect(spawn.arguments.contains("--memory-mib"))
+
+        let linux = MicroVMProfile(workspacePath: "/w", options: try #require(MicroVMLaunchOptions(image: "alpine")))
+        #expect(microVMHelperEnvironment(["PATH=/usr/bin"], profile: linux) == ["PATH=/usr/bin"])
+    }
+}

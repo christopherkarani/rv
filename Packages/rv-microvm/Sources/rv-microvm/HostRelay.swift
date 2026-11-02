@@ -70,55 +70,7 @@ final class HostRelay: Sendable {
             close(client)
             return
         }
-        let group = DispatchGroup()
-        group.enter()
-        Thread.detachNewThread {
-            copy(from: client, to: upstream)
-            group.leave()
-        }
-        copy(from: upstream, to: client)
-        group.wait()
-        close(client)
-        close(upstream)
-    }
-
-    /// One direction, blocking. EOF half-closes the peer; the other
-    /// direction keeps flowing on its own thread.
-    private static func copy(from source: Int32, to destination: Int32) {
-        var buffer = [UInt8](repeating: 0, count: 65_536)
-        outer: while true {
-            let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
-            if count < 0, errno == EINTR { continue }
-            if count <= 0 { break }
-            var offset = 0
-            while offset < count {
-                let written = buffer.withUnsafeBytes { write(destination, $0.baseAddress! + offset, count - offset) }
-                if written < 0, errno == EINTR { continue }
-                if written <= 0 { break outer }
-                offset += written
-            }
-        }
-        shutdown(destination, SHUT_WR)
-    }
-
-    private static func connectLoopback(port: Int) -> Int32? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = in_port_t(UInt16(port).bigEndian)
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard connected == 0 else {
-            close(fd)
-            return nil
-        }
-        return fd
+        SocketBridge.run(client, upstream)
     }
 
     private static func bindListener(path: String) -> Result<Int32, RelayError> {
