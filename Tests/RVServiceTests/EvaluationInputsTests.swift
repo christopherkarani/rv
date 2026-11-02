@@ -410,3 +410,44 @@ extension JudgeRuntime {
         )
     }
 }
+
+@Suite("Judge port: packs-only floor through the gated door")
+struct JudgePortPacksOnlyFloorTests {
+    /// Pack-allowed (the packs mask the payload as data) but spawn-bearing,
+    /// so `InlineProgramGuard.requiresJudge` flags it.
+    static let inline = ShellCommand(rawValue: #"perl -e 'system("rm -rf ~")'"#)
+
+    @Test("enforce: unscored inline program is indeterminate; the log keeps the pack allow")
+    func enforceFloorsUnscoredInlineProgram() throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let unavailable = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .unavailable("x")))
+            .evaluateAgent(request(Self.inline), cwd: nil, home: home, now: now, inputs: inputs(.enforce, home: home))
+        #expect(unavailable.decision == .indeterminate(.inlineProgramNeedsJudge))
+        let unavailableRow = try #require(try judgeLog(home).last)
+        #expect(unavailableRow["live"] as? String == "allow")
+        #expect(unavailableRow["note"] as? String == "judge-unavailable: x; context: partial")
+
+        let missing = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .failed)).evaluateAgent(
+            request(Self.inline), cwd: nil, home: home, now: now,
+            inputs: inputs(.enforce, home: home, judge: JudgeSelection(engine: .ft, bundle: nil))
+        )
+        #expect(missing.decision == .indeterminate(.inlineProgramNeedsJudge))
+        let missingRow = try #require(try judgeLog(home).last)
+        #expect(missingRow["live"] as? String == "allow")
+        #expect(missingRow["note"] as? String == "engine-missing; context: partial")
+    }
+
+    @Test("observe: unscored inline program is not floored; would-be stays the pack allow")
+    func observeDoesNotFloor() throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let observed = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .unavailable("x")))
+            .evaluateAgent(request(Self.inline), cwd: nil, home: home, now: now, inputs: inputs(.observe, home: home))
+        #expect(observed.decision == .allow)
+        let row = try #require(try judgeLog(home).last)
+        #expect(row["guard"] as? String == "observe")
+        #expect(row["wouldBe"] as? String == "allow")
+        #expect(row["note"] as? String == "judge-unavailable: x; context: partial")
+    }
+}
