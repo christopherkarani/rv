@@ -88,6 +88,18 @@ struct GatedEffectTests {
         #expect(peek.effects == [judgeLog(peek.result, isPeek: true)])
     }
 
+    @Test("enforce, judge unavailable: a risky inline program is floored; its judge log keeps the live allow")
+    func packsOnlyFloorKeepsUnflooredLog() async throws {
+        let inline = ShellCommand(rawValue: #"perl -e 'system("rm -rf ~")'"#)
+        let door = GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: .unavailable("x")))
+        let apply = await Self.decide(.apply, inline, mode: .enforce, door: door, bundle: Self.fakeBundle)
+        #expect(apply.result.decision == .indeterminate(.inlineProgramNeedsJudge))
+        #expect(apply.effects == [.judgeLog(GatedEffect.JudgeLogRow(
+            at: Self.now, guardMode: .enforce, engine: .ft, hash: Self.hash(apply.result),
+            subject: .live(.allow), note: "judge-unavailable: x; context: partial", isPeek: false, score: nil
+        ))])
+    }
+
     @Test("decide writes nothing; the audit precedes the judge log and denial row; peek keeps the audit")
     func auditOrderAndNoWritesBeforePerform() async throws {
         let home = try guardHome(mode: nil)
