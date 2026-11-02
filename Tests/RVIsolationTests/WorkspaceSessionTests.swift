@@ -418,6 +418,18 @@ struct WorkspaceSessionTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == "after")
         #expect(fileMode(file.path) == 0o644)
     }
+
+    @Test func closePublishesNewReadOnlyFile() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openWorkspace(tree)
+        let file = tree.workspaceURL.appendingPathComponent("new-ro.txt")
+        try Data("created".utf8).write(to: file)
+        #expect(chmod(file.path, 0o444) == 0)
+        #expect(succeeded(opened.supervisor.close()))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "created")
+        #expect(fileMode(file.path) == 0o444)
+    }
     @Test func keychainEntryReachesOnlyMatchingAgentRuntime() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }

@@ -343,11 +343,14 @@ func copyTree(
                 close(input)
                 return false
             }
+            // Owner-only while bytes and xattrs land: `fsetxattr` checks the
+            // inode mode, not the descriptor, so a 0444 create cannot take
+            // `com.apple.provenance`. The fchmod below sets the real mode.
             let output = openatWithinCopyClock(
                 destination,
                 name,
                 O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
-                mode
+                0o600
             )
             guard output >= 0 else {
                 close(input)
