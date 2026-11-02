@@ -54,8 +54,8 @@ public enum JudgeRuntime {
         provenance.isUntrusted ? (0.6, 0.30) : (0.8, 0.45)
     }
 
-    /// Live guard mode (doctor). The evaluate door reads it once per
-    /// evaluation through `EvaluationInputs`.
+    /// Live guard mode (doctor, and the file door once per evaluation). The
+    /// shell doors read it once per evaluation through `EvaluationInputs`.
     public static func guardMode(home: HomeDirectory?) -> GuardMode {
         guardMode(environment: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home))
     }

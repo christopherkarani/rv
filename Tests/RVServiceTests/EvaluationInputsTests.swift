@@ -171,6 +171,35 @@ struct EvaluationInputsReadOnceTests {
         }
         #expect(deny.ruleID.pattern == "typed-rules-invalid")
     }
+
+    /// A script body runs in its package directory, which here is the
+    /// parent of cwd: the body reads that directory's store (broken repo
+    /// typed rules), not the gathered cwd store. Holds before and after T6.
+    @Test("script body in another package directory reads that directory's store")
+    func scriptBodyInParentPackageGathersItsOwnStore() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let pkg = try packageDir(script: "echo hi")
+        defer { try? FileManager.default.removeItem(at: pkg) }
+        let sub = pkg.appendingPathComponent("sub", isDirectory: true)
+        let repoRules = pkg.appendingPathComponent(".rv", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repoRules, withIntermediateDirectories: true)
+        try "[[[ not toml".write(
+            to: repoRules.appendingPathComponent("policy.toml"), atomically: true, encoding: .utf8
+        )
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: "npm test"),
+            cwd: WorkingDirectory(rawValue: sub.path), home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { AllowlistSnapshot(entries: []) }
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("body under broken package rules must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID.pattern == "typed-rules-invalid")
+    }
 }
 
 @Suite("Evaluation inputs: judge selection")
