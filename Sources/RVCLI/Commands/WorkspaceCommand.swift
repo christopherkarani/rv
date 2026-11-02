@@ -1,9 +1,9 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVIsolation
 #if os(macOS)
 import Darwin
-import RVIsolation
 #endif
 
 struct Workspace: AsyncParsableCommand {

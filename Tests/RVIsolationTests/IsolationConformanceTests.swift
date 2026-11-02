@@ -794,7 +794,7 @@ private func expectPlatformContainedFamily(
     }
     #elseif os(Linux)
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         Issue.record(
             "id=\(id.rawValue) Linux contained success must not mint IsolatedRunResult",
             sourceLocation: sourceLocation
@@ -806,7 +806,7 @@ private func expectPlatformContainedFamily(
         sourceLocation: sourceLocation
     )
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         break
     }
     #endif
@@ -918,7 +918,8 @@ private func formatProbe(
         family = "none"
     case .seatbelt:
         established = "seatbelt"
-        family = "seatbelt"    case .microvm:
+        family = "seatbelt"
+    case .microvm:
         established = "microvm"
         family = "microvm"
     }

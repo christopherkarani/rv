@@ -228,7 +228,7 @@ private func expectContainedPlatform(
     }
     #elseif os(Linux)
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         Issue.record(
             "Linux contained success must not mint IsolatedRunResult",
             sourceLocation: sourceLocation
@@ -237,7 +237,7 @@ private func expectContainedPlatform(
     #else
     Issue.record("first-slice contained launch requires Darwin or Linux", sourceLocation: sourceLocation)
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         break
     }
     #endif

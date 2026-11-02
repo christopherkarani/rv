@@ -1076,6 +1076,8 @@ struct IsolationApplyTests {
             Issue.record("Linux platform() must be family landlock")
         case .seatbelt:
             Issue.record("Linux platform() must be family landlock, not seatbelt")
+        case .microvm:
+            Issue.record("Linux platform() must be family landlock, not microvm")
         }
         #else
         switch backend.family {
@@ -1085,6 +1087,8 @@ struct IsolationApplyTests {
             Issue.record("unknown platform() must be family none")
         case .landlock:
             Issue.record("unknown platform() must be family none, not landlock")
+        case .microvm:
+            Issue.record("unknown platform() must be family none, not microvm")
         }
         let workspace = try requireWorkspace("/workspace")
         let plan = try requirePlan(

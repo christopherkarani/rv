@@ -90,8 +90,13 @@ public enum MicroVMHelper {
 
     /// Same rules as `rv-pty-claim`: next to the running binary or in a
     /// build tree, never an environment override, never in the workspace.
+    /// Always nil off macOS: the VM backend needs a macOS host.
     public static func locate(workspace: String) -> String? {
+        #if os(macOS)
         resolvedHelperPath(named: executableName, workspace: workspace)
+        #else
+        nil
+        #endif
     }
 }
 
@@ -196,6 +201,7 @@ func microVMSpawnCommand(
 /// Must match `GuestEnvironment.forwardedPrefix` in `Packages/rv-microvm`.
 let microVMForwardedPrefix = "RV_GUEST_"
 
+#if os(macOS)
 struct MicroVMRuntimeEnvironment: Equatable {
     /// envp of the `rv-microvm` process.
     let environment: [String]
@@ -263,3 +269,4 @@ func microVMRuntimeEnvironment(
     environment += guest.map { "\(microVMForwardedPrefix)\($0.0)=\($0.1)" }
     return MicroVMRuntimeEnvironment(environment: environment, forwardedNames: guest.map(\.0))
 }
+#endif

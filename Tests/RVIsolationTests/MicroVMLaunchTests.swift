@@ -146,6 +146,7 @@ struct MicroVMLaunchTests {
         ])
     }
 
+    #if os(macOS)
     @Test("guest values travel in the helper environment, never argv, and host secrets stay behind")
     func runtimeEnvironment() throws {
         let profile = RuntimeResourceProfile(
@@ -224,6 +225,8 @@ struct MicroVMLaunchTests {
         #expect(built.forwardedNames.isEmpty)
         #expect(built.environment.contains { $0.contains("PROXY=") } == false)
     }
+
+    #endif
 
     @Test("state root lives under the rv config directory")
     func stateRoot() {
