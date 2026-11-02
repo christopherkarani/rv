@@ -232,27 +232,110 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
     }
 
-    @Test func importWithCustodianSigningSkipsSeparatePresence() async throws {
-        // Custodian-backed signing authenticates at the key itself, so the
-        // import must not ALSO demand device-owner presence (the one
-        // authentication in an onboard is the custodian's). It still ends
-        // any stale auth window first via beginFreshAuth.
+    /// A presence-at-signing signer that records the order of presence
+    /// confirmation, fresh-auth resets and key uses.
+    final class EventLog: Sendable {
+        private let entries = Mutex<[String]>([])
+        var all: [String] { entries.withLock { $0 } }
+        func append(_ entry: String) { entries.withLock { $0.append(entry) } }
+    }
+
+    static func custodianLikeSigning(
+        backing: MCPApprovalSigning, events: EventLog
+    ) -> MCPApprovalSigning {
+        MCPApprovalSigning(
+            honorsGrants: true, presenceAtSigning: true,
+            status: backing.status,
+            mac: { purpose, fields, create in
+                events.append("mac")
+                return backing.mac(purpose, fields, create)
+            },
+            verify: backing.verify,
+            beginFreshAuth: { events.append("freshAuth") })
+    }
+
+    @Test func importWithCustodianSigningConfirmsPresenceThenAuthenticatesFreshToSign() async throws {
+        // The custodian's keychain prompt carries no context, so the
+        // reason-bearing confirmation still happens, and the auth window
+        // is reset after it, immediately before the key use that signs.
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
-        let freshAuths = Mutex(0)
-        let backing = MCPApprovalSigning.file(configDirectory: fixture.config)
-        let signing = MCPApprovalSigning(
-            honorsGrants: true, presenceAtSigning: true,
-            status: backing.status, mac: backing.mac, verify: backing.verify,
-            beginFreshAuth: { freshAuths.withLock { $0 += 1 } })
+        let events = EventLog()
+        let signing = Self.custodianLikeSigning(
+            backing: .file(configDirectory: fixture.config), events: events)
+        let presence = UserPresence { _, _ in
+            events.append("presence")
+            return .confirmed(method: "terminal confirmation")
+        }
 
         let imported = try await MCPRun.importServers(
             host: .cursor, names: [], project: nil, dryRun: false,
-            environment: fixture.environment(presence: Self.absent, approvalSigning: signing)
+            environment: fixture.environment(presence: presence, approvalSigning: signing)
         ).get()
 
         #expect(imported.contains("wrote mcp.json"))
-        #expect(freshAuths.withLock { $0 } == 1)
+        let order = events.all
+        let presenceAt = try #require(order.firstIndex(of: "presence"))
+        let freshAt = try #require(order.lastIndex(of: "freshAuth"))
+        let firstMac = try #require(order.firstIndex(of: "mac"))
+        #expect(presenceAt < freshAt)
+        #expect(freshAt < firstMac)
+    }
+
+    @Test func importWithCustodianSigningSignsNothingWhenPresenceIsRefused() async throws {
+        let fixture = Fixture()
+        try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let events = EventLog()
+        let signing = Self.custodianLikeSigning(
+            backing: .file(configDirectory: fixture.config), events: events)
+
+        let refused = await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, dryRun: false,
+            environment: fixture.environment(presence: Self.absent, approvalSigning: signing))
+
+        #expect(refused.failureMessage == "not imported: this process has no terminal; nothing imported")
+        #expect(events.all.contains("mac") == false)
+        #expect(events.all.contains("freshAuth") == false)
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+    }
+
+    @Test func trustWithCustodianSigningRequiresReviewedPresenceBeforeSigning() async throws {
+        let fixture = Fixture()
+        try fixture.write(".config/rv/mcp.json", #"{"version":1,"servers":[{"name":"api","url":"https://mcp.example/mcp"}]}"#)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+
+        let refusedEvents = EventLog()
+        let refused = await MCPRun.trust(
+            environment: fixture.environment(
+                presence: Self.absent,
+                approvalSigning: Self.custodianLikeSigning(
+                    backing: .file(configDirectory: fixture.config), events: refusedEvents)),
+            show: { _ in })
+        #expect(refused.failureMessage == "not trusted: this process has no terminal")
+        #expect(refusedEvents.all.contains("mac") == false)
+        #expect(fixture.environment().integrity.isTrusted == false)
+
+        let events = EventLog()
+        let presence = UserPresence { reason, _ in
+            events.append("presence")
+            return reason.contains("https://mcp.example/mcp") ? .confirmed(method: "terminal confirmation") : .refused("review missing")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(
+                presence: presence,
+                approvalSigning: Self.custodianLikeSigning(
+                    backing: .file(configDirectory: fixture.config), events: events)),
+            show: { _ in }
+        ).get()
+        #expect(trusted.contains("trusted mcp.json"))
+        let order = events.all
+        let presenceAt = try #require(order.firstIndex(of: "presence"))
+        let freshAt = try #require(order.lastIndex(of: "freshAuth"))
+        let firstMac = try #require(order.firstIndex(of: "mac"))
+        #expect(presenceAt < freshAt)
+        #expect(freshAt < firstMac)
     }
 
     @Test func importShowsEveryServerURLAndSecretBindingBeforeWriting() async throws {

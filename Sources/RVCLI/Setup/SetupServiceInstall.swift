@@ -26,10 +26,12 @@ extension SetupRun {
             ? try loadLaunchAgent(
                 env: env, plist: URL(fileURLWithPath: layout.launchAgent), label: launchAgentLabel)
             : nil
-        try writeCustodianLaunchAgent(env: env, layout: layout, files: files)
         return domain
     }
 
+    // Wired by setup alone, never by `writeLaunchAgent`: restart and the
+    // KeepAlive repair reload rvd only, and booting out the custodian would
+    // kill an approval waiting on Touch ID.
     // The approvals custodian ships separately (RVApprovals.app). Register it
     // only when the bundle executable is installed; without it MCP approvals
     // stay disabled and every other setup step is unaffected.

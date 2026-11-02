@@ -523,37 +523,32 @@ enum ApprovalKeychain {
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         #if canImport(LocalAuthentication)
-        query[kSecUseAuthenticationContext as String] = sharedAuthContext.withLock { $0 }
+        query[kSecUseAuthenticationContext as String] = authWindow.current()
         #endif
         return query
     }
 
     #if canImport(LocalAuthentication)
-    /// One authentication context for every promptable read, with a short
+    /// One authentication context for every promptable read, with a hard
     /// reuse window: a burst of reads inside one operator flow (onboard:
     /// key + anchor per read, several reads in seconds) prompts once, not
-    /// 3-7 times. Presence is still proven by the person seconds earlier
-    /// in the same flow; the silent ACL probe deliberately never uses
-    /// this context, so presence detection is unchanged. Callers reach
-    /// the custodian only as the pinned CLI peer, so the window cannot
-    /// be ridden by an unrelated process.
+    /// 3-7 times. The silent ACL probe deliberately never uses this
+    /// context, so presence detection is unchanged. An evaluated
+    /// LAContext stays authenticated until invalidated, so the window is
+    /// enforced here: `authReuseDuration` after the context is first used
+    /// it is invalidated and replaced, and `resetAuthContext()` ends it
+    /// early. The window is process-wide, not per-client: callers are
+    /// only the pinned CLI peer, but any of its operations inside the
+    /// window can reuse a prompt another one earned. Operations that must
+    /// authenticate for themselves (trust, import) reset it right before
+    /// the key use they are authorizing.
     static let authReuseDuration: TimeInterval = 30
-    private static let sharedAuthContext = Mutex<LAContext>(makeAuthContext())
-
-    private static func makeAuthContext() -> LAContext {
-        let context = LAContext()
-        context.touchIDAuthenticationAllowableReuseDuration = authReuseDuration
-        return context
-    }
+    private static let authWindow = AuthContextWindow(duration: .seconds(authReuseDuration))
 
     /// Ends the reuse window (invalidates the authenticated context), so
-    /// the next promptable read authenticates fresh. An operation such as
-    /// onboard calls this once at its start and then prompts exactly once.
+    /// the next promptable read authenticates fresh.
     static func resetAuthContext() {
-        sharedAuthContext.withLock { context in
-            context.invalidate()
-            context = makeAuthContext()
-        }
+        authWindow.reset()
     }
     #endif
 
@@ -614,6 +609,53 @@ extension MCPApprovalSigning {
                     ?? ApprovalKeychain.create(configDirectory: configDirectory)
             },
             beginFreshAuth: { ApprovalKeychain.resetAuthContext() })
+    }
+}
+#endif
+
+#if canImport(LocalAuthentication)
+/// An `LAContext` that is replaced once `duration` has elapsed since it was
+/// first handed out, because an evaluated context otherwise satisfies later
+/// keychain queries until it is invalidated.
+final class AuthContextWindow: Sendable {
+    private struct State {
+        var context: LAContext
+        var firstUsed: ContinuousClock.Instant?
+    }
+
+    private let duration: Duration
+    private let now: @Sendable () -> ContinuousClock.Instant
+    private let state: Mutex<State>
+
+    init(duration: Duration, now: @escaping @Sendable () -> ContinuousClock.Instant = { .now }) {
+        self.duration = duration
+        self.now = now
+        self.state = Mutex(State(context: Self.makeContext(duration), firstUsed: nil))
+    }
+
+    func current() -> LAContext {
+        state.withLock { state in
+            let instant = now()
+            if let firstUsed = state.firstUsed, instant - firstUsed >= duration {
+                state.context.invalidate()
+                state = State(context: Self.makeContext(duration), firstUsed: nil)
+            }
+            if state.firstUsed == nil { state.firstUsed = instant }
+            return state.context
+        }
+    }
+
+    func reset() {
+        state.withLock { state in
+            state.context.invalidate()
+            state = State(context: Self.makeContext(duration), firstUsed: nil)
+        }
+    }
+
+    private static func makeContext(_ duration: Duration) -> LAContext {
+        let context = LAContext()
+        context.touchIDAuthenticationAllowableReuseDuration = Double(duration.components.seconds)
+        return context
     }
 }
 #endif

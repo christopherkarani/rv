@@ -833,6 +833,28 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_writeLaunchAgentLeavesTheCustodianAlone() throws {
+    // `rv service restart` and the companion-uninstall KeepAlive repair call
+    // writeLaunchAgent; they must reload rvd only, never boot out the
+    // custodian (that would kill an approval waiting on Touch ID).
+    try withTempHome { home, layout, launchctl in
+        let macOS = (layout.custodianAppExecutable as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: macOS, withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(toFile: layout.custodianAppExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: layout.custodianAppExecutable)
+
+        _ = try SetupRun.writeLaunchAgent(
+            env: env(home: home, launchctl: launchctl), layout: layout,
+            files: FileOps(fileManager: .default), keepAlive: false)
+
+        #expect(FileManager.default.fileExists(atPath: layout.custodianLaunchAgent) == false)
+        #expect(launchctl.bootouts.contains(SetupRun.custodianLaunchAgentLabel) == false)
+        #expect(launchctl.bootstraps.contains { $0.path == layout.custodianLaunchAgent } == false)
+        #expect(launchctl.bootstraps.contains { $0.path == layout.launchAgent })
+    }
+}
+
 @Test func setup_launchAgentTemplate_rendersEmbeddedResource() throws {
     let plist = try LaunchAgentTemplate.rendered(rvdPath: "/opt/rvd")
     #expect(plist.contains("/opt/rvd"))

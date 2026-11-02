@@ -13,6 +13,11 @@ public final class CustodianXPCListener: Sendable {
     private let handler: CustodianRequestHandler
     private let watchdog: CustodianIdleWatchdog
     private let serviceName: String
+    /// One serial queue for every connection's requests. Key create/read
+    /// must not interleave across clients (a concurrent enroll can delete
+    /// the key another request just created), and the blocking Security /
+    /// LocalAuthentication calls must stay off the cooperative pool.
+    private let requestQueue = DispatchQueue(label: "dev.rv.mcp-custodian.requests")
     private let listener = Mutex<xpc_connection_t?>(nil)
     private let actionListener = Mutex<xpc_connection_t?>(nil)
 
@@ -69,7 +74,7 @@ public final class CustodianXPCListener: Sendable {
             listener.map { CustodianHeld(xpc_endpoint_create($0)) }
         } : nil
         let session = CustodianPeerSession(
-            handler: handler, watchdog: watchdog,
+            handler: handler, watchdog: watchdog, queue: requestQueue,
             discoveryOnly: discoveryOnly, actionEndpoint: endpoint)
         xpc_connection_set_event_handler(peer) { event in
             session.handle(event)
@@ -81,23 +86,35 @@ public final class CustodianXPCListener: Sendable {
 final class CustodianPeerSession: Sendable {
     private let handler: CustodianRequestHandler
     private let watchdog: CustodianIdleWatchdog
+    private let queue: DispatchQueue
     private let handshake = Mutex(false)
     private let discoveryOnly: Bool
     private let actionEndpoint: CustodianHeld?
     private let connectionID = UUID()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
+    private let capturePeerRole: @Sendable (xpc_object_t, UUID) -> TrustedRVComponentRole?
 
     init(
         handler: CustodianRequestHandler,
         watchdog: CustodianIdleWatchdog,
+        queue: DispatchQueue,
         discoveryOnly: Bool = false,
         actionEndpoint: CustodianHeld? = nil,
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
-        endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
+        endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() },
+        capturePeerRole: @escaping @Sendable (xpc_object_t, UUID) -> TrustedRVComponentRole? = {
+            message, connectionID in
+            let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
+            return (try? MacOSPeerAuthenticator.capture(
+                message: message, connectionID: connectionID, trust: trust
+            ))?.componentRole
+        }
     ) {
         self.handler = handler
         self.watchdog = watchdog
+        self.queue = queue
+        self.capturePeerRole = capturePeerRole
         self.discoveryOnly = discoveryOnly
         self.actionEndpoint = actionEndpoint
         self.beginTransaction = beginTransaction
@@ -114,15 +131,12 @@ final class CustodianPeerSession: Sendable {
         }
         // The message's audit-token-backed SecCode is captured synchronously.
         // A payload PID, host label or later connection lookup cannot replace it.
-        let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
-        let peerRole = (try? MacOSPeerAuthenticator.capture(
-            message: event, connectionID: connectionID, trust: trust
-        ))?.componentRole
+        let peerRole = capturePeerRole(event, connectionID)
         beginTransaction()
         let held = CustodianHeld(event)
-        Task {
+        Task { await self.watchdog.ping() }
+        queue.async {
             defer { self.endTransaction() }
-            await self.watchdog.ping()
             let message = held.object
             let incoming = CustodianXPCWire.body(from: message) ?? Data()
             let accepted = self.handshake.withLock { $0 }
