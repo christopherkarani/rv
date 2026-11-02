@@ -404,6 +404,6 @@ enum GatewayHeaders {
     }
     static let dropOnResponse: Set<String> = [
         "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "te", "trailer",
-        "transfer-encoding", "upgrade", "content-length", "content-encoding",
+        "transfer-encoding", "upgrade", "content-length", "content-encoding", "www-authenticate",
     ]
 }
