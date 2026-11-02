@@ -10,12 +10,12 @@ enum OpenCodeConfigMerge {
         var root = try parseRoot(existingData)
         var plugins = pluginList(from: root)
         if plugins.contains(where: { pluginSpecifier($0) == pluginPath }) {
-            let data = try encode(root)
+            let data = encode(root, original: existingData)
             return (data, existingData != data)
         }
         plugins.append(.string(pluginPath))
         root["plugin"] = .array(plugins)
-        let data = try encode(root)
+        let data = encode(root, original: existingData)
         return (data, existingData != data)
     }
 
@@ -33,16 +33,14 @@ enum OpenCodeConfigMerge {
         if root.isEmpty {
             return nil
         }
-        return try encode(root)
+        return encode(root, original: existingData)
     }
 
     private static func parseRoot(_ existingData: Data?) throws -> [String: JSONValue] {
         guard let existingData, existingData.isEmpty == false else {
             return [:]
         }
-        guard let value = try? JSONDecoder().decode(JSONValue.self, from: existingData),
-              let root = value.asObject
-        else {
+        guard let root = SharedConfigJSON.parseObject(existingData) else {
             throw OpenCodeConfigMergeError.invalidJSON
         }
         return root
@@ -68,13 +66,8 @@ enum OpenCodeConfigMerge {
         return nil
     }
 
-    private static func encode(_ root: [String: JSONValue]) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        guard let data = try? encoder.encode(JSONValue.object(root)) else {
-            throw OpenCodeConfigMergeError.invalidJSON
-        }
-        return data
+    private static func encode(_ root: [String: JSONValue], original: Data?) -> Data {
+        SharedConfigJSON.encode(root, preservingLayoutOf: original)
     }
 }
 

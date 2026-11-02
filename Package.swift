@@ -109,6 +109,9 @@ let coreLibraryTargets: [Target] = [
         ]
     ),
     .target(name: "RVIPC", dependencies: ["RVDomain"]),
+    // libxpc wire primitives + the operator-UI client. Peer authentication
+    // needs RVIsolation; everything else stays out of the UI's graph.
+    .target(name: "RVXPC", dependencies: ["RVIPC", "RVIsolation"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
     .target(name: "RVMCP", dependencies: ["RVDomain", "RVHistory", "RVIsolation", "RVPolicy"]),
@@ -136,6 +139,7 @@ let coreProducts: [Product] = [
     .library(name: "RVHooks", targets: ["RVHooks"]),
     .library(name: "RVLaya", targets: ["RVLaya"]),
     .library(name: "RVIPC", targets: ["RVIPC"]),
+    .library(name: "RVXPC", targets: ["RVXPC"]),
     .library(name: "RVPresentation", targets: ["RVPresentation"]),
     .library(name: "RVTheme", targets: ["RVTheme"]),
     .library(name: "RVTUI", targets: ["RVTUI"]),
@@ -198,7 +202,7 @@ let coreTestTargets: [Target] = [
 let macOSOperatorUITargets: [Target] = [
     .target(
         name: "RVOperatorUI",
-        dependencies: ["RVDomain", "RVIPC", "RVService"]
+        dependencies: ["RVIPC", "RVXPC"]
     ),
     .executableTarget(
         name: "rv-operator-ui",
@@ -222,7 +226,7 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya",
+            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya", "RVXPC",
         ]
     ),
     .executableTarget(

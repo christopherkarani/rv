@@ -1,6 +1,9 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import RVIPC
+#if os(macOS)
+import AppKit
+#endif
 
 /// Trusted hook-ask review surface. Distinct mode from
 /// `OperatorReviewView` (launch) and `OperatorActionReviewView` (action):
@@ -50,7 +53,17 @@ public struct OperatorHookReviewView: View {
             }
         }
         .task {
-            await model.connect()
+            // Poll: keep the list live so a newly staged ask appears
+            // without a manual Refresh, and redial after an rvd outage.
+            // Cancelled automatically when the view disappears.
+            await model.maintain()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                await model.maintain()
+            }
+        }
+        .onChange(of: model.unseenApprovalIDs) { _, new in
+            signalNewArrivals(new)
         }
         .alert("Notice", isPresented: noticeBinding) {
             Button("OK", role: .cancel) {}
@@ -69,6 +82,16 @@ public struct OperatorHookReviewView: View {
         Binding(
             get: { model.notice != nil },
             set: { if !$0 { Task { model.dismissNotice() } } })
+    }
+
+    /// Arrival signal: the dock badge mirrors the unseen count. Badge-only
+    /// on purpose — no permission prompt, no sound, no focus steal.
+    /// (`NSApp.requestAttention` is unavailable in this SDK; a banner or
+    /// bounce is a follow-up with its own interruption tradeoffs.)
+    private func signalNewArrivals(_ new: Set<String>) {
+        #if os(macOS)
+        NSApp.dockTile.badgeLabel = new.isEmpty ? nil : "\(new.count)"
+        #endif
     }
 
     private var connectionHint: String {

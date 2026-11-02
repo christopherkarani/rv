@@ -92,12 +92,25 @@ public final class UnixEvaluateListener: Sendable {
     private let runtime: ServiceRuntime
     private let watchdog: IdleWatchdog
     public let socketURL: URL
+    private let limits: UnixConnectionLimits
+    private let slots: UnixConnectionSlots
     private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-evaluate")
+    /// Connections serve here, never on `queue`: each `serve` loop blocks in
+    /// `recv` for the life of its connection, so serving on the serial accept
+    /// queue would starve every later accept behind the first connection.
+    private let connections = DispatchQueue(
+        label: "rv.unix-evaluate-connections",
+        attributes: .concurrent
+    )
 
     private struct ListenerState {
         var listenFD: Int32 = -1
         var source: ReadSource?
+        /// True once `start` bound and is listening. `stop` unlinks the
+        /// socket file only then: a never-started listener must not remove a
+        /// path it does not own.
+        var ownsSocket: Bool = false
     }
 
     /// Dispatch sources are thread-safe handles. Only the listener touches
@@ -106,10 +119,17 @@ public final class UnixEvaluateListener: Sendable {
         let source: DispatchSourceRead
     }
 
-    public init(runtime: ServiceRuntime, watchdog: IdleWatchdog, socketURL: URL) {
+    public init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        socketURL: URL,
+        limits: UnixConnectionLimits = .standard
+    ) {
         self.runtime = runtime
         self.watchdog = watchdog
         self.socketURL = socketURL
+        self.limits = limits
+        self.slots = UnixConnectionSlots(limit: limits.maxConnections)
     }
 
     public func start() throws {
@@ -145,25 +165,38 @@ public final class UnixEvaluateListener: Sendable {
         }
         source.resume()
         let held = ReadSource(source: source)
-        state.withLock { $0.source = held }
+        state.withLock {
+            $0.source = held
+            $0.ownsSocket = true
+        }
     }
 
     public func stop() {
-        let held = state.withLock { state -> ReadSource? in
+        let held = state.withLock { state -> (ReadSource?, Bool) in
             let current = state.source
+            let owned = state.ownsSocket
             state.source = nil
             state.listenFD = -1
-            return current
+            state.ownsSocket = false
+            return (current, owned)
         }
-        held?.source.cancel()
-        try? FileManager.default.removeItem(at: socketURL)
+        held.0?.source.cancel()
+        guard held.1 else { return }
+        UnixSocketPath.removeSocketFileIfSocket(at: socketURL)
     }
 
     private func acceptOne() {
         let listenFD = state.withLock { $0.listenFD }
         let client = Glibc.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
-        queue.async { self.serve(client) }
+        guard limits.applyReceiveTimeout(to: client), slots.acquire() else {
+            _ = Glibc.close(client)
+            return
+        }
+        connections.async {
+            defer { self.slots.release() }
+            self.serve(client)
+        }
     }
 
     private func serve(_ fd: Int32) {
@@ -185,20 +218,23 @@ public final class UnixEvaluateListener: Sendable {
         }
         while true {
             guard let body = try? UnixFrameIO.readFrame(fd: fd) else { return }
+            let receivedAt = ContinuousClock.now
+            // Refused once rvd decided to exit: closing the connection sends
+            // the client to the relaunched daemon.
+            guard watchdog.beginRequest() else { return }
             let gate = UnixReplyGate()
             let runtime = self.runtime
-            let watchdog = self.watchdog
             let accepted = handshakeOK
             Task {
-                await watchdog.ping()
                 let incoming = await runtime.handleIncoming(
                     body, handshakeOK: accepted, context: context,
-                    sameUIDSocket: context.peer != nil)
+                    sameUIDSocket: context.peer != nil, receivedAt: receivedAt)
                 gate.finish(incoming)
             }
             let incoming = gate.wait()
             handshakeOK = incoming.handshakeAccepted
             try? UnixFrameIO.writeFrame(fd: fd, body: incoming.frame)
+            watchdog.endRequest()
         }
     }
 }

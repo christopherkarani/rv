@@ -38,12 +38,14 @@ struct MachineConfigJSONTests {
         #expect(text.contains("safety"))
     }
 
-    @Test func write_rejectsUnencodableValue() throws {
+    @Test func update_rejectsUnencodableValue() throws {
         let root = try makeDirectory("invalid")
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("config.json")
         #expect(throws: SafetyStoreError.invalidFile) {
-            try MachineConfigJSON.write(["when": .number(.infinity)], to: file)
+            try MachineConfigJSON.update(file: file) { object in
+                object["when"] = .number(.infinity)
+            }
         }
         #expect(FileManager.default.fileExists(atPath: file.path) == false)
     }
