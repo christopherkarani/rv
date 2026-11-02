@@ -263,21 +263,25 @@ public struct PendingApprovalRequest: Sendable, Equatable {
 }
 
 /// Durable pending-approval record. Bound to identity + `action.fingerprint`.
+///
+/// Immutable: lifecycle changes go through `PendingApprovalLedger`, which
+/// derives each next record with `transitioned(to:)`. Binding fields and
+/// the expiry window can never be edited on a stored row.
 public struct PendingApproval: Sendable, Equatable, Codable {
-    public var id: ApprovalID
+    public let id: ApprovalID
     /// Nil for historical rows. A subject description is not live authority.
-    public var subject: ApprovalSubject?
-    public var identity: ApprovalIdentity
-    public var action: ProposedAction
-    public var reason: ApprovalReason
-    public var continuation: ApprovalContinuation
-    public var timeoutPolicy: ApprovalTimeoutPolicy
-    public var createdAt: Date
-    public var expiresAt: Date
-    public var state: PendingApprovalState
+    public let subject: ApprovalSubject?
+    public let identity: ApprovalIdentity
+    public let action: ProposedAction
+    public let reason: ApprovalReason
+    public let continuation: ApprovalContinuation
+    public let timeoutPolicy: ApprovalTimeoutPolicy
+    public let createdAt: Date
+    public let expiresAt: Date
+    public let state: PendingApprovalState
     /// M-07 content digest of the masked shell payload, or nil for file
     /// asks and historical rows. Part of the create dedupe key.
-    public var payloadDigest: ContentPayloadDigest?
+    public let payloadDigest: ContentPayloadDigest?
 
     package init(
         id: ApprovalID,
@@ -303,6 +307,23 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         self.expiresAt = expiresAt
         self.state = state
         self.payloadDigest = payloadDigest
+    }
+
+    /// Same record in `state`. Only the ledger moves a record's lifecycle.
+    func transitioned(to state: PendingApprovalState) -> PendingApproval {
+        PendingApproval(
+            id: id,
+            identity: identity,
+            action: action,
+            reason: reason,
+            continuation: continuation,
+            timeoutPolicy: timeoutPolicy,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            state: state,
+            subject: subject,
+            payloadDigest: payloadDigest
+        )
     }
 
     public var fingerprint: ActionFingerprint {
@@ -380,10 +401,10 @@ public struct PendingApproval: Sendable, Equatable, Codable {
 
 /// Exactly-once delivery of a human (or deny) resolution to the host path.
 public struct ApprovalConsumption: Sendable, Equatable {
-    public var approval: PendingApproval
-    public var decision: ApprovalDecision
+    public let approval: PendingApproval
+    public let decision: ApprovalDecision
 
-    public init(approval: PendingApproval, decision: ApprovalDecision) {
+    package init(approval: PendingApproval, decision: ApprovalDecision) {
         self.approval = approval
         self.decision = decision
     }

@@ -7,6 +7,7 @@ import RVHooks
 import RVPolicy
 import RVIPC
 #if canImport(XPC)
+import RVXPC
 @preconcurrency import XPC
 #endif
 @testable import RVService

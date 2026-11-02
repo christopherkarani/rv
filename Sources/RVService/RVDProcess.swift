@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import RVAnalytics
 import RVIPC
+import RVPolicy
 import Synchronization
 
 public enum RVDProcess {
@@ -27,8 +28,9 @@ public enum RVDProcess {
             ceremonies: ceremonies,
             actionCeremonies: actionCeremonies
         )
+        JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         let slot = ListenerSlot()
-        let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
+        let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listeners?.stop()
             Darwin.exit(0)
         }
@@ -38,11 +40,20 @@ public enum RVDProcess {
             unix: UnixSocketListener(runtime: runtime, watchdog: watchdog, socketURL: socketURL)
         )
         slot.listeners = listeners
-        // Unix first: a bind failure exits before XPC registration, matching
-        // the Linux `--socket` fail-fast behavior.
-        try listeners.unix.start()
+        // XPC is the macOS production transport; the Unix socket is
+        // secondary. A socket that cannot start (e.g. a refused
+        // `~/.config`) is reported and skipped, never a launch failure that
+        // would block every hook on each launchd activation.
+        do {
+            try listeners.unix.start()
+        } catch {
+            FileHandle.standardError.write(
+                Data("rvd: unix socket unavailable (\(error)); continuing with XPC only\n".utf8)
+            )
+        }
         listeners.xpc.start()
-        Task { await watchdog.ping() }
+        watchdog.start()
+        RVDLifecycle.prewarmJudge()
         RunLoop.main.run()
     }
 }
@@ -69,6 +80,7 @@ private final class ListenerSlot: Sendable {
 import Foundation
 import RVAnalytics
 import RVIPC
+import RVPolicy
 import Synchronization
 
 public enum RVDProcess {
@@ -91,8 +103,9 @@ public enum RVDProcess {
             ceremonies: ceremonies,
             actionCeremonies: actionCeremonies
         )
+        JudgeRuntime.bindLoadWait(JudgeRuntime.daemonLoadWait)
         let slot = ListenerSlot()
-        let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
+        let watchdog = RVDLifecycle.watchdog(configuration: configuration, runtime: runtime) {
             slot.listener?.stop()
             Foundation.exit(0)
         }
@@ -102,8 +115,10 @@ public enum RVDProcess {
             socketURL: socketURL
         )
         slot.listener = listener
+        // The socket is Linux's only transport: a start failure is fatal.
         try listener.start()
-        Task { await watchdog.ping() }
+        watchdog.start()
+        RVDLifecycle.prewarmJudge()
         RunLoop.main.run()
     }
 }
@@ -117,3 +132,31 @@ private final class ListenerSlot: Sendable {
     }
 }
 #endif
+
+/// Process-lifetime wiring shared by both platform entry points.
+enum RVDLifecycle {
+    /// Idle exit that keeps the process (and its allow-once table) while
+    /// grants are live, and exits once its own binary was replaced on disk.
+    static func watchdog(
+        configuration: RVDConfiguration,
+        runtime: ServiceRuntime,
+        exit: @escaping @Sendable () -> Void
+    ) -> IdleWatchdog {
+        let executable = ExecutableChangeProbe.running()
+        return IdleWatchdog(
+            seconds: configuration.idleExitSeconds,
+            hasLiveGrants: { await runtime.hasLiveAllowOnceGrants() },
+            executableChanged: { executable?.hasChanged() ?? false },
+            onFire: exit
+        )
+    }
+
+    /// Loads the judge off the main path after the listeners are up: the
+    /// first Hello is never delayed, and the first judged request joins the
+    /// in-progress load (bounded by `JudgeRuntime.daemonLoadWait`).
+    static func prewarmJudge() {
+        DispatchQueue.global(qos: .utility).async {
+            JudgeRuntime.prewarm(home: HomeDirectory.process())
+        }
+    }
+}

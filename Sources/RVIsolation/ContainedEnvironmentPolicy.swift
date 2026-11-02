@@ -623,16 +623,27 @@ public enum ContainedToolchainRoots {
 /// conditional exclusion is the only overlap between the generic boundary
 /// and the pre-secret-broker compatibility behavior.
 public enum ContainedSensitivePaths {
+    /// rv's config dir, home-relative; parent of the cage developer homes.
+    static let rvConfigRelative = ".config/rv"
+
     /// Home-relative sensitive paths from the catalog (`homeSuffix` and
     /// `hostAuth` kinds), e.g. `.ssh`, `.config/gh`. Computed once: the
     /// catalog is immutable, and the sensitivity checks in the sanitize
     /// loops call this per PATH candidate.
+    ///
+    /// `~/.config/rv` is skipped: the hook gate guards it, but the cage's
+    /// own developer home, cache and tmp live under
+    /// `~/.config/rv/workspaces`. The rest of rv's config dir is already
+    /// unreachable inside the cage: the profile is `(deny default)` and
+    /// grants only the developer-home trees.
     public static let catalogRelatives: [String] = {
         var relatives: [String] = []
         for rule in SecretPathCatalog.dayOne.rules {
             switch rule.kind {
             case .homeSuffix(let parts), .hostAuth(let parts):
-                relatives.append(parts.joined(separator: "/"))
+                let relative = parts.joined(separator: "/")
+                guard relative != rvConfigRelative else { continue }
+                relatives.append(relative)
             case .basename, .envVariant:
                 break
             }

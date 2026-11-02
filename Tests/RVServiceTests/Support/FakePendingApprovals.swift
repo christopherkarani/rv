@@ -1,5 +1,6 @@
 import Foundation
-import RVDomain
+// transitioned(to:) is internal: only the ledger (and this fake of it) moves state.
+@testable import RVDomain
 
 actor FakePendingApprovals: PendingApprovalCoordinating {
     struct ResolveCall: Sendable, Equatable {
@@ -65,7 +66,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         guard let index = records.firstIndex(where: { $0.id == id }) else {
             throw PendingApprovalError.notFound
         }
-        var record = records[index]
+        let record = records[index]
         if record.identity != identity {
             throw PendingApprovalError.identityMismatch
         }
@@ -74,9 +75,9 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         }
         switch record.state {
         case .awaitingHuman:
-            record.state = .resolved(ApprovalResolution(decision: decision, resolvedAt: now))
-            records[index] = record
-            return record
+            let next = record.transitioned(to: .resolved(ApprovalResolution(decision: decision, resolvedAt: now)))
+            records[index] = next
+            return next
         case .consumed:
             throw PendingApprovalError.alreadyConsumed
         case .resolved, .expired, .canceled, .timedOut:
@@ -92,12 +93,12 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         guard let index = records.firstIndex(where: { $0.id == id }) else {
             throw PendingApprovalError.notFound
         }
-        var record = records[index]
+        let record = records[index]
         switch record.state {
         case .awaitingHuman:
-            record.state = .canceled(at: now)
-            records[index] = record
-            return record
+            let next = record.transitioned(to: .canceled(at: now))
+            records[index] = next
+            return next
         case .resolved:
             throw PendingApprovalError.alreadyResolved
         case .consumed:
@@ -120,7 +121,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         guard let index = records.firstIndex(where: { $0.id == id }) else {
             throw PendingApprovalError.notFound
         }
-        var record = records[index]
+        let record = records[index]
         if record.identity != identity {
             throw PendingApprovalError.identityMismatch
         }
@@ -129,9 +130,9 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         }
         switch record.state {
         case .resolved(let resolution):
-            record.state = .consumed(resolution, at: now)
-            records[index] = record
-            return ApprovalConsumption(approval: record, decision: resolution.decision)
+            let next = record.transitioned(to: .consumed(resolution, at: now))
+            records[index] = next
+            return ApprovalConsumption(approval: next, decision: resolution.decision)
         case .consumed:
             throw PendingApprovalError.alreadyConsumed
         case .awaitingHuman:
