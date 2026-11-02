@@ -198,6 +198,20 @@ import RVTheme
     #expect(uninstall.contains("rv setup"))
 }
 
+@Test func helpText_serviceRestart_isDispatchedAndListed() {
+    #expect(HelpDispatch.topic(arguments: ["service", "restart", "--help"]) == .serviceRestart)
+    #expect(HelpDispatch.topic(arguments: ["help", "service", "restart"]) == .serviceRestart)
+    #expect(HelpDispatch.topic(arguments: ["service", "restart"]) == nil)
+
+    let service = HelpDispatch.text(.service, palette: colorOffPalette)
+    #expect(service.contains("restart"))
+
+    let restart = HelpDispatch.text(.serviceRestart, palette: colorOffPalette)
+    #expect(restart.split(separator: "\n").first.map(String.init) == "Usage")
+    #expect(restart.contains("rv service restart"))
+    #expect(restart.contains("kickstart"))
+}
+
 @Test func helpText_root_listsEveryParserCommand() {
     let text = HelpDispatch.text(.root, palette: colorOffPalette)
     let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }

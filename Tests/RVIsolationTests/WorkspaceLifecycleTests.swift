@@ -93,6 +93,20 @@ struct WorkspaceLifecycleTests {
         #expect(supervisor.publishCount == 0)
     }
 
+    @Test func publishRejectionCarriesTheRetainedImageToTheClient() {
+        let image = "/var/folders/ab/cdef0123456789/T/rv-rejected-0123456789AB-20261102T101500Z.sparseimage"
+        let error = WorkspaceSessionError.publishRejected(retainedImage: image)
+        #expect(workspaceControlCode(error) == .publishRejected)
+        let detail = workspaceControlDetail(error)
+        #expect(detail == image)
+        #expect(workspaceControlDetail(.alreadyClosed) == nil)
+        #expect(WorkspaceSessionFailure.isolation(error) == .workspaceInodeBoundaryFailed)
+        // The path survives the wire bound and the control-character filter.
+        let request = WorkspaceControlRequest(operation: .closeWorkspace, id: UUID(), token: UUID())
+        let response = WorkspaceControlResponse.failure(request: request, code: .publishRejected, detail: detail)
+        #expect(response.detail == image)
+    }
+
     @Test func closeFailureCachesOnlyTerminalFailures() {
         // The leader's retryable-vs-terminal decision: only a close that
         // stopped with children alive releases leadership so a later close
@@ -102,6 +116,7 @@ struct WorkspaceLifecycleTests {
             .apply(.workspaceInodeBoundaryFailed),
             .notAcceptingRuntime(.closing),
             .cleanupFailed(.workspaceInodeBoundaryFailed),
+            .publishRejected(retainedImage: "/tmp/rv-rejected-x.sparseimage"),
             .alreadyClosed,
             .unknownRuntime(RuntimeSessionID()),
             .runtimeLimit,

@@ -3,51 +3,8 @@ import Foundation
 import RVIPC
 import RVIsolation
 import Synchronization
+import RVXPC
 @preconcurrency import XPC
-
-/// Dictionary key for UTF-8 `IPCRequest` / `IPCResponse` / Hello JSON (`IPCJSON`).
-enum XPCIPCWire {
-    static let key = "rv.ipc"
-    static let actionEndpointKey = "rv.action-endpoint"
-
-    static func body(from message: xpc_object_t) -> Data? {
-        var length = 0
-        guard let bytes = xpc_dictionary_get_data(message, key, &length) else {
-            return nil
-        }
-        return Data(bytes: bytes, count: length)
-    }
-
-    static func set(_ data: Data, on message: xpc_object_t) {
-        set(data, key: key, on: message)
-    }
-
-    /// Sibling of `rv.ipc`. Present (including empty) means use these bytes as
-    /// `hookEvaluate` stdin instead of the JSON `stdin` field.
-    static let stdinKey = "rv.stdin"
-
-    static func stdin(from message: xpc_object_t) -> Data? {
-        var length = 0
-        guard let bytes = xpc_dictionary_get_data(message, stdinKey, &length) else {
-            return nil
-        }
-        return Data(bytes: bytes, count: length)
-    }
-
-    static func setStdin(_ data: Data, on message: xpc_object_t) {
-        set(data, key: stdinKey, on: message)
-    }
-
-    private static func set(_ data: Data, key: String, on message: xpc_object_t) {
-        data.withUnsafeBytes { buffer in
-            if let base = buffer.baseAddress {
-                xpc_dictionary_set_data(message, key, base, buffer.count)
-            } else {
-                xpc_dictionary_set_data(message, key, "", 0)
-            }
-        }
-    }
-}
 
 /// Raw libxpc listener on `dev.rv.evaluate`. C and Swift share `rv.ipc` xpc_data.
 public final class XPCEvaluateListener: Sendable {
@@ -216,6 +173,13 @@ final class XPCPeerSession: Sendable {
         guard type == XPC_TYPE_DICTIONARY else {
             return nil
         }
+        // Admission is synchronous and shares the idle-exit lock: once rvd
+        // decided to exit (idle or replaced binary), the message is dropped
+        // and the client reconnects to the relaunched daemon.
+        let receivedAt = ContinuousClock.now
+        guard watchdog.beginRequest() else {
+            return nil
+        }
         // The message's audit-token-backed SecCode is captured synchronously.
         // A payload PID, host label or later connection lookup cannot replace it.
         let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
@@ -230,8 +194,10 @@ final class XPCPeerSession: Sendable {
         beginTransaction()
         let held = XPCHeld(event)
         return Task {
-            defer { self.endTransaction() }
-            await self.watchdog.ping()
+            defer {
+                self.endTransaction()
+                self.watchdog.endRequest()
+            }
             let message = held.object
             let incoming = XPCIPCWire.body(from: message)
             let stdinOverlay = XPCIPCWire.stdin(from: message)
@@ -267,7 +233,8 @@ final class XPCPeerSession: Sendable {
                     incoming,
                     handshakeOK: accepted,
                     stdinOverlay: stdinOverlay,
-                    context: context
+                    context: context,
+                    receivedAt: receivedAt
                 )
             } else {
                 let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
@@ -288,16 +255,6 @@ final class XPCPeerSession: Sendable {
                 xpc_connection_send_message(peer, reply)
             }
         }
-    }
-}
-
-// Immutable after init. libxpc objects are safe to use from multiple
-// threads; the handle itself is never mutated, only passed to xpc calls.
-final class XPCHeld: @unchecked Sendable {
-    let object: xpc_object_t
-
-    init(_ object: xpc_object_t) {
-        self.object = object
     }
 }
 #endif
