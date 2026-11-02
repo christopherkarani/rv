@@ -35,14 +35,14 @@ public func evaluate<E: PatternEngine>(
     let matchingView = Normalize.matchingView(of: request.command)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return foldSecretPathIfAllow(
+        return floorSelfProtection(request.command, foldSecretPathIfAllow(
             EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
             catalog: secrets,
             safety: safety,
             allowPaths: allowPaths,
             home: home,
             resolution: pathResolution
-        )
+        ))
     }
 
     var attempts = 0
@@ -77,22 +77,32 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return foldSecretPathIfAllow(
+        return floorSelfProtection(request.command, foldSecretPathIfAllow(
             viewed,
             catalog: secrets,
             safety: safety,
             allowPaths: allowPaths,
             home: home,
             resolution: pathResolution
-        )
+        ))
     }
-    return foldSecretPathIfAllow(
+    return floorSelfProtection(request.command, foldSecretPathIfAllow(
         EvaluationResult(outcome: .plain, matchingView: matchingView),
         catalog: secrets,
         safety: safety,
         allowPaths: allowPaths,
         home: home,
         resolution: pathResolution
+    ))
+}
+
+/// An allowed `rv` invocation that weakens rv is indeterminate: the owner
+/// runs rv administration in Terminal, never the agent it guards.
+private func floorSelfProtection(_ command: ShellCommand, _ result: EvaluationResult) -> EvaluationResult {
+    guard result.decision == .allow, SelfProtectionGuard.weakensPolicy(command) else { return result }
+    return EvaluationResult(
+        outcome: .indeterminate(.selfProtection),
+        matchingView: result.matchingView
     )
 }
 

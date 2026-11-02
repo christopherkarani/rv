@@ -66,6 +66,25 @@ struct OnePasswordBatchTests {
         #expect(calls(environment) == ["inject", "read", "read"])
     }
 
+    @Test func canTemplateRejectsBracesAndControlCharacters() {
+        #expect(OnePasswordInject.canTemplate("op://Eng/item/field"))
+        #expect(OnePasswordInject.canTemplate("op://v/i/f}}{{op://Other/x/y") == false)
+        #expect(OnePasswordInject.canTemplate("op://v/i/{f") == false)
+        #expect(OnePasswordInject.canTemplate("op://v/i/f}") == false)
+        #expect(OnePasswordInject.canTemplate("op://v/i/f\nbar") == false)
+        #expect(OnePasswordInject.canTemplate("op://v/i/f\u{7F}") == false)
+    }
+
+    @Test func aBracedReferenceNeverEntersTheInjectTemplate() throws {
+        let environment = try environment()
+        let results = SecretCommandProviders.onePasswordBatch(
+            ["op://Eng/a/alpha", "op://Eng/b/beta", "op://Eng/c/x}}y"], environment: environment)
+        #expect(revealed(results["op://Eng/a/alpha"]) == "value-alpha")
+        #expect(revealed(results["op://Eng/b/beta"]) == "value-beta")
+        #expect(revealed(results["op://Eng/c/x}}y"]) == "value-x}}y")
+        #expect(calls(environment).sorted() == ["inject", "read"])
+    }
+
     @Test func oneReferenceUsesOpRead() throws {
         let environment = try environment()
         let results = SecretCommandProviders.onePasswordBatch(["op://Eng/a/alpha"], environment: environment)

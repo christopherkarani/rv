@@ -45,7 +45,7 @@ final class FakeRefresher: Sendable {
 }
 
 /// Polls `condition` for up to two seconds.
-func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
+private func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
     for _ in 0..<(seconds * 100) {
         if condition() { return true }
         usleep(10_000)
@@ -217,6 +217,51 @@ struct SecretGatewayRotationTests {
         #expect(statuses.withLock { $0 } == [200, 200])
         #expect(refresher.calls == 1)
         #expect(sentValues(upstream) == [Self.new, Self.new])
+    }
+
+    @Test func aRefreshThatNeverAnswersRefusesTheRequestInsteadOfHangingIt() throws {
+        let upstream = RecordingUpstream()
+        let audit = AuditRecords()
+        let clock = TestClock()
+        let refresher = FakeRefresher([.success(Self.new)], held: true)
+        let (gateway, port, placeholder) = try harness(
+            upstream: upstream, clock: clock, audit: audit,
+            refresh: SecretRefreshPolicy(interval: 60) { refresher.resolve() })
+        defer { gateway.stop() }
+        gateway.refreshWaitLimit = 0.3
+
+        clock.advance(121)
+        let refused = try call(port, placeholder)
+        #expect(refused.status == 503)
+        #expect(refusals(audit).last == "refreshFailed")
+        #expect(upstream.requests.isEmpty)
+        refresher.release()
+    }
+
+    @Test func aRefreshStillRunsWhenEveryGlobalQueueWorkerIsBusy() throws {
+        let clock = TestClock()
+        let refresher = FakeRefresher([.success(Self.new)])
+        let (gateway, _, placeholder) = try harness(
+            upstream: RecordingUpstream(), clock: clock, audit: AuditRecords(),
+            refresh: SecretRefreshPolicy(interval: 60) { refresher.resolve() })
+        defer { gateway.stop() }
+        gateway.refreshWaitLimit = 5
+
+        clock.advance(121)
+        let hold = DispatchSemaphore(value: 0)
+        for _ in 0..<512 { DispatchQueue.global(qos: .userInitiated).async { hold.wait() } }
+        defer { for _ in 0..<512 { hold.signal() } }
+        usleep(300_000)
+
+        let outcome = Mutex<GatewayRefusal??>(nil)
+        let done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            outcome.withLock { $0 = .some(gateway.prepare(placeholder.token)) }
+            done.signal()
+        }
+        #expect(done.wait(timeout: .now() + 10) == .success)
+        #expect(outcome.withLock { $0 } == .some(nil))
+        #expect(refresher.calls == 1)
     }
 
     @Test func concurrentDueChecksStartOneBackgroundRefresh() throws {

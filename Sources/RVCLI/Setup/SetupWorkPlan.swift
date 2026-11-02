@@ -55,7 +55,8 @@ enum SetupWorkPlanBuilder {
             }
         }
         // Hosts before LaunchAgent: a launchctl miss must not skip hook wiring.
-        // Hooks still evaluate in-process when rvd is down.
+        // There is no in-process fallback: with rvd down every hook denies, so
+        // setup reports a failed or skipped service step with a fix line.
         steps.append(rvdIsExecutable ? .writeLaunchAgent : .skipLaunchAgent)
         return SetupWorkPlan(steps: steps)
     }

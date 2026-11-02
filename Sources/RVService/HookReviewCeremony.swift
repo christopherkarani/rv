@@ -50,6 +50,9 @@ actor HookReviewCeremonyService {
     private let grants: EphemeralAllowOnceTable
     private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
+    /// The daemon's live compile set, resolved per peek so a
+    /// `setPackEnabled` rebuild after init is visible (AC-001).
+    private let gated: @Sendable () -> GatedEvaluate
     private var challenges: [ApprovalID: Challenge] = [:]
 
     init(
@@ -57,6 +60,7 @@ actor HookReviewCeremonyService {
         allowOnce: AllowOnceStore,
         grants: EphemeralAllowOnceTable,
         home: HomeDirectory?,
+        gated: @escaping @Sendable () -> GatedEvaluate,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.pending = pending
@@ -64,6 +68,7 @@ actor HookReviewCeremonyService {
         self.grants = grants
         self.home = home
         self.clock = clock
+        self.gated = gated
     }
 
     // MARK: - UI review surface
@@ -286,13 +291,21 @@ actor HookReviewCeremonyService {
 
     // MARK: - Private
 
+    /// Allow-once peek on the `gated` current at peek time, never a
+    /// per-peek `EvaluationWorld.assemble`.
     private func peek() -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
         let home = home
         let store = allowOnce
         let grants = grants
+        let gated = gated
         return { command, cwd, now in
-            await LiveEvaluateWorld(home: home, store: store, grants: grants, clock: { now })
-                .peek(command: command, cwd: cwd)
+            await LiveEvaluateWorld(
+                home: home,
+                store: store,
+                grants: grants,
+                gated: gated(),
+                clock: { now }
+            ).peek(command: command, cwd: cwd)
         }
     }
 

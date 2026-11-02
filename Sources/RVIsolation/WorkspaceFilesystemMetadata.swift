@@ -55,9 +55,7 @@ enum WorkspaceFilesystemMetadata {
     static func filesystemIgnoresOwnership(descriptor: Int32) -> Bool {
         final class Box: @unchecked Sendable { var ignored = false }
         let box = Box()
-        let ok = diskImagePerformWithinCopyClock {
-            let copy = diskImageDuplicateDescriptor(descriptor)
-            guard copy >= 0 else { return false }
+        let ok = diskImagePerformWithinCopyClock(duplicating: descriptor) { copy in
             var info = statfs()
             let stated = fstatfs(copy, &info) == 0
             close(copy)
