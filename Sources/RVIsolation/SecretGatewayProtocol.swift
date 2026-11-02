@@ -240,8 +240,10 @@ enum GatewaySubstitution {
         _ head: GatewayRequestHead,
         route: GatewayRoute,
         lookup: (String) -> Live?
-    ) -> Result<(head: GatewayRequestHead, used: Live), GatewayRefusal> {
+    ) -> Result<(head: GatewayRequestHead, used: Live, echoes: [Echo]), GatewayRefusal> {
         var used: Live?
+        var echoes: [Echo] = []
+        var basicRewritten = false
         func rewrite(_ bytes: [UInt8], at position: Position) -> Result<[UInt8], GatewayRefusal> {
             let found = SecretPlaceholder.occurrences(in: bytes)
             // Fail closed: an encoded placeholder would otherwise go upstream unswapped.
@@ -290,7 +292,12 @@ enum GatewaySubstitution {
                 switch (user, password) {
                 case (.failure(let refusal), _), (_, .failure(let refusal)): return .failure(refusal)
                 case (.success(let user), .success(let password)):
-                    rewritten.headers[index].value = "Basic " + Data(user + password).base64EncodedString()
+                    let encoded = Data(user + password).base64EncodedString()
+                    rewritten.headers[index].value = "Basic " + encoded
+                    // The real value now travels base64-encoded, where a raw scrub cannot see it.
+                    echoes.append(Echo(needle: Array(encoded.utf8),
+                        replacement: Array(Data(credentials).base64EncodedString().utf8)))
+                    basicRewritten = true
                 }
                 continue
             }
@@ -300,7 +307,26 @@ enum GatewaySubstitution {
             }
         }
         guard let used else { return .failure(.noPlaceholder) }
-        return .success((rewritten, used))
+        if basicRewritten {
+            let placeholder = Array(SecretPlaceholder(token: used.token, prefix: used.prefix).text.utf8)
+            echoes += base64Fragments(of: used.value.bytes).map { Echo(needle: $0, replacement: placeholder) }
+        }
+        return .success((rewritten, used, echoes))
+    }
+
+    /// A response-side rewrite for a form of the secret that leaves the gateway encoded.
+    typealias Echo = (needle: [UInt8], replacement: [UInt8])
+
+    /// Base64 text of `value` that holds wherever it sits in a larger base64 string:
+    /// one fragment per byte alignment, trimmed to whole three-byte groups, since
+    /// the characters touching its edges depend on the neighbouring bytes.
+    static func base64Fragments(of value: [UInt8]) -> [[UInt8]] {
+        (0..<3).compactMap { skip in
+            guard value.count > skip else { return nil }
+            let whole = (value.count - skip) / 3 * 3
+            let fragment = Array(Data(value[skip..<skip + whole]).base64EncodedString().utf8)
+            return fragment.count >= 8 ? fragment : nil
+        }
     }
 
     /// The value as it may appear at `position`, or nil when no encoding keeps
