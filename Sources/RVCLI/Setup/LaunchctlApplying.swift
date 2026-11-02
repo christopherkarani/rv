@@ -26,10 +26,17 @@ protocol LaunchctlApplying {
     func bootstrap(domain: String, plist: URL) throws
     func bootout(domain: String, label: String) throws
     func isLoaded(domain: String, label: String) -> Bool
+    /// Whether `launchctl print <domain>` succeeds. `gui/<uid>` is absent in
+    /// SSH / Background sessions with no Aqua login.
+    func domainExists(_ domain: String) -> Bool
+    /// `launchctl kickstart -k <domain>/<label>`: kill and restart the job.
+    func kickstart(domain: String, label: String) throws
 }
 
 extension LaunchctlApplying {
     func isLoaded(domain _: String, label _: String) -> Bool { false }
+    func domainExists(_: String) -> Bool { true }
+    func kickstart(domain _: String, label _: String) throws {}
 }
 
 enum LaunchctlError: Error, Equatable {
@@ -86,6 +93,19 @@ struct ProcessLaunchctl: LaunchctlApplying {
         } catch {
             return false
         }
+    }
+
+    func domainExists(_ domain: String) -> Bool {
+        do {
+            try run(["print", domain])
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func kickstart(domain: String, label: String) throws {
+        try run(["kickstart", "-k", "\(domain)/\(label)"])
     }
 
     private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {

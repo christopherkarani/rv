@@ -16,8 +16,12 @@ public enum SelfProtectionGuard {
     }
 }
 
+/// `rv` is the C front door; it execs the installed `rv-cli` sibling with the
+/// same argv, so invoking `rv-cli` directly is the same Swift CLI.
+private let rvProgramNames: Set<String> = ["rv", "rv-cli"]
+
 private func isWeakeningInvocation(_ argv: [String]) -> Bool {
-    guard argv.first == "rv" else { return false }
+    guard let program = argv.first, rvProgramNames.contains(program) else { return false }
     let words = argv.dropFirst().filter { $0.hasPrefix("-") == false }
     let flags = Set(argv.dropFirst().filter { $0.hasPrefix("-") })
     guard let verb = words.first else { return false }

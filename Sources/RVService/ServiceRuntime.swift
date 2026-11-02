@@ -174,7 +174,8 @@ public actor ServiceRuntime {
         handshakeOK: Bool,
         stdinOverlay: Data? = nil,
         context: AuthenticatedRequestContext = .unauthenticated,
-        sameUIDSocket: Bool = false
+        sameUIDSocket: Bool = false,
+        receivedAt: ContinuousClock.Instant? = nil
     ) async -> IncomingReply {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
@@ -188,11 +189,13 @@ public actor ServiceRuntime {
         }
         if handshakeOK == false {
             return await handleUnreadyIncoming(
-                body, stdinOverlay: stdinOverlay, context: context, sameUIDSocket: sameUIDSocket)
+                body, stdinOverlay: stdinOverlay, context: context, sameUIDSocket: sameUIDSocket,
+                receivedAt: receivedAt)
         }
         do {
             let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
-            let response = await dispatch(request, context: context, sameUIDSocket: sameUIDSocket)
+            let response = await dispatch(
+                request, context: context, sameUIDSocket: sameUIDSocket, receivedAt: receivedAt)
             return IncomingReply(
                 frame: (try? IPCJSON.encode(response)) ?? Data(),
                 handshakeAccepted: true
@@ -211,7 +214,8 @@ public actor ServiceRuntime {
         _ body: Data,
         stdinOverlay: Data?,
         context: AuthenticatedRequestContext,
-        sameUIDSocket: Bool
+        sameUIDSocket: Bool,
+        receivedAt: ContinuousClock.Instant?
     ) async -> IncomingReply {
         guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
             let response = IPCResponse(
@@ -239,7 +243,8 @@ public actor ServiceRuntime {
             switch ack.status {
             case .ok:
                 let response = await dispatch(
-                    overlaid, context: context, sameUIDSocket: sameUIDSocket)
+                    overlaid, context: context, sameUIDSocket: sameUIDSocket,
+                    receivedAt: receivedAt)
                 return IncomingReply(
                     frame: (try? IPCJSON.encode(response)) ?? Data(),
                     handshakeAccepted: true
@@ -306,10 +311,13 @@ public actor ServiceRuntime {
         }
     }
 
+    /// `receivedAt` is when the transport read the frame, before any actor
+    /// hop: a hookEvaluate's `HookDeadline` budget runs from there.
     public func dispatch(
         _ request: IPCRequest,
         context: AuthenticatedRequestContext = .unauthenticated,
-        sameUIDSocket: Bool = false
+        sameUIDSocket: Bool = false,
+        receivedAt: ContinuousClock.Instant? = nil
     ) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
@@ -330,7 +338,8 @@ public actor ServiceRuntime {
         case .evaluate(let params):
             result = .evaluate(await evaluate(params.request, cwd: params.cwd))
         case .hookEvaluate(let params):
-            switch await makeHookEvaluateResult(params) {
+            let deadline = HookDeadline(receivedAt: receivedAt ?? .now)
+            switch await makeHookEvaluateResult(params, deadline: deadline) {
             case .success(let reply): result = .hookEvaluate(reply)
             case .failure(let error): result = .error(error)
             }
@@ -511,15 +520,26 @@ public actor ServiceRuntime {
     ) async -> EvaluateReply {
         let started = DispatchTime.now()
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: params.request.enabledPacks))
-        let reply = EvaluateReply(result: gated.evaluateAgent(params.request, cwd: params.cwd, home: configHome))
+        let (gated, home) = (gated, configHome)
+        // Off the actor: the judge path blocks (load wait, inference).
+        let reply = EvaluateReply(result: await JudgeOffload.run {
+            gated.evaluateAgent(params.request, cwd: params.cwd, home: home)
+        })
         log?.record(ServiceLogEvent(method: "agentEvaluate", elapsedMs:
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
             requestID: requestID, principal: context.reference))
         return reply
     }
 
+    /// rvd idle exit asks before dropping the process: unexpired allow-once
+    /// grants live only in this table, so exiting would revoke them.
+    public func hasLiveAllowOnceGrants() async -> Bool {
+        await grants.hasLiveGrants(now: clock())
+    }
+
     private func makeHookEvaluateResult(
-        _ params: HookEvaluateParams
+        _ params: HookEvaluateParams,
+        deadline: HookDeadline
     ) async -> Result<HookEvaluateReply, IPCError> {
         do {
             rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
@@ -532,7 +552,8 @@ public actor ServiceRuntime {
                     pending: pendingApprovals,
                     clock: clock,
                     recordDecision: analyticsRecorder()
-                )
+                ),
+                deadline: deadline
             )
             return .success(reply)
         } catch let error as IPCError {

@@ -26,6 +26,9 @@ struct SelfProtectionGuardTests {
         "env RV_X=1 rv safety normal",
         "ls && rv packs disable core.git",
         "bash -c 'rv uninstall'",
+        "rv-cli packs disable core.git",
+        "~/.local/bin/rv-cli uninstall",
+        "rv-cli allow-once redeem 123456",
     ]
 
     static let harmless: [String] = [
@@ -43,6 +46,8 @@ struct SelfProtectionGuardTests {
         "echo rv uninstall",
         "git commit -m 'rv uninstall docs'",
         "ls rv",
+        "rv-cli packs list",
+        "rv-cli doctor",
     ]
 
     @Test("agent-issued rv commands that weaken policy are flagged", arguments: weakening)
