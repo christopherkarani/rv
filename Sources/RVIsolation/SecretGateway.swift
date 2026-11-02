@@ -115,6 +115,8 @@ public final class SecretGateway: @unchecked Sendable {
         var approvals: [GatewayAccessRule] = []
         /// Set at bind when the runtime has an admission channel that can ask.
         var approver: SecretRequestApprover?
+        /// Pinned at lease from the definition's `binaries`; empty allows any process of the runtime.
+        var binaries: [GatewayBinaryPin] = []
         /// Bumped each time a refresh swaps the value.
         var generation = 0
         /// Values this entry held before, newest first, still scrubbed from responses.
@@ -642,6 +644,14 @@ public final class SecretGateway: @unchecked Sendable {
             switch peers.verify(peer, group) {
             case .member: continue
             case .outsider: return .runtimeMismatch
+            case .unverifiable: return .runtimeUnverified
+            }
+        }
+        for entry in presented where entry.binaries.isEmpty == false {
+            guard let group = entry.processGroup else { return .runtimeUnverified }
+            switch peers.binaries(peer, group, entry.binaries) {
+            case .allowed: continue
+            case .mismatch: return .binaryMismatch
             case .unverifiable: return .runtimeUnverified
             }
         }

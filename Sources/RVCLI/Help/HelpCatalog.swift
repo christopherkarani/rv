@@ -526,6 +526,14 @@ enum HelpCatalog {
                     description: "403 approvalPending + Retry-After until approved, then retry the identical request once; approvalDenied; approvalUnavailable"
                 ),
                 HelpRow(
+                    name: "binaries",
+                    description: "binaries [\"/usr/bin/git\"] on gateway or awsSigV4: only processes running, or started by, these spend it"
+                ),
+                HelpRow(
+                    name: "binaries refusal",
+                    description: "403 binaryMismatch (misuse); a binary replaced since launch no longer matches"
+                ),
+                HelpRow(
                     name: "defaults",
                     description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
                 ),

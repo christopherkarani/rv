@@ -241,6 +241,9 @@ enum GatewayRefusal: Error, Equatable {
     /// No approval service can be asked: no admission channel, no live agent
     /// principal, or the service declined to file it.
     case approvalUnavailable
+    /// A process holding the connection, and none of its ancestors up to the
+    /// runtime's leader, runs a binary the secret's `binaries` list allows.
+    case binaryMismatch
 
     /// Seconds a client should wait before retrying, sent as `Retry-After`.
     var retryAfter: Int? { self == .approvalPending ? 5 : nil }
@@ -253,7 +256,7 @@ enum GatewayRefusal: Error, Equatable {
     var isMisuse: Bool {
         switch self {
         case .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules, .encodedPlaceholder,
-            .ambiguousPath, .echoMethod, .runtimeMismatch, .awsKeyMismatch:
+            .ambiguousPath, .echoMethod, .runtimeMismatch, .awsKeyMismatch, .binaryMismatch:
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
             .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .approvalPending,
@@ -270,7 +273,7 @@ enum GatewayRefusal: Error, Equatable {
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
             .runtimeMismatch, .runtimeUnverified, .expired, .awsKeyMismatch, .approvalPending, .approvalDenied,
-            .approvalUnavailable:
+            .approvalUnavailable, .binaryMismatch:
             403
         case .tooLarge: 413
         case .echoMethod: 405
@@ -305,6 +308,7 @@ enum GatewayRefusal: Error, Equatable {
         case .approvalDenied: "the approval for this request was denied, expired, or already used"
         case .approvalUnavailable:
             "this request needs a human's approval, and no approver is available for this runtime"
+        case .binaryMismatch: "this secret may be used only by the binaries its definition lists"
         }
     }
 }

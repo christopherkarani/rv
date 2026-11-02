@@ -49,6 +49,10 @@ struct GatewayPeer: Equatable, Sendable {
 /// Decides whether a peer belongs to a runtime.
 struct GatewayPeerCheck: Sendable {
     var verify: @Sendable (GatewayPeer, ProcessGroupFact) -> GatewayPeerVerdict
+    /// For secrets bound to `binaries`: whether every runtime process
+    /// holding the peer's socket runs, or descends from, a pinned binary.
+    var binaries: @Sendable (GatewayPeer, ProcessGroupFact, [GatewayBinaryPin]) -> GatewayBinaryVerdict =
+        { _, _, _ in .unverifiable }
 
     /// The peer is a member when a process of the runtime holds the client
     /// socket, found by its port pair. The cage denies the `setsid` and
@@ -57,15 +61,33 @@ struct GatewayPeerCheck: Sendable {
     /// `detached: true` does this). So a runtime's processes are its group,
     /// the live descendants of its leader, and, when the leader leads a
     /// session (terminal runtimes), that session.
-    static let runtime = GatewayPeerCheck { peer, group in
-        #if os(macOS)
-        GatewayPeerScan.verdict(peer, group: group)
-        #else
-        // No libproc; contained launches are refused on Linux before exec,
-        // so no runtime there holds a gateway placeholder.
-        .unverifiable
-        #endif
-    }
+    static let runtime = GatewayPeerCheck(
+        verify: { peer, group in
+            #if os(macOS)
+            GatewayPeerScan.verdict(peer, group: group)
+            #else
+            // No libproc; contained launches are refused on Linux before exec,
+            // so no runtime there holds a gateway placeholder.
+            .unverifiable
+            #endif
+        },
+        binaries: { peer, group, pins in
+            #if os(macOS)
+            guard let holders = GatewayPeerScan.holders(peer, group: group) else { return .unverifiable }
+            // A forked child inherits the socket; every holder must pass.
+            var verdict = GatewayBinaryVerdict.allowed
+            for holder in holders {
+                switch GatewayBinaryScan.verdict(holder: holder, leader: group.pgid.rawValue, pins: pins) {
+                case .allowed: continue
+                case .mismatch: verdict = .mismatch
+                case .unverifiable: return .unverifiable
+                }
+            }
+            return verdict
+            #else
+            .unverifiable
+            #endif
+        })
 }
 
 #if os(macOS)
@@ -73,16 +95,44 @@ enum GatewayPeerScan {
     /// Bounds the descendant walk; past it the answer is `unverifiable`.
     static let maximumDescendants = 4_096
 
-    static func verdict(_ peer: GatewayPeer, group: ProcessGroupFact) -> GatewayPeerVerdict {
+    /// The group's live leader and members. A reused pgid is a different
+    /// group, and a group whose leader is gone belongs to a runtime that has returned.
+    private static func live(_ group: ProcessGroupFact) -> (leader: pid_t, members: [pid_t])? {
         let leader = group.pgid.rawValue
-        // A reused pgid is a different group, and a group whose leader is
-        // gone belongs to a runtime that has returned.
         guard case .found(let info) = ProcessGroupRecovery.lookup(leader),
             info.pbi_pgid == UInt32(leader),
             Int64(info.pbi_start_tvsec) == group.startSeconds,
             Int64(info.pbi_start_tvusec) == group.startMicroseconds,
             let members = groupMembers(leader)
-        else { return .unverifiable }
+        else { return nil }
+        return (leader, members)
+    }
+
+    /// Every runtime process holding the peer's socket: its group, the
+    /// leader's descendants, and the leader's session. Nil when any of them
+    /// could not be read, or none holds it.
+    static func holders(_ peer: GatewayPeer, group: ProcessGroupFact) -> [pid_t]? {
+        guard let (leader, members) = live(group) else { return nil }
+        let (parents, complete) = descendants(of: leader)
+        guard complete else { return nil }
+        var candidates = Set(members).union(parents.keys)
+        if getsid(leader) == leader {
+            guard let processes = userProcesses() else { return nil }
+            candidates.formUnion(processes.filter { getsid($0) == leader })
+        }
+        var found: [pid_t] = []
+        for pid in candidates.sorted() {
+            switch holdsSocket(pid, peer) {
+            case .some(true): found.append(pid)
+            case .some(false): continue
+            case .none: return nil
+            }
+        }
+        return found.isEmpty ? nil : found
+    }
+
+    static func verdict(_ peer: GatewayPeer, group: ProcessGroupFact) -> GatewayPeerVerdict {
+        guard let (leader, members) = live(group) else { return .unverifiable }
         var search = Search(peer: peer)
         // Each match is re-checked after the scan, so a pid that exited and
         // was reused mid-scan does not count.

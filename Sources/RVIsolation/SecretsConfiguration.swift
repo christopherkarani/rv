@@ -174,6 +174,10 @@ public struct SecretDefinition: Sendable, Equatable {
     public var expires: Date?
     /// Gateway only: re-resolve from the provider this often while a runtime lives.
     public var refresh: SecretRefreshInterval?
+    /// Gateway only: absolute paths of the binaries that may spend the value.
+    /// A request is served only when every runtime process holding its
+    /// connection runs one of them, or descends from one that does.
+    public var binaries: [String]?
 
     public init(
         name: String,
@@ -183,7 +187,8 @@ public struct SecretDefinition: Sendable, Equatable {
         delivery: SecretDelivery,
         type: String? = nil,
         expires: Date? = nil,
-        refresh: SecretRefreshInterval? = nil
+        refresh: SecretRefreshInterval? = nil,
+        binaries: [String]? = nil
     ) {
         self.name = name
         self.description = description
@@ -193,6 +198,7 @@ public struct SecretDefinition: Sendable, Equatable {
         self.type = type
         self.expires = expires
         self.refresh = refresh
+        self.binaries = binaries
     }
 
     func stages(forAgent agent: String?) -> Bool {
@@ -337,7 +343,8 @@ enum SecretsDecoding {
         let place = "secrets[\(index)]"
         guard let object = value as? [String: Any] else { throw Failure("\(place) must be an object") }
         try onlyKeys(
-            object, ["name", "description", "agents", "source", "delivery", "type", "expires", "refresh"], at: place)
+            object, ["name", "description", "agents", "source", "delivery", "type", "expires", "refresh", "binaries"],
+            at: place)
         guard let name = object["name"] as? String, variable(name), reservedVariables.contains(name) == false else {
             throw Failure("\(place).name must be an environment variable name")
         }
@@ -393,9 +400,29 @@ enum SecretsDecoding {
             }
             refresh = interval
         }
+        var binaries: [String]?
+        if let raw = object["binaries"] {
+            guard let list = raw as? [String], (1...16).contains(list.count), list.allSatisfy(binaryPath),
+                Set(list).count == list.count
+            else {
+                throw Failure("\(name).binaries must be 1 to 16 distinct absolute paths, such as /usr/bin/git")
+            }
+            if case .environment = delivery {
+                throw Failure(
+                    "\(name).binaries applies to gateway delivery; rv cannot see which process reads an environment variable")
+            }
+            binaries = list
+        }
         return SecretDefinition(
             name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName,
-            expires: expires, refresh: refresh)
+            expires: expires, refresh: refresh, binaries: binaries)
+    }
+
+    /// Absolute, without `.` or `..` components, printable, and at most 1024 bytes.
+    static func binaryPath(_ path: String) -> Bool {
+        path.hasPrefix("/") && path.utf8.count <= 1_024
+            && path.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
+            && path.split(separator: "/").allSatisfy { $0 != "." && $0 != ".." }
     }
 
     static func single(_ value: Any?, secret: String, field: String) throws -> (String, [String: Any]) {

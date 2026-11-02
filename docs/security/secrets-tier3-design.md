@@ -652,6 +652,36 @@ request.
   SDKs that support one, giving `LOCAL_PEERPID` for free?
 - Should a mismatch be cached per connection?
 
+**As built** (`secrets/t3-07-binary-binding`). Corrections to the proposal above:
+- **Hook point.** The check cannot run before the head is read: until the
+  placeholder is known there is no secret, and so no `binaries` list. It
+  runs in `verifyPeer`, after the runtime-membership check and before
+  `prepare` (refresh), for every presented entry that lists binaries.
+- **Identity.** No content hash. Each path is resolved once at lease and
+  pinned by (device, inode, size, ctime). ctime replaces the proposed
+  mtime: `utimes` can restore an mtime, but nothing in user space sets
+  ctime, so an in-place rewrite is caught without hashing. The pins live on
+  the gateway entry, so an upgrade takes effect at the next launch.
+  `EgressProxy`'s TOFU pins are not shared: they are keyed for egress
+  identity and outlive a lease.
+- **Holders.** The scan collects every runtime process holding the client
+  socket (the group, the leader's descendants, the leader's session). A
+  forked child inherits the socket, so every holder must pass. An
+  unreadable descriptor table makes the answer `runtimeUnverified`.
+- **Ancestors.** The walk stops at the runtime leader or launchd, at most
+  64 levels, then re-checks each walked process's start time.
+- **Caching.** None: a gateway connection serves one request (open question
+  answered).
+- **Unix socket** (open question): not pursued; the TCP scan covers every
+  SDK.
+- **Tests.** The real-scan test runs `curl` and `bash` in the test process's
+  group instead of a cage: this test process (no pinned binary) is refused,
+  a pinned `curl` is admitted, and a `curl` under a pinned `bash` is
+  admitted by ancestry. A swapped binary is covered by the pin tests
+  (rename over the path, and an in-place rewrite with the mtime restored).
+  A pid exiting mid-walk is covered only by the start-time re-check; no
+  test races it.
+
 ---
 
 ## (i) Remaining rv gaps outside the Tier 1/2 stack
