@@ -143,6 +143,8 @@ public final class SecretGateway: @unchecked Sendable {
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
+    /// Test seam: how long a request waits for a refresh. Set before serving.
+    var refreshWaitLimit = SecretGateway.refreshWaitLimit
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
