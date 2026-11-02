@@ -451,6 +451,7 @@ public final class SecretGateway: @unchecked Sendable {
         let rewritten: GatewayRequestHead
         let token: String
         let surfaces: [String]
+        let echoes: [GatewaySubstitution.Echo]
         switch substituted {
         case .failure(let refusal):
             deny(refusal)
@@ -459,6 +460,7 @@ public final class SecretGateway: @unchecked Sendable {
             rewritten = result.head
             token = result.used.token
             surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
+            echoes = result.echoes
         }
         guard let live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
@@ -486,7 +488,7 @@ public final class SecretGateway: @unchecked Sendable {
         let sink = GatewayResponseWriter(
             fd: client,
             method: head.method,
-            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))]
+            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))] + echoes
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         let headers = rewritten.headers + [GatewayHeaders.identityEncoding]
