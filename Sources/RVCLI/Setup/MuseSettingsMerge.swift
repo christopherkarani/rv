@@ -52,37 +52,31 @@ enum MuseSettingsMerge {
 
     /// Sets `managed_hooks_path` to `hooksPath` when the key is absent.
     /// Returns merged bytes and whether content changed. All other keys are
-    /// preserved; rendering matches the house merge output (sorted keys,
-    /// pretty printed). Unmergeable or already-keyed settings return the
+    /// preserved in their original order and spelling (`SharedConfigJSON`).
+    /// Unmergeable or already-keyed settings return the
     /// input unchanged with `wrote: false` — never throws for expected
     /// states, so setup skips instead of failing the run.
     static func merge(existingData: Data?, hooksPath: String) -> (data: Data, wrote: Bool) {
         guard let existingData,
-              let value = try? JSONDecoder().decode(JSONValue.self, from: existingData),
-              let root = value.asObject,
+              let root = SharedConfigJSON.parseObject(existingData),
               root["schema_version"]?.int == schemaVersion,
-              root[managedHooksKey] == nil,
-              let rendered = render(root: rootWithKey(root, hooksPath: hooksPath))
+              root[managedHooksKey] == nil
         else {
             return (existingData ?? Data(), false)
         }
-        return (rendered, true)
+        return (render(root: rootWithKey(root, hooksPath: hooksPath), original: existingData), true)
     }
 
     /// Removes `managed_hooks_path` only when it points at `hooksPath`.
     /// Foreign keys and unmergeable bytes are returned unchanged.
     static func strip(existingData: Data, hooksPath: String) -> (data: Data, changed: Bool) {
-        guard let value = try? JSONDecoder().decode(JSONValue.self, from: existingData),
-              var root = value.asObject,
+        guard var root = SharedConfigJSON.parseObject(existingData),
               root[managedHooksKey]?.string == hooksPath
         else {
             return (existingData, false)
         }
         root.removeValue(forKey: managedHooksKey)
-        guard let rendered = render(root: root) else {
-            return (existingData, false)
-        }
-        return (rendered, true)
+        return (render(root: root, original: existingData), true)
     }
 
     private static func rootWithKey(_ root: [String: JSONValue], hooksPath: String) -> [String: JSONValue] {
@@ -91,9 +85,7 @@ enum MuseSettingsMerge {
         return next
     }
 
-    private static func render(root: [String: JSONValue]) -> Data? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        return try? encoder.encode(JSONValue.object(root))
+    private static func render(root: [String: JSONValue], original: Data) -> Data {
+        SharedConfigJSON.encode(root, preservingLayoutOf: original)
     }
 }

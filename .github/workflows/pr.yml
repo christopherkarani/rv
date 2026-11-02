@@ -392,7 +392,7 @@ jobs:
       # proof — this job already ran Scripts/c-hook-proof.sh. One invocation:
       # a second `swift test --filter` would re-plan and re-typecheck.
       - name: Darwin Swift (XPC / CLI)
-        run: Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests|RVWorkspaceTUITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
+        run: Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests|RVWorkspaceTUITests|RVOperatorUITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh

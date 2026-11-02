@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVHistory
 import RVLaya
 import RVPolicy
@@ -384,21 +385,21 @@ public enum JudgeRuntime {
                 verdict: nil, action: nil, engine: selection.engine,
                 note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
             )
-            return result
+            return packsOnlyFloor(result, command: command)
         }
-        let reading = read(
-            judge.judge(JudgeCall(
-                command: command.rawValue, context: context,
-                engine: selection.engine, bundle: bundle
-            )),
-            over: result,
-            provenance: provenance
-        )
+        let run = judge.judge(JudgeCall(
+            command: command.rawValue, context: context,
+            engine: selection.engine, bundle: bundle
+        ))
+        let reading = read(run, over: result, provenance: provenance)
         log(
             home: home, guardMode: inputs.guardMode, live: reading.outcome, wouldBe: nil,
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
         )
+        // Only enforce floors an unscored allow; the log keeps the pack
+        // result, as for engine-missing above.
+        if case .unavailable = run { return packsOnlyFloor(reading.outcome, command: command) }
         return reading.outcome
     }
 
@@ -475,6 +476,18 @@ public enum JudgeRuntime {
                 verdict: verdict, action: action, note: verdict.truncated ? "truncated" : nil
             )
         }
+    }
+
+    /// Packs-only (no judge could score): an inline interpreter program the
+    /// packs masked as data, carrying spawn/eval/delete/secret markers, is
+    /// indeterminate rather than an unreviewed allow.
+    static func packsOnlyFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        guard InlineProgramGuard.requiresJudge(command) else { return result }
+        return EvaluationResult(
+            outcome: .indeterminate(.inlineProgramNeedsJudge),
+            matchingView: result.matchingView,
+            analysis: result.analysis
+        )
     }
 
     /// Load failure is distinct from prediction failure: the first is a

@@ -133,20 +133,32 @@ struct EgressReviewTests {
         let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
         let created = try await egressCLIProposal(store: store)
         #expect(EgressReviewRun.reviewUnchanged(before: created, after: created))
-        var swappedFingerprint = created
-        swappedFingerprint.action = .shell(
-            .effectOnly(
-                EffectShell(
-                    fingerprint: ActionFingerprint(rawValue: "egress:evil.example.com:443"),
-                    scope: created.action.scope
-                )
+        // Rows are immutable; a drifted store row is a differently built record.
+        func row(_ action: ProposedAction, _ state: PendingApprovalState) -> PendingApproval {
+            PendingApproval(
+                id: created.id, identity: created.identity, action: action,
+                reason: created.reason, continuation: created.continuation,
+                timeoutPolicy: created.timeoutPolicy, createdAt: created.createdAt,
+                expiresAt: created.expiresAt, state: state,
+                subject: created.subject, payloadDigest: created.payloadDigest
             )
+        }
+        #expect(EgressReviewRun.reviewUnchanged(before: created, after: row(created.action, created.state)))
+        let swappedFingerprint = row(
+            .shell(
+                .effectOnly(
+                    EffectShell(
+                        fingerprint: ActionFingerprint(rawValue: "egress:evil.example.com:443"),
+                        scope: created.action.scope
+                    )
+                )
+            ),
+            created.state
         )
         #expect(
             EgressReviewRun.reviewUnchanged(before: created, after: swappedFingerprint) == false)
-        var resolved = created
-        resolved.state = .resolved(
-            ApprovalResolution(decision: .allowOnce, resolvedAt: Date()))
+        let resolved = row(
+            created.action, .resolved(ApprovalResolution(decision: .allowOnce, resolvedAt: Date())))
         #expect(EgressReviewRun.reviewUnchanged(before: created, after: resolved) == false)
     }
 

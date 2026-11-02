@@ -17,8 +17,10 @@ static const char kUntrustedMessage[] =
 static const char kProtocolMessage[] =
     "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
 
-/* Existing Cursor deny `agent_message`; down-case asks never use it. */
-static const char kCursorDenyAgentLine[] = "RV blocked this command. Wait for the human.";
+/* Cursor deny `agent_message`; mirrors `cursorAgentStopLine` (RVHooks).
+ * Down-case asks never use it. */
+static const char kCursorDenyAgentLine[] =
+    "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human.";
 
 enum RvWhenDown rv_when_down_parse(const char *value) {
     if (value == NULL) {
@@ -74,6 +76,12 @@ static int render_deny(const char *host, const char *msg, struct RvHookFallback 
         n = snprintf(out->out, sizeof out->out,
                      "{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"%s\"}\n",
                      msg, kCursorDenyAgentLine);
+    } else if (strcmp(host, "muse") == 0) {
+        /* MuseHostCodec: `decision: block` is rejected on this event. */
+        n = snprintf(out->out, sizeof out->out,
+                     "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\","
+                     "\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n",
+                     msg);
     } else {
         n = snprintf(out->out, sizeof out->out,
                      "{\"decision\":\"deny\",\"reason\":\"%s\"}\n", msg);
