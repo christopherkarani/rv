@@ -10,6 +10,7 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
     struct State: Sendable {
         var items: [UIHookReviewItemDTO] = []
         var bindRefused = false
+        var connectThrows = false
         var completeResult: HookReviewStatus = .allowedOnce
         var denyResult: HookReviewStatus = .denied
         var connectCalls = 0
@@ -30,12 +31,19 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
         state.withLock { $0.bindRefused = refused }
     }
 
+    func setConnectThrows(_ shouldThrow: Bool) {
+        state.withLock { $0.connectThrows = shouldThrow }
+    }
+
     var snapshot: State {
         state.withLock { $0 }
     }
 
     func connect() async throws {
         state.withLock { $0.connectCalls += 1 }
+        if state.withLock({ $0.connectThrows }) {
+            throw FakeBridgeError.refused
+        }
     }
 
     func hookList() async throws -> UIHookReviewListDTO {
@@ -274,6 +282,89 @@ struct OperatorHookReviewModelTests {
         await model.select("hook-1")
         #expect(model.bound == nil)
         #expect(model.notice != nil)
+    }
+
+    @Test func connectBaselinesExistingItemsAsSeen() async {
+        // Rows already pending when the app opens are the baseline, not
+        // arrivals: the arrival signal must stay quiet for them.
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem(), hookReviewItem(approvalID: "hook-2")])
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        #expect(model.items.count == 2)
+        #expect(model.unseenApprovalIDs.isEmpty)
+    }
+
+    @Test func refreshFlagsNewArrivalsAsUnseen() async {
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem()])
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        #expect(model.unseenApprovalIDs.isEmpty)
+        bridge.setItems([hookReviewItem(), hookReviewItem(approvalID: "hook-2")])
+        await model.refresh()
+        #expect(model.items.count == 2)
+        #expect(model.unseenApprovalIDs == ["hook-2"])
+    }
+
+    @Test func selectingAnArrivalClearsItFromUnseen() async {
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem()])
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        bridge.setItems([hookReviewItem(), hookReviewItem(approvalID: "hook-2")])
+        await model.refresh()
+        #expect(model.unseenApprovalIDs == ["hook-2"])
+        await model.select("hook-2")
+        #expect(model.unseenApprovalIDs.isEmpty)
+    }
+
+    @Test func expiredArrivalsLeaveUnseen() async {
+        // A row that vanishes server-side (expired/resolved elsewhere) is
+        // no longer awaiting the human: it must not linger as unseen.
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem()])
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        bridge.setItems([hookReviewItem(), hookReviewItem(approvalID: "hook-2")])
+        await model.refresh()
+        #expect(model.unseenApprovalIDs == ["hook-2"])
+        bridge.setItems([hookReviewItem()])
+        await model.refresh()
+        #expect(model.unseenApprovalIDs.isEmpty)
+    }
+
+    @Test func maintainRefreshesWhenConnected() async {
+        // The view's poll tick: one maintain() is one refresh, and it never
+        // spends device-owner authentication.
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem()])
+        let counter = AuthCounter()
+        let model = makeModel(bridge: bridge, counter: counter)
+        await model.connect()
+        bridge.setItems([hookReviewItem(), hookReviewItem(approvalID: "hook-2")])
+        await model.maintain()
+        #expect(model.items.count == 2)
+        #expect(model.unseenApprovalIDs == ["hook-2"])
+        #expect(counter.calls == 0)
+    }
+
+    @Test func maintainRetriesConnectWhileDisconnected() async {
+        // After an rvd outage the view heals itself: maintain() keeps
+        // redialing until the bridge answers, then baselines the list.
+        let bridge = FakeHookBridge()
+        bridge.setConnectThrows(true)
+        let model = makeModel(bridge: bridge)
+        await model.maintain()
+        await model.maintain()
+        #expect(model.connection != .connected)
+        #expect(bridge.snapshot.connectCalls == 2)
+        bridge.setConnectThrows(false)
+        bridge.setItems([hookReviewItem()])
+        await model.maintain()
+        #expect(model.connection == .connected)
+        #expect(model.items.count == 1)
+        #expect(model.unseenApprovalIDs.isEmpty)
     }
 }
 

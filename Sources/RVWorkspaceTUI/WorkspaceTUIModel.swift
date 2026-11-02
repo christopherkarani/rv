@@ -339,6 +339,13 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
     }
 
+    /// Test seam: returns once every effect routed before this call has run.
+    /// Routed workers re-drain inline only, so they never enqueue more work.
+    func waitForRoutedEffects() {
+        terminalQueue.sync {}
+        commandQueue.sync {}
+    }
+
     // MARK: - Runtime effect boundary
 
     /// Where one effect executes. Queue choice is the runtime's discipline;

@@ -7,93 +7,96 @@ import Testing
 
 private let claudeFreshBytes = """
 {
-  "hooks" : {
-    "PreToolUse" : [
+  "hooks": {
+    "PreToolUse": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "RV_BINARY=\\/usr\\/local\\/bin\\/rv python3 \\/tmp\\/home\\/.claude\\/hooks\\/rv-guard.py",
-            "timeout" : 90,
-            "type" : "command"
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
           }
         ],
-        "matcher" : "Bash"
+        "matcher": "Bash"
       },
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "RV_BINARY=\\/usr\\/local\\/bin\\/rv python3 \\/tmp\\/home\\/.claude\\/hooks\\/rv-guard.py",
-            "timeout" : 90,
-            "type" : "command"
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
           }
         ],
-        "matcher" : "Read"
+        "matcher": "Read"
       },
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "RV_BINARY=\\/usr\\/local\\/bin\\/rv python3 \\/tmp\\/home\\/.claude\\/hooks\\/rv-guard.py",
-            "timeout" : 90,
-            "type" : "command"
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
           }
         ],
-        "matcher" : "Edit"
+        "matcher": "Edit"
       },
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "RV_BINARY=\\/usr\\/local\\/bin\\/rv python3 \\/tmp\\/home\\/.claude\\/hooks\\/rv-guard.py",
-            "timeout" : 90,
-            "type" : "command"
+            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "timeout": 90,
+            "type": "command"
           }
         ],
-        "matcher" : "Write"
+        "matcher": "Write"
       }
     ]
   }
 }
+
 """
 
 private let codexFreshBytes = """
 {
-  "hooks" : {
-    "PreToolUse" : [
+  "hooks": {
+    "PreToolUse": [
       {
-        "hooks" : [
+        "hooks": [
           {
-            "command" : "python3 \\/tmp\\/home\\/.codex\\/hooks\\/rv-guard.py",
-            "statusMessage" : "RV",
-            "timeout" : 5,
-            "type" : "command"
+            "command": "python3 /tmp/home/.codex/hooks/rv-guard.py",
+            "statusMessage": "RV",
+            "timeout": 5,
+            "type": "command"
           }
         ],
-        "matcher" : "Bash"
+        "matcher": "Bash"
       }
     ]
   }
 }
+
 """
 
 private let cursorFreshBytes = """
 {
-  "hooks" : {
-    "beforeShellExecution" : [
+  "hooks": {
+    "beforeShellExecution": [
       {
-        "command" : "python3 \\/tmp\\/home\\/.cursor\\/hooks\\/rv-guard.py",
-        "failClosed" : true,
-        "timeout" : 5
+        "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
+        "failClosed": true,
+        "timeout": 5
       }
     ],
-    "preToolUse" : [
+    "preToolUse": [
       {
-        "command" : "python3 \\/tmp\\/home\\/.cursor\\/hooks\\/rv-guard.py",
-        "failClosed" : true,
-        "timeout" : 5
+        "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
+        "failClosed": true,
+        "timeout": 5
       }
     ]
   },
-  "version" : 1
+  "version": 1
 }
+
 """
 
 @Test func mergeEngine_claudeFreshMergeIsByteExact() throws {
@@ -430,15 +433,43 @@ private func syntheticContext() -> HookCommandContext {
     #expect(ClaudeSettingsMerge.inspectionState(of: merged.data) == .wired(bakedPath: "/r"))
 }
 
-// MARK: - Merge -> uninstall round-trips keep foreign bytes
+// MARK: - Merge -> uninstall round-trips keep foreign bytes and key order
 
-private func sortedReencode(_ data: Data) throws -> Data {
-    let object = try JSONSerialization.jsonObject(with: data)
-    return try JSONSerialization.data(
-        withJSONObject: object,
-        options: [.sortedKeys, .prettyPrinted]
-    )
+/// The foreign fixtures below laid out as pretty JSON, in their original key order.
+private let claudeForeignPretty = """
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "other",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
 }
+
+"""
+
+private let cursorForeignPretty = """
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "other",
+        "timeout": 1
+      }
+    ]
+  }
+}
+
+"""
 
 @Test func mergeEngine_roundTripsKeepForeignBytes() throws {
     let claudeForeign = Data(
@@ -454,7 +485,7 @@ private func sortedReencode(_ data: Data) throws -> Data {
     )
     #expect(
         try ClaudeSettingsMerge.uninstall(existingData: claudeMerged.data)
-            == sortedReencode(claudeForeign)
+            == Data(claudeForeignPretty.utf8)
     )
 
     let codexMerged = try CodexHooksMerge.merge(
@@ -463,7 +494,7 @@ private func sortedReencode(_ data: Data) throws -> Data {
     )
     #expect(
         try CodexHooksMerge.uninstall(existingData: codexMerged.data)
-            == sortedReencode(claudeForeign)
+            == Data(claudeForeignPretty.utf8)
     )
 
     let cursorForeign = Data(
@@ -477,7 +508,7 @@ private func sortedReencode(_ data: Data) throws -> Data {
     )
     #expect(
         try CursorHooksMerge.uninstall(existingData: cursorMerged.data)
-            == sortedReencode(cursorForeign)
+            == Data(cursorForeignPretty.utf8)
     )
 }
 

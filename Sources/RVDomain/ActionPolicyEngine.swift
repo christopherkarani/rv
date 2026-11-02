@@ -59,8 +59,8 @@ public struct ActionPolicyExplanation: Sendable, Equatable, Codable {
 }
 
 public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
-    public var decision: HardPolicyDecision
-    public var explanation: ActionPolicyExplanation
+    public let decision: HardPolicyDecision
+    public let explanation: ActionPolicyExplanation
 
     package init(decision: HardPolicyDecision, explanation: ActionPolicyExplanation) {
         self.decision = decision
