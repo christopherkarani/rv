@@ -118,4 +118,43 @@ struct LoginCommandTests {
             provider: github, home: fixture.directory, variables: ["GH_TOKEN": "gh-env-token", "PATH": "/nonexistent"])
         #expect(ghEnv?.value == Data("gh-env-token".utf8))
     }
+
+    @Test func acquireSkipsGatewayPlaceholders() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let placeholder = "rvph_" + String(repeating: "a", count: 32)
+        let github = try #require(LoginProvider.named("github"))
+        #expect(LoginAcquire.value(
+            provider: github, home: fixture.directory,
+            variables: ["GITHUB_TOKEN": placeholder, "GH_TOKEN": placeholder, "PATH": "/nonexistent"]) == nil)
+        let real = LoginAcquire.value(
+            provider: github, home: fixture.directory,
+            variables: ["GH_TOKEN": placeholder, "GITHUB_TOKEN": "real-token", "PATH": "/nonexistent"])
+        #expect(real?.value == Data("real-token".utf8))
+
+        let vercel = try #require(LoginProvider.named("vercel"))
+        #expect(LoginAcquire.value(
+            provider: vercel, home: fixture.directory, variables: ["VERCEL_TOKEN": "pre_" + placeholder]) == nil)
+    }
+
+    @Test func checkWithoutProvidersCoversOnlyConnectedLogins() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        _ = try SecretsRun.set(
+            name: "OPENAI_API_KEY", value: Data("sk-unrelated-123".utf8), definition: .environment,
+            agents: [], description: nil, environment: environment).get()
+
+        // No login connected: the unrelated secret must not be checked.
+        let none = try LoginRun.check(
+            try SecretsRun.configuration(environment).get(), providers: [], environment: environment).get()
+        #expect(none.isEmpty)
+
+        _ = try LoginRun.connect(
+            provider: "vercel", value: Data("vercel-token-123".utf8), origin: "pasted token",
+            environment: environment).get()
+        let rows = try LoginRun.check(
+            try SecretsRun.configuration(environment).get(), providers: [], environment: environment).get()
+        #expect(rows.map(\.name) == ["VERCEL_TOKEN"])
+    }
 }

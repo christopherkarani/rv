@@ -132,6 +132,19 @@ enum LoginRun {
         }
     }
 
+    /// Resolves the named logins' secrets. With no names, only the
+    /// connected app logins are checked, never the other secrets in
+    /// secrets.json (`SecretsRun.check` treats empty names as "all").
+    static func check(
+        _ configuration: SecretsConfiguration, providers names: [String], environment: SecretsEnvironment
+    ) -> Result<[SecretsRun.CheckRow], CommandFailure> {
+        let selected = names.isEmpty
+            ? LoginProvider.all.map(\.secretName).filter { configuration.secret(named: $0) != nil }
+            : names
+        guard selected.isEmpty == false else { return .success([]) }
+        return SecretsRun.check(configuration, names: selected, environment: environment)
+    }
+
     static func logout(
         provider raw: String, environment: SecretsEnvironment
     ) -> Result<String, CommandFailure> {
@@ -175,28 +188,37 @@ enum LoginAcquire {
     ) -> (value: Data, origin: String)? {
         switch provider.id {
         case "vercel":
-            if let token = variables["VERCEL_TOKEN"], token.isEmpty == false {
+            if let token = variables["VERCEL_TOKEN"], isRealToken(token) {
                 return (Data(token.utf8), "imported from $VERCEL_TOKEN")
             }
             for file in LoginRun.vercelAuthFiles(home: home) {
-                if let data = try? Data(contentsOf: file), let token = LoginRun.vercelAuthToken(data) {
+                if let data = try? Data(contentsOf: file), let token = LoginRun.vercelAuthToken(data),
+                    isRealToken(String(decoding: token, as: UTF8.self))
+                {
                     return (token, "imported from Vercel CLI login")
                 }
             }
             return nil
         case "github":
             for variable in ["GH_TOKEN", "GITHUB_TOKEN"] {
-                if let token = variables[variable], token.isEmpty == false {
+                if let token = variables[variable], isRealToken(token) {
                     return (Data(token.utf8), "imported from $\(variable)")
                 }
             }
-            if let token = ghAuthToken(variables: variables) {
+            if let token = ghAuthToken(variables: variables), isRealToken(String(decoding: token, as: UTF8.self)) {
                 return (token, "imported from gh CLI login")
             }
             return nil
         default:
             return nil
         }
+    }
+
+    /// Non-empty and not an rv gateway placeholder. Inside an rv-launched
+    /// shell the token variables hold `rvph_` placeholders; storing one
+    /// would overwrite the real credential with a worthless value.
+    static func isRealToken(_ token: String) -> Bool {
+        token.isEmpty == false && token.contains("rvph_") == false
     }
 
     /// `gh auth token` from the installed GitHub CLI, bounded and silent.
@@ -273,12 +295,14 @@ struct LoginCheck: AsyncParsableCommand {
         }
         let rows: [SecretsRun.CheckRow]
         switch SecretsRun.configuration(environment).flatMap({
-            SecretsRun.check($0, names: names, environment: environment)
+            LoginRun.check($0, providers: names, environment: environment)
         }) {
         case .failure(let failure): try ctx.fail("rv login check: \(failure.message)\n")
         case .success(let checked): rows = checked
         }
-        let text = ctx.explicitRobot ? SecretsRun.robotJSON(rows) : SecretsRun.checkText(rows)
+        let text = ctx.explicitRobot
+            ? SecretsRun.robotJSON(rows)
+            : (rows.isEmpty ? "No app logins connected.\n" : SecretsRun.checkText(rows))
         if rows.allSatisfy(\.ok) {
             ctx.writeStdout(text)
         } else {
@@ -304,7 +328,7 @@ struct LoginConnect: AsyncParsableCommand {
     )
 
     @Argument(help: "Provider: vercel or github.") var provider: String
-    @Flag(name: .customLong("stdin"), help: "Read the token from stdin instead of importing.")
+    @Flag(name: .customLong("stdin"), help: "Skip importing; read the token from stdin (hidden prompt on a terminal).")
     var readStdin = false
     @Option(name: .customLong("resource-profile"), help: "Wire the secret into this runtime profile (see `rv init`).")
     var profile: String?
@@ -336,7 +360,7 @@ struct LoginConnect: AsyncParsableCommand {
         }
         let acquired: (value: Data, origin: String)?
         if readStdin {
-            acquired = SecretsRun.readValue(name: known.secretName, stdinIsTTY: false)
+            acquired = SecretsRun.readValue(name: known.secretName, stdinIsTTY: isatty(STDIN_FILENO) == 1)
                 .map { (value: $0, origin: "pasted token") }
         } else if let found = LoginAcquire.value(
             provider: known, home: URL(fileURLWithPath: home.rawValue), variables: ProcessInfo.processInfo.environment)
