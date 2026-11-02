@@ -133,8 +133,10 @@ public struct GatedEvaluate: Sendable {
         case .observed(let observed):
             return (observed, effects)
         case .enforced(let enforced):
-            // The row is emitted as a decision; `perform` drops it when the
-            // hook deadline has passed (checked at write time, on the task).
+            // Checked on every enforced result, exactly as before effects
+            // became values: past the deadline the check trips it, so
+            // `HookDoor` swaps in the timeout deny even for an allow.
+            guard HookDeadline.permitsSideEffects() else { return (enforced, effects) }
             if let row = Self.denialRow(
                 for: enforced, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now
             ) {
@@ -416,9 +418,11 @@ public struct GatedEvaluate: Sendable {
                 )
             }
         }
-        // Emitted unconditionally on apply; `perform` applies the hook
-        // deadline to it at write time, on the task.
-        if verb.recordsDenial,
+        // On the task, after the offload (`HookDeadline.current` is
+        // task-local). Checked on every apply, allow included: past the
+        // deadline the check trips it and `HookDoor` swaps in the timeout
+        // deny, so no denial row is emitted for a reply nobody reads.
+        if verb.recordsDenial, HookDeadline.permitsSideEffects(),
            let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
             effects.append(row)
         }
@@ -804,15 +808,9 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// The shell: applies one evaluation's effects in order. Missing home
-    /// has no config directory, so nothing is written.
-    ///
-    /// A denial row is written only while the task's bound `HookDeadline`
-    /// permits side effects: past it the hook client has given up, so the
-    /// row would record a block for a reply nobody read. The check runs
-    /// here, at write time; `HookDeadline.current` is task-local, so call
-    /// `perform` on the evaluating task, never inside `JudgeOffload.run`
-    /// (the agent door, which runs there, emits no denial rows). The
-    /// exemption audit and judge log are not deadline-gated.
+    /// has no config directory, so nothing is written. The hook deadline
+    /// is applied by the decision (no `.denialRow` is emitted past it);
+    /// the exemption audit and judge log are not deadline-gated.
     static func perform(_ effects: [GatedEffect], home: HomeDirectory?) {
         guard let home else { return }
         for effect in effects {
@@ -822,7 +820,6 @@ public struct GatedEvaluate: Sendable {
             case .judgeLog(let row):
                 JudgeRuntime.appendLog(row, home: home)
             case .denialRow(let row):
-                guard HookDeadline.permitsSideEffects() else { continue }
                 recordDenial(row, home: home)
             }
         }

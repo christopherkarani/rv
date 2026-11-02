@@ -170,11 +170,40 @@ struct GatedEffectTests {
             Issue.record("judge review must deny, got \(result.decision)")
             return
         }
-        #expect(decided.effects.contains { if case .denialRow = $0 { true } else { false } })
+        #expect(!decided.effects.contains { if case .denialRow = $0 { true } else { false } })
         #expect(stale.hasTripped)
         #expect(try exemptionRows(home).map(\.dropped) == [["dropped.env"]])
         #expect(try judgeLog(home).count == 1)
         #expect(ledgerRows(home).isEmpty)
+    }
+
+    /// Parity with the inline writes: an enforced apply checks the hook
+    /// deadline even when it allows, so a late allow trips it and the hook
+    /// door answers with the timeout deny.
+    @Test("enforce: a late allowed apply still trips the hook deadline")
+    func lateAllowedApplyTripsDeadline() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let repo = try effectRepo(in: home, named: "repo", dropping: [])
+        let cwd = try #require(WorkingDirectory(validating: repo.path))
+        let door = GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: .unavailable("test")))
+        let inputs = EvaluationInputs(
+            guardMode: .enforce,
+            judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle),
+            store: .gather(home: home, cwd: cwd)
+        )
+        let stale = HookDeadline(receivedAt: .now - .seconds(30))
+        let result = await HookDeadline.$current.withValue(stale) {
+            await door.gated(
+                .apply, Self.request(ShellCommand(rawValue: "ls")), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
+                now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash, inputs: inputs
+            )
+        }
+        guard case .allow = result.decision else {
+            Issue.record("plain ls must allow, got \(result.decision)")
+            return
+        }
+        #expect(stale.hasTripped)
     }
 
     @Test("observe: every shell door asks for one would-be judge row and no denial row", arguments: [
