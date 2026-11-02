@@ -40,6 +40,18 @@ enum WorkspacePublishOutcome: Equatable, Sendable {
     case interrupted(at: String)
 }
 
+extension WorkspacePublishOutcome {
+    /// True when the publish was refused only because the agent's tree holds
+    /// an escaping symlink: a policy decision about content, not evidence of
+    /// tampering or a read failure. Only then is the volume worth keeping.
+    var isContentPolicyRejection: Bool {
+        guard case .rejected(let rejections) = self, rejections.isEmpty == false else {
+            return false
+        }
+        return rejections.allSatisfy { $0.reason == .symlinkEscapesWorkspace }
+    }
+}
+
 /// Test seam: return true to fail commit step `index` (naming `relative`)
 /// as a finished failure.
 enum WorkspacePublishFaults {

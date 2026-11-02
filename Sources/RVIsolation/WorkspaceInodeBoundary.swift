@@ -122,6 +122,9 @@ private struct BoundaryMutable: Sendable {
     /// the workspace.
     var blockWorkspaceRename = false
     var publishOutcome: WorkspacePublishOutcome = .notRun
+    /// Where a content-policy rejection moved the volume's disk image
+    /// instead of unlinking it. Nil for every other outcome.
+    var retainedRejectedImage: String?
 }
 
 /// Mounts the workspace path on a fresh volume before a contained process runs.
@@ -320,7 +323,12 @@ final class WorkspaceInodeBoundary: Sendable {
         } else {
             published = .failure(.workspaceInodeBoundaryFailed)
         }
-        let restored = restoreOriginalDirectory()
+        // A symlink-policy rejection wrote nothing, so the volume is the only
+        // copy of the agent's work: keep its image instead of unlinking it.
+        // Tamper, inode, and unreadable rejections keep the discard.
+        let restored = restoreOriginalDirectory(
+            retainingImage: rejected && publishOutcome.isContentPolicyRejection
+        )
         // The copy budget is already the detach reserve. Publish did not
         // write and did not reject, and the original directory is back.
         // The volume's unpublished names are gone with it. That is a
@@ -467,7 +475,9 @@ final class WorkspaceInodeBoundary: Sendable {
         }
     }
 
-    private func restoreOriginalDirectory() -> Result<Void, IsolationApplyError> {
+    private func restoreOriginalDirectory(
+        retainingImage: Bool = false
+    ) -> Result<Void, IsolationApplyError> {
         if mutable.withLock({ $0.blockWorkspaceRename }) {
             return .failure(.workspaceInodeBoundaryFailed)
         }
@@ -523,8 +533,19 @@ final class WorkspaceInodeBoundary: Sendable {
         // umount can succeed while `hdiutil detach` fails or is skipped.
         // The image path is what a later detach still needs.
         if let imagePath, diskImageMayRemoveImage(detachSucceeded: detached) {
-            // A stopped unlink is not the image being gone.
-            if diskImageUnlinkWithinCancelClock(imagePath) == nil {
+            if retainingImage {
+                switch retainRejectedImage(imagePath) {
+                case .retained(let path):
+                    mutable.withLock { $0.retainedRejectedImage = path }
+                case .stopped:
+                    return .failure(.workspaceInodeBoundaryFailed)
+                case .left:
+                    // Every rename failed. The image stays where it is;
+                    // retention never falls back to unlinking the work.
+                    break
+                }
+            } else if diskImageUnlinkWithinCancelClock(imagePath) == nil {
+                // A stopped unlink is not the image being gone.
                 return .failure(.workspaceInodeBoundaryFailed)
             }
         }
@@ -693,6 +714,12 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     /// What the last publish left in the saved tree.
+    /// Path of the detached disk image kept after a symlink-policy rejection,
+    /// holding every edit the agent made. Nil when no image was retained.
+    var retainedRejectedImagePath: String? {
+        mutable.withLock { $0.retainedRejectedImage }
+    }
+
     var publishOutcome: WorkspacePublishOutcome {
         mutable.withLock { $0.publishOutcome }
     }
@@ -2625,6 +2652,57 @@ func workspaceMountSource(_ path: String) -> String? {
 
 private func pathDepth(_ path: String) -> Int {
     path.split(separator: "/").count
+}
+
+private enum RetainedImage {
+    case retained(String)
+    /// The cancel clock stopped the move. The image is where it was.
+    case stopped
+    /// No unused retained name could be taken. The image is where it was.
+    case left
+}
+
+/// Moves the detached image of a rejected workspace to a name nothing
+/// sweeps: `rv-rejected-<token>-<UTC>.sparseimage` beside it. The
+/// `rv-inode-` prefix is what `rv workspace leftovers` lists for deletion,
+/// and recovery unlinks only the recorded path, so the new name is neither.
+/// `RENAME_EXCL` never replaces a file. The mode is narrowed to 0600 after
+/// the move; a failed chmod does not undo it, because the data is already
+/// safe and the image sits in the owner's private directory.
+private func retainRejectedImage(_ source: String, now: Date = Date()) -> RetainedImage {
+    let url = URL(fileURLWithPath: source)
+    var stem = url.deletingPathExtension().lastPathComponent
+    if stem.hasPrefix("rv-inode-") {
+        stem = "rv-rejected-" + stem.dropFirst("rv-inode-".count)
+    } else {
+        stem += "-rejected"
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(identifier: "UTC")
+    formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+    let stamp = formatter.string(from: now)
+    let directory = url.deletingLastPathComponent()
+    for attempt in 0..<10 {
+        let suffix = attempt == 0 ? "" : "-\(attempt)"
+        let destination = directory
+            .appendingPathComponent("\(stem)-\(stamp)\(suffix).sparseimage").path
+        let moved = diskImagePerformWithinCancelClock {
+            let renamed = source.withCString { from in
+                destination.withCString { to in
+                    renamex_np(from, to, UInt32(RENAME_EXCL)) == 0
+                }
+            }
+            if renamed { _ = chmod(destination, 0o600) }
+            return renamed
+        }
+        switch moved {
+        case nil: return .stopped
+        case true?: return .retained(destination)
+        case false?: continue
+        }
+    }
+    return .left
 }
 
 private func renamePath(_ source: String, _ destination: String) -> Bool {
