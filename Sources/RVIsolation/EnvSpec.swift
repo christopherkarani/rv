@@ -80,6 +80,13 @@ enum EnvSpec {
     /// Bounds recursion through nested calls and literals.
     static let maximumDepth = 32
 
+    /// Bounds the work, not only the depth: a failed nested call or literal
+    /// is retried by every enclosing level, so unclosed `f(x,f(x,...` input
+    /// would otherwise take exponential time. Each byte of input pays for this
+    /// many calls or literals; well-formed input needs a small constant.
+    static let nestedEntriesPerByte = 64
+    static let nestedEntryAllowance = 4096
+
     static func parse(_ source: String) -> Result<File, ParseError> {
         var text = source.replacingOccurrences(of: "\r\n", with: "\n")
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
@@ -91,7 +98,9 @@ enum EnvSpec {
     /// that followed `KEY = ` and so parsed as a string.
     static func functionCall(_ text: String) -> Value? {
         var parser = Parser(bytes: Array(text.utf8))
-        guard let call = parser.functionCall(decorator: false), parser.position == parser.bytes.count else { return nil }
+        guard let call = parser.functionCall(decorator: false), parser.position == parser.bytes.count,
+            parser.exhausted == false
+        else { return nil }
         return call
     }
 }
@@ -103,8 +112,15 @@ extension EnvSpec {
         let bytes: [UInt8]
         var position = 0
         var depth = 0
+        var budget: Int
+        /// Sticky: once the work budget runs out, no nested rule starts and the
+        /// parse is refused, so a fallback alternative cannot misread the input.
+        var exhausted = false
 
-        init(bytes: [UInt8]) { self.bytes = bytes }
+        init(bytes: [UInt8]) {
+            self.bytes = bytes
+            budget = bytes.count * EnvSpec.nestedEntriesPerByte + EnvSpec.nestedEntryAllowance
+        }
 
         // MARK: File structure
 
@@ -122,6 +138,7 @@ extension EnvSpec {
                 } else {
                     return .failure(ParseError(line: line(at: position)))
                 }
+                if exhausted { return .failure(ParseError(line: line(at: position))) }
             }
             return .success(File(nodes: nodes))
         }
@@ -403,11 +420,15 @@ extension EnvSpec {
             if let call = functionCall(decorator: decorator) { return call }
             if let quoted = quotedString() { return quoted }
             let start = position
+            // A `${` with no `}` before the line ends leaves every later `${`
+            // on that line unclosed too, so the scan is not repeated.
+            var unclosedUntil = 0
             while let byte = current {
                 let reference = position
-                if take("${") {
+                if reference >= unclosedUntil, take("${") {
                     while let inner = current, inner != .closeBrace, inner != .newline { position += 1 }
                     if take(.closeBrace) { continue }
+                    unclosedUntil = position
                     position = reference
                 }
                 guard byte != .space, byte != .newline, byte != .comma, byte != .closeParen, byte != .closeBrace,
@@ -581,7 +602,12 @@ extension EnvSpec {
         mutating func take(_ expected: String) -> Bool { take(Array(expected.utf8)) }
 
         mutating func enter() -> Bool {
-            guard depth < EnvSpec.maximumDepth else { return false }
+            guard exhausted == false, depth < EnvSpec.maximumDepth else { return false }
+            budget -= 1
+            guard budget >= 0 else {
+                exhausted = true
+                return false
+            }
             depth += 1
             return true
         }

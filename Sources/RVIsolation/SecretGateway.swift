@@ -146,6 +146,8 @@ public final class SecretGateway: @unchecked Sendable {
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
+    /// Test seam: how long a request waits for a refresh. Set before serving.
+    var refreshWaitLimit = SecretGateway.refreshWaitLimit
 
     public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
@@ -219,6 +221,16 @@ public final class SecretGateway: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return entries[token]
+    }
+
+    /// True when some live placeholder belongs to `secret`. The route name is
+    /// agent-supplied, so a misuse finding may only name a secret that is
+    /// actually brokered here.
+    private func holdsLivePlaceholder(for secret: String?) -> Bool {
+        guard let secret else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.values.contains { $0.secret == secret }
     }
 
     /// A TCP stream socket that is close-on-exec before the caller uses it.
@@ -467,10 +479,10 @@ public final class SecretGateway: @unchecked Sendable {
         // Every live entry the request names, so a refusal can name the
         // runtime the placeholder was leased to.
         var presented: [Entry] = []
-        func deny(_ refusal: GatewayRefusal) {
+        func deny(_ refusal: GatewayRefusal, runtime: String? = presented.first?.runtime) {
             refuse(
                 client, refusal, method: head.method, path: path, secret: route.secret,
-                runtime: presented.first?.runtime, started: started)
+                runtime: runtime, started: started)
         }
         guard GatewayHeaders.echoMethods.contains(head.method) == false else {
             deny(.echoMethod)
@@ -479,11 +491,16 @@ public final class SecretGateway: @unchecked Sendable {
         var forwarded = head
         forwarded.headers = GatewayHeaders.forwardable(head.headers)
         func substitute() -> Result<
-            (head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>), GatewayRefusal
+            (
+                head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>,
+                echoes: [GatewaySubstitution.Echo]
+            ), GatewayRefusal
         > {
             presented = []
             if let authorization = forwarded.header("Authorization"), AWSSigV4.isSigV4(authorization) {
+                // Re-signed, not substituted: no value leaves encoded, so there are no echoes to scrub.
                 return admitAWS(forwarded, route: route, authorization: authorization, presented: &presented)
+                    .map { ($0.head, $0.used, $0.surfaces, []) }
             }
             return GatewaySubstitution.apply(forwarded, route: route) { token in
                 let found = entry(token)
@@ -496,8 +513,8 @@ public final class SecretGateway: @unchecked Sendable {
         // policy, so a misuse is never reported as an expiry.
         if case .success(let result) = substituted {
             // Only the placeholder's own runtime may trigger a refresh.
-            if let refusal = verifyPeer(client, presented) {
-                deny(refusal)
+            if let failure = verifyPeer(client, presented) {
+                deny(failure.refusal, runtime: failure.entry?.runtime)
                 return
             }
             if let refusal = prepare(result.used.token) {
@@ -509,6 +526,7 @@ public final class SecretGateway: @unchecked Sendable {
         let rewritten: GatewayRequestHead
         let token: String
         let surfaces: [String]
+        let echoes: [GatewaySubstitution.Echo]
         switch substituted {
         case .failure(let refusal):
             deny(refusal)
@@ -517,6 +535,7 @@ public final class SecretGateway: @unchecked Sendable {
             rewritten = result.head
             token = result.used.token
             surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
+            echoes = result.echoes
         }
         guard let live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
@@ -559,7 +578,7 @@ public final class SecretGateway: @unchecked Sendable {
             // Earlier generations too: an upstream may still echo a value it held before rotation.
             scrub: live.scrubbed.map {
                 ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
-            },
+            } + echoes,
             // A call that mints credentials answers with a new key the scrubber has never seen.
             tripwires: live.signing?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
         )
@@ -611,18 +630,20 @@ public final class SecretGateway: @unchecked Sendable {
 
     /// Loopback is open to every process on the host, so a placeholder alone
     /// is not enough: the connection must come from each named entry's
-    /// runtime. Fails closed when that cannot be shown.
-    private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> GatewayRefusal? {
-        guard let peer = GatewayPeer.of(client) else { return .runtimeUnverified }
+    /// runtime. Fails closed when that cannot be shown, and names the entry
+    /// that failed so the finding points at the runtime whose lease was
+    /// spent from outside.
+    private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> (refusal: GatewayRefusal, entry: Entry?)? {
+        guard let peer = GatewayPeer.of(client) else { return (.runtimeUnverified, presented.first) }
         var checked: [ProcessGroupFact] = []
         for entry in presented {
-            guard let group = entry.processGroup else { return .runtimeUnverified }
+            guard let group = entry.processGroup else { return (.runtimeUnverified, entry) }
             guard checked.contains(group) == false else { continue }
             checked.append(group)
             switch peers.verify(peer, group) {
             case .member: continue
-            case .outsider: return .runtimeMismatch
-            case .unverifiable: return .runtimeUnverified
+            case .outsider: return (.runtimeMismatch, entry)
+            case .unverifiable: return (.runtimeUnverified, entry)
             }
         }
         return nil
@@ -635,8 +656,9 @@ public final class SecretGateway: @unchecked Sendable {
         GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
         _ = audit(SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
-            upstreamStatus: nil, activity: refusal.isMisuse ? .blocked : .refused, refusal: refusal.code,
-            reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            upstreamStatus: nil,
+            activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
+            refusal: refusal.code, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }
