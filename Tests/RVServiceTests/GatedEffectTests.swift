@@ -136,9 +136,9 @@ struct GatedEffectTests {
         #expect(ledgerRows(home).count == 1)
     }
 
-    /// The decision still asks for the denial row past the hook deadline;
-    /// the shell drops it at write time, and only it: the client gave up on
-    /// the reply, but the audit and judge log describe the evaluation.
+    /// Past the hook deadline the decision asks for no denial row, and only
+    /// that row is dropped: the client gave up on the reply, but the audit
+    /// and judge log describe the evaluation.
     @Test("apply past the hook deadline: the shell writes the audit and judge log but no denial row")
     func lateApplyWritesNoDenialRow() async throws {
         let home = try guardHome(mode: nil)
@@ -277,6 +277,25 @@ struct GatedEffectTests {
         )
         #expect(observe.result.decision == .allow)
         #expect(observe.effects.isEmpty)
+    }
+
+    /// Parity with the inline writes: an enforced file read checks the hook
+    /// deadline whatever the verdict, so a late allow trips it and a late
+    /// deny asks for no denial row.
+    @Test("file door: a late enforced read trips the hook deadline and asks for no denial row", arguments: [
+        "/nonexistent/rv-effects/notes.txt", "/nonexistent/rv-effects/.env",
+    ])
+    func lateFileReadTripsDeadline(_ path: String) {
+        let action = FileToolAction(kind: .read, path: FileToolPath(rawValue: path))
+        let stale = HookDeadline(receivedAt: .now - .seconds(30))
+        let decided = HookDeadline.$current.withValue(stale) {
+            GatedEvaluate().decideFile(
+                action, home: nil, cwd: nil, host: .hook(.claude), now: Self.now, guardMode: .enforce
+            )
+        }
+        #expect((decided.result.decision == .allow) == path.hasSuffix("notes.txt"))
+        #expect(stale.hasTripped)
+        #expect(decided.effects.isEmpty)
     }
 
     /// SEC-003: the grant is spent inside `decide`, not by applying effects.
