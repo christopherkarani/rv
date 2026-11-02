@@ -354,7 +354,9 @@ public enum MCPHostSetup {
                     return .failure(.writeFailed(file.path.path))
                 }
                 guard saveManifest(records, configDirectory) else { return .failure(.manifest("could not save")) }
-                guard writePreservingMode(Data(updated.prettyText.utf8), to: file.path, backups: &result.backups) else {
+                guard writePreservingMode(
+                    Data(updated.prettyText.utf8), to: file.path, backupDirectory: backupDirectory(configDirectory),
+                    backups: &result.backups) else {
                     return .failure(.writeFailed(file.path.path))
                 }
             }
@@ -399,7 +401,9 @@ public enum MCPHostSetup {
                 changed = true
                 result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
             }
-            if changed, writePreservingMode(Data(root.prettyText.utf8), to: url, backups: &result.backups) == false {
+            if changed, writePreservingMode(
+                Data(root.prettyText.utf8), to: url, backupDirectory: backupDirectory(configDirectory),
+                backups: &result.backups) == false {
                 return .failure(.writeFailed(path))
             }
         }
@@ -432,14 +436,19 @@ public enum MCPHostSetup {
     }
 
     /// Temp file + rename in the same directory, keeping the original mode.
-    /// The replaced bytes are kept first (`ConfigBackup`); that copy's path
-    /// is appended to `backups`.
-    static func writePreservingMode(_ data: Data, to url: URL, backups: inout [String]) -> Bool {
+    /// The replaced bytes are kept first (`ConfigBackup`) under
+    /// `backupDirectory`, never beside the file: project-scoped configs
+    /// (`.mcp.json`, `.cursor/mcp.json`) sit in a repository, and a sibling
+    /// copy would escape their ignore patterns with the original credentials.
+    /// That copy's path is appended to `backups`.
+    static func writePreservingMode(
+        _ data: Data, to url: URL, backupDirectory: String, backups: inout [String]
+    ) -> Bool {
         var info = stat()
         let mode = lstat(url.path, &info) == 0 ? info.st_mode & 0o777 : 0o600
         let backup: String?
         do {
-            backup = try ConfigBackup.preserve(url.path, before: data)
+            backup = try ConfigBackup.preserve(url.path, before: data, directory: backupDirectory)
         } catch {
             return false
         }
@@ -452,6 +461,10 @@ public enum MCPHostSetup {
         }
         if let backup { backups.append(backup) }
         return true
+    }
+
+    static func backupDirectory(_ configDirectory: URL) -> String {
+        configDirectory.appendingPathComponent("backups").path
     }
 
     static func manifestURL(_ configDirectory: URL) -> URL {

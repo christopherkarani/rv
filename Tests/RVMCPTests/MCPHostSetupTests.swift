@@ -300,10 +300,16 @@ struct MCPHostSetupTests {
         let box = Sandbox()
         let original = #"{"zeta": 1.0, "big": 12345678901234567890, "mcpServers": {"wax": {"command": "wax-mcp"}}}"#
         let file = try box.write(".cursor/mcp.json", original)
+        let backupRoot = box.config.appendingPathComponent("backups")
         let backups = {
+            try FileManager.default.contentsOfDirectory(atPath: backupRoot.path)
+                .filter { $0.contains(".rv-backup-") }
+                .map { backupRoot.appendingPathComponent($0).path }
+        }
+        // Project-scoped configs live in a repository: no copy may land beside them.
+        let beside = {
             try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
-                .filter { $0.hasPrefix("mcp.json.rv-backup-") }
-                .map { file.deletingLastPathComponent().appendingPathComponent($0).path }
+                .filter { $0.contains(".rv-backup-") }
         }
 
         let result = try MCPHostSetup.setup(
@@ -313,6 +319,9 @@ struct MCPHostSetupTests {
         let setupBackup = try #require(result.backups.first)
         #expect(result.backups.count == 1)
         #expect(try backups() == [setupBackup])
+        #expect(try beside().isEmpty)
+        let mode = try FileManager.default.attributesOfItem(atPath: setupBackup)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o600)
         #expect(FileManager.default.contents(atPath: setupBackup) == Data(original.utf8))
         let routed = try String(contentsOf: file, encoding: .utf8)
         #expect(routed.hasPrefix("{\n  \"zeta\": 1.0,\n  \"big\": 12345678901234567890,\n  \"mcpServers\""))
@@ -323,6 +332,7 @@ struct MCPHostSetupTests {
         #expect(Set(try backups()) == [setupBackup, undoBackup])
         #expect(FileManager.default.contents(atPath: setupBackup) == Data(original.utf8))
         #expect(FileManager.default.contents(atPath: undoBackup) == Data(routed.utf8))
+        #expect(try beside().isEmpty)
     }
 
     @Test func undoLeavesEntriesTheUserChanged() throws {
