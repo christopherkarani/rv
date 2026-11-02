@@ -265,10 +265,6 @@ public enum JudgeRuntime {
     /// Fine-tuned bundle: `RV_FT_BUNDLE` when set and valid, else the
     /// installed `models/laya-ft-v2-coreml`. A directory only counts when
     /// `model.mlpackage` is in it.
-    public static func ftBundleDir(home: HomeDirectory?) -> URL? {
-        ftBundleDir(home: home, environment: ProcessInfo.processInfo.environment)
-    }
-
     static func ftBundleDir(home: HomeDirectory?, environment: [String: String]) -> URL? {
         func valid(_ dir: URL) -> URL? {
             let fm = FileManager.default
@@ -286,10 +282,6 @@ public enum JudgeRuntime {
 
     /// A directory only counts as a bundle when a model artifact is in it;
     /// anything else (unset, empty, wrong path) means packs-only.
-    public static func bundleDir(home: HomeDirectory?) -> URL? {
-        bundleDir(home: home, environment: ProcessInfo.processInfo.environment)
-    }
-
     static func bundleDir(home: HomeDirectory?, environment: [String: String]) -> URL? {
         func valid(_ dir: URL) -> URL? {
             // Only the CoreML judge is wired; an ONNX-only directory is
