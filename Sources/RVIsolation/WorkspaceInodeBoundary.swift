@@ -534,11 +534,18 @@ final class WorkspaceInodeBoundary: Sendable {
         // The image path is what a later detach still needs.
         if let imagePath, diskImageMayRemoveImage(detachSucceeded: detached) {
             if retainingImage {
-                switch retainRejectedImage(imagePath) {
+                switch retainRejectedImage(imagePath, device: imageDevice, inode: imageInode) {
                 case .retained(let path):
                     mutable.withLock { $0.retainedRejectedImage = path }
                 case .stopped:
                     return .failure(.workspaceInodeBoundaryFailed)
+                case .notOurs:
+                    // The cage can replace this name. What sits there is not
+                    // the image this process created, so there is nothing to
+                    // retain; the discard path removes the name only.
+                    if diskImageUnlinkWithinCancelClock(imagePath) == nil {
+                        return .failure(.workspaceInodeBoundaryFailed)
+                    }
                 case .left:
                     // Every rename failed. The image stays where it is;
                     // retention never falls back to unlinking the work.

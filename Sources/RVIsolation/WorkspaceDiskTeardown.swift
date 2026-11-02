@@ -425,16 +425,28 @@ enum RetainedImage {
     case stopped
     /// No unused retained name could be taken. The image is where it was.
     case left
+    /// The path is not the recorded image: a different inode, a symlink, a
+    /// non-regular file, or a hard-linked one. Nothing was moved.
+    case notOurs
 }
 
 /// Moves the detached image of a rejected workspace to a name nothing
 /// sweeps: `rv-rejected-<token>-<UTC>.sparseimage` beside it. The
 /// `rv-inode-` prefix is what `rv workspace leftovers` lists for deletion,
 /// and recovery unlinks only the recorded path, so the new name is neither.
-/// `RENAME_EXCL` never replaces a file. The mode is narrowed to 0600 after
-/// the move; a failed chmod does not undo it, because the data is already
-/// safe and the image sits in the owner's private directory.
-func retainRejectedImage(_ source: String, now: Date = Date()) -> RetainedImage {
+/// `RENAME_EXCL` never replaces a file. The image sits in a directory the
+/// cage can write, so the path is untrusted: it is `lstat`ed and must be the
+/// recorded regular file with one link before the move (`.notOurs`
+/// otherwise), and the mode is narrowed to 0600 through a descriptor opened
+/// `O_NOFOLLOW` that is checked against the same inode, never by path. A
+/// failed narrowing does not undo the move, because the data is already safe.
+func retainRejectedImage(
+    _ source: String,
+    device: UInt64?,
+    inode: UInt64?,
+    now: Date = Date()
+) -> RetainedImage {
+    guard let device, let inode else { return .notOurs }
     let url = URL(fileURLWithPath: source)
     var stem = url.deletingPathExtension().lastPathComponent
     if stem.hasPrefix("rv-inode-") {
@@ -452,22 +464,70 @@ func retainRejectedImage(_ source: String, now: Date = Date()) -> RetainedImage 
         let suffix = attempt == 0 ? "" : "-\(attempt)"
         let destination = directory
             .appendingPathComponent("\(stem)-\(stamp)\(suffix).sparseimage").path
-        let moved = diskImagePerformWithinCancelClock {
-            let renamed = source.withCString { from in
-                destination.withCString { to in
-                    renamex_np(from, to, UInt32(RENAME_EXCL)) == 0
-                }
-            }
-            if renamed { _ = chmod(destination, 0o600) }
-            return renamed
+        let verdict = RetainVerdictBox()
+        let finished = diskImagePerformWithinCancelClock {
+            verdict.value = moveRecordedImage(
+                from: source, to: destination, device: device, inode: inode
+            )
+            return true
         }
-        switch moved {
-        case nil: return .stopped
-        case true?: return .retained(destination)
-        case false?: continue
+        guard finished != nil else { return .stopped }
+        switch verdict.value {
+        case .moved: return .retained(destination)
+        case .notOurs: return .notOurs
+        case .nameTaken: continue
         }
     }
     return .left
+}
+
+private enum RetainMove {
+    case moved
+    case notOurs
+    case nameTaken
+}
+
+private final class RetainVerdictBox: @unchecked Sendable {
+    var value = RetainMove.nameTaken
+}
+
+/// Runs on the cancel-clock worker. `lstat` pins the recorded identity, the
+/// exclusive rename moves that name, and `fchmod` runs on a descriptor that
+/// `fstat` proves is the same inode, so a link planted after the check is
+/// never chmodded.
+private func moveRecordedImage(
+    from source: String,
+    to destination: String,
+    device: UInt64,
+    inode: UInt64
+) -> RetainMove {
+    var before = stat()
+    guard source.withCString({ lstat($0, &before) }) == 0,
+        (before.st_mode & S_IFMT) == S_IFREG,
+        before.st_nlink == 1,
+        UInt64(before.st_dev) == device,
+        UInt64(before.st_ino) == inode
+    else {
+        return .notOurs
+    }
+    let renamed = source.withCString { from in
+        destination.withCString { to in
+            renamex_np(from, to, UInt32(RENAME_EXCL)) == 0
+        }
+    }
+    guard renamed else { return .nameTaken }
+    let fd = destination.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+    guard fd >= 0 else { return .moved }
+    defer { close(fd) }
+    var after = stat()
+    if fstat(fd, &after) == 0,
+        (after.st_mode & S_IFMT) == S_IFREG,
+        UInt64(after.st_dev) == device,
+        UInt64(after.st_ino) == inode
+    {
+        _ = fchmod(fd, 0o600)
+    }
+    return .moved
 }
 
 #endif

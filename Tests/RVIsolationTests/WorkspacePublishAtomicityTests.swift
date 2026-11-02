@@ -159,6 +159,36 @@ struct WorkspacePublishAtomicityTests {
         #expect(boundary.isReleased)
     }
 
+    /// The cage can write the directory that holds the image. A symlink
+    /// planted over the image name must be neither retained nor followed: the
+    /// victim keeps its mode and the planted name is removed.
+    @Test func plantedImageSymlinkIsNotRetainedOrChmodded() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try seed(tree)
+        let boundary = try establish(tree)
+        let original = try #require(identityImagePath(boundary))
+        defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
+        let victim = tree.workspaceURL.deletingLastPathComponent()
+            .appendingPathComponent("victim-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: true)
+        defer { _ = chmod(victim.path, 0o755); try? FileManager.default.removeItem(at: victim) }
+        #expect(chmod(victim.path, 0o755) == 0)
+        try agentEdits(tree)
+        #expect(symlink("/usr/bin/python3", tree.workspaceURL.appendingPathComponent("escape").path) == 0)
+        #expect(unlink(original) == 0)
+        #expect(symlink(victim.path, original) == 0)
+
+        #expect(boundaryFailed(boundary.publishAndRestore()))
+        #expect(boundary.publishOutcome.isContentPolicyRejection)
+        #expect(boundary.retainedRejectedImagePath == nil)
+        var status = stat()
+        #expect(stat(victim.path, &status) == 0)
+        #expect((status.st_mode & 0o777) == 0o755)
+        #expect(lstat(original, &status) != 0)
+    }
+
     /// Tamper and inode rejections keep today's discard: the image is gone.
     @Test func tamperRejectionStillUnlinksTheImage() throws {
         let tree = try ContainmentTree()
