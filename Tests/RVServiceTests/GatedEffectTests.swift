@@ -6,8 +6,9 @@ import RVPolicy
 @testable import RVService
 
 /// Value-level checks on the decision half of each door: which effects it
-/// asks for, in what order, with what content. No home, so nothing touches
-/// disk and the shell would drop every effect.
+/// asks for, in what order, with what content. Most cases pass no home, so
+/// nothing touches disk; the one that needs dropped repo literals uses a temp
+/// home and checks that only `perform` writes.
 @Suite("Gated effects as values")
 struct GatedEffectTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -85,6 +86,54 @@ struct GatedEffectTests {
         #expect(apply.effects == [judgeLog(apply.result, isPeek: false), try #require(Self.denialRow(apply.result))])
         let peek = await Self.decide(.peek, Self.judged, mode: .enforce, door: door, bundle: Self.fakeBundle)
         #expect(peek.effects == [judgeLog(peek.result, isPeek: true)])
+    }
+
+    @Test("decide writes nothing; the audit precedes the judge log and denial row; peek keeps the audit")
+    func auditOrderAndNoWritesBeforePerform() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let repo = try effectRepo(in: home, named: "repo", dropping: ["dropped.env"])
+        let cwd = try #require(WorkingDirectory(validating: repo.path))
+        let door = GatedEvaluate(
+            EvaluateSession(),
+            judge: EffectFixedJudge(run: .verdict(try effectVerdict(choice: "review", risk: 0.5)))
+        )
+        func decide(_ intent: EvaluationIntent) async -> (result: EvaluationResult, effects: [GatedEffect]) {
+            await door.decide(
+                intent, Self.request(Self.judged), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
+                now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash,
+                inputs: EvaluationInputs(
+                    guardMode: .enforce,
+                    judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle),
+                    store: .gather(home: home, cwd: cwd)
+                )
+            )
+        }
+        func kinds(_ effects: [GatedEffect]) -> [String] {
+            effects.map {
+                switch $0 {
+                case .exemptionAudit: "audit"
+                case .judgeLog: "judgeLog"
+                case .denialRow: "denialRow"
+                }
+            }
+        }
+        let audit = GatedEffect.exemptionAudit(GatedEffect.ExemptionAudit(
+            dropped: ["dropped.env"], workspace: URL(fileURLWithPath: cwd.rawValue, isDirectory: true), at: Self.now
+        ))
+        let apply = await decide(.apply)
+        #expect(kinds(apply.effects) == ["audit", "judgeLog", "denialRow"])
+        #expect(apply.effects.first == audit)
+        let peek = await decide(.peek)
+        #expect(kinds(peek.effects) == ["audit", "judgeLog"])
+        #expect(peek.effects.first == audit)
+        #expect(try exemptionRows(home).isEmpty)
+        #expect((try? judgeLogText(home)) == nil)
+        #expect(ledgerRows(home).isEmpty)
+        GatedEvaluate.perform(apply.effects, home: home)
+        #expect(try exemptionRows(home).map(\.dropped) == [["dropped.env"]])
+        #expect(try judgeLog(home).count == 1)
+        #expect(ledgerRows(home).count == 1)
     }
 
     @Test("observe: every shell door asks for one would-be judge row and no denial row", arguments: [
