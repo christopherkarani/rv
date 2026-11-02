@@ -928,7 +928,17 @@ enum MCPRun {
             servers: names, configuration: verified, secrets: secrets, resolver: resolver,
             baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load, sandbox: sandbox)
         {
-        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .failure(let error):
+            if case .secretUnavailable(let server, let secret, _) = error {
+                // Only the names: the reason may carry resolver detail.
+                auditOrLog(
+                    AuditEvent(
+                        time: Date(), kind: .mcpApproval, decision: .denied, subject: server,
+                        reason: "secret refused at launch", source: "rv mcp serve",
+                        detail: ["server": server, "secret": secret]),
+                    configDirectory: environment.configDirectory)
+            }
+            return .failure(CommandFailure(error.message))
         case .success(let planned): return .success(planned)
         }
     }

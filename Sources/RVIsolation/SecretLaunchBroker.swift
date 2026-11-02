@@ -279,8 +279,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
             probe = { resolver.version(launched.source) }
         }
         var interval = launched.refresh?.timeInterval
-        // Session credentials expire, so an AWS profile is always re-read.
-        if case .awsSigV4 = launched.delivery { interval = interval ?? Self.awsRefreshInterval }
+        // Session credentials expire, so an AWS profile is always re-read, at
+        // least as often as the AWS cadence whatever `refresh` says.
+        if case .awsSigV4 = launched.delivery { interval = min(interval ?? Self.awsRefreshInterval, Self.awsRefreshInterval) }
         // An access token is re-minted on the pace of its own lifetime.
         var followsExpiry = false
         if case .oauth = launched.source { followsExpiry = true }
@@ -431,12 +432,21 @@ extension SecretDelivery {
 
 /// What a managed policy forbids for one secret definition.
 public enum SecretOrganizationRules {
-    public static func violation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
+    /// The source rule alone: callers that resolve a secret on the host and
+    /// deliver nothing into a cage (scan, hook run, audit-forward headers)
+    /// check only this, as `MCPGatewayRuntime.resolve` does for remote headers.
+    public static func sourceViolation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
         guard let policy else { return nil }
         if policy.allowsSecretSource(definition.source.kind) == false {
             return "\(definition.name) uses a \(definition.source.kind) source, which is not allowed"
         }
-        if case .environment = definition.delivery, policy.secrets.allowEnvironmentDelivery == false {
+        return nil
+    }
+
+    /// The source rule plus the delivery rule, for secrets that reach a cage.
+    public static func violation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
+        if let reason = sourceViolation(definition, policy: policy) { return reason }
+        if let policy, case .environment = definition.delivery, policy.secrets.allowEnvironmentDelivery == false {
             return "\(definition.name) is delivered as an environment variable, which is not allowed; use the gateway"
         }
         return nil

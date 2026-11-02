@@ -76,6 +76,7 @@ public enum ReviewPromptBuilder: Sendable {
             lines.append("method: \(request.method)")
             lines.append("destination: \(request.host)\(request.path)")
             lines.append("bodyBytes: \(request.bodyBytes)")
+            if let headers = request.headerSummary { lines.append("headers: \(headers)") }
         }
     }
 

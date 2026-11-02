@@ -92,6 +92,37 @@ struct SecretGatewayScrubTests {
         }
     }
 
+    private func hex(_ text: String, separator: String = "", uppercase: Bool = false) -> String {
+        text.utf8.map { String(format: uppercase ? "%02X" : "%02x", $0) }.joined(separator: separator)
+    }
+
+    @Test func hexEchoesAreRedactedContiguousOrSpacedInEitherCase() {
+        let value = "real-session-token-0000111122223333"
+        for separator in ["", " "] {
+            for uppercase in [false, true] {
+                let encoded = hex(value, separator: separator, uppercase: uppercase)
+                let output = scrub(value, "<CanonicalRequestBytes>47 45 54 0a \(encoded) 0a 68</CanonicalRequestBytes>")
+                #expect(output == "<CanonicalRequestBytes>47 45 54 0a [rv:redacted] 0a 68</CanonicalRequestBytes>")
+            }
+        }
+    }
+
+    @Test func hexEchoesSplitAtEveryBoundaryAreCaught() {
+        let value = "real-session-token-0000111122223333"
+        let encoded = Array("x=\(hex(value, separator: " "));".utf8)
+        for split in 0...encoded.count {
+            var scrubber = SecretScrubber([(Array(value.utf8), placeholder)])
+            let output = scrubber.process(Array(encoded[..<split])) + scrubber.process(Array(encoded[split...]))
+                + scrubber.finish()
+            #expect(output == Array("x=[rv:redacted];".utf8), "hex split at \(split)")
+        }
+    }
+
+    @Test func hexOfAnotherStringIsLeftAlone() {
+        let body = "digest \(hex("not the token at all, just text"))"
+        #expect(scrub("real-session-token-0000111122223333", body) == body)
+    }
+
     @Test func holdsBackOnlyATrailingPartialMatch() {
         var scrubber = SecretScrubber([(Array("sk-live-REAL-0123456789".utf8), placeholder)])
         // Nothing here can start the value or one of its encodings.
