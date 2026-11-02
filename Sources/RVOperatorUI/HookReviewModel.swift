@@ -33,7 +33,8 @@ extension XPCOperatorUIClient: OperatorHookUIBridge {}
 /// an explicit `allowOnce()` call from the Allow-once button. The bound
 /// challenge is retained verbatim and its exact IDs are echoed back on
 /// completion or deny; the model never substitutes, caches across
-/// approvals, or completes a challenge it did not bind.
+/// approvals, or completes a challenge it did not bind. Polling
+/// (`maintain()`) only lists: it can surface arrivals, never authenticate.
 @Observable
 @MainActor
 public final class OperatorHookReviewModel {
@@ -51,9 +52,13 @@ public final class OperatorHookReviewModel {
     public private(set) var lastStatus: HookReviewStatus?
     public private(set) var notice: String?
     public private(set) var authenticating = false
+    /// Approval IDs that arrived after the initial baseline and have not
+    /// been opened yet. Drives the view's arrival signal (badge/bounce).
+    public private(set) var unseenApprovalIDs: Set<String> = []
 
     private let bridge: any OperatorHookUIBridge
     private let authenticator: OperatorAuthenticator
+    private var seenApprovalIDs = Set<String>()
 
     public init(
         bridge: any OperatorHookUIBridge,
@@ -71,8 +76,22 @@ public final class OperatorHookReviewModel {
             try await bridge.connect()
             connection = .connected
             await refresh()
+            // Baseline: rows already pending when the app opens are not
+            // arrivals, so the arrival signal stays quiet for them.
+            markAllSeen()
         } catch {
             connection = .failed(describe(error))
+        }
+    }
+
+    /// One poll tick for the view's refresh loop: redial while the bridge
+    /// is unreachable (self-heals after an rvd outage), otherwise refresh.
+    /// Lists only; never authenticates.
+    public func maintain() async {
+        if connection == .connected {
+            await refresh()
+        } else {
+            await connect()
         }
     }
 
@@ -80,6 +99,7 @@ public final class OperatorHookReviewModel {
         guard connection == .connected else { return }
         do {
             items = try await bridge.hookList().items
+            trackArrivals()
             if let selectedID, !items.contains(where: { $0.approvalID == selectedID }) {
                 clearSelection()
             } else if let current = bound,
@@ -100,6 +120,8 @@ public final class OperatorHookReviewModel {
         clearSelection()
         guard let id, connection == .connected else { return }
         selectedID = id
+        // Opening a request marks it seen: the human is looking at it.
+        unseenApprovalIDs.remove(id)
         do {
             bound = try await bridge.hookBind(approvalID: id)
             notice = nil
@@ -181,6 +203,22 @@ public final class OperatorHookReviewModel {
     private func clearSelection() {
         selectedID = nil
         bound = nil
+    }
+
+    /// Folds the freshly listed rows into the arrival signal: IDs never
+    /// listed before become unseen; IDs that vanished server-side
+    /// (expired, resolved elsewhere) stop being unseen.
+    private func trackArrivals() {
+        let current = Set(items.map(\.approvalID))
+        unseenApprovalIDs = unseenApprovalIDs
+            .intersection(current)
+            .union(current.subtracting(seenApprovalIDs))
+        seenApprovalIDs.formUnion(current)
+    }
+
+    private func markAllSeen() {
+        seenApprovalIDs.formUnion(items.map(\.approvalID))
+        unseenApprovalIDs.removeAll()
     }
 
     private static func notAuthenticatedNotice(_ outcome: UIAuthenticationOutcome) -> String {

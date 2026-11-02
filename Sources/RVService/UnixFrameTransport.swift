@@ -218,20 +218,23 @@ public final class UnixEvaluateListener: Sendable {
         }
         while true {
             guard let body = try? UnixFrameIO.readFrame(fd: fd) else { return }
+            let receivedAt = ContinuousClock.now
+            // Refused once rvd decided to exit: closing the connection sends
+            // the client to the relaunched daemon.
+            guard watchdog.beginRequest() else { return }
             let gate = UnixReplyGate()
             let runtime = self.runtime
-            let watchdog = self.watchdog
             let accepted = handshakeOK
             Task {
-                await watchdog.ping()
                 let incoming = await runtime.handleIncoming(
                     body, handshakeOK: accepted, context: context,
-                    sameUIDSocket: context.peer != nil)
+                    sameUIDSocket: context.peer != nil, receivedAt: receivedAt)
                 gate.finish(incoming)
             }
             let incoming = gate.wait()
             handshakeOK = incoming.handshakeAccepted
             try? UnixFrameIO.writeFrame(fd: fd, body: incoming.frame)
+            watchdog.endRequest()
         }
     }
 }

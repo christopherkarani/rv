@@ -143,9 +143,16 @@ private func runHonorHook(
     let client = try isolatedClient(transport: nil)
     var hook = Hook()
     hook.host = host
-    let outcome = await hook.run(stdin: stdin, client: client)
+    // Pin the default RV_HOOK_WHEN_DOWN posture (ask) regardless of the
+    // developer's own environment.
+    let outcome = await CLIProcess.$context.withValue(CLIProcess.Context(environment: [:])) {
+        await hook.run(stdin: stdin, client: client)
+    }
     return HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode, stderr: outcome.stderr)
 }
+
+/// Unreachable-daemon fallback reason (no transport in these probes).
+private let daemonDownReason = HookDaemonFallback.message(for: .unreachable)
 
 @Test func hookAllowGitStatus_emptyStdoutExitZero() async throws {
     let expected = try grokExpected("allow-git-status")
@@ -255,7 +262,7 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
+    #expect(wire.stdout.contains(daemonDownReason))
 }
 
 @Test func hookMalformed_failsClosedWithDenyJSONWithoutEvaluating() async throws {
@@ -288,7 +295,7 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
+    #expect(wire.stdout.contains(daemonDownReason))
     #expect(wire.stdout.contains(malformedHookSentence(.unreadable)) == false)
 }
 
@@ -307,28 +314,30 @@ private func runHonorHook(
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
+    #expect(wire.stdout.contains(daemonDownReason))
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
-@Test func hookClaudeFileEnv_deniesWithoutServiceTransport() async throws {
+@Test func hookClaudeFileEnv_asksWithoutServiceTransport() async throws {
+    // Daemon down on an ask-capable host: the human decides in Claude
+    // (RV_HOOK_WHEN_DOWN default); never an allow, never file contents.
     let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "deny-file-env.json"),
         host: .claude
     )
     #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\""))
+    #expect(wire.stdout.contains(daemonDownReason))
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
-@Test func hookCursorFileSsh_deniesPermission() async throws {
+@Test func hookCursorFileSsh_asksPermissionWhenDaemonDown() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("cursor", "deny-file-ssh.json"),
         host: .cursor
     )
     #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains("\"permission\":\"deny\""))
+    #expect(wire.stdout.contains("\"permission\":\"ask\""))
     #expect(wire.stdout.contains("\"permissionDecision\"") == false)
 }
 
@@ -468,14 +477,14 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookClaudeOrdinaryFile_deniesWithoutServiceTransport() async throws {
+@Test func hookClaudeOrdinaryFile_asksWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "allow-non-shell-read.json"),
         host: .claude
     )
     #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\""))
+    #expect(wire.stdout.contains(daemonDownReason))
 }
 
 @Test func hookClaudeXPCDown_stillAskDeniesResetHard() async throws {
@@ -819,15 +828,15 @@ private func runHonorHook(
     #expect(json["permission"] as? String == "allow")
 }
 
-@Test func hookCursorOrdinaryFile_deniesWithoutServiceTransport() async throws {
+@Test func hookCursorOrdinaryFile_asksWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("cursor", "allow-non-shell-read.json"),
         host: .cursor
     )
     #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains("\"permission\":\"deny\""))
+    #expect(wire.stdout.contains("\"permission\":\"ask\""))
     #expect(wire.stdout.contains("\"permissionDecision\"") == false)
-    #expect(wire.stdout.contains(HookUnavailability.serviceUnreachable.reason))
+    #expect(wire.stdout.contains(daemonDownReason))
 }
 
 @Test func hookCursorMalformed_deniesWithoutEvaluating() async throws {

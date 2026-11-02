@@ -39,6 +39,18 @@ struct WorkspacePublishSymlinkPolicyTests {
         #expect(workspaceSymlinkTargetStaysInside(link: "y", target: "d/file", links: ["d": "sub/deep"]))
         #expect(workspaceSymlinkTargetStaysInside(link: "loop", target: "loop", links: ["loop": "loop"]) == false)
     }
+
+    /// The saved tree is usually case-insensitive: `P/..` reaches the link
+    /// `p`, so `y` would be the workspace's parent. A component that matches
+    /// a link only by case is refused.
+    @Test func caseOnlyLinkMatchesAreRefused() {
+        #expect(workspaceSymlinkTargetStaysInside(link: "y", target: "P/..", links: ["p": "."]) == false)
+        #expect(workspaceSymlinkTargetStaysInside(link: "y", target: "sub/P/..", links: ["sub/p": ".."]) == false)
+        #expect(workspaceSymlinkTargetStaysInside(link: "y", target: "SUB/p/..", links: ["sub/p": ".."]) == false)
+        // An exact match still resolves, and unrelated names are unaffected.
+        #expect(workspaceSymlinkTargetStaysInside(link: "y", target: "p/x", links: ["p": "sub"]))
+        #expect(workspaceSymlinkTargetStaysInside(link: "y", target: "Q/x", links: ["p": "sub"]))
+    }
 }
 
 #if os(macOS)
@@ -68,7 +80,12 @@ struct WorkspacePublishAtomicityTests {
     }
 
     /// A finished failure after many committed steps rolls every step back.
-    @Test func midCommitFailureRollsBack() throws {
+    /// "gone" fails before the rollback directory exists. "keep" is the last
+    /// step (its directory mode), so the retire of "gone" and every earlier
+    /// step have applied and must be undone, including the rename back out
+    /// of the rollback directory and the restored 0o750 mode.
+    @Test(arguments: ["gone", "keep"])
+    func midCommitFailureRollsBack(_ failingName: String) throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         try seed(tree)
@@ -78,13 +95,15 @@ struct WorkspacePublishAtomicityTests {
         let before = try treeState(boundary.savedPath)
 
         let result = WorkspacePublishFaults.$commitFault.withValue({ _, relative in
-            relative == "gone"
+            relative == failingName
         }) {
             boundary.publishAndRestore()
         }
         #expect(boundaryFailed(result))
-        #expect(boundary.publishOutcome == .rolledBack(failedAt: "gone"))
+        #expect(boundary.publishOutcome == .rolledBack(failedAt: failingName))
         #expect(try treeState(tree.workspaceURL.path) == before)
+        #expect(before["keep"] == "d:750")
+        #expect(before["gone/old.txt"] != nil)
         #expect(rollbackLeftovers(tree).isEmpty)
     }
 
@@ -102,6 +121,27 @@ struct WorkspacePublishAtomicityTests {
         #expect(boundaryFailed(boundary.publishAndRestore()))
         #expect(boundary.publishOutcome == .rejected([
             WorkspacePublishRejection(relative: "escape", reason: .symlinkEscapesWorkspace),
+        ]))
+        #expect(try treeState(tree.workspaceURL.path) == before)
+    }
+
+    /// `p -> .` and `y -> P/..`: on the case-insensitive saved tree `y` would
+    /// resolve to the workspace's parent. The case-only match is refused.
+    @Test func caseOnlyLinkChainIsRefusedAndNothingPublishes() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try seed(tree)
+        let boundary = try establish(tree)
+        defer { _ = boundary.discardAndRestore() }
+        try agentEdits(tree)
+        let ws = tree.workspaceURL
+        #expect(symlink(".", ws.appendingPathComponent("p").path) == 0)
+        #expect(symlink("P/..", ws.appendingPathComponent("y").path) == 0)
+        let before = try treeState(boundary.savedPath)
+
+        #expect(boundaryFailed(boundary.publishAndRestore()))
+        #expect(boundary.publishOutcome == .rejected([
+            WorkspacePublishRejection(relative: "y", reason: .symlinkEscapesWorkspace),
         ]))
         #expect(try treeState(tree.workspaceURL.path) == before)
     }
