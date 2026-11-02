@@ -197,6 +197,16 @@ public final class SecretGateway: @unchecked Sendable {
         return entries[token]
     }
 
+    /// True when some live placeholder belongs to `secret`. The route name is
+    /// agent-supplied, so a misuse finding may only name a secret that is
+    /// actually brokered here.
+    private func holdsLivePlaceholder(for secret: String?) -> Bool {
+        guard let secret else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.values.contains { $0.secret == secret }
+    }
+
     /// A TCP stream socket that is close-on-exec before the caller uses it.
     /// Linux passes `SOCK_CLOEXEC` to `socket`. Darwin does not define that
     /// flag, so the descriptor that survives is the one `F_DUPFD_CLOEXEC`
@@ -467,6 +477,7 @@ public final class SecretGateway: @unchecked Sendable {
         let rewritten: GatewayRequestHead
         let token: String
         let surfaces: [String]
+        let echoes: [GatewaySubstitution.Echo]
         switch substituted {
         case .failure(let refusal):
             deny(refusal)
@@ -475,6 +486,7 @@ public final class SecretGateway: @unchecked Sendable {
             rewritten = result.head
             token = result.used.token
             surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
+            echoes = result.echoes
         }
         guard let live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
@@ -506,7 +518,7 @@ public final class SecretGateway: @unchecked Sendable {
         let sink = GatewayResponseWriter(
             fd: client,
             method: head.method,
-            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))]
+            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))] + echoes
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         let headers = rewritten.headers + [GatewayHeaders.identityEncoding]
@@ -578,8 +590,9 @@ public final class SecretGateway: @unchecked Sendable {
         GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
         _ = audit(SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
-            upstreamStatus: nil, activity: refusal.isMisuse ? .blocked : .refused, refusal: refusal.code,
-            reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            upstreamStatus: nil,
+            activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
+            refusal: refusal.code, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }
