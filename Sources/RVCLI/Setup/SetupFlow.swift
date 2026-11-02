@@ -91,18 +91,15 @@ extension SetupEnvironment {
         let supervisor = EvaluateSupervisor.launchd
         let touchLaunchd = loginHome
         let touchSystemd = false
-        // P2-1: inject fileManager via SetupEnvironment consistently.
         let companionPresence: any CompanionPresenceDetecting = FilesystemCompanionPresence(
-            home: home.rawValue,
-            fileManager: fileManager
+            home: home.rawValue
         )
 #endif
         return SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
             rvPath: resolveRv(home: home.rawValue),
-            rvdPath: resolveRvd(nextTo: executable?.path, home: home.rawValue, fileManager: fileManager)
-                ?? (home.rawValue + "/.local/bin/rvd"),
+            rvdPath: resolveRvd(home: home.rawValue),
             fileManager: fileManager,
             launchctl: ProcessLaunchctl(),
             systemctl: ProcessSystemctl(),
@@ -110,7 +107,8 @@ extension SetupEnvironment {
             touchSystemd: touchSystemd,
             supervisor: supervisor,
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment),
-            companionPresence: companionPresence
+            companionPresence: companionPresence,
+            runningExecutable: executable?.path
         )
     }
 }

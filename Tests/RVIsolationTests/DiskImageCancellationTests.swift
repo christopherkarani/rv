@@ -1900,6 +1900,44 @@ struct DiskImageCancellationTests {
         #expect(Date().timeIntervalSince(started) < 2)
     }
 
+    /// The worker's descriptor is duplicated on the caller. A worker that
+    /// starts only after the caller stopped waiting and closed its fd must
+    /// still act on the original file, not on whatever reused that number.
+    @Test func waitForStatDuplicatesOnTheCallerBeforeHandOff() throws {
+        final class InodeBox: @unchecked Sendable { var inode: UInt64 = 0 }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-dup-handoff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first")
+        let second = root.appendingPathComponent("second")
+        try Data("a".utf8).write(to: first)
+        try Data("b".utf8).write(to: second)
+        let fd = open(first.path, O_RDONLY | O_CLOEXEC)
+        try #require(fd >= 0)
+        var original = stat()
+        try #require(fstat(fd, &original) == 0)
+
+        let gate = DispatchSemaphore(value: 0)
+        let done = DispatchSemaphore(value: 0)
+        let box = InodeBox()
+        let result = diskImageWaitForStat(duplicating: fd, allowance: 0.05, liveDeadline: { nil }) { copy in
+            gate.wait()
+            var status = stat()
+            if fstat(copy, &status) == 0 { box.inode = UInt64(status.st_ino) }
+            close(copy)
+            done.signal()
+            return true
+        }
+        #expect(result == nil)
+        close(fd)
+        let reused = open(second.path, O_RDONLY | O_CLOEXEC)
+        defer { if reused >= 0 { close(reused) } }
+        gate.signal()
+        done.wait()
+        #expect(box.inode == UInt64(original.st_ino))
+    }
+
     /// A spent copy clock must not run these on the caller. `a044874d` still
     /// chmod/rmdir/unlink/rename/open/fstat/fgetxattr/fsetxattr/realpath-fallback
     /// here, so the file changes and the attribute lands. No sleep: allowance 0

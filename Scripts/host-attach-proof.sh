@@ -192,6 +192,7 @@ stage_from_debug() {
     "$C_SRC/json_escape.c" \
     "$C_SRC/json_reply.c" \
     "$C_SRC/daemon_trust.c" \
+    "$C_SRC/hook_fallback.c" \
     "$C_SRC/rv.c" || return 1
   chmod 755 "$STAGE/rv"
   cp "$rvcli" "$STAGE/rv-cli"
@@ -299,6 +300,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     "$C_SRC/json_escape.c" \
     "$C_SRC/json_reply.c" \
     "$C_SRC/daemon_trust.c" \
+    "$C_SRC/hook_fallback.c" \
     "$C_SRC/rv.c" || fail "could not compile proof rv"
   chmod 755 "$BIN/rv"
   RVD_PROOF_DIR="/tmp/rv-host-attach-$$"
@@ -363,7 +365,7 @@ EOF
   done
   if [[ "$warm" -ne 1 ]]; then
     if [[ -f "/Library/Application Support/RV/peer-trust.json" ]] \
-      && grep -q 'operation-bound owner authorization' "$PROOF_ROOT/warm.out" 2>/dev/null; then
+      && grep -q 'RV daemon identity check failed' "$PROOF_ROOT/warm.out" 2>/dev/null; then
       fail "admin trust manifest is installed, so the unpinned proof rvd is correctly rejected; run this proof on a manifest-free machine (as CI does) or with an admin-pinned current daemon"
     fi
     printf 'host-attach-proof: rvd.err\n' >&2
