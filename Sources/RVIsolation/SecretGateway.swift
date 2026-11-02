@@ -443,10 +443,10 @@ public final class SecretGateway: @unchecked Sendable {
         // Every live entry the request names, so a refusal can name the
         // runtime the placeholder was leased to.
         var presented: [Entry] = []
-        func deny(_ refusal: GatewayRefusal) {
+        func deny(_ refusal: GatewayRefusal, runtime: String? = presented.first?.runtime) {
             refuse(
                 client, refusal, method: head.method, path: path, secret: route.secret,
-                runtime: presented.first?.runtime, started: started)
+                runtime: runtime, started: started)
         }
         guard GatewayHeaders.echoMethods.contains(head.method) == false else {
             deny(.echoMethod)
@@ -483,8 +483,8 @@ public final class SecretGateway: @unchecked Sendable {
             deny(.unknownPlaceholder)
             return
         }
-        if let refusal = verifyPeer(client, presented) {
-            deny(refusal)
+        if let failure = verifyPeer(client, presented) {
+            deny(failure.refusal, runtime: failure.entry?.runtime)
             return
         }
         if head.header("Expect")?.lowercased() == "100-continue" {
@@ -552,18 +552,20 @@ public final class SecretGateway: @unchecked Sendable {
 
     /// Loopback is open to every process on the host, so a placeholder alone
     /// is not enough: the connection must come from each named entry's
-    /// runtime. Fails closed when that cannot be shown.
-    private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> GatewayRefusal? {
-        guard let peer = GatewayPeer.of(client) else { return .runtimeUnverified }
+    /// runtime. Fails closed when that cannot be shown, and names the entry
+    /// that failed so the finding points at the runtime whose lease was
+    /// spent from outside.
+    private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> (refusal: GatewayRefusal, entry: Entry?)? {
+        guard let peer = GatewayPeer.of(client) else { return (.runtimeUnverified, presented.first) }
         var checked: [ProcessGroupFact] = []
         for entry in presented {
-            guard let group = entry.processGroup else { return .runtimeUnverified }
+            guard let group = entry.processGroup else { return (.runtimeUnverified, entry) }
             guard checked.contains(group) == false else { continue }
             checked.append(group)
             switch peers.verify(peer, group) {
             case .member: continue
-            case .outsider: return .runtimeMismatch
-            case .unverifiable: return .runtimeUnverified
+            case .outsider: return (.runtimeMismatch, entry)
+            case .unverifiable: return (.runtimeUnverified, entry)
             }
         }
         return nil
