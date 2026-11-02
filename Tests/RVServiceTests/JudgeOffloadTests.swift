@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Judge work runs off the cooperative pool")
 struct JudgeOffloadTests {
-    @Test func blockedJudgeWaitsDoNotStarveUnrelatedTasks() async {
+    @Test func blockedJudgeWaitsDoNotStarveUnrelatedTasks() async throws {
         // More blocked judge waits than the cooperative pool has threads: if
         // they ran on the pool, nothing else (Hello, the idle watchdog)
         // could run until the slow load finished. Release and measurement
@@ -15,19 +15,20 @@ struct JudgeOffloadTests {
         // constrained thread budget and would starve with it.
         let waiters = ProcessInfo.processInfo.activeProcessorCount * 3
         let release = DispatchSemaphore(value: 0)
-        let latency = Mutex<Duration?>(nil)
+        // The invariant, not a latency bound: an unrelated task spawned while
+        // every judge wait is blocked runs before those waits are released.
+        // A starved pool could only run it after the release. Other suites in
+        // this process can delay it (seconds on a small CI runner), so the
+        // 5 s gap leaves room for noise without hiding real starvation.
+        let probeRan = Mutex<ContinuousClock.Instant?>(nil)
+        let releasedAt = Mutex<ContinuousClock.Instant?>(nil)
         DispatchQueue(label: "test.probe").asyncAfter(deadline: .now() + .milliseconds(300)) {
-            let spawned = ContinuousClock.now
             Task.detached {
-                let ran = ContinuousClock.now
-                latency.withLock { $0 = ran - spawned }
+                probeRan.withLock { $0 = ContinuousClock.now }
             }
         }
-        // A starved pool cannot run the probe before the release, so its
-        // latency is at least release - probe (4.7 s). The bound sits well
-        // below that and well above scheduler noise from the other suites
-        // sharing this process on a small CI runner (1.35 s seen on Linux).
-        DispatchQueue(label: "test.release").asyncAfter(deadline: .now() + .seconds(5)) {
+        DispatchQueue(label: "test.release").asyncAfter(deadline: .now() + .milliseconds(5300)) {
+            releasedAt.withLock { $0 = ContinuousClock.now }
             for _ in 0..<waiters { release.signal() }
         }
         let finished = await withTaskGroup(of: Int.self) { group in
@@ -40,11 +41,12 @@ struct JudgeOffloadTests {
             return await group.reduce(0, +)
         }
         #expect(finished == waiters)
-        while latency.withLock({ $0 }) == nil {
+        while probeRan.withLock({ $0 }) == nil {
             try? await Task.sleep(for: .milliseconds(20))
         }
-        let measured = latency.withLock { $0 } ?? .seconds(99)
-        #expect(measured < .milliseconds(2500), "unrelated task waited \(measured) behind judge waits")
+        let ran = try #require(probeRan.withLock { $0 })
+        let released = try #require(releasedAt.withLock { $0 })
+        #expect(ran < released, "unrelated task only ran \(ran - released) after the judge waits were released")
     }
 
     @Test func returnsTheBodysValue() async {
