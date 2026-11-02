@@ -1504,7 +1504,7 @@ private func isClusteredSinkShort(_ token: String, kind: WrapperKind) -> Bool {
     return letters.allSatisfy { shellShortLetters.contains($0) }
 }
 
-private func splitTopLevelPipes(_ text: String) -> [String] {
+func splitTopLevelPipes(_ text: String) -> [String] {
     var segments: [String] = []
     var current = ""
     var quote: Character?

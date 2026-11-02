@@ -54,9 +54,15 @@ public struct OperatorAuthenticator: Sendable {
         case .biometryNotAvailable, .biometryNotEnrolled, .passcodeNotSet,
             .biometryLockout, .touchIDLockout, .notInteractive, .invalidContext:
             return .unavailable
-        case .authenticationFailed:
+        // Deprecated Touch ID aliases, Apple Watch/companion and accessory
+        // biometry: no usable owner proof on this Mac.
+        case .touchIDNotAvailable, .touchIDNotEnrolled, .watchNotAvailable,
+            .biometryNotPaired, .biometryDisconnected:
+            return .unavailable
+        case .authenticationFailed, .invalidDimensions:
             return .failed
         @unknown default:
+            // Fail closed: an unrecognized code is never treated as success.
             return .failed
         }
     }

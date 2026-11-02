@@ -657,25 +657,29 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     #expect(unknownFamily == false)
 }
 
-@Test func egressProxyParsesClientHelloSNIAndRejectsMalformed() {
-    func hello(_ host: String?) -> [UInt8] {
-        var body: [UInt8] = [0x03, 0x03] + [UInt8](repeating: 0xAB, count: 32) + [0x00]
-        body += [0x00, 0x02, 0x13, 0x01, 0x01, 0x00]
-        var extensions: [UInt8] = []
-        if let host {
-            let name = Array(host.utf8)
-            let entry: [UInt8] = [0x00, UInt8(name.count >> 8), UInt8(name.count & 0xFF)] + name
-            let sni: [UInt8] = [UInt8(entry.count >> 8), UInt8(entry.count & 0xFF)] + entry
-            extensions += [0x00, 0x00, UInt8(sni.count >> 8), UInt8(sni.count & 0xFF)] + sni
-        }
-        body += [UInt8(extensions.count >> 8), UInt8(extensions.count & 0xFF)] + extensions
-        var record: [UInt8] = [0x16, 0x03, 0x01, 0x00, 0x00, 0x01,
-                               UInt8((body.count >> 16) & 0xFF), UInt8((body.count >> 8) & 0xFF), UInt8(body.count & 0xFF)] + body
-        let length = record.count - 5
-        record[3] = UInt8(length >> 8)
-        record[4] = UInt8(length & 0xFF)
-        return record
+/// Minimal TLS 1.3 ClientHello record, with an SNI host_name when `host`
+/// is non-nil.
+private func egressClientHello(_ host: String?) -> [UInt8] {
+    var body: [UInt8] = [0x03, 0x03] + [UInt8](repeating: 0xAB, count: 32) + [0x00]
+    body += [0x00, 0x02, 0x13, 0x01, 0x01, 0x00]
+    var extensions: [UInt8] = []
+    if let host {
+        let name = Array(host.utf8)
+        let entry: [UInt8] = [0x00, UInt8(name.count >> 8), UInt8(name.count & 0xFF)] + name
+        let sni: [UInt8] = [UInt8(entry.count >> 8), UInt8(entry.count & 0xFF)] + entry
+        extensions += [0x00, 0x00, UInt8(sni.count >> 8), UInt8(sni.count & 0xFF)] + sni
     }
+    body += [UInt8(extensions.count >> 8), UInt8(extensions.count & 0xFF)] + extensions
+    var record: [UInt8] = [0x16, 0x03, 0x01, 0x00, 0x00, 0x01,
+                           UInt8((body.count >> 16) & 0xFF), UInt8((body.count >> 8) & 0xFF), UInt8(body.count & 0xFF)] + body
+    let length = record.count - 5
+    record[3] = UInt8(length >> 8)
+    record[4] = UInt8(length & 0xFF)
+    return record
+}
+
+@Test func egressProxyParsesClientHelloSNIAndRejectsMalformed() {
+    let hello = egressClientHello
     #expect(EgressProxy.tlsServerName(hello("api.example.com")) == "api.example.com")
     #expect(EgressProxy.tlsServerName(hello(nil)) == nil)
     #expect(EgressProxy.tlsServerName([]) == nil)
@@ -1260,5 +1264,147 @@ private func egressScopedCache(
     #expect(
         EgressProxy.stripProxyAuthorization(header: malformed)
             == "GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: h\r\n\r\n"
+    )
+}
+
+// MARK: - Admission ladder characterization (pinned before the pure
+// `EgressAdmission` extraction): SNI binding, plaintext-to-443, and
+// auth-before-binary-gate ordering over real sockets.
+
+private func egressSendBytes(_ fd: Int32, _ bytes: [UInt8]) -> Bool {
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes { pointer -> Int in
+            guard let base = pointer.baseAddress else { return -1 }
+            return send(fd, base.advanced(by: offset), bytes.count - offset, 0)
+        }
+        if written <= 0 { return false }
+        offset += written
+    }
+    return true
+}
+
+private func egressAllowlistGrantProxy(
+    host: String,
+    credential: EgressProxyCredential,
+    collector: EgressDenialCollector
+) -> EgressProxy {
+    EgressProxy(
+        grants: [
+            credential: EgressGrant(
+                principal: EgressPrincipal(rawValue: "mcp-server"),
+                policy: EgressHostPolicy(allowedHosts: [host], relaysLoopback: false)
+            )
+        ],
+        record: { collector.record($0) }
+    )
+}
+
+@Test func egressProxyCredentialedAllowlistTunnelDeniesSNIMismatch() throws {
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = egressAllowlistGrantProxy(host: "api.example.com", credential: credential, collector: collector)
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let connect = "CONNECT api.example.com:443 HTTP/1.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\n\r\n"
+    // A ClientHello naming a different server, then a non-TLS first record:
+    // both get the 200 first (clients wait for it), then close unanswered.
+    for first in [egressClientHello("other.example.com"), Array("GET / HTTP/1.1\r\n\r\n".utf8)] {
+        let client = try #require(egressConnect(port: port))
+        defer { close(client) }
+        #expect(egressSend(client, text: connect))
+        #expect(egressRead(client).contains("HTTP/1.1 200 Connection established"))
+        #expect(egressSendBytes(client, first))
+        #expect(egressRead(client).contains("HTTP/1.1 403") == false)
+    }
+    egressAwaitDenials(collector, count: 2)
+    #expect(collector.all.count == 2)
+    #expect(collector.all.allSatisfy { $0.reason == .sniMismatch })
+    #expect(collector.all.allSatisfy { $0.host == "api.example.com" && $0.port == 443 && $0.binaryPath == nil })
+}
+
+@Test func egressProxyCredentialedAllowlistTunnelDialsAfterMatchingSNI() throws {
+    // Matching SNI passes the binding and dials; `.invalid` never resolves,
+    // so the dial failure is recorded without a 403 into the open tunnel.
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = egressAllowlistGrantProxy(host: "sni-check.invalid", credential: credential, collector: collector)
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(
+        egressSend(
+            client,
+            text: "CONNECT sni-check.invalid:443 HTTP/1.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\n\r\n"
+        )
+    )
+    #expect(egressRead(client).contains("HTTP/1.1 200 Connection established"))
+    #expect(egressSendBytes(client, egressClientHello("SNI-Check.invalid.")))
+    #expect(egressRead(client).contains("HTTP/1.1 403") == false)
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.count == 1)
+    #expect(collector.all.first?.reason == .dnsFailed)
+    #expect(collector.all.first?.host == "sni-check.invalid")
+    #expect(collector.all.first?.port == 443)
+}
+
+@Test func egressProxyCredentialedDeniesPlaintextAbsoluteHTTPToTLSPort() throws {
+    // A credentialed grant that allows host:443 never relays plaintext
+    // absolute-URI there; the same host on port 80 is admitted (and then
+    // fails DNS, proving it got past policy).
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS)],
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let auth = "Proxy-Authorization: Bearer \(credential.rawValue)\r\n"
+    let tls = try #require(egressConnect(port: port))
+    #expect(egressSend(tls, text: "GET http://no-such-host.invalid:443/ HTTP/1.1\r\n\(auth)\r\n"))
+    #expect(egressReadUntil403(tls).contains("HTTP/1.1 403"))
+    close(tls)
+    egressAwaitDenials(collector, count: 1)
+    let plain = try #require(egressConnect(port: port))
+    #expect(egressSend(plain, text: "GET http://no-such-host.invalid/ HTTP/1.1\r\n\(auth)\r\n"))
+    #expect(egressReadUntil403(plain).contains("HTTP/1.1 403"))
+    close(plain)
+    egressAwaitDenials(collector, count: 2)
+    #expect(collector.all.map(\.reason) == [.deniedPolicy, .dnsFailed])
+    #expect(collector.all.map(\.port) == [443, 80])
+}
+
+@Test func egressProxyAuthenticatesBeforeBinaryGate() throws {
+    // Credentialed + binary-scoped + unattributed: an unauthenticated caller
+    // gets 407 (never the binary verdict); an authenticated one gets the
+    // fail-closed binary denial. Both shapes.
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS)],
+        binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let auth = "Proxy-Authorization: Bearer \(credential.rawValue)\r\n"
+    let requests: [(text: String, status: String)] = [
+        ("CONNECT 127.0.0.1:9 HTTP/1.1\r\n\r\n", "HTTP/1.1 407"),
+        ("CONNECT 127.0.0.1:9 HTTP/1.1\r\n\(auth)\r\n", "HTTP/1.1 403"),
+        ("GET http://127.0.0.1:9/ HTTP/1.1\r\n\r\n", "HTTP/1.1 407"),
+        ("GET http://127.0.0.1:9/ HTTP/1.1\r\n\(auth)\r\n", "HTTP/1.1 403"),
+    ]
+    for (index, request) in requests.enumerated() {
+        let client = try #require(egressConnect(port: port))
+        #expect(egressSend(client, text: request.text))
+        #expect(egressReadUntil403(client).contains(request.status))
+        close(client)
+        egressAwaitDenials(collector, count: index + 1)
+    }
+    #expect(
+        collector.all.map(\.reason)
+            == [.deniedCredential, .unattributedPeer, .deniedCredential, .unattributedPeer]
     )
 }

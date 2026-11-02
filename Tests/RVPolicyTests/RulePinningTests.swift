@@ -283,8 +283,7 @@ struct RulePinningTests {
         let allow = RulePinning.draft(record: record, polarity: .allow)
         let block = RulePinning.draft(record: record, polarity: .block)
         #expect(allow != block)
-        var other = record
-        other.id = ApprovalID(rawValue: "other-id")
+        let other = pendingRecord(id: "other-id", action: record.action)
         #expect(RulePinning.draft(record: other, polarity: .allow) != allow)
     }
 
