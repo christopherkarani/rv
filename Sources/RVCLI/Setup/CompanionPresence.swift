@@ -25,17 +25,17 @@ struct FixedCompanionPresence: CompanionPresenceDetecting {
 /// Looks for `rv.app` under `/Applications` and `$HOME/Applications`.
 /// Bundle id must be `dev.rv.*` and must not be the Mach service `dev.rv.evaluate`.
 /// CLI paths such as `~/.local/bin/rv` and `/Applications/rv/bin/rv` are not the app.
+/// Holds only immutable roots; each probe reads through the thread-safe
+/// `FileManager.default`, so the type is `Sendable` without an unchecked claim.
 struct FilesystemCompanionPresence: CompanionPresenceDetecting {
-    var searchRoots: [URL]
-    var fileManager: FileManager
+    let searchRoots: [URL]
 
-    init(searchRoots: [URL], fileManager: FileManager = .default) {
+    init(searchRoots: [URL]) {
         self.searchRoots = searchRoots
-        self.fileManager = fileManager
     }
 
-    init(home: String, fileManager: FileManager = .default) {
-        self.init(searchRoots: Self.defaultSearchRoots(home: home), fileManager: fileManager)
+    init(home: String) {
+        self.init(searchRoots: Self.defaultSearchRoots(home: home))
     }
 
     static func defaultSearchRoots(home: String) -> [URL] {
@@ -57,6 +57,7 @@ struct FilesystemCompanionPresence: CompanionPresenceDetecting {
     }
 
     private func isCompanionApp(at url: URL) -> Bool {
+        let fileManager = FileManager.default
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue
@@ -88,8 +89,3 @@ struct FilesystemCompanionPresence: CompanionPresenceDetecting {
         return true
     }
 }
-
-// FileManager is not Sendable, but FilesystemCompanionPresence is used
-// synchronously during setup (single-threaded, no concurrent mutation).
-// Mark @unchecked Sendable to satisfy CompanionPresenceDetecting: Sendable.
-extension FilesystemCompanionPresence: @unchecked Sendable {}

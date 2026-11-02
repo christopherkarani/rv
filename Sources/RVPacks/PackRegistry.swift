@@ -3,7 +3,7 @@ import RVDomain
 
 public enum PackRegistry {
     public static func loadIndex() throws -> PackIndex {
-        try loadIndex(from: .module)
+        try loadIndex(from: PackResourceBundle.require(PackResourceBundle.located))
     }
 
     public static func loadIndex(from bundle: Bundle) throws -> PackIndex {
@@ -12,7 +12,7 @@ public enum PackRegistry {
     }
 
     public static func loadDayOne() throws -> [PackSnapshot] {
-        try loadDayOne(from: .module)
+        try loadDayOne(from: PackResourceBundle.require(PackResourceBundle.located))
     }
 
     public static func loadDayOne(from bundle: Bundle) throws -> [PackSnapshot] {
@@ -32,7 +32,7 @@ public enum PackRegistry {
     }
 
     public static func loadAllDocuments() throws -> [PackDocument] {
-        try loadAllDocuments(from: .module)
+        try loadAllDocuments(from: PackResourceBundle.require(PackResourceBundle.located))
     }
 
     public static func loadAllDocuments(from bundle: Bundle) throws -> [PackDocument] {
@@ -46,7 +46,7 @@ public enum PackRegistry {
     }
 
     public static func loadDocument(_ id: PackID) throws -> PackDocument {
-        try loadDocument(id, from: .module)
+        try loadDocument(id, from: PackResourceBundle.require(PackResourceBundle.located))
     }
 
     public static func loadDocument(_ id: PackID, from bundle: Bundle) throws -> PackDocument {
@@ -62,4 +62,92 @@ public enum PackRegistry {
         }
         return try Data(contentsOf: url)
     }
+}
+
+/// Non-trapping stand-in for SwiftPM's generated `Bundle.module`.
+///
+/// The generated accessor traps when `rv_RVPacks.bundle` is missing next to
+/// the binary; under launchd that is a crash loop in which
+/// every hook is blocked. This lookup searches the same candidates the
+/// generated accessor does and returns nil instead, so callers throw
+/// `PackLoadError.missingResource` and `rvd` reports core packs unavailable
+/// through the Hello skew path. When the bundle exists the result is the
+/// same bundle the accessor would return.
+enum PackResourceBundle {
+    static let bundleName = "rv_RVPacks"
+
+    static let located: Bundle? = locate(lazyCandidates: defaultCandidates())
+
+    static func require(_ bundle: Bundle?) throws -> Bundle {
+        guard let bundle else { throw PackLoadError.missingResource(bundleName) }
+        return bundle
+    }
+
+    static func locate(candidates: [URL?]) -> Bundle? {
+        locate(lazyCandidates: candidates.map { candidate in { candidate } })
+    }
+
+    /// Candidates are evaluated in order and only until one matches: the
+    /// framework probe enumerates loaded bundles and is not free.
+    private static func locate(lazyCandidates: [() -> URL?]) -> Bundle? {
+        for candidate in lazyCandidates {
+            guard let base = candidate() else { continue }
+            for directoryName in bundleDirectoryNames {
+                if let bundle = Bundle(url: base.appendingPathComponent(directoryName)) {
+                    return bundle
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Swift Build (the SwiftPM default since 6.4) names the bundle
+    /// `<name>.bundle` on every platform. The legacy native build system
+    /// still emits `<name>.resources` on Linux, which release staging also
+    /// accepts, so non-Darwin falls back to it.
+    #if canImport(Darwin)
+    private static let bundleDirectoryNames = [bundleName + ".bundle"]
+    #else
+    private static let bundleDirectoryNames = [bundleName + ".bundle", bundleName + ".resources"]
+    #endif
+
+    /// Mirrors `resource_bundle_accessor.swift`: the DEBUG-only
+    /// `PACKAGE_RESOURCE_BUNDLE_PATH` / `_URL` override, then the main
+    /// bundle's resources (app), this module's bundle (framework), and the
+    /// main bundle URL (command-line tools: the executable's directory).
+    /// Off Darwin the modules link statically, so the framework candidate
+    /// is the main bundle and is left out.
+    private static func defaultCandidates() -> [() -> URL?] {
+        var overrides: [() -> URL?] = []
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if let override = environment["PACKAGE_RESOURCE_BUNDLE_PATH"]
+            ?? environment["PACKAGE_RESOURCE_BUNDLE_URL"] {
+            overrides = [{ URL(fileURLWithPath: override) }]
+        }
+        #endif
+        #if canImport(Darwin)
+        return overrides + [
+            { Bundle.main.resourceURL },
+            { imageBundle().resourceURL },
+            { Bundle.main.bundleURL },
+        ]
+        #else
+        return overrides + [{ Bundle.main.resourceURL }, { Bundle.main.bundleURL }]
+        #endif
+    }
+
+    #if canImport(Darwin)
+    /// `Bundle(for: SomeClassInThisModule.self)` without a class: the bundle
+    /// whose executable is the image this code is linked into, else main.
+    private static func imageBundle() -> Bundle {
+        var info = Dl_info()
+        guard dladdr(#dsohandle, &info) != 0, let name = info.dli_fname else { return .main }
+        let image = URL(fileURLWithPath: String(cString: name)).resolvingSymlinksInPath()
+        let owner = (Bundle.allFrameworks + Bundle.allBundles).first {
+            $0.executableURL?.resolvingSymlinksInPath() == image
+        }
+        return owner ?? .main
+    }
+    #endif
 }

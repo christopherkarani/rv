@@ -71,14 +71,11 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// to drop the id, and subscribe rejects it until then.
     private var flushing: Set<UUID> = []
     private var inputOwner: UUID?
-    private var exited = false
-    private var exitStatus: Int32?
-    private var finishing = false
-    private var exitQueued = false
-    private var readerStarted = false
-    private var readerStopped = false
-    private var shutdownStarted = false
-    private var masterClosed = false
+    /// Three independent axes: the master can close while the runtime still
+    /// runs, and the reader can stop (EOF) while the master stays open.
+    private var exitPhase = ExitPhase.running
+    private var readerPhase = ReaderPhase.notStarted
+    private var masterPhase = MasterPhase.open
     let slavePath: String
 
     private init(
@@ -205,7 +202,7 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     var masterFD: Int32 {
         condition.lock()
-        let fd = masterClosed ? -1 : master
+        let fd = masterPhase == .closed ? -1 : master
         condition.unlock()
         return fd
     }
@@ -229,7 +226,7 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// never reports running after its exit was delivered.
     var hasExited: Bool {
         condition.lock()
-        let value = exited
+        let value = exitPhase.hasFinished
         condition.unlock()
         return value
     }
@@ -255,7 +252,7 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// whose group is not its own pid fails the launch.
     func foregroundProcessGroup() -> pid_t? {
         condition.lock()
-        let fd = masterClosed ? -1 : master
+        let fd = masterPhase == .closed ? -1 : master
         condition.unlock()
         guard fd >= 0 else { return nil }
         var group: pid_t = -1
@@ -265,11 +262,11 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     func startReader() {
         condition.lock()
-        if masterClosed || readerStarted {
+        if masterPhase == .closed || readerPhase != .notStarted {
             condition.unlock()
             return
         }
-        readerStarted = true
+        readerPhase = .running
         let held = heldSlave
         heldSlave = -1
         condition.unlock()
@@ -277,7 +274,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         let thread = Thread { [self] in
             self.readLoop()
             self.condition.lock()
-            self.readerStopped = true
+            self.readerPhase = .stopped
             self.condition.broadcast()
             self.condition.unlock()
         }
@@ -289,13 +286,11 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// Further attaches still see replay plus the exit status.
     func finish(status: Int32?) {
         condition.lock()
-        if finishing {
+        guard exitPhase == .running else {
             condition.unlock()
             return
         }
-        finishing = true
-        exited = true
-        exitStatus = status
+        exitPhase = .draining(status: status)
         if inputOwner != nil {
             inputOwner = nil
             enqueueOwnerLocked(false)
@@ -303,9 +298,9 @@ final class RuntimeTerminal: @unchecked Sendable {
         condition.unlock()
         shutdownMaster()
         condition.lock()
-        if exitQueued == false {
-            exitQueued = true
-            let notice = TerminalNotice.exited(exitStatus ?? -1)
+        if case .draining(let status) = exitPhase {
+            exitPhase = .delivered(status: status)
+            let notice = TerminalNotice.exited(status ?? -1)
             for subscriber in subscribers.values where subscriber.dropped == false && subscriber.stopped == false {
                 subscriber.chunks.append(notice)
             }
@@ -316,16 +311,16 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     func shutdownMaster() {
         condition.lock()
-        if shutdownStarted {
-            while masterClosed == false {
+        if masterPhase != .open {
+            while masterPhase != .closed {
                 condition.wait()
             }
             condition.unlock()
             return
         }
-        shutdownStarted = true
+        masterPhase = .shuttingDown
         let wake = stopWrite
-        let started = readerStarted
+        let started = readerPhase != .notStarted
         condition.unlock()
         if wake >= 0 {
             var byte: UInt8 = 1
@@ -333,7 +328,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         }
         if started {
             condition.lock()
-            while readerStopped == false {
+            while readerPhase != .stopped {
                 condition.wait()
             }
             condition.unlock()
@@ -347,7 +342,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         stopRead = -1
         stopWrite = -1
         heldSlave = -1
-        masterClosed = true
+        masterPhase = .closed
         condition.broadcast()
         condition.unlock()
         if fd >= 0 { Darwin.close(fd) }
@@ -385,8 +380,8 @@ final class RuntimeTerminal: @unchecked Sendable {
             subscriber.chunks.append(.replay(sequence: chunk.sequence, bytes: chunk.bytes))
             subscriber.queuedBytes += chunk.bytes.count
         }
-        if exitQueued {
-            subscriber.chunks.append(.exited(exitStatus ?? -1))
+        if case .delivered(let status) = exitPhase {
+            subscriber.chunks.append(.exited(status ?? -1))
         }
         subscribers[client] = subscriber
         condition.unlock()
@@ -416,8 +411,8 @@ final class RuntimeTerminal: @unchecked Sendable {
             subscriber.chunks.append(.replay(sequence: chunk.sequence, bytes: chunk.bytes))
             subscriber.queuedBytes += chunk.bytes.count
         }
-        if exitQueued {
-            subscriber.chunks.append(.exited(exitStatus ?? -1))
+        if case .delivered(let status) = exitPhase {
+            subscriber.chunks.append(.exited(status ?? -1))
         }
         subscriber.deliver = true
         condition.broadcast()
@@ -446,7 +441,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.unlock()
             return .failure(.unavailable)
         }
-        if exited || exitQueued {
+        if exitPhase.hasFinished {
             condition.unlock()
             return .failure(.unavailable)
         }
@@ -480,7 +475,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             return .failure(.invalid)
         }
         condition.lock()
-        if masterClosed || exited || master < 0 {
+        if masterPhase == .closed || exitPhase.hasFinished || master < 0 {
             condition.unlock()
             return .failure(.unavailable)
         }
@@ -507,7 +502,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             return .failure(.invalid)
         }
         condition.lock()
-        guard masterClosed == false, master >= 0 else {
+        guard masterPhase != .closed, master >= 0 else {
             condition.unlock()
             return .failure(.unavailable)
         }
@@ -553,9 +548,9 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.lock()
             let masterFD = master
             let wakeFD = stopRead
-            let stopping = shutdownStarted
+            let stopping = masterPhase != .open
             condition.unlock()
-            // `shutdownMaster` sets `shutdownStarted` and waits for this thread
+            // `shutdownMaster` leaves `.open` and waits for this thread
             // before it closes the master. Every return below drains that fd
             // first, so the last slave bytes are copied before the close.
             guard masterFD >= 0, wakeFD >= 0 else { return }
@@ -629,7 +624,7 @@ final class RuntimeTerminal: @unchecked Sendable {
     private func publish(_ data: Data) {
         guard data.isEmpty == false else { return }
         condition.lock()
-        if masterClosed || exitQueued {
+        if masterPhase == .closed || exitPhase.isDelivered {
             condition.unlock()
             return
         }
@@ -861,6 +856,38 @@ final class RuntimeTerminal: @unchecked Sendable {
         return fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0
     }
 
+}
+
+/// Exit axis of a `RuntimeTerminal`. Only `finish` writes it.
+private enum ExitPhase: Equatable {
+    case running
+    /// `finish` ran: facts report exited and input is refused; the drain and
+    /// the exit notice are still pending.
+    case draining(status: Int32?)
+    /// The exit notice was queued; late attaches get `.exited(status ?? -1)`.
+    case delivered(status: Int32?)
+
+    var hasFinished: Bool { self != .running }
+
+    var isDelivered: Bool {
+        if case .delivered = self { return true }
+        return false
+    }
+}
+
+/// Reader-thread axis of a `RuntimeTerminal`.
+private enum ReaderPhase: Equatable {
+    case notStarted
+    case running
+    case stopped
+}
+
+/// Master-descriptor axis of a `RuntimeTerminal`. The descriptors themselves
+/// stay separate vars and are closed together on `.closed`.
+private enum MasterPhase: Equatable {
+    case open
+    case shuttingDown
+    case closed
 }
 
 // Confined to `RuntimeTerminal.condition`: only touched while the owner holds
