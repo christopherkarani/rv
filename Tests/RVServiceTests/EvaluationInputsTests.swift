@@ -394,23 +394,6 @@ struct JudgePortThresholdTests {
     }
 }
 
-extension JudgeRuntime {
-    /// Main's packs-only floor suite calls the pre-T6 `apply(to:command:home:)`.
-    /// This adapter keeps that suite byte-identical while routing it through
-    /// T6's one gather (process environment, as the public door does) and the
-    /// live judge port. Test target only: production has the one entry point.
-    static func apply(
-        to result: EvaluationResult, command: ShellCommand, home: HomeDirectory?
-    ) -> EvaluationResult {
-        apply(
-            to: result, command: command, home: home,
-            inputs: .gather(home: home, cwd: nil, environment: ProcessInfo.processInfo.environment),
-            judge: LiveJudgePort(), provenance: .unknown, now: Date(),
-            cwd: nil, allowSafeLane: true, isPeek: false
-        )
-    }
-}
-
 @Suite("Judge port: packs-only floor through the gated door")
 struct JudgePortPacksOnlyFloorTests {
     /// Pack-allowed (the packs mask the payload as data) but spawn-bearing,
