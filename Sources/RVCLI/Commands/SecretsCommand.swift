@@ -532,7 +532,7 @@ enum SecretsRun {
     struct VarlockImport {
         /// Notes, skips, and one `import` line per fresh secret.
         var lines: [String]
-        /// Every secret the schema maps, defined already or not; a profile wires all of them.
+        /// Every secret the schema maps that is defined or about to be; a profile wires all of them.
         var names: [String]
         var fresh: [SecretDefinition]
         var current: SecretsConfiguration
@@ -554,15 +554,26 @@ enum SecretsRun {
         case .success(let loaded): current = loaded
         }
         var lines = imported.notes
-        let fresh = imported.secrets.filter { secret in
+        // secrets.json refuses two secrets setting one variable, so check the merged set.
+        var exported = Set(current.secrets.flatMap(\.exportedVariables))
+        var fresh: [SecretDefinition] = []
+        var names: [String] = []
+        for secret in imported.secrets {
             if current.secret(named: secret.name) != nil {
                 lines.append("skip \(secret.name): secrets.json already defines it")
-                return false
+                names.append(secret.name)
+                continue
             }
+            if let taken = secret.exportedVariables.first(where: exported.contains) {
+                lines.append("skip \(secret.name): secrets.json or another imported secret already sets $\(taken)")
+                continue
+            }
+            exported.formUnion(secret.exportedVariables)
             lines.append(importLine(secret))
-            return true
+            fresh.append(secret)
+            names.append(secret.name)
         }
-        return .success(VarlockImport(lines: lines, names: imported.secrets.map(\.name), fresh: fresh, current: current))
+        return .success(VarlockImport(lines: lines, names: names, fresh: fresh, current: current))
     }
 
     /// Names where the value comes from and where it goes, never the value.

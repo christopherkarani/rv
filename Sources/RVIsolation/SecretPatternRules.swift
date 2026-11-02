@@ -100,7 +100,9 @@ enum SecretPatternRules {
         guard needle.isEmpty == false, haystack.count >= needle.count else { return needle.isEmpty }
         return haystack.withUnsafeBytes { hay in
             needle.withUnsafeBytes { pin in
-                memmem(hay.baseAddress, hay.count, pin.baseAddress, pin.count) != nil
+                // Both are non-empty here; Glibc's memmem takes non-optional pointers.
+                guard let h = hay.baseAddress, let n = pin.baseAddress else { return false }
+                return memmem(h, hay.count, n, pin.count) != nil
             }
         }
     }

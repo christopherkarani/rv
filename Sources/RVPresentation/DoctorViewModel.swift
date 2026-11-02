@@ -45,7 +45,9 @@ public enum DoctorFileToolsState: String, Equatable, Sendable {
     case notApplicable = "n-a"
 }
 
-/// Readiness of the in-process evaluation fallback.
+/// Whether this CLI can load and compile the core packs locally. Diagnostic
+/// only: hooks never evaluate in-process, so a down `rvd` denies every hook
+/// regardless of this state.
 public enum DoctorFallbackState: String, Equatable, Sendable {
     case ready
     case unavailable
@@ -67,12 +69,14 @@ public struct DoctorServiceView: Equatable, Sendable {
     public var serviceSemver: String?
     /// Mach service label.
     public var label: String
-    /// Local fallback readiness.
+    /// Local core-pack readiness (not a hook fallback; there is none).
     public var fallback: DoctorFallbackState
     /// LaunchAgent registration state.
     public var launchAgent: DoctorLaunchAgentState
     /// Sanitized operator-facing warning.
     public var warning: String?
+    /// One-line repair hint when the service is not running cleanly.
+    public var fix: String?
 
     /// Creates the service facts for a doctor snapshot.
     public init(
@@ -82,7 +86,8 @@ public struct DoctorServiceView: Equatable, Sendable {
         label: String,
         fallback: DoctorFallbackState,
         launchAgent: DoctorLaunchAgentState,
-        warning: String? = nil
+        warning: String? = nil,
+        fix: String? = nil
     ) {
         self.state = state
         self.protocolName = protocolName
@@ -91,6 +96,7 @@ public struct DoctorServiceView: Equatable, Sendable {
         self.fallback = fallback
         self.launchAgent = launchAgent
         self.warning = warning
+        self.fix = fix
     }
 }
 
@@ -174,6 +180,34 @@ public struct DoctorLeftoversSummary: Equatable, Sendable {
     }
 }
 
+/// How badly an install problem breaks hooks.
+public enum DoctorProblemSeverity: String, Equatable, Sendable {
+    /// Hooks may still work; worth fixing.
+    case warn
+    /// Hooks are, or will be, denied until this is fixed.
+    case fail
+}
+
+/// One install/runtime problem doctor found, with a copy-pasteable repair.
+public struct DoctorProblem: Equatable, Sendable {
+    /// Stable machine id (e.g. `launchd-domain`).
+    public var id: String
+    /// Severity used for exit status and ink.
+    public var severity: DoctorProblemSeverity
+    /// One-line description of what is wrong.
+    public var summary: String
+    /// One-line repair hint.
+    public var fix: String
+
+    /// Creates a doctor problem row.
+    public init(id: String, severity: DoctorProblemSeverity, summary: String, fix: String) {
+        self.id = id
+        self.severity = severity
+        self.summary = summary
+        self.fix = fix
+    }
+}
+
 /// Workspace leftovers as doctor reports them. Informational: never grades health.
 public enum DoctorLeftoversView: Equatable, Sendable {
     /// Contained workspaces exist only on macOS.
@@ -200,6 +234,8 @@ public struct DoctorViewModel: Equatable, Sendable {
     public var blocksEnabled: Bool
     /// Workspace leftovers, when the caller probed for them.
     public var leftovers: DoctorLeftoversView?
+    /// Install/runtime problems in display order; empty when none were found.
+    public var problems: [DoctorProblem]
 
     /// Creates a complete doctor health model.
     public init(
@@ -210,7 +246,8 @@ public struct DoctorViewModel: Equatable, Sendable {
         grade: DoctorProtectionGrade = .hook,
         safety: SafetyLevel = .normal,
         blocksEnabled: Bool = true,
-        leftovers: DoctorLeftoversView? = nil
+        leftovers: DoctorLeftoversView? = nil,
+        problems: [DoctorProblem] = []
     ) {
         self.service = service
         self.packs = packs
@@ -220,17 +257,20 @@ public struct DoctorViewModel: Equatable, Sendable {
         self.safety = safety
         self.blocksEnabled = blocksEnabled
         self.leftovers = leftovers
+        self.problems = problems
     }
 
     /// Whether doctor should return a successful exit code. Graded from
     /// the worst component: the service must be running (down, skew, and
-    /// not-installed all fail even when the local fallback is ready), the
-    /// fallback must be ready, packs must be ready, and config readable.
-    /// Host wiring alone does not grade health (setup is the remedy).
+    /// not-installed all fail: hooks have no in-process fallback), local
+    /// core packs must load, packs must be ready, config readable, and no
+    /// install problem may be failing. Host wiring alone does not grade
+    /// health (setup is the remedy).
     public var isHealthy: Bool {
         service.state == .running
             && service.fallback == .ready
             && config == .readable
             && packs.areDayOnePacksReady
+            && problems.allSatisfy { $0.severity != .fail }
     }
 }
