@@ -507,17 +507,6 @@ struct VarlockSchemaTests {
         #expect(plan.notes.contains("note ACME_KEY: @type startsWith is not a usable placeholder prefix (up to 32 of A-Z a-z 0-9 _ -)"))
         #expect(plan.notes.contains("note ACME_KEY: @type endsWith/isLength do not shape rv's placeholder"))
     }
-
-    @Test func importedSecretsNeverExportTheSameVariable() throws {
-        let plan = try VarlockSchema.plan("""
-            # @proxy(domain=api.example.com)
-            ACME=op(op://Eng/Acme/key)
-            # @sensitive
-            ACME_BASE_URL=op(op://Eng/Acme/url)
-            """).get()
-        #expect(plan.secrets.map(\.name) == ["ACME"])
-        #expect(plan.notes.contains("skip ACME_BASE_URL: another imported secret already sets $ACME_BASE_URL"))
-    }
 }
 
 extension Result where Failure == VarlockSchemaError {

@@ -119,7 +119,8 @@ struct SecretGatewayRuntimeBindingTests {
         #expect(upstream.requests.count == 1)
     }
 
-    @Test func everyPlaceholderInTheRequestMustBelongToThePeersRuntime() throws {
+    @Test(arguments: [true, false])
+    func everyPlaceholderInTheRequestMustBelongToThePeersRuntime(stolenInQuery: Bool) throws {
         let other = ProcessGroupFact(pgid: ValidatedPGID(5353)!, startSeconds: 3, startMicroseconds: 4)
         let upstream = RecordingUpstream(status: 200)
         let audit = AuditRecords()
@@ -130,8 +131,11 @@ struct SecretGatewayRuntimeBindingTests {
         let stolen = SecretPlaceholder.mint(prefix: "sk-")
         gateway.register(stolen, entry: try entry(runtime: "R2", group: other, surfaces: [.header, .query]))
 
+        // The query is read before the headers, so the order decides which
+        // entry comes first; the record names the failing one either way.
+        let (query, header) = stolenInQuery ? (stolen, own) : (own, stolen)
         let response = try gatewayExchange(port: port,
-            "GET /s/OPENAI_API_KEY/models?key=\(stolen.text) HTTP/1.1\r\nAuthorization: Bearer \(own.text)\r\n\r\n")
+            "GET /s/OPENAI_API_KEY/models?key=\(query.text) HTTP/1.1\r\nAuthorization: Bearer \(header.text)\r\n\r\n")
         #expect(response.status == 403)
         #expect(upstream.requests.isEmpty)
         let record = try #require(audit.items.withLock { $0.last })
@@ -230,12 +234,51 @@ struct SecretGatewayRuntimeBindingTests {
         return status
     }
 
-    private func spawnShell(_ script: String, flags: Int32, arguments: [String]) throws -> pid_t {
+    /// A process that joins another runtime's group with
+    /// `POSIX_SPAWN_SETPGROUP` shares its pgid but is neither the leader nor
+    /// a descendant of it, and the leader leads no session. It is not that
+    /// runtime, even though the kernel lets a same-session process join.
+    @Test func aSiblingThatJoinedTheRuntimesGroupIsRefused() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-join-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let done = directory.appendingPathComponent("done").path
+        let out = directory.appendingPathComponent("out").path
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let gateway = SecretGateway(transport: upstream.transport, peers: .runtime, audit: audit.record)
+        defer { gateway.stop() }
+        let port = try gateway.start().get()
+        let leader = try spawnShell(
+            "while [ ! -f \"$1\" ]; do /bin/sleep 0.05; done", flags: Int32(POSIX_SPAWN_SETPGROUP), arguments: [done])
+        defer {
+            FileManager.default.createFile(atPath: done, contents: nil)
+            var status: Int32 = 0
+            waitpid(leader, &status, 0)
+        }
+        let group = try #require(ProcessGroupRecovery.capture(pid: leader))
+        let placeholder = SecretPlaceholder.mint(prefix: "sk-")
+        gateway.register(placeholder, entry: try entry(runtime: "R1", group: group))
+
+        let sibling = try spawnShell(
+            "/usr/bin/curl -sS -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer $1\" \"$2\" > \"$3\"",
+            flags: Int32(POSIX_SPAWN_SETPGROUP), joining: leader,
+            arguments: [placeholder.text, "http://127.0.0.1:\(port)/s/OPENAI_API_KEY/models", out])
+        var status: Int32 = 0
+        waitpid(sibling, &status, 0)
+        #expect(try String(contentsOfFile: out, encoding: .utf8) == "403")
+        #expect(upstream.requests.isEmpty)
+        #expect(audit.items.withLock { $0.last?.refusal } == "runtimeMismatch")
+    }
+
+    private func spawnShell(
+        _ script: String, flags: Int32, joining group: pid_t = 0, arguments: [String]
+    ) throws -> pid_t {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         posix_spawnattr_setflags(&attributes, Int16(flags))
-        if flags & Int32(POSIX_SPAWN_SETPGROUP) != 0 { posix_spawnattr_setpgroup(&attributes, 0) }
+        if flags & Int32(POSIX_SPAWN_SETPGROUP) != 0 { posix_spawnattr_setpgroup(&attributes, group) }
         let argv = (["/bin/sh", "-c", script, "sh"] + arguments).map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0

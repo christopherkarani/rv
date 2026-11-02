@@ -3,6 +3,15 @@ import Synchronization
 import Testing
 @testable import RVIsolation
 
+/// Polls `condition` for up to `seconds`. File-private: other test files keep their own copy.
+private func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
+    for _ in 0..<(seconds * 100) {
+        if condition() { return true }
+        usleep(10_000)
+    }
+    return condition()
+}
+
 /// `oauth` sources: tokens minted from Keychain credentials, refresh tokens
 /// that rotate are written back, and an exchange with an unknown outcome
 /// blocks its refresh token instead of resending it.

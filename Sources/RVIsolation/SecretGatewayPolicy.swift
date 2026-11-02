@@ -219,18 +219,34 @@ enum GatewayAccess {
     }
 
     static func glob(_ pattern: String, matches path: String) -> Bool {
-        segments(Array(pattern.dropFirst().split(separator: "/", omittingEmptySubsequences: false))[...],
-            match: Array(path.dropFirst().split(separator: "/", omittingEmptySubsequences: false))[...])
-    }
-
-    private static func segments(_ pattern: ArraySlice<Substring>, match path: ArraySlice<Substring>) -> Bool {
-        guard let first = pattern.first else { return path.isEmpty }
-        if first == "**" {
-            let rest = pattern.dropFirst()
-            return (0...path.count).contains { segments(rest, match: path.dropFirst($0)) }
+        let pattern = pattern.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map { Array($0.utf8) }
+        let path = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map { Array($0.utf8) }
+        let deep = Array("**".utf8)
+        // `**` matches any run of segments, so the latest one seen is the only
+        // backtrack point needed: matching what follows it as early as
+        // possible leaves the largest remainder. Cost is O(pattern x path),
+        // however many `**` the pattern holds.
+        var p = 0, t = 0
+        var deepAt: Int?
+        var resume = 0
+        while t < path.count {
+            if p < pattern.count, pattern[p] == deep {
+                deepAt = p
+                resume = t
+                p += 1
+            } else if p < pattern.count, wildcard(pattern[p], matches: path[t]) {
+                p += 1
+                t += 1
+            } else if let deepAt {
+                p = deepAt + 1
+                resume += 1
+                t = resume
+            } else {
+                return false
+            }
         }
-        guard let segment = path.first, wildcard(Array(first.utf8), matches: Array(segment.utf8)) else { return false }
-        return segments(pattern.dropFirst(), match: path.dropFirst())
+        while p < pattern.count, pattern[p] == deep { p += 1 }
+        return p == pattern.count
     }
 
     /// `*` matches any run of bytes inside one segment.

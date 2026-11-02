@@ -113,14 +113,16 @@ therefore honored only on a connection from the runtime it was leased to.
 
 - rv records the runtime leader (its pid, which is also its process group,
   and its start time) after spawn and before the runtime runs.
-- A runtime's processes are: its leader's process group; every live
-  descendant of the leader; and, when the leader leads its own session
-  (terminal runtimes), that session. The cage denies the `setsid` and
-  `setpgid` syscalls, but `posix_spawn` with `POSIX_SPAWN_SETSID` or
-  `POSIX_SPAWN_SETPGROUP` (Node's `detached: true`) moves a child out of the
-  group, and the descendant walk keeps those children in.
+- A runtime's processes are: its leader; every live descendant of the
+  leader; and, when the leader leads its own session (terminal runtimes),
+  that session. The group is not membership: the cage denies the `setsid`
+  and `setpgid` syscalls, but `posix_spawn` with `POSIX_SPAWN_SETPGROUP`
+  lets any process in the same session join a group, so a sibling runtime
+  could otherwise join this one. The same flag, and `POSIX_SPAWN_SETSID`
+  (Node's `detached: true`), moves a child out of the group, and the
+  descendant walk keeps those children in.
 - On each request, rv takes the connection's port pair and looks, with
-  libproc, for one of those processes holding the client socket: the group
+  libproc, for one of those processes holding the client socket: the leader
   first, then the descendants (at most 4096), then the session. Each match
   is re-checked after the scan so a reused pid does not count. Every
   placeholder in the request is checked, so one runtime cannot spend
@@ -135,9 +137,9 @@ therefore honored only on a connection from the runtime it was leased to.
 
 Limits: the check binds to the runtime, not to a binary inside it; any of
 its processes may spend the placeholder unless the secret lists `binaries`
-(next section). A process that left the group and
-whose parent then exited (reparented to launchd) is no longer a descendant;
-unless it is in a terminal runtime's session, its requests are refused as
+(next section). A process whose parent exited
+(reparented to launchd) is no longer a descendant, even if it stayed in the
+leader's group; unless it is in a terminal runtime's session, its requests are refused as
 `runtimeMismatch`. Linux has no check (no
 libproc), so every gateway request there is `runtimeUnverified`. Contained
 launches on Linux are already refused before exec.

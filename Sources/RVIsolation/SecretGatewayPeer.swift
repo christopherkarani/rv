@@ -58,9 +58,11 @@ struct GatewayPeerCheck: Sendable {
     /// socket, found by its port pair. The cage denies the `setsid` and
     /// `setpgid` syscalls but allows `posix_spawn`, whose `SETSID` and
     /// `SETPGROUP` flags move a child out of the leader's group (Node's
-    /// `detached: true` does this). So a runtime's processes are its group,
-    /// the live descendants of its leader, and, when the leader leads a
-    /// session (terminal runtimes), that session.
+    /// `detached: true` does this). The same `SETPGROUP` lets any process
+    /// in the leader's session join the group, so the group is not
+    /// membership. A runtime's processes are its leader, the live
+    /// descendants of its leader, and, when the leader leads a session
+    /// (terminal runtimes), that session.
     static let runtime = GatewayPeerCheck(
         verify: { peer, group in
             #if os(macOS)
@@ -95,27 +97,16 @@ enum GatewayPeerScan {
     /// Bounds the descendant walk; past it the answer is `unverifiable`.
     static let maximumDescendants = 4_096
 
-    /// The group's live leader and members. A reused pgid is a different
-    /// group, and a group whose leader is gone belongs to a runtime that has returned.
-    private static func live(_ group: ProcessGroupFact) -> (leader: pid_t, members: [pid_t])? {
-        let leader = group.pgid.rawValue
-        guard case .found(let info) = ProcessGroupRecovery.lookup(leader),
-            info.pbi_pgid == UInt32(leader),
-            Int64(info.pbi_start_tvsec) == group.startSeconds,
-            Int64(info.pbi_start_tvusec) == group.startMicroseconds,
-            let members = groupMembers(leader)
-        else { return nil }
-        return (leader, members)
-    }
-
-    /// Every runtime process holding the peer's socket: its group, the
-    /// leader's descendants, and the leader's session. Nil when any of them
-    /// could not be read, or none holds it.
+    /// Every runtime process holding the peer's socket: the leader, its
+    /// descendants, and the session it leads (group membership alone proves
+    /// nothing, as in `verdict`). Nil when any of them could not be read, or
+    /// none holds it.
     static func holders(_ peer: GatewayPeer, group: ProcessGroupFact) -> [GatewayHolder]? {
-        guard let (leader, members) = live(group) else { return nil }
+        let leader = group.pgid.rawValue
+        guard isLeader(leader, of: group) else { return nil }
         let (parents, complete) = descendants(of: leader)
         guard complete else { return nil }
-        var candidates = Set(members).union(parents.keys)
+        var candidates = Set(parents.keys).union([leader])
         if getsid(leader) == leader {
             guard let processes = userProcesses() else { return nil }
             candidates.formUnion(processes.filter { getsid($0) == leader })
@@ -141,11 +132,17 @@ enum GatewayPeerScan {
     }
 
     static func verdict(_ peer: GatewayPeer, group: ProcessGroupFact) -> GatewayPeerVerdict {
-        guard let (leader, members) = live(group) else { return .unverifiable }
+        let leader = group.pgid.rawValue
+        // A reused pgid is a different group, and a group whose leader is
+        // gone belongs to a runtime that has returned.
+        guard isLeader(leader, of: group) else { return .unverifiable }
         var search = Search(peer: peer)
-        // Each match is re-checked after the scan, so a pid that exited and
-        // was reused mid-scan does not count.
-        if search.finds(members, still: { pgid(of: $0) == leader }) { return .member }
+        // Group membership alone proves nothing: a same-session process can
+        // join any group with `POSIX_SPAWN_SETPGROUP`. A holder must be the
+        // leader, below it, or in the session it leads. Each match is
+        // re-checked after the scan, so a pid that exited and was reused
+        // mid-scan does not count.
+        if search.finds([leader], still: { _ in isLeader(leader, of: group) }) { return .member }
         let (parents, complete) = descendants(of: leader)
         if complete == false { search.incomplete = true }
         if search.finds(Array(parents.keys), still: { parent(of: $0) == parents[$0] }) { return .member }
@@ -154,6 +151,14 @@ enum GatewayPeerScan {
             if search.finds(session, still: { getsid($0) == leader }) { return .member }
         }
         return search.incomplete ? .unverifiable : .outsider
+    }
+
+    /// Whether `pid` is still the process `group` recorded as its leader.
+    private static func isLeader(_ pid: pid_t, of group: ProcessGroupFact) -> Bool {
+        guard case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return false }
+        return info.pbi_pgid == UInt32(pid)
+            && Int64(info.pbi_start_tvsec) == group.startSeconds
+            && Int64(info.pbi_start_tvusec) == group.startMicroseconds
     }
 
     private struct Search {
@@ -188,25 +193,9 @@ enum GatewayPeerScan {
         return (parents, true)
     }
 
-    private static func pgid(of pid: pid_t) -> pid_t? {
-        guard case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return nil }
-        return pid_t(info.pbi_pgid)
-    }
-
     private static func parent(of pid: pid_t) -> pid_t? {
         guard case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return nil }
         return pid_t(info.pbi_ppid)
-    }
-
-    /// `proc_listpgrppids` counts pids, unlike `proc_pidinfo`, which counts
-    /// bytes. Without a buffer it estimates every process on the host.
-    private static func groupMembers(_ pgid: pid_t) -> [pid_t]? {
-        let estimate = proc_listpgrppids(pgid, nil, 0)
-        guard estimate > 0 else { return nil }
-        var pids = [pid_t](repeating: 0, count: Int(estimate) + 32)
-        let count = pids.withUnsafeMutableBytes { proc_listpgrppids(pgid, $0.baseAddress, Int32($0.count)) }
-        guard count > 0 else { return nil }
-        return pids.prefix(min(Int(count), pids.count)).filter { $0 > 1 }
     }
 
     /// This user's processes. Runtimes run as rv's user, and `proc_listpids`

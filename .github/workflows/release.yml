@@ -56,7 +56,7 @@ jobs:
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
             RVCorpusTests
-          Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
+          Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests|RVOperatorUITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
 
       - name: Isolation tests (A-E)
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[A-Ea-e]'

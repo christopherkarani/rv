@@ -296,6 +296,39 @@ struct EnvSpecConformanceTests {
         #expect(EnvSpec.parse("# @dec=" + deep + "\nVAL=").failureLine == 1)
         #expect(EnvSpec.parse("VAL=" + String(repeating: "f(", count: 10_000)).failureLine == nil)
     }
+
+    /// A failed nested call or literal is retried by every enclosing level, so
+    /// the depth cap alone leaves unclosed `f(x,f(x,...` input exponential.
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        "VAL=" + String(repeating: "f(x,", count: 64),
+        "VAL=" + String(repeating: "[x,", count: 64),
+        "# @d=f(x,\n" + String(repeating: "# f(x,\n", count: 63) + "VAL=",
+    ])
+    func unclosedNestingDoesNotBlowUp(source: String) {
+        #expect(EnvSpec.parse(source).failureLine != nil)
+    }
+
+    /// Calls as unquoted text are still found when the budget is not spent.
+    @Test func closedNestingStillParses() {
+        let source = "VAL=" + String(repeating: "f(x,", count: 8) + "y" + String(repeating: ")", count: 8)
+        #expect(EnvSpec.parse(source).failureLine == nil)
+    }
+
+    /// `${` with no closing brace is scanned once per line, not once per `${`.
+    @Test(.timeLimit(.minutes(1)))
+    func unclosedInterpolationInAnArrayIsLinear() throws {
+        let source = "VAL=[" + String(repeating: "${", count: 200_000)
+        let parsed = EnvSpec.parse(source)
+        #expect(parsed.failureLine == nil)
+        #expect(try parsed.get().items.first?.value == .text(String(source.dropFirst(4)), quote: nil))
+    }
+
+    @Test func closedInterpolationInAnArrayStaysOneElement() throws {
+        let parsed = try EnvSpec.parse("VAL=[${A},${B C},${D ${E}]").get()
+        #expect(parsed.items.first?.value == .array([
+            Self.text("${A}"), Self.text("${B C}"), Self.text("${D ${E}"),
+        ]))
+    }
 }
 
 extension Result where Success == EnvSpec.File, Failure == EnvSpec.ParseError {
