@@ -13,7 +13,7 @@ static void fail(const char *name, const char *detail) {
 
 static const char *const kHosts[] = {
     "grok", "pi", "opencode", "claude", "openclaw",
-    "hermes", "codex", "cursor", "antigravity",
+    "hermes", "codex", "cursor", "antigravity", "muse",
 };
 #define HOST_COUNT (sizeof kHosts / sizeof kHosts[0])
 
@@ -39,7 +39,8 @@ static int deny_exit(const char *host) {
         return 2;
     }
     if (strcmp(host, "grok") == 0 || strcmp(host, "claude") == 0
-        || strcmp(host, "cursor") == 0 || strcmp(host, "antigravity") == 0) {
+        || strcmp(host, "cursor") == 0 || strcmp(host, "antigravity") == 0
+        || strcmp(host, "muse") == 0) {
         return 0;
     }
     return 1;
@@ -164,8 +165,14 @@ static void test_exact_wires(void) {
 
     snprintf(want, sizeof want,
              "{\"permission\":\"deny\",\"user_message\":\"%s\","
-             "\"agent_message\":\"RV blocked this command. Wait for the human.\"}\n", unreach);
+             "\"agent_message\":\"RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human.\"}\n", unreach);
     expect_exact("cursor_deny", "cursor", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_DENY, want, "", 0);
+
+    /* MuseHostCodec: hookSpecificOutput deny, exit 0; `decision: block` is rejected. */
+    snprintf(want, sizeof want,
+             "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\","
+             "\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", unreach);
+    expect_exact("muse_ask_falls_back", "muse", RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_ASK, want, "", 0);
 
     /* Codex has no ask primitive: deny shape (block + stderr + exit 2) even in ask mode. */
     snprintf(want, sizeof want, "{\"decision\":\"block\",\"reason\":\"%s\"}\n", unreach);

@@ -52,8 +52,9 @@ enforced by `tests/run.sh`:
 
 - Apple Silicon + macOS 15 floor, or Linux aarch64/x86_64.
 - `-Wall` clean. No Foundation/CFNetwork linkage (Darwin).
-- `is_valid_host` must match `HookHost.setupSlotOrder` or a missing host
-  silently misses as operator.
+- `is_valid_host` must accept exactly the `HookHost` cases (derived from
+  `RVDomain/HookHost.swift`, not hard-coded) or a missing host silently
+  misses as operator.
 
 ## Swift mirrors — change both, or change the vectors
 

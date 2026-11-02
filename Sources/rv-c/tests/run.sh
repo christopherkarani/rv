@@ -100,20 +100,39 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/hook_fallback.c" \
   "$SRC/rv.c"
 
-# Pipe hosts must match HookHost.setupSlotOrder. Invalid hosts exec rv-cli
-# before the socket/XPC door, so a missing name is silent miss-as-operator.
-if ! awk '
-  /static int is_valid_host/,/^}/ { body = body $0 "\n" }
-  END {
-    n = split("grok pi opencode claude openclaw hermes codex cursor antigravity", want, " ")
-    for (i = 1; i <= n; i++) {
-      if (index(body, "\"" want[i] "\"") == 0) exit 1
+# Pipe hosts must match the Swift HookHost enum exactly. Invalid hosts exec
+# rv-cli before the socket/XPC door, so a missing name is silent
+# miss-as-operator. Derived from the source of truth, never hard-coded.
+HOOK_HOST_SWIFT="$ROOT/Sources/RVDomain/HookHost.swift"
+HOSTS="$(awk '
+  /^public enum HookHost:/ { inside = 1; next }
+  inside && /^}/ { exit }
+  inside && /^    case [a-z]+$/ { print $2 }
+' "$HOOK_HOST_SWIFT" | sort)"
+C_HOSTS="$(awk '
+  /static int is_valid_host/,/^}/ {
+    line = $0
+    while (match(line, /strcmp\(s, "[a-z]+"\)/)) {
+      chunk = substr(line, RSTART, RLENGTH)
+      sub(/^strcmp\(s, "/, "", chunk)
+      sub(/"\)$/, "", chunk)
+      print chunk
+      line = substr(line, RSTART + RLENGTH)
     }
   }
-' "$SRC/rv.c"; then
-  printf "rv-c tests: is_valid_host must include every setupSlotOrder host\n" >&2
+' "$SRC/rv.c" | sort)"
+if [[ -z "$HOSTS" || "$HOSTS" != "$C_HOSTS" ]]; then
+  printf "rv-c tests: is_valid_host must accept exactly the HookHost cases\n" >&2
+  printf "HookHost: %s\nrv.c:     %s\n" "$(echo $HOSTS)" "$(echo $C_HOSTS)" >&2
   exit 1
 fi
+# Shipped host templates must name only HookHost cases.
+for tmpl_host in $(grep -ho -- '--host [a-z]*' "$ROOT"/Sources/RVHooks/Resources/hosts/*.tmpl | awk '{ print $2 }' | sort -u); do
+  if ! grep -qx "$tmpl_host" <<<"$HOSTS"; then
+    printf "rv-c tests: template host %s is not a HookHost case\n" "$tmpl_host" >&2
+    exit 1
+  fi
+done
 
 if [[ "$OS" == "Darwin" ]]; then
   if otool -L "$OUT/rv" | grep -E 'Frameworks/Foundation\.framework|CFNetwork' >/dev/null; then
@@ -193,35 +212,112 @@ if ! grep -q -- 'test' "$OUT/operator.argv"; then
   exit 1
 fi
 
+# Host deny wire must match the Swift codecs (RVHooks/*HostCodec.swift):
+# exact keys, exit code, and Codex blocking stderr. Every HookHost needs an
+# explicit expectation here, so a new host cannot inherit a guessed shape.
+check_deny() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+host, out_path, err_path, status, want = sys.argv[1:6]
+status = int(status)
+text = open(out_path, encoding="utf-8").read()
+err = open(err_path, encoding="utf-8").read()
+if not text.endswith("\n") or text.count("\n") != 1:
+    raise SystemExit("%s: deny must be one JSON line, got %r" % (host, text))
+obj = json.loads(text)
+stop = "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."
+leftover = {"grok": 0, "antigravity": 0, "pi": 1, "opencode": 1, "openclaw": 1, "hermes": 1}
+if host in leftover:
+    expect_status = leftover[host]
+    assert set(obj) == {"decision", "reason"} and obj["decision"] == "deny", (host, obj)
+    reason = obj["reason"]
+elif host == "codex":
+    expect_status = 2
+    assert set(obj) == {"decision", "reason"} and obj["decision"] == "block", (host, obj)
+    reason = obj["reason"]
+    assert err == reason + "\n", ("codex stderr must carry the blocking reason", err)
+elif host in ("claude", "muse"):
+    expect_status = 0
+    keys = {"hookSpecificOutput"} | ({"systemMessage"} if host == "claude" else set())
+    assert set(obj) == keys, (host, obj)
+    hso = obj["hookSpecificOutput"]
+    assert set(hso) == {"hookEventName", "permissionDecision", "permissionDecisionReason"}, (host, hso)
+    assert hso["hookEventName"] == "PreToolUse" and hso["permissionDecision"] == "deny", (host, hso)
+    reason = hso["permissionDecisionReason"]
+    if host == "claude":
+        assert obj["systemMessage"] == reason, (host, obj)
+elif host == "cursor":
+    expect_status = 0
+    assert set(obj) == {"permission", "user_message", "agent_message"}, (host, obj)
+    assert obj["permission"] == "deny" and obj["agent_message"] == stop, (host, obj)
+    reason = obj["user_message"]
+else:
+    raise SystemExit("rv-c tests: no expected deny wire for HookHost %s" % host)
+if status != expect_status:
+    raise SystemExit("%s: deny exit %d, want %d" % (host, status, expect_status))
+if not reason or want not in reason:
+    raise SystemExit("%s: reason %r missing %r" % (host, reason, want))
+PY
+}
+
+# Substrings of the hook_fallback.c messages (classified, not a generic sentence).
+REASON_INPUT="RV could not read this hook request"
+REASON_OVERSIZE="RV could not read this hook request"
+REASON_UNREACHABLE='RV daemon is not reachable'
+REASON_REJECTED='RV daemon identity check failed'
+
 # Every host denies malformed input directly; an executable CLI sibling must
 # never receive authority-bearing fallback input.
-for host in grok pi opencode claude openclaw hermes codex cursor antigravity; do
+host_count=0
+for host in $HOSTS; do
+  host_count=$((host_count + 1))
   log="$OUT/deny-$host.argv"
   rm -f "$log"
   set +e
   printf 'a\0b' | RV_C_ARGV_LOG="$log" "$PROBE/rv" hook --host "$host" >"$OUT/deny-$host.json" 2>"$OUT/deny-$host.err"
   status=$?
   set -e
-  expected=1
-  case "$host" in grok|claude|cursor|antigravity) expected=0 ;; codex) expected=2 ;; esac
-  if [[ "$status" -ne "$expected" || -e "$log" ]]; then
+  if [[ -e "$log" ]]; then
     printf 'rv-c tests: %s fallback must deny without invoking CLI\n' "$host" >&2
     exit 1
   fi
-  case "$host" in
-    claude) marker='"permissionDecision":"deny"' ;;
-    cursor) marker='"permission":"deny"' ;;
-    codex) marker='"decision":"block"' ;;
-    *) marker='"decision":"deny"' ;;
-  esac
-  if ! grep -q "$marker" "$OUT/deny-$host.json"; then
-    printf 'rv-c tests: %s missing host denial wire\n' "$host" >&2
+  if ! check_deny "$host" "$OUT/deny-$host.json" "$OUT/deny-$host.err" "$status" "$REASON_INPUT"; then
+    printf 'rv-c tests: %s malformed-input denial wire mismatch\n' "$host" >&2
     exit 1
   fi
-  if [[ "$host" == codex && ! -s "$OUT/deny-$host.err" ]]; then
-    printf 'rv-c tests: Codex requires blocking stderr\n' >&2
+done
+
+# Well-formed input with no reachable daemon names the cause, never a
+# generic auth sentence. RV_HOOK_WHEN_DOWN=deny pins the deny wire on the
+# ask-capable hosts (Claude, Cursor) too. Linux pins an empty runtime dir (no socket);
+# Darwin has no test-controlled Mach service, so a live foreign rvd may
+# answer and be rejected by the identity check instead.
+DOWN_XDG="$OUT/no-daemon-xdg"
+rm -rf "$DOWN_XDG"
+mkdir -p "$DOWN_XDG"
+for host in $HOSTS; do
+  log="$OUT/down-$host.argv"
+  rm -f "$log"
+  set +e
+  printf '{}' | RV_HOOK_WHEN_DOWN=deny XDG_RUNTIME_DIR="$DOWN_XDG" RV_C_ARGV_LOG="$log" "$PROBE/rv" hook --host "$host" >"$OUT/down-$host.json" 2>"$OUT/down-$host.err"
+  status=$?
+  set -e
+  if [[ -e "$log" ]]; then
+    printf 'rv-c tests: %s no-daemon path must deny without invoking CLI\n' "$host" >&2
     exit 1
   fi
+  if check_deny "$host" "$OUT/down-$host.json" "$OUT/down-$host.err" "$status" "$REASON_UNREACHABLE" 2>/dev/null; then
+    continue
+  fi
+  if [[ "$OS" == "Darwin" ]] \
+    && check_deny "$host" "$OUT/down-$host.json" "$OUT/down-$host.err" "$status" "$REASON_REJECTED" 2>/dev/null; then
+    continue
+  fi
+  printf 'rv-c tests: %s no-daemon deny must name the unreachable service\n' "$host" >&2
+  cat "$OUT/down-$host.json" >&2
+  exit 1
 done
 
 # Oversized input must also deny without invoking a replay child.
@@ -229,7 +325,8 @@ set +e
 head -c 1048577 /dev/zero | tr '\0' 'x' | RV_C_ARGV_LOG="$OUT/oversize.argv" "$PROBE/rv" hook --host codex >"$OUT/oversize.json" 2>"$OUT/oversize.err"
 oversize_status=${PIPESTATUS[2]}
 set -e
-if [[ "$oversize_status" -ne 2 || -e "$OUT/oversize.argv" || ! -s "$OUT/oversize.err" ]]; then
+if [[ -e "$OUT/oversize.argv" ]] \
+  || ! check_deny codex "$OUT/oversize.json" "$OUT/oversize.err" "$oversize_status" "$REASON_OVERSIZE"; then
   printf 'rv-c tests: oversized hook must deny without CLI replay\n' >&2
   exit 1
 fi
@@ -319,6 +416,8 @@ if [[ "$down_ready" -eq 1 ]]; then
   expect_down claude-allow claude allow 0 '"permissionDecision":"ask"'
   expect_down codex-default codex "" 2 '"decision":"block"'
   expect_down opencode-default opencode "" 1 '"decision":"deny"'
+  # Muse has no ask primitive: its deny wire (hookSpecificOutput, exit 0).
+  expect_down muse-default muse "" 0 '"permissionDecision":"deny"'
   if [[ ! -s "$OUT/down-codex-default.err" ]]; then
     printf 'rv-c tests: Codex down fallback requires blocking stderr\n' >&2
     exit 1
@@ -336,4 +435,4 @@ if [[ "$down_ready" -eq 1 ]]; then
   printf 'rv-c daemon-down fallback: ask/deny rendering passed\n'
 fi
 
-printf 'rv-c hook fallback boundary: 9 host denial cases and oversized input passed\n'
+printf 'rv-c hook fallback boundary: %s host denial cases, no-daemon causes, and oversized input passed\n' "$host_count"

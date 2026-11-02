@@ -6,6 +6,7 @@ import RVIPC
 @testable import RVIsolation
 import RVPolicy
 @testable import RVService
+import RVXPC
 @preconcurrency import XPC
 
 /// Step 8B P7: `XPCOperatorUIBridge.hookReply` gate tests. Every
