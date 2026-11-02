@@ -399,6 +399,7 @@ public final class SecretGateway: @unchecked Sendable {
         }
         let rewritten: GatewayRequestHead
         let token: String
+        let echoes: [GatewaySubstitution.Echo]
         switch substituted {
         case .failure(let refusal):
             refuse(client, refusal, method: head.method, path: path, secret: route.secret)
@@ -406,6 +407,7 @@ public final class SecretGateway: @unchecked Sendable {
         case .success(let result):
             rewritten = result.head
             token = result.used.token
+            echoes = result.echoes
         }
         guard let live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
@@ -424,7 +426,7 @@ public final class SecretGateway: @unchecked Sendable {
         let sink = GatewayResponseWriter(
             fd: client,
             method: head.method,
-            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))]
+            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))] + echoes
         )
         transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: rewritten.headers, body: body), sink)
         audit(SecretUseRecord(
