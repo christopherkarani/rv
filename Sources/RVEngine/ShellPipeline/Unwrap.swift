@@ -115,7 +115,8 @@ extension ShellPipeline {
         workingDirectory: WorkingDirectory?,
         budget: UnwrapBudget,
         depth: Int,
-        layers: [WrapperKind]
+        layers: [WrapperKind],
+        splitChains: Bool = true
     ) -> UnwrapOutcome {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -150,6 +151,17 @@ extension ShellPipeline {
                 depth: depth,
                 layers: layers
             )
+        }
+        if splitChains,
+            let chained = unwrapChain(
+                trimmed,
+                workingDirectory: workingDirectory,
+                budget: budget,
+                depth: depth,
+                layers: layers
+            )
+        {
+            return chained
         }
         let tokens = ShellPipeline.tokenize(trimmed)
         let argv = Argv(tokens: tokens)
@@ -281,6 +293,9 @@ extension ShellPipeline {
                 extract: extractRuby,
                 workingDirectory: workingDirectory
             )
+        }
+        if let peel = peelUtility(head, tokens: tokens, workingDirectory: workingDirectory) {
+            return peel
         }
         return .notWrapper
     }
@@ -588,7 +603,7 @@ private func extractPython(_ code: String) -> InterpreterExtract {
     if let command = pythonShellCommand(folded) {
         return .command(command)
     }
-    if looksLikePythonSpawn(folded) {
+    if looksLikePythonSpawn(folded) || pythonCodeCanSpawn(folded) {
         return .limited
     }
     return .dataOnly
@@ -658,7 +673,7 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     if let command = nodeShellCommand(folded) {
         return .command(command)
     }
-    if looksLikeNodeSpawn(folded) {
+    if looksLikeNodeSpawn(folded) || nodeCodeCanSpawn(folded) {
         return .limited
     }
     return .dataOnly
@@ -708,7 +723,7 @@ private func extractRuby(_ code: String) -> InterpreterExtract {
     if let command = rubyShellCommand(folded) {
         return .command(command)
     }
-    if looksLikeRubySpawn(folded) {
+    if looksLikeRubySpawn(folded) || rubyCodeCanSpawn(folded) {
         return .limited
     }
     return .dataOnly
@@ -867,7 +882,7 @@ private func quoteIfNeeded(_ value: String) -> String {
     return value
 }
 
-private func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
+func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
     tokens.map(renderToken).joined(separator: " ")
 }
 
