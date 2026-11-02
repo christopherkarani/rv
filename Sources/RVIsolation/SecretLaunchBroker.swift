@@ -260,8 +260,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
             probe = { resolver.version(launched.source) }
         }
         var interval = launched.refresh?.timeInterval
-        // Session credentials expire, so an AWS profile is always re-read.
-        if case .awsSigV4 = launched.delivery { interval = interval ?? Self.awsRefreshInterval }
+        // Session credentials expire, so an AWS profile is always re-read, at
+        // least as often as the AWS cadence whatever `refresh` says.
+        if case .awsSigV4 = launched.delivery { interval = min(interval ?? Self.awsRefreshInterval, Self.awsRefreshInterval) }
         guard interval != nil || probe != nil else { return nil }
         return SecretRefreshPolicy(interval: interval, marker: marker, probe: probe) {
             [weak self] in

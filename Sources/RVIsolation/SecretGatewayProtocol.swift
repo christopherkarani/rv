@@ -234,6 +234,12 @@ enum GatewayRefusal: Error, Equatable {
     /// A signed-chunk or event-stream payload: each chunk signature chains to
     /// the agent's seed signature, which the gateway replaces.
     case awsSignedStreaming
+    /// An unsigned-payload mode on a service other than S3, whose signature
+    /// the gateway cannot produce for it.
+    case awsUnsignedPayload
+    /// The upstream's answer carried a `SecretAccessKey`: credentials minted
+    /// by the call, which would otherwise reach the agent unscrubbed.
+    case awsCredentialsInResponse
 
     /// The case name, a stable code for audit records.
     var code: String { "\(self)" }
@@ -246,15 +252,19 @@ enum GatewayRefusal: Error, Equatable {
             .ambiguousPath, .echoMethod, .runtimeMismatch, .awsKeyMismatch:
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
-            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming:
+            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .awsUnsignedPayload,
+            .awsCredentialsInResponse:
             false
         }
     }
 
     var status: Int {
         switch self {
-        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath, .awsSignedStreaming: 400
+        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath, .awsSignedStreaming,
+            .awsUnsignedPayload:
+            400
         case .auditUnavailable, .refreshFailed: 503
+        case .awsCredentialsInResponse: 502
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
@@ -288,6 +298,10 @@ enum GatewayRefusal: Error, Equatable {
         case .awsKeyMismatch: "the request is signed with an access key other than this secret's AWS_ACCESS_KEY_ID"
         case .awsSignedStreaming:
             "signed streaming payloads cannot be re-signed; send UNSIGNED-PAYLOAD or STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+        case .awsUnsignedPayload:
+            "unsigned payload modes are accepted for S3 only; send the body with a payload hash for this service"
+        case .awsCredentialsInResponse:
+            "the AWS response carried new credentials, which are never passed to the agent"
         }
     }
 }

@@ -73,7 +73,7 @@ the cage.
   request and string-to-sign, and derives the key with `RVDigest.hmacSHA256`,
   which works on both platforms. Signed bodies use the SHA-256 of the
   buffered body (the gateway already buffers up to 32 MiB). Chunked uploads
-  use UNSIGNED-PAYLOAD.
+  use UNSIGNED-PAYLOAD (S3 only).
 - **Hook point in `handle`.** *As built:* a request whose `Authorization`
   starts with `AWS4-` takes `admitAWS` instead of `GatewaySubstitution`, and
   an AWS entry offers no substitution surface, so its placeholder spent as a
@@ -112,7 +112,7 @@ the cage.
 - The credentials endpoint must not be reachable by a process outside the
   runtime (PR 13).
 - Response scrubbing must cover the real access-key id, which S3 error
-  bodies echo.
+  bodies echo, and its hex form in the canonical request those bodies print.
 
 **Test plan.**
 - Use the AWS SigV4 test suite vectors against the pure signer.
@@ -134,7 +134,14 @@ and 300 for tests.
   `127.0.0.1`, so nothing is staged.
 - One `upstream` per secret (one region). A host pattern is deferred.
 - Signed-chunk and event-stream payloads are refused (`awsSignedStreaming`,
-  400). `UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` pass.
+  400). `UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` pass for
+  an S3 binding; any other service refuses them (`awsUnsignedPayload`, 400).
+- Credential-minting services (`sts`, `iam`, `sso`, ...) are refused by the
+  decoder, and a non-S3 response carrying `SecretAccessKey` is refused
+  (`awsCredentialsInResponse`, 502): the gateway scrubs only the profile's
+  own keys, so keys minted by a call would reach the agent.
+- `read-only` is refused for query-protocol services, where the action is a
+  parameter and a method rule cannot limit it.
 
 ---
 

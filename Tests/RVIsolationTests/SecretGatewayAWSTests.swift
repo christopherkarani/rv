@@ -33,14 +33,14 @@ struct SecretGatewayAWSTests {
     }
 
     static func secretsJSON(
-        allow: String = "", name: String = "AWS_DEV", fields: String = "", extra: String = ""
+        allow: String = "", name: String = "AWS_DEV", fields: String = "", extra: String = "", service: String = "s3"
     ) -> String {
         let rules = allow.isEmpty ? "" : ",\"allow\":\(allow)"
         return """
             {"version":1,"secrets":[
               {"name":"\(name)"\(fields),"source":{"awsProfile":{"profile":"dev"}},
                "delivery":{"awsSigV4":{"upstream":"https://s3.us-east-1.amazonaws.com","region":"us-east-1",
-                                       "service":"s3","endpointEnv":"AWS_ENDPOINT_URL_S3"\(rules)}}}\(extra)
+                                       "service":"\(service)","endpointEnv":"AWS_ENDPOINT_URL_S3"\(rules)}}}\(extra)
             ]}
             """
     }
@@ -233,6 +233,24 @@ struct SecretGatewayAWSTests {
         #expect(h.fixture.auditLines.contains { $0["kind"] as? String == "secret.misuse" } == false)
     }
 
+    @Test(arguments: ["UNSIGNED-PAYLOAD", "STREAMING-UNSIGNED-PAYLOAD-TRAILER"])
+    func unsignedPayloadModesAreRefusedForServicesOtherThanS3(_ mode: String) throws {
+        let h = try harness(Self.secretsJSON(service: "bedrock"))
+        defer { h.tearDown() }
+        let response = try sigV4(h, method: "POST", target: "/s/AWS_DEV/model/x/invoke", contentSHA256: mode, body: "{}")
+        #expect(response.status == 400)
+        #expect(response.body.contains("S3"))
+        #expect(h.upstream.requests.isEmpty)
+        #expect(refusals(h.fixture) == ["awsUnsignedPayload"])
+        #expect(h.fixture.auditLines.contains { $0["kind"] as? String == "secret.misuse" } == false)
+        // The gateway hashes the body itself when the agent does not ask for an unsigned mode.
+        let hashed = try sigV4(
+            h, method: "POST", target: "/s/AWS_DEV/model/x/invoke", contentSHA256: String(repeating: "0", count: 64),
+            body: "{}")
+        #expect(hashed.status == 200)
+        #expect(h.upstream.requests.first?.headers["x-amz-content-sha256"] == AWSSigV4.payloadHash(Array("{}".utf8)))
+    }
+
     @Test func unsignedTrailerUploadsPassThroughWithTheirMode() throws {
         let h = try harness()
         defer { h.tearDown() }
@@ -293,17 +311,53 @@ struct SecretGatewayAWSTests {
 
     @Test func expiryComesFromTheCredentialsExpiration() throws {
         let provider = Provider([
-            .success(Self.credentials(expires: Self.start.addingTimeInterval(600))),
+            .success(Self.credentials(expires: Self.start.addingTimeInterval(100))),
             .failure(.failed("sso session expired")),
         ])
         // An hour between refreshes, so only the credentials' own Expiration can stop the request.
         let h = try harness(Self.secretsJSON(fields: #","refresh":"1h""#), provider: provider)
         defer { h.tearDown() }
         #expect(try sigV4(h).status == 200)
-        h.clock.advance(601)
+        h.clock.advance(101)
         #expect(try sigV4(h).status == 403)
         #expect(h.upstream.requests.count == 1)
         #expect(refusals(h.fixture) == ["expired"])
+    }
+
+    @Test func expiredCredentialsAreRefreshedBeforeTheRequestIsRefused() throws {
+        let rotatedKey = "AKIAROTATEDKEY000002"
+        let provider = Provider([
+            .success(Self.credentials(expires: Self.start.addingTimeInterval(100))),
+            .success(Self.credentials(
+                key: rotatedKey, secret: "rotated/secret", token: "rotated-token-000",
+                expires: Self.start.addingTimeInterval(3_700))),
+        ])
+        let h = try harness(Self.secretsJSON(fields: #","refresh":"1h""#), provider: provider)
+        defer { h.tearDown() }
+        #expect(try sigV4(h).status == 200)
+        // Past Expiration but well inside the cadence: the very next request waits for fresh credentials.
+        h.clock.advance(101)
+        #expect(try sigV4(h).status == 200)
+        #expect(h.upstream.requests.last?.headers["authorization"]?.contains(rotatedKey) == true)
+        #expect(refusals(h.fixture).isEmpty)
+    }
+
+    @Test func aLongRefreshNeverStretchesTheAWSCadence() throws {
+        let rotatedKey = "AKIAROTATEDKEY000002"
+        let provider = Provider([
+            .success(Self.credentials(expires: Self.start.addingTimeInterval(3_600))),
+            .success(Self.credentials(
+                key: rotatedKey, secret: "rotated/secret", token: "rotated-token-000",
+                expires: Self.start.addingTimeInterval(7_200))),
+        ])
+        let h = try harness(Self.secretsJSON(fields: #","refresh":"30d""#), provider: provider)
+        defer { h.tearDown() }
+        h.clock.advance(SecretLaunchBroker.awsRefreshInterval + 1)
+        _ = try sigV4(h)
+        #expect(eventually {
+            (try? self.sigV4(h))?.status == 200
+                && h.upstream.requests.last?.headers["authorization"]?.contains(rotatedKey) == true
+        })
     }
 
     @Test func refreshedCredentialsAreUsedAndExtendTheExpiry() throws {
@@ -326,6 +380,65 @@ struct SecretGatewayAWSTests {
         #expect(try sigV4(h).status == 200)
         let last = try #require(h.upstream.requests.last)
         #expect(last.headers["x-amz-security-token"] == "rotated-token-000")
+    }
+
+    // MARK: Responses
+
+    private static let minted = "newlyMintedSecret/aaaa+bbbb"
+
+    @Test func aResponseCarryingNewCredentialsIsRefusedBeforeAnyByteReachesTheAgent() throws {
+        let upstream = RecordingUpstream(chunks: [
+            Data("<Credentials><AccessKeyId>ASIANEWKEY</AccessKeyId><SecretAcc".utf8),
+            Data("essKey>\(Self.minted)</SecretAccessKey></Credentials>".utf8),
+        ])
+        let h = try harness(Self.secretsJSON(service: "bedrock"), upstream: upstream)
+        defer { h.tearDown() }
+        let response = try sigV4(h, contentSHA256: String(repeating: "0", count: 64))
+        #expect(response.status == 502)
+        #expect(response.body.contains("credentials"))
+        #expect(response.body.contains(Self.minted) == false)
+        #expect(response.body.contains("ASIANEWKEY") == false)
+        #expect(refusals(h.fixture) == ["awsCredentialsInResponse"])
+        #expect(h.fixture.auditLines.contains { $0["kind"] as? String == "secret.misuse" } == false)
+        #expect(h.fixture.auditText.contains(Self.minted) == false)
+    }
+
+    @Test func credentialsLateInALargeResponseCutTheStreamBeforeTheValue() throws {
+        let filler = Data(repeating: UInt8(ascii: "x"), count: 20_000)
+        let upstream = RecordingUpstream(
+            chunks: Array(repeating: filler, count: 5) + [Data(#"{"SecretAccessKey":"\#(Self.minted)"}"#.utf8)])
+        let h = try harness(Self.secretsJSON(service: "bedrock"), upstream: upstream)
+        defer { h.tearDown() }
+        let response = try sigV4(h, contentSHA256: String(repeating: "0", count: 64))
+        #expect(response.body.contains(Self.minted) == false)
+        #expect(response.body.contains("SecretAccessKey") == false)
+        #expect(response.body.hasPrefix("xxxx"))
+        #expect(refusals(h.fixture) == ["awsCredentialsInResponse"])
+    }
+
+    @Test func s3ObjectBodiesThatNameSecretAccessKeyPassThrough() throws {
+        let upstream = RecordingUpstream(chunks: [Data("aws_secret_access_key: SecretAccessKey=notes".utf8)])
+        let h = try harness(upstream: upstream)
+        defer { h.tearDown() }
+        let response = try sigV4(h)
+        #expect(response.status == 200)
+        #expect(response.body == "aws_secret_access_key: SecretAccessKey=notes")
+        #expect(refusals(h.fixture).isEmpty)
+    }
+
+    @Test func hexEncodedCanonicalRequestsInS3ErrorBodiesAreScrubbed() throws {
+        func hex(_ text: String) -> String { text.utf8.map { String(format: "%02x", $0) }.joined(separator: " ") }
+        let body = "<Error><Code>SignatureDoesNotMatch</Code><CanonicalRequestBytes>47 45 54 0a "
+            + "\(hex("x-amz-security-token:" + Self.realToken)) 0a \(hex(Self.realKey).uppercased())</CanonicalRequestBytes></Error>"
+        let upstream = RecordingUpstream(status: 403, chunks: [Data(body.utf8)])
+        let h = try harness(upstream: upstream)
+        defer { h.tearDown() }
+        let response = try sigV4(h)
+        #expect(response.status == 403)
+        #expect(response.body.contains("SignatureDoesNotMatch"))
+        #expect(response.body.contains(hex(Self.realToken)) == false)
+        #expect(response.body.contains(hex(Self.realKey).uppercased()) == false)
+        #expect(response.body.contains("[rv:redacted]"))
     }
 
     // MARK: Lease
@@ -433,6 +546,35 @@ struct SecretGatewayAWSTests {
             Issue.record("accepted: \(pair)")
             return
         }
+    }
+
+    @Test(arguments: [
+        "sts", "iam", "sso", "sso-oauth", "awsssoportal", "awsssooidc", "signin", "cognito-identity", "cognito-idp",
+        "s3express",
+    ])
+    func theDecoderRefusesServicesThatMintCredentials(_ service: String) {
+        let json = Self.secretsJSON(service: service)
+        guard case .failure(let error) = SecretsConfiguration.decode(Data(json.utf8)) else {
+            Issue.record("accepted credential-minting service \(service)")
+            return
+        }
+        #expect(error.message.contains("mints credentials"))
+        #expect(error.message.contains(service))
+    }
+
+    @Test(arguments: ["ec2", "sqs", "sns", "rds", "elasticloadbalancing", "autoscaling", "cloudformation", "monitoring"])
+    func theDecoderRefusesReadOnlyForQueryProtocolServices(_ service: String) throws {
+        let json = Self.secretsJSON(allow: #"["read-only"]"#, service: service)
+        guard case .failure(let error) = SecretsConfiguration.decode(Data(json.utf8)) else {
+            Issue.record("accepted read-only on query-protocol service \(service)")
+            return
+        }
+        #expect(error.message.contains("read-only"))
+        #expect(error.message.contains("query"))
+        // An explicit rule is the operator's own and stays allowed, as does read-only elsewhere.
+        _ = try SecretsConfiguration.decode(Data(Self.secretsJSON(
+            allow: #"[{"methods":["POST"],"path":"/"}]"#, service: service).utf8)).get()
+        _ = try SecretsConfiguration.decode(Data(Self.secretsJSON(allow: #"["read-only"]"#, service: "s3").utf8)).get()
     }
 
     // MARK: Provider
