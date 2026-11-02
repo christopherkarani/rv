@@ -439,7 +439,8 @@ enum SecretsRun {
     }
 
     /// Values a leak scan looks for. Organization policy applies first: a
-    /// source it forbids is never resolved, and an invalid policy fails.
+    /// source it forbids is never resolved, and an invalid policy fails. Only
+    /// the source rule applies: the scan reads on the host and delivers nothing.
     private static func scannableValues(
         _ configuration: SecretsConfiguration, environment: SecretsEnvironment, skippedPrefix: String
     ) -> Result<(values: [(name: String, value: SecretValue)], skipped: [String]), CommandFailure> {
@@ -449,7 +450,7 @@ enum SecretsRun {
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
-            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
+            if let reason = SecretOrganizationRules.sourceViolation(secret, policy: environment.managed.policy) {
                 skipped.append("\(skippedPrefix)\(secret.name): organization policy: \(reason)")
                 continue
             }

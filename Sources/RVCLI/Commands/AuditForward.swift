@@ -218,8 +218,24 @@ enum AuditForwardRun {
         return .success(target)
     }
 
+    /// The headers for a run: the organization's (unless `--to` replaces the
+    /// endpoint) merged under the `--header` flags, then `${secret:NAME}`
+    /// resolved. Both sources go through the same organization policy.
+    static func headers(
+        to: String?, flags: [String], managed: ManagedPolicyState,
+        secrets: () -> Result<SecretsConfiguration, SecretsConfigurationError>, resolver: SecretResolver
+    ) -> Result<[String: String], CommandFailure> {
+        var merged = to == nil ? managed.policy?.auditForward?.headers ?? [:] : [:]
+        switch parseHeaders(flags) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let parsed): merged.merge(parsed) { _, new in new }
+        }
+        return resolveHeaders(merged, secrets: secrets, resolver: resolver, policy: managed.policy)
+    }
+
     /// `${secret:NAME}` in header values, resolved through secrets.json.
-    /// Organization policy applies before a value is read.
+    /// Organization policy applies before a value is read. Only the source
+    /// rule applies: headers are resolved on the host and never enter a cage.
     static func resolveHeaders(
         _ headers: [String: String], secrets: () -> Result<SecretsConfiguration, SecretsConfigurationError>,
         resolver: SecretResolver, policy: ManagedPolicy?
@@ -236,7 +252,7 @@ enum AuditForwardRun {
             guard let secret = configuration.secret(named: name) else {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
             }
-            if let reason = SecretOrganizationRules.violation(secret, policy: policy) {
+            if let reason = SecretOrganizationRules.sourceViolation(secret, policy: policy) {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)): organization policy: \(reason)"))
             }
             switch resolver.resolve(secret.source) {
@@ -323,10 +339,8 @@ struct AuditForward: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
         case .success(let resolved): target = resolved
         }
-        var headerMap = to == nil ? managed.policy?.auditForward?.headers ?? [:] : [:]
-        switch AuditForwardRun.parseHeaders(headers) {
-        case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
-        case .success(let parsed): headerMap.merge(parsed) { _, new in new }
+        if case .failure(let failure) = AuditForwardRun.parseHeaders(headers) {
+            try ctx.fail("rv audit forward: \(failure.message)\n")
         }
         let url: URL
         switch AuditForwardRun.destination(target) {
@@ -362,9 +376,9 @@ struct AuditForward: AsyncParsableCommand {
             }
             return
         }
-        switch AuditForwardRun.resolveHeaders(
-            headerMap, secrets: { SecretsConfiguration.load(configDirectory: configDirectory) },
-            resolver: .live(home: home.rawValue), policy: managed.policy)
+        switch AuditForwardRun.headers(
+            to: to, flags: headers, managed: managed,
+            secrets: { SecretsConfiguration.load(configDirectory: configDirectory) }, resolver: .live(home: home.rawValue))
         {
         case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
         case .success(let resolved): options.headers = resolved
