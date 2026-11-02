@@ -136,6 +136,47 @@ struct GatedEffectTests {
         #expect(ledgerRows(home).count == 1)
     }
 
+    /// The decision still asks for the denial row past the hook deadline;
+    /// the shell drops it at write time, and only it: the client gave up on
+    /// the reply, but the audit and judge log describe the evaluation.
+    @Test("apply past the hook deadline: the shell writes the audit and judge log but no denial row")
+    func lateApplyWritesNoDenialRow() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let repo = try effectRepo(in: home, named: "repo", dropping: ["dropped.env"])
+        let cwd = try #require(WorkingDirectory(validating: repo.path))
+        let door = GatedEvaluate(
+            EvaluateSession(),
+            judge: EffectFixedJudge(run: .verdict(try effectVerdict(choice: "review", risk: 0.5)))
+        )
+        let inputs = EvaluationInputs(
+            guardMode: .enforce,
+            judge: JudgeSelection(engine: .ft, bundle: Self.fakeBundle),
+            store: .gather(home: home, cwd: cwd)
+        )
+        let stale = HookDeadline(receivedAt: .now - .seconds(30))
+        let (decided, result) = await HookDeadline.$current.withValue(stale) {
+            let decided = await door.decide(
+                .apply, Self.request(Self.judged), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
+                now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash, inputs: inputs
+            )
+            let result = await door.gated(
+                .apply, Self.request(Self.judged), cwd: cwd, home: home, grants: EphemeralAllowOnceTable(),
+                now: Self.now, allowlist: { .empty }, host: .hook(.claude), tool: .bash, inputs: inputs
+            )
+            return (decided, result)
+        }
+        guard case .deny = result.decision else {
+            Issue.record("judge review must deny, got \(result.decision)")
+            return
+        }
+        #expect(decided.effects.contains { if case .denialRow = $0 { true } else { false } })
+        #expect(stale.hasTripped)
+        #expect(try exemptionRows(home).map(\.dropped) == [["dropped.env"]])
+        #expect(try judgeLog(home).count == 1)
+        #expect(ledgerRows(home).isEmpty)
+    }
+
     @Test("observe: every shell door asks for one would-be judge row and no denial row", arguments: [
         EvaluationIntent.peek, .apply,
     ])
