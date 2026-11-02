@@ -118,6 +118,28 @@ struct SecretGatewayAccessTests {
             .map { $0.header("Authorization") } == .success("Bearer real"))
     }
 
+    @Test func twoDeepWildcardsMatchInLinearishTime() throws {
+        // A long repeated-segment path that cannot match: backtracking over
+        // both `**` would take quadratic time and hold a gateway slot.
+        let rule = try #require(GatewayAccessRule(methods: ["GET"], path: "/**/contents/**/README"))
+        let target = "/s/K/repos" + String(repeating: "/contents", count: 20_000)
+        let clock = ContinuousClock()
+        var result: GatewayRefusal?
+        let elapsed = try clock.measure {
+            let route = try #require(GatewayRoute(target: target))
+            result = GatewayAccess.refusal([rule], method: "GET", route: route, basePath: "")
+        }
+        #expect(result == .outsideAllowRules)
+        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(GatewayAccess.glob("/**/contents/**/README", matches: "/repos/contents/x/contents/README"))
+        #expect(GatewayAccess.glob("/**/contents/**/README", matches: "/contents/README"))
+        #expect(GatewayAccess.glob("/**/contents/**/README", matches: "/contents/contents/a/README"))
+        #expect(GatewayAccess.glob("/**/contents/**/README", matches: "/README") == false)
+        #expect(GatewayAccess.glob("/a/**/b/*/**", matches: "/a/x/b/y/z/w"))
+        #expect(GatewayAccess.glob("/a/**/b/*/**", matches: "/a/b/y"))
+        #expect(GatewayAccess.glob("/a/**/b/*/**", matches: "/a/b") == false)
+    }
+
     @Test func auditPathsNeverCarryAPlaceholder() {
         let key = SecretPlaceholder.mint(prefix: "sk-")
         #expect(SecretPlaceholder.redacted("/s/K/bot\(key.text)/send") == "/s/K/botsk-rvph_[redacted]/send")
