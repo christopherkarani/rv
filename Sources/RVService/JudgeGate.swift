@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVHistory
 import RVLaya
 import RVPolicy
@@ -379,25 +380,26 @@ public enum JudgeRuntime {
         // A bundle that cannot LOAD is unavailable: packs-only plus a
         // note (doctor surfaces it), never an eternal Ask loop.
         guard let bundle = selection.bundle else {
-            return (result, logRow(
+            return (packsOnlyFloor(result, command: command), logRow(
                 guardMode: inputs.guardMode, subject: .live(result),
                 verdict: nil, action: nil, engine: selection.engine,
                 note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
             ))
         }
-        let reading = read(
-            judge.judge(JudgeCall(
-                command: command.rawValue, context: context,
-                engine: selection.engine, bundle: bundle
-            )),
-            over: result,
-            provenance: provenance
-        )
-        return (reading.outcome, logRow(
+        let run = judge.judge(JudgeCall(
+            command: command.rawValue, context: context,
+            engine: selection.engine, bundle: bundle
+        ))
+        let reading = read(run, over: result, provenance: provenance)
+        let row = logRow(
             guardMode: inputs.guardMode, subject: .live(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
-        ))
+        )
+        // Only enforce floors an unscored allow; the log keeps the pack
+        // result, as for engine-missing above.
+        if case .unavailable = run { return (packsOnlyFloor(reading.outcome, command: command), row) }
+        return (reading.outcome, row)
     }
 
     /// Observe path: the would-be verdict as a log row, always allow.
@@ -471,6 +473,18 @@ public enum JudgeRuntime {
                 verdict: verdict, action: action, note: verdict.truncated ? "truncated" : nil
             )
         }
+    }
+
+    /// Packs-only (no judge could score): an inline interpreter program the
+    /// packs masked as data, carrying spawn/eval/delete/secret markers, is
+    /// indeterminate rather than an unreviewed allow.
+    static func packsOnlyFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        guard InlineProgramGuard.requiresJudge(command) else { return result }
+        return EvaluationResult(
+            outcome: .indeterminate(.inlineProgramNeedsJudge),
+            matchingView: result.matchingView,
+            analysis: result.analysis
+        )
     }
 
     /// Load failure is distinct from prediction failure: the first is a

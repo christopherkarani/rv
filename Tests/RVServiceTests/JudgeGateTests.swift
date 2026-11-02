@@ -400,3 +400,55 @@ struct JudgeRaisePinTests {
         #expect(!problems.isEmpty)
     }
 }
+
+@Suite("Judge gate packs-only floor")
+struct JudgeGatePacksOnlyFloorTests {
+    static func withEmptyHome(_ body: (HomePath) throws -> Void) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-floor-home-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try body(try #require(HomePath(validating: root.path)))
+    }
+
+    /// Empty environment and an empty home: no bundle resolves, so no
+    /// judge can score (engine-missing), whatever the process env holds.
+    static func packsOnly(_ command: String, home: HomePath) -> EvaluationResult {
+        JudgeRuntime.apply(
+            to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command),
+            inputs: .gather(home: home, cwd: nil, environment: [:]), judge: LiveJudgePort(),
+            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false
+        ).result
+    }
+
+    @Test("no judge: spawn-bearing inline programs are indeterminate", arguments: [
+        #"perl -e 'system("rm -rf ~")'"#,
+        #"awk 'BEGIN{system("rm -rf ~")}'"#,
+        #"php -r 'system("rm -rf ~");'"#,
+        "sed -n '1e rm -rf ~' f",
+        #"node -e 'require("fs").rmSync(process.env.HOME,{recursive:true})'"#,
+        #"python3 -c "from os import system; system('rm -rf ~')""#,
+        "perl <<EOF\nsystem(\"rm -rf ~\");\nEOF",
+        #"python3 <<< "import os; os.system('id')""#,
+        #"printf 'system("rm -rf ~");' | perl"#,
+        "cat x.pl | perl",
+    ])
+    func spawnPayloadIndeterminate(command: String) throws {
+        try Self.withEmptyHome { home in
+            #expect(Self.packsOnly(command, home: home).decision == .indeterminate(.inlineProgramNeedsJudge))
+        }
+    }
+
+    @Test("no judge: benign inline programs stay allowed", arguments: [
+        "awk '{print $1}' f",
+        "perl -ne 'print if /x/' f",
+        "python3 -c 'print(1)'",
+        "echo 'print(1)' | python3",
+        "cat f | perl -ne 'print if /x/'",
+    ])
+    func benignPayloadAllowed(command: String) throws {
+        try Self.withEmptyHome { home in
+            #expect(Self.packsOnly(command, home: home).decision == .allow)
+        }
+    }
+}

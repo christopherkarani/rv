@@ -414,6 +414,88 @@ struct UnixSocketListenerTests {
         #expect(try Data(contentsOf: socketURL) == Data("not-ours".utf8))
     }
 
+    @Test func silentIdleConnectionDoesNotDelaySecondClient() throws {
+        let home = try makeIsolatedHome("idle")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        // Connected, never sends a byte: its serve loop parks in recv.
+        let idle = try retryDarwinConnect(path: socketURL.path)
+        defer { idle.close() }
+        let second = try retryDarwinConnect(path: socketURL.path)
+        defer { second.close() }
+        let started = Date()
+        let data = try #require(sendWithin(seconds: 5, second, body: try IPCJSON.encode(Hello())).data)
+        #expect(Date().timeIntervalSince(started) < 2)
+        #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
+    @Test func idleConnectionIsClosedAfterReceiveTimeout() throws {
+        let home = try makeIsolatedHome("rcvto")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL,
+            limits: UnixConnectionLimits(maxConnections: 4, receiveTimeoutSeconds: 1)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let ack = try #require(sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())).data)
+        #expect(try IPCJSON.decode(HelloAck.self, from: ack).status == .ok)
+        // Idle past the receive timeout: the listener must hang up.
+        Thread.sleep(forTimeInterval: 2)
+        #expect(sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())) == .hungUp)
+    }
+
+    @Test func connectionsBeyondCapAreClosedAndSlotsAreReleased() throws {
+        let home = try makeIsolatedHome("cap")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL,
+            limits: UnixConnectionLimits(maxConnections: 1, receiveTimeoutSeconds: 30)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let first = try retryDarwinConnect(path: socketURL.path)
+        defer { first.close() }
+        let ack = try #require(sendWithin(seconds: 5, first, body: try IPCJSON.encode(Hello())).data)
+        #expect(try IPCJSON.decode(HelloAck.self, from: ack).status == .ok)
+
+        let over = try retryDarwinConnect(path: socketURL.path)
+        defer { over.close() }
+        #expect(sendWithin(seconds: 5, over, body: try IPCJSON.encode(Hello())) == .hungUp)
+
+        // Closing the first connection frees its slot for a later client.
+        first.close()
+        var recovered = false
+        for _ in 0..<40 where recovered == false {
+            let next = try retryDarwinConnect(path: socketURL.path)
+            if let data = sendWithin(seconds: 5, next, body: try IPCJSON.encode(Hello())).data,
+               (try? IPCJSON.decode(HelloAck.self, from: data))?.status == .ok {
+                recovered = true
+            }
+            next.close()
+            if recovered == false { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        #expect(recovered)
+    }
+
     @Test func skewedHelloKeepsHandshakeClosedThenRecovers() throws {
         let home = try makeIsolatedHome("skrec")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -480,6 +562,38 @@ private struct UncheckedClient: @unchecked Sendable {
     init(_ client: DarwinEvaluateClient) {
         self.client = client
     }
+}
+
+private enum SendOutcome: Equatable, Sendable {
+    case reply(Data)
+    case hungUp
+    case timedOut
+
+    var data: Data? {
+        if case .reply(let data) = self { return data }
+        return nil
+    }
+}
+
+/// One request/reply on a worker thread, bounded by `seconds` because the
+/// client socket itself has no timeout.
+private func sendWithin(seconds: Double, _ client: DarwinEvaluateClient, body: Data) -> SendOutcome {
+    let box = OutcomeBox()
+    let done = DispatchSemaphore(value: 0)
+    let held = UncheckedClient(client)
+    DispatchQueue.global().async {
+        box.set((try? held.client.send(body: body)).map(SendOutcome.reply) ?? .hungUp)
+        done.signal()
+    }
+    guard done.wait(timeout: .now() + seconds) == .success else { return .timedOut }
+    return box.get() ?? .hungUp
+}
+
+private final class OutcomeBox: Sendable {
+    private let box = Mutex<SendOutcome?>(nil)
+
+    func set(_ outcome: SendOutcome) { box.withLock { $0 = outcome } }
+    func get() -> SendOutcome? { box.withLock { $0 } }
 }
 
 private func darwinResetHardRequest() -> IPCRequest {

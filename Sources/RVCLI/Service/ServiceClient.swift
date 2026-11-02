@@ -371,6 +371,30 @@ public struct ServiceClient: Sendable {
 #endif
     }
 
+    /// Hook-door liveness over the same consult transport hooks use: a
+    /// read-only snapshot, never an evaluation. Retried so a freshly
+    /// bootstrapped daemon still starting does not read as down.
+    func verifyHookService(attempts: Int = 3, retryDelayNanoseconds: UInt64 = 1_000_000_000) async -> Bool {
+        guard let transport else { return false }
+        let tries = max(1, attempts)
+        for attempt in 0..<tries {
+            do {
+                _ = try await send(
+                    DoctorSnapshotCall(),
+                    using: transport,
+                    timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                    hookConsult: true
+                )
+                return true
+            } catch {
+                if attempt + 1 < tries, retryDelayNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+                }
+            }
+        }
+        return false
+    }
+
     public func status() async -> ServiceStatusReport {
         ServiceHealth.inspect(await diagnostics()).statusReport
     }

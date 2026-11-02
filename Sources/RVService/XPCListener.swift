@@ -3,51 +3,8 @@ import Foundation
 import RVIPC
 import RVIsolation
 import Synchronization
+import RVXPC
 @preconcurrency import XPC
-
-/// Dictionary key for UTF-8 `IPCRequest` / `IPCResponse` / Hello JSON (`IPCJSON`).
-enum XPCIPCWire {
-    static let key = "rv.ipc"
-    static let actionEndpointKey = "rv.action-endpoint"
-
-    static func body(from message: xpc_object_t) -> Data? {
-        var length = 0
-        guard let bytes = xpc_dictionary_get_data(message, key, &length) else {
-            return nil
-        }
-        return Data(bytes: bytes, count: length)
-    }
-
-    static func set(_ data: Data, on message: xpc_object_t) {
-        set(data, key: key, on: message)
-    }
-
-    /// Sibling of `rv.ipc`. Present (including empty) means use these bytes as
-    /// `hookEvaluate` stdin instead of the JSON `stdin` field.
-    static let stdinKey = "rv.stdin"
-
-    static func stdin(from message: xpc_object_t) -> Data? {
-        var length = 0
-        guard let bytes = xpc_dictionary_get_data(message, stdinKey, &length) else {
-            return nil
-        }
-        return Data(bytes: bytes, count: length)
-    }
-
-    static func setStdin(_ data: Data, on message: xpc_object_t) {
-        set(data, key: stdinKey, on: message)
-    }
-
-    private static func set(_ data: Data, key: String, on message: xpc_object_t) {
-        data.withUnsafeBytes { buffer in
-            if let base = buffer.baseAddress {
-                xpc_dictionary_set_data(message, key, base, buffer.count)
-            } else {
-                xpc_dictionary_set_data(message, key, "", 0)
-            }
-        }
-    }
-}
 
 /// Raw libxpc listener on `dev.rv.evaluate`. C and Swift share `rv.ipc` xpc_data.
 public final class XPCEvaluateListener: Sendable {
@@ -298,16 +255,6 @@ final class XPCPeerSession: Sendable {
                 xpc_connection_send_message(peer, reply)
             }
         }
-    }
-}
-
-// Immutable after init. libxpc objects are safe to use from multiple
-// threads; the handle itself is never mutated, only passed to xpc calls.
-final class XPCHeld: @unchecked Sendable {
-    let object: xpc_object_t
-
-    init(_ object: xpc_object_t) {
-        self.object = object
     }
 }
 #endif
