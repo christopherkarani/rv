@@ -1,5 +1,6 @@
 import Testing
 import RVDomain
+import RVEngine
 @testable import RVHooks
 
 private let codec = ClaudeHostCodec()
@@ -77,4 +78,33 @@ func claudeEditTools_decodeToEditAction(tool: String, input: String, path: Strin
 @Test(arguments: ["TodoWrite", "WebFetch", "WebSearch", "Task"])
 func claudeUnrelatedToolsStayForeign(tool: String) {
     #expect(codec.decode(claudePre(tool, #"{"path":"/p/.env"}"#)) == .foreign)
+}
+
+// End to end through the real catalog gate.
+private func gateWire(_ stdin: String) async -> HookWire {
+    await hookWire(
+        host: .claude,
+        stdin: stdin,
+        world: hookWorld(
+            evaluate: { _, _ in EvaluationResult(outcome: .plain) },
+            evaluateFile: { action, _ in evaluateFileTool(action) }
+        )
+    )
+}
+
+@Test func claudeGrepOnSshKey_isDeniedByRealGate() async {
+    let wire = await gateWire(claudePre("Grep", #"{"pattern":"x","path":"~/.ssh/id_rsa","output_mode":"content"}"#))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("core.secrets"))
+}
+
+@Test func claudeGrepWithSecretGlob_isDeniedByRealGate() async {
+    let wire = await gateWire(claudePre("Grep", #"{"pattern":"x","path":"/p","glob":".env*"}"#))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func claudeBenignGrep_isAllowedByRealGate() async {
+    let wire = await gateWire(claudePre("Grep", #"{"pattern":"TODO","path":"/p/src"}"#))
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
 }
