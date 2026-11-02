@@ -51,6 +51,16 @@ struct ActionPolicyEngineTests {
         #expect(bound.decision == .deny(ActionPolicyEngine.Builtin.remoteBranchAsk))
     }
 
+    @Test func secretRequest_isMandatoryHumanAndReviewCannotLiftIt() {
+        let action = ProposedAction.secretRequest(SecretRequestAction(
+            secret: "GH", method: "POST", host: "api.example.com", path: "/repos/o/r/merges",
+            targetSHA256: "t", bodySHA256: "b", bodyBytes: 1))
+        let verdict = ActionPolicyEngine.evaluate(action: action, context: privateBranch)
+        #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.secretRequestApproval))
+        let bound = ActionPolicyEngine.bind(action: action, context: privateBranch, review: .success(allowReview))
+        #expect(bound == .mandatoryHuman(ActionPolicyEngine.Builtin.secretRequestApproval))
+    }
+
     @Test func plainPush_isMandatoryHumanOnPrivateBranch() {
         let verdict = ActionPolicyEngine.evaluate(
             action: ActionPolicyFixtures.plainPush(branchName: "topic"),

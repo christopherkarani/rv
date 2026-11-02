@@ -111,6 +111,10 @@ public final class SecretGateway: @unchecked Sendable {
         /// Set for AWS SigV4 delivery: `value` is a credential set, and the
         /// gateway re-signs instead of substituting.
         var signing: AWSSigningBinding?
+        /// Expanded `approve` rules; a matching request needs a human's yes.
+        var approvals: [GatewayAccessRule] = []
+        /// Set at bind when the runtime has an admission channel that can ask.
+        var approver: SecretRequestApprover?
         /// Bumped each time a refresh swaps the value.
         var generation = 0
         /// Values this entry held before, newest first, still scrubbed from responses.
@@ -130,8 +134,13 @@ public final class SecretGateway: @unchecked Sendable {
     /// does not land stops the request.
     let audit: @Sendable (SecretUseRecord) -> Bool
     let now: @Sendable () -> Date
+    let approvalTiming: GatewayApprovalTiming
     let lock = NSLock()
     var entries: [String: Entry] = [:]
+    /// Approvals filed and not yet resolved, by the action digest they bind.
+    var parkedApprovals: [String: ParkedApproval] = [:]
+    /// Requests currently held open waiting for a human.
+    var waitingApprovals = 0
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
     private var listenFDs: [Int32] = []
     /// Signaled when that fd's accept loop has left the socket, so `stop`
@@ -159,12 +168,14 @@ public final class SecretGateway: @unchecked Sendable {
         transport: SecretUpstreamTransport,
         peers: GatewayPeerCheck,
         audit: @escaping @Sendable (SecretUseRecord) -> Bool,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        approvalTiming: GatewayApprovalTiming = .standard
     ) {
         self.transport = transport
         self.peers = peers
         self.audit = audit
         self.now = now
+        self.approvalTiming = approvalTiming
     }
 
     deinit {
@@ -203,10 +214,17 @@ public final class SecretGateway: @unchecked Sendable {
         lock.unlock()
     }
 
+    func bind(_ placeholders: [SecretPlaceholder], approver: SecretRequestApprover) {
+        lock.lock()
+        for placeholder in placeholders { entries[placeholder.token]?.approver = approver }
+        lock.unlock()
+    }
+
     public func revoke(_ placeholders: [SecretPlaceholder]) {
         lock.lock()
         for placeholder in placeholders { entries[placeholder.token] = nil }
         lock.unlock()
+        cancelApprovals(for: Set(placeholders.map(\.token)))
     }
 
     var liveCount: Int {
@@ -342,6 +360,7 @@ public final class SecretGateway: @unchecked Sendable {
         boundPort = nil
         entries.removeAll()
         lock.unlock()
+        cancelApprovals(for: nil)
         if let port {
             wakeListeningPort(port)
         }
@@ -532,6 +551,13 @@ public final class SecretGateway: @unchecked Sendable {
             deny(.tooLarge)
             return
         }
+        if let refusal = approval(
+            live, token: token, method: head.method, route: route, basePath: Self.live(live, token: token).basePath,
+            url: url, target: head.target, body: body)
+        {
+            deny(refusal)
+            return
+        }
         var headers = rewritten.headers
         if let signing = live.signing {
             switch awsSigned(
@@ -626,7 +652,9 @@ public final class SecretGateway: @unchecked Sendable {
         _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
         runtime: String? = nil, started: DispatchTime
     ) {
-        GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
+        GatewaySocket.writeAll(
+            client,
+            GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
         _ = audit(SecretUseRecord(
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil, activity: refusal.isMisuse ? .blocked : .refused, refusal: refusal.code,
@@ -770,11 +798,12 @@ enum GatewaySocket {
         return true
     }
 
-    static func plainResponse(status: Int, reason: String) -> [UInt8] {
+    static func plainResponse(status: Int, reason: String, retryAfter: Int? = nil) -> [UInt8] {
         let body = "rv secret gateway: \(reason)\n"
         let phrase = HTTPURLResponse.localizedString(forStatusCode: status).capitalized
+        let retry = retryAfter.map { "Retry-After: \($0)\r\n" } ?? ""
         return Array(
-            ("HTTP/1.1 \(status) \(phrase)\r\nContent-Type: text/plain; charset=utf-8\r\n"
+            ("HTTP/1.1 \(status) \(phrase)\r\nContent-Type: text/plain; charset=utf-8\r\n" + retry
                 + "Content-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body).utf8)
     }
 

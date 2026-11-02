@@ -171,6 +171,7 @@ extension SecretsConfiguration {
                     fields["surfaces"] = GatewaySurface.ordered(binding.surfaces).map(\.rawValue)
                 }
                 if binding.allow.isEmpty == false { fields["allow"] = allowList(binding.allow) }
+                if binding.approve.isEmpty == false { fields["approve"] = allowList(binding.approve) }
                 entry["delivery"] = ["gateway": fields]
             case .awsSigV4(let binding):
                 var fields: [String: Any] = [
@@ -178,6 +179,7 @@ extension SecretsConfiguration {
                     "service": binding.service, "endpointEnv": binding.endpointEnv,
                 ]
                 if binding.allow.isEmpty == false { fields["allow"] = allowList(binding.allow) }
+                if binding.approve.isEmpty == false { fields["approve"] = allowList(binding.approve) }
                 entry["delivery"] = ["awsSigV4": fields]
             }
             return entry

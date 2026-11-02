@@ -388,6 +388,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
     case shell(ShellAction)
     case file(FileAction)
     case http(HTTPAction)
+    /// A secret gateway request held for a human by the secret's `approve` rule.
+    case secretRequest(SecretRequestAction)
 
     public var fingerprint: ActionFingerprint {
         switch self {
@@ -396,6 +398,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         case .file(let action):
             return action.fingerprint
         case .http(let action):
+            return action.fingerprint
+        case .secretRequest(let action):
             return action.fingerprint
         }
     }
@@ -406,7 +410,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.supportingCommand
-        case .file, .http:
+        case .file, .http, .secretRequest:
             return nil
         }
     }
@@ -419,6 +423,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
             return action.effects
         case .http(let action):
             return action.effects
+        case .secretRequest(let action):
+            return action.effects
         }
     }
 
@@ -429,6 +435,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         case .file(let action):
             return action.resources
         case .http(let action):
+            return action.resources
+        case .secretRequest(let action):
             return action.resources
         }
     }
@@ -441,6 +449,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
             return action.scope
         case .http(let action):
             return action.scope
+        case .secretRequest(let action):
+            return action.scope
         }
     }
 
@@ -448,7 +458,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.gitAction
-        case .file, .http:
+        case .file, .http, .secretRequest:
             return nil
         }
     }

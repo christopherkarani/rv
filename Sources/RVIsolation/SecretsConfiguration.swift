@@ -56,20 +56,26 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var surfaces: Set<GatewaySurface>
     /// Methods and paths the secret may be used for. Empty allows any.
     public var allow: [GatewayAllowance]
+    /// Methods and paths that need a human's approval per request. Empty needs none.
+    public var approve: [GatewayAllowance]
 
     public init(
         upstream: URL, baseURLEnv: String, placeholderPrefix: String = "",
-        surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = []
+        surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [],
+        approve: [GatewayAllowance] = []
     ) {
         self.upstream = upstream
         self.baseURLEnv = baseURLEnv
         self.placeholderPrefix = placeholderPrefix
         self.surfaces = surfaces
         self.allow = allow
+        self.approve = approve
     }
 
     /// `allow` with presets expanded.
     public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
+    /// `approve` with presets expanded.
+    public var approvalRules: [GatewayAccessRule] { approve.flatMap(\.rules) }
 }
 
 /// AWS SDKs in the cage sign with a placeholder key id against
@@ -87,17 +93,25 @@ public struct AWSSigningBinding: Sendable, Equatable {
     public var endpointEnv: String
     /// Methods and paths the secret may be used for. Empty allows any.
     public var allow: [GatewayAllowance]
+    /// Methods and paths that need a human's approval per request. Empty needs none.
+    public var approve: [GatewayAllowance]
 
-    public init(upstream: URL, region: String, service: String, endpointEnv: String, allow: [GatewayAllowance] = []) {
+    public init(
+        upstream: URL, region: String, service: String, endpointEnv: String, allow: [GatewayAllowance] = [],
+        approve: [GatewayAllowance] = []
+    ) {
         self.upstream = upstream
         self.region = region
         self.service = service
         self.endpointEnv = endpointEnv
         self.allow = allow
+        self.approve = approve
     }
 
     /// `allow` with presets expanded.
     public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
+    /// `approve` with presets expanded.
+    public var approvalRules: [GatewayAccessRule] { approve.flatMap(\.rules) }
 }
 
 public enum SecretDelivery: Sendable, Equatable {
@@ -451,7 +465,8 @@ enum SecretsDecoding {
             try onlyKeys(fields, [], at: place)
             return .environment
         case "gateway":
-            try onlyKeys(fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces", "allow"], at: place)
+            try onlyKeys(
+                fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces", "allow", "approve"], at: place)
             guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
@@ -464,11 +479,12 @@ enum SecretsDecoding {
             }
             let surfaces = try self.surfaces(fields["surfaces"], at: "\(place).surfaces")
             let allow = try self.allow(fields["allow"], at: "\(place).allow")
+            let approve = try self.allow(fields["approve"], at: "\(place).approve")
             return .gateway(SecretGatewayBinding(
                 upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
-                allow: allow))
+                allow: allow, approve: approve))
         case "awsSigV4":
-            try onlyKeys(fields, ["upstream", "region", "service", "endpointEnv", "allow"], at: place)
+            try onlyKeys(fields, ["upstream", "region", "service", "endpointEnv", "allow", "approve"], at: place)
             guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
@@ -486,8 +502,10 @@ enum SecretsDecoding {
                 throw Failure("\(place).endpointEnv must be a distinct variable such as AWS_ENDPOINT_URL_S3")
             }
             let allow = try self.allow(fields["allow"], at: "\(place).allow")
+            let approve = try self.allow(fields["approve"], at: "\(place).approve")
             return .awsSigV4(AWSSigningBinding(
-                upstream: upstream, region: region, service: service, endpointEnv: endpointEnv, allow: allow))
+                upstream: upstream, region: region, service: service, endpointEnv: endpointEnv, allow: allow,
+                approve: approve))
         default:
             throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
         }

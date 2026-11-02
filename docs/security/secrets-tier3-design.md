@@ -383,9 +383,34 @@ gateway requests.
 
 **Size.** M.
 
-**Open questions.**
-- Should approvals ride rvd's IPC (identity-bound), or a host-local prompt?
-- What does a hook-less shell launch do with no approver: deny or allow?
+**Open questions (decided).**
+- Approvals ride rvd's action-approval service through the runtime's
+  admission channel, so they are identity-bound.
+- With no approver, deny (`approvalUnavailable`).
+
+**As built (corrects the proposal above).**
+- *No grants, scopes, or `maxDuration`.* Every matching request needs its
+  own single-use approval: the proposal's `request` scope with
+  `maxDuration = 0`. Config is `approve: [GatewayAllowance]`, the `allow`
+  shape, not a new `GatewayApprovalRule`.
+- *No separate nonce.* The approval service already binds each approval to
+  a random approval and continuation id, the agent principal, and the action
+  digest, and consumes it once (`consumeApproval(_:actionDigestHex:)`).
+  `SecretRequestAction` binds SHA-256 of the full target (query included)
+  and of the body.
+- *Blocking was wrong.* Approvals take human time (they live 15 minutes);
+  agent HTTP clients do not wait that long.
+  The gateway holds a request up to 20 s, then refuses `approvalPending`
+  with `Retry-After`; an identical retry after approval consumes it and is
+  forwarded. Past 16 held requests, a request checks once instead of
+  waiting, and gets 403 `approvalPending`, not 503.
+- *Hook point.* After the body read and before substitution and the
+  forward record (`SecretGateway.handle`), in
+  `Sources/RVIsolation/SecretGatewayApproval.swift`. Policy maps
+  `ProposedAction.secretRequest` to `mandatoryHuman`; `perform` and compile
+  refuse it, since only the gateway executes it.
+- Parked approvals are cancelled on `revoke` and `stop`, and dropped after
+  the service's 15-minute lifetime.
 
 ---
 

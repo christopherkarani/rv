@@ -510,6 +510,14 @@ enum HelpCatalog {
                     description: "Another key id is 403 (misuse); signed-chunk uploads 400 (use UNSIGNED-PAYLOAD); re-read every 5m or refresh, expiring at Expiration"
                 ),
                 HelpRow(
+                    name: "approve",
+                    description: "approve [{methods, path}] on gateway or awsSigV4: each matching request needs a human's yes in rv"
+                ),
+                HelpRow(
+                    name: "approve refusals",
+                    description: "403 approvalPending + Retry-After until approved, then retry the identical request once; approvalDenied; approvalUnavailable"
+                ),
+                HelpRow(
                     name: "defaults",
                     description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
                 ),

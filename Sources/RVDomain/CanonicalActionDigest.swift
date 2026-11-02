@@ -52,6 +52,7 @@ public enum CanonicalActionDigest: Sendable {
         case .shell: return "shell"
         case .file: return "file"
         case .http: return "http"
+        case .secretRequest: return "secretRequest"
         }
     }
 }

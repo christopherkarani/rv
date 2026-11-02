@@ -70,6 +70,12 @@ public enum ReviewPromptBuilder: Sendable {
             if let address = http.destination.address {
                 lines.append("address: \(address.presentation)")
             }
+        case .secretRequest(let request):
+            lines.append("kind: secretRequest")
+            lines.append("secret: \(request.secret)")
+            lines.append("method: \(request.method)")
+            lines.append("destination: \(request.host)\(request.path)")
+            lines.append("bodyBytes: \(request.bodyBytes)")
         }
     }
 

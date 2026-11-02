@@ -26,6 +26,9 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         /// Runs inside `consumeApproval` before the verdict returns. Lets
         /// a test revoke the principal between spend and resume.
         var onConsume: (@Sendable (UUID) -> Void)?
+        /// Runs at the start of `createApproval`, outside the lock. Lets a
+        /// test hold concurrent filers inside the call together.
+        var onCreate: (@Sendable () -> Void)?
     }
 
     private let state = Mutex(State())
@@ -52,6 +55,10 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         state.withLock { $0.onConsume = hook }
     }
 
+    func setOnCreate(_ hook: (@Sendable () -> Void)?) {
+        state.withLock { $0.onCreate = hook }
+    }
+
     /// Authorize-all: every approval reports authorized and consumes.
     func authorizeAll() {
         state.withLock {
@@ -69,7 +76,8 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         reason: RuntimeAskReason,
         policyContext: String
     ) -> CreatedActionApproval? {
-        state.withLock { state in
+        state.withLock { $0.onCreate }?()
+        return state.withLock { state in
             guard !state.createDeclined else { return nil }
             state.creates.append((action, reason))
             let created = CreatedActionApproval(
@@ -111,7 +119,7 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
     }
 }
 
-private final class ParkEffect: Sendable {
+final class ParkEffect: Sendable {
     private let runsBox = Mutex(0)
     private let commandsBox = Mutex<[String]>([])
     var runs: Int { runsBox.withLock { $0 } }
@@ -126,7 +134,7 @@ private final class ParkEffect: Sendable {
     }
 }
 
-private struct ParkHarness {
+struct ParkHarness {
     let root: URL
     let runtime: RuntimeSession
     let capability: RuntimeCapability
@@ -285,7 +293,7 @@ private struct ParkHarness {
     }
 }
 
-private enum ParkHarnessError: Error {
+enum ParkHarnessError: Error {
     case announceFailed
     case bindFailed
 }
