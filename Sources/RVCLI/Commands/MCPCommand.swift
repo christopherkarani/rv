@@ -1263,6 +1263,7 @@ enum MCPRun {
         case .success(let result):
             var lines = result.changed.map { (undo ? "restored " : "routed through rv: ") + $0 }
             lines += result.skipped.map { "skipped " + $0 }
+            lines += result.backups.map { "previous version kept at " + MCPDisplayedText.field($0) }
             if result.manualSteps.isEmpty == false {
                 lines.append("\(host.rawValue) keeps MCP servers in TOML; run:")
                 lines += result.manualSteps.map { "  " + $0 }

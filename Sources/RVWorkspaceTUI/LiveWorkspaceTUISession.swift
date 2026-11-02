@@ -2,41 +2,42 @@
 import Foundation
 import RVDomain
 import RVIsolation
+import Synchronization
 
 /// `WorkspaceClient` adapted to the TUI. This type never sees a PTY descriptor.
-public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Sendable {
-    private let connectionLock = NSLock()
-    /// Lifecycle and subscription traffic has its own host connection. A
-    /// cancellation can wait for child teardown, so terminal input must not
-    /// share that ordered server request loop.
-    private var storedControlClient: WorkspaceClient
-    /// Terminal subscriptions/events and lease, write, and resize RPCs use one
-    /// independent host connection. It never carries lifecycle cancellation.
-    private var storedTerminalClient: WorkspaceClient
-    private var endpoint: WorkspaceEndpoint?
+public final class LiveWorkspaceTUISession: WorkspaceTUISession {
+    private struct Connections {
+        /// Lifecycle and subscription traffic has its own host connection. A
+        /// cancellation can wait for child teardown, so terminal input must not
+        /// share that ordered server request loop.
+        var control: WorkspaceClient
+        /// Terminal subscriptions/events and lease, write, and resize RPCs use one
+        /// independent host connection. It never carries lifecycle cancellation.
+        var terminal: WorkspaceClient
+        var endpoint: WorkspaceEndpoint?
+        var closed = false
+    }
+
+    /// Guards only the connection refs; every RPC runs on a copied ref outside the lock.
+    private let connections: Mutex<Connections>
     private let project: String?
     private let hostExecutable: URL?
-    private var closed = false
 
     private var controlClient: WorkspaceClient {
-        connectionLock.lock()
-        defer { connectionLock.unlock() }
-        return storedControlClient
+        connections.withLock { $0.control }
     }
 
     private var terminalClient: WorkspaceClient {
-        connectionLock.lock()
-        defer { connectionLock.unlock() }
-        return storedTerminalClient
+        connections.withLock { $0.terminal }
     }
 
     public init(controlClient: WorkspaceClient, terminalClient: WorkspaceClient,
                 endpoint: WorkspaceEndpoint? = nil, project: String? = nil,
                 hostExecutable: URL? = nil) {
         precondition(controlClient !== terminalClient, "workspace TUI requires separate control and terminal clients")
-        self.storedControlClient = controlClient
-        self.storedTerminalClient = terminalClient
-        self.endpoint = endpoint
+        self.connections = Mutex(Connections(
+            control: controlClient, terminal: terminalClient, endpoint: endpoint
+        ))
         self.project = project
         self.hostExecutable = hostExecutable
     }
@@ -45,20 +46,11 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
     /// is detached before returning the failure.
     public static func connect(_ endpoint: WorkspaceEndpoint, project: String? = nil,
                                hostExecutable: URL? = nil) -> Result<LiveWorkspaceTUISession, WorkspaceClientFailure> {
-        switch WorkspaceClient.connect(endpoint) {
-        case .failure(let error):
-            return .failure(error)
-        case .success(let control):
-            switch WorkspaceClient.connect(endpoint) {
-            case .failure(let error):
-                _ = control.detach()
-                return .failure(error)
-            case .success(let terminal):
-                return .success(LiveWorkspaceTUISession(
-                    controlClient: control, terminalClient: terminal,
-                    endpoint: endpoint, project: project, hostExecutable: hostExecutable
-                ))
-            }
+        connectPair(endpoint).map { pair in
+            LiveWorkspaceTUISession(
+                controlClient: pair.control, terminalClient: pair.terminal,
+                endpoint: endpoint, project: project, hostExecutable: hostExecutable
+            )
         }
     }
 
@@ -74,40 +66,49 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
                 return .failure(.disconnected)
             }
         } else {
-            connectionLock.lock()
-            let previous = endpoint
-            connectionLock.unlock()
-            guard let previous else { return .failure(.disconnected) }
+            guard let previous = connections.withLock({ $0.endpoint }) else { return .failure(.disconnected) }
             target = previous
         }
-        let newControl: WorkspaceClient
-        switch WorkspaceClient.connect(target) {
-        case .success(let client): newControl = client
+        let pair: (control: WorkspaceClient, terminal: WorkspaceClient)
+        switch Self.connectPair(target) {
+        case .success(let connected): pair = connected
         case .failure(let error): return .failure(Self.failure(error))
         }
-        let newTerminal: WorkspaceClient
-        switch WorkspaceClient.connect(target) {
-        case .success(let client): newTerminal = client
-        case .failure(let error):
-            _ = newControl.detach()
-            return .failure(Self.failure(error))
+        let old = connections.withLock { state -> (control: WorkspaceClient, terminal: WorkspaceClient)? in
+            if state.closed { return nil }
+            let replaced = (control: state.control, terminal: state.terminal)
+            state.control = pair.control
+            state.terminal = pair.terminal
+            state.endpoint = target
+            return replaced
         }
-        connectionLock.lock()
-        if closed {
-            connectionLock.unlock()
-            _ = newTerminal.detach()
-            _ = newControl.detach()
+        guard let old else {
+            _ = pair.terminal.detach()
+            _ = pair.control.detach()
             return .failure(.disconnected)
         }
-        let oldControl = storedControlClient
-        let oldTerminal = storedTerminalClient
-        storedControlClient = newControl
-        storedTerminalClient = newTerminal
-        endpoint = target
-        connectionLock.unlock()
-        _ = oldTerminal.detach()
-        _ = oldControl.detach()
+        _ = old.terminal.detach()
+        _ = old.control.detach()
         return .success(())
+    }
+
+    /// Opens control then terminal; a half-opened pair detaches control
+    /// before returning the failure.
+    private static func connectPair(
+        _ endpoint: WorkspaceEndpoint
+    ) -> Result<(control: WorkspaceClient, terminal: WorkspaceClient), WorkspaceClientFailure> {
+        switch WorkspaceClient.connect(endpoint) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let control):
+            switch WorkspaceClient.connect(endpoint) {
+            case .failure(let error):
+                _ = control.detach()
+                return .failure(error)
+            case .success(let terminal):
+                return .success((control: control, terminal: terminal))
+            }
+        }
     }
 
     public func inventory() -> Result<SessionInventory, WorkspaceTUIError> {
@@ -289,11 +290,10 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
     }
 
     public func close() {
-        connectionLock.lock()
-        closed = true
-        let terminal = storedTerminalClient
-        let control = storedControlClient
-        connectionLock.unlock()
+        let (terminal, control) = connections.withLock { state in
+            state.closed = true
+            return (state.terminal, state.control)
+        }
         _ = terminal.detach()
         _ = control.detach()
     }

@@ -111,9 +111,23 @@ struct RuntimeAdversarialTests {
             try FileManager.default.createSymbolicLink(atPath: first.path, withDestinationPath: "second")
         }
         script += "printf ran > inside; printf escaped > \(quote(first.appendingPathComponent("escaped").path))"
-        let run = try await runShell(tree.contained, script)
-        #expect(exists(tree.workspaceURL.appendingPathComponent("inside")))
-        #expect(run.exitStatus != 0)
+        if createdByAgent {
+            // An agent-created absolute link that leaves the workspace is
+            // refused at publish, and publish is all-or-nothing: the run
+            // fails closed and not even `inside` reaches the saved tree.
+            let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: ["-c", script]))
+            let result = await IsolationBackends.applyOffPool(tree.contained, command: command)
+            guard case .failure(.workspaceInodeBoundaryFailed) = result else {
+                Issue.record("escaping agent symlink must fail the publish, got \(result)")
+                return
+            }
+            #expect(!exists(tree.workspaceURL.appendingPathComponent("inside")))
+            #expect(!exists(second))
+        } else {
+            let run = try await runShell(tree.contained, script)
+            #expect(exists(tree.workspaceURL.appendingPathComponent("inside")))
+            #expect(run.exitStatus != 0)
+        }
         #expect(!exists(outside))
     }
 

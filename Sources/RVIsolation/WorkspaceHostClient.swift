@@ -75,6 +75,9 @@ public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case recoveryRequired
     case childTeardownFailed
     case runtimeLimit
+    /// Close refused an escaping symlink. Nothing was published; the
+    /// associated value is the path of the retained disk image.
+    case publishRejected(retainedImage: String)
     case staleEndpoint
     case terminalUnavailable
     case terminalBusy
@@ -1008,6 +1011,7 @@ private func clientFailure(_ code: WorkspaceControlCode, detail: String?) -> Wor
     case .recoveryRequired: .recoveryRequired
     case .childTeardownFailed: .childTeardownFailed
     case .runtimeLimit: .runtimeLimit
+    case .publishRejected: .publishRejected(retainedImage: detail ?? "")
     case .terminalUnavailable: .terminalUnavailable
     case .terminalBusy: .terminalBusy
     case .terminalLimit: .terminalLimit

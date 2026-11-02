@@ -49,7 +49,8 @@ final class SecretRefreshFlight: Sendable {
 
     func finish() { group.leave() }
 
-    func wait() { group.wait() }
+    /// True when the refresh finished within `seconds`.
+    func wait(seconds: TimeInterval) -> Bool { group.wait(timeout: .now() + seconds) == .success }
 }
 
 struct SecretRotationState: Sendable {
@@ -86,6 +87,11 @@ extension SecretGateway {
     static let historyDepth = 8
     /// The probe is cheap but runs on the request path, so at most this often per entry.
     static let probeSpacing: TimeInterval = 2
+    /// How long a request waits for a refresh: the provider command timeout
+    /// (30 s) plus a margin. A refresh that outlasts it counts as failed for
+    /// that request, so a provider that never answers cannot pin handler
+    /// threads and connection slots.
+    static let refreshWaitLimit: TimeInterval = 32
 
     /// Applies rotation and expiry for one request about to use `token`.
     /// Nil lets it through, with the entry's value as current as the policy requires.
@@ -144,17 +150,19 @@ extension SecretGateway {
     /// Runs or joins this entry's refresh and waits for it. With `restart`, a
     /// refresh already running may have read the value before the change, so
     /// a new one follows it.
+    /// Gives up after `refreshWaitLimit`; the caller's step logic then
+    /// treats the entry as unrefreshed.
     private func refresh(_ token: String, restart: Bool) {
         if restart {
             lock.lock()
             let running = entries[token]?.rotation?.flight
             lock.unlock()
-            running?.wait()
+            if let running, !running.wait(seconds: refreshWaitLimit) { return }
         }
         lock.lock()
         let flight = beginRefresh(token)
         lock.unlock()
-        flight?.wait()
+        _ = flight?.wait(seconds: refreshWaitLimit)
     }
 
     /// The running refresh, or a new one. Caller holds `lock`.
@@ -163,9 +171,11 @@ extension SecretGateway {
         if let running = state.flight { return running }
         let flight = SecretRefreshFlight()
         entries[token]?.rotation?.flight = flight
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.finishRefresh(token, result: refresh.resolve(), flight: flight)
-        }
+        // Not the global queue: request handlers run there and wait on this
+        // refresh, so under load they could occupy every worker it needs.
+        let thread = Thread { self.finishRefresh(token, result: refresh.resolve(), flight: flight) }
+        thread.qualityOfService = .userInitiated
+        thread.start()
         return flight
     }
 
