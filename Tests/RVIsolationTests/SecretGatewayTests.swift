@@ -354,6 +354,22 @@ struct SecretGatewayTests {
         }
     }
 
+    @Test func upstreamChallengeOnANon401StatusIsPassedThroughWithoutTheChallenge() throws {
+        let upstream = RecordingUpstream(
+            status: 403,
+            headers: [("WWW-Authenticate", "Bearer error=\"insufficient_scope\", scope=\"files.write\""),
+                      ("Content-Type", "application/json")],
+            chunks: [Data("{\"error\":\"insufficient_scope\"}".utf8)])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 403)
+        #expect(response.headers["www-authenticate"] == nil)
+        #expect(response.body.contains("insufficient_scope"))
+    }
+
     @Test func acceptsChunkedBodiesAndExpectContinue() throws {
         let upstream = RecordingUpstream(status: 201, chunks: [Data("created".utf8)])
         let audit = AuditRecords()
