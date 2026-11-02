@@ -1,0 +1,214 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import Foundation
+import RVPresentation
+#if os(macOS)
+import RVIsolation
+#endif
+
+/// Where the LaunchAgent is registered, as `launchctl print` sees it.
+struct LaunchdObservation: Equatable, Sendable {
+    var guiDomainExists: Bool
+    var loadedInGui: Bool
+    var loadedInUser: Bool
+}
+
+/// State of the admin peer-trust manifest hooks consult first.
+enum TrustManifestState: Equatable, Sendable {
+    case absent
+    case valid
+    /// Present but rejected: hooks and doctor fail closed.
+    case invalid
+    case notApplicable
+}
+
+/// Install facts doctor cannot read from `rvd` itself.
+struct DoctorInstallProbes {
+    var userID: uid_t
+    var launchd: LaunchdObservation?
+    var trustManifest: TrustManifestState
+
+    static func live(
+        userID: uid_t = getuid(),
+        launchctl: any LaunchctlApplying = ProcessLaunchctl()
+    ) -> DoctorInstallProbes {
+#if os(macOS)
+        DoctorInstallProbes(
+            userID: userID,
+            launchd: LaunchAgentProbe.observe(
+                label: SetupRun.launchAgentLabel,
+                userID: userID,
+                launchctl: launchctl
+            ),
+            trustManifest: liveTrustManifest()
+        )
+#else
+        DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
+#endif
+    }
+
+#if os(macOS)
+    private static func liveTrustManifest() -> TrustManifestState {
+        switch ProtectedPeerTrustConfiguration.hookTrustSource() {
+        case .manifest:
+            .valid
+        case .siblingPin:
+            .absent
+        case .invalid:
+            .invalid
+        }
+    }
+#endif
+}
+
+/// Install/runtime problems that make hooks deny even though rv "looks"
+/// installed. Each carries the exact repair command.
+enum DoctorInstallChecks {
+#if os(Linux)
+    static let packBundleName = "rv_RVPacks.resources"
+#else
+    static let packBundleName = "rv_RVPacks.bundle"
+#endif
+    static let trustManifestPath = "/Library/Application Support/RV/peer-trust.json"
+
+    static func problems(
+        paths: OwnedPaths,
+        fileManager: FileManager,
+        probes: DoctorInstallProbes
+    ) -> [DoctorProblem] {
+        [
+            trustManifest(probes.trustManifest),
+            installedBinaries(paths: paths, fileManager: fileManager),
+            launchAgentProgram(paths: paths, fileManager: fileManager),
+            launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
+            configDirectory(paths: paths, userID: probes.userID),
+        ].compactMap { $0 }
+    }
+
+    private static func setupFix(_ paths: OwnedPaths) -> String {
+        "run \(paths.localRv) setup"
+    }
+
+    static func trustManifest(_ state: TrustManifestState) -> DoctorProblem? {
+        guard state == .invalid else { return nil }
+        return DoctorProblem(
+            id: "trust-manifest",
+            severity: .fail,
+            summary: "\(trustManifestPath) is present but rejected (must be a valid, root-owned manifest); "
+                + "hooks fail closed",
+            fix: "sudo rm '\(trustManifestPath)' (or reinstall a valid manifest)"
+        )
+    }
+
+    /// `rvd` beside the hook `rv`, and the pack bundle `rvd` loads beside it.
+    static func installedBinaries(paths: OwnedPaths, fileManager: FileManager) -> DoctorProblem? {
+        guard fileManager.isExecutableFile(atPath: paths.localRvd) else {
+            return DoctorProblem(
+                id: "rvd-missing",
+                severity: .fail,
+                summary: "rvd not found at \(paths.localRvd); hooks have no daemon to ask",
+                fix: SetupRun.reinstallHint
+            )
+        }
+        let bundle = (paths.localRvd as NSString).deletingLastPathComponent + "/" + packBundleName
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: bundle, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return DoctorProblem(
+                id: "pack-bundle",
+                severity: .fail,
+                summary: "\(packBundleName) missing next to \(paths.localRvd); rvd cannot load its packs",
+                fix: SetupRun.reinstallHint
+            )
+        }
+        return nil
+    }
+
+    /// The plist must launch the `rvd` hooks pin (`~/.local/bin/rvd`).
+    static func launchAgentProgram(paths: OwnedPaths, fileManager: FileManager) -> DoctorProblem? {
+        guard fileManager.fileExists(atPath: paths.launchAgent) else { return nil }
+        guard let program = launchAgentProgram(at: paths.launchAgent) else {
+            return DoctorProblem(
+                id: "launch-agent-rvd",
+                severity: .fail,
+                summary: "LaunchAgent \(paths.launchAgent) is unreadable or names no program",
+                fix: setupFix(paths)
+            )
+        }
+        let expected = (paths.localRvd as NSString).standardizingPath
+        guard (program as NSString).standardizingPath != expected else { return nil }
+        return DoctorProblem(
+            id: "launch-agent-rvd",
+            severity: .fail,
+            summary: "LaunchAgent runs \(program), but hooks only trust \(paths.localRvd)",
+            fix: setupFix(paths)
+        )
+    }
+
+    static func launchAgentProgram(at path: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path),
+            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+            let dictionary = plist as? [String: Any]
+        else { return nil }
+        if let arguments = dictionary["ProgramArguments"] as? [String], let first = arguments.first {
+            return first
+        }
+        return dictionary["Program"] as? String
+    }
+
+    /// A job only in `user/<uid>` is invisible to hosts in the Aqua session.
+    static func launchdDomain(
+        _ observation: LaunchdObservation?,
+        paths: OwnedPaths,
+        userID: uid_t
+    ) -> DoctorProblem? {
+        guard let observation,
+            observation.guiDomainExists,
+            observation.loadedInUser,
+            observation.loadedInGui == false
+        else { return nil }
+        return DoctorProblem(
+            id: "launchd-domain",
+            severity: .fail,
+            summary: "\(SetupRun.launchAgentLabel) is loaded in \(LaunchdDomain.user(userID)), "
+                + "which desktop agents cannot reach (\(LaunchdDomain.gui(userID)) exists)",
+            fix: setupFix(paths)
+        )
+    }
+
+    /// Mirrors rvd's socket base-directory rule: `~/.config` must be a
+    /// directory owned by this user and not group/world-writable.
+    static func configDirectory(paths: OwnedPaths, userID: uid_t) -> DoctorProblem? {
+        let config = paths.home.rawValue + "/.config"
+        var info = stat()
+        guard stat(config, &info) == 0 else { return nil }
+        if (info.st_mode & S_IFMT) != S_IFDIR {
+            return DoctorProblem(
+                id: "config-dir",
+                severity: .fail,
+                summary: "\(config) is not a directory; rvd cannot create its socket",
+                fix: "mv '\(config)' '\(config).bak' && mkdir -m 700 '\(config)'"
+            )
+        }
+        if info.st_uid != userID {
+            return DoctorProblem(
+                id: "config-dir",
+                severity: .fail,
+                summary: "\(config) is owned by uid \(info.st_uid), not uid \(userID); rvd refuses to start",
+                fix: "sudo chown \(userID) '\(config)'"
+            )
+        }
+        let mode = Int(info.st_mode) & 0o777
+        if mode & 0o022 != 0 {
+            return DoctorProblem(
+                id: "config-dir",
+                severity: .fail,
+                summary: "\(config) is group/world-writable (mode \(String(mode, radix: 8))); rvd refuses to start",
+                fix: "chmod go-w '\(config)'"
+            )
+        }
+        return nil
+    }
+}
