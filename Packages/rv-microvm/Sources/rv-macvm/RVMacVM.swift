@@ -121,6 +121,9 @@ struct Status: AsyncParsableCommand {
     func run() async throws {
         let name = try imageName(image)
         let layout = root.layout
+        // rv runs this before every --macvm launch: a good moment to delete
+        // the clones of runs that were killed (a cancel is a SIGKILL).
+        MacVMRuns.sweep(in: layout.runs)
         var problems: [String] = []
         for file in [layout.disk(name), layout.auxiliaryStorage(name)] where !FileManager.default.fileExists(atPath: file.path) {
             problems.append("missing \(file.path)")

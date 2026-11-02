@@ -82,6 +82,7 @@ public enum AgentSession {
 
     private static func run(_ child: GuestChild, channel: MacVMChannel, configuration: AgentConfiguration) {
         let output = DispatchGroup()
+        let group = CommandGroup(leader: child.pid)
         let pumping: [Bool]
         if let master = child.master {
             pumping = [pump(master, into: channel, as: MacVMFrame.output, group: output)]
@@ -94,29 +95,25 @@ public enum AgentSession {
         if pumping.contains(false) {
             // Output the host would never see: stop rather than truncate silently.
             channel.send(.errorOutput(Data("rv-macvm-agent: cannot read the command's output\n".utf8)))
-            _ = kill(-child.pid, SIGKILL)
+            group.signal(SIGKILL)
         }
         let input = DispatchGroup()
         let stdinClosed = Mutex(false)
-        let exited = Mutex(false)
         input.enter()
         Thread.detachNewThread {
-            let closed = forwardInput(
-                channel: channel, child: child, configuration: configuration,
-                hasExited: { exited.withLock { $0 } }
-            )
+            let closed = forwardInput(channel: channel, child: child, group: group, configuration: configuration)
             stdinClosed.withLock { $0 = closed }
             input.leave()
         }
 
-        var status: Int32 = 0
-        while waitpid(child.pid, &status, 0) < 0, errno == EINTR {}
-        exited.withLock { $0 = true }
+        // The leader stays a zombie until the group kills are done.
+        group.waitForExit()
         if output.wait(timeout: .now() + .milliseconds(Int(drainMilliseconds))) == .timedOut {
             // Background processes still hold the terminal or pipes.
-            stopLeftovers(child, configuration: configuration)
+            stopLeftovers(group, configuration: configuration)
         }
-        stopLeftovers(child, configuration: configuration)
+        stopLeftovers(group, configuration: configuration)
+        let status = group.reap()
         // Everything written is delivered before `exit`, which the host
         // treats as the end of output. Each pump owns its descriptor, so a
         // pump that outlives this wait never reads a recycled one.
@@ -135,25 +132,35 @@ public enum AgentSession {
     /// it ignores the signals before it spawns the command, so a signal
     /// sent earlier would end the session instead. `started` comes before
     /// ssh has connected, so an early signal waits for that.
-    private static func deliver(
-        _ number: Int32, child: GuestChild, configuration: AgentConfiguration, hasExited: () -> Bool
-    ) {
+    private static func deliver(_ number: Int32, group: CommandGroup, configuration: AgentConfiguration) {
         guard SessionVerb.forwardedSignals.contains(number) else { return }
         guard let user = configuration.user else {
-            _ = kill(-child.pid, number)
+            group.signal(number)
             return
         }
         guard let entry = getpwnam(user) else { return }
         let deadline = Date().addingTimeInterval(sessionStartSeconds)
-        while !hasExited() {
-            let leaders = SessionVerb.processes(PROC_UID_ONLY, entry.pointee.pw_uid).filter {
-                getpgid($0) == $0 && executablePath($0) == configuration.trampoline
-                    && !SessionVerb.processes(PROC_PPID_ONLY, UInt32($0)).isEmpty
-            }
+        while !group.hasExited {
+            let leaders = sessionLeaders(
+                SessionVerb.processes(PROC_UID_ONLY, entry.pointee.pw_uid), trampoline: configuration.trampoline
+            )
             leaders.forEach { _ = kill(-$0, number) }
             guard leaders.isEmpty, Date() < deadline else { return }
             usleep(20_000)
         }
+    }
+
+    /// Among the guest user's processes, the `session` verbs ready for a
+    /// signal: group leaders running this executable that have spawned the
+    /// command (before that, they have not yet ignored the signal).
+    static func sessionLeaders(
+        _ candidates: [pid_t],
+        trampoline: String,
+        groupOf: (pid_t) -> pid_t = { getpgid($0) },
+        executableOf: (pid_t) -> String? = executablePath,
+        hasChild: (pid_t) -> Bool = { !SessionVerb.processes(PROC_PPID_ONLY, UInt32($0)).isEmpty }
+    ) -> [pid_t] {
+        candidates.filter { groupOf($0) == $0 && executableOf($0) == trampoline && hasChild($0) }
     }
 
     private static func executablePath(_ pid: pid_t) -> String? {
@@ -166,8 +173,8 @@ public enum AgentSession {
     /// the guest user: a process that left the group (`setsid`) would
     /// otherwise keep the terminal or pipes open. One exec runs per VM, so
     /// the guest user's processes are all this command's.
-    private static func stopLeftovers(_ child: GuestChild, configuration: AgentConfiguration) {
-        _ = kill(-child.pid, SIGKILL)
+    private static func stopLeftovers(_ group: CommandGroup, configuration: AgentConfiguration) {
+        group.signal(SIGKILL)
         guard let user = configuration.user else { return }
         // kill(-1) as the guest user signals all of that user's processes
         // except the sender.
@@ -212,18 +219,17 @@ public enum AgentSession {
     }
 
     /// Host frames until the connection ends. An end before the command
-    /// exits means the host is gone: kill the group. After it exits the
-    /// pid may be reused, so nothing is killed. True when this closed the
-    /// stdin pipe.
+    /// exits means the host is gone: kill the group. True when this closed
+    /// the stdin pipe.
     private static func forwardInput(
-        channel: MacVMChannel, child: GuestChild, configuration: AgentConfiguration, hasExited: () -> Bool
+        channel: MacVMChannel, child: GuestChild, group: CommandGroup, configuration: AgentConfiguration
     ) -> Bool {
         var stdinPipe = child.stdinPipe
         while true {
             let frame: MacVMFrame?
             do { frame = try channel.receive() } catch { frame = nil }
             guard let frame else {
-                if !hasExited() { _ = kill(-child.pid, SIGKILL) }
+                group.signal(SIGKILL)
                 return stdinPipe == nil && child.stdinPipe != nil
             }
             switch frame {
@@ -239,7 +245,7 @@ public enum AgentSession {
             case .resize(let rows, let columns):
                 if let master = child.master { GuestChild.resize(master, rows: rows, columns: columns) }
             case .signal(let number):
-                deliver(number, child: child, configuration: configuration, hasExited: hasExited)
+                deliver(number, group: group, configuration: configuration)
             default:
                 continue
             }

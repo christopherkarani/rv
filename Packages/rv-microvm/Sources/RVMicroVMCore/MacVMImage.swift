@@ -46,9 +46,13 @@ public struct MacVMLayout: Sendable, Equatable {
         images.appendingPathComponent(name.value, isDirectory: true)
     }
 
-    public func disk(_ name: MacVMImageName) -> URL { image(name).appendingPathComponent("disk.img") }
-    public func auxiliaryStorage(_ name: MacVMImageName) -> URL { image(name).appendingPathComponent("aux.img") }
-    public func record(_ name: MacVMImageName) -> URL { image(name).appendingPathComponent("image.json") }
+    public static let diskName = "disk.img"
+    public static let auxiliaryStorageName = "aux.img"
+    public static let recordName = "image.json"
+
+    public func disk(_ name: MacVMImageName) -> URL { image(name).appendingPathComponent(Self.diskName) }
+    public func auxiliaryStorage(_ name: MacVMImageName) -> URL { image(name).appendingPathComponent(Self.auxiliaryStorageName) }
+    public func record(_ name: MacVMImageName) -> URL { image(name).appendingPathComponent(Self.recordName) }
 }
 
 /// `image.json`: written last by `prepare`, so its presence means the image

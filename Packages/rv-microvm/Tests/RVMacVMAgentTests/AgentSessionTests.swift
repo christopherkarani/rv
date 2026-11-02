@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import RVMacVMAgent
+@testable import RVMacVMAgent
 import RVMicroVMCore
 import Testing
 
@@ -183,6 +183,21 @@ struct AgentSessionTests {
         try harness.collect()
         #expect(harness.output.contains("term"))
         #expect(harness.exit == 9)
+    }
+
+    @Test("in a guest a signal targets only session verbs that lead a group and have spawned the command")
+    func sessionLeaders() {
+        let trampoline = "/usr/local/libexec/rv-macvm-agent"
+        // 10 ready; 11 not yet spawned; 12 not a group leader; 13 another
+        // program; 14 gone (no executable).
+        let leaders = AgentSession.sessionLeaders(
+            [10, 11, 12, 13, 14],
+            trampoline: trampoline,
+            groupOf: { $0 == 12 ? 10 : $0 },
+            executableOf: { [13: "/bin/zsh", 14: nil][$0] ?? trampoline },
+            hasChild: { $0 != 11 }
+        )
+        #expect(leaders == [10])
     }
 
     @Test("a terminal Ctrl-C and a host SIGINT end the command with the shell's 130", arguments: [true, false])

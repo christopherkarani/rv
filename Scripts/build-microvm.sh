@@ -33,7 +33,24 @@ PACKAGE="$ROOT/Packages/rv-microvm"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
-for product in rv-microvm rv-macvm rv-macvm-agent; do
+# rv-macvm's unattended setup (VZMacGuestProvisioningOptions) exists only
+# in the macOS 27 SDK; built with an older one, `prepare` would download and
+# install 25 GB before failing. A release then ships without the pair
+# (install.sh and rv treat it as optional); a debug build keeps it for work
+# on `run`.
+products=(rv-microvm rv-macvm rv-macvm-agent)
+macvm=1
+sdk_major="$(xcrun --show-sdk-version 2>/dev/null | cut -d. -f1)"
+if [[ -z "$sdk_major" || "$sdk_major" -lt 27 ]]; then
+  if [[ "$CONFIG" == "release" ]]; then
+    printf 'build-microvm: WARNING: macOS SDK %s is older than 27; leaving out rv-macvm and rv-macvm-agent (--macvm)\n' "${sdk_major:-unknown}" >&2
+    products=(rv-microvm)
+    macvm=0
+  else
+    printf 'build-microvm: macOS SDK %s is older than 27: rv-macvm prepare will not work in this build\n' "${sdk_major:-unknown}" >&2
+  fi
+fi
+for product in "${products[@]}"; do
   "$ROOT/Scripts/swift-6.4" build --package-path "$PACKAGE" -c "$CONFIG" --product "$product"
 done
 BIN="$("$ROOT/Scripts/swift-6.4" build --package-path "$PACKAGE" -c "$CONFIG" --show-bin-path)"
@@ -56,14 +73,25 @@ install_signed() {
   mv -f "$staged" "$OUT/$1"
 }
 install_signed rv-microvm "$PACKAGE/rv-microvm.entitlements"
-install_signed rv-macvm "$PACKAGE/rv-microvm.entitlements"
-install_signed rv-macvm-agent
+entitled=(rv-microvm)
+if [[ "$macvm" == 1 ]]; then
+  install_signed rv-macvm "$PACKAGE/rv-microvm.entitlements"
+  install_signed rv-macvm-agent
+  entitled+=(rv-macvm)
+else
+  # Never leave an older pair next to the new rv.
+  rm -f "$OUT/rv-macvm" "$OUT/rv-macvm-agent"
+fi
 
 "$ROOT/Scripts/build-guest-relay.sh" "$OUT/.rv-guest-relay.building" aarch64 >/dev/null
 mv -f "$OUT/.rv-guest-relay.building" "$OUT/rv-guest-relay"
 
-for entitled in rv-microvm rv-macvm; do
-  codesign -d --entitlements - "$OUT/$entitled" 2>/dev/null | grep -q 'com.apple.security.virtualization' \
-    || { printf 'build-microvm: %s is missing the virtualization entitlement\n' "$entitled" >&2; exit 1; }
+for name in "${entitled[@]}"; do
+  codesign -d --entitlements - "$OUT/$name" 2>/dev/null | grep -q 'com.apple.security.virtualization' \
+    || { printf 'build-microvm: %s is missing the virtualization entitlement\n' "$name" >&2; exit 1; }
 done
-printf 'build-microvm: rv-microvm, rv-guest-relay, rv-macvm and rv-macvm-agent in %s\n' "$OUT"
+if [[ "$macvm" == 1 ]]; then
+  printf 'build-microvm: rv-microvm, rv-guest-relay, rv-macvm and rv-macvm-agent in %s\n' "$OUT"
+else
+  printf 'build-microvm: rv-microvm and rv-guest-relay in %s\n' "$OUT"
+fi

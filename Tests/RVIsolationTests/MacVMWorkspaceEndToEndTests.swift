@@ -109,6 +109,15 @@ struct MacVMWorkspaceEndToEndTests {
         try gitlock 'touch .git/index.lock && rm .git/index.lock'
         try gitobject 'mkdir -p .git/objects/ab && echo o > .git/objects/ab/cd'
         try normal 'echo ok > notes.txt'
+        # No way out of the sandbox to write those paths: setuid exec and
+        # launchd jobs (which would run unsandboxed) must both be refused.
+        for setuid in "/usr/bin/sudo -n /usr/bin/true" "/usr/bin/crontab -l"; do
+          case "$($setuid 2>&1)" in *"not permitted"*) echo "setuid=denied" ;; *) echo "setuid=allowed: $setuid" ;; esac
+        done
+        /bin/launchctl submit -l dev.rv.e2e-escape -- /usr/bin/touch "$PWD/.git/hooks/escaped" 2>/dev/null
+        /bin/launchctl bootstrap user/$(id -u) /dev/null 2>/dev/null
+        sleep 2
+        if [ -e .git/hooks/escaped ]; then echo launchd=escaped; else echo launchd=denied; fi
         """
         let running = try supervisor.launch(
             host: nil,
@@ -120,9 +129,11 @@ struct MacVMWorkspaceEndToEndTests {
             sessionStore: .file(tree.rootURL.appendingPathComponent("runtime.jsonl"))
         ).get()
         let output = try runToExit(supervisor, running.id.rawValue, expect: nil)
-        for denied in ["hook", "config", "renamegit", "rmgit", "rvnew", "cfgnew"] {
+        for denied in ["hook", "config", "renamegit", "rmgit", "rvnew", "cfgnew", "launchd"] {
             #expect(output.contains("\(denied)=denied"), "\(denied): \(output)")
         }
+        #expect(output.components(separatedBy: "setuid=denied").count == 3, "\(output)")
+        #expect(!output.contains("setuid=allowed"), "\(output)")
         for allowed in ["gitlock", "gitobject", "normal"] {
             #expect(output.contains("\(allowed)=allowed"), "\(allowed): \(output)")
         }
@@ -151,9 +162,26 @@ struct MacVMWorkspaceEndToEndTests {
             admission: .failClosed,
             sessionStore: .file(tree.rootURL.appendingPathComponent("runtime.jsonl"))
         ).get()
-        #expect(macVMProcesses(workspace: tree.workspaceURL.path).isEmpty == false)
+        let helpers = macVMProcesses(workspace: tree.workspaceURL.path)
+        let pid = try #require(helpers.first.flatMap { Int32($0.split(separator: " ").first ?? "") }, "\(helpers)")
         _ = supervisor.cancel(running.id)
         #expect(e2eWait(seconds: 60) { macVMProcesses(workspace: tree.workspaceURL.path).isEmpty })
+        // A cancel SIGKILLs rv-macvm, so its clone stays behind until the
+        // next `status` (which rv runs before every launch) sweeps it.
+        let runs = URL(fileURLWithPath: MicroVMHelper.stateRoot(home: NSHomeDirectory(), guest: .macOS)).appendingPathComponent("runs")
+        func clones() -> [String] {
+            ((try? FileManager.default.contentsOfDirectory(atPath: runs.path)) ?? []).filter { $0.hasPrefix("\(pid)-") }
+        }
+        #expect(clones().count == 1, "the killed run's clone: \(clones())")
+        let helper = try #require(MicroVMHelper.locate(workspace: tree.workspaceURL.path, guest: .macOS))
+        let status = Process()
+        status.executableURL = URL(fileURLWithPath: helper)
+        status.arguments = ["status", "--image", macVMEndToEndImage]
+        status.standardOutput = FileHandle.nullDevice
+        status.standardError = FileHandle.nullDevice
+        try status.run()
+        status.waitUntilExit()
+        #expect(clones().isEmpty, "\(clones())")
     }
 
     @Test func unpreparedImageFailsClosedBeforeTheHandshake() throws {
@@ -190,11 +218,11 @@ struct MacVMWorkspaceEndToEndTests {
     }
 }
 
-/// `rv-macvm run` processes sharing `workspace`.
+/// `rv-macvm run` processes sharing `workspace`, as "PID COMMAND".
 private func macVMProcesses(workspace: String) -> [String] {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/ps")
-    process.arguments = ["-axww", "-o", "command="]
+    process.arguments = ["-axww", "-o", "pid=,command="]
     let pipe = Pipe()
     process.standardOutput = pipe
     guard (try? process.run()) != nil else { return ["ps failed"] }
@@ -202,7 +230,7 @@ private func macVMProcesses(workspace: String) -> [String] {
     process.waitUntilExit()
     return String(decoding: data, as: UTF8.self)
         .split(separator: "\n")
-        .map(String.init)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
         .filter { $0.contains("rv-macvm run") && $0.contains("--workspace \(posixRealpath(workspace) ?? workspace) ") }
 }
 #endif

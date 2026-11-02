@@ -4,6 +4,10 @@ import Foundation
 public enum MacVMAgent {
     /// Guest vsock port the agent listens on for exec sessions.
     public static let controlPort: UInt32 = 1024
+    /// How long the agent waits at boot for the guest's sshd, which starts
+    /// every command, before listening anyway. Well inside the host's
+    /// `MacVMRun.agentTimeoutSeconds`.
+    public static let sshdReadySeconds = 60
     public static let protocolVersion = 1
     /// virtiofs tag of the workspace share; the agent mounts it at the
     /// workspace's host path.
@@ -190,14 +194,19 @@ public struct MacVMExecRequest: Codable, Sendable, Equatable {
         "/dev", "/cores", "/Users/\(MacVMAgent.user)",
     ]
 
-    /// The guest system directory `workspace` would cover, compared without
-    /// case like the guest volume: one it is at or under, or one under it.
+    /// The guest system directory `workspace` would cover: one it is at or
+    /// under, or one under it. Compared as the guest volume names files:
+    /// normalization-insensitive, with full case folding (`ſ` is `s`).
     static func coveredSystemRoot(_ workspace: String) -> String? {
-        let path = workspace.lowercased()
+        let path = volumeName(workspace)
         return guestSystemRoots.first { root in
-            let root = root.lowercased()
+            let root = volumeName(root)
             return path == root || path.hasPrefix(root + "/") || root.hasPrefix(path + "/")
         }
+    }
+
+    static func volumeName(_ path: String) -> String {
+        path.decomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
     }
 
     /// True for `/a/b`: no empty, `.` or `..` components, no trailing `/`.

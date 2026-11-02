@@ -182,8 +182,9 @@ func bridgeToLoopback(_ connection: VZVirtioSocketConnection, port: Int, budget:
 }
 
 /// clonefile(2): copy-on-write, so a run costs only what the guest writes.
-func cloneFile(_ source: URL, to destination: URL) throws {
-    guard clonefile(source.path, destination.path, 0) == 0 else {
-        throw SetupError("cannot clone \(source.path): \(String(cString: strerror(errno))) (the state root must be on APFS)")
+/// Clones `name` in the directory open as `directory`.
+func cloneFile(at directory: Int32, _ name: String, to destination: URL) throws {
+    guard clonefileat(directory, name, AT_FDCWD, destination.path, 0) == 0 else {
+        throw SetupError("cannot clone the image's \(name): \(String(cString: strerror(errno))) (the state root must be on APFS)")
     }
 }

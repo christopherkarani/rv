@@ -33,22 +33,26 @@ struct MacVMRunner {
         }
         let layout = MacVMLayout(root: options.layout.root)
         guard let name = MacVMImageName.validate(options.image) else { throw SetupError("invalid image name \(options.image)") }
-        let record = try loadRecord(layout, name)
+        // One handle on the image directory for the record and both clones:
+        // a `prepare --replace` swap mid-way cannot mix two images.
+        let image = open(layout.image(name).path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard image >= 0 else { throw SetupError("image \(name) is not prepared; run: rv-macvm prepare --image \(name)") }
+        defer { close(image) }
+        let record = try loadRecord(image, name)
         guard let model = VZMacHardwareModel(dataRepresentation: record.hardwareModel), model.isSupported else {
             throw SetupError("this Mac cannot run image \(name) (macOS \(record.osVersion))")
         }
 
-        let runs = try sweepRuns(layout)
-        guard runs.live < Self.concurrentLimit else {
-            throw SetupError("Apple allows \(Self.concurrentLimit) macOS VMs at a time and \(runs.live) are running")
+        let run: MacVMRunClaim
+        switch MacVMRuns.claim(in: layout.runs, limit: Self.concurrentLimit) {
+        case .failure(let error): throw SetupError(error.description)
+        case .success(let claimed): run = claimed
         }
-        let runDirectory = layout.runs.appendingPathComponent(MacVMRunDirectory.name(pid: getpid()), isDirectory: true)
-        try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: runDirectory) }
-        let disk = runDirectory.appendingPathComponent("disk.img")
-        let auxiliary = runDirectory.appendingPathComponent("aux.img")
-        try cloneFile(layout.disk(name), to: disk)
-        try cloneFile(layout.auxiliaryStorage(name), to: auxiliary)
+        defer { run.release() }
+        let disk = run.directory.appendingPathComponent(MacVMLayout.diskName)
+        let auxiliary = run.directory.appendingPathComponent(MacVMLayout.auxiliaryStorageName)
+        try cloneFile(at: image, MacVMLayout.diskName, to: disk)
+        try cloneFile(at: image, MacVMLayout.auxiliaryStorageName, to: auxiliary)
 
         let spec = MachineSpec(
             hardwareModel: model, auxiliaryStorage: auxiliary, disk: disk,
@@ -80,27 +84,17 @@ struct MacVMRunner {
         }
     }
 
-    private func loadRecord(_ layout: MacVMLayout, _ name: MacVMImageName) throws -> MacVMImageRecord {
-        guard let data = try? Data(contentsOf: layout.record(name)) else {
+    private func loadRecord(_ image: Int32, _ name: MacVMImageName) throws -> MacVMImageRecord {
+        let descriptor = openat(image, MacVMLayout.recordName, O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else {
             throw SetupError("image \(name) is not prepared; run: rv-macvm prepare --image \(name)")
         }
+        let data = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true).readDataToEndOfFile()
         do {
             return try JSONDecoder().decode(MacVMImageRecord.self, from: data)
         } catch {
             throw SetupError("image \(name) has an unreadable image.json; prepare it again")
         }
-    }
-
-    /// Removes clones left by killed runs; counts the live ones.
-    private func sweepRuns(_ layout: MacVMLayout) throws -> (live: Int, removed: Int) {
-        try FileManager.default.createDirectory(at: layout.runs, withIntermediateDirectories: true)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.runs.path)) ?? []
-        let stale = MacVMRunDirectory.stale(names) { kill($0, 0) == 0 || errno == EPERM }
-        for name in stale {
-            try? FileManager.default.removeItem(at: layout.runs.appendingPathComponent(name))
-        }
-        let live = names.filter { MacVMRunDirectory.owner(of: $0) != nil && !stale.contains($0) }.count
-        return (live, stale.count)
     }
 
     private func connectAgent(_ machine: Machine) async throws -> VZVirtioSocketConnection {

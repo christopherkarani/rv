@@ -31,8 +31,19 @@ struct MacVMPreparer {
     let keepIPSW: Bool
     let replace: Bool
 
+    /// Unattended setup needs `VZMacGuestProvisioningOptions`: the macOS 27
+    /// SDK at build time and macOS 27 at run time.
+    static var canProvision: Bool {
+        #if canImport(Virtualization, _version: 308)
+        if #available(macOS 27, *) { return true }
+        #endif
+        return false
+    }
+
     func prepare() async throws {
         let fm = FileManager.default
+        // Before the 25 GB download and the install, not after them.
+        guard Self.canProvision else { throw Self.provisioningUnavailable }
         guard replace || !fm.fileExists(atPath: layout.image(name).path) else {
             throw SetupError("image \(name) already exists at \(layout.image(name).path); pass --replace to rebuild it")
         }
@@ -42,6 +53,14 @@ struct MacVMPreparer {
         try fm.createDirectory(at: layout.cache, withIntermediateDirectories: true)
         try fm.createDirectory(at: layout.images, withIntermediateDirectories: true)
         sweepStaging()
+        // The install and setup boots are VMs too: they count toward
+        // Apple's limit like a run.
+        let slot: MacVMRunClaim
+        switch MacVMRuns.claim(in: layout.runs, limit: MacVMRunner.concurrentLimit) {
+        case .failure(let error): throw SetupError(error.description)
+        case .success(let claimed): slot = claimed
+        }
+        defer { slot.release() }
 
         let (restoreURL, downloaded) = try await restoreImage()
         defer { if downloaded, !keepIPSW { try? fm.removeItem(at: restoreURL) } }
@@ -58,8 +77,8 @@ struct MacVMPreparer {
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
         var committed = false
         defer { if !committed { try? fm.removeItem(at: staging) } }
-        let disk = staging.appendingPathComponent("disk.img")
-        let auxiliary = staging.appendingPathComponent("aux.img")
+        let disk = staging.appendingPathComponent(MacVMLayout.diskName)
+        let auxiliary = staging.appendingPathComponent(MacVMLayout.auxiliaryStorageName)
         try createSparseDisk(disk, gib: diskGiB)
         _ = try VZMacAuxiliaryStorage(creatingStorageAt: auxiliary, hardwareModel: requirements.hardwareModel, options: [])
 
@@ -95,7 +114,7 @@ struct MacVMPreparer {
             agentSHA256: agentHash,
             user: MacVMAgent.user
         )
-        try JSONEncoder().encode(record).write(to: staging.appendingPathComponent("image.json"))
+        try JSONEncoder().encode(record).write(to: staging.appendingPathComponent(MacVMLayout.recordName))
         try commit(staging)
         committed = true
         report("image \(name) is ready")
@@ -292,8 +311,12 @@ struct MacVMPreparer {
             return
         }
         #endif
-        throw SetupError("unattended setup needs macOS 27 on this Mac and an rv-macvm built with the macOS 27 SDK")
+        throw Self.provisioningUnavailable
     }
+
+    static let provisioningUnavailable = SetupError(
+        "unattended setup needs macOS 27 on this Mac and an rv-macvm built with the macOS 27 SDK"
+    )
 
     private func guestAddress(mac: String) async throws -> String {
         let deadline = Date().addingTimeInterval(900)

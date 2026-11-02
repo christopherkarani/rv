@@ -356,6 +356,7 @@ struct MacOSGuestLaunchTests {
         #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
     }
 
+    #if os(macOS)
     /// The guest profile allows everything but the control paths, so it
     /// must not leave a way to start a process outside the sandbox: such a
     /// process could write `.git/hooks`. Seatbelt itself refuses launchd
@@ -372,33 +373,43 @@ struct MacOSGuestLaunchTests {
         let job: [String: Any] = ["Label": label, "ProgramArguments": ["/usr/bin/touch", marker.path], "RunAtLoad": true]
         try PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
         let profile = macOSGuestSandboxProfile(workspacePath: directory.path)
-        func sandboxed(_ arguments: [String]) throws -> Int32 {
+        func sandboxed(_ arguments: [String]) throws -> (status: Int32, error: String) {
             let process = Process()
+            let errors = Pipe()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
             process.arguments = ["-p", profile] + arguments
             process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            process.standardError = errors
             try process.run()
+            let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             process.waitUntilExit()
-            return process.terminationStatus
+            return (process.terminationStatus, error)
         }
-        #expect(try sandboxed(["/usr/bin/true"]) == 0)
+        #expect(try sandboxed(["/usr/bin/true"]).status == 0)
         let domain = "gui/\(getuid())"
-        #expect(try sandboxed(["/bin/launchctl", "bootstrap", domain, plist.path]) != 0)
-        #expect(try sandboxed(["/bin/launchctl", "bootstrap", "user/\(getuid())", plist.path]) != 0)
-        #expect(try sandboxed(["/usr/bin/crontab", "-l"]) != 0)
-        #expect(try sandboxed(["/usr/bin/sudo", "-n", "/usr/bin/true"]) != 0)
+        #expect(try sandboxed(["/bin/launchctl", "bootstrap", domain, plist.path]).status != 0)
+        #expect(try sandboxed(["/bin/launchctl", "bootstrap", "user/\(getuid())", plist.path]).status != 0)
+        let submitted = "\(label)-submit"
+        _ = try sandboxed(["/bin/launchctl", "submit", "-l", submitted, "--", "/usr/bin/touch", marker.path])
+        // Setuid binaries fail on their own too (no crontab, no password),
+        // so only sandbox-exec's own refusal proves the exec was blocked.
+        for setuid in [["/usr/bin/crontab", "-l"], ["/usr/bin/sudo", "-n", "/usr/bin/true"]] {
+            let result = try sandboxed(setuid)
+            #expect(result.status == 71 && result.error.contains("Operation not permitted"), "\(setuid): \(result)")
+        }
         Thread.sleep(forTimeInterval: 1)
         let leaked = FileManager.default.fileExists(atPath: marker.path)
-        if leaked {
+        for job in ["bootout \(domain)/\(label)", "remove \(submitted)"] {
             let cleanup = Process()
             cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            cleanup.arguments = ["bootout", "\(domain)/\(label)"]
+            cleanup.arguments = job.split(separator: " ").map(String.init)
+            cleanup.standardError = FileHandle.nullDevice
             try? cleanup.run()
             cleanup.waitUntilExit()
         }
         #expect(leaked == false)
     }
+    #endif
 
     @Test("a macOS launch hands rv-macvm the guest profile in its environment, not argv")
     func helperEnvironment() throws {

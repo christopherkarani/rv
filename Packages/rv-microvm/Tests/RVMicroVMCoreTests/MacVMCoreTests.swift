@@ -92,6 +92,11 @@ struct MacVMProtocolTests {
         // The guest volume is case-insensitive.
         (request(workspace: "/ETC/x"), "system"),
         (request(workspace: "/library/LaunchDaemons"), "system"),
+        // APFS folds case fully: the long s (U+017F) is an `s`.
+        (request(workspace: "/u\u{017F}r/local/libexec"), "system"),
+        (request(workspace: "/U\u{017F}ers/rv"), "system"),
+        (request(workspace: "/Sy\u{017F}tem/Library"), "system"),
+        (request(workspace: "/\u{017F}bin"), "system"),
         // Only canonical paths: no empty or `.` components, no trailing `/`.
         (request(workspace: "//etc/x"), "workspace"),
         (request(workspace: "/./etc/x"), "workspace"),
@@ -253,6 +258,36 @@ struct MacVMHostHelperTests {
         #expect(MacVMRunDirectory.stale(["1-a", "2-b", "junk", "3-c"], isAlive: { $0 == 2 }) == ["1-a", "3-c"])
     }
 
+    @Test("a run is live while its process holds the run's lock; dead and unlocked runs are swept")
+    func runClaims() throws {
+        let runs = FileManager.default.temporaryDirectory.appendingPathComponent("rv-runs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: runs) }
+        let first = try MacVMRuns.claim(in: runs, limit: 2).get()
+        let second = try MacVMRuns.claim(in: runs, limit: 2).get()
+        // Two held runs fill the limit; the refusal leaves nothing behind.
+        guard case .failure(.limit(let live, _)) = MacVMRuns.claim(in: runs, limit: 2) else {
+            Issue.record("a third run must be refused")
+            return
+        }
+        #expect(live == 2)
+        #expect(try runDirectories(runs).count == 2)
+        // A killed run leaves its directory with nobody holding the lock;
+        // an unrelated process reusing its pid cannot make it look live.
+        let killed = runs.appendingPathComponent("4242-dead", isDirectory: true)
+        try FileManager.default.createDirectory(at: killed, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: killed.appendingPathComponent(MacVMRuns.lockName).path, contents: nil)
+        let legacy = runs.appendingPathComponent("77-nolock", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        #expect(MacVMRuns.sweep(in: runs) == 2)
+        #expect(Set(try runDirectories(runs)) == [first.directory.lastPathComponent, second.directory.lastPathComponent])
+        first.release()
+        #expect(!FileManager.default.fileExists(atPath: first.directory.path))
+        let third = try MacVMRuns.claim(in: runs, limit: 2).get()
+        second.release()
+        third.release()
+        #expect(try runDirectories(runs).isEmpty)
+    }
+
     @Test("the setup script installs the agent daemon from the setup share and reports its hash")
     func setupScript() {
         let script = MacVMSetup.script
@@ -312,4 +347,9 @@ struct MacVMHostHelperTests {
         #expect(piped.terminal == false)
         #expect(piped.environment.contains { $0.hasPrefix("TERM=") } == false)
     }
+}
+
+/// Run directories, without the lock that guards counting.
+private func runDirectories(_ runs: URL) throws -> [String] {
+    try FileManager.default.contentsOfDirectory(atPath: runs.path).filter { !$0.hasPrefix(".") }
 }
