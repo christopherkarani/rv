@@ -237,6 +237,22 @@ extension SecretLaunchBrokerTests {
         #expect(fixture.auditText.contains("sk-live-REAL") == false)
     }
 
+    @Test func misuseFindingsAreNotForgedForSecretsTheBrokerDoesNotHold() throws {
+        let fixture = try SecretsFixture(SecretsFixture.standard)
+        defer { fixture.tearDown() }
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver,
+            transport: RecordingUpstream().transport, workspace: "W1")
+        defer { broker.stop() }
+        let placeholder = try leasedPlaceholder(broker)
+        let trace = try gatewayExchange(port: placeholder.port, "TRACE /s/PROD_DB_PASSWORD/x HTTP/1.1\r\n\r\n")
+        #expect(trace.status == 405)
+        let encoded = try gatewayExchange(port: placeholder.port,
+            "GET /s/AWS_SECRET/rvph%5F\(placeholder.token) HTTP/1.1\r\n\r\n")
+        #expect(encoded.status == 400)
+        #expect(fixture.auditLines.filter { $0["kind"] as? String == "secret.misuse" }.isEmpty)
+    }
+
     @Test func brokeredRequestsAreNotForwardedWhenTheAuditLogCannotBeWritten() throws {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }

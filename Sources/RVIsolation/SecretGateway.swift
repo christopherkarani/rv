@@ -178,6 +178,16 @@ public final class SecretGateway: @unchecked Sendable {
         return entries[token]
     }
 
+    /// True when some live placeholder belongs to `secret`. The route name is
+    /// agent-supplied, so a misuse finding may only name a secret that is
+    /// actually brokered here.
+    private func holdsLivePlaceholder(for secret: String?) -> Bool {
+        guard let secret else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.values.contains { $0.secret == secret }
+    }
+
     /// A TCP stream socket that is close-on-exec before the caller uses it.
     /// Linux passes `SOCK_CLOEXEC` to `socket`. Darwin does not define that
     /// flag, so the descriptor that survives is the one `F_DUPFD_CLOEXEC`
@@ -526,8 +536,9 @@ public final class SecretGateway: @unchecked Sendable {
         GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
         _ = audit(SecretUseRecord(
             secret: secret, runtime: nil, upstreamHost: nil, method: method, path: path, status: refusal.status,
-            upstreamStatus: nil, activity: refusal.isMisuse ? .blocked : .refused, refusal: refusal.code,
-            reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            upstreamStatus: nil,
+            activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
+            refusal: refusal.code, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }

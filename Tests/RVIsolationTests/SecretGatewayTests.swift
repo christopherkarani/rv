@@ -402,6 +402,20 @@ struct SecretGatewayTests {
         }
     }
 
+    @Test func misuseRefusalsForASecretWithNoLivePlaceholderAreRefusedNotBlocked() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, _) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let fake = String(repeating: "ab", count: SecretPlaceholder.tokenLength / 2)
+        _ = try gatewayExchange(port: port, "TRACE /s/PROD_DB_PASSWORD/x HTTP/1.1\r\n\r\n")
+        _ = try gatewayExchange(port: port, "GET /s/AWS_SECRET/rvph%5F\(fake) HTTP/1.1\r\n\r\n")
+        _ = try gatewayExchange(port: port, "TRACE /s/OPENAI_API_KEY/x HTTP/1.1\r\n\r\n")
+        let records = audit.items.withLock { $0 }
+        #expect(records.map(\.refusal) == ["echoMethod", "encodedPlaceholder", "echoMethod"])
+        #expect(records.map(\.activity) == [.refused, .refused, .blocked])
+    }
+
     @Test func policyRefusalsAreBlockedOtherRefusalsRefusedAndFailedExchangesErrors() throws {
         let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
         let audit = AuditRecords()
