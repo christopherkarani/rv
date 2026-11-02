@@ -104,6 +104,16 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
     public var grade: String
     public var isHealthy: Bool
     public var leftovers: Leftovers?
+    /// Install problems with repair hints; omitted when there are none.
+    public var problems: [Problem]?
+
+    /// One install problem (`DoctorProblem`).
+    public struct Problem: Equatable, Sendable, Encodable {
+        public var id: String
+        public var severity: String
+        public var summary: String
+        public var fix: String
+    }
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -114,6 +124,7 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
         case grade
         case isHealthy = "ok"
         case leftovers
+        case problems
     }
 }
 
@@ -235,7 +246,10 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
         config: model.config.rawValue,
         grade: model.grade.rawValue,
         isHealthy: model.isHealthy,
-        leftovers: model.leftovers.map(doctorRobotLeftovers)
+        leftovers: model.leftovers.map(doctorRobotLeftovers),
+        problems: model.problems.isEmpty ? nil : model.problems.map {
+            DoctorRobotPayload.Problem(id: $0.id, severity: $0.severity.rawValue, summary: $0.summary, fix: $0.fix)
+        }
     )
 }
 

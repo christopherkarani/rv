@@ -4,7 +4,7 @@ import RVIPC
 import SwiftUI
 import RVOperatorUI
 #if canImport(XPC)
-import RVService
+import RVXPC
 #endif
 
 @main
