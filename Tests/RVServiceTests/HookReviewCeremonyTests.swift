@@ -452,6 +452,100 @@ struct HookReviewCeremonyTests {
         }
     }
 
+    @Test func allowOncePeekResolvesInjectedGatedAtPeekTime() async throws {
+        // AC-001: the ceremony peek runs on the gated the runtime holds at
+        // peek time, not a per-peek `EvaluationWorld.assemble` from disk.
+        let source = SwappableGated(GatedEvaluate(EvaluateSession(enabledPacks: [])))
+        let env = try HookCeremonyEnv(now: now, gated: { source.resolve() })
+        defer { env.tearDown() }
+        let ui = AuthenticatedOperatorUIConnectionID()
+
+        // Current gated has no core packs: indeterminate refuses, no grant.
+        // An assemble from disk would compile day-one and plant.
+        _ = try await env.seed(command: "git reset --hard", id: "hook-stale")
+        let (stale, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-stale", uiConnection: ui)
+        await #expect(throws: HookReviewCeremonyError.notReviewable) {
+            try await env.ceremonies.completeHookCeremony(
+                UIHookCompletion(
+                    challengeID: stale.challengeID,
+                    approvalID: "hook-stale",
+                    outcome: .authenticated
+                ),
+                uiConnection: ui
+            )
+        }
+        #expect(try await env.grantedCount() == 0)
+
+        // The runtime rebuilds gated; the next peek must see the new one.
+        source.replace(with: GatedEvaluate(EvaluateSession(enabledPacks: dayOnePackIDs)))
+        _ = try await env.seed(command: "git reset --hard HEAD", id: "hook-live")
+        let (live, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-live", uiConnection: ui)
+        let status = try await env.ceremonies.completeHookCeremony(
+            UIHookCompletion(
+                challengeID: live.challengeID,
+                approvalID: "hook-live",
+                outcome: .authenticated
+            ),
+            uiConnection: ui
+        )
+        #expect(status == .allowedOnce)
+        #expect(try await env.grantedCount() == 1)
+        #expect(source.resolutions == 2)
+    }
+
+    @Test func runtimeCeremonyPeekSeesPackEnabledAfterInit() async throws {
+        // AC-001 through ServiceRuntime: a pack enabled after init is
+        // visible to the hook ceremony peek via the runtime's live gated.
+        // The probe rule exists only in the runtime's snapshots, so a
+        // peek that re-assembled bundled packs would allow and plant nothing.
+        let sqlite = PackID(rawValue: "database.sqlite")
+        let snapshots = EvaluationWorld.resolveSnapshots(nil).map { pack in
+            guard pack.id == sqlite else { return pack }
+            var probed = pack
+            probed.destructive.append(
+                DestructiveRule(
+                    name: "t1-live-gated-probe",
+                    pattern: "rv-t1-live-gated-probe",
+                    severity: .critical,
+                    reason: "T1 live gated probe",
+                    explanation: nil
+                ))
+            return probed
+        }
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        let service = ServiceRuntime(
+            snapshots: snapshots,
+            home: env.home,
+            allowOnce: env.grants,
+            clock: env.clock,
+            pendingApprovals: .coordinator(env.pending)
+        )
+        let ceremonies = await service.hookCeremonies
+        #expect(await service.compiledPackIDs.contains(sqlite) == false)
+
+        _ = try PacksFacade.enable(home: env.home, ids: [sqlite.rawValue])
+        _ = await service.dispatch(IPCRequest(method: .listPacks))
+        #expect(await service.compiledPackIDs.contains(sqlite))
+
+        _ = try await env.seed(command: "sqlite3 rv-t1-live-gated-probe", id: "hook-pack")
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await ceremonies.bindHookReview(
+            approvalID: "hook-pack", uiConnection: ui)
+        let status = try await ceremonies.completeHookCeremony(
+            UIHookCompletion(
+                challengeID: challenge.challengeID,
+                approvalID: "hook-pack",
+                outcome: .authenticated
+            ),
+            uiConnection: ui
+        )
+        #expect(status == .allowedOnce)
+        #expect(try await env.grantedCount() == 1)
+    }
+
     @Test func listMarksAllowOnceAvailabilityByAction() async throws {
         let env = try HookCeremonyEnv(now: now)
         defer { env.tearDown() }
@@ -471,28 +565,65 @@ private final class FrozenClock: @unchecked Sendable {
     init(_ now: Date) { self.now = now }
 }
 
+/// Stands in for `ServiceRuntime.gated`: replaced on a pack-set rebuild,
+/// counting how often the ceremony resolves it.
+private final class SwappableGated: Sendable {
+    private struct State {
+        var gated: GatedEvaluate
+        var resolutions = 0
+    }
+
+    private let state: Mutex<State>
+
+    init(_ gated: GatedEvaluate) {
+        state = Mutex(State(gated: gated))
+    }
+
+    var resolutions: Int { state.withLock { $0.resolutions } }
+
+    func replace(with gated: GatedEvaluate) {
+        state.withLock { $0.gated = gated }
+    }
+
+    func resolve() -> GatedEvaluate {
+        state.withLock { state in
+            state.resolutions += 1
+            return state.gated
+        }
+    }
+}
+
 private final class HookCeremonyEnv {
     private let homeURL: URL
     private let allowOnceDirectory: URL
     private let frozen: FrozenClock
+    let home: HomeDirectory
+    let clock: @Sendable () -> Date
     let ceremonies: HookReviewCeremonyService
     let pending: PendingApprovalStore
     let grants: AllowOnceStore
 
-    init(now: Date) throws {
+    /// `gated` defaults to the day-one compile set for this isolated home,
+    /// assembled once (as the daemon holds it), not per peek.
+    init(now: Date, gated: (@Sendable () -> GatedEvaluate)? = nil) throws {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
+        self.home = home
         let frozen = FrozenClock(now)
         self.frozen = frozen
         pending = PendingApprovalStore.makeLive(home: home)
         grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        let clock: @Sendable () -> Date = { frozen.now }
+        self.clock = clock
+        let dayOne = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         ceremonies = HookReviewCeremonyService(
             pending: pending,
             allowOnce: grants,
             grants: EphemeralAllowOnceTable(),
             home: home,
-            clock: { frozen.now }
+            gated: gated ?? { dayOne },
+            clock: clock
         )
     }
 

@@ -10,11 +10,14 @@
  *   consumed. An installed root-owned trust manifest requires the
  *   `.service` role. With no manifest (one-click install) the daemon must
  *   be the exact sibling `rvd` bytes (canonical path + CDHash). A manifest
- *   that exists but fails validation fails closed.
+ *   that exists but fails validation fails closed. Entries whose role this
+ *   build does not know (written by a newer RV) are skipped, not fatal;
+ *   known roles keep every check.
  * - Linux: the connected AF_UNIX peer must be same-uid (`SO_PEERCRED`) and
  *   its `/proc/<pid>/exe` must be the sibling `rvd`.
  *
- * Every failure returns 0; callers fail closed to an explicit denial.
+ * Every failure returns 0; callers never consume the reply and report the
+ * `untrusted` failure class (hook_fallback.h).
  */
 
 #ifdef __APPLE__

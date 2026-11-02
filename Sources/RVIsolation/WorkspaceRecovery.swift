@@ -326,7 +326,7 @@ extension WorkspaceRecovery {
         case .failed:
             return .failed(nil)
         }
-        switch detach(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        switch advance(.detach, workspace, identity: identity, log: lifecycleLog, progress: &progress) {
         case .done:
             break
         case .blocked(let reason):
@@ -334,7 +334,7 @@ extension WorkspaceRecovery {
         case .failed:
             return .failed(nil)
         }
-        switch restore(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        switch advance(.restore, workspace, identity: identity, log: lifecycleLog, progress: &progress) {
         case .done:
             break
         case .blocked(let reason):
@@ -562,7 +562,7 @@ extension WorkspaceRecovery {
         }
         if fault == .afterChildTeardown { return .interrupted(.afterChildTeardown) }
 
-        switch publish(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        switch advance(.publish, workspace, identity: identity, log: lifecycleLog, progress: &progress) {
         case .done:
             break
         case .blocked(let reason):
@@ -572,7 +572,7 @@ extension WorkspaceRecovery {
         }
         if fault == .afterPublish { return .interrupted(.afterPublish) }
 
-        switch detach(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        switch advance(.detach, workspace, identity: identity, log: lifecycleLog, progress: &progress) {
         case .done:
             break
         case .blocked(let reason):
@@ -582,7 +582,7 @@ extension WorkspaceRecovery {
         }
         if fault == .afterUnmount { return .interrupted(.afterUnmount) }
 
-        switch restore(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        switch advance(.restore, workspace, identity: identity, log: lifecycleLog, progress: &progress) {
         case .done:
             break
         case .blocked(let reason):
@@ -641,114 +641,95 @@ extension WorkspaceRecovery {
         return .done
     }
 
-    private static func publish(
+    /// Completeness check → one mount observation → pure decision → act → mark.
+    ///
+    /// The observation stays immediately before the action it guards, and the
+    /// step's completion is recorded only after that action succeeds.
+    private static func advance(
+        _ step: WorkspaceSessionLifecycle.TeardownStep,
         _ workspace: WorkspaceReconstruction,
         identity: WorkspaceDurableIdentity,
         log: URL,
         progress: inout Set<WorkspaceLifecycleRecord.Kind>
     ) -> Step {
-        if WorkspaceSessionLifecycle.isComplete(.publish, progress: progress) {
+        if WorkspaceSessionLifecycle.isComplete(step, progress: progress) {
             return .done
         }
-        switch workspaceMountObservation(identity: identity, project: workspace.originalPath) {
-        case .originalRestored:
+        let observation = workspaceMountObservation(identity: identity, project: workspace.originalPath)
+        switch WorkspaceRecoveryPlan.decide(step: step, progress: progress, observation: observation) {
+        case .done:
             return .done
-        case .missingMount:
-            return .blocked(.missingVolume)
-        case .unrelatedMount:
-            return .blocked(.unrelatedMount)
-        case .savedTreeMismatch:
-            return .blocked(.ambiguousSavedTree)
-        case .ambiguous:
-            return .blocked(.ambiguousOwnership)
-        case .ownedMount:
-            break
-        }
-        guard case .success(let snapshot) = loadSnapshot(identity) else { return .failed }
-        switch WorkspaceInodeBoundary.reattach(
-            project: workspace.originalPath,
-            identity: identity,
-            snapshot: snapshot
-        ) {
-        case .failure:
+        case .blocked(let reason):
+            return .blocked(reason)
+        case .failed:
             return .failed
-        case .success(let boundary):
-            switch boundary.preflightPublish() {
-            case .failure:
-                return .blocked(.publicationConflict)
-            case .success:
-                break
-            }
-            switch boundary.publishPreservingMount() {
-            case .failure:
-                return .failed
-            case .success:
-                break
-            }
+        case .markComplete:
+            break
+        case .act(let action):
+            let outcome = execute(action, workspace, identity: identity)
+            guard case .done = outcome else { return outcome }
         }
-        guard mark(.publicationCompleted, workspace, log: log, progress: &progress) else { return .failed }
+        guard mark(WorkspaceRecoveryPlan.completion(of: step), workspace, log: log, progress: &progress) else {
+            return .failed
+        }
         return .done
     }
 
-    private static func detach(
+    /// Performs one admitted recovery action; `.done` means it succeeded.
+    private static func execute(
+        _ action: RecoveryAction,
         _ workspace: WorkspaceReconstruction,
-        identity: WorkspaceDurableIdentity,
-        log: URL,
-        progress: inout Set<WorkspaceLifecycleRecord.Kind>
+        identity: WorkspaceDurableIdentity
     ) -> Step {
-        if WorkspaceSessionLifecycle.isComplete(.detach, progress: progress) {
-            return .done
-        }
-        switch workspaceMountObservation(identity: identity, project: workspace.originalPath) {
-        case .originalRestored, .missingMount:
-            guard mark(.mountCleanupCompleted, workspace, log: log, progress: &progress) else { return .failed }
-            return .done
-        case .unrelatedMount:
-            return .blocked(.unrelatedMount)
-        case .savedTreeMismatch:
-            return .blocked(.ambiguousSavedTree)
-        case .ambiguous:
-            return .blocked(.ambiguousOwnership)
-        case .ownedMount:
-            break
-        }
-        guard case .success(let snapshot) = loadSnapshot(identity) else { return .failed }
-        switch WorkspaceInodeBoundary.reattach(
-            project: workspace.originalPath,
-            identity: identity,
-            snapshot: snapshot
-        ) {
-        case .failure:
-            return .failed
-        case .success(let boundary):
-            switch boundary.detachOwnedMount() {
+        switch action {
+        case .publishOwnedMount:
+            guard case .success(let snapshot) = loadSnapshot(identity) else { return .failed }
+            switch WorkspaceInodeBoundary.reattach(
+                project: workspace.originalPath,
+                identity: identity,
+                snapshot: snapshot
+            ) {
             case .failure:
                 return .failed
-            case .success:
-                break
+            case .success(let boundary):
+                switch boundary.preflightPublish() {
+                case .failure:
+                    return .blocked(.publicationConflict)
+                case .success:
+                    break
+                }
+                switch boundary.publishPreservingMount() {
+                case .failure:
+                    return .failed
+                case .success:
+                    return .done
+                }
             }
-        }
-        guard mark(.mountCleanupCompleted, workspace, log: log, progress: &progress) else { return .failed }
-        return .done
-    }
-
-    private static func restore(
-        _ workspace: WorkspaceReconstruction,
-        identity: WorkspaceDurableIdentity,
-        log: URL,
-        progress: inout Set<WorkspaceLifecycleRecord.Kind>
-    ) -> Step {
-        if WorkspaceSessionLifecycle.isComplete(.restore, progress: progress) {
-            return .done
-        }
-        switch workspaceMountObservation(identity: identity, project: workspace.originalPath) {
-        case .originalRestored:
+        case .detachOwnedMount:
+            guard case .success(let snapshot) = loadSnapshot(identity) else { return .failed }
+            switch WorkspaceInodeBoundary.reattach(
+                project: workspace.originalPath,
+                identity: identity,
+                snapshot: snapshot
+            ) {
+            case .failure:
+                return .failed
+            case .success(let boundary):
+                switch boundary.detachOwnedMount() {
+                case .failure:
+                    return .failed
+                case .success:
+                    return .done
+                }
+            }
+        case .removeOwnedImage:
             guard removeOwnedFile(
                 path: identity.imagePath,
                 device: identity.imageDevice,
                 inode: identity.imageInode
             ) else { return .failed }
-        case .missingMount:
+            return .done
+        case .restoreHiddenOriginal:
             switch WorkspaceInodeBoundary.restoreHiddenOriginal(
                 project: workspace.originalPath,
                 identity: identity
@@ -756,19 +737,9 @@ extension WorkspaceRecovery {
             case .failure:
                 return .failed
             case .success:
-                break
+                return .done
             }
-        case .unrelatedMount:
-            return .blocked(.unrelatedMount)
-        case .ownedMount:
-            return .failed
-        case .savedTreeMismatch:
-            return .blocked(.ambiguousSavedTree)
-        case .ambiguous:
-            return .blocked(.ambiguousOwnership)
         }
-        guard mark(.originalRestored, workspace, log: log, progress: &progress) else { return .failed }
-        return .done
     }
 
     private static func cleanupOwnedFiles(_ identity: WorkspaceDurableIdentity) -> Bool {
@@ -1203,7 +1174,7 @@ extension WorkspaceRecovery {
 }
 
 /// Mount observation shared by recovery and the inode boundary.
-enum WorkspaceMountObservation: Equatable, Sendable {
+enum WorkspaceMountObservation: CaseIterable, Equatable, Sendable {
     case ownedMount
     case missingMount
     case originalRestored
