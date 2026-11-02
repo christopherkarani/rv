@@ -652,10 +652,11 @@ struct SecretsCommandTests {
         #expect(skipped.stderr.contains("scan skipped"))
     }
 
-    private func git(_ work: URL, _ args: [String]) throws {
+    private func git(_ work: URL, _ args: [String], environment: [String: String]? = nil) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", work.path] + args
+        if let environment { process.environment = environment }
         try process.run()
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
@@ -723,6 +724,66 @@ struct SecretsCommandTests {
         #expect(FileManager.default.fileExists(atPath: saved.path) == false)
         _ = try SecretGitHook.uninstall(workTree: work).get()
         #expect(try String(contentsOf: hook, encoding: .utf8) == "#!/bin/bash\necho previous\n")
+    }
+
+    @Test func hookInstallKeepsHooksItCannotReadAsText() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-binary")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        let saved = work.appendingPathComponent(".git/hooks/pre-commit.rv-saved")
+        let binary = Data([0xFF, 0xFE, 0x00, 0x80, 0x81])
+
+        try binary.write(to: hook)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try Data(contentsOf: hook) == binary)
+
+        let legacy = Data("#!/bin/sh\n# rv-secrets-hook\n'/usr/bin/true' secrets hook run\n".utf8)
+        try legacy.write(to: hook)
+        try binary.write(to: saved)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try Data(contentsOf: hook) == legacy)
+        #expect(try Data(contentsOf: saved) == binary)
+    }
+
+    @Test func hookScansTheIndexGitNamesInGitIndexFile() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-alt-index")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        try Data("key: \(token)\n".utf8).write(to: work.appendingPathComponent("f.txt"))
+        // `git commit -a` stages into a temporary index and leaves .git/index stale.
+        let alternate = fixture.directory.appendingPathComponent("alt-index").path
+        var inherited = ProcessInfo.processInfo.environment
+        inherited["GIT_INDEX_FILE"] = alternate
+        try git(work, ["add", "f.txt"], environment: inherited)
+
+        let stale = try SecretGitHook.scan(workTree: work, secrets: []).get()
+        #expect(stale.findings.isEmpty)
+        let found = try SecretGitHook.scan(workTree: work, secrets: [], environment: inherited).get()
+        #expect(found.findings.map(\.path) == ["f.txt"])
+    }
+
+    @Test func hookScansASymlinkReplacedByAFileHoldingAToken() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-typechange")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let link = work.appendingPathComponent("l")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "target")
+        try git(work, ["add", "l"])
+        try git(work, ["-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "-m", "link"])
+        try FileManager.default.removeItem(at: link)
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        try Data("key: \(token)\n".utf8).write(to: link)
+        try git(work, ["add", "l"])
+        let found = try SecretGitHook.scan(workTree: work, secrets: []).get()
+        #expect(found.findings.map(\.path) == ["l"])
     }
 
     @Test func hookUninstallDeletesAHookThatOnlyHeldRvsBlock() throws {
