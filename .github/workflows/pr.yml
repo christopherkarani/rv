@@ -373,6 +373,11 @@ jobs:
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
+      # rv-guest-relay (micro-VM backend) is a static Linux binary built
+      # with zig's bundled musl; release.sh stages it.
+      - name: Install zig
+        run: brew install zig
+
       # C hook units ran in the previous step; release.sh skips its own copy.
       - name: Stage release binaries
         env:
