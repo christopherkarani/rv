@@ -53,6 +53,7 @@ import Testing
             "host-hermes-auth",
             "host-openclaw-auth",
             "host-antigravity-auth",
+            "home-rv-config",
         ]
     )
     let reason = "Access to a sensitive path is not allowed."

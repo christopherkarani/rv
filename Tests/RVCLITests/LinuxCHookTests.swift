@@ -84,11 +84,11 @@ struct LinuxCHookTests {
         process.waitUntilExit()
         let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         // No daemon in this probe: the C hook itself answers with the
-        // fail-closed boundary deny. Mint-on-deny needs a live
+        // unreachable fallback (Grok has no ask primitive, so deny). Mint-on-deny needs a live
         // service (pinned by HookReviewCeremonyTests + c-hook-proof AC-001),
         // so no unlock code and no per-rule reason appear here.
         #expect(out.contains("\"decision\":\"deny\""))
-        #expect(out.contains("operation-bound owner authorization"))
+        #expect(out.contains("RV daemon is not reachable"))
         #expect(allowOnceUnlockCode(in: out) == nil)
         #expect(out.contains("git reset --hard") == false)
         #expect(out.contains("\"decision\":\"allow\"") == false)
@@ -119,6 +119,7 @@ private func compileCHook() throws -> URL {
         src.appendingPathComponent("json_escape.c").path,
         src.appendingPathComponent("json_reply.c").path,
         src.appendingPathComponent("daemon_trust.c").path,
+        src.appendingPathComponent("hook_fallback.c").path,
         src.appendingPathComponent("rv.c").path,
     ]
     process.standardOutput = Pipe()
