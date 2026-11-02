@@ -169,9 +169,10 @@ public enum WorkspaceTerminalSession {
     /// blocking write would; a gone reader then surfaces as EPIPE.
     static func writeOutput(_ data: Data, to fd: Int32) -> OutputWrite {
         data.withUnsafeBytes { buffer -> OutputWrite in
+            guard let base = buffer.baseAddress else { return .written }
             var offset = 0
             while offset < buffer.count {
-                let count = Darwin.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                let count = Darwin.write(fd, base + offset, buffer.count - offset)
                 if count > 0 {
                     offset += count
                 } else if count < 0, errno == EINTR {
