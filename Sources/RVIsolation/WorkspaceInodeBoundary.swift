@@ -122,6 +122,9 @@ private struct BoundaryMutable: Sendable {
     /// the workspace.
     var blockWorkspaceRename = false
     var publishOutcome: WorkspacePublishOutcome = .notRun
+    /// Where a content-policy rejection moved the volume's disk image
+    /// instead of unlinking it. Nil for every other outcome.
+    var retainedRejectedImage: String?
 }
 
 /// Mounts the workspace path on a fresh volume before a contained process runs.
@@ -320,7 +323,12 @@ final class WorkspaceInodeBoundary: Sendable {
         } else {
             published = .failure(.workspaceInodeBoundaryFailed)
         }
-        let restored = restoreOriginalDirectory()
+        // A symlink-policy rejection wrote nothing, so the volume is the only
+        // copy of the agent's work: keep its image instead of unlinking it.
+        // Tamper, inode, and unreadable rejections keep the discard.
+        let restored = restoreOriginalDirectory(
+            retainingImage: rejected && publishOutcome.isContentPolicyRejection
+        )
         // The copy budget is already the detach reserve. Publish did not
         // write and did not reject, and the original directory is back.
         // The volume's unpublished names are gone with it. That is a
@@ -467,7 +475,9 @@ final class WorkspaceInodeBoundary: Sendable {
         }
     }
 
-    private func restoreOriginalDirectory() -> Result<Void, IsolationApplyError> {
+    private func restoreOriginalDirectory(
+        retainingImage: Bool = false
+    ) -> Result<Void, IsolationApplyError> {
         if mutable.withLock({ $0.blockWorkspaceRename }) {
             return .failure(.workspaceInodeBoundaryFailed)
         }
@@ -523,8 +533,19 @@ final class WorkspaceInodeBoundary: Sendable {
         // umount can succeed while `hdiutil detach` fails or is skipped.
         // The image path is what a later detach still needs.
         if let imagePath, diskImageMayRemoveImage(detachSucceeded: detached) {
-            // A stopped unlink is not the image being gone.
-            if diskImageUnlinkWithinCancelClock(imagePath) == nil {
+            if retainingImage {
+                switch retainRejectedImage(imagePath) {
+                case .retained(let path):
+                    mutable.withLock { $0.retainedRejectedImage = path }
+                case .stopped:
+                    return .failure(.workspaceInodeBoundaryFailed)
+                case .left:
+                    // Every rename failed. The image stays where it is;
+                    // retention never falls back to unlinking the work.
+                    break
+                }
+            } else if diskImageUnlinkWithinCancelClock(imagePath) == nil {
+                // A stopped unlink is not the image being gone.
                 return .failure(.workspaceInodeBoundaryFailed)
             }
         }
@@ -693,6 +714,12 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     /// What the last publish left in the saved tree.
+    /// Path of the detached disk image kept after a symlink-policy rejection,
+    /// holding every edit the agent made. Nil when no image was retained.
+    var retainedRejectedImagePath: String? {
+        mutable.withLock { $0.retainedRejectedImage }
+    }
+
     var publishOutcome: WorkspacePublishOutcome {
         mutable.withLock { $0.publishOutcome }
     }

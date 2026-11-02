@@ -63,6 +63,7 @@ struct WorkspacePublishAtomicityTests {
         try seed(tree)
         let boundary = try establish(tree)
         defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
         try agentEdits(tree)
         // Replace one saved inode with the same bytes: that entry rejects.
         let tampered = boundary.savedPath.appendingPath("b.txt")
@@ -91,6 +92,7 @@ struct WorkspacePublishAtomicityTests {
         try seed(tree)
         let boundary = try establish(tree)
         defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
         try agentEdits(tree)
         let before = try treeState(boundary.savedPath)
 
@@ -114,6 +116,7 @@ struct WorkspacePublishAtomicityTests {
         try seed(tree)
         let boundary = try establish(tree)
         defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
         try agentEdits(tree)
         #expect(symlink(target, tree.workspaceURL.appendingPathComponent("escape").path) == 0)
         let before = try treeState(boundary.savedPath)
@@ -125,6 +128,68 @@ struct WorkspacePublishAtomicityTests {
         #expect(try treeState(tree.workspaceURL.path) == before)
     }
 
+    /// A symlink-policy rejection publishes nothing but must not destroy the
+    /// agent's work: the detached image is kept under a name nothing sweeps.
+    @Test func symlinkPolicyRejectionRetainsTheImage() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try seed(tree)
+        let boundary = try establish(tree)
+        let original = try #require(identityImagePath(boundary))
+        defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
+        try agentEdits(tree)
+        #expect(symlink("/usr/bin/python3", tree.workspaceURL.appendingPathComponent("escape").path) == 0)
+        let before = try treeState(boundary.savedPath)
+
+        #expect(boundaryFailed(boundary.publishAndRestore()))
+        #expect(boundary.publishOutcome.isContentPolicyRejection)
+        #expect(try treeState(tree.workspaceURL.path) == before)
+        let retained = try #require(boundary.retainedRejectedImagePath)
+        #expect(retained != original)
+        #expect(FileManager.default.fileExists(atPath: original) == false)
+        var status = stat()
+        #expect(lstat(retained, &status) == 0)
+        #expect((status.st_mode & S_IFMT) == S_IFREG)
+        #expect((status.st_mode & 0o777) == 0o600)
+        let name = (retained as NSString).lastPathComponent
+        #expect(name.hasPrefix("rv-rejected-"))
+        #expect(name.hasSuffix(".sparseimage"))
+        // Never mounted: nothing is attached at the workspace path.
+        #expect(boundary.isReleased)
+    }
+
+    /// Tamper and inode rejections keep today's discard: the image is gone.
+    @Test func tamperRejectionStillUnlinksTheImage() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try seed(tree)
+        let boundary = try establish(tree)
+        let original = try #require(identityImagePath(boundary))
+        defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
+        try agentEdits(tree)
+        let tampered = boundary.savedPath.appendingPath("b.txt")
+        #expect(unlink(tampered) == 0)
+        try Data("b\n".utf8).write(to: URL(fileURLWithPath: tampered))
+
+        #expect(boundaryFailed(boundary.publishAndRestore()))
+        #expect(boundary.publishOutcome.isContentPolicyRejection == false)
+        #expect(boundary.retainedRejectedImagePath == nil)
+        #expect(FileManager.default.fileExists(atPath: original) == false)
+    }
+
+    /// An escaping symlink beside a tampered inode is not a pure policy
+    /// rejection: the mixed outcome discards.
+    @Test func mixedRejectionIsNotAContentPolicyRejection() {
+        let policy = WorkspacePublishRejection(relative: "e", reason: .symlinkEscapesWorkspace)
+        let tamper = WorkspacePublishRejection(relative: "b", reason: .inodeChanged)
+        #expect(WorkspacePublishOutcome.rejected([policy]).isContentPolicyRejection)
+        #expect(WorkspacePublishOutcome.rejected([policy, tamper]).isContentPolicyRejection == false)
+        #expect(WorkspacePublishOutcome.rejected([]).isContentPolicyRejection == false)
+        #expect(WorkspacePublishOutcome.committed(leftovers: []).isContentPolicyRejection == false)
+    }
+
     /// `p -> .` and `y -> P/..`: on the case-insensitive saved tree `y` would
     /// resolve to the workspace's parent. The case-only match is refused.
     @Test func caseOnlyLinkChainIsRefusedAndNothingPublishes() throws {
@@ -133,6 +198,7 @@ struct WorkspacePublishAtomicityTests {
         try seed(tree)
         let boundary = try establish(tree)
         defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
         try agentEdits(tree)
         let ws = tree.workspaceURL
         #expect(symlink(".", ws.appendingPathComponent("p").path) == 0)
@@ -152,6 +218,7 @@ struct WorkspacePublishAtomicityTests {
         try seed(tree)
         let boundary = try establish(tree)
         defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
         try agentEdits(tree)
         let ws = tree.workspaceURL
         #expect(symlink("a.txt", ws.appendingPathComponent("rel").path) == 0)
@@ -181,6 +248,8 @@ struct WorkspacePublishAtomicityTests {
             #expect(symlink("/usr/bin/true", link) == 0)
             let boundary = try establish(tree)
             defer { _ = boundary.discardAndRestore() }
+            defer { removeRetainedImage(boundary) }
+        defer { removeRetainedImage(boundary) }
             try agentEdits(tree)
             if retarget {
                 #expect(unlink(link) == 0)
@@ -240,6 +309,18 @@ private func agentEdits(_ tree: ContainmentTree) throws {
 
 private func establish(_ tree: ContainmentTree) throws -> WorkspaceInodeBoundary {
     try establishWorkspaceInodeBoundary(at: tree.workspaceURL.path).get()
+}
+
+/// A policy rejection keeps the 30 MB image; tests must not leak it.
+private func removeRetainedImage(_ boundary: WorkspaceInodeBoundary) {
+    if let retained = boundary.retainedRejectedImagePath { unlink(retained) }
+}
+
+private func identityImagePath(_ boundary: WorkspaceInodeBoundary) -> String? {
+    boundary.recoveryIdentity(
+        lockPath: "", lockDevice: 0, lockInode: 0, ownerToken: UUID(),
+        snapshotPath: "", snapshotDevice: 0, snapshotInode: 0
+    ).imagePath
 }
 
 private func rollbackLeftovers(_ tree: ContainmentTree) -> [String] {

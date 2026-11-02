@@ -418,4 +418,56 @@ private func workspaceImageDevice(
     }
     return .device(device)
 }
+
+enum RetainedImage {
+    case retained(String)
+    /// The cancel clock stopped the move. The image is where it was.
+    case stopped
+    /// No unused retained name could be taken. The image is where it was.
+    case left
+}
+
+/// Moves the detached image of a rejected workspace to a name nothing
+/// sweeps: `rv-rejected-<token>-<UTC>.sparseimage` beside it. The
+/// `rv-inode-` prefix is what `rv workspace leftovers` lists for deletion,
+/// and recovery unlinks only the recorded path, so the new name is neither.
+/// `RENAME_EXCL` never replaces a file. The mode is narrowed to 0600 after
+/// the move; a failed chmod does not undo it, because the data is already
+/// safe and the image sits in the owner's private directory.
+func retainRejectedImage(_ source: String, now: Date = Date()) -> RetainedImage {
+    let url = URL(fileURLWithPath: source)
+    var stem = url.deletingPathExtension().lastPathComponent
+    if stem.hasPrefix("rv-inode-") {
+        stem = "rv-rejected-" + stem.dropFirst("rv-inode-".count)
+    } else {
+        stem += "-rejected"
+    }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(identifier: "UTC")
+    formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+    let stamp = formatter.string(from: now)
+    let directory = url.deletingLastPathComponent()
+    for attempt in 0..<10 {
+        let suffix = attempt == 0 ? "" : "-\(attempt)"
+        let destination = directory
+            .appendingPathComponent("\(stem)-\(stamp)\(suffix).sparseimage").path
+        let moved = diskImagePerformWithinCancelClock {
+            let renamed = source.withCString { from in
+                destination.withCString { to in
+                    renamex_np(from, to, UInt32(RENAME_EXCL)) == 0
+                }
+            }
+            if renamed { _ = chmod(destination, 0o600) }
+            return renamed
+        }
+        switch moved {
+        case nil: return .stopped
+        case true?: return .retained(destination)
+        case false?: continue
+        }
+    }
+    return .left
+}
+
 #endif
