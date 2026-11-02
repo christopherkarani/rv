@@ -20,9 +20,9 @@ struct LaunchdPlistTests {
     #if os(Linux)
     @Test func linuxAcceptsSocketFlag() throws {
         let flagged = try RVDLaunch.parse(arguments: ["rvd", "--socket"])
-        #expect(flagged.idleExitSeconds == 300)
+        #expect(flagged.idleExitSeconds == IdleWatchdog.defaultSeconds)
         let equals = try RVDLaunch.parse(arguments: ["rvd", "--socket=/ignored"])
-        #expect(equals.idleExitSeconds == 300)
+        #expect(equals.idleExitSeconds == IdleWatchdog.defaultSeconds)
         #expect(equals.printVersion == false)
     }
 

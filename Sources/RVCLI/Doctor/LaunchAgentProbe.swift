@@ -12,4 +12,17 @@ enum LaunchAgentProbe {
             launchctl.isLoaded(domain: domain, label: label)
         }
     }
+
+    /// Which domains hold the job, and whether an Aqua `gui/` domain exists.
+    static func observe(
+        label: String,
+        userID: uid_t,
+        launchctl: any LaunchctlApplying
+    ) -> LaunchdObservation {
+        LaunchdObservation(
+            guiDomainExists: launchctl.domainExists(LaunchdDomain.gui(userID)),
+            loadedInGui: launchctl.isLoaded(domain: LaunchdDomain.gui(userID), label: label),
+            loadedInUser: launchctl.isLoaded(domain: LaunchdDomain.user(userID), label: label)
+        )
+    }
 }

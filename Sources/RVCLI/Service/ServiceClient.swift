@@ -304,13 +304,29 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    /// Authority-bearing hooks never retry through the local evaluation door.
+    /// Whole hook consult budget: two Hello exchanges (3000 ms each, covers
+    /// a launchd cold spawn) plus hookEvaluate (8000 ms; rvd enforces its
+    /// own shorter deadline). Mirrors the C client's per-exchange budgets.
+    static let hookEvaluateTimeoutMs = 14_000
+
+    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
-        func unavailable() -> HookWire {
-            LocalControlBoundary.deniedHook(host: host)
+        await hookEvaluate(
+            host: host,
+            stdin: stdin,
+            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey])
+        )
+    }
+
+    /// Authority-bearing hooks never retry through the local evaluation door,
+    /// and the request is never resent. A daemon miss is classified and
+    /// rendered per `whenDown` (`HookDaemonFallback`).
+    public func hookEvaluate(host: HookHost, stdin: String, whenDown: HookWhenDown) async -> HookWire {
+        func unavailable(_ failure: HookDaemonFailure) -> HookWire {
+            HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
         }
         guard let transport else {
-            return unavailable()
+            return unavailable(.unreachable)
         }
         do {
             let reply = try await send(
@@ -322,7 +338,7 @@ public struct ServiceClient: Sendable {
                     )
                 ),
                 using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                timeoutMs: Self.hookEvaluateTimeoutMs,
                 hookConsult: true
             )
             switch EvaluationRoute.path(for: .reply(
@@ -333,26 +349,65 @@ public struct ServiceClient: Sendable {
                 return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
             case .inProcess:
                 transport.invalidate()
-                return unavailable()
+                return unavailable(.protocol)
             }
         } catch is IPCCallError {
             transport.invalidate()
-            return unavailable()
+            return unavailable(.protocol)
         } catch {
-            return unavailable()
+            return unavailable(HookDaemonFallback.classify(error))
         }
+    }
+
+    /// Client for `rv doctor` / `rv service status`: hook-consult probes pin
+    /// the `rvd` beside the hook `rv` (`~/.local/bin/rvd`), exactly as hooks
+    /// do, regardless of where this `rv-cli` runs from.
+    static func probing(home: HomeDirectory?) -> ServiceClient {
+#if canImport(XPC)
+        let hookRvd = home.map { OwnedPaths(home: $0).localRvd }
+        return ServiceClient(transport: XPCServiceTransport(hookSiblingDaemonPath: hookRvd), home: home)
+#else
+        return ServiceClient(home: home)
+#endif
+    }
+
+    /// Hook-door liveness over the same consult transport hooks use: a
+    /// read-only snapshot, never an evaluation. Retried so a freshly
+    /// bootstrapped daemon still starting does not read as down.
+    func verifyHookService(attempts: Int = 3, retryDelayNanoseconds: UInt64 = 1_000_000_000) async -> Bool {
+        guard let transport else { return false }
+        let tries = max(1, attempts)
+        for attempt in 0..<tries {
+            do {
+                _ = try await send(
+                    DoctorSnapshotCall(),
+                    using: transport,
+                    timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                    hookConsult: true
+                )
+                return true
+            } catch {
+                if attempt + 1 < tries, retryDelayNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+                }
+            }
+        }
+        return false
     }
 
     public func status() async -> ServiceStatusReport {
         ServiceHealth.inspect(await diagnostics()).statusReport
     }
 
+    /// Probes rvd over the hook-consult session: the same daemon-identity
+    /// rule hooks apply (admin manifest when installed, else the sibling
+    /// `rvd` pin), so a healthy manifest-free install reads as running.
     func diagnostics() async -> ServiceDiagnosticResult {
         let localCorePacksReady = door.corePacksReady
         switch await route() {
         case .xpc(let transport, let serviceSemver):
             do {
-                let snapshot = try await send(DoctorSnapshotCall(), using: transport)
+                let snapshot = try await send(DoctorSnapshotCall(), using: transport, hookConsult: true)
                 return .xpc(
                     snapshot: snapshot,
                     localCorePacksReady: localCorePacksReady
@@ -426,8 +481,31 @@ public struct ServiceClient: Sendable {
         case let error as ServiceTransportError:
             .transport(error)
         default:
-            .transport(.unexpected)
+            xpcClientFailure(error) == .daemonRejected ? .daemonRejected : .transport(.unexpected)
         }
+    }
+
+    /// Typed view of `XPCEvaluateClientError`, which otherwise collapses into
+    /// "request failed": no listener is down; a failed identity check is a
+    /// daemon the hook client would also refuse.
+    private enum XPCClientFailure {
+        case down
+        case daemonRejected
+    }
+
+    private static func xpcClientFailure(_ error: Error) -> XPCClientFailure? {
+#if canImport(XPC)
+        switch error as? XPCEvaluateClientError {
+        case .connectFailed, .cancelled:
+            return .down
+        case .authenticationFailed:
+            return .daemonRejected
+        case nil:
+            return nil
+        }
+#else
+        return nil
+#endif
     }
 
     private enum Route {
@@ -440,7 +518,7 @@ public struct ServiceClient: Sendable {
     private func route() async -> Route {
         guard let transport else { return .down }
         do {
-            let ack = try await transport.hello(clientSemver: ProtocolVersion.serviceSemver)
+            let ack = try await transport.helloHookConsult(clientSemver: ProtocolVersion.serviceSemver)
             if let reason = skewReason(ack) {
                 transport.invalidate()
                 return .skew(reason, serviceSemver: ack.serviceSemver)
@@ -454,7 +532,14 @@ public struct ServiceClient: Sendable {
                 return .failed(.transport(error))
             }
         } catch {
-            return .failed(.transport(.unexpected))
+            switch Self.xpcClientFailure(error) {
+            case .down:
+                return .down
+            case .daemonRejected:
+                return .failed(.daemonRejected)
+            case nil:
+                return .failed(.transport(.unexpected))
+            }
         }
     }
 

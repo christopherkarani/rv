@@ -250,6 +250,89 @@ struct UnixSocketListenerTests {
         #expect(err.contains("HOME is required"))
     }
 
+    /// On macOS XPC is the production transport: a socket base the daemon
+    /// refuses (group-writable `~/.config`) must not take XPC down with it.
+    @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() throws {
+        let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let home = try makeIsolatedHome("gw")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent(".config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o770], ofItemAtPath: config.path)
+        let process = Process()
+        process.executableURL = rvd
+        process.environment = [
+            "HOME": home.path,
+            "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "",
+        ]
+        let stderr = Pipe()
+        process.standardError = stderr
+        process.standardOutput = Pipe()
+        try process.run()
+        Darwin.usleep(1_500_000)
+        let survived = process.isRunning
+        process.terminate()
+        process.waitUntilExit()
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        #expect(survived, "rvd must keep running without its Unix socket; stderr: \(err)")
+        #expect(err.contains("rvd: unix socket unavailable"))
+        #expect(err.contains("continuing with XPC only"))
+        #expect(err.contains("launch failed") == false)
+    }
+
+    /// A rebuilt/upgraded rvd on disk leaves the old process serving replies
+    /// every client rejects (cdhash pin). The stale daemon must exit after
+    /// its next request so launchd starts the new binary. The copy also has
+    /// no `rv_RVPacks.bundle` beside it: it must answer, not trap.
+    @Test func rvdProcessExitsAfterItsBinaryIsReplaced() throws {
+        let built = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let home = try makeIsolatedHome("swap")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let binDir = home.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let rvd = binDir.appendingPathComponent("rvd")
+        try FileManager.default.copyItem(at: built, to: rvd)
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let process = Process()
+        process.executableURL = rvd
+        process.environment = [
+            "HOME": home.path,
+            "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "",
+        ]
+        process.standardError = Pipe()
+        process.standardOutput = Pipe()
+        try process.run()
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+            process.waitUntilExit()
+        }
+
+        let first = try retryDarwinConnect(path: socketURL.path, attempts: 80)
+        defer { first.close() }
+        let ack = try IPCJSON.decode(HelloAck.self, from: first.send(body: try IPCJSON.encode(Hello())))
+        #expect(ack.status == .skew(.corePacksUnavailable))
+        Darwin.usleep(200_000)
+        #expect(process.isRunning)
+
+        let staged = binDir.appendingPathComponent("rvd.new")
+        try Data("replacement".utf8).write(to: staged)
+        _ = try FileManager.default.replaceItemAt(rvd, withItemAt: staged)
+
+        let second = try retryDarwinConnect(path: socketURL.path, attempts: 80)
+        defer { second.close() }
+        _ = try? second.send(body: try IPCJSON.encode(Hello()))
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning, Date() < deadline {
+            Darwin.usleep(50_000)
+        }
+        #expect(process.isRunning == false)
+        if process.isRunning == false {
+            #expect(process.terminationStatus == 0)
+        }
+    }
+
     @Test func concurrentConnectionsAreBothServed() throws {
         let home = try makeIsolatedHome("conc")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -331,6 +414,88 @@ struct UnixSocketListenerTests {
         #expect(try Data(contentsOf: socketURL) == Data("not-ours".utf8))
     }
 
+    @Test func silentIdleConnectionDoesNotDelaySecondClient() throws {
+        let home = try makeIsolatedHome("idle")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        // Connected, never sends a byte: its serve loop parks in recv.
+        let idle = try retryDarwinConnect(path: socketURL.path)
+        defer { idle.close() }
+        let second = try retryDarwinConnect(path: socketURL.path)
+        defer { second.close() }
+        let started = Date()
+        let data = try #require(sendWithin(seconds: 5, second, body: try IPCJSON.encode(Hello())).data)
+        #expect(Date().timeIntervalSince(started) < 2)
+        #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
+    @Test func idleConnectionIsClosedAfterReceiveTimeout() throws {
+        let home = try makeIsolatedHome("rcvto")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL,
+            limits: UnixConnectionLimits(maxConnections: 4, receiveTimeoutSeconds: 1)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let ack = try #require(sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())).data)
+        #expect(try IPCJSON.decode(HelloAck.self, from: ack).status == .ok)
+        // Idle past the receive timeout: the listener must hang up.
+        Thread.sleep(forTimeInterval: 2)
+        #expect(sendWithin(seconds: 5, client, body: try IPCJSON.encode(Hello())) == .hungUp)
+    }
+
+    @Test func connectionsBeyondCapAreClosedAndSlotsAreReleased() throws {
+        let home = try makeIsolatedHome("cap")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL,
+            limits: UnixConnectionLimits(maxConnections: 1, receiveTimeoutSeconds: 30)
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let first = try retryDarwinConnect(path: socketURL.path)
+        defer { first.close() }
+        let ack = try #require(sendWithin(seconds: 5, first, body: try IPCJSON.encode(Hello())).data)
+        #expect(try IPCJSON.decode(HelloAck.self, from: ack).status == .ok)
+
+        let over = try retryDarwinConnect(path: socketURL.path)
+        defer { over.close() }
+        #expect(sendWithin(seconds: 5, over, body: try IPCJSON.encode(Hello())) == .hungUp)
+
+        // Closing the first connection frees its slot for a later client.
+        first.close()
+        var recovered = false
+        for _ in 0..<40 where recovered == false {
+            let next = try retryDarwinConnect(path: socketURL.path)
+            if let data = sendWithin(seconds: 5, next, body: try IPCJSON.encode(Hello())).data,
+               (try? IPCJSON.decode(HelloAck.self, from: data))?.status == .ok {
+                recovered = true
+            }
+            next.close()
+            if recovered == false { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        #expect(recovered)
+    }
+
     @Test func skewedHelloKeepsHandshakeClosedThenRecovers() throws {
         let home = try makeIsolatedHome("skrec")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -397,6 +562,38 @@ private struct UncheckedClient: @unchecked Sendable {
     init(_ client: DarwinEvaluateClient) {
         self.client = client
     }
+}
+
+private enum SendOutcome: Equatable, Sendable {
+    case reply(Data)
+    case hungUp
+    case timedOut
+
+    var data: Data? {
+        if case .reply(let data) = self { return data }
+        return nil
+    }
+}
+
+/// One request/reply on a worker thread, bounded by `seconds` because the
+/// client socket itself has no timeout.
+private func sendWithin(seconds: Double, _ client: DarwinEvaluateClient, body: Data) -> SendOutcome {
+    let box = OutcomeBox()
+    let done = DispatchSemaphore(value: 0)
+    let held = UncheckedClient(client)
+    DispatchQueue.global().async {
+        box.set((try? held.client.send(body: body)).map(SendOutcome.reply) ?? .hungUp)
+        done.signal()
+    }
+    guard done.wait(timeout: .now() + seconds) == .success else { return .timedOut }
+    return box.get() ?? .hungUp
+}
+
+private final class OutcomeBox: Sendable {
+    private let box = Mutex<SendOutcome?>(nil)
+
+    func set(_ outcome: SendOutcome) { box.withLock { $0 = outcome } }
+    func get() -> SendOutcome? { box.withLock { $0 } }
 }
 
 private func darwinResetHardRequest() -> IPCRequest {

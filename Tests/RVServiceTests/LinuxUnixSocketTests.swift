@@ -7,6 +7,7 @@ import Testing
 import RVDomain
 import RVIPC
 import RVPolicy
+import Synchronization
 @testable import RVService
 
 @Suite(.serialized)
@@ -65,6 +66,56 @@ struct LinuxUnixSocketTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+    }
+
+    @Test func silentIdleConnectionDoesNotStarveSecondClient() throws {
+        let xdg = try makeInjectedXDG("idle")
+        defer { try? FileManager.default.removeItem(at: xdg) }
+        let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
+        let listener = UnixEvaluateListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        // Connected, never sends a byte: its serve loop parks in recv. Serving
+        // on the serial accept queue would starve the second client behind it.
+        let idle = try retryUnixConnect(path: socketURL.path)
+        defer { idle.close() }
+        let second = try retryUnixConnect(path: socketURL.path)
+        defer { second.close() }
+        let box = LinuxReplyBox()
+        let done = DispatchSemaphore(value: 0)
+        let held = LinuxUncheckedClient(second)
+        DispatchQueue.global().async {
+            box.set(try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data()))
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + 5) == .success, let data = box.get() else {
+            Issue.record("second client was not served while an idle connection was open")
+            return
+        }
+        #expect(try IPCJSON.decode(HelloAck.self, from: data).status == .ok)
+    }
+
+    @Test func stopWithoutStartRemovesNothing() throws {
+        let xdg = try makeInjectedXDG("nostart")
+        defer { try? FileManager.default.removeItem(at: xdg) }
+        let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
+        try FileManager.default.createDirectory(
+            at: socketURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("not-ours".utf8).write(to: socketURL)
+        let listener = UnixEvaluateListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        listener.stop()
+        #expect(try Data(contentsOf: socketURL) == Data("not-ours".utf8))
     }
 
     @Test func rvdSocketProcessDeniesResetHard() async throws {
@@ -138,6 +189,22 @@ struct LinuxUnixSocketTests {
         #expect(err.contains("XDG_RUNTIME_DIR is required"))
         #expect(FileManager.default.fileExists(atPath: "/tmp/rv.sock") == false)
         #expect(FileManager.default.fileExists(atPath: "/tmp/evaluate.sock") == false)
+    }
+}
+
+/// Test-only shared box for one reply from a worker thread.
+private final class LinuxReplyBox: Sendable {
+    private let box = Mutex<Data?>(nil)
+
+    func set(_ data: Data?) { box.withLock { $0 = data } }
+    func get() -> Data? { box.withLock { $0 } }
+}
+
+private struct LinuxUncheckedClient: @unchecked Sendable {
+    let client: UnixEvaluateClient
+
+    init(_ client: UnixEvaluateClient) {
+        self.client = client
     }
 }
 

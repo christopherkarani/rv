@@ -13,6 +13,8 @@ import RVPresentation
 
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
+    /// One-line repair when installed binaries (rvd, pack bundle) are missing.
+    static let reinstallHint = "reinstall rv (curl -fsSL https://rykanv.com/install | sh)"
 
     static func setup(
         _ env: SetupEnvironment,
@@ -35,12 +37,38 @@ enum SetupRun {
             )
             return SetupOutcome(
                 stdout: formatted.text,
+                stderr: serviceWarning(report),
                 exitCode: 0,
                 emitted: formatted.emitted
             )
         } catch {
             return failureOutcome(error, command: .setup)
         }
+    }
+
+    /// Hooks wired with no service behind them deny every tool call; say so.
+    private static func serviceWarning(_ report: SetupReport) -> String {
+        guard let missing = report.serviceSkippedMissingRvd else { return "" }
+        return """
+            rv setup: rvd not found at \(missing); the service was not installed, so hooks will deny tool calls
+            fix: \(reinstallHint)
+
+            """
+    }
+
+    /// Setup that loads the real supervisor must run from the hook's bin dir:
+    /// the plist names `rvd` there, and a different build's `rv-cli` would
+    /// wire hooks for binaries that were never installed.
+    private static func requireInstalledCopy(_ env: SetupEnvironment) throws(SetupError) {
+        guard env.touchLaunchd || env.touchSystemd, let running = env.runningExecutable else { return }
+        let runningDirectory = canonicalDirectory(of: running)
+        let installedDirectory = canonicalDirectory(of: env.rvPath)
+        guard runningDirectory != installedDirectory else { return }
+        throw SetupError.notInstalledCopy(running: running, installedRv: env.rvPath)
+    }
+
+    private static func canonicalDirectory(of path: String) -> String {
+        URL(fileURLWithPath: path).deletingLastPathComponent().resolvingSymlinksInPath().path
     }
 
     private static func failureOutcome(
@@ -52,6 +80,7 @@ enum SetupRun {
     }
 
     private static func perform(_ env: SetupEnvironment, force: Bool) throws(SetupError) -> SetupReport {
+        try requireInstalledCopy(env)
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)

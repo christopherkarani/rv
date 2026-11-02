@@ -15,9 +15,7 @@ public enum PendingApprovalLedger: Sendable {
             case .keepWaiting:
                 return record
             case .autoDeny, .failTask:
-                var next = record
-                next.state = .timedOut(ApprovalTimeoutEnding(policy: record.timeoutPolicy, at: now))
-                return next
+                return record.transitioned(to: .timedOut(ApprovalTimeoutEnding(policy: record.timeoutPolicy, at: now)))
             }
         }
     }
@@ -86,9 +84,7 @@ public enum PendingApprovalLedger: Sendable {
             return try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
                 try ensureBinding(record, fingerprint: fingerprint, identity: identity)
                 try ensureAwaitingHuman(record)
-                var next = record
-                next.state = .resolved(ApprovalResolution(decision: decision, resolvedAt: now))
-                return next
+                return record.transitioned(to: .resolved(ApprovalResolution(decision: decision, resolvedAt: now)))
             }
         } catch {
             throw error
@@ -103,9 +99,7 @@ public enum PendingApprovalLedger: Sendable {
         do {
             return try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
                 try ensureAwaitingHuman(record)
-                var next = record
-                next.state = .expired(at: now)
-                return next
+                return record.transitioned(to: .expired(at: now))
             }
         } catch {
             throw error
@@ -120,9 +114,7 @@ public enum PendingApprovalLedger: Sendable {
         do {
             return try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
                 try ensureAwaitingHuman(record)
-                var next = record
-                next.state = .canceled(at: now)
-                return next
+                return record.transitioned(to: .canceled(at: now))
             }
         } catch {
             throw error
@@ -147,9 +139,7 @@ public enum PendingApprovalLedger: Sendable {
                     // This name-only API has no live principal or owner proof.
                     // It can deliver a deny, never executable authority.
                     if resolution.decision.authorizesExactAction { throw .invalidRequest }
-                    var next = record
-                    next.state = .consumed(resolution, at: now)
-                    return next
+                    return record.transitioned(to: .consumed(resolution, at: now))
                 case .consumed:
                     throw .alreadyConsumed
                 case .expired:
