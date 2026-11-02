@@ -67,10 +67,11 @@ private func museSettings(_ body: String) -> Data {
         String(data: merged.data, encoding: .utf8)
             == """
             {
-              "managed_hooks_path" : "\\/tmp\\/home\\/.config\\/muse\\/rv-hooks.json",
-              "provider" : "meta",
-              "schema_version" : 1
+              "schema_version": 1,
+              "provider": "meta",
+              "managed_hooks_path": "/tmp/home/.config/muse/rv-hooks.json"
             }
+
             """
     )
     let roundTrip = try #require(
