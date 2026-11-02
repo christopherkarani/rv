@@ -211,11 +211,34 @@ struct LocalControlBoundaryTests {
     }
 
     @Test func setupWarnsWhenWiredHostsOutliveTheService() async throws {
-        // A wired slot with no daemon is exactly the deny-everything trap:
+        // A wired slot with no daemon is the block-or-prompt-everything trap:
         // setup stays green (files are written) but the outcome must carry
         // the service warning on stderr, where robot stdout stays parseable.
-        // Asserted on the outcome, not a captured fd: fd capture deadlocks
-        // under parallel test execution.
+        // The probe is injected so the result never depends on a real rvd.
+        let outcome = try await wiredSetupOutcome(serviceUp: false)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.contains("rv doctor"))
+    }
+
+    @Test func setupStaysQuietWhenWiredHostsHaveALiveService() async throws {
+        let outcome = try await wiredSetupOutcome(serviceUp: true)
+        #expect(outcome.exitCode == 0)
+        #expect(!outcome.stderr.contains("rv doctor"))
+    }
+
+    #if !canImport(XPC)
+    @Test func linuxServiceProbeNeverClaimsTheServiceIsDown() async throws {
+        // Linux hooks use a unix socket the Swift client cannot probe, so the
+        // live probe must report "not down" rather than warn falsely.
+        let home = try isolatedHome()
+        #expect(await Setup.liveServiceProbe(home: home) == true)
+    }
+    #endif
+
+    /// Runs setup against a home with one wired host and a stubbed probe.
+    /// Asserted on the outcome, not a captured fd: fd capture deadlocks
+    /// under parallel test execution.
+    private func wiredSetupOutcome(serviceUp: Bool) async throws -> SetupOutcome {
         let home = try isolatedHome()
         let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
         try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
@@ -223,13 +246,12 @@ struct LocalControlBoundaryTests {
             to: museDir.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8
         )
         // A slot only reads `.wired` when the baked rv path and its rv-cli
-        // sibling are executable. Stubbed, never executed: no rvd on
-        // purpose, so the daemon is down exactly like the real trap.
+        // sibling are executable. Stubbed, never executed.
         let binDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".local/bin")
         try writeExecutableScript(at: binDir.appendingPathComponent("rv"), source: "#!/bin/sh\nexit 0\n")
         try writeExecutableScript(at: binDir.appendingPathComponent("rv-cli"), source: "#!/bin/sh\nexit 0\n")
         let environment = ["HOME": home.rawValue, "PATH": "/usr/bin:/bin"]
-        let outcome = try await withCLIProcess(environment: environment) {
+        return try await withCLIProcess(environment: environment) {
             await Setup().setupOutcome(
                 intent: SetupIntent(
                     kind: .install,
@@ -239,11 +261,10 @@ struct LocalControlBoundaryTests {
                     ceremonyKind: .setup
                 ),
                 clock: LiveSetupCeremonyClock(),
-                write: CeremonyCLI.stdoutWriter()
+                write: CeremonyCLI.stdoutWriter(),
+                probeService: { _ in serviceUp }
             )
         }
-        #expect(outcome.exitCode == 0)
-        #expect(outcome.stderr.contains("rv doctor"))
     }
 
 }
