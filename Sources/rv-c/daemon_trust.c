@@ -151,6 +151,10 @@ static int protected_path(const char *path, int is_file) {
 /* Strict manifest JSON: an array of flat string-valued objects.      */
 /* Anything else (numbers, nesting, duplicate keys, trailing bytes)  */
 /* fails closed. Mirrors the Swift Codable `[Entry]` shape.           */
+/* Forward compatibility: an entry whose role this build does not    */
+/* know (added by a newer RV) is skipped once it parses as a flat     */
+/* string object with a role; known roles keep every check, including */
+/* rejecting unknown keys.                                            */
 
 struct ManifestEntry {
     char *role;
@@ -159,6 +163,7 @@ struct ManifestEntry {
     char *required_team;
     char *dev_cdhash;
     char *dev_path;
+    int has_unknown_key;
 };
 
 #define RV_MANIFEST_MAX_ENTRIES 8
@@ -328,11 +333,16 @@ static int json_entry(struct JsonCursor *c, struct ManifestEntry *e) {
             slot = &e->dev_path;
         }
         free(key);
-        if (slot == NULL || *slot != NULL) {
+        if (slot == NULL) {
+            /* Fatal only for known roles (manifest_parse). */
+            e->has_unknown_key = 1;
+            free(value);
+        } else if (*slot != NULL) {
             free(value);
             return 0;
+        } else {
+            *slot = value;
         }
-        *slot = value;
         if (json_take(c, ',')) {
             continue;
         }
@@ -401,14 +411,19 @@ static int requirement_parses(const char *text) {
     return st == errSecSuccess && req != NULL;
 }
 
-/* Validates one entry exactly like the Swift loader. */
+/* `TrustedRVComponentRole` cases this build knows. */
+static int role_is_known(const char *role) {
+    return strcmp(role, "cli") == 0 || strcmp(role, "service") == 0
+        || strcmp(role, "workspaceHost") == 0
+        || strcmp(role, "operatorUI") == 0;
+}
+
+/* Validates one known-role entry exactly like the Swift loader. */
 static int entry_valid(const struct ManifestEntry *e) {
-    if (e->role == NULL || e->requirement == NULL) {
+    if (e->role == NULL || e->requirement == NULL || e->has_unknown_key) {
         return 0;
     }
-    if (strcmp(e->role, "cli") != 0 && strcmp(e->role, "service") != 0
-        && strcmp(e->role, "workspaceHost") != 0
-        && strcmp(e->role, "operatorUI") != 0) {
+    if (!role_is_known(e->role)) {
         return 0;
     }
     if (!requirement_parses(e->requirement)) {
@@ -446,12 +461,9 @@ static int g_source_loaded = 0;
 static struct ManifestEntry g_service;
 static int g_has_service = 0;
 
-/* Loads and validates the manifest; keeps the service entry. 1 on success. */
-static int manifest_load(void) {
-    int fd;
-    struct stat info;
-    unsigned char *bytes = NULL;
-    size_t len = 0;
+/* Parses and validates manifest bytes; keeps the service entry. 1 on
+ * success. Pure: the caller owns every file-level check. */
+static int manifest_parse(const unsigned char *bytes, size_t len) {
     struct JsonCursor cursor;
     struct ManifestEntry entries[RV_MANIFEST_MAX_ENTRIES];
     int count = 0;
@@ -459,6 +471,78 @@ static int manifest_load(void) {
     int ok = 0;
 
     memset(entries, 0, sizeof entries);
+    cursor.p = bytes;
+    cursor.left = len;
+    if (!json_take(&cursor, '[')) {
+        goto out;
+    }
+    if (!json_take(&cursor, ']')) {
+        for (;;) {
+            if (count >= RV_MANIFEST_MAX_ENTRIES) {
+                goto out;
+            }
+            if (!json_entry(&cursor, &entries[count])) {
+                entry_free(&entries[count]);
+                goto out;
+            }
+            count++;
+            if (json_take(&cursor, ',')) {
+                continue;
+            }
+            if (!json_take(&cursor, ']')) {
+                goto out;
+            }
+            break;
+        }
+    }
+    json_skip_ws(&cursor);
+    if (cursor.left != 0) {
+        goto out;
+    }
+    for (i = 0; i < count; i++) {
+        if (entries[i].role == NULL) {
+            goto out;
+        }
+    }
+    for (i = 0; i < count; i++) {
+        int j;
+        if (!role_is_known(entries[i].role)) {
+            continue;
+        }
+        if (!entry_valid(&entries[i])) {
+            goto out;
+        }
+        for (j = i + 1; j < count; j++) {
+            if (strcmp(entries[i].role, entries[j].role) == 0) {
+                goto out;
+            }
+        }
+        if (strcmp(entries[i].role, "service") == 0) {
+            g_service = entries[i];
+            memset(&entries[i], 0, sizeof entries[i]);
+            g_has_service = 1;
+        }
+    }
+    ok = 1;
+out:
+    for (i = 0; i < count; i++) {
+        entry_free(&entries[i]);
+    }
+    if (!ok && g_has_service) {
+        entry_free(&g_service);
+        g_has_service = 0;
+    }
+    return ok;
+}
+
+/* Loads the root-protected manifest file, then parses it. 1 on success. */
+static int manifest_load(void) {
+    int fd;
+    struct stat info;
+    unsigned char *bytes = NULL;
+    size_t len = 0;
+    int ok = 0;
+
     if (!protected_path(RV_MANIFEST_PATH, 1)) {
         return 0;
     }
@@ -494,66 +578,10 @@ static int manifest_load(void) {
             goto out;
         }
     }
-    close(fd);
-    fd = -1;
-
-    cursor.p = bytes;
-    cursor.left = len;
-    if (!json_take(&cursor, '[')) {
-        goto out;
-    }
-    if (!json_take(&cursor, ']')) {
-        for (;;) {
-            if (count >= RV_MANIFEST_MAX_ENTRIES) {
-                goto out;
-            }
-            if (!json_entry(&cursor, &entries[count])) {
-                entry_free(&entries[count]);
-                goto out;
-            }
-            count++;
-            if (json_take(&cursor, ',')) {
-                continue;
-            }
-            if (!json_take(&cursor, ']')) {
-                goto out;
-            }
-            break;
-        }
-    }
-    json_skip_ws(&cursor);
-    if (cursor.left != 0) {
-        goto out;
-    }
-    for (i = 0; i < count; i++) {
-        int j;
-        if (!entry_valid(&entries[i])) {
-            goto out;
-        }
-        for (j = i + 1; j < count; j++) {
-            if (strcmp(entries[i].role, entries[j].role) == 0) {
-                goto out;
-            }
-        }
-        if (strcmp(entries[i].role, "service") == 0) {
-            g_service = entries[i];
-            memset(&entries[i], 0, sizeof entries[i]);
-            g_has_service = 1;
-        }
-    }
-    ok = 1;
+    ok = manifest_parse(bytes, len);
 out:
-    if (fd >= 0) {
-        close(fd);
-    }
+    close(fd);
     free(bytes);
-    for (i = 0; i < count; i++) {
-        entry_free(&entries[i]);
-    }
-    if (!ok && g_has_service) {
-        entry_free(&g_service);
-        g_has_service = 0;
-    }
     return ok;
 }
 

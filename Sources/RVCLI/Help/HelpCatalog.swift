@@ -14,6 +14,7 @@ enum HelpCatalog {
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
+        case .serviceRestart: serviceRestart
         case .hook: hook
         case .setup: setup
         case .initialize: initialize
@@ -63,6 +64,7 @@ enum HelpCatalog {
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
+                HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
                 HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
                 HelpRow(name: "egress", description: "Review blocked network egress"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
@@ -207,9 +209,11 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv service"),
                 HelpRow(name: "rv service status"),
+                HelpRow(name: "rv service restart"),
             ]),
             HelpSection(heading: "Subcommands", rows: [
                 HelpRow(name: "status", description: "Print whether rvd is running, down, or skewed (default)"),
+                HelpRow(name: "restart", description: "Restart rvd (after an upgrade or repair)"),
             ]),
         ],
         examples: [
@@ -234,6 +238,23 @@ enum HelpCatalog {
         examples: [
             "rv service status",
             "rv service status --robot",
+        ]
+    )
+
+    static let serviceRestart = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv service restart"),
+            ]),
+            HelpSection(heading: "Behavior", rows: [
+                HelpRow(name: "loaded", description: "launchctl kickstart -k the rvd LaunchAgent"),
+                HelpRow(name: "not loaded", description: "Rewrite the LaunchAgent for ~/.local/bin/rvd and load it"),
+            ]),
+        ],
+        examples: [
+            "rv service restart",
         ]
     )
 
