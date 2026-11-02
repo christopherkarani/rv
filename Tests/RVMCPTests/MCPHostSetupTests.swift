@@ -327,6 +327,35 @@ struct MCPHostSetupTests {
         #expect(try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64) == JSONValue.parse(Data(original.utf8), maximumDepth: 64))
     }
 
+    @Test func setupMuseRemoteEntryBecomesStdioGateway() throws {
+        // The gateway entry is always a stdio command; copying a remote
+        // `transport` onto it would leave an HTTP transport with no url.
+        let box = Sandbox()
+        let original = """
+            {"mcpServers": {"docs": {"transport": "streamableHttp", "url": "https://docs.example/mcp", "headers": {"X-Key": "k"}, "mode": "required"}}}
+            """
+        let file = try box.write(".config/muse/settings.json", original)
+        let configuration = MCPConfiguration(servers: [MCPServerDefinition(name: "docs", command: "docs-bin")])
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.muse), configuration: configuration, servers: ["docs"], rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 1)
+
+        let rewritten = try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64)
+        #expect(rewritten["mcpServers"]?["docs"] == .object([
+            "command": .string("/opt/rv"),
+            "args": .array(["mcp", "serve", "--server", "docs"].map(JSONValue.string)),
+            "transport": .string("stdio"),
+            "mode": .string("required"),
+        ]))
+
+        let undone = try MCPHostSetup.undo(host: .muse, servers: nil, configDirectory: box.config).get()
+        #expect(undone.changed.count == 1)
+        #expect(try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64) == JSONValue.parse(Data(original.utf8), maximumDepth: 64))
+    }
+
     @Test func undoLeavesEntriesTheUserChanged() throws {
         let box = Sandbox()
         let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
