@@ -515,7 +515,7 @@ enum SecretsDecoding {
             return .awsProfile(profile: profile)
         case "oauth":
             try onlyKeys(fields, ["tokenURL", "clientID", "clientSecret", "refreshToken", "scope"], at: place)
-            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text) else {
+            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
                 throw Failure("\(place).tokenURL must be an https URL with no query")
             }
             guard let clientID = fields["clientID"] as? String, oauthText(clientID, max: 256, spaces: false) else {
@@ -736,7 +736,9 @@ enum SecretsDecoding {
             && value.utf8.allSatisfy { (0x21...0x7E).contains($0) || (spaces && $0 == 0x20) }
     }
 
-    static func httpsUpstream(_ text: String) -> URL? {
+    /// `keepingTrailingSlash` for a URL that is used as given, such as a token
+    /// endpoint: `/o/token/` and `/o/token` can be different resources.
+    static func httpsUpstream(_ text: String, keepingTrailingSlash: Bool = false) -> URL? {
         guard let components = URLComponents(string: text), components.scheme?.lowercased() == "https",
             let host = components.host, host.isEmpty == false,
             components.user == nil, components.password == nil,
@@ -746,7 +748,7 @@ enum SecretsDecoding {
         var normalized = components
         normalized.scheme = "https"
         normalized.host = host.lowercased()
-        if normalized.path.hasSuffix("/") { normalized.path.removeLast() }
+        if keepingTrailingSlash == false, normalized.path.hasSuffix("/") { normalized.path.removeLast() }
         return normalized.url
     }
 

@@ -146,7 +146,19 @@ struct SecretOAuthTests {
             recovery: "(fixConfiguration)", retried: true),
         Case(name: "invalid_scope", exchange: .response(status: 400, body: json(["error": "invalid_scope"])),
             recovery: "(fixConfiguration)", retried: true),
-        Case(name: "server error", exchange: .response(status: 503, body: Data()), recovery: "(retry)", retried: true),
+        Case(name: "server error without an RFC 6749 body", exchange: .response(status: 503, body: Data()),
+            recovery: "(reauthorize)", retried: false),
+        Case(name: "proxy error page", exchange: .response(status: 502, body: Data("<html>bad gateway</html>".utf8)),
+            recovery: "(reauthorize)", retried: false),
+        Case(name: "server error with an RFC 6749 body",
+            exchange: .response(status: 503, body: json(["error": "temporarily_unavailable"])), recovery: "(retry)", retried: true),
+        Case(name: "200 carrying invalid_client", exchange: .response(status: 200, body: json(["error": "invalid_client"])),
+            recovery: "(fixConfiguration)", retried: true),
+        Case(name: "200 carrying invalid_grant", exchange: .response(status: 200, body: json(["error": "invalid_grant"])),
+            recovery: "(reauthorize)", retried: false),
+        Case(name: "200 carrying an unknown error",
+            exchange: .response(status: 200, body: json(["error": "incorrect_client_credentials"])),
+            recovery: "(retry)", retried: true),
         Case(name: "redirect", exchange: .response(status: 302, body: Data()), recovery: "(fixConfiguration)", retried: true),
     ]
 
@@ -166,10 +178,58 @@ struct SecretOAuthTests {
         }
     }
 
+    @Test func aRotatedRefreshTokenIsKeptEvenWhenTheAccessTokenIsRejected() throws {
+        let oversized = String(repeating: "a", count: OAuthTokenMinter.maximumTokenBytes + 1)
+        let bodies: [[String: Any]] = [
+            ["access_token": "at-1", "token_type": "mac", "refresh_token": "rt-9"],
+            ["access_token": oversized, "token_type": "Bearer", "refresh_token": "rt-9"],
+            ["access_token": "has space", "token_type": "Bearer", "refresh_token": "rt-9"],
+        ]
+        for body in bodies {
+            let issuer = try Issuer([.response(status: 200, body: Self.json(body))])
+            defer { issuer.tearDown() }
+            #expect(message(issuer.minter.mint(Self.source)).hasSuffix("(reauthorize)"))
+            #expect(issuer.keychain.withLock { $0[Self.refreshItem] } == "rt-9", "the issuer rotated; the new token is the grant")
+            // The next mint sends the new token, not the spent one.
+            _ = issuer.minter.mint(Self.source)
+            #expect(issuer.sent.withLock { $0.last?["refresh_token"] } == "rt-9")
+        }
+    }
+
+    @Test func aRejectedAccessTokenWithAnUnstorableRotationNeverResendsTheOldToken() throws {
+        let issuer = try Issuer([.response(status: 200, body: Self.json(
+            ["access_token": "at-1", "token_type": "mac", "refresh_token": "rt-9"]))])
+        defer { issuer.tearDown() }
+        issuer.writable.withLock { $0 = false }
+        #expect(message(issuer.minter.mint(Self.source)).hasSuffix("(reauthorize)"))
+        _ = issuer.minter.mint(Self.source)
+        #expect(issuer.sent.withLock { $0.count } == 1)
+    }
+
+    @Test func expiresInIsClampedAndNeverTraps() throws {
+        for (raw, expected) in [("1e19", 86_400.0), ("1e10", 86_400.0), ("86400", 86_400.0), ("0.2", 1.0), ("30", 30.0)] {
+            let body = Data(#"{"access_token":"at-1","token_type":"Bearer","expires_in":\#(raw)}"#.utf8)
+            let issuer = try Issuer([.response(status: 200, body: body)])
+            defer { issuer.tearDown() }
+            let minted = try #require(token(issuer.minter.mint(Self.source)), "expires_in \(raw)")
+            #expect(minted.expires == Self.start.addingTimeInterval(expected), "expires_in \(raw)")
+        }
+        for raw in ["0", "-5", "\"soon\""] {
+            let body = Data(#"{"access_token":"at-1","token_type":"Bearer","expires_in":\#(raw)}"#.utf8)
+            let issuer = try Issuer([.response(status: 200, body: body)])
+            defer { issuer.tearDown() }
+            #expect(try #require(token(issuer.minter.mint(Self.source))).expires == nil, "expires_in \(raw)")
+        }
+        #expect(OAuthAccessToken.encode(token: "at", expires: Date(timeIntervalSince1970: 1e19)) == nil, "no trap")
+    }
+
     @Test func theClientCredentialsGrantRetriesWhatTheRefreshGrantBlocks() {
+        let proxyError = OAuthTokenMinter.Exchange.response(status: 502, body: Data())
+        #expect(OAuthTokenMinter.classify(proxyError, grant: .clientCredentials)
+            == .failed(.retry, detail: "the token endpoint failed (HTTP 502)"))
         #expect(OAuthTokenMinter.classify(.noAnswer, grant: .clientCredentials) == .failed(.retry, detail: "the token endpoint did not answer"))
         let invalidGrant = OAuthTokenMinter.Exchange.response(status: 400, body: Self.json(["error": "invalid_grant"]))
-        guard case .failed(.fixConfiguration, _) = OAuthTokenMinter.classify(invalidGrant, grant: .clientCredentials) else {
+        guard case .failed(.fixConfiguration, _, _) = OAuthTokenMinter.classify(invalidGrant, grant: .clientCredentials) else {
             Issue.record("invalid_grant on client credentials is a configuration problem")
             return
         }
@@ -201,6 +261,21 @@ struct SecretOAuthTests {
         issuer.keychain.withLock { $0[Self.refreshItem] = "rt-5" }
         #expect(token(issuer.minter.mint(Self.source)) != nil)
         #expect(issuer.sent.withLock { $0.count } == 2)
+    }
+
+    @Test func clearingTheBlockLetsTheSameRefreshTokenBeSentAgain() throws {
+        let issuer = try Issuer([.response(status: 400, body: Self.json(["error": "invalid_grant"]))])
+        defer { issuer.tearDown() }
+        #expect(OAuthRefreshBlock.clear(Self.refreshItem, configDirectory: issuer.directory) == false)
+        #expect(message(issuer.minter.mint(Self.source)).hasSuffix("(reauthorize)"))
+        #expect(message(issuer.minter.mint(Self.source)).contains("rv secrets oauth-reset"))
+        #expect(issuer.sent.withLock { $0.count } == 1)
+        let file = OAuthRefreshBlock.stateFile(Self.refreshItem, configDirectory: issuer.directory)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        #expect(OAuthRefreshBlock.clear(Self.refreshItem, configDirectory: issuer.directory) == true)
+        #expect(FileManager.default.fileExists(atPath: file.path) == false)
+        #expect(token(issuer.minter.mint(Self.source)) != nil)
+        #expect(issuer.sent.withLock { $0.map { $0["refresh_token"] } } == ["rt-1", "rt-1"])
     }
 
     @Test func aRotationThatCannotBeStoredNeverResendsTheOldToken() throws {
@@ -309,6 +384,80 @@ struct SecretOAuthTests {
         })
     }
 
+    final class MintCount: Sendable {
+        private let value = Mutex(0)
+        var count: Int { value.withLock { $0 } }
+        func next() -> Int { value.withLock { $0 += 1; return $0 } }
+    }
+
+    final class Harness: Sendable {
+        let broker: SecretLaunchBroker
+        let upstream: RecordingUpstream
+        let mints: MintCount
+        let send: @Sendable () throws -> Int
+
+        init(broker: SecretLaunchBroker, upstream: RecordingUpstream, mints: MintCount, send: @escaping @Sendable () throws -> Int) {
+            self.broker = broker
+            self.upstream = upstream
+            self.mints = mints
+            self.send = send
+        }
+    }
+
+    /// A broker leasing `GH` whose tokens live `lifetime` seconds, with a mint counter.
+    private func lifetimeHarness(
+        lifetime: TimeInterval, fixture: SecretsFixture, clock: TestClock
+    ) throws -> Harness {
+        let mints = MintCount()
+        let resolver = SecretResolver { source in
+            guard case .oauth = source else { return .failure(.notFound("not oauth")) }
+            return .success(OAuthAccessToken.encode(
+                token: "at-\(mints.next())", expires: clock.now.addingTimeInterval(lifetime))!)
+        }
+        let upstream = RecordingUpstream()
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: resolver, transport: upstream.transport,
+            peers: .fixed(.member), workspace: "W1", now: { clock.now })
+        let lease = try broker.lease(names: ["GH"], agent: nil).get()
+        broker.bind(lease, processGroup: testProcessGroup)
+        let placeholder = try #require(lease.environment.first { $0.name == "GH" }?.value)
+        let port = try #require(broker.gatewayPort)
+        let send: @Sendable () throws -> Int = {
+            try gatewayExchange(port: port,
+                "GET /s/GH/user HTTP/1.1\r\nAuthorization: Bearer \(placeholder)\r\nContent-Length: 0\r\n\r\n").status
+        }
+        return Harness(broker: broker, upstream: upstream, mints: mints, send: send)
+    }
+
+    @Test func nothingIsMintedOnceTheDefinitionsOwnExpiryHasPassed() throws {
+        let json = Self.secretsJSON.replacingOccurrences(
+            of: #"GH_API"}}}"#, with: #"GH_API"}},"expires":"2027-01-15T08:16:40Z"}"#)
+        #expect(json != Self.secretsJSON)
+        let fixture = try SecretsFixture(json)
+        defer { fixture.tearDown() }
+        let clock = TestClock(Self.start)
+        let harness = try lifetimeHarness(lifetime: 3600, fixture: fixture, clock: clock)
+        defer { harness.broker.stop() }
+        #expect(harness.mints.count == 1)
+        clock.advance(1001)
+        #expect(try harness.send() != 200)
+        #expect(harness.mints.count == 1, "an expired definition must not rotate the refresh token for nothing")
+        #expect(try harness.send() != 200)
+        #expect(harness.mints.count == 1)
+    }
+
+    @Test func aTokenThatLivesUnderThePacingFloorIsRefreshedBeforeARequestAfterItExpires() throws {
+        let fixture = try SecretsFixture(Self.secretsJSON)
+        defer { fixture.tearDown() }
+        let clock = TestClock(Self.start)
+        let harness = try lifetimeHarness(lifetime: 20, fixture: fixture, clock: clock)
+        defer { harness.broker.stop() }
+        clock.advance(25)
+        #expect(try harness.send() == 200, "past expiry the request waits for a fresh token instead of being refused")
+        #expect(harness.upstream.requests.last?.headers["authorization"] == "Bearer at-2")
+        #expect(harness.mints.count == 2)
+    }
+
     @Test func aTokenAlreadyExpiredAtLaunchFailsTheLease() throws {
         let fixture = try SecretsFixture(Self.secretsJSON)
         defer { fixture.tearDown() }
@@ -340,6 +489,18 @@ struct SecretOAuthTests {
                 upstream: URL(string: "https://api.example.com")!, baseURLEnv: "GH_API")))
         ])
         #expect(try SecretsConfiguration.decode(full.encoded()).get() == full)
+    }
+
+    @Test func aTokenURLKeepsItsTrailingSlash() throws {
+        let json = Self.secretsJSON.replacingOccurrences(
+            of: "https://issuer.example.com/oauth/token", with: "https://issuer.example.com/o/token/")
+        let decoded = try SecretsConfiguration.decode(Data(json.utf8)).get()
+        guard case .oauth(let oauth) = decoded.secret(named: "GH")?.source else {
+            Issue.record("oauth source did not decode")
+            return
+        }
+        #expect(oauth.tokenURL.absoluteString == "https://issuer.example.com/o/token/")
+        #expect(try SecretsConfiguration.decode(decoded.encoded()).get() == decoded)
     }
 
     static let malformed: [(String, String)] = [

@@ -76,12 +76,13 @@ struct SecretRotationState: Sendable {
     var flight: SecretRefreshFlight?
 
     /// What a request at `now` must do for an entry refreshed every `interval`.
-    /// A failure is retried no sooner than a quarter interval later.
-    func step(now: Date, interval: TimeInterval) -> Step {
+    /// A failure is retried no sooner than a quarter interval later. With
+    /// `expired`, the value is spent: no grace, the request waits for a refresh.
+    func step(now: Date, interval: TimeInterval, expired: Bool = false) -> Step {
         let age = now.timeIntervalSince(resolvedAt)
-        guard age >= interval else { return .serve }
+        guard age >= interval || expired else { return .serve }
         let retry = failedAt.map { now.timeIntervalSince($0) >= interval / 4 } ?? true
-        if age < interval * 2 { return retry && flight == nil ? .background : .serve }
+        if age < interval * 2, expired == false { return retry && flight == nil ? .background : .serve }
         return retry || flight != nil ? .wait : .refuse
     }
 }
@@ -117,8 +118,7 @@ extension SecretGateway {
             refresh(token, restart: true)
         }
         lock.lock()
-        let interval = entries[token].flatMap(Self.refreshInterval)
-        let step = interval.flatMap { entries[token]?.rotation?.step(now: now(), interval: $0) } ?? .serve
+        let step = rotationStep(token) ?? .serve
         lock.unlock()
         switch step {
         case .serve:
@@ -133,9 +133,7 @@ extension SecretGateway {
             refresh(token, restart: false)
             lock.lock()
             // A refresh moves a token's expiry, and with it the interval.
-            let after = entries[token].flatMap(Self.refreshInterval).flatMap {
-                entries[token]?.rotation?.step(now: now(), interval: $0)
-            }
+            let after = rotationStep(token)
             lock.unlock()
             if after == .wait || after == .refuse { return .refreshFailed }
         }
@@ -147,6 +145,17 @@ extension SecretGateway {
         guard let entry = entries[token] else { return .unknownPlaceholder }
         if let expires = entry.expires, now() >= expires { return .expired }
         return nil
+    }
+
+    /// What a request now must do for `token`. Caller holds `lock`.
+    /// A lifetime-paced value past its expiry is spent whatever the pacing floor
+    /// says, so the request waits for a fresh one rather than being refused behind
+    /// a background refresh. (AWS credentials past expiry have `expiredAndDue`.)
+    private func rotationStep(_ token: String) -> SecretRotationState.Step? {
+        guard let entry = entries[token], let interval = Self.refreshInterval(entry) else { return nil }
+        let at = now()
+        let spent = entry.refresh?.followsExpiry == true && entry.expires.map { at >= $0 } == true
+        return entry.rotation?.step(now: at, interval: interval, expired: spent)
     }
 
     /// True for a refreshable AWS entry past its expiry that has not been read

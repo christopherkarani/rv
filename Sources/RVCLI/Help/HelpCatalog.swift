@@ -446,6 +446,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
                 HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
+                HelpRow(name: "rv secrets oauth-reset <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
@@ -511,11 +512,11 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "oauth",
-                    description: "oauth source {tokenURL, clientID, refreshToken|clientSecret {service, account}, scope}: gateway only; re-minted on the token's lifetime"
+                    description: "oauth source {tokenURL, clientID, refreshToken?, clientSecret? {service, account} (at least one), scope}: gateway only; re-minted on the token's lifetime"
                 ),
                 HelpRow(
                     name: "oauth recovery",
-                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one"
+                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one or `rv secrets oauth-reset <name>` lifts the block (state: ~/.config/rv/secrets-oauth/)"
                 ),
                 HelpRow(
                     name: "approve",

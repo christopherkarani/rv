@@ -337,12 +337,16 @@ used without putting a long-lived token in the gateway.
   gateway entry by it, as with AWS credential sets. PR 14's rotation paces
   it: `SecretRefreshPolicy.followsExpiry` makes the interval half the
   token's remaining lifetime (floor 15 s), so a refresh starts past
-  half-life and a request waits for one at expiry.
+  half-life and a request waits for one at expiry (also for a token that
+  lives under the floor). `expires_in` is clamped to 1 s through 1 day. Past
+  the definition's own `expires`, no exchange runs.
 - *State on disk, not in the Keychain.* `~/.config/rv/secrets-oauth/<key>.json`
   holds `{recovery, token}`, where `token` is the refresh token's
   `SecretFingerprinter` HMAC. It is written as `investigate` before every
   exchange and removed after a clean one, and it blocks only while the
-  item still holds that token, so storing a new one lifts it.
+  item still holds that token, so storing a new one lifts it, as does
+  `rv secrets oauth-reset NAME`, which deletes that file (for issuers that
+  do not rotate refresh tokens).
 - *Concurrency.* A `flock` per refresh-token item serializes exchanges.
   Two brokers make two sequential exchanges, each with the latest stored
   token, not one: no rotated token is ever resent, which is the property
@@ -350,7 +354,11 @@ used without putting a long-lived token in the gateway.
 - *Classification refined.* A complete error response issues nothing
   (RFC 6749 §5.2), so it is `retry` or `fixConfiguration` by code; only no
   answer after sending, or a 200 without a usable bearer token, is
-  ambiguous and `reauthorize`.
+  ambiguous and `reauthorize`. A 200 carrying `error` and no `access_token`
+  is an error response, not an ambiguous success. For the refresh grant, a
+  5xx without an OAuth `error` body is ambiguous too (a proxy may answer
+  after the issuer rotated). A rotated refresh token that arrives with an
+  unusable access token is stored first.
 - *Surface.* No new 502: a request that cannot get a fresh token is refused
   `refreshFailed` (503), and the refresh audit record carries the recovery.
 

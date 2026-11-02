@@ -307,6 +307,11 @@ final class SecretLaunchBroker: @unchecked Sendable {
         guard current.source == launched.source, current.delivery == launched.delivery else {
             return .failure(.failed("\(name) now has a different source or delivery; start a new session to use it"))
         }
+        // Past the definition's own expiry nothing is minted: the exchange would rotate the
+        // refresh token only for the gateway to refuse the result.
+        if case .oauth = current.source, let expires = current.expires, now() >= expires {
+            return .failure(.failed("\(name) has passed its expiry; extend it with `rv secrets set \(name) --expires`"))
+        }
         switch managed() {
         case .invalid(let reason):
             return .failure(.failed("organization policy is invalid: \(reason)"))
