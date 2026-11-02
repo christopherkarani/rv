@@ -108,3 +108,14 @@ private func gateWire(_ stdin: String) async -> HookWire {
     #expect(wire.stdout.isEmpty)
     #expect(wire.exitCode == 0)
 }
+
+@Test func claudeGrep_braceListPastTheExpansionCapFailsClosed() {
+    let filler = (1...80).map { "a\($0)" }.joined(separator: ",")
+    // Two groups: the first overflows the cap, leaving `{.env,x}` unexpanded.
+    let input = #"{"pattern":"x","path":"/p","glob":"{"# + filler + #",}{.env,x}"}"#
+    let action = decodedFile(claudePre("Grep", input))
+    #expect(action?.kind == .read)
+    if let action {
+        #expect(SecretPathCatalog.dayOne.firstMatch(of: action.path.rawValue) != nil)
+    }
+}

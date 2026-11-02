@@ -59,7 +59,9 @@ enum ClaudeSearchTarget {
     static func secretGlobTarget(_ glob: String) -> String? {
         let catalog = SecretPathCatalog.dayOne
         let names = secretNames(catalog)
-        for expanded in expandBraces(glob) {
+        // Too many alternatives to prove none selects a secret: fail closed.
+        guard let globs = expandBraces(glob) else { return names.first }
+        for expanded in globs {
             if catalog.firstMatch(of: expanded) != nil { return expanded }
             let last = lastComponent(expanded)
             if last.allSatisfy({ $0 == "*" }) { continue }
@@ -89,8 +91,9 @@ enum ClaudeSearchTarget {
         path.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? path
     }
 
-    /// Expands `{a,b}` groups (nested allowed) into plain globs, capped.
-    static func expandBraces(_ glob: String, limit: Int = 64) -> [String] {
+    /// Expands `{a,b}` groups (nested allowed) into plain globs; nil when the
+    /// expansion would exceed `limit`.
+    static func expandBraces(_ glob: String, limit: Int = 64) -> [String]? {
         var pending = [glob]
         var done: [String] = []
         while let next = pending.popLast() {
@@ -106,7 +109,7 @@ enum ClaudeSearchTarget {
             for alt in splitTopLevel(body) {
                 pending.append(prefix + alt + suffix)
             }
-            if pending.count + done.count > limit { return done + pending }
+            if pending.count + done.count > limit { return nil }
         }
         return done
     }
