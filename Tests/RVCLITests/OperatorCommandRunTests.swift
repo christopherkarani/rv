@@ -419,8 +419,8 @@ struct OperatorCommandRunTests {
         // `rv uninstall` sheds oversight, so without device-owner
         // authentication the LA tripwire refuses before touching HOME.
         try await withCLIProcess(environment: [:]) {
-            #expect(throws: ExitCode(1)) {
-                try Setup.parse(["--robot"]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Setup.parse(["--robot"]).run()
             }
             await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await Uninstall.parse(["--robot"]).run()
@@ -428,14 +428,14 @@ struct OperatorCommandRunTests {
         }
         let home = try isolatedHome()
         try await withCLIProcess(home: home, environment: ["PATH": "/usr/bin:/bin"]) {
-            #expect(throws: ExitCode.self) {
-                try Setup.parse(["--robot"]).run()
+            await #expect(throws: ExitCode.self) {
+                try await Setup.parse(["--robot"]).run()
             }
             await #expect(throws: ExitCode.self) {
                 try await Uninstall.parse(["--robot"]).run()
             }
-            #expect(throws: ExitCode.self) {
-                try Setup.parse(["--force", "--plain"]).run()
+            await #expect(throws: ExitCode.self) {
+                try await Setup.parse(["--force", "--plain"]).run()
             }
         }
         try await withCLIProcess(
@@ -444,8 +444,8 @@ struct OperatorCommandRunTests {
             stdinIsTTY: true,
             stdoutIsTTY: true
         ) {
-            #expect(throws: ExitCode.self) {
-                try Setup.parse(["--plain", "--no-color"]).run()
+            await #expect(throws: ExitCode.self) {
+                try await Setup.parse(["--plain", "--no-color"]).run()
             }
         }
     }

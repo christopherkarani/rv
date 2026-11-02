@@ -3,6 +3,7 @@ import Dispatch
 import Foundation
 import Synchronization
 import Testing
+import RVXPC
 @preconcurrency import XPC
 @testable import RVService
 

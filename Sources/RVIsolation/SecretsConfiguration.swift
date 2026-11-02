@@ -280,7 +280,7 @@ extension SecretsConfiguration {
 
 extension SecretDefinition {
     /// Environment names this secret sets in the cage.
-    var exportedVariables: [String] {
+    package var exportedVariables: [String] {
         switch delivery {
         case .gateway(let binding): [name, binding.baseURLEnv]
         case .environment: [name]

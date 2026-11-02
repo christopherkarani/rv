@@ -8,6 +8,15 @@ import Synchronization
 import Testing
 @testable import RVIsolation
 
+/// Polls `condition` for up to `seconds`. File-private: other test files keep their own copy.
+private func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
+    for _ in 0..<(seconds * 100) {
+        if condition() { return true }
+        usleep(10_000)
+    }
+    return condition()
+}
+
 /// `awsProfile` + `awsSigV4`: the cage holds a placeholder key id and a
 /// throwaway secret; the gateway discards the agent's signature and re-signs
 /// with the real keys for the bound upstream only.
