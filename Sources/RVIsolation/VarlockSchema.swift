@@ -41,7 +41,6 @@ public enum VarlockSchema {
         }
         var plan = VarlockImportPlan()
         var seen = Set<String>()
-        var exported = Set<String>()
         for item in document.items {
             guard seen.insert(item.name).inserted else {
                 plan.notes.append("skip \(item.name): named more than once; kept the first")
@@ -50,12 +49,6 @@ public enum VarlockSchema {
             switch definition(item, inits: document.inits, defaultSensitive: document.defaultSensitive) {
             case .skip(let reason): plan.notes.append("skip \(item.name): \(reason)")
             case .secret(let secret, let notes):
-                // secrets.json refuses two secrets setting one variable.
-                if let taken = secret.exportedVariables.first(where: exported.contains) {
-                    plan.notes.append("skip \(item.name): another imported secret already sets $\(taken)")
-                    continue
-                }
-                exported.formUnion(secret.exportedVariables)
                 plan.secrets.append(secret)
                 plan.notes += notes.map { "note \(item.name): \($0)" }
             }
