@@ -99,6 +99,36 @@ struct SecretLaunchBrokerTests {
         #expect(info.st_mode & 0o777 == 0o600)
     }
 
+    @Test func gatewayBindingSurfacesReachTheGatewayEntry() throws {
+        let fixture = try SecretsFixture("""
+            {"version":1,"secrets":[
+              {"name":"MAPS_KEY","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+               "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"MAPS_BASE_URL",
+                                      "placeholderPrefix":"sk-","surfaces":["query"]}}}
+            ]}
+            """)
+        defer { fixture.tearDown() }
+        let upstream = RecordingUpstream(status: 200)
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver,
+            transport: upstream.transport, workspace: nil)
+        defer { broker.stop() }
+        let lease = try broker.lease(names: ["MAPS_KEY"], agent: nil).get()
+        let placeholder = try #require(lease.placeholders.first).text
+        let port = try #require(broker.gatewayPort)
+
+        let query = try gatewayExchange(port: port,
+            "GET /s/MAPS_KEY/x?key=\(placeholder) HTTP/1.1\r\n\r\n")
+        #expect(query.status == 200)
+        let seen = try #require(upstream.requests.first)
+        #expect(seen.url == "https://api.example.com/v1/x?key=sk-live-REAL-0123456789")
+
+        let header = try gatewayExchange(port: port,
+            "GET /s/MAPS_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder)\r\n\r\n")
+        #expect(header.status == 403)
+        #expect(upstream.requests.count == 1)
+    }
+
     @Test func agentFilterSkipsSecretsForOtherAgents() throws {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
