@@ -150,9 +150,9 @@ public enum HTTPResolutionError: Error, Sendable, Equatable {
 /// pattern): policy judges `method` + `destination`, never bags. `scope`
 /// stays stored: it is request context, not an HTTP fact.
 public struct HTTPAction: Sendable, Equatable, Codable {
-    public var fingerprint: ActionFingerprint
-    public var method: HTTPMethod
-    public var destination: HTTPDestination
+    public let fingerprint: ActionFingerprint
+    public let method: HTTPMethod
+    public let destination: HTTPDestination
     public var scope: ActionScope
 
     /// HTTP policy judges the destination, not typed effects.

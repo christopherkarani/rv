@@ -823,79 +823,19 @@ func diskImageMountStatAllowance(sharedDeadline: Date?, now: Date) -> DiskImageR
     )
 }
 
-/// A timed-out worker may still be inside a syscall Darwin will not
-/// interrupt. Keep the `Thread` so it is not released while that call runs.
-/// Parked objects stay alive too: releasing a directory enumerator while
-/// `nextObject` is still inside `getattrlistbulk` would free it under the call.
-private final class DiskImageParkedCalls: @unchecked Sendable {
-    static let shared = DiskImageParkedCalls()
-    private let lock = NSLock()
-    private var threads: [Thread] = []
-    /// An object is needed only while a worker parked at its retain
-    /// time may still be inside a call using it, so each entry carries
-    /// the then-unfinished threads and is dropped once they all finish.
-    private var objects: [(object: AnyObject, workers: [Thread])] = []
-
-    private func prune() {
-        threads.removeAll { $0.isFinished }
-        objects.removeAll { $0.workers.allSatisfy { $0.isFinished } }
-    }
-
-    func keep(_ thread: Thread) {
-        lock.lock()
-        // A finished parked worker is no longer inside its syscall, so
-        // its Thread need not be retained. Pruning here bounds retention
-        // to workers that are still wedged, instead of every worker that
-        // ever timed out.
-        prune()
-        threads.append(thread)
-        lock.unlock()
-    }
-
-    func keepObject(_ object: AnyObject) {
-        lock.lock()
-        prune()
-        objects.append((object, threads.filter { $0.isFinished == false }))
-        lock.unlock()
-    }
-}
-
-/// Retains `object` until every worker parked at retain time has
-/// finished. Used when a clock stop returns while a worker may still
-/// be inside a call that uses `object`.
+/// Retains `object` until every call wedged at retain time has
+/// returned. Used when a clock stop returns while a worker may still be
+/// inside a call that uses `object`: releasing a directory enumerator
+/// while `nextObject` is inside `getattrlistbulk` would free it under
+/// the call.
 func diskImageRetainAcrossPark(_ object: AnyObject) {
-    DiskImageParkedCalls.shared.keepObject(object)
+    DiskImageSyscallPool.shared.retainAcrossWedged(object)
 }
 
-private final class DiskImageStatWorker: @unchecked Sendable {
-    private let lock = NSLock()
-    private var result = false
-    private var finished = false
-    private let body: @Sendable () -> Bool
-    /// Signalled once when `finished` is set, so the waiter wakes on
-    /// completion instead of paying a poll interval per syscall.
-    let completion = DispatchSemaphore(value: 0)
-
-    init(body: @escaping @Sendable () -> Bool) {
-        self.body = body
-    }
-
-    func run() {
-        let value = body()
-        lock.lock()
-        result = value
-        finished = true
-        lock.unlock()
-        completion.signal()
-    }
-
-    func snapshot() -> (finished: Bool, result: Bool) {
-        lock.lock()
-        let state = (finished, result)
-        lock.unlock()
-        return state
-    }
-}
+/// How quickly a stop that arms during a call (the shared cancel clock
+/// has no wake-up of its own) is noticed. Completion wakes the waiter at
+/// once; this only bounds the wait for a stop that arrives mid-call.
+private let diskImageLiveStopRecheck: TimeInterval = 0.005
 
 /// Wait for one blocking call. `nil` allowance is the non-cancelled path:
 /// the call still runs off the caller, and a shared clock that arms during
@@ -903,37 +843,46 @@ private final class DiskImageStatWorker: @unchecked Sendable {
 /// gone. `stat`, `statfs`, `fstatat`, `mkdir`, `readdir`, `read`, and
 /// `write` blocked on a vnode lock do not fail with `EINTR`, so this does
 /// not wait for the call to return. The caller is back by the stop. The
-/// worker may still be inside the call; it is parked, not joined. Zero does
-/// not start the call.
+/// worker may still be inside the call; it is quarantined, not joined.
+/// Zero does not start the call. A pool already holding its cap of
+/// wedged workers starts nothing and returns nil (fail closed).
 func diskImageWaitForStat(
     allowance: TimeInterval?,
     liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
+    pool: DiskImageSyscallPool = .shared,
     stat: @escaping @Sendable () -> Bool
 ) -> Bool? {
     if let allowance, allowance <= 0 { return nil }
-    let worker = DiskImageStatWorker(body: stat)
-    let thread = Thread { worker.run() }
     let started = Date()
-    thread.start()
-    while true {
-        let state = worker.snapshot()
-        if state.finished { return state.result }
-        let now = Date()
-        var slice: TimeInterval = 0.005
-        if let stopAt = diskImageWaitStop(
-            started: started,
-            allowance: allowance,
-            liveDeadline: liveDeadline()
-        ) {
-            if now >= stopAt {
-                DiskImageParkedCalls.shared.keep(thread)
-                return nil
-            }
-            // Wake no later than the stop; the slice cap only bounds how
-            // quickly a deadline arming during the wait is noticed.
-            slice = min(slice, stopAt.timeIntervalSince(now))
-        }
-        _ = worker.completion.wait(timeout: .now() + slice)
+    guard let call = pool.submit(stat) else { return nil }
+    return pool.wait(for: call, recheck: diskImageLiveStopRecheck) {
+        diskImageWaitStop(started: started, allowance: allowance, liveDeadline: liveDeadline())
+    }
+}
+
+/// `diskImageWaitForStat` on a duplicate of `fd` taken here, on the caller.
+/// A worker that duplicated `fd` itself could start after the caller
+/// stopped waiting and closed it, then act on whatever reused that number.
+/// `body` owns the copy and must close it. A failed duplicate is a finished
+/// failure; zero allowance takes no duplicate and starts nothing.
+func diskImageWaitForStat(
+    duplicating fd: Int32,
+    allowance: TimeInterval?,
+    liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
+    pool: DiskImageSyscallPool = .shared,
+    _ body: @escaping @Sendable (Int32) -> Bool
+) -> Bool? {
+    if let allowance, allowance <= 0 { return nil }
+    let copy = diskImageDuplicateDescriptor(fd)
+    guard copy >= 0 else { return false }
+    let started = Date()
+    // A refused call never reaches `body`, so the copy is still ours.
+    guard let call = pool.submit({ body(copy) }) else {
+        close(copy)
+        return nil
+    }
+    return pool.wait(for: call, recheck: diskImageLiveStopRecheck) {
+        diskImageWaitStop(started: started, allowance: allowance, liveDeadline: liveDeadline())
     }
 }
 
@@ -941,17 +890,35 @@ func diskImageWaitForStat(
 /// `nil` means the call did not finish before that stop.
 func diskImagePerformWithinCopyClock(_ body: @escaping @Sendable () -> Bool) -> Bool? {
     diskImageWaitForStat(
-        allowance: diskImageTreeSyscallAllowance(
-            deadline: CooperativeLaunchStop.cancelClock?.deadline
-        ),
-        liveDeadline: {
-            if blockingWorkIsCancelled() { CooperativeLaunchStop.noteCancel() }
-            return diskImageTreeCopyStop(
-                deadline: CooperativeLaunchStop.cancelClock?.deadline,
-                now: Date()
-            )
-        },
+        allowance: diskImageCopyClockAllowance(),
+        liveDeadline: diskImageCopyClockLiveStop,
         stat: body
+    )
+}
+
+/// `diskImagePerformWithinCopyClock` on a caller-side duplicate of `fd`;
+/// see `diskImageWaitForStat(duplicating:)`. `body` owns the copy.
+func diskImagePerformWithinCopyClock(
+    duplicating fd: Int32,
+    _ body: @escaping @Sendable (Int32) -> Bool
+) -> Bool? {
+    diskImageWaitForStat(
+        duplicating: fd,
+        allowance: diskImageCopyClockAllowance(),
+        liveDeadline: diskImageCopyClockLiveStop,
+        body
+    )
+}
+
+private func diskImageCopyClockAllowance() -> TimeInterval? {
+    diskImageTreeSyscallAllowance(deadline: CooperativeLaunchStop.cancelClock?.deadline)
+}
+
+@Sendable private func diskImageCopyClockLiveStop() -> Date? {
+    if blockingWorkIsCancelled() { CooperativeLaunchStop.noteCancel() }
+    return diskImageTreeCopyStop(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline,
+        now: Date()
     )
 }
 
@@ -1095,9 +1062,7 @@ func diskImageOpenPathWithinCopyClock(
 /// call: the parked worker can still truncate afterwards, so nil must be
 /// treated as "may have truncated", never as a finished failure.
 func diskImageFtruncateWithinCopyClock(_ fd: Int32, _ length: off_t) -> Bool? {
-    diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let truncated = ftruncate(copy, length) == 0
         close(copy)
         return truncated
@@ -1369,12 +1334,7 @@ private final class DiskImageReadBox: @unchecked Sendable {
 /// `EINTR` is returned to the caller so the retry can see the clock.
 func diskImageReadWithinCopyClock(_ fd: Int32, maxCount: Int) -> DiskImageIOResult? {
     let box = DiskImageReadBox(size: maxCount)
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else {
-            box.errnoValue = errno
-            return false
-        }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let count = box.bytes.withUnsafeMutableBytes { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
             return read(copy, base, raw.count)
@@ -1399,12 +1359,7 @@ func diskImageWriteWithinCopyClock(
 ) -> DiskImageIOResult? {
     let box = DiskImageReadBox(size: 1)
     let payload = bytes
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else {
-            box.errnoValue = errno
-            return false
-        }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let wrote = payload.withUnsafeBytes { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
             let start = base.advanced(by: offset)
@@ -1820,7 +1775,7 @@ func readDirectoryNamesStoppingForDetachReserve(
 }
 
 /// Same stop, on a directory fd. `fdopendir` consumes a duplicate so the
-/// caller's fd stays open. The duplicate is opened on the worker.
+/// caller's fd stays open. The duplicate is taken on the caller.
 func readDirectoryNames(
     _ dirfd: Int32,
     mayContinue: () -> Bool
@@ -1828,9 +1783,7 @@ func readDirectoryNames(
     if directoryReadMayContinue(mayContinue()) == false { return nil }
     let hold = DirectoryHold()
     defer { hold.closeUnlessLeaked() }
-    let opened = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(dirfd)
-        guard copy >= 0 else { return false }
+    let opened = diskImagePerformWithinCopyClock(duplicating: dirfd) { copy in
         if lseek(copy, 0, SEEK_SET) < 0 {
             close(copy)
             return false
@@ -2014,6 +1967,9 @@ struct SavedReplaceOutcome: Equatable, Sendable {
     var reachedTruncate: Bool
     var originalIntact: Bool
     var mayRenameOntoWorkspace: Bool
+    /// With `retainBackup`, the host path of the pre-commit bytes after a
+    /// commit. The caller owns and unlinks it.
+    var retainedBackup: String? = nil
 }
 
 func savedTreeMayRenameOntoWorkspace(originalIntact: Bool, restoreFinished: Bool) -> Bool {
@@ -2031,6 +1987,7 @@ func replaceOriginalOnlyAfterStagedCopy(
     original: Int32,
     originalPath: String? = nil,
     stagedDirectory: URL = FileManager.default.temporaryDirectory,
+    retainBackup: Bool = false,
     mayContinue: (CopyClockPoint) -> Bool,
     copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
 ) -> SavedReplaceOutcome {
@@ -2126,11 +2083,13 @@ func replaceOriginalOnlyAfterStagedCopy(
         copyXattr: copyXattr
     )
     if committed {
+        if retainBackup { consumedBackup = true }
         return SavedReplaceOutcome(
             committed: true,
             reachedTruncate: true,
             originalIntact: true,
-            mayRenameOntoWorkspace: true
+            mayRenameOntoWorkspace: true,
+            retainedBackup: retainBackup ? backupURL.path : nil
         )
     }
     return restoreBackupAfterTruncate(
@@ -2217,9 +2176,7 @@ func descriptorSize(_ fd: Int32) -> off_t? {
         var found = false
     }
     let box = Box()
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         var status = stat()
         let found = fstat(copy, &status) == 0
         close(copy)
@@ -2435,9 +2392,7 @@ func copyXattrsObservingClock(
 
 func removeXattr(_ fd: Int32, _ name: String) -> Bool {
     let label = name
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let removed = label.withCString { xattrRemove(copy, $0) == 0 }
         close(copy)
         return removed
@@ -2509,9 +2464,7 @@ func readXattrWindow(_ fd: Int32, _ name: String, offset: Int, length: Int) -> [
     let box = Box()
     let label = name
     let limit = length
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let needed = label.withCString { xattrValueSize(copy, $0) }
         if needed < 0 || needed > limit {
             close(copy)
@@ -2558,9 +2511,7 @@ func copyXattrBytesObservingClock(
 func listXattrNames(_ fd: Int32) -> [String]? {
     final class SizeBox: @unchecked Sendable { var count = 0 }
     let sizeBox = SizeBox()
-    let sized = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let sized = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         sizeBox.count = xattrListSize(copy)
         close(copy)
         return true
@@ -2570,9 +2521,7 @@ func listXattrNames(_ fd: Int32) -> [String]? {
     guard needed > 0 else { return [] }
     final class NameBox: @unchecked Sendable { var names: [String] = [] }
     let nameBox = NameBox()
-    let listed = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let listed = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         var buffer = [CChar](repeating: 0, count: needed)
         let count = buffer.withUnsafeMutableBufferPointer { raw in
             xattrList(copy, raw.baseAddress, needed)
@@ -2604,9 +2553,7 @@ func readXattr(_ fd: Int32, _ name: String) -> [UInt8]? {
     final class Box: @unchecked Sendable { var bytes: [UInt8]? }
     let box = Box()
     let label = name
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let needed = label.withCString { xattrValueSize(copy, $0) }
         if needed < 0 {
             close(copy)
@@ -2635,9 +2582,7 @@ func readXattr(_ fd: Int32, _ name: String) -> [UInt8]? {
 func writeXattr(_ fd: Int32, _ name: String, _ value: [UInt8]) -> Bool {
     let label = name
     let payload = value
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         let wrote = payload.withUnsafeBytes { raw in
             label.withCString { item in
                 xattrWrite(copy, item, raw.baseAddress, payload.count) == 0
@@ -2660,9 +2605,7 @@ private func xattrByteCountWithinCopyClock(_ fd: Int32, _ name: String) -> Clock
     final class Box: @unchecked Sendable { var count = -1 }
     let box = Box()
     let label = name
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         box.count = label.withCString { xattrValueSize(copy, $0) }
         close(copy)
         return true
@@ -2725,9 +2668,7 @@ func copyResourceForkObservingClock(
 func pathForFileDescriptor(_ fd: Int32) -> String? {
     final class Box: @unchecked Sendable { var path: String? }
     let box = Box()
-    let ok = diskImagePerformWithinCopyClock {
-        let copy = diskImageDuplicateDescriptor(fd)
-        guard copy >= 0 else { return false }
+    let ok = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         // Darwin's pointer overlay. The variadic C `fcntl` is unavailable in Swift.
         let got = fcntl(copy, F_GETPATH, &buffer) == 0

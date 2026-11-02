@@ -5,6 +5,9 @@ import RVTheme
 
 struct SetupReport: Equatable, Sendable {
     var slots: SetupSlotSnapshot
+    /// Set when the service step was skipped because `rvd` is missing at
+    /// this path: hooks are wired but nothing can answer them.
+    var serviceSkippedMissingRvd: String?
 
     init(
         grok: SetupSlotKind,

@@ -45,7 +45,7 @@ final class FakeRefresher: Sendable {
 }
 
 /// Polls `condition` for up to two seconds.
-func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
+private func eventually(seconds: Int = 2, _ condition: () -> Bool) -> Bool {
     for _ in 0..<(seconds * 100) {
         if condition() { return true }
         usleep(10_000)

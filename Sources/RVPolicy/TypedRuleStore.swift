@@ -232,51 +232,89 @@ public struct TypedRuleStore: Sendable {
         try loadDocument(toml: machineFileURL, json: machineLegacyJSONURL)
     }
 
+    /// Replaces the rules and keeps the live schema version, safety level,
+    /// and allow paths. The live document is read under the save locks, so
+    /// a concurrent save of those fields is never clobbered by a stale read.
     public func saveMachine(_ rules: [TypedRule]) throws {
-        let existing = (try? loadMachineDocument()) ?? PolicyDocument()
-        try saveMachine(
-            PolicyDocument(
-                schemaVersion: existing.schemaVersion,
-                rules: rules.map { rule in
-                    PolicyDocumentRule(
-                        id: rule.id,
-                        verdict: rule.verdict,
-                        predicate: rule.predicate
-                    )
-                },
-                safetyLevel: existing.safetyLevel,
-                allowPaths: existing.allowPaths
-            )
-        )
+        try commitMachine {
+            let existing = (try? loadMachineDocument()) ?? PolicyDocument()
+            return Self.replacingRules(of: existing, with: rules)
+        }
     }
 
     public func saveMachine(_ document: PolicyDocument) throws {
-        // Dual-write, verified first: the HMAC log (tamper-evident history)
-        // and the JSONL revision log (CLI history) are both validated before
-        // the document moves, so a rejected save leaves the file and both
-        // logs untouched. Lock order is always log-lock then file-lock.
-        // One timestamp for both logs: the display `recorded_at` must equal
-        // the sealed `recorded_at_ms`, so two mints would brick the
-        // cross-check.
+        try commitMachine { document }
+    }
+
+    /// Read-modify-write of machine `policy.toml` as one critical section:
+    /// `transform` sees the live document under the same locks the save
+    /// takes, so concurrent updates serialize instead of losing one. A
+    /// throwing `transform` leaves `policy.toml` and the JSONL log
+    /// untouched. Returns the saved document. `transform` must not call
+    /// back into this store's saves, rollbacks, or history reads: the
+    /// flock-based locks are not reentrant and would self-deadlock.
+    @discardableResult
+    func updateMachine(
+        _ transform: (PolicyDocument) throws -> PolicyDocument
+    ) throws -> PolicyDocument {
+        try commitMachine { try transform(try loadMachineDocument()) }
+    }
+
+    /// The one machine save path. `next` runs with both locks held, right
+    /// before the write.
+    ///
+    /// Dual-write, verified first: the HMAC log (tamper-evident history)
+    /// and the JSONL revision log (CLI history) are both validated before
+    /// the document moves, so a rejected save leaves the file and both
+    /// logs untouched. Lock order is always log-lock then file-lock.
+    /// One timestamp for both logs: the display `recorded_at` must equal
+    /// the sealed `recorded_at_ms`, so two mints would brick the
+    /// cross-check.
+    @discardableResult
+    private func commitMachine(
+        _ next: () throws -> PolicyDocument
+    ) throws -> PolicyDocument {
         try withFileLock(at: machineLogLockURL) {
             let records = try reconcileInterruptedSave(
                 verified: try loadVerifiedLogForAppend()
             )
             let recordedAtMs = Self.nowMs()
-            try save(
-                document,
-                to: machineFileURL,
-                lockURL: machineLockURL,
-                revisionsURL: machineRevisionsURL,
-                sealed: records,
-                recordedAtMs: recordedAtMs
-            )
+            let document = try withFileLock(at: machineLockURL) {
+                let document = try next()
+                try saveUnlocked(
+                    document,
+                    to: machineFileURL,
+                    revisionsURL: machineRevisionsURL,
+                    sealed: records,
+                    recordedAtMs: recordedAtMs
+                )
+                return document
+            }
             try appendLogRecord(
                 toml: PolicyDocumentTOML.render(document),
                 after: records,
                 recordedAtMs: recordedAtMs
             )
+            return document
         }
+    }
+
+    private static func replacingRules(
+        of existing: PolicyDocument,
+        with rules: [TypedRule]
+    ) -> PolicyDocument {
+        PolicyDocument(
+            schemaVersion: existing.schemaVersion,
+            rules: rules.map { rule in
+                PolicyDocumentRule(
+                    id: rule.id,
+                    verdict: rule.verdict,
+                    predicate: rule.predicate
+                )
+            },
+            safetyLevel: existing.safetyLevel,
+            allowPaths: existing.allowPaths
+        )
     }
 
     /// Verified machine history, oldest first. Empty only when neither
@@ -475,35 +513,50 @@ public struct TypedRuleStore: Sendable {
         )
     }
 
+    /// Replaces the rules and keeps the live schema version, safety level,
+    /// and allow paths, read under the repo `.policy.lock`.
     public func saveRepo(_ rules: [TypedRule], workspace: URL) throws {
-        let existing = (try? loadRepoDocument(workspace: workspace)) ?? PolicyDocument()
-        try saveRepo(
-            PolicyDocument(
-                schemaVersion: existing.schemaVersion,
-                rules: rules.map { rule in
-                    PolicyDocumentRule(
-                        id: rule.id,
-                        verdict: rule.verdict,
-                        predicate: rule.predicate
-                    )
-                },
-                safetyLevel: existing.safetyLevel,
-                allowPaths: existing.allowPaths
-            ),
-            workspace: workspace
-        )
+        try commitRepo(workspace: workspace) {
+            let existing = (try? loadRepoDocument(workspace: workspace)) ?? PolicyDocument()
+            return Self.replacingRules(of: existing, with: rules)
+        }
     }
 
     public func saveRepo(_ document: PolicyDocument, workspace: URL) throws {
+        try commitRepo(workspace: workspace) { document }
+    }
+
+    /// Read-modify-write of repo `.rv/policy.toml` under one `.policy.lock`
+    /// hold. Same contract as `updateMachine`, including the no-reentry rule.
+    @discardableResult
+    func updateRepo(
+        workspace: URL,
+        _ transform: (PolicyDocument) throws -> PolicyDocument
+    ) throws -> PolicyDocument {
+        try commitRepo(workspace: workspace) {
+            try transform(try loadRepoDocument(workspace: workspace))
+        }
+    }
+
+    /// The one repo save path. `next` runs with `.policy.lock` held, right
+    /// before the write.
+    @discardableResult
+    private func commitRepo(
+        workspace: URL,
+        _ next: () throws -> PolicyDocument
+    ) throws -> PolicyDocument {
         let file = Self.repoFileURL(workspace: workspace)
         let lock = file.deletingLastPathComponent()
             .appendingPathComponent(".policy.lock", isDirectory: false)
-        try save(
-            document,
-            to: file,
-            lockURL: lock,
-            revisionsURL: repoRevisionsURL(workspace: workspace)
-        )
+        return try withFileLock(at: lock) {
+            let document = try next()
+            try saveUnlocked(
+                document,
+                to: file,
+                revisionsURL: repoRevisionsURL(workspace: workspace)
+            )
+            return document
+        }
     }
 
     public var machineRevisionsURL: URL {
@@ -865,28 +918,9 @@ public struct TypedRuleStore: Sendable {
         )
     }
 
-    private func save(
-        _ document: PolicyDocument,
-        to url: URL,
-        lockURL: URL,
-        revisionsURL: URL,
-        sealed: [VerifiedLogRecord]? = nil,
-        recordedAtMs: Int64? = nil
-    ) throws {
-        try withFileLock(at: lockURL) {
-            try saveUnlocked(
-                document,
-                to: url,
-                revisionsURL: revisionsURL,
-                sealed: sealed,
-                recordedAtMs: recordedAtMs
-            )
-        }
-    }
-
-    /// Caller holds `lockURL` for `url`. Repo rollback uses this so the
+    /// Caller holds the file lock for `url`. Repo rollback uses this so the
     /// live re-read, the gate, and the rename share one `.policy.lock`
-    /// hold. `save` is the path that acquires the lock.
+    /// hold. `commitMachine` / `commitRepo` are the paths that acquire it.
     private func saveUnlocked(
         _ document: PolicyDocument,
         to url: URL,
