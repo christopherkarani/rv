@@ -125,6 +125,32 @@ struct SecretGatewaySigV4Tests {
         #expect(signed.headers.first { $0.name == "X-Amz-Content-Sha256" }?.value == payloadHash)
     }
 
+    /// Same curl 8.7.1 recipe (plus `--path-as-is`, `Host: examplebucket.s3.amazonaws.com`, query
+    /// `list-type=2`) for the single-encode branch: an encoded slash, UTF-8 bytes, `%2B`. Paths whose
+    /// wire form is not already canonical (`%7E`, lowercase hex) are left out: curl signs those as sent
+    /// and the signer re-encodes them, and no offline reference says which S3 expects.
+    @Test(arguments: [
+        ("/bucket/a%2Fb/c.txt", "UNSIGNED-PAYLOAD",
+         "8c34dfeaa5ad9c0c2b32cde62d1175059dd6b4e253965ffe287c31633a4643ce"),
+        ("/bucket/a%2Fb/c.txt", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+         "9fc0130c4b1bc59c72017f988dc4874514b1d2a1ecd8e52d942834d1b0f67d9c"),
+        ("/bucket/%E2%82%AC/caf%C3%A9%2B.txt", "UNSIGNED-PAYLOAD",
+         "c879b098b6d9669cc4b87c7e79cdc8372455e421637e94e2952b6d4fd7e3ebc0"),
+        ("/bucket/%E2%82%AC/caf%C3%A9%2B.txt", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+         "40fb64cc9cc7964e639bb6988b4197e1b4d6dea98d5721620d3404e710f93bcc"),
+    ])
+    func s3SingleEncodeMatchesCurl(_ path: String, _ payloadHash: String, _ signature: String) throws {
+        let signed = try #require(AWSSigV4.sign(
+            AWSSigV4.Request(
+                method: "GET", path: path, query: "list-type=2",
+                headers: [("Host", "examplebucket.s3.amazonaws.com")], payloadHash: payloadHash),
+            credentials: Self.example,
+            scope: AWSSigV4.Scope(region: "us-east-1", service: "s3"),
+            at: Self.suiteDate, options: .s3))
+        #expect(signed.signature == signature)
+        #expect(signed.canonicalRequest.components(separatedBy: "\n")[1] == path)
+    }
+
     static let example = AWSSigV4.Credentials(
         accessKeyID: SecretValue("AKIDEXAMPLE")!,
         secretAccessKey: SecretValue("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY")!,
@@ -165,13 +191,59 @@ struct SecretGatewaySigV4Tests {
 
     @Test func anUndecodablePathOrQueryIsRefused() {
         for (path, query) in [("/a%zz", nil), ("/a", "k=%G0"), ("/a%", nil)] as [(String, String?)] {
-            #expect(AWSSigV4.sign(
-                AWSSigV4.Request(
-                    method: "GET", path: path, query: query, headers: [("Host", "s3.amazonaws.com")],
-                    payloadHash: AWSSigV4.unsignedPayload),
-                credentials: Self.example, scope: AWSSigV4.Scope(region: "us-east-1", service: "s3"),
-                at: Self.suiteDate, options: .s3) == nil)
+            for (options, payloadHash) in [
+                (AWSSigV4.Options.s3, AWSSigV4.unsignedPayload), (AWSSigV4.Options(), AWSSigV4.payloadHash([])),
+            ] {
+                #expect(AWSSigV4.sign(
+                    AWSSigV4.Request(
+                        method: "GET", path: path, query: query, headers: [("Host", "s3.amazonaws.com")],
+                        payloadHash: payloadHash),
+                    credentials: Self.example, scope: AWSSigV4.Scope(region: "us-east-1", service: "s3"),
+                    at: Self.suiteDate, options: options) == nil)
+            }
         }
+    }
+
+    static func signing(
+        headers: [(name: String, value: String)] = [("Host", "example.amazonaws.com")],
+        payloadHash: String = AWSSigV4.payloadHash([]), options: AWSSigV4.Options = AWSSigV4.Options()
+    ) -> AWSSigV4.Signed? {
+        AWSSigV4.sign(
+            AWSSigV4.Request(method: "GET", path: "/", query: nil, headers: headers, payloadHash: payloadHash),
+            credentials: example, scope: AWSSigV4.Scope(region: "us-east-1", service: "service"),
+            at: suiteDate, options: options)
+    }
+
+    @Test func controlCharactersInHeadersAreRefused() {
+        #expect(Self.signing(headers: [("Host", "example.amazonaws.com"), ("X-A", "one\r\nX-Injected: two")]) == nil)
+        #expect(Self.signing(headers: [("Host", "example.amazonaws.com"), ("X-A", "a\u{7F}b")]) == nil)
+        #expect(Self.signing(headers: [("Host", "example.amazonaws.com"), ("X-A\n", "a")]) == nil)
+        #expect(Self.signing(headers: [("Host", "example.amazonaws.com"), ("X-A", "a\tb")]) != nil)
+    }
+
+    @Test func hostMustBeSigned() {
+        #expect(Self.signing(headers: []) == nil)
+        #expect(Self.signing(headers: [("X-A", "a")]) == nil)
+        #expect(Self.signing(headers: [("HOST", "example.amazonaws.com")]) != nil)
+    }
+
+    @Test func thePayloadHashIsLowercaseHexOrUnsignedWhereAllowed() {
+        let bad = [
+            "", "abc", String(repeating: "A", count: 64), String(repeating: "g", count: 64),
+            String(repeating: "a", count: 63), String(repeating: "a", count: 64) + "\n",
+            "agent-hash", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", AWSSigV4.unsignedPayload, AWSSigV4.unsignedTrailerPayload,
+        ]
+        for hash in bad { #expect(Self.signing(payloadHash: hash) == nil) }
+        for hash in bad where hash != AWSSigV4.unsignedPayload && hash != AWSSigV4.unsignedTrailerPayload {
+            #expect(Self.signing(payloadHash: hash, options: .s3) == nil)
+        }
+        #expect(Self.signing(payloadHash: String(repeating: "a", count: 64)) != nil)
+        #expect(Self.signing(payloadHash: AWSSigV4.unsignedPayload, options: .s3) != nil)
+        #expect(Self.signing(payloadHash: AWSSigV4.unsignedTrailerPayload, options: .s3) != nil)
+        // Unsigned payload is S3-only: it is refused when the path is double-encoded.
+        var singleEncoded = AWSSigV4.Options()
+        singleEncoded.doubleEncodePath = false
+        #expect(Self.signing(payloadHash: AWSSigV4.unsignedPayload, options: singleEncoded) != nil)
     }
 
     @Test func signedOutputNeverPrintsASecret() throws {
@@ -184,7 +256,14 @@ struct SecretGatewaySigV4Tests {
                 sessionToken: SecretValue("real-session-token")),
             scope: AWSSigV4.Scope(region: "us-east-1", service: "service"), at: Self.suiteDate,
             options: AWSSigV4.Options()))
-        for printed in [String(describing: signed), String(reflecting: signed), String(describing: Self.example)] {
+        var dumped = ""
+        dump(signed, to: &dumped)
+        var dumpedCredentials = ""
+        dump(Self.example, to: &dumpedCredentials)
+        for printed in [
+            String(describing: signed), String(reflecting: signed), String(describing: Self.example), dumped,
+            dumpedCredentials,
+        ] {
             #expect(printed.contains("AKIDEXAMPLE") == false)
             #expect(printed.contains("real-session-token") == false)
             #expect(printed.contains("EXAMPLEKEY") == false)

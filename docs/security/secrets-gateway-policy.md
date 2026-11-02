@@ -209,6 +209,11 @@ decodes correctly. At most two edge characters, under 12 bits of the value,
 can remain beside the marker. Base64 runs shorter than 8 characters are not
 matched.
 
+Hex copies of the value, contiguous or space-separated and in either case,
+also become `[rv:redacted]`. S3 `SignatureDoesNotMatch` bodies print the
+canonical request, signed session token included, as space-separated hex
+bytes. Hex runs shorter than 8 characters are not matched.
+
 A value split across response chunks is still caught. The gateway holds back
 only a trailing partial match, so streamed output (SSE, token streams) that
 cannot be the start of the value is forwarded at once.
@@ -219,7 +224,7 @@ a response with a body still carries a `Content-Encoding` other than
 `identity`, the gateway returns `502` and forwards none of it.
 
 Not covered: double encodings (percent inside JSON, base64 of an escaped
-value), hex, HTML entities, and payloads that are themselves archives
+value), HTML entities, and payloads that are themselves archives
 (`application/zip`, `application/gzip`).
 
 ## Expiry and rotation
@@ -301,21 +306,43 @@ makes the gateway sign instead:
   keys and session token. It signs `host`, `content-type`, `content-md5`, and
   every remaining `x-amz-*` header. The body is hashed by the gateway; the
   agent's hash is ignored unless it chose `UNSIGNED-PAYLOAD` or
-  `STREAMING-UNSIGNED-PAYLOAD-TRAILER`.
+  `STREAMING-UNSIGNED-PAYLOAD-TRAILER`, which only an S3 binding accepts;
+  any other `service` refuses them (`awsUnsignedPayload`).
 - The AWS placeholder has no substitution surface. As a bearer token, in a
   query (presigned URLs), or anywhere besides the key id, it is refused with
   `surfaceNotAllowed`. `allow` rules, runtime binding, the audit-first
   forward record, and response scrubbing all apply as for
   `gateway` delivery.
 - Expiry is the earlier of `expires` and the credentials' `Expiration`.
-  Credentials are re-read every 5 minutes, or every `refresh` when set, using
-  the refresh path in "Expiry and rotation"; each refresh takes the new
-  `Expiration`.
+  Credentials are re-read every 5 minutes, or every `refresh` when that is
+  shorter (a longer `refresh` never stretches the 5 minutes), using the
+  refresh path in "Expiry and rotation"; each refresh takes the new
+  `Expiration`. A request that arrives after `Expiration` waits for a fresh
+  read before it is refused with `expired`; a failed read is not repeated for
+  5 seconds.
 - Responses are scrubbed of each generation's key id, secret key, and session
   token; each becomes the placeholder. S3 error bodies echo the key id.
+- A binding cannot sign for a service that mints credentials. The decoder
+  refuses `sts`, `iam`, `sso`, `sso-oauth`, `awsssoportal`, `awsssooidc`,
+  `signin`, `cognito-identity`, `cognito-idp`, `s3express`, `ecr`,
+  `ecr-public`, and `codeartifact`: a call such as `AssumeRole`,
+  `CreateAccessKey`, or `GetAuthorizationToken` would return new credentials
+  the gateway has no way to scrub. As defence in depth, for every service except `s3` a response
+  that contains the field name `SecretAccessKey` is refused
+  (`awsCredentialsInResponse`). While the first 64 KiB of the response are
+  held, the agent gets a plain `502` and none of it; if the name shows up
+  later, the stream is cut short just before it. An S3 binding passes object
+  bodies through untouched.
 - The credential set is spent only by the gateway. An MCP server or an
   `audit forward` header that names an `awsProfile` secret is refused
   before the profile is read.
+- Limit: query-protocol services (`ec2`, `sqs`, `sns`, `rds`,
+  `elasticloadbalancing`, `autoscaling`, `cloudformation`, `elasticache`,
+  `redshift`, `ses`, `sdb`, `cloudsearch`, `importexport`, `monitoring`) take
+  the action as a parameter, so `GET /?Action=TerminateInstances` is a GET on
+  `/`. Method and path rules cannot tell a read from a write there, and the
+  decoder refuses the `read-only` preset for them. Scope the profile's IAM
+  policy for those services.
 - Limit: `allow` matches the method and path only. Signed headers such as
   `x-amz-copy-source` name other resources, so a `PUT` allowed on
   `/my-bucket/*` can still copy from a bucket the rules do not list. Scope
@@ -324,6 +351,8 @@ makes the gateway sign instead:
 | refusal | status | misuse | when |
 |---------|--------|--------|------|
 | `awsKeyMismatch` | 403 | yes | the key id in `Credential=` is not this secret's placeholder, or names a non-AWS secret |
+| `awsUnsignedPayload` | 400 | no | `X-Amz-Content-Sha256` is `UNSIGNED-PAYLOAD` or `STREAMING-UNSIGNED-PAYLOAD-TRAILER` on a binding whose `service` is not `s3`. Send the body with a payload hash |
+| `awsCredentialsInResponse` | 502 | no | the upstream's answer contains a `SecretAccessKey` field (a non-S3 binding). The upstream produced it, not the agent, so it is not misuse; the response is not forwarded |
 | `awsSignedStreaming` | 400 | no | `X-Amz-Content-Sha256` is a signed-chunk or event-stream mode (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, `...-TRAILER`, `...-EVENTS`, ECDSA). Each chunk signature chains to the seed signature the gateway replaces. Configure the SDK for unsigned payloads with trailing checksums |
 
 ## OAuth tokens
@@ -352,9 +381,15 @@ elsewhere and store it in the Keychain
   surfaces, `allow`, `approve`, runtime binding, audit, and scrubbing.
 - A token is minted at launch and again only while the runtime uses it.
   Past half its lifetime, the next request mints in the background; at
-  expiry, a request waits for a new one. `refresh` caps the interval. A
-  token without `expires_in` is re-minted every 30 minutes.
-- `tokenURL` must be https, and redirects are not followed.
+  expiry, a request waits for a new one, even when the token lives under
+  the 15 s pacing floor. `refresh` caps the interval. A token without a
+  positive `expires_in` is re-minted every 30 minutes, and `expires_in` is
+  clamped to 1 s through 1 day, so an issuer cannot claim an unbounded
+  lifetime. Once the definition's own `expires` has passed, nothing is
+  minted: the request is refused `refreshFailed`, without an exchange that
+  would rotate the refresh token for nothing.
+- `tokenURL` must be https with no query, and is used exactly as written
+  (a trailing `/` is kept). Redirects are not followed.
 - Exchanges of one refresh token are serialized across rv processes, by a
   lock in `~/.config/rv/secrets-oauth`. Before each one, rv records the
   refresh token's HMAC fingerprint there, never the token.
@@ -362,17 +397,33 @@ elsewhere and store it in the Keychain
 
   | recovery | when | then |
   |----------|------|------|
-  | `retry` | no connection; HTTP 5xx or another error code | a later request tries again |
+  | `retry` | no connection; an RFC 6749 error with an unknown code, on any status; client credentials: any HTTP 5xx | a later request tries again |
   | `fixConfiguration` | `invalid_client`, `unauthorized_client`, `invalid_scope`, `unsupported_grant_type`, `invalid_request`, a redirect; `invalid_grant` on client credentials | a later request tries again; fix secrets.json |
-  | `reauthorize` | `invalid_grant`; no answer after the request was sent; a 200 without a usable bearer token; a rotated refresh token rv could not store | that refresh token is never sent again |
+  | `reauthorize` | `invalid_grant`; no answer after the request was sent; a 200 without a usable bearer token; refresh grant: an HTTP 5xx without an OAuth `error` body (a proxy may answer after the issuer rotated); a rotated refresh token rv could not store | that refresh token is never sent again |
   | `investigate` | rv stopped mid-exchange | that refresh token is never sent again |
 
+  A 200 whose JSON carries `error` and no `access_token` (GitHub does this)
+  is classified by the same code table as a 4xx: nothing was issued. A
+  rotated `refresh_token` that arrives with an unusable access token is
+  stored before the access token is rejected.
+
   Storing a different refresh token in the item lifts `reauthorize` and
-  `investigate`. rv shows only the issuer's `error` code, filtered, and
-  never its description or body.
+  `investigate`. So does `rv secrets oauth-reset NAME`, for an issuer that
+  does not rotate refresh tokens (Google, say), where a timeout or an rv
+  quit mid-refresh would otherwise block the only token for good. It
+  deletes the state file for NAME's refresh-token item,
+  `~/.config/rv/secrets-oauth/<key>.json` (`<key>` is the first 32 hex
+  digits of SHA-256 of `service NUL account`; the file holds the recovery
+  class and the token's HMAC, never the token), waiting out an exchange in
+  flight. It reads, sends, and prints no token. If the issuer does rotate
+  refresh tokens and the earlier refresh may have been spent, store a new
+  token instead: resending a spent one can make the issuer revoke the
+  grant. rv shows only the issuer's `error` code, filtered, and never its
+  description or body.
 - A request that needs a new token and cannot get one is refused with
   `refreshFailed` (503), and the `event: refresh` audit record carries the
-  recovery. `rv secrets check` mints once and prints it. `rv secrets scan`
+  recovery. `rv secrets check` mints once and prints the access token's
+  fingerprint, the one the gateway audits. `rv secrets scan`
   looks for the stored refresh token and client secret and never mints.
 
 ## Request approvals
@@ -385,21 +436,53 @@ shape as `allow`. A request they match needs a human's yes, every time:
 ```
 
 - `allow` is checked first; `approve` only holds requests `allow` lets
-  through. An ambiguous path is held, not passed.
+  through. An ambiguous path is held, not passed. `approve` matching is
+  also forgiving where `allow` is exact: a request is held when it matches
+  a rule as sent, or after the method is upper-cased, the path is
+  lower-cased, and a trailing slash is dropped from path and rule. So
+  `DELETE /repos/*/*` also holds `DELETE /repos/o/r/` and `/Repos/O/R`.
+  `allow` keeps exact matching.
 - The gateway files the request with rv's action-approval service as a
   `secretRequest` action (mandatory human, nothing downgrades it). The
   approver sees the secret's name, method, host, the redacted path without
-  its query, and the body's size and SHA-256. Never the value, the
-  placeholder, or the body.
-- The action binds the full request target (query included) and body by
-  SHA-256. A retry with any other query or body is a different action and
-  a new approval.
+  its query, the body's size and SHA-256, and the operation-selecting
+  headers the request carries (`x-amz-target`, `x-amz-copy-source`,
+  `stripe-account`, `content-type`; names and values, placeholders
+  redacted, long values cut at 200 bytes). Never the secret value, the
+  placeholder, the `Authorization` value, or the body.
+- The action binds the full request target (query included), the body, and
+  the request headers by SHA-256. A retry with any other query, body or
+  bound header is a different action and a new approval. Headers are
+  hashed before substitution with names lowercased and sorted and
+  placeholders redacted, so the hash does not depend on the runtime.
+  These volatile headers, which an SDK changes between retries of one
+  call, are left out: `authorization`, `date`, `x-amz-date`,
+  `x-amz-content-sha256` (the body is bound separately),
+  `x-amz-security-token`, `amz-sdk-invocation-id`, `amz-sdk-request`,
+  `user-agent`, `x-amz-user-agent`, `content-length`, `traceparent`,
+  `tracestate`, `x-amzn-trace-id`, `x-request-id`, `idempotency-key`, and
+  hop-by-hop headers (`connection`, `keep-alive`, `te`, `trailer`,
+  `transfer-encoding`, `upgrade`, `expect`, `accept-encoding`, `host`,
+  `proxy-*`). Every other header is bound, so a client whose other headers
+  vary between calls is asked again, never waved through.
+- An approval is filed for one placeholder, so one runtime. Another
+  runtime's identical request files its own approval and never waits on or
+  spends this one.
 - The request is held up to 20 seconds. Then it is refused with
   `approvalPending` and `Retry-After: 5`. Once the human approves, the next
   identical request consumes the approval and is forwarded. Each approval
   forwards one request.
 - At most 16 requests are held at once (the gateway has 64 connection
   slots); past that, a request checks once and is refused if still pending.
+- After the human approves, the gateway reads the secret again before it
+  forwards: a placeholder revoked or expired during the hold is refused
+  (`unknownPlaceholder`, `expired`), and a value refreshed during the hold
+  is substituted fresh.
+- The approval is consumed before the AWS signature and before the
+  `event: forward` audit record. If either then fails (`auditUnavailable`,
+  a signing refusal), the request is not forwarded and the approval is
+  spent; the next request asks again. The forward record has to stay last
+  before the send, so this order is deliberate.
 - Approvals need the runtime's admission channel and a live agent
   principal: a runtime launched with an agent definition. Otherwise, a
   request `approve` matches is refused with `approvalUnavailable`.
@@ -426,7 +509,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `approvalPending`, `approvalDenied`, `approvalUnavailable` | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse`, `approvalPending`, `approvalDenied`, `approvalUnavailable` | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
   | `refreshed` | `event: refresh`; a refresh swapped in a new value (new `fingerprint`) | info |
   | `refreshFailed` | `event: refresh`; a refresh could not read the provider (`reason`) | failed |

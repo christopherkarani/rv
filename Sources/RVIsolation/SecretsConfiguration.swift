@@ -123,9 +123,26 @@ public struct AWSSigningBinding: Sendable, Equatable {
     /// Variables rv stages itself for an AWS-signed secret.
     public static let stagedVariables: Set<String> = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
 
+    /// Signing names whose calls return new credentials (AssumeRole,
+    /// CreateAccessKey, GetCredentials, GetAuthorizationToken, ...). The agent
+    /// would receive credentials the gateway never scrubs, so no binding may
+    /// sign for them.
+    public static let credentialMintingServices: Set<String> = [
+        "sts", "iam", "sso", "sso-oauth", "awsssoportal", "awsssooidc", "signin", "cognito-identity", "cognito-idp",
+        "s3express", "ecr", "ecr-public", "codeartifact",
+    ]
+
+    /// Signing names of services that also take their action as a query
+    /// parameter on `GET /`, so a method or path rule cannot tell a read from
+    /// a write (`GET /?Action=TerminateInstances`).
+    public static let queryProtocolServices: Set<String> = [
+        "ec2", "sqs", "sns", "rds", "elasticloadbalancing", "autoscaling", "cloudformation", "elasticache", "redshift",
+        "ses", "sdb", "cloudsearch", "importexport", "monitoring",
+    ]
+
     public var upstream: URL
     public var region: String
-    /// The SigV4 signing name: `s3`, `bedrock`, `sts`, ...
+    /// The SigV4 signing name: `s3`, `bedrock`, `ec2`, ...
     public var service: String
     /// `AWS_ENDPOINT_URL` or a per-service `AWS_ENDPOINT_URL_<SERVICE>`.
     public var endpointEnv: String
@@ -150,6 +167,9 @@ public struct AWSSigningBinding: Sendable, Equatable {
     public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
     /// `approve` with presets expanded.
     public var approvalRules: [GatewayAccessRule] { approve.flatMap(\.rules) }
+
+    /// S3 signs the path as sent and accepts unsigned payloads.
+    var isS3: Bool { service == "s3" }
 }
 
 public enum SecretDelivery: Sendable, Equatable {
@@ -522,7 +542,7 @@ enum SecretsDecoding {
             return .awsProfile(profile: profile)
         case "oauth":
             try onlyKeys(fields, ["tokenURL", "clientID", "clientSecret", "refreshToken", "scope"], at: place)
-            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text) else {
+            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
                 throw Failure("\(place).tokenURL must be an https URL with no query")
             }
             guard let clientID = fields["clientID"] as? String, oauthText(clientID, max: 256, spaces: false) else {
@@ -592,7 +612,15 @@ enum SecretsDecoding {
             else {
                 throw Failure("\(place).endpointEnv must be a distinct variable such as AWS_ENDPOINT_URL_S3")
             }
+            guard AWSSigningBinding.credentialMintingServices.contains(service) == false else {
+                throw Failure("\(place).service \(service) mints credentials, which would reach the agent unscrubbed")
+            }
             let allow = try self.allow(fields["allow"], at: "\(place).allow")
+            if AWSSigningBinding.queryProtocolServices.contains(service), allow.contains(.preset(.readOnly)) {
+                throw Failure(
+                    "\(place).allow read-only cannot limit \(service): it takes its action as a query parameter on GET; "
+                        + "scope the profile's IAM policy instead")
+            }
             let approve = try self.allow(fields["approve"], at: "\(place).approve")
             return .awsSigV4(AWSSigningBinding(
                 upstream: upstream, region: region, service: service, endpointEnv: endpointEnv, allow: allow,
@@ -735,7 +763,9 @@ enum SecretsDecoding {
             && value.utf8.allSatisfy { (0x21...0x7E).contains($0) || (spaces && $0 == 0x20) }
     }
 
-    static func httpsUpstream(_ text: String) -> URL? {
+    /// `keepingTrailingSlash` for a URL that is used as given, such as a token
+    /// endpoint: `/o/token/` and `/o/token` can be different resources.
+    static func httpsUpstream(_ text: String, keepingTrailingSlash: Bool = false) -> URL? {
         guard let components = URLComponents(string: text), components.scheme?.lowercased() == "https",
             let host = components.host, host.isEmpty == false,
             components.user == nil, components.password == nil,
@@ -745,7 +775,7 @@ enum SecretsDecoding {
         var normalized = components
         normalized.scheme = "https"
         normalized.host = host.lowercased()
-        if normalized.path.hasSuffix("/") { normalized.path.removeLast() }
+        if keepingTrailingSlash == false, normalized.path.hasSuffix("/") { normalized.path.removeLast() }
         return normalized.url
     }
 

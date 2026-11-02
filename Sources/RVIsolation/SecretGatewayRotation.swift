@@ -76,12 +76,13 @@ struct SecretRotationState: Sendable {
     var flight: SecretRefreshFlight?
 
     /// What a request at `now` must do for an entry refreshed every `interval`.
-    /// A failure is retried no sooner than a quarter interval later.
-    func step(now: Date, interval: TimeInterval) -> Step {
+    /// A failure is retried no sooner than a quarter interval later. With
+    /// `expired`, the value is spent: no grace, the request waits for a refresh.
+    func step(now: Date, interval: TimeInterval, expired: Bool = false) -> Step {
         let age = now.timeIntervalSince(resolvedAt)
-        guard age >= interval else { return .serve }
+        guard age >= interval || expired else { return .serve }
         let retry = failedAt.map { now.timeIntervalSince($0) >= interval / 4 } ?? true
-        if age < interval * 2 { return retry && flight == nil ? .background : .serve }
+        if age < interval * 2, expired == false { return retry && flight == nil ? .background : .serve }
         return retry || flight != nil ? .wait : .refuse
     }
 }
@@ -107,6 +108,9 @@ extension SecretGateway {
         return min(refresh.interval ?? half, half)
     }
 
+    /// An expired AWS entry is re-read on a request no sooner than this after the last read.
+    static let expiredRetrySpacing: TimeInterval = 5
+
     /// Applies rotation and expiry for one request about to use `token`.
     /// Nil lets it through, with the entry's value as current as the policy requires.
     func prepare(_ token: String) -> GatewayRefusal? {
@@ -114,8 +118,7 @@ extension SecretGateway {
             refresh(token, restart: true)
         }
         lock.lock()
-        let interval = entries[token].flatMap(Self.refreshInterval)
-        let step = interval.flatMap { entries[token]?.rotation?.step(now: now(), interval: $0) } ?? .serve
+        let step = rotationStep(token) ?? .serve
         lock.unlock()
         switch step {
         case .serve:
@@ -130,17 +133,43 @@ extension SecretGateway {
             refresh(token, restart: false)
             lock.lock()
             // A refresh moves a token's expiry, and with it the interval.
-            let after = entries[token].flatMap(Self.refreshInterval).flatMap {
-                entries[token]?.rotation?.step(now: now(), interval: $0)
-            }
+            let after = rotationStep(token)
             lock.unlock()
             if after == .wait || after == .refuse { return .refreshFailed }
         }
+        // Past its Expiration an AWS credential set is read again before the
+        // request is refused, however long the interval has left to run.
+        if expiredAndDue(token) { refresh(token, restart: false) }
         lock.lock()
         defer { lock.unlock() }
         guard let entry = entries[token] else { return .unknownPlaceholder }
         if let expires = entry.expires, now() >= expires { return .expired }
         return nil
+    }
+
+    /// What a request now must do for `token`. Caller holds `lock`.
+    /// A lifetime-paced value past its expiry is spent whatever the pacing floor
+    /// says, so the request waits for a fresh one rather than being refused behind
+    /// a background refresh. (AWS credentials past expiry have `expiredAndDue`.)
+    private func rotationStep(_ token: String) -> SecretRotationState.Step? {
+        guard let entry = entries[token], let interval = Self.refreshInterval(entry) else { return nil }
+        let at = now()
+        let spent = entry.refresh?.followsExpiry == true && entry.expires.map { at >= $0 } == true
+        return entry.rotation?.step(now: at, interval: interval, expired: spent)
+    }
+
+    /// True for a refreshable AWS entry past its expiry that has not been read
+    /// in the last `expiredRetrySpacing`, so a provider that keeps returning
+    /// expired credentials is not spawned on every request.
+    private func expiredAndDue(_ token: String) -> Bool {
+        let at = now()
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[token], entry.signing != nil, entry.refresh != nil, let expires = entry.expires,
+            at >= expires, let state = entry.rotation
+        else { return false }
+        let last = max(state.resolvedAt, state.failedAt ?? state.resolvedAt)
+        return at.timeIntervalSince(last) >= Self.expiredRetrySpacing
     }
 
     /// True when the probe, if due, reports a marker other than the last one.

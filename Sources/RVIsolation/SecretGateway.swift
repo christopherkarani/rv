@@ -139,8 +139,8 @@ public final class SecretGateway: @unchecked Sendable {
     let approvalTiming: GatewayApprovalTiming
     let lock = NSLock()
     var entries: [String: Entry] = [:]
-    /// Approvals filed and not yet resolved, by the action digest they bind.
-    var parkedApprovals: [String: ParkedApproval] = [:]
+    /// Approvals filed and not yet resolved, by placeholder and the action digest they bind.
+    var parkedApprovals: [ParkedApprovalKey: ParkedApproval] = [:]
     /// Requests currently held open waiting for a human.
     var waitingApprovals = 0
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
@@ -527,7 +527,7 @@ public final class SecretGateway: @unchecked Sendable {
             }
             if entry(result.used.token)?.value != result.used.value { substituted = substitute() }
         }
-        let rewritten: GatewayRequestHead
+        var rewritten: GatewayRequestHead
         let token: String
         let surfaces: [String]
         switch substituted {
@@ -539,9 +539,9 @@ public final class SecretGateway: @unchecked Sendable {
             token = result.used.token
             surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
         }
-        guard let live = entry(token),
+        guard var live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
-            let url = upstreamRoute.upstreamURL(base: live.upstream)
+            var url = upstreamRoute.upstreamURL(base: live.upstream)
         else {
             deny(.unknownPlaceholder)
             return
@@ -555,10 +555,40 @@ public final class SecretGateway: @unchecked Sendable {
         }
         if let refusal = approval(
             live, token: token, method: head.method, route: route, basePath: Self.live(live, token: token).basePath,
-            url: url, target: head.target, body: body)
+            url: url, target: head.target, headers: forwarded.headers, body: body)
         {
             deny(refusal)
             return
+        }
+        // The hold can last seconds: what the human approved is the request,
+        // not the entry as it was then. Revoked, expired or refreshed since
+        // is checked again, and a changed value is substituted afresh.
+        if live.approvals.isEmpty == false {
+            if let refusal = prepare(token) {
+                deny(refusal)
+                return
+            }
+            guard let current = entry(token) else {
+                deny(.unknownPlaceholder)
+                return
+            }
+            if current.value != live.value {
+                switch substitute() {
+                case .failure(let refusal):
+                    deny(refusal)
+                    return
+                case .success(let again):
+                    rewritten = again.head
+                }
+                guard let upstream = GatewayRoute(target: rewritten.target),
+                    let fresh = upstream.upstreamURL(base: current.upstream)
+                else {
+                    deny(.unknownPlaceholder)
+                    return
+                }
+                url = fresh
+            }
+            live = current
         }
         var headers = rewritten.headers
         if let signing = live.signing {
@@ -587,7 +617,9 @@ public final class SecretGateway: @unchecked Sendable {
             // Earlier generations too: an upstream may still echo a value it held before rotation.
             scrub: live.scrubbed.map {
                 ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
-            }
+            },
+            // A call that mints credentials answers with a new key the scrubber has never seen.
+            tripwires: live.signing?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         headers.append(GatewayHeaders.identityEncoding)
@@ -596,6 +628,10 @@ public final class SecretGateway: @unchecked Sendable {
         record.status = sink.status
         record.upstreamStatus = sink.upstreamStatus
         record.activity = sink.upstreamStatus == nil ? .error : .brokered
+        if let refusal = sink.refusal {
+            record.activity = .refused
+            record.refusal = refusal.code
+        }
         record.reason = sink.failure
         record.responseBytes = sink.bytesWritten
         record.durationMilliseconds = Self.milliseconds(since: started)
@@ -686,17 +722,29 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     private var wroteHead = false
     private var framed = true
     private var closed = false
+    /// The field name that marks a response carrying new credentials.
+    static let mintedCredentialsField = Array("SecretAccessKey".utf8)
+    /// Bytes held back, head first, while a tripwire could still fire before
+    /// anything has been sent. Credential responses are far smaller.
+    static let holdLimit = 64 * 1024
+    private var held: [UInt8]?
+    private let watching: Bool
+    private(set) var refusal: GatewayRefusal?
     private(set) var status = 502
     /// The upstream's own status, before any rewrite. Nil when none arrived.
     private(set) var upstreamStatus: Int?
     private(set) var bytesWritten = 0
     private(set) var failure: String?
 
-    init(fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])]) {
+    init(
+        fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = []
+    ) {
         self.fd = fd
         self.method = method
-        scrubber = SecretScrubber(pairs)
-        headerScrubber = scrubber
+        let watching = tripwires.isEmpty == false
+        self.watching = watching
+        scrubber = SecretScrubber(pairs, tripwires: tripwires)
+        headerScrubber = SecretScrubber(pairs)
     }
 
     func head(status: Int, headers: [(name: String, value: String)]) {
@@ -737,7 +785,8 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         }
         if framed { text += "Transfer-Encoding: chunked\r\n" }
         text += "Connection: close\r\n\r\n"
-        closed = GatewaySocket.writeAll(fd, Array(text.utf8)) == false
+        if watching { held = [] }
+        closed = write(Array(text.utf8)) == false
     }
 
     func body(_ data: Data) -> Bool {
@@ -745,6 +794,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         defer { lock.unlock() }
         guard closed == false, framed else { return closed == false }
         let clean = scrubber.process(Array(data))
+        if scrubber.tripped { return trip(sending: clean) }
         return writeChunk(clean)
     }
 
@@ -759,9 +809,15 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             return
         }
         if framed {
-            _ = writeChunk(scrubber.finish())
-            _ = GatewaySocket.writeAll(fd, Array("0\r\n\r\n".utf8))
+            let rest = scrubber.finish()
+            if scrubber.tripped {
+                _ = trip(sending: rest)
+                return
+            }
+            _ = writeChunk(rest)
+            _ = write(Array("0\r\n\r\n".utf8))
         }
+        flushHeld()
         closed = true
     }
 
@@ -771,18 +827,58 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         if failure == nil { failure = reason }
         guard closed == false else { return }
         closed = true
+        flushHeld()
         if wroteHead == false {
             status = 502
             GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream failed: \(reason)"))
         }
     }
 
+    private static func chunk(_ bytes: [UInt8]) -> [UInt8] {
+        bytes.isEmpty ? [] : Array(String(bytes.count, radix: 16).utf8) + [13, 10] + bytes + [13, 10]
+    }
+
     private func writeChunk(_ bytes: [UInt8]) -> Bool {
         guard bytes.isEmpty == false else { return true }
         bytesWritten += bytes.count
-        let frame = Array(String(bytes.count, radix: 16).utf8) + [13, 10] + bytes + [13, 10]
-        if GatewaySocket.writeAll(fd, frame) == false { closed = true }
+        let frame = Self.chunk(bytes)
+        if write(frame) == false { closed = true }
         return closed == false
+    }
+
+    /// Sends, or while a tripwire could still fire before anything has left,
+    /// holds the bytes; past `holdLimit` the hold is released.
+    private func write(_ bytes: [UInt8]) -> Bool {
+        guard held != nil else { return GatewaySocket.writeAll(fd, bytes) }
+        held?.append(contentsOf: bytes)
+        guard (held?.count ?? 0) > Self.holdLimit else { return true }
+        return flushHeld()
+    }
+
+    @discardableResult
+    private func flushHeld() -> Bool {
+        guard let bytes = held else { return true }
+        held = nil
+        return GatewaySocket.writeAll(fd, bytes)
+    }
+
+    /// A tripwire matched. While nothing has been sent the agent gets a plain
+    /// 502 in place of the response; after that the stream is cut short at
+    /// the field name, before the value.
+    private func trip(sending clean: [UInt8]) -> Bool {
+        let refused = GatewayRefusal.awsCredentialsInResponse
+        refusal = refused
+        failure = refused.reason
+        closed = true
+        if held != nil {
+            held = nil
+            status = refused.status
+            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: refused.status, reason: refused.reason))
+        } else if framed {
+            bytesWritten += clean.count
+            _ = GatewaySocket.writeAll(fd, Self.chunk(clean))
+        }
+        return false
     }
 }
 

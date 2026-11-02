@@ -287,9 +287,12 @@ enum SecretsRun {
                     name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
                     error: secret.unusableCredentials)
             case .success(let value):
+                // The gateway audits the access token itself, not the JSON an oauth source resolves to.
+                var shown = value
+                if case .oauth = secret.source, let token = secret.credentialParts(value)?.first { shown = token }
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: true,
-                    fingerprint: fingerprinter?.fingerprint(of: value), error: nil)
+                    fingerprint: fingerprinter?.fingerprint(of: shown), error: nil)
             case .failure(let error):
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
@@ -433,6 +436,37 @@ enum SecretsRun {
         return .success(lines.joined(separator: "\n") + "\n")
     }
 
+    /// Lifts the block rv keeps against an `oauth` secret's refresh token. Touches only the
+    /// state file under `<config>/secrets-oauth`; no token is read, sent, or shown.
+    static func oauthReset(name: String, environment: SecretsEnvironment) -> Result<String, CommandFailure> {
+        let current: SecretsConfiguration
+        switch configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): current = loaded
+        }
+        guard let secret = current.secret(named: name) else {
+            return .failure("\(DisplayedText.field(name)) is not defined in secrets.json")
+        }
+        guard case .oauth(let oauth) = secret.source else {
+            return .failure("\(DisplayedText.field(name)) is not an oauth secret")
+        }
+        guard let item = oauth.refreshToken else {
+            return .success("\(DisplayedText.field(name)) uses the client credentials grant; rv keeps no block for it.\n")
+        }
+        switch OAuthRefreshBlock.clear(item, configDirectory: environment.configDirectory) {
+        case nil:
+            return .failure("another rv process is refreshing \(DisplayedText.field(name)); try again")
+        case false?:
+            return .success("No block is recorded for \(DisplayedText.field(name)).\n")
+        case true?:
+            return .success(
+                "Cleared the block on \(DisplayedText.field(name)); the next request sends the refresh token in "
+                    + "keychain item \(DisplayedText.field(item.service)) / \(DisplayedText.field(item.account)) again.\n"
+                    + "If the issuer rotates refresh tokens and an earlier refresh may have been spent, store a new "
+                    + "refresh token there instead; resending a spent one can make the issuer revoke the grant.\n")
+        }
+    }
+
     struct ScanReport: Encodable, Equatable {
         var findings: [SecretLeakFinding]
         var skipped: [String]
@@ -454,7 +488,8 @@ enum SecretsRun {
     }
 
     /// Values a leak scan looks for. Organization policy applies first: a
-    /// source it forbids is never resolved, and an invalid policy fails.
+    /// source it forbids is never resolved, and an invalid policy fails. Only
+    /// the source rule applies: the scan reads on the host and delivers nothing.
     private static func scannableValues(
         _ configuration: SecretsConfiguration, environment: SecretsEnvironment, skippedPrefix: String
     ) -> Result<(values: [(name: String, value: SecretValue)], skipped: [String]), CommandFailure> {
@@ -464,7 +499,7 @@ enum SecretsRun {
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
-            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
+            if let reason = SecretOrganizationRules.sourceViolation(secret, policy: environment.managed.policy) {
                 skipped.append("\(skippedPrefix)\(secret.name): organization policy: \(reason)")
                 continue
             }
@@ -756,7 +791,8 @@ struct Secrets: AsyncParsableCommand {
         commandName: "secrets",
         abstract: "Manage secrets agents use through placeholders.",
         subcommands: [
-            SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsScan.self,
+            SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsOAuthReset.self,
+            SecretsScan.self,
             SecretsDescribe.self, SecretsImport.self, SecretsHook.self,
         ],
         defaultSubcommand: SecretsList.self
@@ -933,6 +969,22 @@ struct SecretsRemove: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "secrets remove", json: false, robot: false, plain: true, noColor: true)
         switch SecretsRun.remove(name: name, environment: .live(home: try ctx.requireHome())) {
         case .failure(let failure): try ctx.fail("rv secrets remove: \(failure.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+}
+
+struct SecretsOAuthReset: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "oauth-reset",
+        abstract: "Lift the block on an oauth secret's refresh token so rv sends it again. Touches no token.")
+
+    @Argument var name: String
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets oauth-reset", json: false, robot: false, plain: true, noColor: true)
+        switch SecretsRun.oauthReset(name: name, environment: .live(home: try ctx.requireHome())) {
+        case .failure(let failure): try ctx.fail("rv secrets oauth-reset: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)
         }
     }

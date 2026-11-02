@@ -38,7 +38,11 @@ struct OAuthAccessToken: Sendable {
 
     static func encode(token: String, expires: Date?) -> SecretValue? {
         var object: [String: Any] = ["access_token": token]
-        if let expires { object["expires_at"] = Int(expires.timeIntervalSince1970) }
+        if let expires {
+            // A date this far out has no epoch second to write; leave it off rather than trap.
+            guard let epoch = Int(exactly: expires.timeIntervalSince1970.rounded(.down)) else { return nil }
+            object["expires_at"] = epoch
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
         return SecretValue(String(decoding: data, as: UTF8.self))
     }
@@ -69,6 +73,9 @@ struct OAuthTokenMinter: Sendable {
     static let directoryName = "secrets-oauth"
     /// Leaves room for the JSON wrapper inside `SecretValue.maximumBytes`.
     static let maximumTokenBytes = 8 * 1024
+    /// `expires_in` is clamped to this range: an issuer claiming more than a day
+    /// would otherwise keep a token past a re-mint for as long as it likes.
+    static let lifetimeRange: ClosedRange<TimeInterval> = 1...86_400
 
     static func live(home: String) -> OAuthTokenMinter {
         let configDirectory = URL(fileURLWithPath: home, isDirectory: true)
@@ -133,7 +140,12 @@ struct OAuthTokenMinter: Sendable {
             }
             try? FileManager.default.removeItem(at: stateURL)
             return encodedResult(token, expires: expires)
-        case .failed(let recovery, let detail):
+        case .failed(var recovery, var detail, let rotated):
+            // The issuer rotated while rejecting the access token: the new token is the grant.
+            if let rotated, let next = SecretValue(rotated), next != refreshToken, write(item, next) == false {
+                recovery = .reauthorize
+                detail = "the issuer rotated the refresh token and the Keychain write failed"
+            }
             if recovery == .reauthorize || recovery == .investigate {
                 _ = OAuthRefreshState(recovery: recovery, token: fingerprint).save(stateURL)
             } else {
@@ -150,7 +162,7 @@ struct OAuthTokenMinter: Sendable {
     ) -> Result<SecretValue, SecretResolutionError> {
         switch Self.classify(send(request(source, refreshToken: nil, clientSecret: clientSecret)), grant: .clientCredentials) {
         case .minted(let token, let expires, _): return encodedResult(token, expires: expires)
-        case .failed(let recovery, let detail): return .failure(Self.failure(recovery, item: nil, detail: detail))
+        case .failed(let recovery, let detail, _): return .failure(Self.failure(recovery, item: nil, detail: detail))
         }
     }
 
@@ -160,7 +172,8 @@ struct OAuthTokenMinter: Sendable {
 
     enum Outcome: Sendable, Equatable {
         case minted(token: String, expires: TimeInterval?, refreshToken: String?)
-        case failed(OAuthRecovery, detail: String)
+        /// `refreshToken`: a usable rotated refresh token that came with the failure.
+        case failed(OAuthRecovery, detail: String, refreshToken: String? = nil)
     }
 
     /// RFC 6749 §5.1 / §5.2. A complete error response means the issuer
@@ -174,27 +187,30 @@ struct OAuthTokenMinter: Sendable {
             return .failed(rotating ? .reauthorize : .retry, detail: "the token endpoint did not answer")
         case .response(let status, let body):
             let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
-            if status == 200 {
+            // Only the `error` code, filtered: issuers put anything in descriptions.
+            let code = (json?["error"] as? String).map(safeCode) ?? ""
+            if status == 200, json?["error"] == nil || json?["access_token"] != nil {
+                let rotated = json?["refresh_token"] as? String
+                let usableRotation = rotated.flatMap { usableToken($0) ? $0 : nil }
                 guard let token = json?["access_token"] as? String, usableToken(token),
                     (json?["token_type"] as? String)?.lowercased() == "bearer"
                 else {
                     return .failed(
                         rotating ? .reauthorize : .fixConfiguration,
-                        detail: "the token endpoint answered without a usable bearer token")
+                        detail: "the token endpoint answered without a usable bearer token", refreshToken: usableRotation)
                 }
-                let rotated = json?["refresh_token"] as? String
-                if let rotated, usableToken(rotated) == false {
+                if rotated != nil, usableRotation == nil {
                     return .failed(.reauthorize, detail: "the token endpoint returned an unusable refresh token")
                 }
                 let lifetime = (json?["expires_in"] as? NSNumber)?.doubleValue
                 return .minted(
-                    token: token, expires: lifetime.flatMap { $0 > 0 ? $0 : nil }, refreshToken: rotated)
+                    token: token,
+                    expires: lifetime.flatMap { $0 > 0 ? min(max($0, lifetimeRange.lowerBound), lifetimeRange.upperBound) : nil },
+                    refreshToken: rotated)
             }
             if (300..<400).contains(status) {
                 return .failed(.fixConfiguration, detail: "the token endpoint redirected (HTTP \(status)); set tokenURL to the final URL")
             }
-            // Only the `error` code, filtered: issuers put anything in descriptions.
-            let code = (json?["error"] as? String).map(safeCode) ?? ""
             let shown = code.isEmpty ? "HTTP \(status)" : "\(code), HTTP \(status)"
             switch code {
             case "invalid_grant":
@@ -202,6 +218,11 @@ struct OAuthTokenMinter: Sendable {
             case "invalid_client", "unauthorized_client", "invalid_scope", "unsupported_grant_type", "invalid_request":
                 return .failed(.fixConfiguration, detail: "the token endpoint refused (\(shown))")
             default:
+                // A proxy can answer 5xx after the issuer already rotated the token; resending a spent
+                // refresh token can make the issuer revoke the grant, so only an RFC 6749 error retries.
+                if rotating, code.isEmpty, (500..<600).contains(status) {
+                    return .failed(.reauthorize, detail: "the token endpoint failed (\(shown)) without an OAuth error, so the refresh may have been spent")
+                }
                 return .failed(.retry, detail: "the token endpoint failed (\(shown))")
             }
         }
@@ -260,10 +281,12 @@ struct OAuthTokenMinter: Sendable {
         case .investigate:
             return .failed(
                 "\(prefix)a refresh with \(place) did not finish, so the issuer may have rotated it; "
-                    + "check the grant, then store a working refresh token in that item (investigate)")
+                    + "check the grant, then store a working refresh token in that item; if the issuer does not rotate "
+                    + "refresh tokens, `rv secrets oauth-reset <secret>` lifts the block (investigate)")
         case .reauthorize:
             return .failed(
-                "\(prefix)rv will not send that refresh token again; store a new refresh token in \(place) (reauthorize)")
+                "\(prefix)rv will not send that refresh token again; store a new refresh token in \(place), or if the "
+                    + "issuer does not rotate refresh tokens run `rv secrets oauth-reset <secret>` (reauthorize)")
         case .fixConfiguration:
             return .failed("\(prefix)fix tokenURL, clientID, clientSecret, or scope in secrets.json (fixConfiguration)")
         }
@@ -271,7 +294,7 @@ struct OAuthTokenMinter: Sendable {
 
     // MARK: Files
 
-    private func stateFile(_ item: SecretKeychainItem) -> URL {
+    func stateFile(_ item: SecretKeychainItem) -> URL {
         stateDirectory.appendingPathComponent("\(Self.key(item)).json", isDirectory: false)
     }
 
@@ -299,6 +322,18 @@ struct OAuthTokenMinter: Sendable {
             guard errno == EWOULDBLOCK || errno == EINTR, Date() < deadline else { return false }
             usleep(50_000)
         }
+    }
+
+    /// Removes the block recorded for `item`'s refresh token, waiting out an
+    /// exchange in flight. True when there was a block to remove.
+    func clearBlock(_ item: SecretKeychainItem) -> Bool? {
+        var cleared = false
+        let locked = withLock(item) {
+            let url = stateFile(item)
+            cleared = FileManager.default.fileExists(atPath: url.path)
+            try? FileManager.default.removeItem(at: url)
+        }
+        return locked ? cleared : nil
     }
 
     // MARK: Live transport
@@ -358,5 +393,27 @@ struct OAuthRefreshState: Equatable {
             withJSONObject: ["recovery": recovery.rawValue, "token": token], options: [.sortedKeys])
         else { return false }
         return (try? data.write(to: url, options: [.atomic])) != nil
+    }
+}
+
+/// The block `OAuthTokenMinter` records against a refresh token, for `rv secrets oauth-reset`.
+/// State lives in `<config>/secrets-oauth/<key>.json`, one file per refresh-token Keychain
+/// item; it holds a recovery class and an HMAC of the token, never the token.
+public enum OAuthRefreshBlock {
+    public static func stateFile(_ item: SecretKeychainItem, configDirectory: URL) -> URL {
+        minter(configDirectory).stateFile(item)
+    }
+
+    /// Lifts the block on `item`'s refresh token. True when one was recorded; nil
+    /// when another rv process held the exchange lock for the whole wait.
+    public static func clear(_ item: SecretKeychainItem, configDirectory: URL) -> Bool? {
+        minter(configDirectory).clearBlock(item)
+    }
+
+    private static func minter(_ configDirectory: URL) -> OAuthTokenMinter {
+        OAuthTokenMinter(
+            send: { _ in .notSent }, read: { _ in nil }, write: { _, _ in false },
+            stateDirectory: configDirectory.appendingPathComponent(OAuthTokenMinter.directoryName, isDirectory: true),
+            now: { Date() })
     }
 }

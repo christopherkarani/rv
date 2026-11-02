@@ -302,6 +302,59 @@ struct AuditForwardTests {
         #expect(resolved.withLock { $0 } == 0)
     }
 
+    @Test func headerSecretsIgnoreTheEnvironmentDeliveryRuleBecauseTheyNeverEnterACage() throws {
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "SIEM", source: .hostEnvironment(variable: "SIEM"), delivery: .environment)
+        ])
+        let resolver = SecretResolver { _ in .success(SecretValue("tok123")!) }
+        let policy = try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#.utf8)).get()
+        let headers = try AuditForwardRun.resolveHeaders(
+            ["Authorization": "Bearer ${secret:SIEM}"], secrets: { .success(secrets) }, resolver: resolver, policy: policy
+        ).get()
+        #expect(headers == ["Authorization": "Bearer tok123"])
+    }
+
+    @Test func runResolvesHeadersThroughTheManagedPolicyState() throws {
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "SIEM", source: .hostEnvironment(variable: "SIEM"), delivery: .environment)
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("tok123")!)
+        }
+        let managed = ManagedPolicyState.active(ManagedPolicyBundle(
+            policy: try ManagedPolicy.decode(Data((
+                #"{"version":1,"secrets":{"allowedSources":["keychain"]},"#
+                    + #""audit":{"forward":{"url":"https://org.example/ingest","headers":{"Authorization":"Bearer ${secret:SIEM}"}}}}"#
+            ).utf8)).get(),
+            sha256: "abc", isSigned: true, directory: "/managed"))
+        guard case .failure(let refused) = AuditForwardRun.headers(
+            to: nil, flags: [], managed: managed, secrets: { .success(secrets) }, resolver: resolver)
+        else {
+            Issue.record("a policy header secret from a disallowed source was resolved")
+            return
+        }
+        #expect(refused.message
+            == "header secret SIEM: organization policy: SIEM uses a hostEnvironment source, which is not allowed")
+        #expect(resolved.withLock { $0 } == 0)
+
+        let allowed = try AuditForwardRun.headers(
+            to: nil, flags: [], managed: .none, secrets: { .success(secrets) }, resolver: resolver
+        ).get()
+        #expect(allowed.isEmpty, "no managed policy means no organization headers")
+        // --to drops the organization's headers; the operator's own flags still obey the policy.
+        guard case .failure(let flagRefused) = AuditForwardRun.headers(
+            to: "https://siem.example/hook", flags: ["X-Token=${secret:SIEM}"], managed: managed,
+            secrets: { .success(secrets) }, resolver: resolver)
+        else {
+            Issue.record("a flag header secret from a disallowed source was resolved")
+            return
+        }
+        #expect(flagRefused.message.hasPrefix("header secret SIEM: organization policy:"))
+        #expect(resolved.withLock { $0 } == 0)
+    }
+
     @Test func cursorPathEscapesControlsFromHome() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let home = URL(fileURLWithPath: "/tmp/h\u{1B}[2J\u{1B}[H\u{2028}\(sentence)\u{202E}\(sentence)", isDirectory: true)

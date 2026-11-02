@@ -132,6 +132,8 @@ struct MCPManagedPolicyTests {
         // Remote headers are spent host-side by the gateway, never in a child's environment.
         #expect(plan("remote") == nil)
         #expect(resolved.withLock { $0 } == 1)
+        configuration.managed = try organization(#"{"version":1,"secrets":{"allowEnvironmentDelivery":true}}"#)
+        #expect(plan("envy") == nil)
     }
 
     @Test func gatewayOnlySecretsAreRefusedToEveryServerBeforeResolving() throws {

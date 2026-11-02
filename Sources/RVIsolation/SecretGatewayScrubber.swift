@@ -15,10 +15,19 @@ import Foundation
 ///   matched on the characters the value alone determines, so at most two
 ///   edge characters (under 12 bits of the value) can remain beside it.
 ///
+/// - Hex forms, contiguous or space-separated and in either case, also become
+///   `redactionMarker`. S3 `SignatureDoesNotMatch` bodies print the canonical
+///   request, session token included, as space-separated hex bytes.
+///
 /// Not covered: double encodings (percent inside JSON, base64 of a
-/// percent-encoded value), hex, HTML entities, and compressed bodies. The
+/// percent-encoded value), HTML entities, and compressed bodies. The
 /// gateway asks upstream for identity encoding and refuses a compressed
 /// response rather than forwarding bytes it could not scan.
+///
+/// A tripwire is a needle that must never reach the agent at all, such as the
+/// `SecretAccessKey` field name of a response that mints credentials. Where
+/// one matches, the scrubber drops it and everything after it, and `tripped`
+/// reads true.
 ///
 /// Only a trailing partial match is held back, so streamed output that
 /// cannot be the start of a value flows through immediately.
@@ -26,6 +35,7 @@ struct SecretScrubber {
     static let redactionMarker = Array("[rv:redacted]".utf8)
     /// Shorter base64 runs collide with ordinary text too easily.
     static let minimumBase64Run = 8
+    static let minimumHexRun = 8
 
     /// One way a value byte, or a whole scalar for `\uXXXX`, may appear.
     struct Form {
@@ -40,12 +50,15 @@ struct SecretScrubber {
         /// Alternatives for each value byte offset.
         var forms: [[Form]]
         var replacement: [UInt8]
+        /// A match ends the stream instead of being replaced.
+        var trips: Bool
         /// Bytes that can begin this pattern; every other position is skipped.
         var starts: [Bool]
 
-        init(forms: [[Form]], replacement: [UInt8]) {
+        init(forms: [[Form]], replacement: [UInt8], trips: Bool = false) {
             self.forms = forms
             self.replacement = replacement
+            self.trips = trips
             var starts = [Bool](repeating: false, count: 256)
             for form in forms.first ?? [] {
                 guard let first = form.bytes.first else { continue }
@@ -70,17 +83,22 @@ struct SecretScrubber {
     /// Bytes that can begin some pattern; everything else is emitted at once.
     private let starts: [Bool]
     private var pending: [UInt8] = []
+    /// True once a tripwire matched; nothing more is emitted.
+    private(set) var tripped = false
 
-    init(_ pairs: [(needle: [UInt8], replacement: [UInt8])]) {
+    init(_ pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = []) {
         var patterns: [(length: Int, pattern: Pattern)] = []
         var seen: Set<[UInt8]> = []
         for pair in pairs where pair.needle.isEmpty == false {
             if seen.insert(pair.needle).inserted {
                 patterns.append((pair.needle.count, Pattern(forms: Self.forms(pair.needle), replacement: pair.replacement)))
             }
-            for encoded in Self.base64Needles(pair.needle) where seen.insert(encoded).inserted {
+            for encoded in Self.base64Needles(pair.needle) + Self.hexNeedles(pair.needle) where seen.insert(encoded).inserted {
                 patterns.append((encoded.count, Pattern(forms: Self.forms(encoded), replacement: Self.redactionMarker)))
             }
+        }
+        for needle in tripwires where needle.isEmpty == false {
+            patterns.append((needle.count, Pattern(forms: Self.forms(needle), replacement: [], trips: true)))
         }
         // Longest first: a longer encoding still in flight holds back a shorter one.
         let sorted = patterns.sorted { $0.length > $1.length }.map(\.pattern)
@@ -89,6 +107,7 @@ struct SecretScrubber {
     }
 
     mutating func process(_ chunk: [UInt8]) -> [UInt8] {
+        guard tripped == false else { return [] }
         pending += chunk
         return drain(final: false)
     }
@@ -104,6 +123,7 @@ struct SecretScrubber {
     }
 
     private mutating func drain(final: Bool) -> [UInt8] {
+        guard tripped == false else { return [] }
         var output: [UInt8] = []
         output.reserveCapacity(pending.count)
         var index = 0
@@ -115,6 +135,11 @@ struct SecretScrubber {
                     case .none:
                         continue
                     case .full(let end):
+                        if pattern.trips {
+                            tripped = true
+                            pending = []
+                            return output
+                        }
                         output += pattern.replacement
                         index = end
                         continue scan
@@ -216,6 +241,22 @@ struct SecretScrubber {
             all += [bare, bare.map { $0 == 43 ? 45 : $0 == 47 ? 95 : $0 }]
         }
         return all.filter { $0.count >= minimumBase64Run }
+    }
+
+    /// The value's bytes as hex digits, with and without a space between
+    /// bytes, in lower and upper case.
+    static func hexNeedles(_ value: [UInt8]) -> [[UInt8]] {
+        var all: [[UInt8]] = []
+        for separator in [[UInt8](), [32]] {
+            for uppercase in [false, true] {
+                let digits = value.map { byte in
+                    let text = String(byte, radix: 16, uppercase: uppercase)
+                    return Array((text.count < 2 ? "0" + text : text).utf8)
+                }
+                all.append(Array(digits.joined(separator: separator)))
+            }
+        }
+        return all.filter { $0.count >= minimumHexRun }
     }
 
     private static func scalarStarts(_ value: [UInt8]) -> [Int: Unicode.Scalar] {

@@ -66,6 +66,11 @@ public struct GatewayAccessRule: Sendable, Hashable {
         return segments.filter { $0 == "**" }.count <= maximumDeepWildcards
     }
 
+    /// This rule with its path folded the way `GatewayAccess.holds` folds requests.
+    func folded() -> GatewayAccessRule {
+        GatewayAccessRule(methods: methods, path: GatewayAccess.foldedPath(path), query: query)
+    }
+
     func permits(method: String, path: String, query raw: String) -> Bool {
         if let methods, methods.contains(method) == false { return false }
         guard GatewayAccess.glob(self.path, matches: path) else { return false }
@@ -154,13 +159,40 @@ enum GatewayAccess {
         _ rules: [GatewayAccessRule], method: String, route: GatewayRoute, basePath: String
     ) -> GatewayRefusal? {
         guard rules.isEmpty == false else { return nil }
+        guard let (path, query) = requestPathAndQuery(route, basePath: basePath) else { return .ambiguousPath }
+        let allowed = rules.contains { $0.permits(method: method, path: path, query: query) }
+        return allowed ? nil : .outsideAllowRules
+    }
+
+    /// Whether an `approve` rule holds this request. Fails closed where
+    /// `refusal` is exact: an ambiguous path is held, and so is a request
+    /// that matches a rule once the method is upper-cased, the path is
+    /// lower-cased, and a trailing slash is dropped from path and rule.
+    /// Only `approve` folds; `allow` keeps its exact matching.
+    static func holds(
+        _ rules: [GatewayAccessRule], method: String, route: GatewayRoute, basePath: String
+    ) -> Bool {
+        guard rules.isEmpty == false else { return false }
+        guard let (path, query) = requestPathAndQuery(route, basePath: basePath) else { return true }
+        if rules.contains(where: { $0.permits(method: method, path: path, query: query) }) { return true }
+        let folded = foldedPath(path)
+        return rules.contains {
+            $0.folded().permits(method: method.uppercased(), path: folded, query: query)
+        }
+    }
+
+    /// Lower-cased, without a trailing slash (the root stays `/`).
+    static func foldedPath(_ path: String) -> String {
+        let lowered = path.lowercased()
+        return lowered.count > 1 && lowered.hasSuffix("/") ? String(lowered.dropLast()) : lowered
+    }
+
+    private static func requestPathAndQuery(_ route: GatewayRoute, basePath: String) -> (String, String)? {
         let remainder = route.remainder
         let queryStart = remainder.firstIndex(of: "?") ?? remainder.endIndex
         let joined = basePath + remainder[..<queryStart]
-        guard let path = normalizedPath(joined.isEmpty ? "/" : joined) else { return .ambiguousPath }
-        let query = remainder[queryStart...].dropFirst()
-        let allowed = rules.contains { $0.permits(method: method, path: path, query: String(query)) }
-        return allowed ? nil : .outsideAllowRules
+        guard let path = normalizedPath(joined.isEmpty ? "/" : joined) else { return nil }
+        return (path, String(remainder[queryStart...].dropFirst()))
     }
 
     /// The path decoded once, or nil when an upstream could read it in a

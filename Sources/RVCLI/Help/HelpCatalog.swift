@@ -419,7 +419,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest (OCSF 1.3.0 with --format ocsf)"),
                 HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
-                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
+                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward; fails if the org policy is invalid"),
                 HelpRow(name: "--install", description: "macOS LaunchAgent every 5 min; prints a LaunchDaemon template for root"),
                 HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it (unkeyed: anchoring needs the forwarded head)"),
                 HelpRow(name: "verify", description: "Finds edits, deletions, and reordering that did not recompute the chain; exit 1 at the first break"),
@@ -446,6 +446,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
                 HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
+                HelpRow(name: "rv secrets oauth-reset <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
@@ -503,19 +504,19 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "aws",
-                    description: "awsProfile source + awsSigV4 delivery {upstream, region, service, endpointEnv, allow}: the cage gets a placeholder key id; rv re-signs"
+                    description: "awsProfile source + awsSigV4 delivery {upstream, region, service, endpointEnv, allow}: the cage gets a placeholder key id; rv re-signs. Credential-minting services (sts, iam, sso, ...) are refused; read-only is refused for query-protocol services (ec2, sqs, sns, ...)"
                 ),
                 HelpRow(
                     name: "aws refusals",
-                    description: "Another key id is 403 (misuse); signed-chunk uploads 400 (use UNSIGNED-PAYLOAD); re-read every 5m or refresh, expiring at Expiration"
+                    description: "Another key id is 403 (misuse); signed-chunk uploads 400 (UNSIGNED-PAYLOAD is S3 only); a response with SecretAccessKey is 502; re-read every 5m or a shorter refresh, expired credentials are re-read first"
                 ),
                 HelpRow(
                     name: "oauth",
-                    description: "oauth source {tokenURL, clientID, refreshToken|clientSecret {service, account}, scope}: gateway only; re-minted on the token's lifetime"
+                    description: "oauth source {tokenURL, clientID, refreshToken?, clientSecret? {service, account} (at least one), scope}: gateway only; re-minted on the token's lifetime"
                 ),
                 HelpRow(
                     name: "oauth recovery",
-                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one"
+                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one or `rv secrets oauth-reset <name>` lifts the block (state: ~/.config/rv/secrets-oauth/)"
                 ),
                 HelpRow(
                     name: "approve",
