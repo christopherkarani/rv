@@ -91,7 +91,8 @@ public enum PolicyGate {
         rebaseInProgress: Bool = false,
         safety: SafetyLevel = .strict,
         maskedSegments: [String]? = nil,
-        invocationPrefix: [String] = []
+        invocationPrefix: [String] = [],
+        claim: @Sendable () -> Bool = { true }
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -115,7 +116,8 @@ public enum PolicyGate {
             cwd: cwd,
             now: now,
             maskedSegments: maskedSegments,
-            invocationPrefix: invocationPrefix
+            invocationPrefix: invocationPrefix,
+            claim: claim
         ) else {
             return withoutGrant
         }

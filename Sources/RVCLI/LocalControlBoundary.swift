@@ -1,6 +1,4 @@
 import ArgumentParser
-import RVDomain
-import RVHooks
 
 /// Transitional fail-closed boundary until authenticated service mutation routes exist.
 enum LocalControlBoundary {
@@ -8,9 +6,5 @@ enum LocalControlBoundary {
 
     static func requireOwnerAuthorization() throws {
         throw ValidationError(reason)
-    }
-
-    static func deniedHook(host: HookHost) -> HookWire {
-        productionHostCodec(host).encodeDeny(reason: reason, rule: nil, next: .none)
     }
 }

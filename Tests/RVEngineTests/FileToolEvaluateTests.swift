@@ -141,3 +141,40 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
     }
     #expect(deny.ruleID.rawValue == "core.secrets:id-rsa")
 }
+
+@Test func evaluateFileTool_allowsCageHomeCacheAndTmpUnderRvConfig() {
+    for path in [
+        "/Users/u/.config/rv/workspaces/proj-abcd/home/go/pkg/mod/x/y.go",
+        "/Users/u/.config/rv/workspaces/proj-abcd/home/.claude/plans/p.md",
+        "/Users/u/.config/rv/workspaces/proj-abcd/cache/build/x.o",
+        "/Users/u/.config/rv/workspaces/proj-abcd/tmp/scratch.txt",
+        "~/.config/rv/workspaces/proj-abcd/tmp/scratch.txt",
+        "$HOME/.config/rv/workspaces/proj-abcd/home/a.txt",
+    ] {
+        for kind in [FileToolKind.read, .write] {
+            let result = evaluateFileTool(FileToolAction(kind: kind, path: FileToolPath(rawValue: path)))
+            #expect(result.decision == .allow, "\(path)")
+        }
+    }
+}
+
+@Test func evaluateFileTool_stillDeniesRvConfigOutsideCageScratch() {
+    for path in [
+        "/Users/u/.config/rv/policy.toml",
+        "~/.config/rv/policy-revisions.key",
+        "/Users/u/.config/rv/workspaces",
+        "/Users/u/.config/rv/workspaces/proj-abcd",
+        "/Users/u/.config/rv/workspaces/proj-abcd/bin/git",
+        "/Users/u/.config/rv/workspaces/proj-abcd/home/../../../policy.toml",
+        "/Users/u/.config/rv/workspaces/proj-abcd/tmp/../../policy.toml",
+        "/Users/u/.config/rv/other/proj-abcd/home/x",
+        "/Users/u/.config/rv/policy.toml/workspaces/proj-abcd/home/x",
+    ] {
+        let result = evaluateFileTool(FileToolAction(kind: .read, path: FileToolPath(rawValue: path)))
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected deny for \(path)")
+            continue
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:home-rv-config", "\(path)")
+    }
+}

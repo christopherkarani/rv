@@ -6,6 +6,7 @@
 #include "json_reply.h"
 #include "evaluation_route.h"
 #include "daemon_trust.h"
+#include "hook_fallback.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -16,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #ifdef __APPLE__
@@ -35,7 +37,11 @@ extern char **environ;
 #define RV_STDIN_KEY "rv.stdin"
 #define RV_CLIENT_SEMVER "1.0.0"
 #define RV_STDIN_XPC_MAX 1048576
-#define RV_XPC_TIMEOUT_MS 700
+/* Hello covers a launchd on-demand spawn of rvd; hookEvaluate covers a
+ * cold judge load (the daemon enforces its own shorter deadline). */
+#define RV_HELLO_TIMEOUT_MS 3000
+#define RV_EVALUATE_TIMEOUT_MS 8000
+#define RV_HOOK_RETRY_DELAY_MS 200
 
 struct ByteBuf {
     unsigned char *p;
@@ -176,7 +182,8 @@ static int is_valid_host(const char *s) {
         || strcmp(s, "hermes") == 0
         || strcmp(s, "codex") == 0
         || strcmp(s, "cursor") == 0
-        || strcmp(s, "antigravity") == 0;
+        || strcmp(s, "antigravity") == 0
+        || strcmp(s, "muse") == 0;
 }
 
 /* 0 = pipe, 1 = exec rv-cli with the same argv. */
@@ -264,25 +271,28 @@ static void exec_same_argv(char **argv) {
     _exit(2);
 }
 
-/* No CLI replay: neither a transport failure nor malformed input grants authority. */
-static void deny_hook(const char *host) {
-    const char *reason = "Authenticated RV service and operation-bound owner authorization required.";
-    int status = 0;
-    if (strcmp(host, "codex") == 0) {
-        printf("{\"decision\":\"block\",\"reason\":\"%s\"}\n", reason);
-        fprintf(stderr, "%s\n", reason);
-        status = 2;
-    } else if (strcmp(host, "claude") == 0) {
-        printf("{\"systemMessage\":\"%s\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", reason, reason);
-    } else if (strcmp(host, "cursor") == 0) {
-        printf("{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"RV blocked this command. Wait for the human.\"}\n", reason);
-    } else {
-        printf("{\"decision\":\"deny\",\"reason\":\"%s\"}\n", reason);
-        if (strcmp(host, "grok") != 0 && strcmp(host, "antigravity") != 0) status = 1;
+/* No CLI replay: neither a transport failure nor malformed input grants
+ * authority. Renders the classified fallback (hook_fallback.h): input
+ * failures always deny; daemon-unavailable classes follow
+ * RV_HOOK_WHEN_DOWN (ask by default). */
+static void fail_hook(const char *host, enum RvHookFailure failure) {
+    struct RvHookFallback fallback;
+    enum RvWhenDown mode = rv_when_down_parse(getenv(RV_HOOK_WHEN_DOWN_ENV));
+    if (rv_hook_fallback_render(host, failure, mode, &fallback) != 0) {
+        /* Unreachable for valid hosts; exit 2 blocks on Claude and Codex. */
+        _exit(2);
     }
-    fflush(stdout);
-    fflush(stderr);
-    _exit(status);
+    (void)write_all(STDOUT_FILENO, fallback.out, strlen(fallback.out));
+    (void)write_all(STDERR_FILENO, fallback.err, strlen(fallback.err));
+    _exit(fallback.exit_code);
+}
+
+static void sleep_ms(long ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+    }
 }
 
 /* RFC 4122 UUID v4 from /dev/urandom. Not Apple-only; not libuuid. */
@@ -416,20 +426,26 @@ struct XpcWait {
     xpc_object_t reply;
 };
 
-/* One XPC request/reply round trip. Returns a retained reply dictionary,
- * or NULL on timeout, error reply, or non-dictionary reply. */
+/* One XPC request/reply round trip. Returns a retained, sender-verified
+ * reply dictionary, or NULL with *failure set (and *retryable set when
+ * the failure is transient: timeout, connection invalid/interrupted). */
 static xpc_object_t xpc_exchange(
     xpc_connection_t conn,
     const void *json,
     size_t json_len,
     const void *stdin_bytes,
-    size_t stdin_len
+    size_t stdin_len,
+    int64_t timeout_ms,
+    enum RvHookFailure *failure,
+    int *retryable
 ) {
     xpc_object_t msg;
     struct XpcWait *wait;
     long timed_out;
     xpc_object_t reply;
 
+    *failure = RV_HOOK_FAIL_UNREACHABLE;
+    *retryable = 0;
     wait = (struct XpcWait *)calloc(1, sizeof *wait);
     if (wait == NULL) {
         return NULL;
@@ -463,10 +479,7 @@ static xpc_object_t xpc_exchange(
 
     timed_out = dispatch_semaphore_wait(
         wait->sem,
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            (int64_t)RV_XPC_TIMEOUT_MS * (int64_t)NSEC_PER_MSEC
-        )
+        dispatch_time(DISPATCH_TIME_NOW, timeout_ms * (int64_t)NSEC_PER_MSEC)
     );
     if (timed_out != 0) {
         /*
@@ -474,8 +487,10 @@ static xpc_object_t xpc_exchange(
          * once and write wait->reply, so freeing `wait` here would race
          * that block. The struct and its semaphore live until process
          * exit (_exit), bounded to one small allocation per timed-out
-         * invocation.
+         * exchange (at most two per invocation: one retry).
          */
+        *failure = RV_HOOK_FAIL_TIMEOUT;
+        *retryable = 1;
         return NULL;
     }
     reply = wait->reply;
@@ -484,15 +499,28 @@ static xpc_object_t xpc_exchange(
     if (reply == NULL) {
         return NULL;
     }
-    if (xpc_get_type(reply) == XPC_TYPE_ERROR
-        || xpc_get_type(reply) != XPC_TYPE_DICTIONARY)
-    {
+    if (xpc_get_type(reply) == XPC_TYPE_ERROR) {
+        /* Not registered / launchd refused (INVALID) or rvd exited
+         * mid-exchange (INTERRUPTED, e.g. an idle-exit race). */
+        *retryable = reply == XPC_ERROR_CONNECTION_INVALID
+            || reply == XPC_ERROR_CONNECTION_INTERRUPTED;
+        xpc_release(reply);
+        return NULL;
+    }
+    if (xpc_get_type(reply) != XPC_TYPE_DICTIONARY) {
+        *failure = RV_HOOK_FAIL_PROTOCOL;
         xpc_release(reply);
         return NULL;
     }
     /* A Mach service name is not server identity. Do not consume
      * authority-bearing results from an unverified daemon. */
     if (!rv_verify_daemon_reply(reply)) {
+        *failure = RV_HOOK_FAIL_UNTRUSTED;
+        /* A stale rvd (binary replaced by an upgrade) answers once and then
+         * exits; launchd starts the new binary on the next connect. Callers
+         * zero this after the hookEvaluate exchange, so it only retries
+         * Hellos. */
+        *retryable = 1;
         xpc_release(reply);
         return NULL;
     }
@@ -559,14 +587,19 @@ static const char kHelloJson[] =
  * discovery only; anything else there is authorizationDenied.
  *
  * Every reply's sender is verified in xpc_exchange (daemon_trust.h)
- * before any field is consumed, exactly like the Swift client. */
+ * before any field is consumed, exactly like the Swift client.
+ *
+ * Returns 0, or the failure class. *retryable is set only for transient
+ * failures that happen before the hookEvaluate request is sent: once it
+ * is sent the daemon may have acted on it, so it is never resent. */
 static int xpc_hook_evaluate(
     const void *json,
     size_t json_len,
     const void *stdin_bytes,
     size_t stdin_len,
     char **reply_json,
-    size_t *reply_len
+    size_t *reply_len,
+    int *retryable
 ) {
     xpc_connection_t discovery = NULL;
     xpc_connection_t actions = NULL;
@@ -575,11 +608,13 @@ static int xpc_hook_evaluate(
     const void *data;
     size_t n = 0;
     char *copy;
-    int rc = -1;
+    enum RvHookFailure failure = RV_HOOK_FAIL_UNREACHABLE;
+    int ok = 0;
 
+    *retryable = 0;
     discovery = xpc_connection_create_mach_service(RV_MACH_SERVICE, NULL, 0);
     if (discovery == NULL) {
-        return -1;
+        return RV_HOOK_FAIL_UNREACHABLE;
     }
     xpc_connection_set_event_handler(discovery, ^(xpc_object_t event) {
         (void)event;
@@ -587,24 +622,33 @@ static int xpc_hook_evaluate(
     xpc_connection_resume(discovery);
 
     reply = xpc_exchange(
-        discovery, kHelloJson, sizeof kHelloJson - 1, NULL, 0);
+        discovery, kHelloJson, sizeof kHelloJson - 1, NULL, 0,
+        RV_HELLO_TIMEOUT_MS, &failure, retryable);
     if (reply == NULL) {
         goto out;
     }
     data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
-    if (data == NULL || n == 0 || !hello_ack_ok((const char *)data, n)) {
+    if (data == NULL || n == 0) {
+        failure = RV_HOOK_FAIL_PROTOCOL;
+        goto out;
+    }
+    if (!hello_ack_ok((const char *)data, n)) {
+        failure = RV_HOOK_FAIL_UNTRUSTED;
+        *retryable = 1;
         goto out;
     }
     endpoint_obj = xpc_dictionary_get_value(reply, RV_ACTION_ENDPOINT_KEY);
     if (endpoint_obj == NULL
         || xpc_get_type(endpoint_obj) != XPC_TYPE_ENDPOINT)
     {
+        failure = RV_HOOK_FAIL_PROTOCOL;
         goto out;
     }
     actions = xpc_connection_create_from_endpoint(endpoint_obj);
     xpc_release(reply);
     reply = NULL;
     if (actions == NULL) {
+        failure = RV_HOOK_FAIL_UNREACHABLE;
         goto out;
     }
     xpc_connection_set_event_handler(actions, ^(xpc_object_t event) {
@@ -613,34 +657,46 @@ static int xpc_hook_evaluate(
     xpc_connection_resume(actions);
 
     reply = xpc_exchange(
-        actions, kHelloJson, sizeof kHelloJson - 1, NULL, 0);
-    if (reply == NULL) {
-        goto out;
-    }
-    data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
-    if (data == NULL || n == 0 || !hello_ack_ok((const char *)data, n)) {
-        goto out;
-    }
-    xpc_release(reply);
-    reply = NULL;
-
-    reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len);
+        actions, kHelloJson, sizeof kHelloJson - 1, NULL, 0,
+        RV_HELLO_TIMEOUT_MS, &failure, retryable);
     if (reply == NULL) {
         goto out;
     }
     data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
     if (data == NULL || n == 0) {
+        failure = RV_HOOK_FAIL_PROTOCOL;
+        goto out;
+    }
+    if (!hello_ack_ok((const char *)data, n)) {
+        failure = RV_HOOK_FAIL_UNTRUSTED;
+        *retryable = 1;
+        goto out;
+    }
+    xpc_release(reply);
+    reply = NULL;
+
+    /* Point of no return: from here on nothing is retried. */
+    reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len,
+                         RV_EVALUATE_TIMEOUT_MS, &failure, retryable);
+    *retryable = 0;
+    if (reply == NULL) {
+        goto out;
+    }
+    data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
+    if (data == NULL || n == 0) {
+        failure = RV_HOOK_FAIL_PROTOCOL;
         goto out;
     }
     copy = (char *)malloc(n + 1);
     if (copy == NULL) {
+        failure = RV_HOOK_FAIL_PROTOCOL;
         goto out;
     }
     memcpy(copy, data, n);
     copy[n] = '\0';
     *reply_json = copy;
     *reply_len = n;
-    rc = 0;
+    ok = 1;
 
 out:
     if (reply != NULL) {
@@ -654,7 +710,7 @@ out:
         xpc_connection_cancel(discovery);
         xpc_release(discovery);
     }
-    return rc;
+    return ok ? 0 : (int)failure;
 }
 #else
 
@@ -725,73 +781,107 @@ static int unix_socket_path(char *out, size_t cap) {
     return 0;
 }
 
+static void set_socket_timeouts(int fd, long ms) {
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+}
+
+/* errno after a failed send/recv: a socket timeout is TIMEOUT, anything
+ * else (reset, EOF, broken pipe) means the daemon went away. */
+static int io_failure(void) {
+    return (errno == EAGAIN || errno == EWOULDBLOCK)
+        ? RV_HOOK_FAIL_TIMEOUT
+        : RV_HOOK_FAIL_UNREACHABLE;
+}
+
+/* Returns 0, or the failure class. *retryable is set only for transient
+ * failures before any request byte is sent (missing socket, refused,
+ * connect timeout); once sent the request is never resent. */
 static int unix_hook_evaluate(
     const void *json,
     size_t json_len,
     char **reply_json,
-    size_t *reply_len
+    size_t *reply_len,
+    int *retryable
 ) {
     char path[RV_UNIX_PATH_MAX];
     int fd;
     struct sockaddr_un addr;
-    struct timeval tv;
     unsigned char header[4];
     uint32_t n;
     char *copy;
+    int failure;
 
+    *retryable = 0;
     if (json_len == 0 || json_len > RV_FRAME_MAX) {
-        return -1;
+        return RV_HOOK_FAIL_INPUT;
     }
     if (unix_socket_path(path, sizeof path) != 0) {
-        return -1;
+        return RV_HOOK_FAIL_UNREACHABLE;
     }
 
     fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-        return -1;
+        return RV_HOOK_FAIL_UNREACHABLE;
     }
-    tv.tv_sec = RV_XPC_TIMEOUT_MS / 1000;
-    tv.tv_usec = (RV_XPC_TIMEOUT_MS % 1000) * 1000;
-    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    set_socket_timeouts(fd, RV_HELLO_TIMEOUT_MS);
 
     memset(&addr, 0, sizeof addr);
     addr.sun_family = AF_UNIX;
     memcpy(addr.sun_path, path, strlen(path) + 1);
     if (connect(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
+        int err = errno;
         close(fd);
-        return -1;
+        if (err == ENOENT || err == ECONNREFUSED) {
+            *retryable = 1;
+            return RV_HOOK_FAIL_UNREACHABLE;
+        }
+        if (err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT || err == EINPROGRESS) {
+            *retryable = 1;
+            return RV_HOOK_FAIL_TIMEOUT;
+        }
+        return RV_HOOK_FAIL_UNREACHABLE;
     }
     /* A socket path is not server identity. Verify the connected peer
      * is the sibling rvd before sending any action bytes. */
     if (!rv_verify_unix_daemon(fd)) {
         close(fd);
-        return -1;
+        /* Nothing sent yet; a stale rvd drains and exits on its own. */
+        *retryable = 1;
+        return RV_HOOK_FAIL_UNTRUSTED;
     }
 
+    /* Point of no return: from here on nothing is retried. */
+    set_socket_timeouts(fd, RV_EVALUATE_TIMEOUT_MS);
     write_be32(header, (uint32_t)json_len);
     if (send_nosig(fd, header, 4) != 0 || send_nosig(fd, json, json_len) != 0) {
+        failure = io_failure();
         close(fd);
-        return -1;
+        return failure;
     }
     if (recv_exact(fd, header, 4) != 0) {
+        failure = io_failure();
         close(fd);
-        return -1;
+        return failure;
     }
     n = read_be32(header);
     if (n == 0 || n > RV_FRAME_MAX) {
         close(fd);
-        return -1;
+        return RV_HOOK_FAIL_PROTOCOL;
     }
     copy = (char *)malloc((size_t)n + 1);
     if (copy == NULL) {
         close(fd);
-        return -1;
+        return RV_HOOK_FAIL_PROTOCOL;
     }
     if (recv_exact(fd, copy, (size_t)n) != 0) {
+        failure = io_failure();
         free(copy);
         close(fd);
-        return -1;
+        return failure;
     }
     close(fd);
     copy[n] = '\0';
@@ -800,6 +890,38 @@ static int unix_hook_evaluate(
     return 0;
 }
 #endif
+
+/* One retry, only for transient failures before the hookEvaluate request
+ * left this process (cold launchd spawn, idle-exit race). */
+static int hook_evaluate(
+    const char *request,
+    size_t request_len,
+    const struct ByteBuf *stdin_buf,
+    char **reply_json,
+    size_t *reply_len
+) {
+    int attempt;
+    int failure = RV_HOOK_FAIL_UNREACHABLE;
+    for (attempt = 0; attempt < 2; attempt++) {
+        int retryable = 0;
+#ifdef __APPLE__
+        failure = xpc_hook_evaluate(
+            request, request_len, stdin_buf->p, stdin_buf->len,
+            reply_json, reply_len, &retryable);
+#else
+        (void)stdin_buf;
+        failure = unix_hook_evaluate(
+            request, request_len, reply_json, reply_len, &retryable);
+#endif
+        if (failure == 0 || !retryable) {
+            break;
+        }
+        if (attempt == 0) {
+            sleep_ms(RV_HOOK_RETRY_DELAY_MS);
+        }
+    }
+    return failure;
+}
 
 int main(int argc, char **argv) {
     const char *host = NULL;
@@ -810,6 +932,7 @@ int main(int argc, char **argv) {
     size_t reply_len = 0;
     char request_id[37];
     struct RvHookReply reply;
+    int failure;
 
     /* Broken output pipes must not terminate RV before its denial path. */
     signal(SIGPIPE, SIG_IGN);
@@ -820,61 +943,50 @@ int main(int argc, char **argv) {
 
     /* Action bytes go only to a verified daemon: Darwin verifies every
      * reply's sender in xpc_exchange, Linux verifies the connected peer
-     * in unix_hook_evaluate (daemon_trust.h). Any verification or
-     * transport failure below fails closed to deny_hook. */
+     * in unix_hook_evaluate (daemon_trust.h). Every failure below exits
+     * through fail_hook with its class: malformed input always denies;
+     * an unavailable, slow, untrusted or skewed daemon renders per
+     * RV_HOOK_WHEN_DOWN (hook_fallback.h). Nothing replays to rv-cli. */
 
     memset(&stdin_buf, 0, sizeof stdin_buf);
     int stdin_read = buf_read_fd_limited(&stdin_buf, STDIN_FILENO, RV_STDIN_XPC_MAX);
     if (stdin_read == BUF_READ_ERROR) {
         buf_free(&stdin_buf);
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_INPUT);
     }
 
     if (stdin_read == BUF_READ_LIMIT) {
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_INPUT);
     }
 
     if (stdin_buf.has_nul
         || stdin_buf.len > RV_STDIN_XPC_MAX
         || !rv_utf8_is_valid(stdin_buf.p, stdin_buf.len))
     {
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_INPUT);
     }
 
     request = build_request(host, stdin_buf.p, stdin_buf.len, &request_len, request_id);
     if (request == NULL) {
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_INPUT);
     }
 
-#ifdef __APPLE__
-    if (xpc_hook_evaluate(
-            request,
-            request_len,
-            stdin_buf.p,
-            stdin_buf.len,
-            &reply_json,
-            &reply_len) != 0) {
-        free(request);
-        deny_hook(host);
-    }
-#else
-    if (unix_hook_evaluate(request, request_len, &reply_json, &reply_len) != 0) {
-        free(request);
-        deny_hook(host);
-    }
-#endif
+    failure = hook_evaluate(request, request_len, &stdin_buf, &reply_json, &reply_len);
     free(request);
+    if (failure != 0) {
+        fail_hook(host, (enum RvHookFailure)failure);
+    }
 
     memset(&reply, 0, sizeof reply);
     if (rv_parse_hook_reply(reply_json, reply_len, &reply) != RV_HOOK_REPLY_OK) {
         free(reply_json);
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_PROTOCOL);
     }
     free(reply_json);
 
     if (!reply.has_id || strcasecmp(reply.id, request_id) != 0) {
         rv_hook_reply_free(&reply);
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_PROTOCOL);
     }
 
     if (rv_should_miss_replay(
@@ -882,13 +994,15 @@ int main(int argc, char **argv) {
             reply.has_service_semver ? reply.service_semver : NULL))
     {
         rv_hook_reply_free(&reply);
-        deny_hook(host);
+        fail_hook(host, RV_HOOK_FAIL_PROTOCOL);
     }
 
     if (write_all(STDOUT_FILENO, reply.stdout_bytes, reply.stdout_len) != 0) {
         rv_hook_reply_free(&reply);
         buf_free(&stdin_buf);
-        deny_hook(host);
+        /* A verdict the host could not receive must never degrade to
+         * allow-mode silence: the always-deny class keeps the deny exit. */
+        fail_hook(host, RV_HOOK_FAIL_INPUT);
     }
     {
         int32_t code = reply.exit_code;

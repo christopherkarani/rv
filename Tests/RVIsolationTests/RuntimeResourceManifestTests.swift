@@ -55,7 +55,7 @@ import Testing
     )
     let manifestA = RuntimeResourceManifest(profileA)
     let manifestB = RuntimeResourceManifest(profileB)
-    defer { manifestA.remove(); manifestB.remove() }
+    defer { _ = manifestA.remove(); _ = manifestB.remove() }
     #expect(manifestA.stage().isSuccess)
     #expect(manifestB.stage().isSuccess)
     let stagedA = manifestA.privateHome + "/.config/selected.auth"
@@ -91,7 +91,7 @@ import Testing
         credentials: [.init(source: alias.path, destination: "auth")]
     )
     let manifest = RuntimeResourceManifest(profile)
-    defer { manifest.remove() }
+    defer { _ = manifest.remove() }
     #expect(manifest.stage().isFailure(.credential(destination: "auth")))
     #expect(FileManager.default.fileExists(atPath: manifest.privateHome) == false)
 }
@@ -116,7 +116,7 @@ import Testing
         ]
     )
     let agent = RuntimeResourceManifest(profile)
-    defer { agent.remove() }
+    defer { _ = agent.remove() }
     #expect(agent.stage(forAgent: "grok").isSuccess)
     #expect(try String(contentsOfFile: agent.privateHome + "/shared.auth", encoding: .utf8)
         == "synthetic-shared")
@@ -124,13 +124,13 @@ import Testing
         == "synthetic-grok")
 
     let other = RuntimeResourceManifest(profile)
-    defer { other.remove() }
+    defer { _ = other.remove() }
     #expect(other.stage(forAgent: "codex").isSuccess)
     #expect(FileManager.default.fileExists(atPath: other.privateHome + "/shared.auth"))
     #expect(FileManager.default.fileExists(atPath: other.privateHome + "/grok.auth") == false)
 
     let shell = RuntimeResourceManifest(profile)
-    defer { shell.remove() }
+    defer { _ = shell.remove() }
     #expect(shell.stage().isSuccess)
     #expect(FileManager.default.fileExists(atPath: shell.privateHome + "/shared.auth"))
     #expect(FileManager.default.fileExists(atPath: shell.privateHome + "/grok.auth") == false)
@@ -142,10 +142,37 @@ import Testing
         executableLinks: [.init(name: "grok", target: "/nonexistent/grok-target")]
     )
     let manifest = RuntimeResourceManifest(profile)
-    defer { manifest.remove() }
+    defer { _ = manifest.remove() }
     #expect(manifest.stage().isFailure(.executableLink(name: "grok")))
     #expect(ResourceStagingError.executableLink(name: "grok").detail == "executable link 'grok'")
     #expect(FileManager.default.fileExists(atPath: manifest.privateHome) == false)
+}
+
+@Test func failedPrivateHomeCleanupIsReportedNotSilent() throws {
+    guard getuid() != 0 else { return }
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-resource-cleanup-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let source = root.appendingPathComponent("synthetic.auth")
+    try Data("synthetic".utf8).write(to: source)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source.path)
+    let profile = RuntimeResourceProfile(
+        id: "cleanup", projects: [root.path],
+        credentials: [.init(source: source.path, destination: ".config/synthetic.auth")]
+    )
+    let manifest = RuntimeResourceManifest(profile)
+    #expect(manifest.stage().isSuccess)
+    let locked = manifest.privateHome + "/.config"
+    // A read-only parent keeps the credential copy from being unlinked.
+    #expect(chmod(locked, 0o500) == 0)
+    #expect(manifest.remove().isFailure(.cleanup))
+    #expect(FileManager.default.fileExists(atPath: locked + "/synthetic.auth"))
+    #expect(chmod(locked, 0o700) == 0)
+    #expect(manifest.remove().isSuccess)
+    #expect(FileManager.default.fileExists(atPath: manifest.privateHome) == false)
+    // Already gone is not a failure: teardown paths may race to remove.
+    #expect(manifest.remove().isSuccess)
 }
 
 private func keychainProfile(
