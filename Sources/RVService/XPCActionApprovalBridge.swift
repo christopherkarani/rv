@@ -4,6 +4,7 @@ import RVDomain
 import RVIPC
 import RVIsolation
 import Synchronization
+import RVXPC
 @preconcurrency import XPC
 
 /// rvd side of the action-approval host RPCs (create / status / consume /
