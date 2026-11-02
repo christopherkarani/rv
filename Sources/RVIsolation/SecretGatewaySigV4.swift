@@ -11,6 +11,7 @@ import RVDomain
 enum AWSSigV4 {
     static let algorithm = "AWS4-HMAC-SHA256"
     static let unsignedPayload = "UNSIGNED-PAYLOAD"
+    static let unsignedTrailerPayload = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
     static let ownedHeaders: Set<String> = [
         "authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256",
     ]
@@ -48,12 +49,13 @@ enum AWSSigV4 {
         /// Raw query, without `?`.
         var query: String?
         var headers: [(name: String, value: String)]
-        /// Hex SHA-256 of the body, or `UNSIGNED-PAYLOAD`.
+        /// Lowercase hex SHA-256 of the body, or `UNSIGNED-PAYLOAD` /
+        /// `STREAMING-UNSIGNED-PAYLOAD-TRAILER` in S3 mode (`doubleEncodePath == false`) only.
         var payloadHash: String
     }
 
     /// Carries the session token and the real access-key id, so it never prints.
-    struct Signed: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    struct Signed: Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
         var canonicalRequest: String
         var stringToSign: String
         var signature: String
@@ -62,17 +64,22 @@ enum AWSSigV4 {
 
         var description: String { "<signed request redacted>" }
         var debugDescription: String { description }
+        var customMirror: Mirror { Mirror(self, children: []) }
     }
 
     static func payloadHash(_ body: [UInt8]) -> String { RVDigest.sha256Hex(body) }
 
-    /// Nil when the path or query cannot be decoded, or a credential is not text.
+    /// Nil when the path or query cannot be decoded, a credential is not text,
+    /// a header name or value holds a control character, `host` is not among
+    /// the headers, or the payload hash is not allowed.
     static func sign(
         _ request: Request, credentials: Credentials, scope: Scope, at date: Date, options: Options
     ) -> Signed? {
         guard let accessKeyID = credentials.accessKeyID.text,
             let uri = canonicalURI(request.path, options: options),
-            let query = canonicalQuery(request.query)
+            let query = canonicalQuery(request.query),
+            validPayloadHash(request.payloadHash, options: options),
+            request.headers.contains(where: { $0.name.lowercased() == "host" })
         else { return nil }
         var tokenHeader: (name: String, value: String)?
         if let sessionToken = credentials.sessionToken {
@@ -84,7 +91,7 @@ enum AWSSigV4 {
         if options.sendPayloadHash { owned.append(("X-Amz-Content-Sha256", request.payloadHash)) }
         let signedInput = request.headers.filter { ownedHeaders.contains($0.name.lowercased()) == false }
             + owned + (options.signSessionToken ? tokenHeader.map { [$0] } ?? [] : [])
-        let (canonicalHeaders, signedHeaders) = canonicalHeaders(signedInput)
+        guard let (canonicalHeaders, signedHeaders) = canonicalHeaders(signedInput) else { return nil }
         let canonicalRequest = [request.method, uri, query, canonicalHeaders, signedHeaders, request.payloadHash]
             .joined(separator: "\n")
         let credentialScope = "\(stamp.date)/\(scope.region)/\(scope.service)/aws4_request"
@@ -114,13 +121,13 @@ enum AWSSigV4 {
     static func canonicalURI(_ path: String, options: Options) -> String? {
         let source = path.isEmpty ? "/" : path
         let normalized = options.normalizePath ? normalize(source) : source
-        if options.doubleEncodePath {
-            return encode(Array(normalized.utf8), keepSlash: true)
-        }
         var segments: [String] = []
         for segment in normalized.split(separator: "/", omittingEmptySubsequences: false) {
             guard let decoded = percentDecode(segment) else { return nil }
             segments.append(encode(decoded, keepSlash: false))
+        }
+        if options.doubleEncodePath {
+            return encode(Array(normalized.utf8), keepSlash: true)
         }
         return segments.joined(separator: "/")
     }
@@ -154,15 +161,29 @@ enum AWSSigV4 {
     }
 
     /// Lowercased names, sorted; repeated names joined with commas in order;
-    /// values trimmed with inner runs of spaces collapsed.
-    static func canonicalHeaders(_ headers: [(name: String, value: String)]) -> (canonical: String, signed: String) {
+    /// values trimmed with inner runs of spaces collapsed. Nil when a name or
+    /// value holds a control character (other than a tab in a value).
+    static func canonicalHeaders(
+        _ headers: [(name: String, value: String)]
+    ) -> (canonical: String, signed: String)? {
         var values: [String: [String]] = [:]
         for header in headers {
+            guard header.name.utf8.allSatisfy({ $0 >= 0x20 && $0 != 0x7F }),
+                header.value.utf8.allSatisfy({ ($0 >= 0x20 && $0 != 0x7F) || $0 == UInt8(ascii: "\t") })
+            else { return nil }
             values[header.name.lowercased(), default: []].append(trimAll(header.value))
         }
         let names = values.keys.sorted()
         let canonical = names.map { "\($0):\(values[$0, default: []].joined(separator: ","))\n" }.joined()
         return (canonical, names.joined(separator: ";"))
+    }
+
+    /// 64 lowercase hex digits, or an unsigned-payload mode when the path is single-encoded (S3).
+    static func validPayloadHash(_ hash: String, options: Options) -> Bool {
+        if hash == unsignedPayload || hash == unsignedTrailerPayload { return options.doubleEncodePath == false }
+        return hash.utf8.count == 64 && hash.utf8.allSatisfy {
+            ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9")) || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+        }
     }
 
     static func trimAll(_ value: String) -> String {
