@@ -7,6 +7,7 @@ import RVHooks
 enum SetupFailureCommand: String {
     case setup
     case uninstall
+    case serviceRestart = "service restart"
 }
 
 /// One launchctl step whose refusal setup/uninstall surfaces.
@@ -17,7 +18,7 @@ enum LaunchctlAction {
 
 /// Closed taxonomy of setup/uninstall failures. Every reachable failure in
 /// `perform` / `uninstall` is one of these cases; `setupFailureOutput` maps
-/// each exhaustively to one stderr line and one exit code. No other site may
+/// each exhaustively to one failure line (plus optional fix lines) and one exit code. No other site may
 /// format these errors.
 ///
 /// Exit codes follow sysexits(3): 65 data error (embedded resource unusable),
@@ -53,6 +54,13 @@ enum SetupError: Error, Equatable, Sendable {
     case ownedPathStillExists
     /// Installed-adapter state could not be determined for an unexpected reason.
     case inspectionFailed
+    /// Setup would load the real supervisor but runs from outside the hook's
+    /// bin dir. Hooks pin `rvd` beside `~/.local/bin/rv`, so only the
+    /// installed copy may wire them. Carries the running binary and the
+    /// installed `rv` to run instead.
+    case notInstalledCopy(running: String, installedRv: String)
+    /// The `rvd` the service must run is missing (or not executable).
+    case rvdMissing(String)
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -63,13 +71,15 @@ enum SetupError: Error, Equatable, Sendable {
 }
 
 /// The single owner of failure output for setup/uninstall. Exhaustive over
-/// `SetupError`; no default arm exists.
+/// `SetupError`; no default arm exists. Errors that leave the install in a
+/// half-working state add a consequence line and a `fix:` line.
 func setupFailureOutput(
     _ error: SetupError,
     command: SetupFailureCommand
 ) -> (stderr: String, exitCode: Int32) {
     let phrase: String
     let exitCode: Int32
+    var detail: [String] = []
     switch error {
     case .ownerAuthenticationRequired:
         phrase = "device-owner authentication required"
@@ -101,6 +111,12 @@ func setupFailureOutput(
     case .launchctlApplyFailed(.bootstrap):
         phrase = "unable to load LaunchAgent"
         exitCode = EX_UNAVAILABLE
+        if command == .setup {
+            detail.append("hooks are wired but rvd is not loaded, so agent tool calls will be denied")
+        }
+        detail.append(
+            "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause"
+        )
     case .launchctlApplyFailed(.bootout):
         phrase = "unable to unload LaunchAgent"
         exitCode = EX_UNAVAILABLE
@@ -119,6 +135,16 @@ func setupFailureOutput(
     case .inspectionFailed:
         phrase = "unable to inspect Host adapters"
         exitCode = EX_SOFTWARE
+    case .notInstalledCopy(let running, let installedRv):
+        phrase = "\(running) is not the installed rv"
+        exitCode = EX_USAGE
+        detail.append("hooks only trust the rvd beside \(installedRv)")
+        detail.append("fix: install this build first (install.sh), then run \(installedRv) setup")
+    case .rvdMissing(let path):
+        phrase = "rvd not found at \(path)"
+        exitCode = EX_UNAVAILABLE
+        detail.append("fix: \(SetupRun.reinstallHint)")
     }
-    return ("rv \(command.rawValue) failed: \(phrase)\n", exitCode)
+    let lines = ["rv \(command.rawValue) failed: \(phrase)"] + detail
+    return (lines.joined(separator: "\n") + "\n", exitCode)
 }

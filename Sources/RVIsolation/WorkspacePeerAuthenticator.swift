@@ -87,9 +87,22 @@ import Security
 /// No environment variable or user-owned file can add a component role.
 /// An administrator installs this manifest and its artifacts under protected paths.
 public struct ProtectedPeerTrustConfiguration: Sendable {
-    struct Entry: Codable, Sendable {
+    struct Entry: Sendable {
         var role: TrustedRVComponentRole
         var requirement: String
+        var requiredIdentifier: String?
+        var requiredTeamIdentifier: String?
+        var developmentCDHash: String?
+        var developmentExecutablePath: String?
+    }
+
+    /// Wire shape before role resolution. `role` stays a string so an entry
+    /// written by a newer RV (a role this build does not know) is skipped
+    /// instead of invalidating the whole manifest. Known roles are then
+    /// validated exactly as before. Mirrors `Sources/rv-c/daemon_trust.c`.
+    private struct WireEntry: Decodable {
+        var role: String
+        var requirement: String?
         var requiredIdentifier: String?
         var requiredTeamIdentifier: String?
         var developmentCDHash: String?
@@ -130,6 +143,9 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
 
     private init(entries: [Entry]) { self.entries = entries }
 
+    /// Roles this configuration can grant, in manifest order.
+    var configuredRoles: [TrustedRVComponentRole] { entries.map(\.role) }
+
     public static func load(from url: URL) throws -> Self {
         guard protectedPath(url.path, file: true) else {
             throw PeerAuthenticationError.invalidTrustConfiguration
@@ -153,8 +169,31 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
             bytes.append(contentsOf: buffer.prefix(n))
             guard bytes.count <= 65_536 else { throw PeerAuthenticationError.invalidTrustConfiguration }
         }
-        guard let entries = try? JSONDecoder().decode([Entry].self, from: bytes),
-              Set(entries.map(\.role)).count == entries.count else {
+        return try parse(bytes)
+    }
+
+    /// Manifest bytes → validated configuration. File ownership, mode and
+    /// ACL checks belong to `load(from:)`; this is the content contract.
+    static func parse(_ bytes: Data) throws -> Self {
+        guard let wire = try? JSONDecoder().decode([WireEntry].self, from: bytes) else {
+            throw PeerAuthenticationError.invalidTrustConfiguration
+        }
+        var entries: [Entry] = []
+        for item in wire {
+            guard let role = TrustedRVComponentRole(rawValue: item.role) else { continue }
+            guard let requirement = item.requirement else {
+                throw PeerAuthenticationError.invalidTrustConfiguration
+            }
+            entries.append(Entry(
+                role: role,
+                requirement: requirement,
+                requiredIdentifier: item.requiredIdentifier,
+                requiredTeamIdentifier: item.requiredTeamIdentifier,
+                developmentCDHash: item.developmentCDHash,
+                developmentExecutablePath: item.developmentExecutablePath
+            ))
+        }
+        guard Set(entries.map(\.role)).count == entries.count else {
             throw PeerAuthenticationError.invalidTrustConfiguration
         }
         for entry in entries {
