@@ -22,6 +22,31 @@ struct PendingApprovalLedgerTests {
         #expect(record.expiresAt == Self.now.addingTimeInterval(60))
     }
 
+    @Test func transitionsChangeOnlyTheLifecycleState() throws {
+        let created = try Self.created()
+        let (resolved, _) = try PendingApprovalLedger.resolve(
+            records: created.records,
+            id: created.record.id,
+            decision: .deny,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now.addingTimeInterval(5)
+        )
+        let original = created.record
+        #expect(resolved.state == .resolved(
+            ApprovalResolution(decision: .deny, resolvedAt: Self.now.addingTimeInterval(5))))
+        #expect(resolved.id == original.id)
+        #expect(resolved.identity == original.identity)
+        #expect(resolved.action == original.action)
+        #expect(resolved.reason == original.reason)
+        #expect(resolved.continuation == original.continuation)
+        #expect(resolved.timeoutPolicy == original.timeoutPolicy)
+        #expect(resolved.createdAt == original.createdAt)
+        #expect(resolved.expiresAt == original.expiresAt)
+        #expect(resolved.subject == original.subject)
+        #expect(resolved.payloadDigest == original.payloadDigest)
+    }
+
     @Test func duplicateResolveIsRejected() throws {
         let created = try Self.created()
         let (resolved, afterResolve) = try PendingApprovalLedger.resolve(

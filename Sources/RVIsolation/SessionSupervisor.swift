@@ -557,7 +557,7 @@ func spawnSeatbeltProcessBody(
         )
     }
     var resourceStageHandedOff = false
-    defer { if !resourceStageHandedOff { request.resources?.remove() } }
+    defer { if !resourceStageHandedOff { request.resources?.removeReportingFailure() } }
     let agentBin = request.legacyAgentIntegration ? AgentBin.installedDirectory() : nil
     let productive =
         request.productive
@@ -1107,7 +1107,7 @@ func watchSeatbeltProcess(
         also: outcome.recordedPIDs.union([live.pid]),
         budget: sessionBudget
     )
-    if dead { live.resources?.remove() }
+    if dead { live.resources?.removeReportingFailure() }
     let mounted: MountedSeatbeltOutcome
     switch seatbeltWatchDisposition(cancelled: outcome.cancelled, leaderDead: dead) {
     case .cancelled:

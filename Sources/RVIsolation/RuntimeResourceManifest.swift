@@ -57,7 +57,7 @@ struct RuntimeResourceManifest: Sendable, Equatable {
             return .failure(.privateHome)
         }
         var complete = false
-        defer { if !complete { remove() } }
+        defer { if !complete { removeReportingFailure() } }
         guard makeDirectory(bin), makeDirectory(tmp) else { return .failure(.privateHome) }
         for link in profile.executableLinks {
             guard let target = posixRealpath(link.target),
@@ -86,8 +86,28 @@ struct RuntimeResourceManifest: Sendable, Equatable {
         return .success(())
     }
 
-    func remove() {
-        try? FileManager.default.removeItem(atPath: privateHome)
+    /// Delete the private home and the credential copies in it. Already
+    /// gone is success: more than one teardown path may remove it. Any
+    /// other failure leaves credential copies on disk and is returned.
+    func remove() -> Result<Void, ResourceStagingError> {
+        guard FileManager.default.fileExists(atPath: privateHome) else { return .success(()) }
+        do {
+            try FileManager.default.removeItem(atPath: privateHome)
+            return .success(())
+        } catch {
+            guard FileManager.default.fileExists(atPath: privateHome) else { return .success(()) }
+            return .failure(.cleanup)
+        }
+    }
+
+    /// `remove` for teardown paths that have no caller to fail: a cleanup
+    /// failure goes to stderr instead of vanishing, since the leftover
+    /// home still holds credential copies.
+    func removeReportingFailure() {
+        guard case .failure(let error) = remove() else { return }
+        FileHandle.standardError.write(Data(
+            "rv: \(error.detail) left credential copies at \(privateHome)\n".utf8
+        ))
     }
 
     /// Read the profile's keychain entries for this launch's agent tag.
@@ -209,6 +229,7 @@ enum ResourceStagingError: Error, Sendable, Equatable {
     case credential(destination: String)
     case writeTree(path: String)
     case keychain(env: String)
+    case cleanup
 
     /// Operator-legible descriptor for the denial path. Link names,
     /// credential destinations, and keychain env vars come from the
@@ -227,6 +248,8 @@ enum ResourceStagingError: Error, Sendable, Equatable {
             "workspace directory '\((path as NSString).lastPathComponent)'"
         case .keychain(let env):
             "keychain '\(env)'"
+        case .cleanup:
+            "private staging cleanup"
         }
     }
 }

@@ -91,10 +91,8 @@ extension SetupEnvironment {
         let supervisor = EvaluateSupervisor.launchd
         let touchLaunchd = loginHome
         let touchSystemd = false
-        // P2-1: inject fileManager via SetupEnvironment consistently.
         let companionPresence: any CompanionPresenceDetecting = FilesystemCompanionPresence(
-            home: home.rawValue,
-            fileManager: fileManager
+            home: home.rawValue
         )
 #endif
         return SetupEnvironment(

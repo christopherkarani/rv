@@ -91,6 +91,12 @@ struct MCPCommandTests {
             host: .cursor, names: [], project: nil, undo: false, rvPath: rv.path, environment: fixture.environment()
         ).get()
         #expect(setup.contains("routed through rv: github"))
+        // The backup holds the pre-import credentials: it goes under the rv config
+        // dir, never beside the (possibly repository-tracked) host file.
+        #expect(setup.contains("previous version kept at \(fixture.home.appendingPathComponent(".config/rv/backups").path)/"))
+        let cursorSiblings = try FileManager.default.contentsOfDirectory(
+            atPath: fixture.home.appendingPathComponent(".cursor").path)
+        #expect(cursorSiblings.contains { $0.contains(".rv-backup-") } == false)
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)

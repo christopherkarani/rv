@@ -101,7 +101,7 @@ check_empty() {
 
 check_value_types() {
   # Reference types (class, actor) outside the allowed edges.
-  #   class  — RVService (XPC/NSObject) and RVWorkspaceTUI/RVOperatorUI
+  #   class  — RVService/RVXPC (XPC/NSObject) and RVWorkspaceTUI/RVOperatorUI
   #            (framework/session adapters).
   #   actor  — RVService, RVPolicy, RVAnalytics, and RVIsolation (LocalExecutor).
   #            Domain/Engine/Packs/Presentation remain value-only.
@@ -120,7 +120,7 @@ check_value_types() {
   local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |internal |private |fileprivate |open |final )*(class|actor) '
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
-    | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
+    | grep -v 'Sources/RVService/' | grep -v 'Sources/RVXPC/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
     | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' | grep -v 'Sources/RVLaya/' \
     | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCPCustodianCore/' \
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
