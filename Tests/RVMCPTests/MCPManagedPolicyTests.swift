@@ -156,6 +156,27 @@ struct MCPManagedPolicyTests {
             resolved.withLock { $0 += 1 }
             return .success(SecretValue("v")!)
         }
+        let oauth = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "AWS_DEV",
+                source: .oauth(OAuthSource(
+                    tokenURL: try #require(URL(string: "https://issuer.example.com/token")), clientID: "c",
+                    refreshToken: SecretKeychainItem(service: "rv.oauth", account: "dev"))),
+                delivery: .gateway(SecretGatewayBinding(
+                    upstream: try #require(URL(string: "https://api.example.com")), baseURLEnv: "API_URL")))
+        ])
+        for name in ["envy", "remote"] {
+            guard case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: oauth, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            else {
+                Issue.record("\(name) was given an OAuth token")
+                continue
+            }
+            #expect(error == .secretUnavailable(
+                server: name, secret: "AWS_DEV",
+                reason: "oauth secrets are spent only by the secret gateway, not by MCP servers"))
+        }
         let reason = "awsProfile secrets are spent only by the secret gateway, not by MCP servers"
         for name in ["envy", "remote"] {
             guard case .failure(let error) = MCPLaunchPlanner.plan(

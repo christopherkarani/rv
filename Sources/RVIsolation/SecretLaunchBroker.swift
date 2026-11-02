@@ -161,10 +161,19 @@ final class SecretLaunchBroker: @unchecked Sendable {
             // Read before the value, so a write in between shows up as a change.
             // Only gateway entries can rotate.
             let marker = definition.delivery == .environment ? nil : resolver.version(definition.source)
-            let value: SecretValue
+            var value: SecretValue
             switch prefetched[index] ?? resolver.resolve(definition.source) {
             case .failure(let error): return fail(.resolution(secret: name, error))
             case .success(let resolved): value = resolved
+            }
+            var expires = definition.expires
+            if case .oauth = definition.source {
+                guard let minted = OAuthAccessToken(value) else {
+                    return fail(.resolution(secret: name, .invalidValue(OAuthAccessToken.unusable)))
+                }
+                value = minted.token
+                expires = [expires, minted.expires].compactMap { $0 }.min()
+                if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
             }
             let fingerprint = fingerprint(value)
             switch definition.delivery {
@@ -181,7 +190,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: binding.placeholderPrefix, value: value,
                     upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
-                    surfaces: binding.surfaces, rules: binding.rules, expires: definition.expires,
+                    surfaces: binding.surfaces, rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: marker), approvals: binding.approvalRules))
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
@@ -272,8 +281,11 @@ final class SecretLaunchBroker: @unchecked Sendable {
         var interval = launched.refresh?.timeInterval
         // Session credentials expire, so an AWS profile is always re-read.
         if case .awsSigV4 = launched.delivery { interval = interval ?? Self.awsRefreshInterval }
-        guard interval != nil || probe != nil else { return nil }
-        return SecretRefreshPolicy(interval: interval, marker: marker, probe: probe) {
+        // An access token is re-minted on the pace of its own lifetime.
+        var followsExpiry = false
+        if case .oauth = launched.source { followsExpiry = true }
+        guard interval != nil || probe != nil || followsExpiry else { return nil }
+        return SecretRefreshPolicy(interval: interval, marker: marker, probe: probe, followsExpiry: followsExpiry) {
             [weak self] in
             guard let self else { return .failure(.providerUnavailable("the workspace secret broker has stopped")) }
             return self.reresolve(launched)
@@ -305,7 +317,13 @@ final class SecretLaunchBroker: @unchecked Sendable {
             break
         }
         return resolver.resolve(current.source).flatMap { value in
+            var value = value
             var expires = current.expires
+            if case .oauth = current.source {
+                guard let minted = OAuthAccessToken(value) else { return .failure(.invalidValue(OAuthAccessToken.unusable)) }
+                value = minted.token
+                expires = [expires, minted.expires].compactMap { $0 }.min()
+            }
             if case .awsSigV4 = current.delivery {
                 guard let credentials = AWSCredentialSet(value) else {
                     return .failure(.invalidValue(AWSSigningBinding.unusableCredentials))

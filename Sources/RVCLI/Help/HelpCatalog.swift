@@ -499,7 +499,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "sources",
-                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile"
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile, oauth"
                 ),
                 HelpRow(
                     name: "aws",
@@ -508,6 +508,14 @@ enum HelpCatalog {
                 HelpRow(
                     name: "aws refusals",
                     description: "Another key id is 403 (misuse); signed-chunk uploads 400 (use UNSIGNED-PAYLOAD); re-read every 5m or refresh, expiring at Expiration"
+                ),
+                HelpRow(
+                    name: "oauth",
+                    description: "oauth source {tokenURL, clientID, refreshToken|clientSecret {service, account}, scope}: gateway only; re-minted on the token's lifetime"
+                ),
+                HelpRow(
+                    name: "oauth recovery",
+                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one"
                 ),
                 HelpRow(
                     name: "approve",

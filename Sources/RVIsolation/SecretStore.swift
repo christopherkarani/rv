@@ -29,6 +29,8 @@ extension SecretSource {
         case .azure(let vault, let name, let version):
             "azure \(vault)/\(name)\(version.map { "@\($0)" } ?? "")"
         case .awsProfile(let profile): "aws profile \(DisplayedText.field(profile))"
+        case .oauth(let oauth):
+            "oauth \(oauth.refreshToken == nil ? "client credentials" : "refresh token") at \(oauth.tokenURL.host ?? "")"
         }
     }
 }
@@ -149,6 +151,12 @@ extension SecretsConfiguration {
                 entry["source"] = ["azure": fields]
             case .awsProfile(let profile):
                 entry["source"] = ["awsProfile": ["profile": profile]]
+            case .oauth(let oauth):
+                var fields: [String: Any] = ["tokenURL": oauth.tokenURL.absoluteString, "clientID": oauth.clientID]
+                if let item = oauth.clientSecret { fields["clientSecret"] = ["service": item.service, "account": item.account] }
+                if let item = oauth.refreshToken { fields["refreshToken"] = ["service": item.service, "account": item.account] }
+                if let scope = oauth.scope { fields["scope"] = scope }
+                entry["source"] = ["oauth": fields]
             }
             func allowList(_ allow: [GatewayAllowance]) -> [Any] {
                 allow.map { allowance -> Any in

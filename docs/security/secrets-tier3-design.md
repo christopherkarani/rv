@@ -312,10 +312,40 @@ used without putting a long-lived token in the gateway.
 
 **Size.** M-L.
 
-**Open questions.**
-- Who runs the initial authorization-code flow? Reuse `rv mcp`'s browser
-  flow, or require a pre-obtained refresh token?
-- Should the refresher run when no runtime is live?
+**Open questions (decided).**
+- No authorization-code flow: the refresh token or client secret is
+  obtained outside rv and stored in the Keychain.
+- The refresher never runs without a live runtime: it runs only on that
+  runtime's gateway requests.
+
+**As built (corrects the proposal above).**
+- *Source shape.* `oauth {tokenURL, clientID, clientSecret?, refreshToken?,
+  scope?}`, with both credentials as Keychain items `{service, account}`.
+  No nested `SecretSource` for the client secret, so organization source
+  rules cannot be bypassed through it. The grant is `refresh_token` when
+  `refreshToken` is set, otherwise `client_credentials`. Only `gateway`
+  delivery is allowed; MCP servers and `audit forward` refuse it.
+- *No separate refresher.* Minting is the resolver; the access token
+  crosses it as `{access_token, expires_at}` and the broker bounds the
+  gateway entry by it, as with AWS credential sets. PR 14's rotation paces
+  it: `SecretRefreshPolicy.followsExpiry` makes the interval half the
+  token's remaining lifetime (floor 15 s), so a refresh starts past
+  half-life and a request waits for one at expiry.
+- *State on disk, not in the Keychain.* `~/.config/rv/secrets-oauth/<key>.json`
+  holds `{recovery, token}`, where `token` is the refresh token's
+  `SecretFingerprinter` HMAC. It is written as `investigate` before every
+  exchange and removed after a clean one, and it blocks only while the
+  item still holds that token, so storing a new one lifts it.
+- *Concurrency.* A `flock` per refresh-token item serializes exchanges.
+  Two brokers make two sequential exchanges, each with the latest stored
+  token, not one: no rotated token is ever resent, which is the property
+  that matters.
+- *Classification refined.* A complete error response issues nothing
+  (RFC 6749 §5.2), so it is `retry` or `fixConfiguration` by code; only no
+  answer after sending, or a 200 without a usable bearer token, is
+  ambiguous and `reauthorize`.
+- *Surface.* No new 502: a request that cannot get a fresh token is refused
+  `refreshFailed` (503), and the refresh audit record carries the recovery.
 
 ---
 

@@ -8,16 +8,26 @@ extension SecretDefinition {
     /// The values a leak scan looks for: the value itself, or for an AWS
     /// profile each credential in it. Nil when an AWS profile's output is
     /// not a usable credential set.
-    /// A value that is not a token (an AWS credential set) is spent only by
-    /// the gateway: MCP servers and `audit forward` headers refuse it.
+    /// A value that is not a lasting token (an AWS credential set, or an
+    /// OAuth token only the gateway keeps fresh) is spent only by the
+    /// gateway: MCP servers and `audit forward` headers refuse it.
     public var gatewayOnly: Bool {
-        if case .awsProfile = source { return true }
-        return false
+        switch source {
+        case .awsProfile, .oauth: true
+        default: false
+        }
     }
 
     public func credentialParts(_ value: SecretValue) -> [SecretValue]? {
+        if case .oauth = source { return OAuthAccessToken(value).map { [$0.token] } }
         guard case .awsSigV4 = delivery else { return [value] }
         return AWSCredentialSet(value)?.values
+    }
+
+    /// Why `credentialParts` returned nil.
+    public var unusableCredentials: String {
+        if case .oauth = source { return OAuthAccessToken.unusable }
+        return AWSSigningBinding.unusableCredentials
     }
 }
 

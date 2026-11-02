@@ -277,6 +277,55 @@ makes the gateway sign instead:
 | `awsKeyMismatch` | 403 | yes | the key id in `Credential=` is not this secret's placeholder, or names a non-AWS secret |
 | `awsSignedStreaming` | 400 | no | `X-Amz-Content-Sha256` is a signed-chunk or event-stream mode (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, `...-TRAILER`, `...-EVENTS`, ECDSA). Each chunk signature chains to the seed signature the gateway replaces. Configure the SDK for unsigned payloads with trailing checksums |
 
+## OAuth tokens
+
+An `oauth` source mints short-lived access tokens at an RFC 6749 token
+endpoint. rv runs no browser flow: obtain the refresh token or client secret
+elsewhere and store it in the Keychain
+(`security add-generic-password -U -s SERVICE -a ACCOUNT -w`).
+
+```json
+"source": {"oauth": {
+  "tokenURL": "https://oauth2.example.com/token",
+  "clientID": "my-client",
+  "clientSecret": {"service": "rv.oauth", "account": "example-client-secret"},
+  "refreshToken": {"service": "rv.oauth", "account": "example-refresh"},
+  "scope": "repo"
+}}
+```
+
+- With `refreshToken`, rv uses the `refresh_token` grant and writes a
+  rotated refresh token back to that item. Without it, rv uses
+  `client_credentials`, which needs `clientSecret`. The client secret is
+  sent in the form body (`client_secret_post`).
+- Only `gateway` delivery spends an `oauth` source. The cage gets a
+  placeholder, and the access token is bound like any gateway value:
+  surfaces, `allow`, `approve`, runtime binding, audit, and scrubbing.
+- A token is minted at launch and again only while the runtime uses it.
+  Past half its lifetime, the next request mints in the background; at
+  expiry, a request waits for a new one. `refresh` caps the interval. A
+  token without `expires_in` is re-minted every 30 minutes.
+- `tokenURL` must be https, and redirects are not followed.
+- Exchanges of one refresh token are serialized across rv processes, by a
+  lock in `~/.config/rv/secrets-oauth`. Before each one, rv records the
+  refresh token's HMAC fingerprint there, never the token.
+- Each failure names a recovery:
+
+  | recovery | when | then |
+  |----------|------|------|
+  | `retry` | no connection; HTTP 5xx or another error code | a later request tries again |
+  | `fixConfiguration` | `invalid_client`, `unauthorized_client`, `invalid_scope`, `unsupported_grant_type`, `invalid_request`, a redirect; `invalid_grant` on client credentials | a later request tries again; fix secrets.json |
+  | `reauthorize` | `invalid_grant`; no answer after the request was sent; a 200 without a usable bearer token; a rotated refresh token rv could not store | that refresh token is never sent again |
+  | `investigate` | rv stopped mid-exchange | that refresh token is never sent again |
+
+  Storing a different refresh token in the item lifts `reauthorize` and
+  `investigate`. rv shows only the issuer's `error` code, filtered, and
+  never its description or body.
+- A request that needs a new token and cannot get one is refused with
+  `refreshFailed` (503), and the `event: refresh` audit record carries the
+  recovery. `rv secrets check` mints once and prints it. `rv secrets scan`
+  looks for the stored refresh token and client secret and never mints.
+
 ## Request approvals
 
 `approve` on `gateway` or `awsSigV4` delivery takes rules in the same

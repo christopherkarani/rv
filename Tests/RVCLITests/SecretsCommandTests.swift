@@ -727,6 +727,50 @@ struct SecretsCommandTests {
         #expect(check.first?.error == "the AWS profile did not return usable credentials")
     }
 
+    @Test func oauthSecretsAreScannedForStoredCredentialsWithoutMintingAndCheckedByMinting() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let refreshToken = "rt-leaked-0000111122223333"
+        try Data("refresh=\(refreshToken)\n".utf8).write(to: work.appendingPathComponent("notes.txt"))
+        let source = OAuthSource(
+            tokenURL: URL(string: "https://issuer.example.com/token")!, clientID: "client-1",
+            clientSecret: SecretKeychainItem(service: "rv.oauth", account: "cs"),
+            refreshToken: SecretKeychainItem(service: "rv.oauth", account: "rt"))
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .oauth(source), delivery: .gateway(SecretGatewayBinding(
+                upstream: URL(string: "https://api.example.com")!, baseURLEnv: "GH_API")))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let minted = Mutex(0)
+        let answer = Mutex(#"{"access_token":"at-1","expires_at":1900000000}"#)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { source in
+            switch source {
+            case .keychain(_, "rt"): return .success(SecretValue(refreshToken)!)
+            case .keychain(_, "cs"): return .success(SecretValue("client-secret-0000111122223333")!)
+            case .oauth:
+                minted.withLock { $0 += 1 }
+                return .success(SecretValue(answer.withLock { $0 })!)
+            default: return .failure(.notFound("unexpected"))
+            }
+        }
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.findings.map(\.secret) == ["GH"])
+        #expect(minted.withLock { $0 } == 0)
+        #expect(try SecretsRun.check(configuration, names: [], environment: environment).get().map(\.ok) == [true])
+        #expect(minted.withLock { $0 } == 1)
+        #expect(SecretsRun.describe(configuration).secrets.map(\.delivery) == ["gateway"])
+
+        answer.withLock { $0 = "not a token" }
+        let check = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(check.map(\.ok) == [false])
+        #expect(check.first?.error == "the token endpoint's answer could not be used")
+    }
+
     private func git(_ work: URL, _ args: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")

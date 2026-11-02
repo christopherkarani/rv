@@ -285,7 +285,7 @@ enum SecretsRun {
             case .success(let value) where secret.credentialParts(value) == nil:
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
-                    error: AWSSigningBinding.unusableCredentials)
+                    error: secret.unusableCredentials)
             case .success(let value):
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: true,
@@ -468,10 +468,20 @@ enum SecretsRun {
                 skipped.append("\(skippedPrefix)\(secret.name): organization policy: \(reason)")
                 continue
             }
+            // Scan for the long-lived credentials; resolving would mint, and rotate, a token.
+            if case .oauth(let oauth) = secret.source {
+                for item in [oauth.refreshToken, oauth.clientSecret].compactMap({ $0 }) {
+                    switch environment.resolver.resolve(.keychain(service: item.service, account: item.account)) {
+                    case .success(let value): values.append((secret.name, value))
+                    case .failure(let error): skipped.append("\(skippedPrefix)\(secret.name): \(error.message)")
+                    }
+                }
+                continue
+            }
             switch environment.resolver.resolve(secret.source) {
             case .success(let value):
                 guard let parts = secret.credentialParts(value) else {
-                    skipped.append("\(skippedPrefix)\(secret.name): \(AWSSigningBinding.unusableCredentials)")
+                    skipped.append("\(skippedPrefix)\(secret.name): \(secret.unusableCredentials)")
                     continue
                 }
                 values += parts.map { (secret.name, $0) }

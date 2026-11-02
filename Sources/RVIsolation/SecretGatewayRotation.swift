@@ -28,15 +28,20 @@ public struct SecretRefreshPolicy: Sendable {
     /// The probe's marker when the launch value was read.
     public var marker: String?
     public var probe: (@Sendable () -> String?)?
+    /// The interval is half the value's remaining lifetime at each resolve
+    /// (capped by `interval`), so a refresh starts past half-life and a
+    /// request waits for one at expiry.
+    public var followsExpiry: Bool
     public var resolve: @Sendable () -> Result<SecretRefreshed, SecretResolutionError>
 
     public init(
         interval: TimeInterval?, marker: String? = nil, probe: (@Sendable () -> String?)? = nil,
-        resolve: @escaping @Sendable () -> Result<SecretRefreshed, SecretResolutionError>
+        followsExpiry: Bool = false, resolve: @escaping @Sendable () -> Result<SecretRefreshed, SecretResolutionError>
     ) {
         self.interval = interval
         self.marker = marker
         self.probe = probe
+        self.followsExpiry = followsExpiry
         self.resolve = resolve
     }
 }
@@ -86,6 +91,21 @@ extension SecretGateway {
     static let historyDepth = 8
     /// The probe is cheap but runs on the request path, so at most this often per entry.
     static let probeSpacing: TimeInterval = 2
+    /// Floor for a lifetime-paced interval, so a nearly spent token is not re-minted per request.
+    static let minimumLifetimeInterval: TimeInterval = 15
+    /// Pace for a lifetime-paced value that came without an expiry.
+    static let unexpiringInterval: TimeInterval = 30 * 60
+
+    /// The refresh interval in force for `entry` now.
+    static func refreshInterval(_ entry: Entry) -> TimeInterval? {
+        guard let refresh = entry.refresh else { return nil }
+        guard refresh.followsExpiry else { return refresh.interval }
+        guard let expires = entry.expires, let resolvedAt = entry.rotation?.resolvedAt else {
+            return refresh.interval ?? unexpiringInterval
+        }
+        let half = max(expires.timeIntervalSince(resolvedAt) / 2, minimumLifetimeInterval)
+        return min(refresh.interval ?? half, half)
+    }
 
     /// Applies rotation and expiry for one request about to use `token`.
     /// Nil lets it through, with the entry's value as current as the policy requires.
@@ -94,7 +114,7 @@ extension SecretGateway {
             refresh(token, restart: true)
         }
         lock.lock()
-        let interval = entries[token]?.refresh?.interval
+        let interval = entries[token].flatMap(Self.refreshInterval)
         let step = interval.flatMap { entries[token]?.rotation?.step(now: now(), interval: $0) } ?? .serve
         lock.unlock()
         switch step {
@@ -109,7 +129,10 @@ extension SecretGateway {
         case .wait:
             refresh(token, restart: false)
             lock.lock()
-            let after = interval.flatMap { entries[token]?.rotation?.step(now: now(), interval: $0) }
+            // A refresh moves a token's expiry, and with it the interval.
+            let after = entries[token].flatMap(Self.refreshInterval).flatMap {
+                entries[token]?.rotation?.step(now: now(), interval: $0)
+            }
             lock.unlock()
             if after == .wait || after == .refuse { return .refreshFailed }
         }

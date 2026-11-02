@@ -283,6 +283,22 @@ struct AuditForwardTests {
             return
         }
         #expect(refused.message == "header secret SIEM: awsProfile secrets are spent only by the secret gateway")
+        let oauth = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "SIEM",
+                source: .oauth(OAuthSource(
+                    tokenURL: try #require(URL(string: "https://issuer.example.com/token")), clientID: "c",
+                    refreshToken: SecretKeychainItem(service: "rv.oauth", account: "siem"))),
+                delivery: .gateway(SecretGatewayBinding(
+                    upstream: try #require(URL(string: "https://siem.example.com")), baseURLEnv: "SIEM_URL")))
+        ])
+        guard case .failure(let refusedOAuth) = AuditForwardRun.resolveHeaders(
+            ["Authorization": "Bearer ${secret:SIEM}"], secrets: { .success(oauth) }, resolver: resolver, policy: nil)
+        else {
+            Issue.record("an OAuth token was minted into a header")
+            return
+        }
+        #expect(refusedOAuth.message == "header secret SIEM: oauth secrets are spent only by the secret gateway")
         #expect(resolved.withLock { $0 } == 0)
     }
 
