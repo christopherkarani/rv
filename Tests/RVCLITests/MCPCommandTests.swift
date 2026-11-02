@@ -5345,6 +5345,37 @@ struct MCPCommandTests {
         #expect(launch.arguments.contains("evil-binary") == false)
     }
 
+    @Test func organizationSecretRefusalsAreAudited() throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"], sandbox: MCPSandboxPolicy(network: false))
+        ]))
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .hostEnvironment(variable: "GH"), delivery: .environment)
+        ])
+        let resolver = SecretResolver { _ in .success(SecretValue("fake-value-do-not-log")!) }
+        for (policy, expected) in [
+            (#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#, "allowEnvironmentDelivery"),
+            (#"{"version":1,"secrets":{"allowedSources":["keychain"]}}"#, "hostEnvironment"),
+        ] {
+            var environment = fixture.environment()
+            environment.managed = .active(ManagedPolicyBundle(
+                policy: try ManagedPolicy.decode(Data(policy.utf8)).get(), sha256: "abc", isSigned: true, directory: "/managed"))
+            let configuration = try MCPRun.configuration(environment).get()
+            let before = fixture.approvalEvents().count
+            let refused = MCPRun.upstreamLaunches(
+                names: ["fs"], configuration: configuration, environment: environment, secrets: secrets, resolver: resolver)
+            #expect(refused.failureMessage?.contains(expected) == true)
+            let events = fixture.approvalEvents()
+            #expect(events.count == before + 1)
+            let event = try #require(events.last)
+            #expect(event.decision == .denied && event.subject == "fs" && event.source == "rv mcp serve")
+            #expect(event.detail == ["server": "fs", "secret": "GH"])
+        }
+        let ledger = (try? String(contentsOf: fixture.config.appendingPathComponent("audit.jsonl"), encoding: .utf8)) ?? ""
+        #expect(ledger.contains("fake-value-do-not-log") == false)
+    }
+
     @Test func launchUsesTheBytesVerifiedDuringTheKeyPrompt() throws {
         let fixture = Fixture()
         try signedConfiguration(fixture, MCPConfiguration(servers: [
