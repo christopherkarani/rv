@@ -80,7 +80,7 @@ enum HostHooksMergeEngine {
         try willMerge?(root)
         var next = stripFingerprinted(from: root, descriptor: descriptor)
         next = insertEntries(into: next, descriptor: descriptor, context: context)
-        let data = try encode(next)
+        let data = SharedConfigJSON.encode(next, preservingLayoutOf: existingData)
         return (data, existingData != data)
     }
 
@@ -102,7 +102,7 @@ enum HostHooksMergeEngine {
         {
             return nil
         }
-        return try encode(stripped)
+        return SharedConfigJSON.encode(stripped, preservingLayoutOf: existingData)
     }
 
     static func locateFingerprintedHooks(
@@ -328,20 +328,9 @@ enum HostHooksMergeEngine {
 
     static func parseRoot(_ data: Data?) throws -> [String: JSONValue] {
         guard let data else { return [:] }
-        guard let value = try? JSONDecoder().decode(JSONValue.self, from: data),
-              let object = value.asObject
-        else {
+        guard let object = SharedConfigJSON.parseObject(data) else {
             throw HostHooksMergeError.unreadable
         }
         return object
-    }
-
-    private static func encode(_ root: [String: JSONValue]) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        guard let data = try? encoder.encode(JSONValue.object(root)) else {
-            throw HostHooksMergeError.unreadable
-        }
-        return data
     }
 }

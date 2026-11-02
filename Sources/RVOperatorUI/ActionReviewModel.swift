@@ -1,8 +1,8 @@
 import Foundation
 import RVIPC
 
-#if canImport(RVService)
-import RVService
+#if canImport(RVXPC)
+import RVXPC
 #endif
 
 /// Test seam over the action-review bridge. Production uses
