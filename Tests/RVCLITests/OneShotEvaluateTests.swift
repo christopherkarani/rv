@@ -28,7 +28,7 @@ struct OneShotEvaluateClientTests {
         #expect(params.clientSemver == ProtocolVersion.serviceSemver)
         #expect(transport.sendCount == 1)
         #expect(transport.helloCount == 0)
-        #expect(transport.lastSendTimeoutMs == 700)
+        #expect(transport.lastSendTimeoutMs == ServiceClient.hookEvaluateTimeoutMs)
     }
 
     @Test func hookEvaluateNilTransport_bothDenyWithoutLocalFallback() async throws {

@@ -297,6 +297,40 @@ struct JudgePortThresholdTests {
         #expect(try judgeLog(home).last?["note"] as? String == "judge-unavailable: x; context: partial")
     }
 
+    @Test("a warming judge fails closed to review on apply and observe, never packs-only")
+    func warmingFailsClosedOnBothPostures() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let door = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .warming))
+        let enforced = await door.gated(
+            .apply, request(judged), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { AllowlistSnapshot(entries: []) },
+            host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
+        )
+        guard case .deny(let deny) = enforced.decision else {
+            Issue.record("warming judge must fail closed on apply, got \(enforced.decision)")
+            return
+        }
+        #expect(deny.ruleID == RuleID(pack: .coreJudge, pattern: "laya-review"))
+        let applyRow = try #require(try judgeLog(home).last)
+        #expect(applyRow["live"] as? String == "deny")
+        #expect(applyRow["note"] as? String == "judge-warming; context: partial")
+
+        let observed = await door.gated(
+            .apply, request(judged), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { AllowlistSnapshot(entries: []) },
+            host: .tty, tool: .bash, inputs: inputs(.observe, home: home)
+        )
+        #expect(observed.outcome == .plain)
+        let observeRow = try #require(try judgeLog(home).last)
+        #expect(observeRow["guard"] as? String == "observe")
+        #expect(observeRow["wouldBe"] as? String == "deny")
+        #expect(observeRow["wouldBeRule"] as? String == RuleID(pack: .coreJudge, pattern: "laya-review").rawValue)
+        #expect(observeRow["note"] as? String == "judge-warming; context: partial")
+    }
+
     @Test("safe lane and missing bundle never consult the judge")
     func judgeSkipped() throws {
         let home = try guardHome(mode: nil)

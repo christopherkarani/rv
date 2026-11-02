@@ -168,7 +168,7 @@ struct FakeXPCUnixSocketTests {
         let reply = try client.sendJSON(methodJSON("doctorSnapshot", [:] as [String: Any]))
         let snap = try #require(nested(reply, ["result", "doctorSnapshot"]))
         #expect(snap["keepAlive"] as? Bool == false)
-        #expect(snap["idleExitSeconds"] as? Int == 300)
+        #expect(snap["idleExitSeconds"] as? Int == IdleWatchdog.defaultSeconds)
         let checks = try #require(snap["checks"] as? [[String: Any]])
         let ids = checks.compactMap { $0["id"] as? String }
         #expect(ids.contains("xpc"))

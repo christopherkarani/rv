@@ -133,6 +133,8 @@ public struct GatedEvaluate: Sendable {
         case .observed(let observed):
             return (observed, effects)
         case .enforced(let enforced):
+            // The row is emitted as a decision; `perform` drops it when the
+            // hook deadline has passed (checked at write time, on the task).
             if let row = Self.denialRow(
                 for: enforced, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now
             ) {
@@ -300,7 +302,9 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
-    /// Gated evaluate with inputs already gathered for this evaluation.
+    /// Gated evaluate. `inputs` is gathered exactly once per evaluation,
+    /// off the cooperative pool together with the evaluation, script check
+    /// and judge (the shell doors pass a live gather; tests pass a value).
     func gated(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
@@ -311,18 +315,19 @@ public struct GatedEvaluate: Sendable {
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
         tool: LedgerTool,
-        inputs: EvaluationInputs
+        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> EvaluationResult {
         let decided = await decide(
             intent, request, cwd: cwd, home: home, grants: grants, now: now,
-            allowlist: allowlist, host: host, tool: tool, inputs: inputs
+            allowlist: allowlist, host: host, tool: tool, inputs: inputs()
         )
         Self.perform(decided.effects, home: home)
         return decided.result
     }
 
     /// Shell-door decision: the verdict plus the writes it asks for, in
-    /// order. Grant spend / preview stays inline here (SEC-003).
+    /// order. Grant spend / preview stays inline here (SEC-003). `inputs`
+    /// is gathered once, inside the offload.
     func decide(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
@@ -333,7 +338,7 @@ public struct GatedEvaluate: Sendable {
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
         tool: LedgerTool,
-        inputs: EvaluationInputs
+        inputs: @autoclosure @escaping @Sendable () -> EvaluationInputs
     ) async -> (result: EvaluationResult, effects: [GatedEffect]) {
         let verb: PolicyVerb
         switch intent {
@@ -342,26 +347,40 @@ public struct GatedEvaluate: Sendable {
         case .apply:
             verb = .apply
         }
-        var effects: [GatedEffect] = []
-        let result = evaluateWithSemantics(
-            request, cwd: cwd, home: home, store: inputs.store, now: now, effects: &effects
-        )
+        let isPeek = verb == .peek
         // Order matters: the script check and the judge run BEFORE the
         // Policy gate, and the gate then sees the final deny exactly
         // once. A judge/script Ask can therefore redeem the grant its
         // approval plants (no infinite Ask loop), and an allow-once
         // grant for a pack deny is never spent on a result the judge
         // would have re-denied afterwards.
+        // The input reads, evaluation and judge steps block (file reads,
+        // model load wait, inference): run them off the cooperative pool.
+        // The Policy gate and every `HookDeadline` check stay here, where
+        // the task-local deadline is bound.
+        // The effects the offloaded steps ask for (exemption audit, judge
+        // log) come back out of the closure, in order, with the result;
+        // the denial row is appended after the Policy gate, here.
+        let (screened, safety, offloaded) = await JudgeOffload.run { [self] in
+            let gathered = inputs()
+            var effects: [GatedEffect] = []
+            let result = evaluateWithSemantics(
+                request, cwd: cwd, home: home, store: gathered.store, now: now, effects: &effects
+            )
+            let screened = posture(
+                result,
+                door: .shell(request, inputs: gathered, isPeek: isPeek),
+                guardMode: gathered.guardMode,
+                cwd: cwd,
+                home: home,
+                now: now,
+                effects: &effects
+            )
+            return (screened, gathered.store.safety, effects)
+        }
+        var effects = offloaded
         let candidate: EvaluationResult
-        switch posture(
-            result,
-            door: .shell(request, inputs: inputs, isPeek: verb == .peek),
-            guardMode: inputs.guardMode,
-            cwd: cwd,
-            home: home,
-            now: now,
-            effects: &effects
-        ) {
+        switch screened {
         case .observed(let observed):
             return (observed, effects)
         case .enforced(let enforced):
@@ -376,6 +395,10 @@ public struct GatedEvaluate: Sendable {
         case .deny:
             if HookAuthorization.policyGateAccess(for: candidate) == .skip {
                 finished = candidate
+            } else if verb == .apply, HookDeadline.permitsSideEffects() == false {
+                // The hook client already gave up: spending the human's
+                // allow-once grant on a reply nobody reads would burn it.
+                finished = candidate
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
@@ -387,12 +410,14 @@ public struct GatedEvaluate: Sendable {
                     grants: grants,
                     now: now,
                     rebaseInProgress: rebasing,
-                    safety: inputs.store.safety,
+                    safety: safety,
                     maskedSegments: Normalize.maskedSegments(of: request.command),
                     invocationPrefix: Normalize.invocationPrefix(of: request.command)
                 )
             }
         }
+        // Emitted unconditionally on apply; `perform` applies the hook
+        // deadline to it at write time, on the task.
         if verb.recordsDenial,
            let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
             effects.append(row)
@@ -560,6 +585,11 @@ public struct GatedEvaluate: Sendable {
                 invocationPrefix: invocationPrefix
             ).result
         case .apply:
+            // The claim runs inside the grant table, atomically with the
+            // spend: past the deadline the grant stays live for the retry,
+            // and a grant spent in time keeps its allow even if the
+            // deadline passes during the remaining steps.
+            let deadline = HookDeadline.current
             return await PolicyGate.consumingGrant(
                 for: result,
                 cwd: cwd,
@@ -569,7 +599,8 @@ public struct GatedEvaluate: Sendable {
                 rebaseInProgress: rebaseInProgress,
                 safety: safety,
                 maskedSegments: maskedSegments,
-                invocationPrefix: invocationPrefix
+                invocationPrefix: invocationPrefix,
+                claim: { deadline?.claimGrantSpend() ?? true }
             ).result
         }
     }
@@ -774,6 +805,14 @@ public struct GatedEvaluate: Sendable {
 
     /// The shell: applies one evaluation's effects in order. Missing home
     /// has no config directory, so nothing is written.
+    ///
+    /// A denial row is written only while the task's bound `HookDeadline`
+    /// permits side effects: past it the hook client has given up, so the
+    /// row would record a block for a reply nobody read. The check runs
+    /// here, at write time; `HookDeadline.current` is task-local, so call
+    /// `perform` on the evaluating task, never inside `JudgeOffload.run`
+    /// (the agent door, which runs there, emits no denial rows). The
+    /// exemption audit and judge log are not deadline-gated.
     static func perform(_ effects: [GatedEffect], home: HomeDirectory?) {
         guard let home else { return }
         for effect in effects {
@@ -783,6 +822,7 @@ public struct GatedEvaluate: Sendable {
             case .judgeLog(let row):
                 JudgeRuntime.appendLog(row, home: home)
             case .denialRow(let row):
+                guard HookDeadline.permitsSideEffects() else { continue }
                 recordDenial(row, home: home)
             }
         }
