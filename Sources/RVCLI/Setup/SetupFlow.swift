@@ -101,8 +101,7 @@ extension SetupEnvironment {
             home: home,
             pathEntries: pathEntries,
             rvPath: resolveRv(home: home.rawValue),
-            rvdPath: resolveRvd(nextTo: executable?.path, home: home.rawValue, fileManager: fileManager)
-                ?? (home.rawValue + "/.local/bin/rvd"),
+            rvdPath: resolveRvd(home: home.rawValue),
             fileManager: fileManager,
             launchctl: ProcessLaunchctl(),
             systemctl: ProcessSystemctl(),
@@ -110,7 +109,8 @@ extension SetupEnvironment {
             touchSystemd: touchSystemd,
             supervisor: supervisor,
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment),
-            companionPresence: companionPresence
+            companionPresence: companionPresence,
+            runningExecutable: executable?.path
         )
     }
 }

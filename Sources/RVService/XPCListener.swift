@@ -216,6 +216,13 @@ final class XPCPeerSession: Sendable {
         guard type == XPC_TYPE_DICTIONARY else {
             return nil
         }
+        // Admission is synchronous and shares the idle-exit lock: once rvd
+        // decided to exit (idle or replaced binary), the message is dropped
+        // and the client reconnects to the relaunched daemon.
+        let receivedAt = ContinuousClock.now
+        guard watchdog.beginRequest() else {
+            return nil
+        }
         // The message's audit-token-backed SecCode is captured synchronously.
         // A payload PID, host label or later connection lookup cannot replace it.
         let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
@@ -230,8 +237,10 @@ final class XPCPeerSession: Sendable {
         beginTransaction()
         let held = XPCHeld(event)
         return Task {
-            defer { self.endTransaction() }
-            await self.watchdog.ping()
+            defer {
+                self.endTransaction()
+                self.watchdog.endRequest()
+            }
             let message = held.object
             let incoming = XPCIPCWire.body(from: message)
             let stdinOverlay = XPCIPCWire.stdin(from: message)
@@ -267,7 +276,8 @@ final class XPCPeerSession: Sendable {
                     incoming,
                     handshakeOK: accepted,
                     stdinOverlay: stdinOverlay,
-                    context: context
+                    context: context,
+                    receivedAt: receivedAt
                 )
             } else {
                 let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
