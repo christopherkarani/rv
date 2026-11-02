@@ -134,6 +134,42 @@ struct MCPManagedPolicyTests {
         #expect(resolved.withLock { $0 } == 1)
     }
 
+    @Test func gatewayOnlySecretsAreRefusedToEveryServerBeforeResolving() throws {
+        let configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(
+                name: "envy", command: "e", secrets: ["TOKEN": "AWS_DEV"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "remote",
+                remote: MCPRemoteServer(
+                    url: try #require(URL(string: "https://mcp.example.com/mcp")),
+                    headers: ["Authorization": "Bearer ${secret:AWS_DEV}"])),
+        ])
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "AWS_DEV", source: .awsProfile(profile: "dev"),
+                delivery: .awsSigV4(AWSSigningBinding(
+                    upstream: try #require(URL(string: "https://s3.us-east-1.amazonaws.com")), region: "us-east-1",
+                    service: "s3", endpointEnv: "AWS_ENDPOINT_URL_S3")))
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("v")!)
+        }
+        let reason = "awsProfile secrets are spent only by the secret gateway, not by MCP servers"
+        for name in ["envy", "remote"] {
+            guard case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            else {
+                Issue.record("\(name) was given an AWS credential set")
+                continue
+            }
+            #expect(error == .secretUnavailable(server: name, secret: "AWS_DEV", reason: reason))
+        }
+        #expect(resolved.withLock { $0 } == 0)
+    }
+
     @Test func organizationThresholdsUseTheExactIntegerSpelling() throws {
         func decide(_ op: String, _ threshold: String, _ amount: String) throws -> MCPToolDecision {
             var configuration = MCPConfiguration(defaultDecision: .allow, servers: [

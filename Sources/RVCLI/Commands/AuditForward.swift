@@ -239,6 +239,10 @@ enum AuditForwardRun {
             if let reason = SecretOrganizationRules.violation(secret, policy: policy) {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)): organization policy: \(reason)"))
             }
+            if secret.gatewayOnly {
+                return .failure(CommandFailure(
+                    "header secret \(DisplayedText.field(name)): \(secret.source.kind) secrets are spent only by the secret gateway"))
+            }
             switch resolver.resolve(secret.source) {
             case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
             case .success(let value):

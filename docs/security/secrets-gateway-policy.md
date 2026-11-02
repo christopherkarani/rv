@@ -264,6 +264,9 @@ makes the gateway sign instead:
   `Expiration`.
 - Responses are scrubbed of each generation's key id, secret key, and session
   token; each becomes the placeholder. S3 error bodies echo the key id.
+- The credential set is spent only by the gateway. An MCP server or an
+  `audit forward` header that names an `awsProfile` secret is refused
+  before the profile is read.
 - Limit: `allow` matches the method and path only. Signed headers such as
   `x-amz-copy-source` name other resources, so a `PUT` allowed on
   `/my-bucket/*` can still copy from a bucket the rules do not list. Scope
