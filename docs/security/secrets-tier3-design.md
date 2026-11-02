@@ -85,7 +85,12 @@ the cage.
   4. Sign for the upstream host.
 
   This replaces lines `:387-401` for that kind only.
-- **Emulated container-credentials endpoint.** The gateway serves
+- **Emulated container-credentials endpoint.** *Deferred (2026-11-02).*
+  As built, the lease stages `AWS_ACCESS_KEY_ID` (the placeholder), a
+  throwaway `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `endpointEnv`. SDKs
+  read environment keys before container credentials, so an endpoint staged
+  beside them would never be called. Environment keys also work for
+  non-SDK tools (`curl --aws-sigv4`). The original proposal follows. The gateway serves
   `GET /aws/creds/<NAME>`. The lease stages:
   - `AWS_CONTAINER_CREDENTIALS_FULL_URI=http://127.0.0.1:P/aws/creds/<NAME>`;
   - `AWS_CONTAINER_AUTHORIZATION_TOKEN=<placeholder>`;
