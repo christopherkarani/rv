@@ -50,6 +50,22 @@ import Testing
     #expect(optedIn.contains("\(home)/.ssh"))
 }
 
+@Test func rvConfigCatalogRuleDoesNotDenyTheCagesOwnDeveloperHome() throws {
+    // The hook catalog guards ~/.config/rv, but the cage's own home, cache
+    // and tmp live under ~/.config/rv/workspaces. Projecting that rule into
+    // Seatbelt would deny the session its own files, and the PATH veto
+    // would reject the developer-home bin.
+    let home = "/Users/operator"
+    let workspaces = try #require(WorkspaceDeveloperHome.workspacesBase(hostHome: home))
+    let denies = ContainedSensitivePaths.denyPaths(hostHome: home, excluding: [])
+    #expect(denies.allSatisfy { workspaces.hasPrefix($0 + "/") == false && workspaces != $0 })
+    #expect(
+        ContainedSensitivePaths.isSensitivePATHEntry(workspaces + "/ws-1/bin", hostHome: home) == false
+    )
+    // The rest of the catalog still projects.
+    #expect(denies.contains("\(home)/.ssh"))
+}
+
 @Test func defaultStagingCreatesNoCredentialLinks() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-cred-closed-\(UUID().uuidString)", isDirectory: true)

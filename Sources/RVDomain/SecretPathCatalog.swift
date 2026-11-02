@@ -122,6 +122,9 @@ private let dayOneRules: [SecretPathRule] = [
     dayOneRule("host-hermes-auth", .hostAuth([".hermes", "auth.json"]), .host),
     dayOneRule("host-openclaw-auth", .hostAuth([".openclaw", "credentials"]), .host),
     dayOneRule("host-antigravity-auth", .hostAuth([".gemini", "oauth_creds.json"]), .host),
+    // rv's own config dir (policy, HMAC keys, packs, models): an agent must
+    // not read or rewrite the policy that guards it.
+    dayOneRule("home-rv-config", .homeSuffix([".config", "rv"]), .credentials),
 ]
 
 // Matching helpers live in SecretPathMatching.swift — single matcher for catalog and policy.

@@ -457,119 +457,107 @@ public final class EgressProxy: @unchecked Sendable {
         }
     }
 
+    /// Shell around the pure admission ladder: parse, gather the effectful
+    /// inputs as values, decide, then execute the verdict.
     private func serveRequest(client: Int32, header: String, leftover: [UInt8]) {
-        if let target = EgressProxy.parseCONNECT(header: header) {
-            // Authenticate before the binary gate: an unauthenticated
-            // caller must not trigger per-request rehashing (up to the
-            // 256 MiB bound on the mismatch path) or learn binary state
-            // from a 403-vs-407 distinction.
-            guard
-                let effective = authenticatedPolicy(
-                    header: header, host: target.host, port: target.port, client: client
-                )
-            else {
-                return
-            }
-            if let gate = binaryGate() {
-                deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
-                return
-            }
-            let external = effective.allows(host: target.host, port: target.port)
-                || supplementAdmits(host: target.host, port: target.port)
-            let loopback = effective.allowsLoopbackTarget(host: target.host, port: target.port)
-            guard external || loopback else {
-                deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
-                return
-            }
-            // A credentialed allowlist proxy (the per-server MCP sandbox
-            // shape) binds each external TLS tunnel to the origin it
-            // dials: a CONNECT to an allowed host on the TLS port must
-            // carry a ClientHello whose SNI is that host, so a co-hosted
-            // tenant on the same address is not reachable through it. The
-            // 200 goes first (clients wait for it before starting TLS),
-            // then the first record is read and checked before dialing.
-            // Generic public-HTTPS grants keep dial-first semantics, and
-            // port-80 tunnels stay plaintext-shaped, as in open mode.
-            var hello = leftover
-            var established = false
-            if grants != nil, external, target.port == EgressHostPolicy.httpsPort, effective.mode == .allowlist {
-                guard EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8)) else {
-                    close(client)
-                    return
-                }
-                established = true
-                guard let first = EgressProxy.readClientHello(client: client, initial: leftover),
-                    let serverName = EgressProxy.tlsServerName(first),
-                    EgressProxy.dnsNamesMatch(serverName, target.host)
-                else {
-                    close(client)
-                    record(EgressProxyDenial(host: target.host, port: target.port, reason: .sniMismatch, recordedAt: Date()))
-                    return
-                }
-                hello = first
-            }
-            guard
-                let upstream = dialUpstream(
-                    host: target.host,
-                    port: target.port,
-                    external: external,
-                    client: client,
-                    established: established
-                )
-            else {
-                return
-            }
-            EgressProxy.suppressSIGPIPE(upstream)
-            guard (established || EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8))),
-                hello.isEmpty || EgressProxy.writeAll(upstream, bytes: hello)
-            else {
-                close(client)
-                close(upstream)
-                return
-            }
-            EgressProxy.setTimeout(client, seconds: 0)
-            EgressProxy.setTimeout(upstream, seconds: 0)
-            relay(client: client, upstream: upstream)
-            return
-        }
-        guard let target = EgressProxy.parseAbsoluteHTTP(header: header) else {
+        let shape: EgressRequestShape
+        let target: EgressTarget
+        if let parsed = EgressProxy.parseCONNECT(header: header) {
+            shape = .connect
+            target = EgressTarget(host: parsed.host, port: parsed.port)
+        } else if let parsed = EgressProxy.parseAbsoluteHTTP(header: header) {
+            // Absolute-URI is the plaintext shape: loopback gateways and
+            // servers (the cage reaches loopback directly, so relaying grants
+            // no new capability) plus public port-80 traffic under the same
+            // policy and public-unicast dial filter as CONNECT. Tunneling
+            // plaintext grants no capability that tunneling TLS does not.
+            shape = .absoluteHTTP
+            target = EgressTarget(host: parsed.host, port: parsed.port)
+        } else {
             deny(client: client, host: "", port: 0, reason: .malformed)
             return
         }
-        // Absolute-URI is the plaintext shape: loopback gateways and
-        // servers (the cage reaches loopback directly, so relaying grants
-        // no new capability) plus public port-80 traffic under the same
-        // policy and public-unicast dial filter as CONNECT. Tunneling
-        // plaintext grants no capability that tunneling TLS does not.
-        // Authenticate first, mirroring the CONNECT branch.
+        let credential = admissionCredential(header: header)
+        // Authenticate before the binary gate: an unauthenticated caller
+        // must not trigger per-request rehashing (up to the 256 MiB bound
+        // on the mismatch path) or learn binary state from a 403-vs-407
+        // distinction. The gate is only evaluated for authenticated callers.
+        let binaryGateDenial: EgressBinaryGateDenial?
+        if case .rejected = credential {
+            binaryGateDenial = nil
+        } else {
+            binaryGateDenial = binaryGate()
+        }
+        let verdict = EgressAdmission.decide(
+            target: target,
+            shape: shape,
+            credential: credential,
+            binaryGateDenial: binaryGateDenial,
+            supplementAllows: supplementAdmits(host: target.host, port: target.port)
+        )
+        switch verdict {
+        case .deny(.deniedCredential, _):
+            denyProxyAuthRequired(client: client, host: target.host, port: target.port)
+        case .deny(let reason, let binaryPath):
+            deny(client: client, host: target.host, port: target.port, reason: reason, binaryPath: binaryPath)
+        case .tunnel(let external, let requireSNI):
+            tunnel(client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI)
+        case .forward(let external):
+            forward(client: client, header: header, target: target, leftover: leftover, external: external)
+        }
+    }
+
+    /// Executes an admitted CONNECT.
+    private func tunnel(client: Int32, target: EgressTarget, leftover: [UInt8], external: Bool, requireSNI: Bool) {
+        // A `requireSNI` tunnel (credentialed allowlist, external, TLS port)
+        // is bound to the origin it dials: the ClientHello's SNI must be
+        // that host, so a co-hosted tenant on the same address is not
+        // reachable through it. The 200 goes first (clients wait for it
+        // before starting TLS), then the first record is read and checked
+        // before dialing.
+        var hello = leftover
+        var established = false
+        if requireSNI {
+            guard EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8)) else {
+                close(client)
+                return
+            }
+            established = true
+            guard let first = EgressProxy.readClientHello(client: client, initial: leftover),
+                EgressAdmission.checkSNI(expectedHost: target.host, serverName: EgressProxy.tlsServerName(first)) == nil
+            else {
+                close(client)
+                record(EgressProxyDenial(host: target.host, port: target.port, reason: .sniMismatch, recordedAt: Date()))
+                return
+            }
+            hello = first
+        }
         guard
-            let effective = authenticatedPolicy(
-                header: header, host: target.host, port: target.port, client: client
+            let upstream = dialUpstream(
+                host: target.host,
+                port: target.port,
+                external: external,
+                client: client,
+                established: established
             )
         else {
             return
         }
-        if let gate = binaryGate() {
-            deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
+        EgressProxy.suppressSIGPIPE(upstream)
+        guard (established || EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8))),
+            hello.isEmpty || EgressProxy.writeAll(upstream, bytes: hello)
+        else {
+            close(client)
+            close(upstream)
             return
         }
-        // A credentialed proxy never speaks plaintext absolute-URI to the
-        // TLS port of an allowed host: the per-server sandbox allowlist is
-        // port 443, so that shape could only smuggle cleartext where the
-        // grant meant TLS. Port-80 absolute-URI is unaffected.
-        if grants != nil, target.port == EgressHostPolicy.httpsPort,
-            effective.allows(host: target.host, port: target.port)
-        {
-            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
-            return
-        }
-        let external = effective.allows(host: target.host, port: target.port)
-            || supplementAdmits(host: target.host, port: target.port)
-        let loopback = effective.allowsLoopbackTarget(host: target.host, port: target.port)
-        guard external || loopback else {
-            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
-            return
-        }
+        EgressProxy.setTimeout(client, seconds: 0)
+        EgressProxy.setTimeout(upstream, seconds: 0)
+        relay(client: client, upstream: upstream)
+    }
+
+    /// Executes an admitted absolute-URI request.
+    private func forward(client: Int32, header: String, target: EgressTarget, leftover: [UInt8], external: Bool) {
         guard
             let upstream = dialUpstream(
                 host: target.host,
@@ -621,19 +609,19 @@ public final class EgressProxy: @unchecked Sendable {
     /// and admits the creating request (OpenShell `verify_or_cache`
     /// compare/update shape:
     /// https://raw.githubusercontent.com/NVIDIA/OpenShell/f88aecfd92e02cb1b5388041f09930d78065979a/crates/navigator-sandbox/src/identity.rs).
-    private func binaryGate() -> (reason: EgressDenialReason, binaryPath: String?)? {
+    private func binaryGate() -> EgressBinaryGateDenial? {
         guard binaryPolicy.isBinaryScoped else { return nil }
         guard let attribution else {
-            return (.unattributedPeer, nil)
+            return EgressBinaryGateDenial(reason: .unattributedPeer, binaryPath: nil)
         }
         guard binaryPolicy.match(forBinaryPath: attribution.binaryPath) != nil else {
-            return (.binaryMismatch, attribution.binaryPath)
+            return EgressBinaryGateDenial(reason: .binaryMismatch, binaryPath: attribution.binaryPath)
         }
         switch pins.verifyAdmitted(canonicalPath: attribution.binaryPath) {
         case .pinned, .match:
             return nil
         case .mismatch, .unreadable:
-            return (.binaryMismatch, attribution.binaryPath)
+            return EgressBinaryGateDenial(reason: .binaryMismatch, binaryPath: attribution.binaryPath)
         }
     }
 
@@ -674,20 +662,17 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     /// Policy judging this request: the shared policy in open mode, or the
-    /// presenting credential's grant in credentialed mode. Denies with 407
-    /// and returns nil when credentialed mode cannot authenticate the
-    /// request. The presented token is never logged.
-    private func authenticatedPolicy(header: String, host: String, port: Int, client: Int32)
-        -> EgressHostPolicy?
-    {
-        guard let grants else { return policy }
+    /// presenting credential's grant in credentialed mode; `.rejected` when
+    /// credentialed mode cannot authenticate the request (the verdict then
+    /// answers 407). The presented token is never logged.
+    private func admissionCredential(header: String) -> EgressAdmissionCredential {
+        guard let grants else { return .open(policy) }
         guard let token = Self.proxyCredentialToken(header: header),
             let grant = grants[EgressProxyCredential(rawValue: token)]
         else {
-            denyProxyAuthRequired(client: client, host: host, port: port)
-            return nil
+            return .rejected
         }
-        return grant.policy
+        return .granted(grant.policy)
     }
 
     private func denyProxyAuthRequired(client: Int32, host: String, port: Int) {
