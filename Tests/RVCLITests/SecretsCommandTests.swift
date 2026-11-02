@@ -692,6 +692,33 @@ struct SecretsCommandTests {
         #expect(resolved.withLock { $0 } == 0)
     }
 
+    @Test func scanAndHookRunStillResolveEnvironmentDeliveredSecretsWhenOnlyTheDeliveryRuleIsSet() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-delivery-rule")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "HOST_TOKEN", source: .hostEnvironment(variable: "HOST_TOKEN"), delivery: .environment)
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let value = "policy-value-12345678"
+        try Data("token=\(value)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
+        try git(work, ["add", "leak.txt"])
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in .success(SecretValue(value)!) }
+        environment.managed = .active(ManagedPolicyBundle(
+            policy: try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#.utf8)).get(),
+            sha256: "abc", isSigned: true, directory: "/managed"))
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.skipped.isEmpty, "scan resolves host-side; the delivery rule does not apply")
+        #expect(report.findings.map(\.secret) == ["HOST_TOKEN"])
+        let hook = try SecretsRun.hookRun(workTree: work, environment: environment).get()
+        #expect(hook.text.contains("could not check") == false)
+        #expect(hook.failed, "a staged real value must still block the commit")
+    }
+
     private func git(_ work: URL, _ args: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")

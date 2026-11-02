@@ -600,15 +600,18 @@ Each line was re-verified against the current tree.
      gateway-side and are not affected.
    - `rv mcp serve` writes a `denied` audit event naming only the server and
      the secret for this refusal and for the `allowedSources` refusal.
-2. **`scan`, `hook run`, and `audit forward` skip managed-policy checks.**
-   - Both `SecretsRun.scan` (`Sources/RVCLI/Commands/SecretsCommand.swift:303-315`)
-     and `SecretsRun.hookRun` (`:409-422`) resolve every configured secret
-     with no `SecretOrganizationRules` check.
-   - `AuditForwardRun.resolveHeaders` (`Sources/RVCLI/Commands/AuditForward.swift:210-238`)
-     resolves `${secret:NAME}` with no policy check.
-   - An invalid policy is ignored entirely when `--to` is passed (`:305`).
-   - **Fix:** route all three through `SecretOrganizationRules.violation`,
-     and fail on an invalid policy. **S.**
+2. **`scan`, `hook run`, and `audit forward` skipped managed-policy checks. Resolved by #482.**
+   - `SecretsRun.scan`, `SecretsRun.hookRun`, and
+     `AuditForwardRun.resolveHeaders` now check the organization's
+     `allowedSources` rule through `SecretOrganizationRules.sourceViolation`
+     before a secret is read. A forbidden secret is reported as skipped (scan,
+     hook run) or fails the run (audit forward headers).
+   - Only the source rule applies. These paths resolve on the host and deliver
+     nothing into a cage, so `allowEnvironmentDelivery: false` does not skip
+     scanning an environment-delivered secret or break a forwarded header. This
+     mirrors the remote MCP header exemption in `MCPGatewayRuntime.resolve`.
+   - An invalid policy fails `scan`, `hook run`, and `audit forward`, with or
+     without `--to`.
 3. **Keychain items lack access control.**
    - `rv secrets set` adds items with only
      `kSecAttrAccessibleWhenUnlocked` (`Sources/RVIsolation/SecretStore.swift:78`).

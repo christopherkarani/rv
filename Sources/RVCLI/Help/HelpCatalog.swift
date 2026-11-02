@@ -419,7 +419,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest (OCSF 1.3.0 with --format ocsf)"),
                 HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
-                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
+                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward; fails if the org policy is invalid"),
                 HelpRow(name: "--install", description: "macOS LaunchAgent every 5 min; prints a LaunchDaemon template for root"),
                 HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it (unkeyed: anchoring needs the forwarded head)"),
                 HelpRow(name: "verify", description: "Finds edits, deletions, and reordering that did not recompute the chain; exit 1 at the first break"),
