@@ -100,7 +100,8 @@ private func expandSegment(_ text: String, depth: Int) -> [String] {
     guard depth < maxSegmentDepth else { return pieces }
     var out: [String] = []
     out.reserveCapacity(pieces.count * 2)
-    for piece in pieces {
+    for rawPiece in pieces {
+        let piece = stripLeadingReservedWords(rawPiece)
         if let peeled = peelGrouping(piece) {
             out.append(contentsOf: expandSegment(peeled, depth: depth + 1))
         } else {
@@ -497,4 +498,22 @@ private func matchBacktick(
         index += 1
     }
     return nil
+}
+
+/// Shell reserved words that introduce a command without being one
+/// (`then rm -r ~`, `! rm -r ~`). The real command is the remainder.
+private let leadingReservedWords: Set<String> = [
+    "if", "then", "else", "elif", "while", "until", "do", "!",
+]
+
+func stripLeadingReservedWords(_ piece: String) -> String {
+    var rest = Substring(piece)
+    while true {
+        let trimmed = rest.drop { $0 == " " || $0 == "\t" }
+        let word = trimmed.prefix { $0 != " " && $0 != "\t" }
+        guard leadingReservedWords.contains(String(word)) else { return String(rest) }
+        let remainder = trimmed.dropFirst(word.count)
+        guard remainder.isEmpty == false else { return String(rest) }
+        rest = remainder.drop { $0 == " " || $0 == "\t" }
+    }
 }
