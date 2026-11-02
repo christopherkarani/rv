@@ -434,7 +434,12 @@ struct MCPHostSetupTests {
         let target = try box.write("dotfiles/mcp.json", "{}")
         let link = box.home.appendingPathComponent("link.json")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-        #expect(MCPHostSetup.writePreservingMode(Data("[]".utf8), to: link) == false)
+        var backups: [String] = []
+        #expect(MCPHostSetup.writePreservingMode(
+            Data("[]".utf8), to: link,
+            backupDirectory: MCPHostSetup.backupDirectory(box.config), backups: &backups
+        ) == false)
+        #expect(backups.isEmpty)
         #expect(isSymbolicLink(link))
         #expect(try String(contentsOf: target, encoding: .utf8) == "{}")
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: box.home.path)
