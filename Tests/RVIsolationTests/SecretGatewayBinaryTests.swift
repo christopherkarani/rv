@@ -54,17 +54,17 @@ struct SecretGatewayBinaryTests {
     }
 
     private func pin(_ path: String) throws -> GatewayBinaryPin {
-        try #require(GatewayBinaryPin.pin(path))
+        try GatewayBinaryPin.pin(path).get()
     }
 
     @Test func theDecoderRoundTripsBinariesAndRefusesBadLists() throws {
-        let decoded = try SecretsConfiguration.decode(Data(Self.json(binaries: #"["/usr/bin/git","/opt/gh"]"#).utf8))
+        let decoded = try SecretsConfiguration.decode(Data(Self.json(binaries: #"["/opt/homebrew/bin/gh","/opt/gh"]"#).utf8))
             .get()
-        #expect(decoded.secret(named: "GH")?.binaries == ["/usr/bin/git", "/opt/gh"])
+        #expect(decoded.secret(named: "GH")?.binaries == ["/opt/homebrew/bin/gh", "/opt/gh"])
         #expect(try SecretsConfiguration.decode(decoded.encoded()).get() == decoded)
         let refused = [
             #"[]"#, #"["git"]"#, #"["/usr/bin/../bin/git"]"#, #"["/usr/./git"]"#, #"["/a","/a"]"#,
-            #"["/usr/bin/git\n"]"#, #""/usr/bin/git""#,
+            #"["/opt/gh\n"]"#, #""/opt/gh""#,
         ]
         for binaries in refused {
             guard case .failure(let error) = SecretsConfiguration.decode(Data(Self.json(binaries: binaries).utf8))
@@ -74,12 +74,18 @@ struct SecretGatewayBinaryTests {
             }
             #expect(error.message.contains("GH.binaries"))
         }
-        let environment = Self.json(binaries: #"["/usr/bin/git"]"#, delivery: #"{"environment":{}}"#)
+        let environment = Self.json(binaries: #"["/opt/homebrew/bin/gh"]"#, delivery: #"{"environment":{}}"#)
         guard case .failure(let error) = SecretsConfiguration.decode(Data(environment.utf8)) else {
             Issue.record("binaries accepted with environment delivery")
             return
         }
         #expect(error.message.contains("applies to gateway delivery"))
+        guard case .failure(let listError) = SecretsConfiguration.decode(Data(Self.json(binaries: "[]").utf8)) else {
+            Issue.record("an empty binaries list was accepted")
+            return
+        }
+        #expect(listError.message.contains("/opt/homebrew/bin/gh"))
+        #expect(listError.message.contains("/usr/bin/git") == false)
     }
 
     @Test func aPinFollowsSymlinksAndBreaksWhenTheFileIsReplacedOrRewritten() throws {
@@ -118,8 +124,70 @@ struct SecretGatewayBinaryTests {
         #expect(rename(swap, real) == 0)
         #expect(fresh.matches(real) == false)
 
-        #expect(GatewayBinaryPin.pin(directory.path) == nil)
-        #expect(GatewayBinaryPin.pin(directory.appendingPathComponent("absent").path) == nil)
+        #expect(GatewayBinaryPin.pin(directory.path) == .failure(.notAFile))
+        #expect(GatewayBinaryPin.pin(directory.appendingPathComponent("absent").path) == .failure(.notAFile))
+    }
+
+    /// The kernel reports a script's interpreter, never the script, so a
+    /// pinned script would 403 every request.
+    @Test func aScriptCannotBePinned() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-script-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("tool").path
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: URL(fileURLWithPath: script))
+        #expect(GatewayBinaryPin.pin(script) == .failure(.script))
+        let binary = directory.appendingPathComponent("binary").path
+        try Data([0xCF, 0xFA, 0xED, 0xFE]).write(to: URL(fileURLWithPath: binary))
+        #expect(throws: Never.self) { _ = try GatewayBinaryPin.pin(binary).get() }
+    }
+
+    /// `/usr/bin/git`, `python3`, `make` and `clang` are xcrun trampolines:
+    /// they exec the real tool in the same process, so nothing runs as them.
+    @Test func aDeveloperShimCannotBePinnedAndNamesTheRealTool() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-shim-\(UUID().uuidString)")
+        let shims = directory.appendingPathComponent("shims")
+        let developer = directory.appendingPathComponent("developer")
+        try FileManager.default.createDirectory(at: shims, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: developer.appendingPathComponent("usr/bin"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for path in [shims.appendingPathComponent("tool"), shims.appendingPathComponent("own"),
+            developer.appendingPathComponent("usr/bin/tool")]
+        {
+            try Data([0xCF, 0xFA, 0xED, 0xFE]).write(to: path)
+            #expect(chmod(path.path, 0o755) == 0)
+        }
+        let shimDirectory = try #require(realpath(shims.path, nil).map { path in
+            defer { free(path) }
+            return String(cString: path)
+        })
+        let developerDirectory = try #require(realpath(developer.path, nil).map { path in
+            defer { free(path) }
+            return String(cString: path)
+        })
+        let refused = GatewayBinaryPin.pin(
+            shimDirectory + "/tool", shimDirectory: shimDirectory, developerDirectories: [developerDirectory])
+        #expect(refused == .failure(.developerShim(real: developerDirectory + "/usr/bin/tool")))
+        // A tool the developer directory does not carry is a real binary.
+        #expect(throws: Never.self) {
+            _ = try GatewayBinaryPin.pin(
+                shimDirectory + "/own", shimDirectory: shimDirectory, developerDirectories: [developerDirectory]).get()
+        }
+        // Outside the shim directory the name is irrelevant.
+        #expect(throws: Never.self) {
+            _ = try GatewayBinaryPin.pin(
+                developerDirectory + "/usr/bin/tool", shimDirectory: shimDirectory,
+                developerDirectories: [developerDirectory]).get()
+        }
+        // On a host with the Command Line Tools, the documented trap is real.
+        if FileManager.default.isExecutableFile(atPath: "/Library/Developer/CommandLineTools/usr/bin/git") {
+            guard case .failure(.developerShim(let real)) = GatewayBinaryPin.pin("/usr/bin/git") else {
+                Issue.record("/usr/bin/git was pinnable")
+                return
+            }
+            #expect(real.hasSuffix("/usr/bin/git"))
+        }
     }
 
     @Test func aMismatchIsRefusedAsMisuseBeforeAnythingIsForwarded() throws {
@@ -186,9 +254,25 @@ struct SecretGatewayBinaryTests {
             Issue.record("a lease pinned a binary that does not exist")
             return
         }
-        #expect(error == .binaryUnavailable(secret: "GH", path: "/rv-absent/tool"))
+        #expect(error == .binaryUnavailable(secret: "GH", path: "/rv-absent/tool", reason: .notAFile))
         #expect(error.message.contains("/rv-absent/tool"))
         #expect(error.message.contains("ghp_") == false)
+
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("rv-lease-\(UUID().uuidString).sh")
+        try Data("#!/bin/sh\n".utf8).write(to: script)
+        defer { try? FileManager.default.removeItem(at: script) }
+        let scripted = try SecretsFixture(Self.json(binaries: "[\"\(script.path)\"]"))
+        defer { scripted.tearDown() }
+        let scriptBroker = SecretLaunchBroker(
+            configDirectory: scripted.directory, resolver: resolver, transport: RecordingUpstream().transport,
+            peers: .fixed(.member), workspace: "W1")
+        defer { scriptBroker.stop() }
+        guard case .failure(let scriptError) = scriptBroker.lease(names: ["GH"], agent: nil) else {
+            Issue.record("a lease pinned a script")
+            return
+        }
+        #expect(scriptError == .binaryUnavailable(secret: "GH", path: script.path, reason: .script))
+        #expect(scriptError.message.contains("list the interpreter"))
 
         let seen = PinLog()
         let upstream = RecordingUpstream()
@@ -225,48 +309,141 @@ struct SecretGatewayBinaryTests {
     }
 
     #if os(macOS)
-    /// The real scan: this test process holding the connection runs no
-    /// pinned binary; a curl it spawns does, and so does a curl whose
-    /// parent shell is pinned. (`/bin/sh` is a trampoline into another
-    /// shell, so bash is pinned and run directly.)
-    @Test func theRealScanAdmitsAPinnedHolderOrAncestorAndRefusesOthers() throws {
-        let group = try #require(ProcessGroupRecovery.capture(pid: getpgrp()))
-        let upstream = RecordingUpstream(status: 200)
-        let audit = AuditRecords()
-
-        let (curlOnly, port, placeholder) = try gateway(
-            .runtime, pins: [try pin("/usr/bin/curl")], upstream: upstream, audit: audit, group: group)
-        defer { curlOnly.stop() }
-        #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 403)
-        #expect(audit.items.withLock { $0.last?.refusal } == "binaryMismatch")
-        #expect(try curl(port: port, placeholder: placeholder, viaShell: false) == "200")
-
-        let (shellOnly, port2, placeholder2) = try gateway(
-            .runtime, pins: [try pin("/bin/bash")], upstream: upstream, audit: audit, group: group)
-        defer { shellOnly.stop() }
-        #expect(try curl(port: port2, placeholder: placeholder2, viaShell: true) == "200")
-        #expect(try curl(port: port2, placeholder: placeholder2, viaShell: false) == "403")
-        #expect(upstream.requests.count == 2)
+    private func holder(_ pid: pid_t) throws -> GatewayHolder {
+        guard case .found(let info) = ProcessGroupRecovery.lookup(pid) else { throw Unreadable() }
+        return GatewayHolder(pid: pid, startSeconds: info.pbi_start_tvsec, startMicroseconds: info.pbi_start_tvusec)
     }
 
-    /// Runs curl in this process group, directly or under bash (which stays
-    /// its parent: the trailing `true` stops bash from exec'ing curl).
-    private func curl(port: Int, placeholder: SecretPlaceholder, viaShell: Bool) throws -> String {
-        let curl = ["/usr/bin/curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
-            "-H", "Authorization: Bearer \(placeholder.text)", "http://127.0.0.1:\(port)/s/OPENAI_API_KEY/models"]
-        let process = Process()
-        let output = Pipe()
-        if viaShell {
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = ["-c", "\"$@\"; true", "sh"] + curl
-        } else {
-            process.executableURL = URL(fileURLWithPath: curl[0])
-            process.arguments = Array(curl.dropFirst())
+    struct Unreadable: Error {}
+
+    @Test func aHolderWhoseStartTimeChangedBeforeTheWalkIsUnverifiable() throws {
+        let pins = [try pin("/usr/bin/true")]
+        let me = try holder(getpid())
+        #expect(GatewayBinaryScan.verdict(holder: me, leader: 1, pins: pins) == .mismatch)
+        var reused = me
+        reused.startMicroseconds += 1
+        #expect(GatewayBinaryScan.verdict(holder: reused, leader: 1, pins: pins) == .unverifiable)
+    }
+
+    @Test func aWalkThatRunsOutOfAncestorsIsUnverifiableNotAMismatch() throws {
+        let pins = [try pin("/usr/bin/true")]
+        let me = try holder(getpid())
+        // The test process has more than one ancestor and the leader is none of them.
+        #expect(GatewayBinaryScan.verdict(holder: me, leader: 1, pins: pins, limit: 1) == .unverifiable)
+        #expect(GatewayBinaryScan.verdict(holder: me, leader: 1, pins: pins) == .mismatch)
+    }
+
+    @Test func aParentThatStartedAfterItsChildIsAReusedPid() {
+        let child = GatewayBinaryScan.Link(pid: 20, parent: 10, seconds: 100, microseconds: 5)
+        let parent = GatewayBinaryScan.Link(pid: 10, parent: 1, seconds: 90, microseconds: 0)
+        #expect(GatewayBinaryScan.ordered([child, parent]))
+        let sameSecond = GatewayBinaryScan.Link(pid: 10, parent: 1, seconds: 100, microseconds: 4)
+        #expect(GatewayBinaryScan.ordered([child, sameSecond]))
+        let reused = GatewayBinaryScan.Link(pid: 10, parent: 1, seconds: 100, microseconds: 6)
+        #expect(GatewayBinaryScan.ordered([child, reused]) == false)
+        #expect(GatewayBinaryScan.ordered([child]))
+    }
+
+    /// The real scan, in a fresh process group led by a perl process the
+    /// test knows: nothing between the connection holders and the leader
+    /// is a stray shell. The leader runs `mode`:
+    /// - `direct`: curl is its child.
+    /// - `shell`: curl is the child of a bash that stays its parent (the
+    ///   trailing `true` stops bash from exec'ing curl).
+    /// - `shared`: the leader opens the connection and a bash child, which
+    ///   inherits the socket, sends the request; both hold it.
+    /// Returns the status code, and the audit refusal code of the last record.
+    private func scan(mode: String, pins: (pid_t) throws -> [GatewayBinaryPin]) throws
+        -> (status: String, refusal: String?)
+    {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-scan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let go = directory.appendingPathComponent("go").path
+        let out = directory.appendingPathComponent("out").path
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let gateway = SecretGateway(transport: upstream.transport, peers: .runtime, audit: audit.record)
+        defer { gateway.stop() }
+        let port = try gateway.start().get()
+        let script = """
+            use IO::Socket::INET;
+            my ($go, $out, $mode) = @ARGV;
+            select(undef, undef, undef, 0.05) until -s $go;
+            open(my $g, '<', $go) or die; my ($port, $placeholder) = split(' ', <$g>); close $g;
+            my @curl = ('/usr/bin/curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}',
+                '-H', "Authorization: Bearer $placeholder", "http://127.0.0.1:$port/s/OPENAI_API_KEY/models");
+            my $result = '';
+            if ($mode eq 'direct') {
+                open(my $h, '-|', @curl) or die; $result = <$h>; close $h;
+            } elsif ($mode eq 'shell') {
+                open(my $h, '-|', '/bin/bash', '-c', '"$@"; true', 'sh', @curl) or die; $result = <$h>; close $h;
+            } else {
+                $^F = 1000;
+                my $socket = IO::Socket::INET->new(PeerAddr => "127.0.0.1:$port") or die;
+                my $fd = fileno($socket);
+                open(my $h, '-|', '/bin/bash', '-c',
+                    'printf "GET /s/OPENAI_API_KEY/models HTTP/1.1\\r\\nAuthorization: Bearer %s\\r\\n\\r\\n" "$1" >&$2; '
+                    . 'IFS= read -r line <&$2; echo "${line:9:3}"', 'sh', $placeholder, $fd) or die;
+                $result = <$h>; close $h;
+            }
+            open(my $o, '>', "$out.tmp") or die; print $o $result; close $o; rename("$out.tmp", $out);
+            """
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        let argv = ["/usr/bin/perl", "-e", script, go, out, mode].map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var leader: pid_t = 0
+        try #require(posix_spawn(&leader, "/usr/bin/perl", nil, &attributes, argv, environ) == 0)
+        defer {
+            kill(-leader, SIGKILL)
+            var status: Int32 = 0
+            waitpid(leader, &status, 0)
         }
-        process.standardOutput = output
-        try process.run()
-        process.waitUntilExit()
-        return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let group = try #require(ProcessGroupRecovery.capture(pid: leader))
+        let placeholder = SecretPlaceholder.mint(prefix: "sk-")
+        gateway.register(placeholder, entry: SecretGateway.Entry(
+            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
+            surfaces: [.header], processGroup: group, binaries: try pins(leader)))
+        try Data("\(port) \(placeholder.text)".utf8).write(to: URL(fileURLWithPath: go))
+        let deadline = Date().addingTimeInterval(20)
+        var status = ""
+        while Date() < deadline {
+            status = ((try? String(contentsOfFile: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if status.isEmpty == false { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return (status, audit.items.withLock { $0.last?.refusal })
+    }
+
+    @Test func theRealScanAdmitsAPinnedHolderOrAncestorAndRefusesOthers() throws {
+        let curl = try pin("/usr/bin/curl")
+        let bash = try pin("/bin/bash")
+        // A pinned holder is served.
+        #expect(try scan(mode: "direct", pins: { _ in [curl] }).status == "200")
+        // An unpinned holder whose parent (the leader) is unpinned too is refused as misuse.
+        let direct = try scan(mode: "direct", pins: { _ in [bash] })
+        #expect(direct.status == "403")
+        #expect(direct.refusal == "binaryMismatch")
+        // A pinned ancestor between the holder and the leader admits it.
+        #expect(try scan(mode: "shell", pins: { _ in [bash] }).status == "200")
+    }
+
+    /// A forked child inherits the socket, so the parent holds it too: every
+    /// holder must pass, not just one.
+    @Test func everyHolderOfASharedSocketMustPass() throws {
+        let bash = try pin("/bin/bash")
+        let refused = try scan(mode: "shared", pins: { _ in [bash] })
+        #expect(refused.status == "403")
+        #expect(refused.refusal == "binaryMismatch")
+        let admitted = try scan(mode: "shared", pins: { leader in
+            [bash, try GatewayBinaryPin.pin(try #require(GatewayBinaryScan.executablePath(leader))).get()]
+        })
+        #expect(admitted.status == "200")
     }
     #endif
 }

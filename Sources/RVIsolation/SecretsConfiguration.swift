@@ -425,7 +425,7 @@ enum SecretsDecoding {
             guard let list = raw as? [String], (1...16).contains(list.count), list.allSatisfy(binaryPath),
                 Set(list).count == list.count
             else {
-                throw Failure("\(name).binaries must be 1 to 16 distinct absolute paths, such as /usr/bin/git")
+                throw Failure("\(name).binaries must be 1 to 16 distinct absolute paths, such as /opt/homebrew/bin/gh")
             }
             if case .environment = delivery {
                 throw Failure(

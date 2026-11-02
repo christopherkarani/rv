@@ -23,8 +23,9 @@ enum SecretLeaseError: Error, Sendable, Equatable {
     case awsCredentialsUnusable(String)
     /// Two secrets in one launch would set the same variable, e.g. two AWS profiles.
     case variableCollision(variable: String, secrets: [String])
-    /// A path in the definition's `binaries` is not a regular file now.
-    case binaryUnavailable(secret: String, path: String)
+    /// A path in the definition's `binaries` cannot be pinned: not a regular
+    /// file now, or one nothing would ever run as (a script, a developer shim).
+    case binaryUnavailable(secret: String, path: String, reason: GatewayBinaryPin.Unpinnable)
 
     var message: String {
         switch self {
@@ -43,8 +44,8 @@ enum SecretLeaseError: Error, Sendable, Equatable {
                 + "(expected credential_process JSON with AccessKeyId, SecretAccessKey, and a valid Expiration)"
         case .variableCollision(let variable, let secrets):
             "secrets \(secrets.joined(separator: " and ")) would both set \(variable); stage one per launch"
-        case .binaryUnavailable(let name, let path):
-            "secret \(name): binary \(path) in its binaries list is not a file on this host"
+        case .binaryUnavailable(let name, let path, let reason):
+            "secret \(name): binary \(path) in its binaries list \(reason.reason)"
         }
     }
 }
@@ -182,8 +183,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
             let fingerprint = fingerprint(value)
             var pins: [GatewayBinaryPin] = []
             for path in definition.binaries ?? [] {
-                guard let pin = GatewayBinaryPin.pin(path) else { return fail(.binaryUnavailable(secret: name, path: path)) }
-                pins.append(pin)
+                switch GatewayBinaryPin.pin(path) {
+                case .success(let pin): pins.append(pin)
+                case .failure(let reason): return fail(.binaryUnavailable(secret: name, path: path, reason: reason))
+                }
             }
             switch definition.delivery {
             case .environment:

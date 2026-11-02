@@ -111,7 +111,7 @@ enum GatewayPeerScan {
     /// Every runtime process holding the peer's socket: its group, the
     /// leader's descendants, and the leader's session. Nil when any of them
     /// could not be read, or none holds it.
-    static func holders(_ peer: GatewayPeer, group: ProcessGroupFact) -> [pid_t]? {
+    static func holders(_ peer: GatewayPeer, group: ProcessGroupFact) -> [GatewayHolder]? {
         guard let (leader, members) = live(group) else { return nil }
         let (parents, complete) = descendants(of: leader)
         guard complete else { return nil }
@@ -120,12 +120,21 @@ enum GatewayPeerScan {
             guard let processes = userProcesses() else { return nil }
             candidates.formUnion(processes.filter { getsid($0) == leader })
         }
-        var found: [pid_t] = []
+        var found: [GatewayHolder] = []
         for pid in candidates.sorted() {
-            switch holdsSocket(pid, peer) {
-            case .some(true): found.append(pid)
-            case .some(false): continue
-            case .none: return nil
+            // Read before the descriptors: the ancestor walk compares it, so
+            // a pid reused after this point is not taken for the holder.
+            switch ProcessGroupRecovery.lookup(pid) {
+            case .absent: continue
+            case .unavailable: return nil
+            case .found(let info):
+                switch holdsSocket(pid, peer) {
+                case .some(true):
+                    found.append(GatewayHolder(
+                        pid: pid, startSeconds: info.pbi_start_tvsec, startMicroseconds: info.pbi_start_tvusec))
+                case .some(false): continue
+                case .none: return nil
+                }
             }
         }
         return found.isEmpty ? nil : found

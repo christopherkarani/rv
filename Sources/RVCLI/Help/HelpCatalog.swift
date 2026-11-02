@@ -528,11 +528,11 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "binaries",
-                    description: "binaries [\"/usr/bin/git\"] on gateway or awsSigV4: only processes running, or started by, these spend it"
+                    description: "binaries [\"/opt/homebrew/bin/gh\"] on gateway or awsSigV4: only processes running, or started by, these spend it"
                 ),
                 HelpRow(
                     name: "binaries refusal",
-                    description: "403 binaryMismatch (misuse); a binary replaced since launch no longer matches"
+                    description: "403 binaryMismatch (misuse); a binary replaced since launch no longer matches; scripts and Xcode shims such as /usr/bin/git are refused at launch (list the real tool)"
                 ),
                 HelpRow(
                     name: "defaults",
