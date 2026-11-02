@@ -16,6 +16,10 @@ public struct DoctorRenderer: FrameRenderer {
         lines.append(contentsOf: packsSection(model.packs, palette: palette))
         lines.append("")
         lines.append(contentsOf: configSection(model, palette: palette))
+        if model.problems.isEmpty == false {
+            lines.append("")
+            lines.append(contentsOf: problemsSection(model.problems, palette: palette))
+        }
         if let leftovers = model.leftovers {
             lines.append("")
             lines.append(contentsOf: leftoversSection(leftovers, palette: palette))
@@ -53,6 +57,24 @@ public struct DoctorRenderer: FrameRenderer {
         if let warning = service.warning, warning.isEmpty == false {
             lines.append("\(factIndent)\(paint(warning, slot: palette.deny, reset: palette.reset))")
         }
+        if let fix = service.fix {
+            lines.append("\(factIndent)\(fixLine(fix, palette: palette))")
+        }
+        return lines
+    }
+
+    /// Every warn/fail row ends with one copy-pasteable repair line.
+    private func fixLine(_ fix: String, palette: Palette) -> String {
+        paint("fix: \(fix)", slot: palette.silver, reset: palette.reset)
+    }
+
+    private func problemsSection(_ problems: [DoctorProblem], palette: Palette) -> [String] {
+        var lines = [heading("Problems", palette: palette)]
+        for problem in problems {
+            let ink = problem.severity == .fail ? palette.deny : palette.mark
+            lines.append("\(paint("◦", slot: ink, reset: palette.reset))  \(paint(problem.summary, slot: ink, reset: palette.reset))")
+            lines.append("   \(fixLine(problem.fix, palette: palette))")
+        }
         return lines
     }
 
@@ -61,8 +83,23 @@ public struct DoctorRenderer: FrameRenderer {
         var lines = [heading("Hosts", palette: palette)]
         for host in hosts {
             lines.append(hostRow(host, nameWidth: nameWidth, palette: palette))
+            if let fix = hostFix(host.state) {
+                lines.append("   \(String(repeating: " ", count: nameWidth + 2))\(fixLine(fix, palette: palette))")
+            }
         }
         return lines
+    }
+
+    /// Undetected hosts (`missing`) are informational, not a problem.
+    private func hostFix(_ state: DoctorHostState) -> String? {
+        switch state {
+        case .absentFile, .broken:
+            "rv setup"
+        case .occupied:
+            "rv setup --force"
+        case .wired, .missing:
+            nil
+        }
     }
 
     private func hostRow(_ host: DoctorHostView, nameWidth: Int, palette: Palette) -> String {
@@ -93,9 +130,12 @@ public struct DoctorRenderer: FrameRenderer {
         switch packs.registry {
         case .broken:
             lines.append("  \(paint("broken", slot: palette.deny, reset: palette.reset))")
+            lines.append("  \(fixLine("run rv packs for the error; reinstall rv if core packs fail to load", palette: palette))")
         case .ready where packs.areDayOnePacksReady == false:
             let disabled = joinedList(packs.missingDayOne.map(\.rawValue).sorted())
             lines.append("  \(paint("disabled \(disabled)", slot: palette.deny, reset: palette.reset))")
+            let ids = packs.missingDayOne.map(\.rawValue).sorted().joined(separator: " ")
+            lines.append("  \(fixLine("rv packs enable \(ids)", palette: palette))")
         case .ready:
             // Day-one IDs only — extras scale via count, not a runaway · list.
             let dayOne = packs.dayOneEnabled.map(\.rawValue).joined(separator: " · ")
@@ -124,10 +164,14 @@ public struct DoctorRenderer: FrameRenderer {
             slot: configInk,
             reset: palette.reset
         )
-        return [
+        var lines = [
             heading("Config", palette: palette),
             "  \(body)",
         ]
+        if model.config == .unreadable {
+            lines.append("  \(fixLine("chmod u+rwx ~/.config/rv", palette: palette))")
+        }
+        return lines
     }
 
     private func leftoversSection(_ leftovers: DoctorLeftoversView, palette: Palette) -> [String] {
@@ -250,7 +294,7 @@ public struct DoctorRenderer: FrameRenderer {
     }
 
     private func serviceDetail(_ service: DoctorServiceView) -> String {
-        "\(service.label) · launch-agent \(service.launchAgent.rawValue) · fallback \(service.fallback.rawValue)"
+        "\(service.label) · launch-agent \(service.launchAgent.rawValue) · local packs \(service.fallback.rawValue)"
     }
 
     private func joinedList(_ names: [String]) -> String {

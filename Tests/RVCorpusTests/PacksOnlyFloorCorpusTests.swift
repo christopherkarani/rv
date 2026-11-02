@@ -40,7 +40,10 @@ struct PacksOnlyFloorCorpusTests {
 
     @Test func rvWeakeningCommands_areIndeterminate() throws {
         let harness = try StressHarness.dayOne()
-        for command in ["rv packs disable core.filesystem", "rv uninstall", "rv safety normal"] {
+        for command in [
+            "rv packs disable core.filesystem", "rv uninstall", "rv safety normal",
+            "rv-cli packs disable core.git", "~/.local/bin/rv-cli uninstall",
+        ] {
             #expect(harness.pin(command).decision == .indeterminate(.selfProtection), "\(command)")
         }
         for command in ["rv packs list", "rv safety", "rv safety strict", "rv doctor"] {
