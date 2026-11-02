@@ -82,10 +82,40 @@ private func containsContiguous(_ haystack: [String], _ needle: [String]) -> Boo
 /// "Conservative extra host-secret shapes". Anchoring to a home root would be
 /// more precise but risks missing exfiltrated copies.
 private func matchesHomeSuffix(_ candidate: String, parts: [String]) -> Bool {
+    if parts == rvConfigParts, isCageScratchPath(candidate) { return false }
     let joined = parts.joined(separator: "/")
     if hasPathPrefix(candidate, prefix: "~/" + joined) { return true }
     if hasPathPrefix(candidate, prefix: "$HOME/" + joined) { return true }
     if hasPathPrefix(candidate, prefix: "${HOME}/" + joined) { return true }
     let components = candidate.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
     return containsContiguous(components, parts)
+}
+
+private let rvConfigParts = [".config", "rv"]
+
+/// A caged agent's own `$HOME`, `$XDG_CACHE_HOME` and `$TMPDIR` live at
+/// `~/.config/rv/workspaces/<id>/{home,cache,tmp}` (`WorkspaceDeveloperHome`),
+/// and the cage still runs rv's file-tool hooks, so the rv-config rule must
+/// not deny them. Only that exact shape is exempt: the first `.config/rv`
+/// must be followed by `workspaces/<id>/{home|cache|tmp}/...`, and a path
+/// with a `.`/`..` component is never exempt (it could climb back out).
+/// `bin` (rv-owned shims), the workspace root, and everything else under
+/// the rv config dir stay protected. Symlinks are handled by the caller's
+/// resolved spelling.
+private func isCageScratchPath(_ candidate: String) -> Bool {
+    let components = candidate.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    guard components.contains(where: { $0 == "." || $0 == ".." }) == false,
+        let start = firstContiguousIndex(components, rvConfigParts)
+    else { return false }
+    let rest = components.dropFirst(start + rvConfigParts.count)
+    guard rest.count >= 3, rest[rest.startIndex] == "workspaces" else { return false }
+    let area = rest[rest.startIndex + 2]
+    return area == "home" || area == "cache" || area == "tmp"
+}
+
+private func firstContiguousIndex(_ haystack: [String], _ needle: [String]) -> Int? {
+    guard haystack.count >= needle.count else { return nil }
+    return (0...(haystack.count - needle.count)).first { start in
+        Array(haystack[start..<(start + needle.count)]) == needle
+    }
 }

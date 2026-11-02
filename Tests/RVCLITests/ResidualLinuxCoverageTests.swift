@@ -225,20 +225,7 @@ struct ResidualLinuxCoverageTests {
         let rvd = URL(fileURLWithPath: home.rawValue)
             .appendingPathComponent(".local/bin/rvd", isDirectory: false)
         try writeExecutableScript(at: rvd, source: "#!/bin/sh\nexit 0\n")
-        #expect(SetupEnvironment.resolveRvd(nextTo: nil, home: home.rawValue) == rvd.path)
-        #expect(SetupEnvironment.resolveRvd(nextTo: "/tmp/missing-rv", home: home.rawValue) == rvd.path)
-        let siblingDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-sibling-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: siblingDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: siblingDir) }
-        let siblingRvd = siblingDir.appendingPathComponent("rvd")
-        try writeExecutableScript(at: siblingRvd, source: "#!/bin/sh\nexit 0\n")
-        #expect(
-            SetupEnvironment.resolveRvd(
-                nextTo: siblingDir.appendingPathComponent("rv").path,
-                home: home.rawValue
-            ) == siblingRvd.path
-        )
+        #expect(SetupEnvironment.resolveRvd(home: home.rawValue) == rvd.path)
         try await withCLIProcess(home: home, stdinText: "not-json") {
             await #expect(throws: ExitCode.self) {
                 try await Hook.parse(["--host", "grok"]).run()
