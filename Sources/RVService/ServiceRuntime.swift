@@ -23,7 +23,14 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private var gated: GatedEvaluate
+    /// Live compile set, replaced by `rebuildGated`. Boxed so the hook
+    /// ceremony, built in `init` before `self` can be captured, reads the
+    /// same value at peek time.
+    private let liveGated: UnfairLock<GatedEvaluate>
+    private var gated: GatedEvaluate {
+        get { liveGated.withLock { $0 } }
+        set { liveGated.withLock { $0 = newValue } }
+    }
     private var catalog: PackCatalog
     private var lastUncoveredWanted: Set<PackID> = []
     private var lastCoverageRebuildAt: UInt64 = 0
@@ -116,7 +123,8 @@ public actor ServiceRuntime {
         self.compiledPackIDs = session.compiledPackIDs
         self.compiledPackIDSet = Set(session.compiledPackIDs)
         let gated = GatedEvaluate(session)
-        self.gated = gated
+        let liveGated = UnfairLock(gated)
+        self.liveGated = liveGated
         self.corePacksReady = gated.corePacksReady
         if let allowOnce {
             self.allowOnce = allowOnce
@@ -149,6 +157,7 @@ public actor ServiceRuntime {
             allowOnce: self.allowOnce,
             grants: self.grants,
             home: resolvedHome,
+            gated: { liveGated.withLock { $0 } },
             clock: clock
         )
     }
