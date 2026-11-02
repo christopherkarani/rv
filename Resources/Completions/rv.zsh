@@ -22,6 +22,7 @@ _rv() {
     'blocks:List recent denials'
     'audit:Unified audit trail'
     'secrets:Secrets agents use through placeholders'
+    'login:App logins agents use through rv'
     'mcp:Find, review, and govern MCP servers'
     'managed:Organization policy: status, verify, keygen, sign'
     'report:Governance posture of this machine (MDM, --json)'
