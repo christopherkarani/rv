@@ -18,6 +18,10 @@ enum WorkspaceSessionError: Error, Sendable, Equatable {
     /// A child process group was still alive. The workspace was not published.
     case childTeardownFailed
     case cleanupFailed(IsolationApplyError)
+    /// Publish refused an escaping symlink and wrote nothing. The original
+    /// directory is restored; the agent's volume was not discarded but kept
+    /// as the detached disk image at `retainedImage`.
+    case publishRejected(retainedImage: String)
     case alreadyClosed
     case unknownRuntime(RuntimeSessionID)
     /// The workspace is active, and the concurrent running-runtime cap is full.
@@ -50,6 +54,8 @@ enum WorkspaceSessionFailure {
             error
         case .childTeardownFailed:
             .lifetimeBoundaryFailed
+        case .publishRejected:
+            .workspaceInodeBoundaryFailed
         case .notAcceptingRuntime, .alreadyClosed, .unknownRuntime, .runtimeLimit:
             .workspaceInodeBoundaryFailed
         case .preparationFailed, .unknownPreparedLaunch, .redemptionAlreadyAccepted:
@@ -1816,8 +1822,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
         // The staged private home holds credential copies; the watch path
         // removes it on the normal teardown, so the retire path must too.
-        // `remove` is `try? rm -rf`: idempotent if a watcher also fires.
-        child.live.resources?.remove()
+        // Removal is idempotent if a watcher also fires; a failure is
+        // reported, not swallowed.
+        child.live.resources?.removeReportingFailure()
         noteRuntimeEnded(session, reason: .spawnFailed)
     }
 
@@ -1911,6 +1918,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         let restored = publish ? boundary.publishAndRestore() : boundary.discardAndRestore()
         switch restored {
         case .failure(let error):
+            if let image = boundary.retainedRejectedImagePath {
+                return .failure(.publishRejected(retainedImage: image))
+            }
             return .failure(.cleanupFailed(error))
         case .success:
             break

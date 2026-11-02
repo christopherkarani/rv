@@ -119,7 +119,7 @@ struct WorkspaceCloseState: Sendable {
         switch error {
         case .childTeardownFailed:
             return false
-        case .apply, .notAcceptingRuntime, .cleanupFailed, .alreadyClosed,
+        case .apply, .notAcceptingRuntime, .cleanupFailed, .publishRejected, .alreadyClosed,
             .unknownRuntime, .runtimeLimit, .ownedByLiveProcess,
             .recoveryInProgress, .unresolvedWorkspace, .preparationFailed,
             .unknownPreparedLaunch, .redemptionAlreadyAccepted:
