@@ -403,8 +403,10 @@ gateway requests.
 - *No separate nonce.* The approval service already binds each approval to
   a random approval and continuation id, the agent principal, and the action
   digest, and consumes it once (`consumeApproval(_:actionDigestHex:)`).
-  `SecretRequestAction` binds SHA-256 of the full target (query included)
-  and of the body.
+  `SecretRequestAction` binds SHA-256 of the full target (query included),
+  of the body, and of the non-volatile request headers (some select the
+  operation: `X-Amz-Target`, `Stripe-Account`). Parked approvals are keyed
+  by placeholder and digest, so one runtime never spends another's.
 - *Blocking was wrong.* Approvals take human time (they live 15 minutes);
   agent HTTP clients do not wait that long.
   The gateway holds a request up to 20 s, then refuses `approvalPending`
@@ -416,6 +418,8 @@ gateway requests.
   `Sources/RVIsolation/SecretGatewayApproval.swift`. Policy maps
   `ProposedAction.secretRequest` to `mandatoryHuman`; `perform` and compile
   refuse it, since only the gateway executes it.
+- After the human says yes, the entry is read and prepared again (revoked,
+  expired or refreshed during the hold), so a stale value never goes out.
 - Parked approvals are cancelled on `revoke` and `stop`, and dropped after
   the service's 15-minute lifetime.
 

@@ -137,8 +137,8 @@ public final class SecretGateway: @unchecked Sendable {
     let approvalTiming: GatewayApprovalTiming
     let lock = NSLock()
     var entries: [String: Entry] = [:]
-    /// Approvals filed and not yet resolved, by the action digest they bind.
-    var parkedApprovals: [String: ParkedApproval] = [:]
+    /// Approvals filed and not yet resolved, by placeholder and the action digest they bind.
+    var parkedApprovals: [ParkedApprovalKey: ParkedApproval] = [:]
     /// Requests currently held open waiting for a human.
     var waitingApprovals = 0
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
@@ -525,7 +525,7 @@ public final class SecretGateway: @unchecked Sendable {
             }
             if entry(result.used.token)?.value != result.used.value { substituted = substitute() }
         }
-        let rewritten: GatewayRequestHead
+        var rewritten: GatewayRequestHead
         let token: String
         let surfaces: [String]
         switch substituted {
@@ -537,9 +537,9 @@ public final class SecretGateway: @unchecked Sendable {
             token = result.used.token
             surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
         }
-        guard let live = entry(token),
+        guard var live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
-            let url = upstreamRoute.upstreamURL(base: live.upstream)
+            var url = upstreamRoute.upstreamURL(base: live.upstream)
         else {
             deny(.unknownPlaceholder)
             return
@@ -553,10 +553,40 @@ public final class SecretGateway: @unchecked Sendable {
         }
         if let refusal = approval(
             live, token: token, method: head.method, route: route, basePath: Self.live(live, token: token).basePath,
-            url: url, target: head.target, body: body)
+            url: url, target: head.target, headers: forwarded.headers, body: body)
         {
             deny(refusal)
             return
+        }
+        // The hold can last seconds: what the human approved is the request,
+        // not the entry as it was then. Revoked, expired or refreshed since
+        // is checked again, and a changed value is substituted afresh.
+        if live.approvals.isEmpty == false {
+            if let refusal = prepare(token) {
+                deny(refusal)
+                return
+            }
+            guard let current = entry(token) else {
+                deny(.unknownPlaceholder)
+                return
+            }
+            if current.value != live.value {
+                switch substitute() {
+                case .failure(let refusal):
+                    deny(refusal)
+                    return
+                case .success(let again):
+                    rewritten = again.head
+                }
+                guard let upstream = GatewayRoute(target: rewritten.target),
+                    let fresh = upstream.upstreamURL(base: current.upstream)
+                else {
+                    deny(.unknownPlaceholder)
+                    return
+                }
+                url = fresh
+            }
+            live = current
         }
         var headers = rewritten.headers
         if let signing = live.signing {

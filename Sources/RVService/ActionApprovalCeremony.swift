@@ -761,7 +761,8 @@ actor ActionApprovalCeremonyService {
         case .secretRequest(let request):
             return (
                 "secret request: \(request.secret)", "\(request.host)\(request.path)",
-                "\(request.method), \(request.bodyBytes)-byte body sha256 \(request.bodySHA256)")
+                "\(request.method), \(request.bodyBytes)-byte body sha256 \(request.bodySHA256)"
+                    + (request.headerSummary.map { ", headers \($0)" } ?? ""))
         }
     }
 
