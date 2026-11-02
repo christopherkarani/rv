@@ -93,13 +93,28 @@ want='RV_FROM_INSTALL=1 exec "$bin/rv" setup'
 sed '$ s/.*/echo SMOKE-STAGE-OK/' "$install_path" > "$WORK/install.sh"
 
 SMOKE_PATH="$PATH"
+smoke_tag=""
+[ "$mode" != "local" ] || smoke_tag="smoke"
 if [ "$mode" = "local" ]; then
   command -v python3 >/dev/null 2>&1 || die "python3 is required"
   command -v curl >/dev/null 2>&1 || die "curl is required"
-  base="$(grep -E '^release_base="' "$install_path" | cut -d'"' -f2)"
-  [ -n "$base" ] || die "cannot find release_base in $install_path"
+  repo="$(grep -E '^release_repo="' "$install_path" | cut -d'"' -f2)"
+  [ -n "$repo" ] || die "cannot find release_repo in $install_path"
+  # The installer pins this tag (no latest lookup) and verifies downloads
+  # against SHA256SUMS, so serve a copy of the assets with a fresh SHA256SUMS.
+  base="$repo/download/smoke"
+  served="$WORK/served"
+  mkdir -p "$served"
+  cp "$assets_dir"/* "$served"/
+  rm -f "$served/SHA256SUMS"
+  (
+    cd "$served" || exit 1
+    for f in *; do
+      if command -v sha256sum >/dev/null 2>&1; then sha256sum -- "$f"; else shasum -a 256 -- "$f"; fi
+    done > SHA256SUMS
+  ) || die "could not write SHA256SUMS"
   port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  (cd "$assets_dir" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
+  (cd "$served" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
   SERVER_PID=$!
   ready=0
   i=0
@@ -135,7 +150,7 @@ SMOKE_HOME="$WORK/home"
 mkdir -p "$SMOKE_HOME" "$WORK/tmp"
 status=0
 PATH="$SMOKE_PATH" HOME="$SMOKE_HOME" TMPDIR="$WORK/tmp" \
-  RV_INSTALL_NO_MODELS=1 sh "$WORK/install.sh" \
+  RV_INSTALL_NO_MODELS=1 RV_INSTALL_VERSION="$smoke_tag" sh "$WORK/install.sh" \
   >"$WORK/stdout.log" 2>"$WORK/stderr.log" || status=$?
 [ "$status" -eq 0 ] || fail "installer exited $status"
 grep -qx 'SMOKE-STAGE-OK' "$WORK/stdout.log" || fail "stage marker missing"
