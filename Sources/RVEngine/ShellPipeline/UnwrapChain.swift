@@ -15,7 +15,9 @@ extension ShellPipeline {
         layers: [WrapperKind]
     ) -> UnwrapOutcome? {
         let segments = splitSegments(maskNonExecutingHeredocBodies(text))
-        guard segments.count > 1 else { return nil }
+        // A single segment still differs from the text when a head was
+        // stripped (`time sudo rm -r ~`), so its wrappers peel too.
+        guard segments.count > 1 || segments.first != text else { return nil }
         var rewritten: [String] = []
         var peeledLayers: [WrapperKind] = []
         var changed = false
@@ -63,7 +65,8 @@ extension ShellPipeline {
 /// command, so segment parsers see both.
 func chainSegmentView(of command: ShellCommand) -> String {
     let view = Normalize.matchingView(of: command.rawValue).rawValue
-    guard splitSegments(view).count > 1,
+    let segments = splitSegments(view)
+    guard segments.count > 1 || segments.first != view.trimmingCharacters(in: .whitespacesAndNewlines),
         case .complete(let unwrapped) = unwrapCommand(command),
         unwrapped.layers.isEmpty == false,
         unwrapped.command.rawValue != command.rawValue

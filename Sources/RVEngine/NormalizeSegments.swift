@@ -100,8 +100,9 @@ private func expandSegment(_ text: String, depth: Int) -> [String] {
     guard depth < maxSegmentDepth else { return pieces }
     var out: [String] = []
     out.reserveCapacity(pieces.count * 2)
+    var heads = SegmentHeadState()
     for rawPiece in pieces {
-        let piece = stripLeadingReservedWords(rawPiece)
+        guard let piece = heads.strip(rawPiece) else { continue }
         if let peeled = peelGrouping(piece) {
             out.append(contentsOf: expandSegment(peeled, depth: depth + 1))
         } else {
@@ -161,8 +162,17 @@ private func splitTopLevelEvents(_ text: String) -> (prefix: String, parts: [Top
     while index < utf8.endIndex {
         let byte = utf8[index]
         if let currentQuote = quote {
+            if byte == UInt8(ascii: "\\"), currentQuote == UInt8(ascii: "\"") {
+                index = indexSkippingEscape(utf8, at: index)
+                continue
+            }
             if byte == currentQuote { quote = nil }
             utf8.formIndex(after: &index)
+            continue
+        }
+        if byte == UInt8(ascii: "\\") {
+            // A backslash-escaped byte is literal (`\;` in `find -exec`).
+            index = indexSkippingEscape(utf8, at: index)
             continue
         }
         if byte == UInt8(ascii: "'") || byte == UInt8(ascii: "\"") {
@@ -322,12 +332,26 @@ private func isGroupOpener(
             cursor = prev
             continue
         }
-        return byte == UInt8(ascii: ";") || byte == UInt8(ascii: "&")
+        if byte == UInt8(ascii: ";") || byte == UInt8(ascii: "&")
             || byte == UInt8(ascii: "|") || byte == UInt8(ascii: "(")
             || byte == UInt8(ascii: "{") || byte == UInt8(ascii: "\n")
             || byte == UInt8(ascii: "\r")
+        {
+            return true
+        }
+        // After a reserved word, a function head, or a `case` arm head the
+        // opener still begins a command body.
+        let prefix = String(decoding: utf8[segmentStart..<index], as: UTF8.self)
+        return prefixIntroducesBody(prefix)
     }
     return true
+}
+
+/// Index past the escaping backslash at `index` and the byte it escapes.
+private func indexSkippingEscape(_ utf8: String.UTF8View, at index: String.Index) -> String.Index {
+    let escaped = utf8.index(after: index)
+    guard escaped < utf8.endIndex else { return escaped }
+    return utf8.index(after: escaped)
 }
 
 /// Strips one layer of fully-wrapping `(...)`/`{...}` grouping.
@@ -498,22 +522,4 @@ private func matchBacktick(
         index += 1
     }
     return nil
-}
-
-/// Shell reserved words that introduce a command without being one
-/// (`then rm -r ~`, `! rm -r ~`). The real command is the remainder.
-private let leadingReservedWords: Set<String> = [
-    "if", "then", "else", "elif", "while", "until", "do", "!",
-]
-
-func stripLeadingReservedWords(_ piece: String) -> String {
-    var rest = Substring(piece)
-    while true {
-        let trimmed = rest.drop { $0 == " " || $0 == "\t" }
-        let word = trimmed.prefix { $0 != " " && $0 != "\t" }
-        guard leadingReservedWords.contains(String(word)) else { return String(rest) }
-        let remainder = trimmed.dropFirst(word.count)
-        guard remainder.isEmpty == false else { return String(rest) }
-        rest = remainder.drop { $0 == " " || $0 == "\t" }
-    }
 }

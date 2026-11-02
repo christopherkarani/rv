@@ -24,9 +24,22 @@ func peelUtility(
 }
 
 private func peelNohup(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
-    let rest = Array(tokens.dropFirst())
+    var rest = Array(tokens.dropFirst())
+    if rest.first?.lexeme == "--" { rest.removeFirst() }
     if rest.isEmpty { return .notWrapper }
     return .next(renderCommand(rest), .nohup, workingDirectory)
+}
+
+private let doasValueLetters: Set<Character> = ["u", "C"]
+
+/// True when the short-flag word `token` (`-u`, `-nu`, `-Eu`) ends in a
+/// flag that takes its value from the next word. A value letter followed by
+/// more characters has its value attached (`-uroot`) and consumes nothing.
+func shortClusterConsumesValue(_ token: String, valueLetters: Set<Character>) -> Bool {
+    guard token.hasPrefix("-"), token.hasPrefix("--") == false else { return false }
+    let letters = token.dropFirst()
+    guard let position = letters.firstIndex(where: { valueLetters.contains($0) }) else { return false }
+    return letters.index(after: position) == letters.endIndex
 }
 
 private func peelDoas(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
@@ -37,7 +50,7 @@ private func peelDoas(_ tokens: [ShellPipeline.Token], workingDirectory: Working
             index += 1
             break
         }
-        if token == "-u" || token == "-C" {
+        if shortClusterConsumesValue(token, valueLetters: doasValueLetters) {
             guard index + 1 < tokens.count else { return .limited(.doas) }
             index += 2
             continue
@@ -109,7 +122,20 @@ private func substitutePlaceholder(
 
 // MARK: - xargs
 
-private let xargsValueFlags: Set<String> = ["-n", "-P", "-L", "-d", "-s", "-a", "-E", "-S"]
+/// Short flags whose value is the rest of the word or the next word.
+private let xargsValueLetters: Set<Character> = ["n", "P", "L", "d", "s", "a", "E", "S", "R"]
+/// Short flags whose value, if any, must be attached (`-l5`, `-eEOF`).
+private let xargsOptionalLetters: Set<Character> = ["l", "e"]
+/// Long options that need a value, as `--opt=value` or `--opt value`.
+private let xargsLongValueOptions: Set<String> = [
+    "arg-file", "delimiter", "max-args", "max-chars", "max-procs", "process-slot-var",
+]
+/// Long options whose value, if any, must be attached with `=`.
+private let xargsLongOptionalOptions: Set<String> = ["eof", "replace", "max-lines"]
+private let xargsLongFlags: Set<String> = [
+    "null", "no-run-if-empty", "verbose", "interactive", "exit", "open-tty",
+    "show-limits", "help", "version",
+]
 
 private func peelXargs(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
@@ -120,31 +146,20 @@ private func peelXargs(_ tokens: [ShellPipeline.Token], workingDirectory: Workin
             index += 1
             break
         }
-        if token == "-I" || token == "-J" {
-            guard index + 1 < tokens.count else { return .limited(.xargs) }
-            replace = tokens[index + 1].lexeme
-            index += 2
+        guard token.hasPrefix("-"), token != "-" else { break }
+        if token.hasPrefix("--") {
+            guard let step = xargsLongOption(token, next: tokens[(index + 1)...].first?.lexeme) else {
+                return .limited(.xargs)
+            }
+            replace = step.replace ?? replace
+            index += step.width
             continue
         }
-        if xargsValueFlags.contains(token) {
-            guard index + 1 < tokens.count else { return .limited(.xargs) }
-            index += 2
-            continue
+        guard let step = xargsShortCluster(token, next: tokens[(index + 1)...].first?.lexeme) else {
+            return .limited(.xargs)
         }
-        if token.hasPrefix("-I"), token.hasPrefix("--") == false, token.count > 2 {
-            replace = String(token.dropFirst(2))
-        }
-        if token == "--replace" {
-            replace = "{}"
-        }
-        if token.hasPrefix("--replace=") {
-            replace = String(token.dropFirst("--replace=".count))
-        }
-        if token.hasPrefix("-") {
-            index += 1
-            continue
-        }
-        break
+        replace = step.replace ?? replace
+        index += step.width
     }
     let rest = Array(tokens.dropFirst(index))
     if rest.isEmpty { return .notWrapper }
@@ -154,13 +169,56 @@ private func peelXargs(_ tokens: [ShellPipeline.Token], workingDirectory: Workin
     return .next(renderCommand(rest), .xargs, workingDirectory)
 }
 
-private let xargsTransparentPrefixes: Set<String> = [
-    "sudo", "doas", "env", "nohup", "nice", "command", "exec", "time", "timeout", "builtin", "ionice",
-]
+private struct XargsOptionStep {
+    /// Words consumed: 1, or 2 when the option took the next word.
+    var width: Int
+    var replace: String?
+}
+
+private func xargsLongOption(_ token: String, next: String?) -> XargsOptionStep? {
+    let body = token.dropFirst(2)
+    let name = String(body.prefix { $0 != "=" })
+    let attached = body.contains("=") ? String(body.drop { $0 != "=" }.dropFirst()) : nil
+    if xargsLongValueOptions.contains(name) {
+        if attached != nil { return XargsOptionStep(width: 1, replace: nil) }
+        return next == nil ? nil : XargsOptionStep(width: 2, replace: nil)
+    }
+    if xargsLongOptionalOptions.contains(name) {
+        let replacement = name == "replace" ? (attached.flatMap { $0.isEmpty ? nil : $0 } ?? "{}") : nil
+        return XargsOptionStep(width: 1, replace: replacement)
+    }
+    return xargsLongFlags.contains(name) ? XargsOptionStep(width: 1, replace: nil) : nil
+}
+
+/// Walks a short-flag word such as `-0`, `-n1`, `-0I`, `-i`, `-iX`.
+/// `-I`/`-J` name the replacement string, GNU `-i` defaults it to `{}`.
+private func xargsShortCluster(_ token: String, next: String?) -> XargsOptionStep? {
+    let letters = Array(token.dropFirst())
+    for (offset, letter) in letters.enumerated() {
+        let attached = String(letters[(offset + 1)...])
+        if letter == "I" || letter == "J" {
+            if attached.isEmpty == false { return XargsOptionStep(width: 1, replace: attached) }
+            return next.map { XargsOptionStep(width: 2, replace: $0) }
+        }
+        if letter == "i" {
+            return XargsOptionStep(width: 1, replace: attached.isEmpty ? "{}" : attached)
+        }
+        if xargsValueLetters.contains(letter) {
+            if attached.isEmpty == false { return XargsOptionStep(width: 1, replace: nil) }
+            return next == nil ? nil : XargsOptionStep(width: 2, replace: nil)
+        }
+        if xargsOptionalLetters.contains(letter) {
+            return XargsOptionStep(width: 1, replace: nil)
+        }
+    }
+    return XargsOptionStep(width: 1, replace: nil)
+}
+
+private let xargsTransparentPrefixes: Set<String> = plainLaunchers.union(["sudo", "env", "timeout", "ionice"])
 
 private let xargsMutatingVerbs: Set<String> = [
     "rm", "mv", "chmod", "chown", "chgrp", "dd", "shred", "truncate", "unlink", "rmdir", "ln",
-    "cp", "install", "tee", "sed", "rsync", "tar", "touch", "mkdir", "ditto", "srm",
+    "cp", "install", "tee", "rsync", "tar", "touch", "mkdir", "ditto", "srm",
     "kill", "pkill", "killall",
 ]
 
@@ -178,6 +236,7 @@ private func xargsInnerIsMutating(_ words: [String], replace: String?) -> Bool {
     let head = unescapeBackslashPairs(basename(words[headIndex])).lowercased()
     let tail = words[(headIndex + 1)...]
     if xargsMutatingVerbs.contains(head) { return true }
+    if head == "sed" { return tail.contains(where: isSedInPlaceFlag) }
     if head == "git" {
         return tail.contains { xargsMutatingGit.contains($0.lowercased()) }
     }
@@ -185,6 +244,13 @@ private func xargsInnerIsMutating(_ words: [String], replace: String?) -> Bool {
         return tail.contains { $0.contains(replace) }
     }
     return false
+}
+
+/// `-i`, `-i.bak`, `-ni`, `-Ei`, `--in-place[=SUFFIX]`: sed only writes
+/// files in place; otherwise it filters its input.
+private func isSedInPlaceFlag(_ word: String) -> Bool {
+    if word.hasPrefix("--") { return "--in-place".hasPrefix(word.prefix { $0 != "=" }) && word.count >= 4 }
+    return word.hasPrefix("-") && word.dropFirst().contains("i")
 }
 
 private func isXargsEffectiveHead(_ word: String) -> Bool {
@@ -208,8 +274,8 @@ private func peelScriptInterpreter(_ head: String, tokens: [ShellPipeline.Token]
         return flagValues(words, flags: ["-e"]).contains(where: luaCodeCanSpawn) ? .limited(.lua) : nil
     }
     if ["awk", "gawk", "mawk", "nawk"].contains(head) {
-        guard let program = awkProgram(words) else { return nil }
-        return awkCodeCanSpawn(program) ? .limited(.awk) : nil
+        let sources = awkSources(words)
+        return sources.readsStdin || sources.programs.contains(where: awkCodeCanSpawn) ? .limited(.awk) : nil
     }
     return nil
 }
@@ -237,25 +303,53 @@ private func perlPrograms(_ words: [String]) -> [String] {
     return values
 }
 
-private func awkProgram(_ words: [String]) -> String? {
+private struct AwkSources {
+    /// Inline programs: every `-e`/`--source`, or the first operand.
+    var programs: [String] = []
+    /// A program file that is stdin (`-f -`, `-f /dev/stdin`): unknowable.
+    var readsStdin = false
+}
+
+private func awkSources(_ words: [String]) -> AwkSources {
+    var sources = AwkSources()
+    var hasSource = false
     var index = 1
+    func note(file: String) {
+        hasSource = true
+        if file == "-" || file.hasPrefix("/dev/") || file.hasPrefix("/proc/") { sources.readsStdin = true }
+    }
     while index < words.count {
         let word = words[index]
+        let next = index + 1 < words.count ? words[index + 1] : nil
         if word == "--" {
-            return index + 1 < words.count ? words[index + 1] : nil
+            if hasSource == false, let next { sources.programs.append(next) }
+            return sources
         }
         if word == "-e" || word == "--source" {
-            return index + 1 < words.count ? words[index + 1] : nil
-        }
-        if word == "-f" || word == "-F" || word == "-v" {
+            hasSource = true
+            if let next { sources.programs.append(next) }
             index += 2
-            continue
-        }
-        if word.hasPrefix("-") {
+        } else if word.hasPrefix("--source=") {
+            hasSource = true
+            sources.programs.append(String(word.dropFirst("--source=".count)))
             index += 1
-            continue
+        } else if ["-f", "-E", "--file", "--exec"].contains(word) {
+            note(file: next ?? "-")
+            index += 2
+        } else if word.hasPrefix("--file=") || word.hasPrefix("--exec=") {
+            note(file: String(word.drop { $0 != "=" }.dropFirst()))
+            index += 1
+        } else if word.hasPrefix("-f"), word.hasPrefix("--") == false {
+            note(file: String(word.dropFirst(2)))
+            index += 1
+        } else if ["-F", "-v", "-i", "-l", "-W"].contains(word) {
+            index += 2
+        } else if word.hasPrefix("-") {
+            index += 1
+        } else {
+            if hasSource == false { sources.programs.append(word) }
+            return sources
         }
-        return word
     }
-    return nil
+    return sources
 }
