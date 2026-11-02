@@ -550,7 +550,7 @@ struct SecretGatewayAWSTests {
 
     @Test(arguments: [
         "sts", "iam", "sso", "sso-oauth", "awsssoportal", "awsssooidc", "signin", "cognito-identity", "cognito-idp",
-        "s3express",
+        "s3express", "ecr", "ecr-public", "codeartifact",
     ])
     func theDecoderRefusesServicesThatMintCredentials(_ service: String) {
         let json = Self.secretsJSON(service: service)

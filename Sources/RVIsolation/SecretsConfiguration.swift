@@ -80,11 +80,12 @@ public struct AWSSigningBinding: Sendable, Equatable {
     public static let stagedVariables: Set<String> = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
 
     /// Signing names whose calls return new credentials (AssumeRole,
-    /// CreateAccessKey, GetCredentials, ...). The agent would receive keys the
-    /// gateway never scrubs, so no binding may sign for them.
+    /// CreateAccessKey, GetCredentials, GetAuthorizationToken, ...). The agent
+    /// would receive credentials the gateway never scrubs, so no binding may
+    /// sign for them.
     public static let credentialMintingServices: Set<String> = [
         "sts", "iam", "sso", "sso-oauth", "awsssoportal", "awsssooidc", "signin", "cognito-identity", "cognito-idp",
-        "s3express",
+        "s3express", "ecr", "ecr-public", "codeartifact",
     ]
 
     /// Signing names of services that also take their action as a query

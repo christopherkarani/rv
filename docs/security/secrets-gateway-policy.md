@@ -275,9 +275,10 @@ makes the gateway sign instead:
   token; each becomes the placeholder. S3 error bodies echo the key id.
 - A binding cannot sign for a service that mints credentials. The decoder
   refuses `sts`, `iam`, `sso`, `sso-oauth`, `awsssoportal`, `awsssooidc`,
-  `signin`, `cognito-identity`, `cognito-idp`, and `s3express`: a call such as
-  `AssumeRole` or `CreateAccessKey` would return new keys the gateway has no
-  way to scrub. As defence in depth, for every service except `s3` a response
+  `signin`, `cognito-identity`, `cognito-idp`, `s3express`, `ecr`,
+  `ecr-public`, and `codeartifact`: a call such as `AssumeRole`,
+  `CreateAccessKey`, or `GetAuthorizationToken` would return new credentials
+  the gateway has no way to scrub. As defence in depth, for every service except `s3` a response
   that contains the field name `SecretAccessKey` is refused
   (`awsCredentialsInResponse`). While the first 64 KiB of the response are
   held, the agent gets a plain `502` and none of it; if the name shows up
