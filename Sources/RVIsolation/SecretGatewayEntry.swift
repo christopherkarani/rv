@@ -28,16 +28,17 @@ extension SecretGateway.Entry {
             generation: generation, previous: previous, rotation: rotation)
     }
 
-    /// An AWS signing entry. It takes no surfaces.
+    /// An AWS signing entry. It takes no surfaces and no prefix: the agent's
+    /// key id is the bare placeholder, which is all `admitAWS` accepts.
     init(
-        secret: String, prefix: String, value: SecretValue, upstream: URL, fingerprint: String?, runtime: String?,
+        secret: String, value: SecretValue, upstream: URL, fingerprint: String?, runtime: String?,
         rules: [GatewayAccessRule] = [], processGroup: ProcessGroupFact? = nil, expires: Date? = nil,
         refresh: SecretRefreshPolicy? = nil, signing: AWSSigningBinding, approvals: [GatewayAccessRule] = [],
         approver: SecretRequestApprover? = nil, binaries: [GatewayBinaryPin] = [], generation: Int = 0,
         previous: [SecretValue] = [], rotation: SecretRotationState? = nil
     ) {
         self.init(
-            secret: secret, prefix: prefix, value: value, upstream: upstream, fingerprint: fingerprint,
+            secret: secret, prefix: "", value: value, upstream: upstream, fingerprint: fingerprint,
             runtime: runtime, mode: .sign(signing), rules: rules, processGroup: processGroup, expires: expires,
             refresh: refresh, approvals: approvals, approver: approver, binaries: binaries, generation: generation,
             previous: previous, rotation: rotation)

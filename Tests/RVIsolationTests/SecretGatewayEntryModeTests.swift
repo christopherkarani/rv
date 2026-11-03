@@ -7,6 +7,8 @@ import Testing
 @Suite("SecretGatewayEntryMode")
 struct SecretGatewayEntryModeTests {
     private let upstream = URL(string: "https://s3.us-east-1.amazonaws.com")!
+    private static let credentials =
+        #"{"Version":1,"AccessKeyId":"AKIAEXAMPLE","SecretAccessKey":"secret-example","SessionToken":"token-example"}"#
 
     private func binding(service: String = "s3") -> AWSSigningBinding {
         AWSSigningBinding(upstream: upstream, region: "us-east-1", service: service, endpointEnv: "AWS_ENDPOINT_URL")
@@ -24,7 +26,7 @@ struct SecretGatewayEntryModeTests {
 
     private func signing(_ binding: AWSSigningBinding) throws -> SecretGateway.Entry {
         SecretGateway.Entry(
-            secret: "A", prefix: "", value: try #require(SecretValue("{}")), upstream: upstream, fingerprint: nil,
+            secret: "A", value: try #require(SecretValue(Self.credentials)), upstream: upstream, fingerprint: nil,
             runtime: nil, signing: binding)
     }
 
@@ -42,6 +44,7 @@ struct SecretGatewayEntryModeTests {
     @Test func signingEntryExposesNoSurfaces() throws {
         let entry = try signing(binding())
         #expect(entry.surfaces.isEmpty)
+        #expect(entry.prefix.isEmpty)
         #expect(entry.isSigning)
         #expect(entry.mode == .sign(binding()))
         #expect(SecretGateway.live(entry, token: "t").surfaces.isEmpty)
@@ -54,6 +57,9 @@ struct SecretGatewayEntryModeTests {
     }
 
     @Test func scrubbedValuesOnlyExpandCredentialSetsForSigningEntries() throws {
-        #expect(try substitution().scrubbed.count == 1)
+        #expect(try substitution().scrubbed.map { $0.revealed() } == [Array("sk-live".utf8)])
+        #expect(
+            try signing(binding()).scrubbed.map { String(decoding: $0.revealed(), as: UTF8.self) }
+                == ["AKIAEXAMPLE", "secret-example", "token-example"])
     }
 }
