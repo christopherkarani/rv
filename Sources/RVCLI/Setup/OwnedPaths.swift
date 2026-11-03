@@ -39,6 +39,10 @@ struct OwnedPaths: Equatable, Sendable {
     var museSettings: String { home.rawValue + "/.config/muse/settings.json" }
     var museHooks: String { home.rawValue + "/.config/muse/rv-hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
+    var custodianLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.mcp-custodian.plist" }
+    var custodianAppExecutable: String {
+        home.rawValue + "/Applications/RVApprovals.app/Contents/MacOS/rv-mcp-custodian"
+    }
     var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
