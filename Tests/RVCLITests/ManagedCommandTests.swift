@@ -102,10 +102,9 @@ struct ManagedCommandTests {
         let scratch = Scratch()
         var environment = MCPEnvironment(
             configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], keychain: FakeKeychain().writer,
-            approvalKeys: .file(configDirectory: scratch.config), presence: UserPresence { _, _ in .confirmed(method: "test") })
-        let signer = try #require(environment.approvalKeys.loadOrCreate())
+            approvalSigning: .file(configDirectory: scratch.config), presence: UserPresence { _, _ in .confirmed(method: "test") })
         _ = MCPConfiguration(servers: [MCPServerDefinition(name: "github", command: "gh-mcp")])
-            .write(configDirectory: scratch.config, signer: signer)
+            .write(configDirectory: scratch.config, signing: environment.approvalSigning)
 
         environment.managed = .invalid("bad signature")
         #expect(failure(MCPRun.configuration(environment))
@@ -170,20 +169,19 @@ struct ManagedCommandTests {
         let mcp = try scratch.write("home/.config/rv/mcp.json", #"{"version":1,"servers":[]}"#)
         chmod(mcp.path, 0o600)
         chmod(scratch.config.path, 0o700)
-        let keys = MCPApprovalKeyStore.file(configDirectory: scratch.config)
+        let keys = MCPApprovalSigning.file(configDirectory: scratch.config)
         func build() -> ReportRun.Report {
             ReportRun.build(ReportRun.Inputs(
                 configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], managed: .none,
                 managedDirectory: "/managed", now: Date(), hostName: "h", userName: "dev", userID: 501,
-                fileExists: { _ in false }, approvalKeys: keys))
+                fileExists: { _ in false }, approvalSigning: keys))
         }
         let untrusted = build()
         #expect(untrusted.compliant == false)
         #expect(untrusted.mcp.error?.contains("edited outside rv") == true)
         #expect(ReportRun.text(untrusted).contains("edited outside rv"))
 
-        let signer = try #require(keys.loadOrCreate())
-        #expect(MCPIntegrity.signCurrent(configDirectory: scratch.config, signer: signer))
+        #expect(MCPIntegrity.signCurrent(configDirectory: scratch.config, signing: keys))
         #expect(build().compliant)
     }
 
