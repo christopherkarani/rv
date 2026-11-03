@@ -185,7 +185,8 @@ private func filesystemSegmentResult(
             ),
             context: ReviewContext(repository: RepositoryReviewContext()),
             policy: policy,
-            gitWorld: .unprobed
+            gitWorld: .unprobed,
+            filesystemWorld: filesystemWorld
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(
         .filesystem(action),
@@ -195,25 +196,15 @@ private func filesystemSegmentResult(
     } else {
         return nil
     }
+    // The engine owns unprobed-filesystem ranking at its seam: an
+    // unresolved-only hit in an unprobed world arrives here as
+    // `.reviewEligible`, so the pack verdict stands; catalog / boundary
+    // hits arrive as their own denies. This adapter only forwards the
+    // world it was given and maps the verdict onto the pack result.
     switch verdict.decision {
     case .hardAllow, .reviewEligible:
         return nil
     case .hardDeny(let deny):
-        if case .unprobed = filesystemWorld,
-            deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID
-        {
-            // ActionPolicyEngine ranks unresolved first. Unprobed worlds skip
-            // that tighten, but catalog / out-of-repo hits on other targets
-            // must still deny.
-            if let boundary = catalogOrBoundaryDeny(for: action) {
-                return filesystemSemanticDeny(
-                    boundary,
-                    pack: pack,
-                    analysis: analysis
-                )
-            }
-            return nil
-        }
         return filesystemSemanticDeny(deny, pack: pack, analysis: analysis)
     case .mandatoryHuman(let deny):
         return filesystemBound(
@@ -263,13 +254,3 @@ private func filesystemWorkingDirectory(_ world: FilesystemAnalysisWorld) -> Wor
     }
 }
 
-private func catalogOrBoundaryDeny(for action: FilesystemAction) -> Deny? {
-    let kinds = action.effects.kinds
-    if kinds.contains(.protectedPathMutation) {
-        return ActionPolicyEngine.Builtin.protectedPath
-    }
-    if kinds.contains(.outsideRepositoryMutation) {
-        return ActionPolicyEngine.Builtin.outsideRepository
-    }
-    return nil
-}

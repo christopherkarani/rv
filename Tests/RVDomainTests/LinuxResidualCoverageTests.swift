@@ -416,7 +416,11 @@ struct LinuxResidualCoverageTests {
             )
         )
         #expect(
-            ActionPolicyEngine.evaluate(action: writeInside).decision == .hardAllow
+            ActionPolicyEngine.evaluate(
+                action: writeInside,
+                context: ReviewContext(repository: RepositoryReviewContext()),
+                gitWorld: .probed(.empty)
+            ).decision == .hardAllow
         )
         let writeOutside = ProposedAction.shell(
             ShellAction.effectOnly(
@@ -428,7 +432,11 @@ struct LinuxResidualCoverageTests {
             )
         )
         #expect(
-            ActionPolicyEngine.evaluate(action: writeOutside).decision
+            ActionPolicyEngine.evaluate(
+                action: writeOutside,
+                context: ReviewContext(repository: RepositoryReviewContext()),
+                gitWorld: .probed(.empty)
+            ).decision
                 == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
         )
         let writeProtected = ProposedAction.shell(
@@ -441,7 +449,11 @@ struct LinuxResidualCoverageTests {
             )
         )
         #expect(
-            ActionPolicyEngine.evaluate(action: writeProtected).decision
+            ActionPolicyEngine.evaluate(
+                action: writeProtected,
+                context: ReviewContext(repository: RepositoryReviewContext()),
+                gitWorld: .probed(.empty)
+            ).decision
                 == .hardDeny(ActionPolicyEngine.Builtin.protectedPath)
         )
         let request = ReviewRequest(
