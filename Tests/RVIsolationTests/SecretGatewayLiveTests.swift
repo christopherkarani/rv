@@ -20,7 +20,7 @@ struct SecretGatewayLiveTests {
             sent.items.withLock { $0.append(request.headers.map { "\($0.name): \($0.value)" } + [request.url.absoluteString]) }
             live.send(request, sink)
         }
-        let gateway = SecretGateway(transport: recording) { record in audit.items.withLock { $0.append(record) } }
+        let gateway = SecretGateway(transport: recording) { audit.record($0) }
         defer { gateway.stop() }
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "")
@@ -37,7 +37,7 @@ struct SecretGatewayLiveTests {
         #expect(response.body.contains("Bearer \(placeholder.text)"))
         #expect(response.body.contains("\"token\": \"\(placeholder.text)\"")
             || response.body.contains("\"token\":\"\(placeholder.text)\""))
-        #expect(audit.items.withLock { $0.first?.status } == 200)
+        #expect(audit.items.withLock { $0.last?.status } == 200)
         let wire = try #require(sent.items.withLock { $0.first })
         #expect(wire.contains("Authorization: Bearer \(secret)"))
         #expect(wire.contains("https://postman-echo.com/get?token=\(secret)"))
@@ -46,7 +46,7 @@ struct SecretGatewayLiveTests {
 
     @Test func redirectsAreNotFollowed() throws {
         let audit = AuditRecords()
-        let gateway = SecretGateway { record in audit.items.withLock { $0.append(record) } }
+        let gateway = SecretGateway { audit.record($0) }
         defer { gateway.stop() }
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "")

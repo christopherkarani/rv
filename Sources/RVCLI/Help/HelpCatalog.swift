@@ -515,10 +515,13 @@ enum HelpCatalog {
                     name: "defaults",
                     description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
                 ),
-                HelpRow(name: "describe", description: "Names, descriptions, types, and delivery for agents; never a value"),
+                HelpRow(name: "describe", description: "Names, descriptions, types, delivery, surfaces, and allow rules for agents; never a value"),
                 HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, @proxy, and provider refs; @proxy(domain=) imports as gateway, literals are skipped"),
                 HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
-                HelpRow(name: "audit", description: "rv audit --kind secret.use shows each use with a fingerprint"),
+                HelpRow(
+                    name: "audit",
+                    description: "rv audit --kind secret.use shows each use; secret.misuse flags policy refusals (high severity)"
+                ),
             ]),
         ],
         examples: [

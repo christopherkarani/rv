@@ -39,6 +39,9 @@ enum SecretsRun {
         var profiles: [String]
         /// Environment delivery puts the real value in the cage.
         var weaker: Bool
+        /// Gateway only: where the placeholder may sit, and allow rules (empty allows any).
+        var surfaces: [String]?
+        var allow: [String]?
     }
 
     struct ListReport: Encodable, Equatable {
@@ -138,6 +141,7 @@ enum SecretsRun {
         let rows = configuration.secrets.map { secret -> ListRow in
             var upstream: String?
             var baseURLEnv: String?
+            let scope = gatewayScope(secret.delivery)
             if case .gateway(let binding) = secret.delivery {
                 upstream = binding.upstream.absoluteString
                 baseURLEnv = binding.baseURLEnv
@@ -152,7 +156,9 @@ enum SecretsRun {
                 baseURLEnv: baseURLEnv,
                 agents: secret.agents,
                 profiles: profiles.filter { $0.secrets.contains(secret.name) }.map(\.id),
-                weaker: secret.delivery == .environment
+                weaker: secret.delivery == .environment,
+                surfaces: scope?.surfaces,
+                allow: scope?.allow
             )
         }
         var warnings: [String] = []
@@ -175,11 +181,24 @@ enum SecretsRun {
                 + "  \(row.source)  \(row.delivery)"
             line += "  profiles: \(row.profiles.isEmpty ? "-" : row.profiles.joined(separator: ","))"
             if let agents = row.agents { line += "  agents: \(agents.joined(separator: ","))" }
+            if let surfaces = row.surfaces, let allow = row.allow {
+                line += "  surfaces: \(surfaces.joined(separator: ","))  allow: \(allowText(allow))"
+            }
             if row.weaker { line += "  [weaker]" }
             return line
         }
         lines += report.warnings.map { "warning: \($0)" }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Surfaces and allow rules of a gateway binding; nil for environment delivery.
+    static func gatewayScope(_ delivery: SecretDelivery) -> (surfaces: [String], allow: [String])? {
+        guard case .gateway(let binding) = delivery else { return nil }
+        return (GatewaySurface.ordered(binding.surfaces).map(\.rawValue), binding.allow.map(\.text))
+    }
+
+    static func allowText(_ allow: [String]) -> String {
+        allow.isEmpty ? "any method and path" : allow.joined(separator: "; ")
     }
 
     static func check(
@@ -377,19 +396,22 @@ enum SecretsRun {
         var type: String?
         var delivery: String
         var source: String
+        var surfaces: [String]? = nil
+        var allow: [String]? = nil
     }
 
     struct DescribeReport: Encodable, Equatable {
         var secrets: [DescribeRow]
     }
 
-    /// Names, descriptions, types, and delivery. No values and no provider locators.
+    /// Names, descriptions, types, delivery, and gateway scope. No values and no provider locators.
     static func describe(_ configuration: SecretsConfiguration) -> DescribeReport {
         DescribeReport(secrets: configuration.secrets.map { secret in
-            DescribeRow(
+            let scope = gatewayScope(secret.delivery)
+            return DescribeRow(
                 name: secret.name, description: secret.description, type: secret.type,
                 delivery: secret.delivery == .environment ? "environment" : "gateway",
-                source: secret.source.kind)
+                source: secret.source.kind, surfaces: scope?.surfaces, allow: scope?.allow)
         })
     }
 
@@ -397,6 +419,10 @@ enum SecretsRun {
         guard report.secrets.isEmpty == false else { return "No secrets configured.\n" }
         return report.secrets.map { row in
             var lines = ["\(row.name)  \(row.source)  \(row.delivery)"]
+            if let surfaces = row.surfaces, let allow = row.allow {
+                lines.append("  surfaces: \(surfaces.joined(separator: ","))")
+                lines.append("  allow: \(allowText(allow))")
+            }
             if let type = row.type { lines.append("  type: \(type)") }
             if let description = row.description { lines.append("  \(description)") }
             return lines.joined(separator: "\n")

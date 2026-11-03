@@ -150,3 +150,26 @@ extension AuditChainTests {
         #expect(AuditChain.verify(Data((line + "\n").utf8)).firstBreak?.reason == "duplicate key")
     }
 }
+
+@Suite("AuditOCSF secret misuse")
+struct AuditOCSFMisuseTests {
+    @Test func misuseIsAHighSeverityDetectionFindingAlert() throws {
+        let event = AuditEvent(
+            time: Date(timeIntervalSince1970: 0), kind: .secretMisuse, decision: .denied, subject: "OPENAI_API_KEY",
+            reason: "placeholder is not allowed in this part of the request for this secret", source: "secret-gateway",
+            detail: ["refusal": "surfaceNotAllowed", "method": "GET", "path": "/s/OPENAI_API_KEY/models"])
+        let object = AuditOCSF.object(event, hostName: "h")
+        #expect(object["class_uid"] as? Int == 2004)
+        #expect(object["severity_id"] as? Int == 4)
+        #expect(object["severity"] as? String == "High")
+        #expect(object["is_alert"] as? Bool == true)
+        let finding = try #require(object["finding_info"] as? [String: Any])
+        #expect(finding["uid"] as? String == "rv.secret.misuse")
+        #expect(AuditEventKind.secretMisuse.matches("secret"))
+        let use = AuditOCSF.object(
+            AuditEvent(time: Date(), kind: .secretUse, decision: .denied, subject: "X", source: "secret-gateway"),
+            hostName: "h")
+        #expect(use["class_uid"] as? Int == 6003)
+        #expect(use["is_alert"] == nil)
+    }
+}

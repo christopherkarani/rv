@@ -9,19 +9,50 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// What one gateway request did. Carries names and a fingerprint, never values.
+/// What happened to one gateway request.
+public enum SecretGatewayActivity: String, Sendable, Equatable {
+    /// The value was placed and the request forwarded upstream.
+    case brokered
+    /// Refused by the secret's own policy before any value was placed: a misuse signal.
+    case blocked
+    /// Refused before forwarding for any other reason.
+    case refused
+    /// Forwarded, but no upstream response arrived.
+    case error
+}
+
+/// What one gateway request did. Carries names and a fingerprint, never a
+/// value or a placeholder.
 public struct SecretUseRecord: Sendable, Equatable {
+    /// A brokered request is recorded once before forwarding, so a failed
+    /// append stops it, and once with its outcome.
+    public enum Stage: String, Sendable, Equatable {
+        case forward
+        case complete
+    }
+
     public var secret: String?
     public var runtime: String?
     public var upstreamHost: String?
     public var method: String
-    /// Path only; the query string is never recorded.
+    /// Path only, placeholders redacted; the query string is never recorded.
     public var path: String
+    /// What the agent received.
     public var status: Int
-    public var allowed: Bool
+    /// What the upstream answered, when it answered.
+    public var upstreamStatus: Int?
+    public var activity: SecretGatewayActivity
+    /// `GatewayRefusal` case name for blocked and refused requests.
+    public var refusal: String?
     public var reason: String?
+    /// Request surfaces the value was placed on.
+    public var surfaces: [String]
     public var fingerprint: String?
     public var responseBytes: Int
+    public var durationMilliseconds: Int
+    public var stage: Stage
+
+    public var allowed: Bool { activity == .brokered || activity == .error }
 }
 
 public struct SecretUpstreamRequest: Sendable {
@@ -75,7 +106,9 @@ public final class SecretGateway: @unchecked Sendable {
     static let socketFloor: Int32 = 64
 
     private let transport: SecretUpstreamTransport
-    private let audit: @Sendable (SecretUseRecord) -> Void
+    /// Returns false when the record did not land; a forward record that
+    /// does not land stops the request.
+    private let audit: @Sendable (SecretUseRecord) -> Bool
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
@@ -95,7 +128,7 @@ public final class SecretGateway: @unchecked Sendable {
 
     public init(
         transport: SecretUpstreamTransport = .urlSession,
-        audit: @escaping @Sendable (SecretUseRecord) -> Void
+        audit: @escaping @Sendable (SecretUseRecord) -> Bool
     ) {
         self.transport = transport
         self.audit = audit
@@ -143,6 +176,16 @@ public final class SecretGateway: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return entries[token]
+    }
+
+    /// True when some live placeholder belongs to `secret`. The route name is
+    /// agent-supplied, so a misuse finding may only name a secret that is
+    /// actually brokered here.
+    private func holdsLivePlaceholder(for secret: String?) -> Bool {
+        guard let secret else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.values.contains { $0.secret == secret }
     }
 
     /// A TCP stream socket that is close-on-exec before the caller uses it.
@@ -375,20 +418,24 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     func handle(_ client: Int32) {
+        let started = DispatchTime.now()
         let reader = GatewaySocket.Reader(fd: client)
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
             let head = GatewayRequestHead.parse(headBytes)
         else {
-            refuse(client, .malformed, method: "?", path: "?", secret: nil)
+            refuse(client, .malformed, method: "?", path: "?", secret: nil, started: started)
             return
         }
-        let path = SecretPlaceholder.redacted(String(head.target.prefix { $0 != "?" }))
+        let path = SecretPlaceholder.redactedPath(head.target)
         guard let route = GatewayRoute(target: head.target) else {
-            refuse(client, .unknownRoute, method: head.method, path: path, secret: nil)
+            refuse(client, .unknownRoute, method: head.method, path: path, secret: nil, started: started)
             return
+        }
+        func deny(_ refusal: GatewayRefusal) {
+            refuse(client, refusal, method: head.method, path: path, secret: route.secret, started: started)
         }
         guard GatewayHeaders.echoMethods.contains(head.method) == false else {
-            refuse(client, .echoMethod, method: head.method, path: path, secret: route.secret)
+            deny(.echoMethod)
             return
         }
         var forwarded = head
@@ -403,28 +450,39 @@ public final class SecretGateway: @unchecked Sendable {
         }
         let rewritten: GatewayRequestHead
         let token: String
+        let surfaces: [String]
         let echoes: [GatewaySubstitution.Echo]
         switch substituted {
         case .failure(let refusal):
-            refuse(client, refusal, method: head.method, path: path, secret: route.secret)
+            deny(refusal)
             return
         case .success(let result):
             rewritten = result.head
             token = result.used.token
+            surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
             echoes = result.echoes
         }
         guard let live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
             let url = upstreamRoute.upstreamURL(base: live.upstream)
         else {
-            refuse(client, .unknownPlaceholder, method: head.method, path: path, secret: route.secret)
+            deny(.unknownPlaceholder)
             return
         }
         if head.header("Expect")?.lowercased() == "100-continue" {
             GatewaySocket.writeAll(client, Array("HTTP/1.1 100 Continue\r\n\r\n".utf8))
         }
         guard let body = readBody(reader, head: head) else {
-            refuse(client, .tooLarge, method: head.method, path: path, secret: route.secret)
+            deny(.tooLarge)
+            return
+        }
+        var record = SecretUseRecord(
+            secret: live.secret, runtime: live.runtime, upstreamHost: url.host, method: head.method, path: path,
+            status: 0, upstreamStatus: nil, activity: .brokered, refusal: nil, reason: nil, surfaces: surfaces,
+            fingerprint: live.fingerprint, responseBytes: 0, durationMilliseconds: 0, stage: .forward)
+        // Fail closed: a request the audit log cannot hold does not leave.
+        guard audit(record) else {
+            deny(.auditUnavailable)
             return
         }
         let sink = GatewayResponseWriter(
@@ -435,18 +493,18 @@ public final class SecretGateway: @unchecked Sendable {
         // Identity encoding so the scrubber sees the bytes the agent will get.
         let headers = rewritten.headers + [GatewayHeaders.identityEncoding]
         transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: headers, body: body), sink)
-        audit(SecretUseRecord(
-            secret: live.secret,
-            runtime: live.runtime,
-            upstreamHost: url.host,
-            method: head.method,
-            path: path,
-            status: sink.status,
-            allowed: true,
-            reason: sink.failure,
-            fingerprint: live.fingerprint,
-            responseBytes: sink.bytesWritten
-        ))
+        record.stage = .complete
+        record.status = sink.status
+        record.upstreamStatus = sink.upstreamStatus
+        record.activity = sink.upstreamStatus == nil ? .error : .brokered
+        record.reason = sink.failure
+        record.responseBytes = sink.bytesWritten
+        record.durationMilliseconds = Self.milliseconds(since: started)
+        _ = audit(record)
+    }
+
+    private static func milliseconds(since start: DispatchTime) -> Int {
+        Int((DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000)
     }
 
     private func readBody(_ reader: GatewaySocket.Reader, head: GatewayRequestHead) -> Data? {
@@ -474,11 +532,16 @@ public final class SecretGateway: @unchecked Sendable {
         return framed
     }
 
-    private func refuse(_ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?) {
+    private func refuse(
+        _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?, started: DispatchTime
+    ) {
         GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
-        audit(SecretUseRecord(
-            secret: secret, runtime: nil, upstreamHost: nil, method: method, path: path,
-            status: refusal.status, allowed: false, reason: refusal.reason, fingerprint: nil, responseBytes: 0
+        _ = audit(SecretUseRecord(
+            secret: secret, runtime: nil, upstreamHost: nil, method: method, path: path, status: refusal.status,
+            upstreamStatus: nil,
+            activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
+            refusal: refusal.code, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }
 }
@@ -496,6 +559,8 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     private var framed = true
     private var closed = false
     private(set) var status = 502
+    /// The upstream's own status, before any rewrite. Nil when none arrived.
+    private(set) var upstreamStatus: Int?
     private(set) var bytesWritten = 0
     private(set) var failure: String?
 
@@ -511,6 +576,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         defer { lock.unlock() }
         guard wroteHead == false else { return }
         wroteHead = true
+        upstreamStatus = status
         // Every forwarded request carries a brokered credential. Passing the
         // 401 and its challenge on would start the agent's own auth flow
         // for a credential only the operator can replace.
