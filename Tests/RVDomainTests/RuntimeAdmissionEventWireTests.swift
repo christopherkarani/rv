@@ -148,7 +148,7 @@ struct RuntimeAdmissionEventWireTests {
         #expect(decision.event.result == .denied(deny.ruleID))
     }
 
-    @Test func pendingAnswerDerivesAuthorizationAndDeferredProjectsPending() {
+    @Test func pendingAnswerDerivesAuthorizationAndDeferredHasNoWireResponse() {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
         var decision = RuntimeAdmissionGate.submitLegacy(
@@ -160,7 +160,7 @@ struct RuntimeAdmissionEventWireTests {
         decision.outcome = .deferred(pending: .reviewAsk)
         #expect(decision.responseDeferred)
         #expect(decision.execute == nil)
-        #expect(decision.response == .pending(.reviewAsk))
+        #expect(decision.response == nil)
     }
 
     @Test func rejectionDerivesAuthorizationAndResultFromTheReason() {

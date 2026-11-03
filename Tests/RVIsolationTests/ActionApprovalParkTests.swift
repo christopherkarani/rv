@@ -375,7 +375,10 @@ struct ActionApprovalParkTests {
         defer { harness.cleanup() }
         let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
-        #expect(decision.response == .pending(.reviewAsk))
+        #expect(decision.outcome == .deferred(pending: .reviewAsk))
+        #expect(decision.response == nil)
+        #expect(decision.event.authorization == .pending)
+        #expect(decision.event.result == .pending(.reviewAsk))
         #expect(harness.effect.runs == 0)
         let creates = harness.backend.snapshot.creates
         #expect(creates.count == 1)

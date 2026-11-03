@@ -649,8 +649,8 @@ final class RuntimeAdmissionSession: Sendable {
             frame: frame, decision: decision, agentContext: agentContext, binding: binding) {
             // The pending event is recorded exactly as the legacy path
             // records it; the waiter's eventual answer records a second,
-            // outcome event. Callers must not write the superseded
-            // pending projection: `responseDeferred` says so.
+            // outcome event. The deferred decision carries no wire
+            // response: `responseDeferred` says so.
             configuration.evidence.record(parked.event)
             return parked
         }

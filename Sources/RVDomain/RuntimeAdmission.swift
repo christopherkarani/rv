@@ -289,9 +289,9 @@ public enum RuntimeAdmissionOutcome: Sendable, Equatable {
     /// A final answer for the runtime.
     case answer(RuntimeAdmissionResponse)
     /// The host parked this ASK for a human decision: the answer arrives
-    /// later, asynchronously. Callers must NOT write a response now; the
-    /// carried reason is the superseded pre-park pending projection. Set
-    /// only by the host session layer, never by the gate.
+    /// later, asynchronously, so no wire response exists now. The carried
+    /// reason is the gate's pending reason the park superseded. Set only by
+    /// the host session layer, never by the gate.
     case deferred(pending: ApprovalReason)
 
     /// Authorization the event records at gate time.
@@ -325,13 +325,12 @@ public struct RuntimeAdmissionDecision: Sendable, Equatable {
         return nil
     }
 
-    /// The wire answer. Nil while the shell still owes an execution.
-    /// A deferred decision projects the superseded pending answer.
+    /// The wire answer. Nil while the shell still owes an execution, and
+    /// for a parked ASK, whose answer is written later by its waiter.
     public var response: RuntimeAdmissionResponse? {
         switch outcome {
-        case .execute: nil
+        case .execute, .deferred: nil
         case .answer(let response): response
-        case .deferred(let reason): .pending(reason)
         }
     }
 
