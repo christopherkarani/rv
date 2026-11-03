@@ -268,7 +268,9 @@ private func dropXargsLauncherPrefixes(_ words: [String]) -> [String] {
             rest = rest.dropFirst()
             while let flag = rest.first, flag.hasPrefix("-"), flag != "--" {
                 rest = rest.dropFirst()
-                if ["-i", "-o", "-e"].contains(flag), rest.isEmpty == false { rest = rest.dropFirst() }
+                if ["-i", "-o", "-e", "--input", "--output", "--error"].contains(flag), rest.isEmpty == false {
+                    rest = rest.dropFirst()
+                }
             }
             if rest.first == "--" { rest = rest.dropFirst() }
         } else {

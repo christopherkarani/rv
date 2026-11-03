@@ -209,6 +209,19 @@
     { "id": "db.allow.r4-git-checkout-detach", "command": "git checkout --detach", "expected": "allow" },
     { "id": "db.allow.r4-git-checkout-b-origin", "command": "git checkout -b x origin/main", "expected": "allow" },
     { "id": "db.allow.r4-sed-n-hash", "command": "sed -n '/^#/p' f", "expected": "allow" },
-    { "id": "db.allow.r4-ruby-rdonly", "command": "ruby -e \"File.open('f', File::RDONLY) { |f| puts f.read }\"", "expected": "allow" }
+    { "id": "db.allow.r4-ruby-rdonly", "command": "ruby -e \"File.open('f', File::RDONLY) { |f| puts f.read }\"", "expected": "allow" },
+    { "id": "db.deny.f488r2-time-substitution-option", "command": "time -$(rm -r ~) ls", "expected": "deny" },
+    { "id": "db.deny.f488r2-exec-a-substitution", "command": "exec -a $(rm -r ~) ls", "expected": "deny" },
+    { "id": "db.deny.f488r2-builtin-substitution-option", "command": "builtin -$(rm -r ~) ls", "expected": "deny" },
+    { "id": "db.deny.f488r2-time-p-substitution-option", "command": "time -p -$(rm -r ~)", "expected": "deny" },
+    { "id": "db.deny.f488r2-case-word-with-space", "command": "case $(uname -s) in Darwin) rm -r ~ ;; esac", "expected": "deny" },
+    { "id": "db.deny.f488r2-case-word-backtick", "command": "case `uname -s` in Darwin) rm -r ~ ;; esac", "expected": "deny" },
+    { "id": "db.deny.f488r2-case-word-param-default", "command": "case ${X:-a b} in x) rm -r ~;; esac", "expected": "deny" },
+    { "id": "db.deny.f488r2-case-multiline", "command": "case $(uname -s) in\nDarwin) rm -r ~\n;;\nesac", "expected": "deny" },
+    { "id": "db.deny.f488r2-nested-group-after-then", "command": "{ if :; then ( rm -r ~ ); fi; }", "expected": "deny" },
+    { "id": "db.deny.f488r2-nested-group-after-do", "command": "( cd /tmp; while :; do ( rm -r ~ ); done )", "expected": "deny" },
+    { "id": "db.deny.f488r2-xargs-stdbuf-long-output", "command": "ls | xargs stdbuf --output L rm -r", "expected": "deny" },
+    { "id": "db.allow.f488r2-case-word-with-space-echo", "command": "case $(uname -s) in Darwin) echo hi ;; esac", "expected": "allow" },
+    { "id": "db.allow.f488r2-time-p-ls", "command": "time -p ls", "expected": "allow" }
   ]
 }

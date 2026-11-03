@@ -351,7 +351,20 @@ private func isGroupOpener(
         }
         // After a reserved word, a function head, or a `case` arm head the
         // opener still begins a command body.
-        let prefix = String(decoding: utf8[segmentStart..<index], as: UTF8.self)
+        // Only the text since the last separator counts: inside an outer
+        // group `segmentStart` is far behind (`{ if :; then ( rm ); fi; }`).
+        var commandStart = index
+        while commandStart != segmentStart {
+            let before = utf8.index(before: commandStart)
+            let byte = utf8[before]
+            if byte == UInt8(ascii: ";") || byte == UInt8(ascii: "&") || byte == UInt8(ascii: "|")
+                || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")
+            {
+                break
+            }
+            commandStart = before
+        }
+        let prefix = String(decoding: utf8[commandStart..<index], as: UTF8.self)
         return prefixIntroducesBody(prefix)
     }
     return true
