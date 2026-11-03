@@ -111,6 +111,8 @@ public enum WorkspaceLayoutStore {
     public static let maximumDocumentBytes = 65_536
 
     /// `canonicalOriginalProject` is the host's resolved original project path, never a mounted workspace path.
+    /// `configurationDirectory` is the rv config root (`~/.config/rv` in production); layouts live under
+    /// `workspace-layouts/<project digest>` inside it. This module never reads HOME itself.
     public static func open(canonicalOriginalProject: String,
                             configurationDirectory: URL) throws -> WorkspaceLayoutOpenResult {
         try openImpl(canonicalOriginalProject: canonicalOriginalProject,

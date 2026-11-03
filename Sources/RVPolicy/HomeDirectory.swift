@@ -7,27 +7,33 @@ public typealias HomeDirectory = HomePath
 
 extension HomeDirectory {
     /// The single sanctioned environment read. nil when HOME is unset or empty.
+    /// Any other non-empty value passes unchanged (`HomePath` is a wire type);
+    /// callers that build filesystem paths use `processValidatedHome()` or
+    /// `processConfigDirectory()`, which also require an absolute, NUL-free HOME.
     public static func process() -> HomeDirectory? {
         HomeDirectory(validating: ProcessInfo.processInfo.environment["HOME"] ?? "")
     }
 
-    /// The process HOME when absolute and NUL-free, else nil.
+    /// `process()` narrowed to an absolute, NUL-free path, as a raw string for
+    /// APIs that take one (e.g. `SecretResolver.live(home:)`). nil otherwise.
     public static func processValidatedHome() -> String? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"],
-              home.hasPrefix("/"), !home.contains("\0") else { return nil }
+        guard let home = process()?.rawValue, isUsableHome(home) else { return nil }
         return home
     }
 
     /// `<home>/.config/rv` for an absolute, NUL-free `home`; nil otherwise.
+    /// Pure: never reads the environment.
     public static func configRoot(for home: String) -> URL? {
-        guard home.hasPrefix("/"), !home.contains("\0") else { return nil }
-        return URL(fileURLWithPath: home, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("rv", isDirectory: true)
+        guard isUsableHome(home), let validated = HomeDirectory(validating: home) else { return nil }
+        return RVPolicyPaths.configDirectory(home: validated)
     }
 
-    /// `~/.config/rv` from the process HOME; nil when HOME is unusable.
+    /// `~/.config/rv` from `processValidatedHome()`; nil when HOME is unusable.
     public static func processConfigDirectory() -> URL? {
         processValidatedHome().flatMap(configRoot(for:))
+    }
+
+    private static func isUsableHome(_ home: String) -> Bool {
+        home.hasPrefix("/") && !home.contains("\0")
     }
 }
