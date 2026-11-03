@@ -122,6 +122,53 @@ struct ManagedStatusGoldenTests {
             """)
     }
 
+    @Test func activeWithoutOrganizationOrSerialOmitsKeys() throws {
+        let policy = try ManagedPolicy.decode(Data(#"{"version": 1}"#.utf8)).get()
+        let status = ManagedRun.status(
+            .active(ManagedPolicyBundle(policy: policy, sha256: "abc", isSigned: false, directory: "/managed")),
+            directory: "/ignored")
+        #expect(ManagedRun.robotJSON(status) == """
+            {
+              "directory" : "/managed",
+              "restrictions" : [
+                "\(Self.sandboxLine)"
+              ],
+              "sha256" : "abc",
+              "signed" : false,
+              "state" : "active"
+            }
+
+            """)
+        #expect(ManagedRun.statusText(status) == """
+            organization policy active: unnamed
+              unsigned sha256 abc
+              \(Self.sandboxLine)
+
+            """)
+    }
+
+    @Test func reportEmbedsTheSameFlatManagedObject() {
+        let report = ReportRun.Report(
+            schema: ReportRun.schema,
+            generatedAt: "2026-01-01T00:00:00Z",
+            rv: .init(version: "0.0.0", platform: "linux"),
+            host: .init(name: "build", user: "me", uid: 1),
+            managed: ManagedRun.status(.invalid("bad owner"), directory: "/managed"),
+            config: [],
+            mcp: .init(ok: true, error: nil, servers: 0, counts: [:], failing: [], plaintextCredentials: 0),
+            secrets: .init(error: nil, items: []),
+            audit: .init(since: "2026-01-01T00:00:00Z", total: 0, byKind: [:], lastEventAt: nil),
+            sandbox: .init(platform: "linux", mcpSandbox: false, peerTrustInstalled: false))
+        #expect(ReportRun.json(report).contains("""
+              "managed" : {
+                "directory" : "/managed",
+                "reason" : "bad owner",
+                "state" : "invalid"
+              },
+            """))
+        #expect(report.compliant == false)
+    }
+
     @Test func invalidPolicyIsNeverCompliant() throws {
         #expect(ManagedRun.status(.invalid("x"), directory: "/m").isInvalid)
         #expect(ManagedRun.status(.none, directory: "/m").isInvalid == false)
