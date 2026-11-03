@@ -28,6 +28,19 @@ struct SecretGatewayLimitsTests {
         }
     }
 
+    @Test func setRefreshKeepsTheBinaryPins() throws {
+        let interval = try #require(SecretRefreshInterval("15m"))
+        let pinned = SecretDelivery.gateway(SecretGatewayBinding(
+            upstream: Self.upstream, baseURLEnv: "API_BASE", limits: SecretGatewayLimits(binaries: ["/usr/bin/curl"])))
+        var secret = definition(pinned)
+        try secret.setRefresh(interval)
+        #expect(secret.refresh == interval)
+        #expect(secret.binaries == ["/usr/bin/curl"])
+        try secret.setRefresh(nil)
+        #expect(secret.binaries == ["/usr/bin/curl"])
+        #expect(secret.delivery == pinned)
+    }
+
     @Test func setRefreshOnEnvironmentRefusesAValueAndAcceptsAClear() throws {
         let interval = try #require(SecretRefreshInterval("15m"))
         var secret = definition(.environment)
@@ -39,8 +52,8 @@ struct SecretGatewayLimitsTests {
     }
 
     @Test func routeIgnoresLimitsButNotTheBinding() throws {
-        let limited = Self.gateway.with(limits: SecretGatewayLimits(
-            refresh: try #require(SecretRefreshInterval("1h")), binaries: ["/usr/bin/curl"]))
+        let interval = try #require(SecretRefreshInterval("1h"))
+        let limited = Self.gateway.with(limits: SecretGatewayLimits(refresh: interval, binaries: ["/usr/bin/curl"]))
         #expect(limited != Self.gateway)
         #expect(limited.route == Self.gateway.route)
         #expect(Self.gateway.route != Self.aws.route)
