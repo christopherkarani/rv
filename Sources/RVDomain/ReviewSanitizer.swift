@@ -3,8 +3,12 @@
 /// never be evaluated on this type. `ActionPolicyEngine` accepts only
 /// `ProposedAction`, which makes that mistake a compile error.
 ///
-/// It exposes no `ActionFingerprint`. The redacted fingerprint is display text
-/// (`fingerprintText`) and cannot be used for approval lookup.
+/// The shell and file arms expose no `ActionFingerprint`. Their redacted
+/// fingerprint is display text (`fingerprintText`) and cannot be used for
+/// approval lookup. The http and secretRequest arms keep the real types
+/// because redaction leaves them credential-free and policy-equivalent: HTTP
+/// only drops the query, whose SHA-256 token already sits in the fingerprint,
+/// and a secret request is returned unchanged.
 public enum RedactedAction: Sendable, Equatable, Codable {
     case shell(RedactedShell)
     case file(RedactedFile)
