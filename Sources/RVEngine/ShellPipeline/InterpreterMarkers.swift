@@ -39,7 +39,8 @@ func matches(_ code: String, pattern: String) -> Bool {
 private let pythonDangerousWords: [String] = [
     "subprocess", "pty", "importlib", "ctypes", "__import__", "builtins", "__builtins__",
     "__subclasses__", "__globals__", "runpy", "popen", "posix", "unlink", "rmdir", "rmtree",
-    "write_text", "write_bytes", "rename", "chmod", "chown", "symlink_to",
+    "write_text", "write_bytes", "rename", "chmod", "chown", "symlink_to", "touch",
+    "O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC",
 ]
 
 /// Modules whose attributes spawn processes or delete/move files.
@@ -64,12 +65,8 @@ private func isDangerousModuleAttribute(module: String, attribute: String) -> Bo
 /// them indirectly (aliased imports, `getattr`, `exec`). Plain data code,
 /// including `os.getcwd()` and `re.compile(...)`, is not flagged.
 func pythonCodeCanSpawn(_ code: String) -> Bool {
-    // `eval("1+1")` over a pure arithmetic literal cannot run anything.
-    let program = code.replacingOccurrences(
-        of: #"eval\(\s*(["'])[0-9+\-*/%().\s]*\1\s*\)"#,
-        with: "0",
-        options: .regularExpression
-    )
+    let program = removingBenignEval(code, arithmeticLiterals: true, blockEval: false)
+    if pythonOpensFileForWrite(program) { return true }
     if containsAnyWord(program, pythonDangerousWords) { return true }
     if matches(program, pattern: #"(?<![.\w])(exec|eval|compile|getattr)\s*\("#) { return true }
     if matches(program, pattern: #"\bsys\s*\.\s*modules\b"#) { return true }
@@ -115,6 +112,7 @@ func nodeCodeCanSpawn(_ code: String) -> Bool {
             pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|writeFile|writeFileSync|rename|renameSync)\b"#
         )
         || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork"])
+        || nodeWritesFiles(code)
         || matches(code, pattern: #"\b(require|import)\s*\(\s*[^'"\s)]"#)
 }
 
@@ -141,14 +139,14 @@ func rubyCodeCanSpawn(_ code: String) -> Bool {
         #"\bIO\.(read|readlines|foreach|binread)\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
         #"(?<![.\w])open\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
     ]
-    return patterns.contains { matches(code, pattern: $0) }
+    return patterns.contains { matches(code, pattern: $0) } || rubyOpensFileForWrite(code)
 }
 
 // MARK: perl
 
 func perlCodeCanSpawn(_ code: String) -> Bool {
     // `eval { ... }` is a trapping block, not string evaluation.
-    let program = code.replacingOccurrences(of: #"\beval\s*\{"#, with: "{", options: .regularExpression)
+    let program = removingBenignEval(code, arithmeticLiterals: false, blockEval: true)
     return program.contains("`")
         || containsAnyWord(program, [
             "system", "exec", "qx", "unlink", "rmtree", "remove_tree", "rmdir", "rename", "fork", "eval",

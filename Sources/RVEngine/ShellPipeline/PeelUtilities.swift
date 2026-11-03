@@ -19,7 +19,7 @@ func peelUtility(
     case "xargs":
         return peelXargs(tokens, workingDirectory: workingDirectory)
     default:
-        return peelScriptInterpreter(head, tokens: tokens)
+        return peelScriptInterpreter(head, tokens: tokens, workingDirectory: workingDirectory)
     }
 }
 
@@ -237,6 +237,7 @@ private func xargsInnerIsMutating(_ words: [String], replace: String?) -> Bool {
     let tail = words[(headIndex + 1)...]
     if xargsMutatingVerbs.contains(head) { return true }
     if head == "sed" { return tail.contains(where: isSedInPlaceFlag) }
+    if head == "perl" { return perlSwitchScan(Array(tail)).inPlace }
     if head == "git" {
         return tail.contains { xargsMutatingGit.contains($0.lowercased()) }
     }
@@ -262,10 +263,16 @@ private func isXargsEffectiveHead(_ word: String) -> Bool {
 
 // MARK: - perl / php / lua / awk
 
-private func peelScriptInterpreter(_ head: String, tokens: [ShellPipeline.Token]) -> Peel? {
+private func peelScriptInterpreter(
+    _ head: String,
+    tokens: [ShellPipeline.Token],
+    workingDirectory: WorkingDirectory?
+) -> Peel? {
     let words = tokens.map(\.lexeme)
     if head == "perl" || head.hasPrefix("perl5") {
-        return perlPrograms(words).contains(where: perlCodeCanSpawn) ? .limited(.perl) : nil
+        if perlPrograms(words).contains(where: perlCodeCanSpawn) { return .limited(.perl) }
+        let edited = parsePerl(Argv(program: head, args: Array(words.dropFirst())))?.paths ?? []
+        return writeProxy(edited, .perl, workingDirectory)
     }
     if head == "php" || head.hasPrefix("php7") || head.hasPrefix("php8") {
         return flagValues(words, flags: ["-r"]).contains(where: phpCodeCanSpawn) ? .limited(.php) : nil
@@ -273,11 +280,36 @@ private func peelScriptInterpreter(_ head: String, tokens: [ShellPipeline.Token]
     if head == "lua" || head.hasPrefix("lua5") || head == "luajit" {
         return flagValues(words, flags: ["-e"]).contains(where: luaCodeCanSpawn) ? .limited(.lua) : nil
     }
+    if head == "sed" || head == "gsed" {
+        let executes = sedScriptTexts(Array(words.dropFirst())).contains { sedScriptEffects($0).executes }
+        if executes { return .limited(.sed) }
+        return writeProxy(sedScriptWrites(Array(words.dropFirst())), .sed, workingDirectory)
+    }
     if ["awk", "gawk", "mawk", "nawk"].contains(head) {
         let sources = awkSources(words)
         return sources.readsStdin || sources.programs.contains(where: awkCodeCanSpawn) ? .limited(.awk) : nil
     }
     return nil
+}
+
+/// Files a sed invocation writes because of its script (`w`, `s///w`) plus
+/// the `-i` operands; empty when the script writes nothing, so plain
+/// `sed -i` keeps its view-based parse.
+private func sedScriptWrites(_ args: [String]) -> [String] {
+    let scripted = sedScriptTexts(args).flatMap { sedScriptEffects($0).writeTargets }
+    guard scripted.isEmpty == false else { return [] }
+    var paths = parseSed(args)?.paths ?? []
+    for target in scripted where paths.contains(target) == false { paths.append(target) }
+    return paths
+}
+
+/// Peels a program whose view-masked script hides its file writes into the
+/// equivalent `tee -- <paths>`, which the filesystem analysis already
+/// classifies (outside the repo denies, inside allows). Nil for no paths.
+private func writeProxy(_ paths: [String], _ kind: WrapperKind, _ workingDirectory: WorkingDirectory?) -> Peel? {
+    guard paths.isEmpty == false else { return nil }
+    let tokens = (["tee", "--"] + paths).map { ShellPipeline.Token(lexeme: $0, wasQuoted: false) }
+    return .next(renderCommand(tokens), kind, workingDirectory)
 }
 
 private func flagValues(_ words: [String], flags: Set<String>) -> [String] {
@@ -316,7 +348,8 @@ private func awkSources(_ words: [String]) -> AwkSources {
     var index = 1
     func note(file: String) {
         hasSource = true
-        if file == "-" || file.hasPrefix("/dev/") || file.hasPrefix("/proc/") { sources.readsStdin = true }
+        let dynamic = file.hasPrefix("<(") || file.contains("$(") || file.contains("`")
+        if file == "-" || file.hasPrefix("/dev/") || file.hasPrefix("/proc/") || dynamic { sources.readsStdin = true }
     }
     while index < words.count {
         let word = words[index]

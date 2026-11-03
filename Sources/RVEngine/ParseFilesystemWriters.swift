@@ -1651,8 +1651,8 @@ private let sedBareLongs: Set<String> = [
 /// attached suffix only, never the next word), which keeps the destination
 /// sound on both GNU and BSD readings. Files are the operands after the
 /// script position (the first operand, unless `-e`/`-f` gave the script).
-/// Residuals: `w /tmp/x` inside the script writes without `-i`, and the GNU
-/// `e` command executes — both are script-language dataflow, unmodeled.
+/// Script `w` targets are claimed too (`sedScriptEffects`). Residual: the GNU
+/// `e` command executes; the unwrap peel limits it (`.sed`), not this parse.
 func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     let stripped = stripWriterRedirectWords(argv.args)
     let scan = scanWriterArgs(
@@ -1690,8 +1690,23 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
         dests += files
         dests += scan.candidates
     }
+    if scan.failed == false, scan.sawHelp == false {
+        dests += sedScriptWriteTargets(scan)
+    }
     dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
+}
+
+/// Files the sed script itself writes (`w`/`W` commands, `s///w` flag),
+/// with or without `-i`. Scripts come from `-e`/`--expression`, else the
+/// first non-empty operand; a `-f` script file is unreadable and ignored.
+private func sedScriptWriteTargets(_ scan: WriterScan) -> [String] {
+    var scripts = (scan.flagValues["e"] ?? []) + (scan.flagValues["expression"] ?? [])
+    let fromFile = scan.flagValues["f"] != nil || scan.flagValues["file"] != nil
+    if scripts.isEmpty, fromFile == false, let first = scan.operands.first(where: { $0.isEmpty == false }) {
+        scripts.append(first)
+    }
+    return scripts.flatMap { sedScriptEffects($0).writeTargets }
 }
 
 func parseSed(_ args: [String]) -> ParsedFilesystemCommand? {
