@@ -118,6 +118,82 @@ struct SecretsCommandTests {
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/OPENAI_API_KEY"] } == Data("sk-rotated".utf8))
     }
 
+    @Test func setStoresGatewaySurfacesFromFlagsOrDefaults() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        #expect(SecretsRun.surfaces(["query", "header"]) == .success([.header, .query]))
+        #expect(SecretsRun.surfaces([]) == .success(nil))
+        #expect(SecretsRun.surfaces(["body"])
+            == .failure("--surface must be header, query, or path, not body"))
+        let explicit = SecretsRun.definitionForSet(
+            name: "ACME_KEY", isNew: true, gateway: "https://api.acme.example", baseURLEnv: "ACME_URL",
+            placeholderPrefix: "", environment: false, surfaces: [.query])
+        #expect(explicit.definition == .gateway(
+            upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: "", surfaces: [.query]))
+        let known = SecretsRun.definitionForSet(
+            name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+            environment: false, surfaces: [.header, .path])
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-1234".utf8), definition: explicit.definition, agents: [],
+            description: nil, environment: environment).get()
+        _ = try SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-1234".utf8), definition: known.definition, agents: [],
+            description: nil, environment: environment).get()
+        _ = try SecretsRun.set(
+            name: "OPENAI_API_KEY", value: Data("sk-1234".utf8),
+            definition: SecretsRun.definitionForSet(
+                name: "OPENAI_API_KEY", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+                environment: false).definition,
+            agents: [], description: nil, environment: environment).get()
+        let configuration = try SecretsRun.configuration(environment).get()
+        func surfaces(_ name: String) -> Set<GatewaySurface>? {
+            guard case .gateway(let binding) = configuration.secret(named: name)?.delivery else { return nil }
+            return binding.surfaces
+        }
+        #expect(surfaces("ACME_KEY") == [.query])
+        #expect(surfaces("GITHUB_TOKEN") == [.header, .path])
+        #expect(surfaces("OPENAI_API_KEY") == [.header])
+    }
+
+    @Test func setStoresAllowRulesAndNotesWhenThereAreNone() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let allow = try SecretsRun.allowances(["github-read", "POST /graphql"]).get()
+        #expect(allow == [.preset(.githubRead), .rule(try #require(GatewayAccessRule(methods: ["POST"], path: "/graphql")))])
+        guard case .failure(let failure) = SecretsRun.allowances(["GET /a/../b"]) else {
+            Issue.record("a traversal glob must be refused")
+            return
+        }
+        #expect(failure.message.contains("--allow must be a preset (read-only, github-clone, github-read)"))
+        let scoped = SecretsRun.definitionForSet(
+            name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+            environment: false, allow: allow)
+        let text = try SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-1234".utf8), definition: scoped.definition, agents: [],
+            description: nil, environment: environment).get()
+        #expect(text.contains("note:") == false)
+        guard case .gateway(let binding) = try SecretsRun.configuration(environment).get()
+            .secret(named: "GITHUB_TOKEN")?.delivery
+        else {
+            Issue.record("expected gateway delivery")
+            return
+        }
+        #expect(binding.allow == allow)
+
+        let open = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-1234".utf8),
+            definition: .gateway(upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: ""),
+            agents: [], description: nil, environment: environment).get()
+        #expect(open.hasSuffix(
+            "note: ACME_KEY may be used with any method and path on api.acme.example; narrow it with --allow, e.g. --allow read-only.\n"))
+        let rotated = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-5678".utf8), definition: nil, agents: [], description: nil,
+            environment: environment).get()
+        #expect(rotated.contains("note:") == false)
+    }
+
     @Test func setRefusesAmbiguousOrForeignSecrets() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
@@ -148,6 +224,121 @@ struct SecretsCommandTests {
             == .failure("GH reads from host $GH; rv secrets set only stores values it reads from rv.secrets"))
     }
 
+    @Test func setStoresExpiryAndRefreshAndUpdatesThemWhenTheValueRotates() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let now = try #require(SecretExpiry.parse("2026-11-01T12:00:00Z"))
+        let gateway = SecretsRun.Definition.gateway(
+            upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: "")
+        let december = try #require(SecretExpiry.parse("2026-12-31"))
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8), definition: gateway, agents: [], description: nil,
+            environment: environment, expires: .some(december), refresh: .some(SecretRefreshInterval("15m")), now: now
+        ).get()
+        var secret = try #require(try SecretsRun.configuration(environment).get().secret(named: "ACME_KEY"))
+        #expect(secret.expires == december)
+        #expect(secret.refresh?.text == "15m")
+
+        // Rotating the value may move the expiry; flags left out keep what is on file.
+        let january = try #require(SecretExpiry.parse("2027-01-31T09:00:00Z"))
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-87654321".utf8), definition: nil, agents: [], description: nil,
+            environment: environment, expires: .some(january), now: now
+        ).get()
+        secret = try #require(try SecretsRun.configuration(environment).get().secret(named: "ACME_KEY"))
+        #expect(secret.expires == january)
+        #expect(secret.refresh?.text == "15m")
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-87654321".utf8))
+
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-87654321".utf8), definition: nil, agents: [], description: nil,
+            environment: environment, expires: .some(nil), refresh: .some(nil), now: now
+        ).get()
+        secret = try #require(try SecretsRun.configuration(environment).get().secret(named: "ACME_KEY"))
+        #expect(secret.expires == nil)
+        #expect(secret.refresh == nil)
+
+        let past = try #require(SecretExpiry.parse("2026-10-31"))
+        #expect(SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-0000".utf8), definition: nil, agents: [], description: nil,
+            environment: environment, expires: .some(past), now: now)
+            == .failure("--expires 2026-10-31 is already past"))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/ACME_KEY"] } == Data("acme-87654321".utf8))
+        guard case .failure(let failure) = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: environment, refresh: .some(SecretRefreshInterval("1h")), now: now)
+        else {
+            Issue.record("refresh must be refused for environment delivery")
+            return
+        }
+        #expect(failure.message.contains("refresh applies to gateway delivery"))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == nil)
+    }
+
+    @Test func expiresAndRefreshFlagsParseStrictly() throws {
+        #expect(SecretsRun.expiry(nil) == .success(nil))
+        #expect(SecretsRun.expiry("none") == .success(.some(nil)))
+        #expect(SecretsRun.expiry("2026-12-31") == .success(.some(SecretExpiry.parse("2026-12-31"))))
+        #expect(SecretsRun.expiry("12/31/2026") == .failure(
+            "--expires must be an ISO-8601 date (2026-12-31), a date-time with a zone (2026-12-31T18:00:00Z), or none"))
+        #expect(SecretsRun.refresh(nil) == .success(nil))
+        #expect(SecretsRun.refresh("none") == .success(.some(nil)))
+        #expect(SecretsRun.refresh("15m") == .success(.some(SecretRefreshInterval("15m"))))
+        #expect(SecretsRun.refresh("10s") == .failure(
+            "--refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m, or none"))
+
+        let parsed = try SecretsSet.parse(["ACME_KEY", "--expires", "2026-12-31", "--refresh", "15m"])
+        #expect(parsed.expires == "2026-12-31")
+        #expect(parsed.refresh == "15m")
+        #expect(throws: (any Error).self) { try SecretsSet.parse(["ACME_KEY", "--expires", "soon"]) }
+        #expect(throws: (any Error).self) { try SecretsSet.parse(["ACME_KEY", "--refresh", "5s"]) }
+        #expect(throws: (any Error).self) { try SecretsSet.parse(["ACME_KEY", "--environment", "--refresh", "15m"]) }
+    }
+
+    @Test func listAndDescribeShowExpiryAndWarnWithinAWeek() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        let now = try #require(SecretExpiry.parse("2026-11-01T12:00:00Z"))
+        for (name, expires) in [("SOON", "2026-11-04"), ("LATER", "2026-12-31"), ("TODAY", "2026-11-02")] {
+            let gateway = SecretsRun.Definition.gateway(
+                upstream: "https://api.acme.example", baseURLEnv: "\(name)_URL", placeholderPrefix: "")
+            _ = try SecretsRun.set(
+                name: name, value: Data("value-12345678".utf8), definition: gateway, agents: [], description: nil,
+                environment: environment, expires: .some(SecretExpiry.parse(expires)),
+                refresh: name == "SOON" ? .some(SecretRefreshInterval("15m")) : nil, now: now
+            ).get()
+        }
+        _ = try SecretsRun.set(
+            name: "GONE", value: Data("value-12345678".utf8), definition: .environment, agents: [], description: nil,
+            environment: environment, now: now
+        ).get()
+        var configuration = try SecretsRun.configuration(environment).get()
+        configuration.secrets[3].expires = SecretExpiry.parse("2026-10-30")
+        _ = configuration.write(configDirectory: fixture.directory)
+
+        let report = SecretsRun.list(configuration, profiles: [], now: now)
+        #expect(report.secrets.map(\.expires) == ["2026-11-04", "2026-12-31", "2026-11-02", "2026-10-30"])
+        #expect(report.secrets.map(\.refresh) == ["15m", nil, nil, nil])
+        #expect(report.warnings == [
+            "SOON expires in 2 days (2026-11-04); rotate it with rv secrets set SOON --expires DATE",
+            "TODAY expires within a day (2026-11-02); rotate it with rv secrets set TODAY --expires DATE",
+            "GONE expired at 2026-10-30; launches that use it fail until it is rotated",
+        ])
+        let text = SecretsRun.listText(report)
+        #expect(text.contains("expires: 2026-11-04  refresh: 15m"))
+        #expect(text.contains("warning: SOON expires in 2 days"))
+
+        let described = SecretsRun.describe(configuration, now: now)
+        #expect(described.secrets.map(\.expires) == ["2026-11-04", "2026-12-31", "2026-11-02", "2026-10-30"])
+        #expect(described.warnings == report.warnings)
+        let describedText = SecretsRun.describeText(described)
+        #expect(describedText.contains("SOON  keychain  gateway\n  surfaces: header\n  allow: any method and path\n"
+            + "  expires: 2026-11-04\n  refresh: 15m\n"))
+        #expect(describedText.contains("warning: GONE expired at 2026-10-30"))
+    }
+
     @Test func listShowsSourcesDeliveryProfilesAndDanglingReferences() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
@@ -174,6 +365,41 @@ struct SecretsCommandTests {
         #expect(text.contains("GH_TOKEN        keychain rv.secrets/GH_TOKEN  environment (real value in the cage)  profiles: -  [weaker]"))
         #expect(text.contains("warning: profile default lists MISSING"))
         #expect(text.contains("sk-x-12345678") == false)
+    }
+
+    @Test func listAndDescribeShowGatewaySurfacesAndAllowRules() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        _ = SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-12345678".utf8),
+            definition: .gateway(
+                upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL", placeholderPrefix: "",
+                surfaces: [.header, .query], allow: try SecretsRun.allowances(["github-read", "POST,PUT /graphql"]).get()),
+            agents: [], description: nil, environment: environment)
+        _ = SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-12345678".utf8),
+            definition: .gateway(upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: ""),
+            agents: [], description: nil, environment: environment)
+        _ = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-87654321".utf8), definition: .environment, agents: [],
+            description: nil, environment: environment)
+        let configuration = try SecretsRun.configuration(environment).get()
+        let report = SecretsRun.list(configuration, profiles: [])
+        #expect(report.secrets.map(\.surfaces) == [["header", "query"], ["header"], nil])
+        #expect(report.secrets.map(\.allow) == [["github-read", "POST,PUT /graphql"], [], nil])
+        let text = SecretsRun.listText(report)
+        #expect(text.contains("profiles: -  surfaces: header,query  allow: github-read; POST,PUT /graphql\n"))
+        #expect(text.contains("profiles: -  surfaces: header  allow: any method and path\n"))
+        #expect(text.contains("GH_TOKEN") && text.contains("[weaker]\n"))
+
+        let described = SecretsRun.describe(configuration)
+        #expect(described.secrets.map(\.surfaces) == [["header", "query"], ["header"], nil])
+        #expect(described.secrets.map(\.allow) == [["github-read", "POST,PUT /graphql"], [], nil])
+        let describedText = SecretsRun.describeText(described)
+        #expect(describedText.contains("GITHUB_TOKEN  keychain  gateway\n  surfaces: header,query\n  allow: github-read; POST,PUT /graphql\n"))
+        #expect(describedText.contains("ACME_KEY  keychain  gateway\n  surfaces: header\n  allow: any method and path\n"))
+        #expect(describedText.contains("ghp-") == false)
     }
 
     @Test func checkShowsFingerprintsNeverValues() throws {
@@ -234,8 +460,8 @@ struct SecretsCommandTests {
         try Data("line one\nexport GH=ghp-leaky-12345678\n".utf8).write(to: tree.appendingPathComponent(".env"))
         try Data("ghp-leaky-12345678".utf8).write(to: tree.appendingPathComponent(".git/config"))
         try Data("clean".utf8).write(to: tree.appendingPathComponent("README"))
-        let report = SecretsRun.scan(
-            root: tree, configuration: try SecretsRun.configuration(environment).get(), environment: environment)
+        let report = try SecretsRun.scan(
+            root: tree, configuration: try SecretsRun.configuration(environment).get(), environment: environment).get()
         #expect(report.findings == [SecretLeakFinding(path: ".env", line: 2, secret: "GH_TOKEN")])
         let text = SecretsRun.scanText(report)
         #expect(text == ".env:2  GH_TOKEN\n")
@@ -257,7 +483,9 @@ struct SecretsCommandTests {
             PORT=3000
             """.utf8).write(to: schema)
         let imported = try SecretsRun.importVarlock(path: schema, dryRun: true, environment: fixture.environment()).get()
-        #expect(imported.contains("import OPENAI_API_KEY: onePassword (type string(startsWith=sk-))"))
+        #expect(imported.contains(
+            "import OPENAI_API_KEY: provider onePassword, delivery environment (real value in the cage), "
+                + "type string(startsWith=sk-)"))
         #expect(imported.contains("dry run: nothing written"))
         #expect(imported.contains(literal) == false)
         #expect(FileManager.default.fileExists(atPath: fixture.secretsFile.path) == false)
@@ -280,32 +508,119 @@ struct SecretsCommandTests {
         #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
     }
 
-    @Test func hookInstallIsIdempotentAndScansTheIndex() throws {
+    @Test func varlockProxyImportsAsGatewayDelivery() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com) @type=string(startsWith=ak_)
+            ACME_KEY=op(op://Eng/Acme/key)
+            """.utf8).write(to: schema)
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("import ACME_KEY: provider onePassword, delivery gateway → api.example.com via $ACME_KEY_BASE_URL"))
+        #expect(text.contains("wrote secrets.json (1 secret)\n"))
+        let stored = try #require(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_KEY"))
+        #expect(stored.delivery == .gateway(SecretGatewayBinding(
+            upstream: URL(string: "https://api.example.com")!, baseURLEnv: "ACME_KEY_BASE_URL", placeholderPrefix: "ak_")))
+    }
+
+    @Test func varlockImportSkipsASecretWhoseVariableSecretsJsonAlreadySets() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.acme.com)
+            ACME_KEY=op(op://Eng/Acme/key)
+            OTHER=op(op://Eng/Other/key)
+            """.utf8).write(to: schema)
+        try SecretsConfiguration(secrets: [
+            SecretDefinition(name: "ACME_KEY_BASE_URL", source: .onePassword(reference: "op://Eng/Url/value"), delivery: .environment),
+        ]).write(configDirectory: fixture.directory).get()
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("skip ACME_KEY: secrets.json or another imported secret already sets $ACME_KEY_BASE_URL"))
+        #expect(text.contains("wrote secrets.json (1 secret)\n"))
+        let stored = try SecretsRun.configuration(fixture.environment()).get()
+        #expect(stored.secret(named: "OTHER") != nil)
+        #expect(stored.secret(named: "ACME_KEY") == nil)
+    }
+
+    @Test func varlockImportSkipsOneOfTwoImportedSecretsSettingTheSameVariable() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com)
+            ACME=op(op://Eng/Acme/key)
+            # @sensitive
+            ACME_BASE_URL=op(op://Eng/Acme/url)
+            """.utf8).write(to: schema)
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("skip ACME_BASE_URL: secrets.json or another imported secret already sets $ACME_BASE_URL"))
+        #expect(try SecretsRun.configuration(fixture.environment()).get().secrets.map(\.name) == ["ACME"])
+    }
+
+    @Test func varlockImportDoesNotBlameAnAlreadyDefinedSecretForAVariableItNoLongerSets() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com)
+            ACME=op(op://Eng/Acme/key)
+            # @sensitive
+            ACME_BASE_URL=op(op://Eng/Acme/url)
+            """.utf8).write(to: schema)
+        try SecretsConfiguration(secrets: [
+            SecretDefinition(name: "ACME", source: .onePassword(reference: "op://Eng/Acme/key"), delivery: .environment),
+        ]).write(configDirectory: fixture.directory).get()
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("skip ACME: secrets.json already defines it"))
+        #expect(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_BASE_URL") != nil)
+    }
+
+    @Test func varlockImportWiresEveryNameIntoAnExistingProfile() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            NEW_KEY=op(op://Eng/New/credential)
+            OLD_KEY=op(op://Eng/Old/credential)
+            """.utf8).write(to: schema)
+        try SecretsConfiguration(secrets: [
+            SecretDefinition(name: "OLD_KEY", source: .onePassword(reference: "op://Eng/Old/credential"), delivery: .environment),
+        ]).write(configDirectory: fixture.directory).get()
+        let missing = SecretsRun.importVarlock(
+            path: schema, dryRun: false, profile: "main", environment: fixture.environment())
+        #expect(missing.failureMessage?.contains("profile main does not exist") == true)
+        #expect(try SecretsRun.configuration(fixture.environment()).get().secret(named: "NEW_KEY") == nil)
+        try fixture.writeProfiles(#"{"version":1,"profiles":[{"id":"main","projects":["/tmp"],"executableLinks":[],"readFiles":[],"readTrees":[],"writeTrees":[],"credentials":[],"environment":[],"secrets":[]}]}"#)
+        let text = try SecretsRun.importVarlock(
+            path: schema, dryRun: false, profile: "main", environment: fixture.environment()).get()
+        #expect(text.contains("wired NEW_KEY, OLD_KEY into profile main"))
+        #expect(SecretsRun.profiles(fixture.environment()).first?.secrets == ["NEW_KEY", "OLD_KEY"])
+    }
+
+    @Test func hookInstallKeepsTheExistingHookAndScansTheIndex() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
         let work = fixture.directory.appendingPathComponent("repo")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        func run(_ args: [String]) throws {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            process.arguments = args
-            try process.run()
-            process.waitUntilExit()
-            #expect(process.terminationStatus == 0)
-        }
-        try run(["-C", work.path, "init", "-q"])
+        try git(work, ["init", "-q"])
         let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
-        try Data("#!/bin/sh\necho foreign\n".utf8).write(to: foreign)
+        let original = "#!/bin/sh\necho foreign\n"
+        try Data(original.utf8).write(to: foreign)
         chmod(foreign.path, 0o755)
         let installed = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
         #expect(installed.contains("installed"))
         let hook = try String(contentsOf: foreign, encoding: .utf8)
-        #expect(hook.contains("# rv-secrets-hook"))
-        #expect(hook.contains("'/usr/bin/true'"))
-        let saved = try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8)
-        #expect(saved == "#!/bin/sh\necho foreign\n")
-        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
-        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == saved)
+        #expect(hook.hasPrefix("#!/bin/sh\n# >>> rv secrets >>>\n"))
+        #expect(hook.contains("'/usr/bin/true' secrets hook run"))
+        #expect(hook.hasSuffix("# <<< rv secrets <<<\necho foreign\n"))
+        #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved").path) == false)
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/opt/rv/bin/rv").get()
+        let reinstalled = try String(contentsOf: foreign, encoding: .utf8)
+        #expect(reinstalled.components(separatedBy: SecretGitHook.beginMarker).count == 2)
+        #expect(reinstalled.contains("'/opt/rv/bin/rv' secrets hook run"))
+        #expect(reinstalled.contains("/usr/bin/true") == false)
 
         let value = "hook-secret-value-xyz"
         var configuration = SecretsConfiguration(secrets: [
@@ -315,25 +630,301 @@ struct SecretsCommandTests {
         let environment = fixture.environment(host: ["GH_TOKEN": value])
         try Data("clean\n".utf8).write(to: work.appendingPathComponent("clean.txt"))
         try Data("\(value)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
-        try run(["-C", work.path, "add", "clean.txt"])
+        try git(work, ["add", "clean.txt"])
         let clean = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(clean.failed == false)
         #expect(clean.text.contains(value) == false)
-        try run(["-C", work.path, "add", "leak.txt"])
+        try git(work, ["add", "leak.txt"])
+        // The index is scanned, not the worktree: cleaning the file on disk does not hide the staged leak.
+        try Data("clean now\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
         let leaked = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(leaked.failed)
         #expect(leaked.text.contains("leak.txt:1:GH_TOKEN"))
+        #expect(leaked.text.contains("rv.secretsScan"))
         #expect(leaked.text.contains(value) == false)
 
         let removed = try SecretGitHook.uninstall(workTree: work).get()
-        #expect(removed.contains("restored"))
-        #expect(try String(contentsOf: foreign, encoding: .utf8) == saved)
+        #expect(removed.contains("removed rv's block"))
+        #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
     }
 
-    private func git(_ work: URL, _ args: [String]) throws {
+    @Test func hookFindsPatternsPastTheFirstMebibyteAndReportsOversizedFiles() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-large")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        let padding = String(repeating: "filler line\n", count: 120_000)
+        try Data((padding + "key: \(token)\n").utf8).write(to: work.appendingPathComponent("big.txt"))
+        let huge = work.appendingPathComponent("huge.bin")
+        #expect(FileManager.default.createFile(atPath: huge.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: huge)
+        try handle.truncate(atOffset: UInt64(SecretLeakScanner.maximumFileBytes + 1))
+        try handle.close()
+        try git(work, ["add", "big.txt", "huge.bin"])
+        let result = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
+        #expect(result.failed)
+        #expect(result.text.contains("big.txt:120001:aws-access-key-id"))
+        #expect(result.text.contains("not scanned (over 8 MiB): huge.bin"))
+        #expect(result.text.contains(token) == false)
+
+        try git(work, ["rm", "-q", "--cached", "big.txt"])
+        let oversizedOnly = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
+        #expect(oversizedOnly.failed == false)
+        #expect(oversizedOnly.text.contains("not scanned (over 8 MiB): huge.bin"))
+    }
+
+    @Test func hookKillSwitchSkipsTheScanWithANotice() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-kill")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let finding = fixture.directory.appendingPathComponent("rv-finds")
+        try Data("#!/bin/sh\necho finding\nexit 1\n".utf8).write(to: finding)
+        chmod(finding.path, 0o755)
+        _ = try SecretGitHook.install(workTree: work, rvPath: finding.path).get()
+        func runHook() throws -> (status: Int32, stderr: String) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [work.appendingPathComponent(".git/hooks/pre-commit").path]
+            process.currentDirectoryURL = work
+            let err = Pipe()
+            process.standardError = err
+            process.standardOutput = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            return (process.terminationStatus, stderr)
+        }
+        #expect(try runHook().status == 1)
+        try git(work, ["config", "rv.secretsScan", "false"])
+        let skipped = try runHook()
+        #expect(skipped.status == 0)
+        #expect(skipped.stderr.contains("scan skipped"))
+    }
+
+    @Test func scanAndHookRunRefuseWhatOrganizationPolicyForbidsWithoutResolvingIt() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "HOST_TOKEN", source: .hostEnvironment(variable: "HOST_TOKEN"), delivery: .environment)
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let resolved = Mutex(0)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("policy-value-12345678")!)
+        }
+        environment.managed = .active(ManagedPolicyBundle(
+            policy: try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowedSources":["keychain"]}}"#.utf8)).get(),
+            sha256: "abc", isSigned: true, directory: "/managed"))
+        let reason = "organization policy: HOST_TOKEN uses a hostEnvironment source, which is not allowed"
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.skipped == ["HOST_TOKEN: \(reason)"])
+        let hook = try SecretsRun.hookRun(workTree: work, environment: environment).get()
+        #expect(hook.text.contains("could not check HOST_TOKEN: \(reason)"))
+        #expect(resolved.withLock { $0 } == 0, "a disallowed source must not be resolved")
+
+        environment.managed = .invalid("policy.json.sig does not verify")
+        let invalid = "organization policy is invalid: policy.json.sig does not verify"
+        guard case .failure(let scanFailure) = SecretsRun.scan(root: work, configuration: configuration, environment: environment),
+            case .failure(let hookFailure) = SecretsRun.hookRun(workTree: work, environment: environment)
+        else {
+            Issue.record("an invalid organization policy must fail scan and hook run")
+            return
+        }
+        #expect(scanFailure.message == invalid)
+        #expect(hookFailure.message == invalid)
+        #expect(resolved.withLock { $0 } == 0)
+    }
+
+    @Test func awsProfilesAreCheckedScannedAndDescribedAsCredentialSets() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let realSecret = "awsSecretKeyForScan/0000+1111"
+        try Data("aws_secret_access_key = \(realSecret)\n".utf8).write(to: work.appendingPathComponent("creds.ini"))
+        let binding = AWSSigningBinding(
+            upstream: URL(string: "https://s3.us-east-1.amazonaws.com")!, region: "us-east-1", service: "s3",
+            endpointEnv: "AWS_ENDPOINT_URL_S3", allow: [.preset(.readOnly)])
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "AWS_DEV", source: .awsProfile(profile: "dev"), delivery: .awsSigV4(binding))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let output = Mutex(#"{"Version":1,"AccessKeyId":"AKIASCANKEY000000001","SecretAccessKey":"\#(realSecret)"}"#)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in .success(SecretValue(output.withLock { $0 })!) }
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.findings.map(\.secret) == ["AWS_DEV"])
+        #expect(try SecretsRun.check(configuration, names: [], environment: environment).get().map(\.ok) == [true])
+        let described = SecretsRun.describe(configuration).secrets
+        #expect(described.map(\.delivery) == ["awsSigV4"])
+        #expect(described.first?.allow == ["read-only"])
+
+        output.withLock { $0 = "not credentials" }
+        let unusable = "AWS_DEV: the AWS profile did not return usable credentials"
+        #expect(try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get().skipped
+            == [unusable])
+        let check = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(check.map(\.ok) == [false])
+        #expect(check.first?.error == "the AWS profile did not return usable credentials")
+    }
+
+    @Test func oauthSecretsAreScannedForStoredCredentialsWithoutMintingAndCheckedByMinting() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let refreshToken = "rt-leaked-0000111122223333"
+        try Data("refresh=\(refreshToken)\n".utf8).write(to: work.appendingPathComponent("notes.txt"))
+        let source = OAuthSource(
+            tokenURL: URL(string: "https://issuer.example.com/token")!, clientID: "client-1",
+            clientSecret: SecretKeychainItem(service: "rv.oauth", account: "cs"),
+            refreshToken: SecretKeychainItem(service: "rv.oauth", account: "rt"))
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .oauth(source), delivery: .gateway(SecretGatewayBinding(
+                upstream: URL(string: "https://api.example.com")!, baseURLEnv: "GH_API")))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let minted = Mutex(0)
+        let answer = Mutex(#"{"access_token":"at-1","expires_at":1900000000}"#)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { source in
+            switch source {
+            case .keychain(_, "rt"): return .success(SecretValue(refreshToken)!)
+            case .keychain(_, "cs"): return .success(SecretValue("client-secret-0000111122223333")!)
+            case .oauth:
+                minted.withLock { $0 += 1 }
+                return .success(SecretValue(answer.withLock { $0 })!)
+            default: return .failure(.notFound("unexpected"))
+            }
+        }
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.findings.map(\.secret) == ["GH"])
+        #expect(minted.withLock { $0 } == 0)
+        #expect(try SecretsRun.check(configuration, names: [], environment: environment).get().map(\.ok) == [true])
+        #expect(minted.withLock { $0 } == 1)
+        #expect(SecretsRun.describe(configuration).secrets.map(\.delivery) == ["gateway"])
+
+        answer.withLock { $0 = "not a token" }
+        let check = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(check.map(\.ok) == [false])
+        #expect(check.first?.error == "the token endpoint's answer could not be used")
+    }
+
+    private func oauthConfiguration(_ fixture: SecretsCLIFixture, refreshToken: Bool = true) throws -> SecretsConfiguration {
+        let source = OAuthSource(
+            tokenURL: URL(string: "https://issuer.example.com/token")!, clientID: "client-1",
+            clientSecret: SecretKeychainItem(service: "rv.oauth", account: "cs"),
+            refreshToken: refreshToken ? SecretKeychainItem(service: "rv.oauth", account: "rt") : nil)
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .oauth(source), delivery: .gateway(SecretGatewayBinding(
+                upstream: URL(string: "https://api.example.com")!, baseURLEnv: "GH_API")))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        return configuration
+    }
+
+    @Test func checkFingerprintsTheAccessTokenTheGatewayAudits() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let configuration = try oauthConfiguration(fixture)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in
+            .success(SecretValue(#"{"access_token":"at-fake-0001","expires_at":1900000000}"#)!)
+        }
+        let row = try #require(try SecretsRun.check(configuration, names: [], environment: environment).get().first)
+        let expected = try #require(SecretFingerprinter.load(configDirectory: fixture.directory))
+            .fingerprint(of: SecretValue("at-fake-0001")!)
+        #expect(row.ok)
+        #expect(row.fingerprint == expected)
+    }
+
+    @Test func oauthResetClearsOnlyTheBlockFileForThatSecretsRefreshToken() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        _ = try oauthConfiguration(fixture)
+        let environment = fixture.environment()
+        let item = SecretKeychainItem(service: "rv.oauth", account: "rt")
+        let other = SecretKeychainItem(service: "rv.oauth", account: "other")
+        let block = OAuthRefreshBlock.stateFile(item, configDirectory: fixture.directory)
+        let unrelated = OAuthRefreshBlock.stateFile(other, configDirectory: fixture.directory)
+        try FileManager.default.createDirectory(at: block.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"recovery":"reauthorize","token":"fp"}"#.utf8).write(to: block)
+        try Data(#"{"recovery":"reauthorize","token":"fp"}"#.utf8).write(to: unrelated)
+
+        let cleared = try SecretsRun.oauthReset(name: "GH", environment: environment).get()
+        #expect(cleared.contains("Cleared the block on GH"))
+        #expect(FileManager.default.fileExists(atPath: block.path) == false)
+        #expect(FileManager.default.fileExists(atPath: unrelated.path), "another secret's block stays")
+        #expect(try SecretsRun.oauthReset(name: "GH", environment: environment).get().contains("No block is recorded"))
+    }
+
+    @Test func oauthResetRefusesWhatIsNotAnOAuthSecretAndNeedsNoStateForClientCredentials() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        var configuration = try oauthConfiguration(fixture, refreshToken: false)
+        configuration.secrets.append(SecretDefinition(
+            name: "PLAIN", source: .hostEnvironment(variable: "PLAIN"), delivery: .environment))
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let environment = fixture.environment()
+        #expect(try SecretsRun.oauthReset(name: "GH", environment: environment).get().contains("client credentials"))
+        guard case .failure(let notOAuth) = SecretsRun.oauthReset(name: "PLAIN", environment: environment) else {
+            Issue.record("a non-oauth secret was accepted")
+            return
+        }
+        #expect(notOAuth.message.contains("not an oauth secret"))
+        guard case .failure(let missing) = SecretsRun.oauthReset(name: "NOPE", environment: environment) else {
+            Issue.record("an unknown secret was accepted")
+            return
+        }
+        #expect(missing.message.contains("not defined"))
+    }
+
+    @Test func scanAndHookRunStillResolveEnvironmentDeliveredSecretsWhenOnlyTheDeliveryRuleIsSet() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-delivery-rule")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "HOST_TOKEN", source: .hostEnvironment(variable: "HOST_TOKEN"), delivery: .environment)
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let value = "policy-value-12345678"
+        try Data("token=\(value)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
+        try git(work, ["add", "leak.txt"])
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in .success(SecretValue(value)!) }
+        environment.managed = .active(ManagedPolicyBundle(
+            policy: try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#.utf8)).get(),
+            sha256: "abc", isSigned: true, directory: "/managed"))
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.skipped.isEmpty, "scan resolves host-side; the delivery rule does not apply")
+        #expect(report.findings.map(\.secret) == ["HOST_TOKEN"])
+        let hook = try SecretsRun.hookRun(workTree: work, environment: environment).get()
+        #expect(hook.text.contains("could not check") == false)
+        #expect(hook.failed, "a staged real value must still block the commit")
+    }
+
+    private func git(_ work: URL, _ args: [String], environment: [String: String]? = nil) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", work.path] + args
+        if let environment { process.environment = environment }
         try process.run()
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
@@ -362,20 +953,118 @@ struct SecretsCommandTests {
         #expect(FileManager.default.fileExists(atPath: main.appendingPathComponent(".git/hooks/pre-commit").path))
     }
 
-    @Test func hookMentioningTheMarkerIsBackedUpNotOverwritten() throws {
+    @Test func hookInstallRefusesHooksItCannotEditSafely() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
-        let work = fixture.directory.appendingPathComponent("repo-marker")
+        let work = fixture.directory.appendingPathComponent("repo-foreign")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         try git(work, ["init", "-q"])
-        let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
-        let original = "#!/bin/sh\n# rv-secrets-hook mentioned in a comment\necho foreign\n"
-        try Data(original.utf8).write(to: foreign)
-        chmod(foreign.path, 0o755)
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        let python = "#!/usr/bin/env python3\nprint('foreign')\n"
+        try Data(python.utf8).write(to: hook)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try String(contentsOf: hook, encoding: .utf8) == python)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.uninstall(workTree: work).get() }
+
+        try FileManager.default.removeItem(at: hook)
+        let target = fixture.directory.appendingPathComponent("shared-hook")
+        try Data("#!/bin/sh\n".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: hook, withDestinationURL: target)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try String(contentsOf: target, encoding: .utf8) == "#!/bin/sh\n")
+    }
+
+    @Test func hookInstallReplacesTheOldWholeFileHook() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-legacy")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        let saved = work.appendingPathComponent(".git/hooks/pre-commit.rv-saved")
+        try Data("#!/bin/sh\n# rv-secrets-hook\n'/usr/bin/true' secrets hook run\n".utf8).write(to: hook)
+        try Data("#!/bin/bash\necho previous\n".utf8).write(to: saved)
         _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
-        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == original)
+        let text = try String(contentsOf: hook, encoding: .utf8)
+        #expect(text.hasPrefix("#!/bin/bash\n# >>> rv secrets >>>"))
+        #expect(text.hasSuffix("echo previous\n"))
+        #expect(text.contains("# rv-secrets-hook") == false)
+        #expect(FileManager.default.fileExists(atPath: saved.path) == false)
         _ = try SecretGitHook.uninstall(workTree: work).get()
-        #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+        #expect(try String(contentsOf: hook, encoding: .utf8) == "#!/bin/bash\necho previous\n")
+    }
+
+    @Test func hookInstallKeepsHooksItCannotReadAsText() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-binary")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        let saved = work.appendingPathComponent(".git/hooks/pre-commit.rv-saved")
+        let binary = Data([0xFF, 0xFE, 0x00, 0x80, 0x81])
+
+        try binary.write(to: hook)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try Data(contentsOf: hook) == binary)
+
+        let legacy = Data("#!/bin/sh\n# rv-secrets-hook\n'/usr/bin/true' secrets hook run\n".utf8)
+        try legacy.write(to: hook)
+        try binary.write(to: saved)
+        #expect(throws: SecretGitHookError.self) { try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get() }
+        #expect(try Data(contentsOf: hook) == legacy)
+        #expect(try Data(contentsOf: saved) == binary)
+    }
+
+    @Test func hookScansTheIndexGitNamesInGitIndexFile() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-alt-index")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        try Data("key: \(token)\n".utf8).write(to: work.appendingPathComponent("f.txt"))
+        // `git commit -a` stages into a temporary index and leaves .git/index stale.
+        let alternate = fixture.directory.appendingPathComponent("alt-index").path
+        var inherited = ProcessInfo.processInfo.environment
+        inherited["GIT_INDEX_FILE"] = alternate
+        try git(work, ["add", "f.txt"], environment: inherited)
+
+        let stale = try SecretGitHook.scan(workTree: work, secrets: []).get()
+        #expect(stale.findings.isEmpty)
+        let found = try SecretGitHook.scan(workTree: work, secrets: [], environment: inherited).get()
+        #expect(found.findings.map(\.path) == ["f.txt"])
+    }
+
+    @Test func hookScansASymlinkReplacedByAFileHoldingAToken() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-typechange")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let link = work.appendingPathComponent("l")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "target")
+        try git(work, ["add", "l"])
+        try git(work, ["-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "-m", "link"])
+        try FileManager.default.removeItem(at: link)
+        let token = "AK" + "IA" + "Q3MZ7XK2LP5VN4RT"
+        try Data("key: \(token)\n".utf8).write(to: link)
+        try git(work, ["add", "l"])
+        let found = try SecretGitHook.scan(workTree: work, secrets: []).get()
+        #expect(found.findings.map(\.path) == ["l"])
+    }
+
+    @Test func hookUninstallDeletesAHookThatOnlyHeldRvsBlock() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-fresh")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        let hook = work.appendingPathComponent(".git/hooks/pre-commit")
+        #expect(try String(contentsOf: hook, encoding: .utf8).hasPrefix("#!/bin/sh\n# >>> rv secrets >>>"))
+        _ = try SecretGitHook.uninstall(workTree: work).get()
+        #expect(FileManager.default.fileExists(atPath: hook.path) == false)
     }
 
     @Test func secretsRobotJSONEscapesLineAndBidiScalars() throws {

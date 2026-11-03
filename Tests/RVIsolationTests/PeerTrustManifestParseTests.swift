@@ -24,31 +24,31 @@ import Testing
 
     @Test func unknownRoleFromNewerBuildIsSkipped() throws {
         let config = try Self.parse(
-            "[\(Self.entry("mcpCustodian", "dev.rv.mcp")),\(Self.entry("service", "dev.rv.rvd"))]"
+            "[\(Self.entry("futureRoleFromNewerBuild", "dev.rv.mcp")),\(Self.entry("service", "dev.rv.rvd"))]"
         )
         #expect(config.configuredRoles == [.service])
     }
 
     @Test func unknownRoleIsNotValidatedLikeAKnownRole() throws {
         let config = try Self.parse(
-            #"[\#(Self.entry("service", "dev.rv.rvd")),{"role":"mcpCustodian","requirement":"nonsense","socketPath":"/x"}]"#
+            #"[\#(Self.entry("service", "dev.rv.rvd")),{"role":"futureRoleFromNewerBuild","requirement":"nonsense","socketPath":"/x"}]"#
         )
         #expect(config.configuredRoles == [.service])
     }
 
     @Test func duplicateUnknownRolesAreSkipped() throws {
         let config = try Self.parse(
-            "[\(Self.entry("mcpCustodian", "a.b")),\(Self.entry("mcpCustodian", "c.d")),\(Self.entry("service", "dev.rv.rvd"))]"
+            "[\(Self.entry("futureRoleFromNewerBuild", "a.b")),\(Self.entry("futureRoleFromNewerBuild", "c.d")),\(Self.entry("service", "dev.rv.rvd"))]"
         )
         #expect(config.configuredRoles == [.service])
     }
 
     @Test(arguments: [
         // Unknown-role entries must still be objects with a string role and string known fields.
-        #"[{"role":"mcpCustodian","requirement":7}]"#,
+        #"[{"role":"futureRoleFromNewerBuild","requirement":7}]"#,
         #"[{"role":7}]"#,
         #"[{"requirement":"x"}]"#,
-        #"["mcpCustodian"]"#,
+        #"["futureRoleFromNewerBuild"]"#,
         // Known roles stay exactly as strict.
         #"[{"role":"service","requirement":"not a requirement (","requiredIdentifier":"dev.rv.rvd","requiredTeamIdentifier":"ABCDE12345"}]"#,
         #"[{"role":"service","requirement":"cdhash H\"0123456789abcdef0123456789abcdef01234567\"","developmentCDHash":"0123456789abcdef0123456789abcdef01234567","developmentExecutablePath":"/tmp/rvd"}]"#,

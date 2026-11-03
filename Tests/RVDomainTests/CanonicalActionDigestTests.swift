@@ -150,6 +150,27 @@ struct CanonicalActionDigestTests {
                 != CanonicalActionDigest.sha256Hex(of: .shell(forced)))
     }
 
+    @Test func secretRequestsAreBoundByTargetBodyAndHeaderHashes() {
+        func request(
+            target: String = "t", body: String = "b", headers: String = "h",
+            shown: [SecretRequestAction.Header] = []
+        ) -> ProposedAction {
+            .secretRequest(SecretRequestAction(
+                secret: "GH", method: "POST", host: "api.example.com", path: "/repos/o/r/merges",
+                targetSHA256: target, bodySHA256: body, bodyBytes: 1, headersSHA256: headers, operationHeaders: shown))
+        }
+        let digest = CanonicalActionDigest.sha256Hex(of: request())
+        #expect(digest == CanonicalActionDigest.sha256Hex(of: request()))
+        #expect(digest != CanonicalActionDigest.sha256Hex(of: request(target: "u")))
+        #expect(digest != CanonicalActionDigest.sha256Hex(of: request(body: "c")))
+        #expect(digest != CanonicalActionDigest.sha256Hex(of: request(headers: "i")))
+        #expect(digest != CanonicalActionDigest.sha256Hex(
+            of: request(shown: [.init(name: "x-amz-target", value: "GetSecretValue")])))
+        #expect(request().effects == ActionEffects())
+        #expect(request().resources == .none)
+        #expect(request().supportingCommand == nil)
+    }
+
     @Test func domainSeparatedFromBareHash() throws {
         // The digest must differ from a bare SHA-256 of the JSON bytes, so
         // these digests can never collide with another project's hashes of

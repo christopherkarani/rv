@@ -35,7 +35,7 @@ public enum DirectHTTP {
         return outcome.withLock { $0 } ?? .failed("no response")
     }
 
-    private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(
             _ session: URLSession, task: URLSessionTask,
             willPerformHTTPRedirection response: HTTPURLResponse,

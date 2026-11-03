@@ -43,6 +43,27 @@ public struct SecretPlaceholder: Sendable, Hashable {
         return found
     }
 
+    /// `text` with every placeholder token replaced, for audit records.
+    static func redacted(_ text: String) -> String {
+        let bytes = Array(text.utf8)
+        var output: [UInt8] = []
+        var cursor = 0
+        for occurrence in occurrences(in: bytes) {
+            output += bytes[cursor..<occurrence.start] + Array("rvph_[redacted]".utf8)
+            cursor = occurrence.start + marker.count + tokenLength
+        }
+        return String(decoding: output + bytes[cursor...], as: UTF8.self)
+    }
+
+    /// The target's path for audit: no query, placeholders redacted, and
+    /// decoded once when that reveals a percent-encoded placeholder.
+    static func redactedPath(_ target: String) -> String {
+        let path = Array(target.utf8.prefix { $0 != UInt8(ascii: "?") })
+        let decoded = GatewaySubstitution.percentDecoded(path)
+        let encoded = occurrences(in: decoded).count != occurrences(in: path).count
+        return redacted(String(decoding: encoded ? decoded : path, as: UTF8.self))
+    }
+
     private static func isLowerHex(_ byte: UInt8) -> Bool {
         (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
     }
@@ -182,14 +203,89 @@ enum GatewayRefusal: Error, Equatable {
     case unknownPlaceholder
     case foreignPlaceholder
     case tooLarge
+    /// The value would change the request's shape where the placeholder sits.
+    case unsafeValue
+    /// TRACE and TRACK make the upstream echo the request, credential included.
+    case echoMethod
+    /// A percent-encoded placeholder: never swapped, so never forwarded.
+    case encodedPlaceholder
+    /// The placeholder sits on a surface its binding does not allow.
+    case surfaceNotAllowed
+    /// A second placeholder on one surface, e.g. a copy in another header
+    /// that the upstream might log or echo.
+    case repeatedPlaceholder
+    /// Method or path outside the secret's allow rules.
+    case outsideAllowRules
+    /// With allow rules, a path an upstream could read differently from the
+    /// matcher: encoded `/` or dots, `..`, `;`, `//`, or double encoding.
+    case ambiguousPath
+    /// The forward record did not reach the audit log.
+    case auditUnavailable
+    /// The connection came from outside the runtime the placeholder was leased to.
+    case runtimeMismatch
+    /// The gateway could not tie the connection to the placeholder's runtime.
+    case runtimeUnverified
+    /// The secret's `expires` has passed.
+    case expired
+    /// The refresh interval and its grace have passed without a successful refresh.
+    case refreshFailed
+    /// A SigV4 request whose access key id is not the secret's placeholder.
+    case awsKeyMismatch
+    /// A signed-chunk or event-stream payload: each chunk signature chains to
+    /// the agent's seed signature, which the gateway replaces.
+    case awsSignedStreaming
+    /// An `approve` rule holds this request and no human has said yes yet.
+    case approvalPending
+    /// The human denied it, the approval lapsed, or the grant could not be consumed.
+    case approvalDenied
+    /// No approval service can be asked: no admission channel, no live agent
+    /// principal, or the service declined to file it.
+    case approvalUnavailable
+    /// A process holding the connection, and none of its ancestors up to the
+    /// runtime's leader, runs a binary the secret's `binaries` list allows.
+    case binaryMismatch
+    /// An unsigned-payload mode on a service other than S3, whose signature
+    /// the gateway cannot produce for it.
+    case awsUnsignedPayload
+    /// The upstream's answer carried a `SecretAccessKey`: credentials minted
+    /// by the call, which would otherwise reach the agent unscrubbed.
+    case awsCredentialsInResponse
+
+    /// Seconds a client should wait before retrying, sent as `Retry-After`.
+    var retryAfter: Int? { self == .approvalPending ? 5 : nil }
+
+    /// The case name, a stable code for audit records.
+    var code: String { "\(self)" }
+
+    /// A request the secret's own policy forbids: worth an alert, since a
+    /// well-behaved client using the placeholder as documented never sends one.
+    var isMisuse: Bool {
+        switch self {
+        case .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules, .encodedPlaceholder,
+            .ambiguousPath, .echoMethod, .runtimeMismatch, .awsKeyMismatch, .binaryMismatch:
+            true
+        case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
+            .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .awsUnsignedPayload,
+            .awsCredentialsInResponse, .approvalPending, .approvalDenied, .approvalUnavailable:
+            false
+        }
+    }
 
     var status: Int {
         switch self {
-        case .malformed: 400
+        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath, .awsSignedStreaming,
+            .awsUnsignedPayload:
+            400
+        case .auditUnavailable, .refreshFailed: 503
+        case .awsCredentialsInResponse: 502
         case .unknownRoute: 404
         case .noPlaceholder: 401
-        case .unknownPlaceholder, .foreignPlaceholder: 403
+        case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
+            .runtimeMismatch, .runtimeUnverified, .expired, .awsKeyMismatch, .approvalPending, .approvalDenied,
+            .approvalUnavailable, .binaryMismatch:
+            403
         case .tooLarge: 413
+        case .echoMethod: 405
         }
     }
 
@@ -201,35 +297,101 @@ enum GatewayRefusal: Error, Equatable {
         case .unknownPlaceholder: "placeholder is not live in this workspace"
         case .foreignPlaceholder: "placeholder belongs to a different secret"
         case .tooLarge: "request too large"
+        case .unsafeValue: "secret value cannot be placed safely at this placeholder's position"
+        case .echoMethod: "method would echo the brokered credential back"
+        case .encodedPlaceholder: "placeholder is percent-encoded; send it as-is"
+        case .surfaceNotAllowed: "placeholder is not allowed in this part of the request for this secret"
+        case .repeatedPlaceholder: "placeholder may appear once per surface (header, query, path)"
+        case .outsideAllowRules: "method and path are outside this secret's allow rules"
+        case .ambiguousPath: "path has encoded separators, dot segments, or ;; send it plainly"
+        case .auditUnavailable: "the audit log could not record this request, so it was not forwarded"
+        case .runtimeMismatch: "placeholder was presented from outside the runtime it was issued to"
+        case .runtimeUnverified: "the gateway could not confirm this connection comes from the placeholder's runtime"
+        case .expired: "the secret has expired; store a new value with `rv secrets set` and a later --expires"
+        case .refreshFailed: "the secret could not be refreshed from its provider, so it was not used"
+        case .awsKeyMismatch: "the request is signed with an access key other than this secret's AWS_ACCESS_KEY_ID"
+        case .awsSignedStreaming:
+            "signed streaming payloads cannot be re-signed; send UNSIGNED-PAYLOAD or STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+        case .approvalPending:
+            "this request needs a human's approval in rv; once approved, retry the identical request"
+        case .approvalDenied: "the approval for this request was denied, expired, or already used"
+        case .approvalUnavailable:
+            "this request needs a human's approval, and no approver is available for this runtime"
+        case .binaryMismatch: "this secret may be used only by the binaries its definition lists"
+        case .awsUnsignedPayload:
+            "unsigned payload modes are accepted for S3 only; send the body with a payload hash for this service"
+        case .awsCredentialsInResponse:
+            "the AWS response carried new credentials, which are never passed to the agent"
         }
     }
 }
 
 /// Swaps this secret's placeholders for its real value in the target and
-/// header values. Body bytes pass through untouched.
+/// header values. Body bytes pass through untouched. The value is encoded or
+/// refused per position so it cannot change the request's shape: a path
+/// segment stays one segment, a query value one value, a header one line.
+/// A placeholder off its binding's surfaces, or a second one on a surface,
+/// is refused before any value is placed, as is a request outside the
+/// binding's allow rules.
 enum GatewaySubstitution {
     struct Live {
         var token: String
         var secret: String
         var prefix: String
         var value: SecretValue
+        var surfaces: Set<GatewaySurface>
+        /// Expanded allow rules; empty allows any method and path.
+        var rules: [GatewayAccessRule] = []
+        /// The upstream URL's own path, which rules match in front of the route's.
+        var basePath = ""
+    }
+
+    /// Where a placeholder sits in the request head.
+    enum Position {
+        case path
+        case query
+        case header
+        /// The user half of decoded Basic credentials, where `:` would move the split.
+        case basicUser
+
+        var surface: GatewaySurface {
+            switch self {
+            case .path: .path
+            case .query: .query
+            case .header, .basicUser: .header
+            }
+        }
     }
 
     static func apply(
         _ head: GatewayRequestHead,
         route: GatewayRoute,
         lookup: (String) -> Live?
-    ) -> Result<(head: GatewayRequestHead, used: Live), GatewayRefusal> {
+    ) -> Result<(head: GatewayRequestHead, used: Live, surfaces: Set<GatewaySurface>, echoes: [Echo]), GatewayRefusal> {
         var used: Live?
-        func rewrite(_ text: String) -> Result<String, GatewayRefusal> {
-            let bytes = Array(text.utf8)
+        var filled: Set<GatewaySurface> = []
+        var echoes: [Echo] = []
+        var basicRewritten = false
+        func rewrite(_ bytes: [UInt8], at position: Position) -> Result<[UInt8], GatewayRefusal> {
             let found = SecretPlaceholder.occurrences(in: bytes)
-            guard found.isEmpty == false else { return .success(text) }
+            // Fail closed: an encoded placeholder would otherwise go upstream unswapped.
+            guard SecretPlaceholder.occurrences(in: percentDecoded(bytes)).count == found.count else {
+                return .failure(.encodedPlaceholder)
+            }
+            guard found.isEmpty == false else { return .success(bytes) }
             var output: [UInt8] = []
             var cursor = 0
             for occurrence in found {
                 guard let live = lookup(occurrence.token) else { return .failure(.unknownPlaceholder) }
                 guard live.secret == route.secret else { return .failure(.foreignPlaceholder) }
+                if let refusal = GatewayAccess.refusal(
+                    live.rules, method: head.method, route: route, basePath: live.basePath)
+                {
+                    return .failure(refusal)
+                }
+                guard live.surfaces.contains(position.surface) else { return .failure(.surfaceNotAllowed) }
+                guard filled.insert(position.surface).inserted else { return .failure(.repeatedPlaceholder) }
+                guard let value = encode(live.value.bytes, at: position) else { return .failure(.unsafeValue) }
                 let prefix = Array(live.prefix.utf8)
                 var start = occurrence.start
                 if prefix.isEmpty == false, start >= prefix.count,
@@ -238,92 +400,190 @@ enum GatewaySubstitution {
                     start -= prefix.count
                 }
                 output += bytes[cursor..<start]
-                output += live.value.bytes
+                output += value
                 cursor = occurrence.start + SecretPlaceholder.marker.count + SecretPlaceholder.tokenLength
                 used = live
             }
             output += bytes[cursor...]
-            return .success(String(decoding: output, as: UTF8.self))
+            return .success(output)
         }
         var rewritten = head
-        switch rewrite(head.target) {
-        case .failure(let refusal): return .failure(refusal)
-        case .success(let target): rewritten.target = target
+        let target = Array(head.target.utf8)
+        let queryStart = target.firstIndex(of: UInt8(ascii: "?")) ?? target.endIndex
+        let path = rewrite(Array(target[..<queryStart]), at: .path)
+        let query = rewrite(Array(target[queryStart...]), at: .query)
+        switch (path, query) {
+        case (.failure(let refusal), _), (_, .failure(let refusal)): return .failure(refusal)
+        case (.success(let path), .success(let query)):
+            rewritten.target = String(decoding: path + query, as: UTF8.self)
         }
         for index in rewritten.headers.indices {
-            switch rewrite(rewritten.headers[index].value) {
+            let value = rewritten.headers[index].value
+            if let credentials = basicCredentials(value) {
+                // `user:password` behind `Basic`, e.g. git's token-as-password.
+                let colon = credentials.firstIndex(of: UInt8(ascii: ":")) ?? credentials.endIndex
+                let user = rewrite(Array(credentials[..<colon]), at: .basicUser)
+                let password = rewrite(Array(credentials[colon...]), at: .header)
+                switch (user, password) {
+                case (.failure(let refusal), _), (_, .failure(let refusal)): return .failure(refusal)
+                case (.success(let user), .success(let password)):
+                    let encoded = Data(user + password).base64EncodedString()
+                    rewritten.headers[index].value = "Basic " + encoded
+                    // The real value now travels base64-encoded, where a raw scrub cannot see it.
+                    echoes.append(Echo(needle: Array(encoded.utf8),
+                        replacement: Array(Data(credentials).base64EncodedString().utf8)))
+                    basicRewritten = true
+                }
+                continue
+            }
+            switch rewrite(Array(value.utf8), at: .header) {
             case .failure(let refusal): return .failure(refusal)
-            case .success(let value): rewritten.headers[index].value = value
+            case .success(let value): rewritten.headers[index].value = String(decoding: value, as: UTF8.self)
             }
         }
         guard let used else { return .failure(.noPlaceholder) }
-        return .success((rewritten, used))
-    }
-}
-
-/// Streaming replace of real values with their placeholders. Holds back at
-/// most `longest - 1` bytes so a value split across chunks is still caught.
-struct SecretScrubber {
-    private let pairs: [(needle: [UInt8], replacement: [UInt8])]
-    private let keep: Int
-    private var pending: [UInt8] = []
-
-    init(_ pairs: [(needle: [UInt8], replacement: [UInt8])]) {
-        self.pairs = pairs.filter { $0.needle.isEmpty == false }.sorted { $0.needle.count > $1.needle.count }
-        keep = max(0, (self.pairs.first?.needle.count ?? 1) - 1)
+        if basicRewritten {
+            let placeholder = Array(SecretPlaceholder(token: used.token, prefix: used.prefix).text.utf8)
+            echoes += base64Fragments(of: used.value.bytes).map { Echo(needle: $0, replacement: placeholder) }
+        }
+        return .success((rewritten, used, filled, echoes))
     }
 
-    mutating func process(_ chunk: [UInt8]) -> [UInt8] {
-        pending += chunk
-        return drain(final: false)
+    /// A response-side rewrite for a form of the secret that leaves the gateway encoded.
+    typealias Echo = (needle: [UInt8], replacement: [UInt8])
+
+    /// Base64 text of `value` that holds wherever it sits in a larger base64 string:
+    /// one fragment per byte alignment, trimmed to whole three-byte groups, since
+    /// the characters touching its edges depend on the neighbouring bytes.
+    static func base64Fragments(of value: [UInt8]) -> [[UInt8]] {
+        (0..<3).compactMap { skip in
+            guard value.count > skip else { return nil }
+            let whole = (value.count - skip) / 3 * 3
+            let fragment = Array(Data(value[skip..<skip + whole]).base64EncodedString().utf8)
+            return fragment.count >= 8 ? fragment : nil
+        }
     }
 
-    mutating func finish() -> [UInt8] {
-        drain(final: true)
+    /// The value as it may appear at `position`, or nil when no encoding keeps
+    /// the request's shape. A header value has no escape for a line break, so
+    /// CR or LF is refused there; env delivery still carries multi-line values.
+    static func encode(_ value: [UInt8], at position: Position) -> [UInt8]? {
+        switch position {
+        case .header:
+            return value.contains { $0 == 13 || $0 == 10 || $0 == 0 } ? nil : value
+        case .basicUser:
+            return value.contains { $0 == 13 || $0 == 10 || $0 == 0 || $0 == UInt8(ascii: ":") } ? nil : value
+        case .path:
+            // Refused rather than encoded: an upstream that decodes before
+            // routing would still see `/`, `\`, or `..` in the path.
+            let reshaping = Array("/\\?#\r\n\0".utf8)
+            guard value.contains(where: reshaping.contains) == false,
+                zip(value, value.dropFirst()).contains(where: { $0 == 46 && $1 == 46 }) == false
+            else { return nil }
+            return percentEncode(value) { isUnreserved($0) || Array("!$&'()*+,;=:@".utf8).contains($0) }
+        case .query:
+            return percentEncode(value, keeping: isUnreserved)
+        }
     }
 
-    private mutating func drain(final: Bool) -> [UInt8] {
-        guard pairs.isEmpty == false else {
-            defer { pending.removeAll() }
-            return pending
+    /// Decoded `Basic` credentials that hold a placeholder, raw or encoded.
+    /// Nil leaves the header to the plain rewrite.
+    static func basicCredentials(_ value: String) -> [UInt8]? {
+        let parts = value.split(separator: " ", maxSplits: 1)
+        guard parts.count == 2, parts[0].lowercased() == "basic",
+            let decoded = Data(base64Encoded: parts[1].trimmingCharacters(in: .whitespaces))
+        else { return nil }
+        let bytes = Array(decoded)
+        guard SecretPlaceholder.occurrences(in: percentDecoded(bytes)).isEmpty == false else { return nil }
+        return bytes
+    }
+
+    /// One pass of `%XX` decoding; malformed escapes stay as they are.
+    static func percentDecoded(_ bytes: [UInt8]) -> [UInt8] {
+        func nibble(_ byte: UInt8) -> UInt8? {
+            switch byte {
+            case 48...57: byte - 48
+            case 65...70: byte - 55
+            case 97...102: byte - 87
+            default: nil
+            }
         }
         var output: [UInt8] = []
-        output.reserveCapacity(pending.count)
+        output.reserveCapacity(bytes.count)
         var index = 0
-        scan: while index < pending.count {
-            for pair in pairs where pending.count - index >= pair.needle.count {
-                if pending[index] == pair.needle[0],
-                    pending[index..<index + pair.needle.count].elementsEqual(pair.needle)
-                {
-                    output += pair.replacement
-                    index += pair.needle.count
-                    continue scan
-                }
+        while index < bytes.count {
+            if bytes[index] == 37, index + 2 < bytes.count,
+                let high = nibble(bytes[index + 1]), let low = nibble(bytes[index + 2])
+            {
+                output.append(high << 4 | low)
+                index += 3
+            } else {
+                output.append(bytes[index])
+                index += 1
             }
-            if final == false, pending.count - index <= keep { break }
-            output.append(pending[index])
-            index += 1
         }
-        pending.removeFirst(index)
         return output
     }
 
-    static func scrub(_ text: String, _ pairs: [(needle: [UInt8], replacement: [UInt8])]) -> String {
-        var scrubber = SecretScrubber(pairs)
-        let bytes = scrubber.process(Array(text.utf8)) + scrubber.finish()
-        return String(decoding: bytes, as: UTF8.self)
+    /// RFC 3986 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
+    private static func isUnreserved(_ byte: UInt8) -> Bool {
+        (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+            || byte == 45 || byte == 46 || byte == 95 || byte == 126
+    }
+
+    private static func percentEncode(_ bytes: [UInt8], keeping keep: (UInt8) -> Bool) -> [UInt8] {
+        let hex = Array("0123456789ABCDEF".utf8)
+        var output: [UInt8] = []
+        output.reserveCapacity(bytes.count)
+        for byte in bytes {
+            if keep(byte) {
+                output.append(byte)
+            } else {
+                output += [37, hex[Int(byte >> 4)], hex[Int(byte & 0x0F)]]
+            }
+        }
+        return output
     }
 }
 
 enum GatewayHeaders {
+    static let echoMethods: Set<String> = ["TRACE", "TRACK"]
+
     /// RFC 9110 hop-by-hop plus framing headers the gateway re-derives.
+    /// `host` is dropped so the transport sets it from the bound upstream.
     static let dropOnRequest: Set<String> = [
         "connection", "keep-alive", "proxy-connection", "proxy-authorization", "proxy-authenticate",
         "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length", "expect",
         "accept-encoding",
     ]
+    /// Would let the agent run a different method than the one policy saw.
+    static let methodOverrides: Set<String> = ["x-http-method-override", "x-http-method", "x-method-override"]
+
+    /// The agent's headers that may go upstream. Runs before substitution, so
+    /// a placeholder in a hop-by-hop header, a `Proxy-*` header, or a header
+    /// `Connection` names is never swapped for the real value.
+    static func forwardable(_ headers: [(name: String, value: String)]) -> [(name: String, value: String)] {
+        let named = Set(headers.filter { $0.name.lowercased() == "connection" }.flatMap {
+            $0.value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        })
+        return headers.filter { header in
+            let name = header.name.lowercased()
+            return dropOnRequest.contains(name) == false && name.hasPrefix("proxy-") == false
+                && methodOverrides.contains(name) == false && named.contains(name) == false
+        }
+    }
+    /// Sent on every upstream request in place of the agent's own value.
+    static let identityEncoding = (name: "Accept-Encoding", value: "identity")
+
+    /// True when no `Content-Encoding` names anything but `identity`.
+    static func isIdentityEncoded(_ headers: [(name: String, value: String)]) -> Bool {
+        headers.filter { $0.name.lowercased() == "content-encoding" }
+            .flatMap { $0.value.split(separator: ",") }
+            .allSatisfy { $0.trimmingCharacters(in: .whitespaces).lowercased() == "identity" }
+    }
+
     static let dropOnResponse: Set<String> = [
         "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "te", "trailer",
-        "transfer-encoding", "upgrade", "content-length", "content-encoding",
+        "transfer-encoding", "upgrade", "content-length", "content-encoding", "www-authenticate",
     ]
 }

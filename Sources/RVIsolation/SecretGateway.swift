@@ -9,19 +9,54 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// What one gateway request did. Carries names and a fingerprint, never values.
+/// What happened to one gateway request.
+public enum SecretGatewayActivity: String, Sendable, Equatable {
+    /// The value was placed and the request forwarded upstream.
+    case brokered
+    /// Refused by the secret's own policy before any value was placed: a misuse signal.
+    case blocked
+    /// Refused before forwarding for any other reason.
+    case refused
+    /// Forwarded, but no upstream response arrived.
+    case error
+    /// A refresh swapped in a new value from the provider.
+    case refreshed
+    /// A refresh could not read the provider; the previous value stays until its grace ends.
+    case refreshFailed
+}
+
+/// What one gateway request did. Carries names and a fingerprint, never a
+/// value or a placeholder.
 public struct SecretUseRecord: Sendable, Equatable {
+    /// A brokered request is recorded once before forwarding, so a failed
+    /// append stops it, and once with its outcome.
+    public enum Stage: String, Sendable, Equatable {
+        case forward
+        case complete
+    }
+
     public var secret: String?
     public var runtime: String?
     public var upstreamHost: String?
     public var method: String
-    /// Path only; the query string is never recorded.
+    /// Path only, placeholders redacted; the query string is never recorded.
     public var path: String
+    /// What the agent received.
     public var status: Int
-    public var allowed: Bool
+    /// What the upstream answered, when it answered.
+    public var upstreamStatus: Int?
+    public var activity: SecretGatewayActivity
+    /// `GatewayRefusal` case name for blocked and refused requests.
+    public var refusal: String?
     public var reason: String?
+    /// Request surfaces the value was placed on.
+    public var surfaces: [String]
     public var fingerprint: String?
     public var responseBytes: Int
+    public var durationMilliseconds: Int
+    public var stage: Stage
+
+    public var allowed: Bool { activity == .brokered || activity == .error }
 }
 
 public struct SecretUpstreamRequest: Sendable {
@@ -63,6 +98,30 @@ public final class SecretGateway: @unchecked Sendable {
         public var upstream: URL
         public var fingerprint: String?
         public var runtime: String?
+        public var surfaces: Set<GatewaySurface> = GatewaySurface.defaults
+        /// Expanded allow rules; empty allows any method and path.
+        public var rules: [GatewayAccessRule] = []
+        /// The runtime leader's process group, set once it is spawned. Only
+        /// a connection from that runtime may spend the value; nil refuses all.
+        var processGroup: ProcessGroupFact?
+        /// From this instant requests are refused.
+        public var expires: Date?
+        /// How the value is re-resolved while the runtime lives; nil keeps the launch value.
+        public var refresh: SecretRefreshPolicy?
+        /// Set for AWS SigV4 delivery: `value` is a credential set, and the
+        /// gateway re-signs instead of substituting.
+        var signing: AWSSigningBinding?
+        /// Expanded `approve` rules; a matching request needs a human's yes.
+        var approvals: [GatewayAccessRule] = []
+        /// Set at bind when the runtime has an admission channel that can ask.
+        var approver: SecretRequestApprover?
+        /// Pinned at lease from the definition's `binaries`; empty allows any process of the runtime.
+        var binaries: [GatewayBinaryPin] = []
+        /// Bumped each time a refresh swaps the value.
+        var generation = 0
+        /// Values this entry held before, newest first, still scrubbed from responses.
+        var previous: [SecretValue] = []
+        var rotation: SecretRotationState?
     }
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
@@ -72,9 +131,18 @@ public final class SecretGateway: @unchecked Sendable {
     static let socketFloor: Int32 = 64
 
     private let transport: SecretUpstreamTransport
-    private let audit: @Sendable (SecretUseRecord) -> Void
-    private let lock = NSLock()
-    private var entries: [String: Entry] = [:]
+    private let peers: GatewayPeerCheck
+    /// Returns false when the record did not land; a forward record that
+    /// does not land stops the request.
+    let audit: @Sendable (SecretUseRecord) -> Bool
+    let now: @Sendable () -> Date
+    let approvalTiming: GatewayApprovalTiming
+    let lock = NSLock()
+    var entries: [String: Entry] = [:]
+    /// Approvals filed and not yet resolved, by placeholder and the action digest they bind.
+    var parkedApprovals: [ParkedApprovalKey: ParkedApproval] = [:]
+    /// Requests currently held open waiting for a human.
+    var waitingApprovals = 0
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
     private var listenFDs: [Int32] = []
     /// Signaled when that fd's accept loop has left the socket, so `stop`
@@ -89,13 +157,29 @@ public final class SecretGateway: @unchecked Sendable {
     /// Test seam, nil in production. Runs after the fast-path check and before
     /// the listener is published, so two `start` calls can overlap that window.
     var beforeListenerPublish: (@Sendable () -> Void)?
+    /// Test seam: how long a request waits for a refresh. Set before serving.
+    var refreshWaitLimit = SecretGateway.refreshWaitLimit
 
-    public init(
+    public convenience init(
         transport: SecretUpstreamTransport = .urlSession,
-        audit: @escaping @Sendable (SecretUseRecord) -> Void
+        audit: @escaping @Sendable (SecretUseRecord) -> Bool,
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.init(transport: transport, peers: .runtime, audit: audit, now: now)
+    }
+
+    init(
+        transport: SecretUpstreamTransport,
+        peers: GatewayPeerCheck,
+        audit: @escaping @Sendable (SecretUseRecord) -> Bool,
+        now: @escaping @Sendable () -> Date = { Date() },
+        approvalTiming: GatewayApprovalTiming = .standard
     ) {
         self.transport = transport
+        self.peers = peers
         self.audit = audit
+        self.now = now
+        self.approvalTiming = approvalTiming
     }
 
     deinit {
@@ -113,6 +197,10 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     public func register(_ placeholder: SecretPlaceholder, entry: Entry) {
+        var entry = entry
+        if let refresh = entry.refresh {
+            entry.rotation = SecretRotationState(resolvedAt: now(), marker: refresh.marker)
+        }
         lock.lock()
         entries[placeholder.token] = entry
         lock.unlock()
@@ -124,10 +212,23 @@ public final class SecretGateway: @unchecked Sendable {
         lock.unlock()
     }
 
+    func bind(_ placeholders: [SecretPlaceholder], processGroup: ProcessGroupFact) {
+        lock.lock()
+        for placeholder in placeholders { entries[placeholder.token]?.processGroup = processGroup }
+        lock.unlock()
+    }
+
+    func bind(_ placeholders: [SecretPlaceholder], approver: SecretRequestApprover) {
+        lock.lock()
+        for placeholder in placeholders { entries[placeholder.token]?.approver = approver }
+        lock.unlock()
+    }
+
     public func revoke(_ placeholders: [SecretPlaceholder]) {
         lock.lock()
         for placeholder in placeholders { entries[placeholder.token] = nil }
         lock.unlock()
+        cancelApprovals(for: Set(placeholders.map(\.token)))
     }
 
     var liveCount: Int {
@@ -136,10 +237,20 @@ public final class SecretGateway: @unchecked Sendable {
         return entries.count
     }
 
-    private func entry(_ token: String) -> Entry? {
+    func entry(_ token: String) -> Entry? {
         lock.lock()
         defer { lock.unlock() }
         return entries[token]
+    }
+
+    /// True when some live placeholder belongs to `secret`. The route name is
+    /// agent-supplied, so a misuse finding may only name a secret that is
+    /// actually brokered here.
+    private func holdsLivePlaceholder(for secret: String?) -> Bool {
+        guard let secret else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.values.contains { $0.secret == secret }
     }
 
     /// A TCP stream socket that is close-on-exec before the caller uses it.
@@ -263,6 +374,7 @@ public final class SecretGateway: @unchecked Sendable {
         boundPort = nil
         entries.removeAll()
         lock.unlock()
+        cancelApprovals(for: nil)
         if let port {
             wakeListeningPort(port)
         }
@@ -372,68 +484,181 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     func handle(_ client: Int32) {
+        let started = DispatchTime.now()
         let reader = GatewaySocket.Reader(fd: client)
         guard let headBytes = reader.readHead(limit: GatewayRequestHead.maximumBytes),
             let head = GatewayRequestHead.parse(headBytes)
         else {
-            refuse(client, .malformed, method: "?", path: "?", secret: nil)
+            refuse(client, .malformed, method: "?", path: "?", secret: nil, started: started)
             return
         }
-        let path = String(head.target.prefix { $0 != "?" })
+        let path = SecretPlaceholder.redactedPath(head.target)
         guard let route = GatewayRoute(target: head.target) else {
-            refuse(client, .unknownRoute, method: head.method, path: path, secret: nil)
+            refuse(client, .unknownRoute, method: head.method, path: path, secret: nil, started: started)
             return
         }
-        let substituted = GatewaySubstitution.apply(head, route: route) { token in
-            entry(token).map {
-                GatewaySubstitution.Live(token: token, secret: $0.secret, prefix: $0.prefix, value: $0.value)
+        // Every live entry the request names, so a refusal can name the
+        // runtime the placeholder was leased to.
+        var presented: [Entry] = []
+        func deny(_ refusal: GatewayRefusal, runtime: String? = presented.first?.runtime) {
+            refuse(
+                client, refusal, method: head.method, path: path, secret: route.secret,
+                runtime: runtime, started: started)
+        }
+        guard GatewayHeaders.echoMethods.contains(head.method) == false else {
+            deny(.echoMethod)
+            return
+        }
+        var forwarded = head
+        forwarded.headers = GatewayHeaders.forwardable(head.headers)
+        func substitute() -> Result<
+            (
+                head: GatewayRequestHead, used: GatewaySubstitution.Live, surfaces: Set<GatewaySurface>,
+                echoes: [GatewaySubstitution.Echo]
+            ), GatewayRefusal
+        > {
+            presented = []
+            if let authorization = forwarded.header("Authorization"), AWSSigV4.isSigV4(authorization) {
+                // Re-signed, not substituted: no value leaves encoded, so there are no echoes to scrub.
+                return admitAWS(forwarded, route: route, authorization: authorization, presented: &presented)
+                    .map { ($0.head, $0.used, $0.surfaces, []) }
+            }
+            return GatewaySubstitution.apply(forwarded, route: route) { token in
+                let found = entry(token)
+                if let found { presented.append(found) }
+                return found.map { Self.live($0, token: token) }
             }
         }
-        let rewritten: GatewayRequestHead
+        var substituted = substitute()
+        // Expiry and refresh apply once the placeholder has passed its own
+        // policy, so a misuse is never reported as an expiry.
+        if case .success(let result) = substituted {
+            // Only the placeholder's own runtime may trigger a refresh.
+            if let failure = verifyPeer(client, presented) {
+                deny(failure.refusal, runtime: failure.entry?.runtime)
+                return
+            }
+            if let refusal = prepare(result.used.token) {
+                deny(refusal)
+                return
+            }
+            if entry(result.used.token)?.value != result.used.value { substituted = substitute() }
+        }
+        var rewritten: GatewayRequestHead
         let token: String
+        let surfaces: [String]
+        let echoes: [GatewaySubstitution.Echo]
         switch substituted {
         case .failure(let refusal):
-            refuse(client, refusal, method: head.method, path: path, secret: route.secret)
+            deny(refusal)
             return
         case .success(let result):
             rewritten = result.head
             token = result.used.token
+            surfaces = GatewaySurface.ordered(result.surfaces).map(\.rawValue)
+            echoes = result.echoes
         }
-        guard let live = entry(token),
+        guard var live = entry(token),
             let upstreamRoute = GatewayRoute(target: rewritten.target),
-            let url = upstreamRoute.upstreamURL(base: live.upstream)
+            var url = upstreamRoute.upstreamURL(base: live.upstream)
         else {
-            refuse(client, .unknownPlaceholder, method: head.method, path: path, secret: route.secret)
+            deny(.unknownPlaceholder)
             return
         }
         if head.header("Expect")?.lowercased() == "100-continue" {
             GatewaySocket.writeAll(client, Array("HTTP/1.1 100 Continue\r\n\r\n".utf8))
         }
         guard let body = readBody(reader, head: head) else {
-            refuse(client, .tooLarge, method: head.method, path: path, secret: route.secret)
+            deny(.tooLarge)
             return
         }
-        let headers = rewritten.headers.filter {
-            GatewayHeaders.dropOnRequest.contains($0.name.lowercased()) == false
+        if let refusal = approval(
+            live, token: token, method: head.method, route: route, basePath: Self.live(live, token: token).basePath,
+            url: url, target: head.target, headers: forwarded.headers, body: body)
+        {
+            deny(refusal)
+            return
+        }
+        // The hold can last seconds: what the human approved is the request,
+        // not the entry as it was then. Revoked, expired or refreshed since
+        // is checked again, and a changed value is substituted afresh.
+        if live.approvals.isEmpty == false {
+            if let refusal = prepare(token) {
+                deny(refusal)
+                return
+            }
+            guard let current = entry(token) else {
+                deny(.unknownPlaceholder)
+                return
+            }
+            if current.value != live.value {
+                switch substitute() {
+                case .failure(let refusal):
+                    deny(refusal)
+                    return
+                case .success(let again):
+                    rewritten = again.head
+                }
+                guard let upstream = GatewayRoute(target: rewritten.target),
+                    let fresh = upstream.upstreamURL(base: current.upstream)
+                else {
+                    deny(.unknownPlaceholder)
+                    return
+                }
+                url = fresh
+            }
+            live = current
+        }
+        var headers = rewritten.headers
+        if let signing = live.signing {
+            switch awsSigned(
+                live, binding: signing, method: head.method, url: url, headers: headers, body: body,
+                payloadMode: forwarded.header("X-Amz-Content-Sha256"))
+            {
+            case .failure(let refusal):
+                deny(refusal)
+                return
+            case .success(let signed): headers = signed
+            }
+        }
+        var record = SecretUseRecord(
+            secret: live.secret, runtime: live.runtime, upstreamHost: url.host, method: head.method, path: path,
+            status: 0, upstreamStatus: nil, activity: .brokered, refusal: nil, reason: nil, surfaces: surfaces,
+            fingerprint: live.fingerprint, responseBytes: 0, durationMilliseconds: 0, stage: .forward)
+        // Fail closed: a request the audit log cannot hold does not leave.
+        guard audit(record) else {
+            deny(.auditUnavailable)
+            return
         }
         let sink = GatewayResponseWriter(
             fd: client,
             method: head.method,
-            scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))]
+            // Earlier generations too: an upstream may still echo a value it held before rotation.
+            scrub: live.scrubbed.map {
+                ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
+            } + echoes,
+            // A call that mints credentials answers with a new key the scrubber has never seen.
+            tripwires: live.signing?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
         )
+        // Identity encoding so the scrubber sees the bytes the agent will get.
+        headers.append(GatewayHeaders.identityEncoding)
         transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: headers, body: body), sink)
-        audit(SecretUseRecord(
-            secret: live.secret,
-            runtime: live.runtime,
-            upstreamHost: url.host,
-            method: head.method,
-            path: path,
-            status: sink.status,
-            allowed: true,
-            reason: sink.failure,
-            fingerprint: live.fingerprint,
-            responseBytes: sink.bytesWritten
-        ))
+        record.stage = .complete
+        record.status = sink.status
+        record.upstreamStatus = sink.upstreamStatus
+        record.activity = sink.upstreamStatus == nil ? .error : .brokered
+        if let refusal = sink.refusal {
+            record.activity = .refused
+            record.refusal = refusal.code
+        }
+        record.reason = sink.failure
+        record.responseBytes = sink.bytesWritten
+        record.durationMilliseconds = Self.milliseconds(since: started)
+        _ = audit(record)
+    }
+
+    private static func milliseconds(since start: DispatchTime) -> Int {
+        Int((DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000)
     }
 
     private func readBody(_ reader: GatewaySocket.Reader, head: GatewayRequestHead) -> Data? {
@@ -461,11 +686,48 @@ public final class SecretGateway: @unchecked Sendable {
         return framed
     }
 
-    private func refuse(_ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?) {
-        GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason))
-        audit(SecretUseRecord(
-            secret: secret, runtime: nil, upstreamHost: nil, method: method, path: path,
-            status: refusal.status, allowed: false, reason: refusal.reason, fingerprint: nil, responseBytes: 0
+    /// Loopback is open to every process on the host, so a placeholder alone
+    /// is not enough: the connection must come from each named entry's
+    /// runtime. Fails closed when that cannot be shown, and names the entry
+    /// that failed so the finding points at the runtime whose lease was
+    /// spent from outside.
+    private func verifyPeer(_ client: Int32, _ presented: [Entry]) -> (refusal: GatewayRefusal, entry: Entry?)? {
+        guard let peer = GatewayPeer.of(client) else { return (.runtimeUnverified, presented.first) }
+        var checked: [ProcessGroupFact] = []
+        for entry in presented {
+            guard let group = entry.processGroup else { return (.runtimeUnverified, entry) }
+            guard checked.contains(group) == false else { continue }
+            checked.append(group)
+            switch peers.verify(peer, group) {
+            case .member: continue
+            case .outsider: return (.runtimeMismatch, entry)
+            case .unverifiable: return (.runtimeUnverified, entry)
+            }
+        }
+        for entry in presented where entry.binaries.isEmpty == false {
+            guard let group = entry.processGroup else { return (.runtimeUnverified, entry) }
+            switch peers.binaries(peer, group, entry.binaries) {
+            case .allowed: continue
+            case .mismatch: return (.binaryMismatch, entry)
+            case .unverifiable: return (.runtimeUnverified, entry)
+            }
+        }
+        return nil
+    }
+
+    private func refuse(
+        _ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?,
+        runtime: String? = nil, started: DispatchTime
+    ) {
+        GatewaySocket.writeAll(
+            client,
+            GatewaySocket.plainResponse(status: refusal.status, reason: refusal.reason, retryAfter: refusal.retryAfter))
+        _ = audit(SecretUseRecord(
+            secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
+            upstreamStatus: nil,
+            activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
+            refusal: refusal.code, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }
 }
@@ -475,21 +737,36 @@ public final class SecretGateway: @unchecked Sendable {
 final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     private let fd: Int32
     private let method: String
-    private let pairs: [(needle: [UInt8], replacement: [UInt8])]
     private let lock = NSLock()
+    /// Unused copy for header values; `scrubber` carries the body's held-back bytes.
+    private let headerScrubber: SecretScrubber
     private var scrubber: SecretScrubber
     private var wroteHead = false
     private var framed = true
     private var closed = false
+    /// The field name that marks a response carrying new credentials.
+    static let mintedCredentialsField = Array("SecretAccessKey".utf8)
+    /// Bytes held back, head first, while a tripwire could still fire before
+    /// anything has been sent. Credential responses are far smaller.
+    static let holdLimit = 64 * 1024
+    private var held: [UInt8]?
+    private let watching: Bool
+    private(set) var refusal: GatewayRefusal?
     private(set) var status = 502
+    /// The upstream's own status, before any rewrite. Nil when none arrived.
+    private(set) var upstreamStatus: Int?
     private(set) var bytesWritten = 0
     private(set) var failure: String?
 
-    init(fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])]) {
+    init(
+        fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])], tripwires: [[UInt8]] = []
+    ) {
         self.fd = fd
         self.method = method
-        self.pairs = pairs
-        scrubber = SecretScrubber(pairs)
+        let watching = tripwires.isEmpty == false
+        self.watching = watching
+        scrubber = SecretScrubber(pairs, tripwires: tripwires)
+        headerScrubber = SecretScrubber(pairs)
     }
 
     func head(status: Int, headers: [(name: String, value: String)]) {
@@ -497,17 +774,41 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         defer { lock.unlock() }
         guard wroteHead == false else { return }
         wroteHead = true
-        self.status = status
+        upstreamStatus = status
+        // Every forwarded request carries a brokered credential. Passing the
+        // 401 and its challenge on would start the agent's own auth flow
+        // for a credential only the operator can replace.
+        if status == 401 {
+            self.status = 502
+            failure = "upstream returned 401 for the brokered credential"
+            closed = true
+            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(
+                status: 502, reason: "the brokered credential was rejected upstream; update it with `rv secrets set`"))
+            return
+        }
         framed = method != "HEAD" && status != 204 && status != 304 && (status < 100 || status >= 200)
+        // Fail closed: a body rv cannot decode is a body it cannot scrub.
+        if framed, GatewayHeaders.isIdentityEncoded(headers) == false {
+            self.status = 502
+            failure = "upstream response is compressed and cannot be scanned for the secret"
+            closed = true
+            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(
+                status: 502, reason: "upstream response is compressed and cannot be scanned for the secret"))
+            return
+        }
+        self.status = status
         var text = "HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status).capitalized)\r\n"
         for header in headers where GatewayHeaders.dropOnResponse.contains(header.name.lowercased()) == false {
-            let value = SecretScrubber.scrub(header.value, pairs)
+            var scrubber = headerScrubber
+            let value = String(
+                decoding: scrubber.process(Array(header.value.utf8)) + scrubber.finish(), as: UTF8.self)
             guard value.contains("\r") == false, value.contains("\n") == false else { continue }
             text += "\(header.name): \(value)\r\n"
         }
         if framed { text += "Transfer-Encoding: chunked\r\n" }
         text += "Connection: close\r\n\r\n"
-        closed = GatewaySocket.writeAll(fd, Array(text.utf8)) == false
+        if watching { held = [] }
+        closed = write(Array(text.utf8)) == false
     }
 
     func body(_ data: Data) -> Bool {
@@ -515,6 +816,7 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
         defer { lock.unlock() }
         guard closed == false, framed else { return closed == false }
         let clean = scrubber.process(Array(data))
+        if scrubber.tripped { return trip(sending: clean) }
         return writeChunk(clean)
     }
 
@@ -529,30 +831,76 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             return
         }
         if framed {
-            _ = writeChunk(scrubber.finish())
-            _ = GatewaySocket.writeAll(fd, Array("0\r\n\r\n".utf8))
+            let rest = scrubber.finish()
+            if scrubber.tripped {
+                _ = trip(sending: rest)
+                return
+            }
+            _ = writeChunk(rest)
+            _ = write(Array("0\r\n\r\n".utf8))
         }
+        flushHeld()
         closed = true
     }
 
     func fail(_ reason: String) {
         lock.lock()
         defer { lock.unlock() }
-        failure = reason
+        if failure == nil { failure = reason }
         guard closed == false else { return }
         closed = true
+        flushHeld()
         if wroteHead == false {
             status = 502
             GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: 502, reason: "upstream failed: \(reason)"))
         }
     }
 
+    private static func chunk(_ bytes: [UInt8]) -> [UInt8] {
+        bytes.isEmpty ? [] : Array(String(bytes.count, radix: 16).utf8) + [13, 10] + bytes + [13, 10]
+    }
+
     private func writeChunk(_ bytes: [UInt8]) -> Bool {
         guard bytes.isEmpty == false else { return true }
         bytesWritten += bytes.count
-        let frame = Array(String(bytes.count, radix: 16).utf8) + [13, 10] + bytes + [13, 10]
-        if GatewaySocket.writeAll(fd, frame) == false { closed = true }
+        let frame = Self.chunk(bytes)
+        if write(frame) == false { closed = true }
         return closed == false
+    }
+
+    /// Sends, or while a tripwire could still fire before anything has left,
+    /// holds the bytes; past `holdLimit` the hold is released.
+    private func write(_ bytes: [UInt8]) -> Bool {
+        guard held != nil else { return GatewaySocket.writeAll(fd, bytes) }
+        held?.append(contentsOf: bytes)
+        guard (held?.count ?? 0) > Self.holdLimit else { return true }
+        return flushHeld()
+    }
+
+    @discardableResult
+    private func flushHeld() -> Bool {
+        guard let bytes = held else { return true }
+        held = nil
+        return GatewaySocket.writeAll(fd, bytes)
+    }
+
+    /// A tripwire matched. While nothing has been sent the agent gets a plain
+    /// 502 in place of the response; after that the stream is cut short at
+    /// the field name, before the value.
+    private func trip(sending clean: [UInt8]) -> Bool {
+        let refused = GatewayRefusal.awsCredentialsInResponse
+        refusal = refused
+        failure = refused.reason
+        closed = true
+        if held != nil {
+            held = nil
+            status = refused.status
+            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(status: refused.status, reason: refused.reason))
+        } else if framed {
+            bytesWritten += clean.count
+            _ = GatewaySocket.writeAll(fd, Self.chunk(clean))
+        }
+        return false
     }
 }
 
@@ -578,11 +926,12 @@ enum GatewaySocket {
         return true
     }
 
-    static func plainResponse(status: Int, reason: String) -> [UInt8] {
+    static func plainResponse(status: Int, reason: String, retryAfter: Int? = nil) -> [UInt8] {
         let body = "rv secret gateway: \(reason)\n"
         let phrase = HTTPURLResponse.localizedString(forStatusCode: status).capitalized
+        let retry = retryAfter.map { "Retry-After: \($0)\r\n" } ?? ""
         return Array(
-            ("HTTP/1.1 \(status) \(phrase)\r\nContent-Type: text/plain; charset=utf-8\r\n"
+            ("HTTP/1.1 \(status) \(phrase)\r\nContent-Type: text/plain; charset=utf-8\r\n" + retry
                 + "Content-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body).utf8)
     }
 

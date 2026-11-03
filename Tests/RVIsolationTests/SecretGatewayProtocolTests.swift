@@ -103,10 +103,70 @@ struct SecretGatewayProtocolTests {
         #expect(GatewayRoute(target: "/s/K/@evil.example")?.upstreamURL(base: base)?.host == "api.example.com")
     }
 
-    private func live(_ placeholder: SecretPlaceholder, secret: String, value: String) -> GatewaySubstitution.Live {
+    private func live(
+        _ placeholder: SecretPlaceholder, secret: String, value: String,
+        surfaces: Set<GatewaySurface> = Set(GatewaySurface.allCases)
+    ) -> GatewaySubstitution.Live {
         GatewaySubstitution.Live(
             token: placeholder.token, secret: secret, prefix: placeholder.prefix,
-            value: SecretValue(value)!)
+            value: SecretValue(value)!, surfaces: surfaces)
+    }
+
+    private func surfaced(
+        _ request: String, surfaces: Set<GatewaySurface>
+    ) throws -> Result<GatewayRequestHead, GatewayRefusal> {
+        let key = SecretPlaceholder.mint(prefix: "")
+        // `BASIC<user:password>` becomes a Basic header value after PH is swapped in.
+        var text = request.replacingOccurrences(of: "PH", with: key.text)
+        while let open = text.range(of: "BASIC<"), let close = text[open.upperBound...].firstIndex(of: ">") {
+            let credentials = String(text[open.upperBound..<close])
+            text.replaceSubrange(open.lowerBound...close, with: "Basic " + Data(credentials.utf8).base64EncodedString())
+        }
+        let parsed = try #require(head(text))
+        let route = try #require(GatewayRoute(target: parsed.target))
+        return GatewaySubstitution.apply(parsed, route: route) {
+            $0 == key.token ? live(key, secret: "KEY", value: "real", surfaces: surfaces) : nil
+        }.map { $0.head }
+    }
+
+    @Test func placeholdersAreSwappedOnlyOnTheirAllowedSurfaces() throws {
+        let header: Set<GatewaySurface> = [.header]
+        #expect(try surfaced("GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: header)
+            .map { $0.header("Authorization") } == .success("Bearer real"))
+        #expect(try surfaced("GET /s/KEY/x?key=PH HTTP/1.1\r\nX: y", surfaces: header) == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/botPH/x HTTP/1.1\r\nX: y", surfaces: header) == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/x?key=PH HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: header)
+            == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/x?key=PH HTTP/1.1\r\nX: y", surfaces: [.query]).map(\.target)
+            == .success("/s/KEY/x?key=real"))
+        #expect(try surfaced("GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: [.query])
+            == .failure(.surfaceNotAllowed))
+        #expect(try surfaced("GET /s/KEY/botPH/x HTTP/1.1\r\nX: y", surfaces: [.path]).map(\.target)
+            == .success("/s/KEY/botreal/x"))
+        #expect(try surfaced("GET /s/KEY/x HTTP/1.1\r\nAuthorization: BASIC<u:PH>", surfaces: [.query])
+            == .failure(.surfaceNotAllowed))
+    }
+
+    @Test func eachSurfaceIsFilledAtMostOnce() throws {
+        let all = Set(GatewaySurface.allCases)
+        for request in [
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH\r\nX-Echo: PH",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH PH",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: BASIC<PH:PH>",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: BASIC<u:PH>\r\nX-Api-Key: PH",
+            "GET /s/KEY/x?a=PH&b=PH HTTP/1.1\r\nX: y",
+            "GET /s/KEY/PH/PH HTTP/1.1\r\nX: y",
+        ] {
+            #expect(try surfaced(request, surfaces: all) == .failure(.repeatedPlaceholder), "\(request)")
+        }
+        let spread = try surfaced("GET /s/KEY/botPH/x?key=PH HTTP/1.1\r\nAuthorization: Bearer PH", surfaces: all)
+        #expect(spread.map(\.target) == .success("/s/KEY/botreal/x?key=real"))
+        #expect(spread.map { $0.header("Authorization") } == .success("Bearer real"))
+        let clone = try surfaced(
+            "GET /s/KEY/r.git/info/refs HTTP/1.1\r\nAuthorization: BASIC<x-access-token:PH>\r\nUser-Agent: git/2",
+            surfaces: [.header])
+        #expect(clone.map { $0.header("Authorization") }
+            == .success("Basic " + Data("x-access-token:real".utf8).base64EncodedString()))
     }
 
     @Test func substitutesOwnPlaceholdersInTargetAndHeaders() throws {
@@ -144,6 +204,99 @@ struct SecretGatewayProtocolTests {
         #expect(try refusal("Authorization: Bearer \(theirs.text)") == .foreignPlaceholder)
         #expect(try refusal("Authorization: Bearer \(mine.text)\r\nX-Leak: \(theirs.text)") == .foreignPlaceholder)
         #expect(try refusal("Authorization: Bearer \(mine.text)") == nil)
+    }
+
+    private func substituted(_ request: String, value: String) throws -> Result<GatewayRequestHead, GatewayRefusal> {
+        let key = SecretPlaceholder.mint(prefix: "")
+        let parsed = try #require(head(request.replacingOccurrences(of: "PH", with: key.text)))
+        let route = try #require(GatewayRoute(target: parsed.target))
+        return GatewaySubstitution.apply(parsed, route: route) {
+            $0 == key.token ? live(key, secret: "KEY", value: value) : nil
+        }.map { $0.head }
+    }
+
+    @Test func queryValuesArePercentEncodedSoTheyCannotAddParameters() throws {
+        let base = try #require(URL(string: "https://api.example.com/v1"))
+        let rewritten = try substituted("GET /s/KEY/models?key=PH&limit=2 HTTP/1.1\r\nX: y", value: "x?admin=1&").get()
+        #expect(rewritten.target == "/s/KEY/models?key=x%3Fadmin%3D1%26&limit=2")
+        let url = try #require(GatewayRoute(target: rewritten.target)?.upstreamURL(base: base))
+        #expect(url.path == "/v1/models")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(items.map(\.name) == ["key", "limit"])
+        #expect(items.first?.value == "x?admin=1&")
+
+        let traversal = try substituted("GET /s/KEY/models?key=PH HTTP/1.1\r\nX: y", value: "/../admin").get()
+        #expect(traversal.target == "/s/KEY/models?key=%2F..%2Fadmin")
+        #expect(GatewayRoute(target: traversal.target)?.upstreamURL(base: base)?.path == "/v1/models")
+
+        let lines = try substituted("GET /s/KEY/x?key=PH HTTP/1.1\r\nX: y", value: "a\r\nb c+%").get()
+        #expect(lines.target == "/s/KEY/x?key=a%0D%0Ab%20c%2B%25")
+    }
+
+    @Test func pathValuesThatCouldReshapeThePathAreRefused() throws {
+        for value in ["/../admin", "x?x=1&", "a/b", "a\\b", "a#b", "..", "a..b", "a\r\nb"] {
+            #expect(try substituted("GET /s/KEY/botPH/send HTTP/1.1\r\nX: y", value: value) == .failure(.unsafeValue),
+                "value \(value.debugDescription)")
+        }
+        let plain = try substituted("GET /s/KEY/botPH/send HTTP/1.1\r\nX: y", value: "123:ABC-def_~").get()
+        #expect(plain.target == "/s/KEY/bot123:ABC-def_~/send")
+        let encoded = try substituted("GET /s/KEY/botPH/send HTTP/1.1\r\nX: y", value: "a b%é").get()
+        #expect(encoded.target == "/s/KEY/bota%20b%25%C3%A9/send")
+    }
+
+    @Test func headerValuesWithLineBreaksAreRefused() throws {
+        for value in ["sk-1\r\nX-Injected: yes", "sk-1\nX-Injected: yes", "sk-1\rX"] {
+            #expect(try substituted("GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH", value: value)
+                == .failure(.unsafeValue))
+        }
+        let pem = "-----BEGIN KEY-----\nabc\n-----END KEY-----"
+        #expect(try substituted("GET /s/KEY/x?k=PH HTTP/1.1\r\nX: y", value: pem).map(\.target)
+            == .success("/s/KEY/x?k=-----BEGIN%20KEY-----%0Aabc%0A-----END%20KEY-----"))
+    }
+
+    private func basic(_ credentials: String) -> String {
+        "Basic " + Data(credentials.utf8).base64EncodedString()
+    }
+
+    @Test func basicCredentialsAreDecodedSubstitutedAndReencoded() throws {
+        let key = SecretPlaceholder.mint(prefix: "")
+        func authorization(_ header: String, value: String = "ghp_real") throws -> Result<String?, GatewayRefusal> {
+            let parsed = try #require(head("GET /s/KEY/repo.git/info/refs HTTP/1.1\r\nAuthorization: \(header)"))
+            let route = try #require(GatewayRoute(target: parsed.target))
+            return GatewaySubstitution.apply(parsed, route: route) {
+                $0 == key.token ? live(key, secret: "KEY", value: value) : nil
+            }.map { $0.head.header("Authorization") }
+        }
+        #expect(try authorization(basic("x-access-token:\(key.text)")) == .success(basic("x-access-token:ghp_real")))
+        #expect(try authorization("basic " + Data("u:\(key.text)".utf8).base64EncodedString())
+            == .success(basic("u:ghp_real")))
+        #expect(try authorization(basic("\(key.text):x-oauth-basic")) == .success(basic("ghp_real:x-oauth-basic")))
+        #expect(try authorization(basic("\(key.text):x"), value: "user:pass") == .failure(.unsafeValue))
+        #expect(try authorization(basic("u:\(key.text)"), value: "a:b") == .success(basic("u:a:b")))
+        #expect(try authorization(basic("u:\(key.text)"), value: "a\r\nX-Injected: 1") == .failure(.unsafeValue))
+        #expect(try authorization(basic("u:\(SecretPlaceholder.mint(prefix: "").text)")) == .failure(.unknownPlaceholder))
+        #expect(try authorization(basic("u:plain")) == .failure(.noPlaceholder))
+    }
+
+    @Test func percentEncodedPlaceholdersAreRefused() throws {
+        let key = SecretPlaceholder.mint(prefix: "")
+        let marker = "%72%76%70%68%5F"
+        let fully = key.text.utf8.map { String(format: "%%%02X", $0) }.joined()
+        for request in [
+            "GET /s/KEY/x?k=%72vph_\(key.token) HTTP/1.1\r\nX: y",
+            "GET /s/KEY/x?k=\(marker)\(key.token) HTTP/1.1\r\nX: y",
+            "GET /s/KEY/\(fully)/x HTTP/1.1\r\nX: y",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer rvph%5f\(key.token)",
+            "GET /s/KEY/x?k=\(key.text) HTTP/1.1\r\nX-Other: rvph%5F\(key.token)",
+            "GET /s/KEY/x HTTP/1.1\r\nAuthorization: \(basic("u:rvph%5F\(key.token)"))",
+        ] {
+            let parsed = try #require(head(request))
+            let route = try #require(GatewayRoute(target: parsed.target))
+            let result = GatewaySubstitution.apply(parsed, route: route) {
+                $0 == key.token ? live(key, secret: "KEY", value: "v") : nil
+            }.map { $0.head }
+            #expect(result == .failure(.encodedPlaceholder), "\(request)")
+        }
     }
 
     @Test func scrubberCatchesValuesSplitAtEveryBoundary() {
