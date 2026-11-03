@@ -69,6 +69,8 @@ public enum FingerprintSegment: Sendable, Equatable {
     case field(String)
     /// Items joined with `,`. An empty list is `\[]`, an escape `escape`
     /// never produces, so it differs from a list of one empty item (`""`).
+    /// A one-item list spells like a `.field`, so a kind must use one shape
+    /// per slot.
     case list([String])
 
     private static let emptyListToken = "\\[]"
