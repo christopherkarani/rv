@@ -428,6 +428,25 @@ struct SecretsCommandTests {
             == .failure("NOPE is not defined in secrets.json"))
     }
 
+    @Test func checkFailsAnExpiredSecretAsALaunchWould() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        try Data("""
+            {"version":1,"secrets":[
+              {"name":"OLD","source":{"hostEnvironment":{"variable":"OLD_SRC"}},"delivery":{"environment":{}},
+               "expires":"2026-01-01"}
+            ]}
+            """.utf8).write(to: fixture.secretsFile)
+        chmod(fixture.secretsFile.path, 0o600)
+        var environment = fixture.environment(host: ["OLD_SRC": "value-old-123"])
+        environment.now = { SecretExpiry.parse("2026-06-01")! }
+        let configuration = try SecretsRun.configuration(environment).get()
+        let rows = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(rows.map(\.ok) == [false])
+        #expect(rows.first?.error == "expired at \(SecretExpiry.text(SecretExpiry.parse("2026-01-01")!))")
+        #expect(rows.first?.fingerprint == nil)
+    }
+
     @Test func removeDeletesTheDefinitionAndTheStoredValue() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }

@@ -223,6 +223,27 @@ struct AuditForwardTests {
         #expect(secret.message.contains("\\\\u001b") == false)
     }
 
+    @Test func anExpiredHeaderSecretIsNeverResolved() {
+        let expired = Date(timeIntervalSince1970: 946_684_800)
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "SIEM", source: .hostEnvironment(variable: "SIEM"), delivery: .environment, expires: expired)
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("tok123")!)
+        }
+        guard case .failure(let failure) = AuditForwardRun.resolveHeaders(
+            ["Authorization": "Bearer ${secret:SIEM}"], secrets: { .success(secrets) }, resolver: resolver, policy: nil)
+        else {
+            Issue.record("an expired header secret was sent")
+            return
+        }
+        #expect(failure.message == "header secret SIEM expired at \(SecretExpiry.text(expired))")
+        #expect(resolved.withLock { $0 } == 0)
+    }
+
     @Test func anInvalidPolicyFailsForwardingEvenWithAnExplicitTarget() throws {
         func failure(_ result: Result<String, CommandFailure>) -> String? {
             if case .failure(let failure) = result { return failure.message }
