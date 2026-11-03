@@ -317,7 +317,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
         guard let current = configuration.secret(named: name) else {
             return .failure(.notFound("\(name) is no longer defined in secrets.json"))
         }
-        guard current.source == launched.source, current.delivery == launched.delivery else {
+        guard current.source == launched.source, current.delivery.route == launched.delivery.route else {
             return .failure(.failed("\(name) now has a different source or delivery; start a new session to use it"))
         }
         // Past the definition's own expiry nothing is minted: the exchange would rotate the

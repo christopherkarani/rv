@@ -96,11 +96,12 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var allow: [GatewayAllowance]
     /// Methods and paths that need a human's approval per request. Empty needs none.
     public var approve: [GatewayAllowance]
+    public var limits: SecretGatewayLimits
 
     public init(
         upstream: URL, baseURLEnv: String, placeholderPrefix: String = "",
         surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [],
-        approve: [GatewayAllowance] = []
+        approve: [GatewayAllowance] = [], limits: SecretGatewayLimits = SecretGatewayLimits()
     ) {
         self.upstream = upstream
         self.baseURLEnv = baseURLEnv
@@ -108,6 +109,7 @@ public struct SecretGatewayBinding: Sendable, Equatable {
         self.surfaces = surfaces
         self.allow = allow
         self.approve = approve
+        self.limits = limits
     }
 
     /// `allow` with presets expanded.
@@ -150,10 +152,11 @@ public struct AWSSigningBinding: Sendable, Equatable {
     public var allow: [GatewayAllowance]
     /// Methods and paths that need a human's approval per request. Empty needs none.
     public var approve: [GatewayAllowance]
+    public var limits: SecretGatewayLimits
 
     public init(
         upstream: URL, region: String, service: String, endpointEnv: String, allow: [GatewayAllowance] = [],
-        approve: [GatewayAllowance] = []
+        approve: [GatewayAllowance] = [], limits: SecretGatewayLimits = SecretGatewayLimits()
     ) {
         self.upstream = upstream
         self.region = region
@@ -161,6 +164,7 @@ public struct AWSSigningBinding: Sendable, Equatable {
         self.endpointEnv = endpointEnv
         self.allow = allow
         self.approve = approve
+        self.limits = limits
     }
 
     /// `allow` with presets expanded.
@@ -192,12 +196,6 @@ public struct SecretDefinition: Sendable, Equatable {
     public var type: String?
     /// From this instant the value is not delivered: launches fail and the gateway refuses.
     public var expires: Date?
-    /// Gateway only: re-resolve from the provider this often while a runtime lives.
-    public var refresh: SecretRefreshInterval?
-    /// Gateway only: absolute paths of the binaries that may spend the value.
-    /// A request is served only when every runtime process holding its
-    /// connection runs one of them, or descends from one that does.
-    public var binaries: [String]?
 
     public init(
         name: String,
@@ -206,9 +204,7 @@ public struct SecretDefinition: Sendable, Equatable {
         source: SecretSource,
         delivery: SecretDelivery,
         type: String? = nil,
-        expires: Date? = nil,
-        refresh: SecretRefreshInterval? = nil,
-        binaries: [String]? = nil
+        expires: Date? = nil
     ) {
         self.name = name
         self.description = description
@@ -217,8 +213,6 @@ public struct SecretDefinition: Sendable, Equatable {
         self.delivery = delivery
         self.type = type
         self.expires = expires
-        self.refresh = refresh
-        self.binaries = binaries
     }
 
     func stages(forAgent agent: String?) -> Bool {
@@ -391,16 +385,7 @@ enum SecretsDecoding {
         }
         let source = try self.source(object["source"], secret: name)
         let delivery = try self.delivery(object["delivery"], secret: name)
-        // A profile's value is a credential set, not a token, and signing needs one.
-        switch (source, delivery) {
-        case (.awsProfile, .awsSigV4): break
-        case (.awsProfile, _): throw Failure("\(name).source.awsProfile needs awsSigV4 delivery")
-        // An access token outlives no runtime: it is minted for, and refreshed by, gateway requests.
-        case (.oauth, .gateway): break
-        case (.oauth, _): throw Failure("\(name).source.oauth needs gateway delivery")
-        case (_, .awsSigV4): throw Failure("\(name).delivery.awsSigV4 needs an awsProfile source")
-        default: break
-        }
+        if let error = SecretDefinitionError.pairing(name, source, delivery) { throw Failure(error.reason) }
         var expires: Date?
         if let raw = object["expires"] {
             guard let text = raw as? String, let date = SecretExpiry.parse(text) else {
@@ -414,10 +399,7 @@ enum SecretsDecoding {
             guard let text = raw as? String, let interval = SecretRefreshInterval(text) else {
                 throw Failure("\(name).refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m")
             }
-            if case .environment = delivery {
-                throw Failure(
-                    "\(name).refresh applies to gateway delivery; a value in the environment cannot change after launch")
-            }
+            if let error = SecretDefinitionError.refresh(name, delivery) { throw Failure(error.reason) }
             refresh = interval
         }
         var binaries: [String]?
@@ -427,15 +409,13 @@ enum SecretsDecoding {
             else {
                 throw Failure("\(name).binaries must be 1 to 16 distinct absolute paths, such as /opt/homebrew/bin/gh")
             }
-            if case .environment = delivery {
-                throw Failure(
-                    "\(name).binaries applies to gateway delivery; rv cannot see which process reads an environment variable")
-            }
+            if let error = SecretDefinitionError.binaries(name, delivery) { throw Failure(error.reason) }
             binaries = list
         }
         return SecretDefinition(
-            name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName,
-            expires: expires, refresh: refresh, binaries: binaries)
+            name: name, description: description, agents: agents, source: source,
+            delivery: delivery.with(limits: SecretGatewayLimits(refresh: refresh, binaries: binaries)),
+            type: typeName, expires: expires)
     }
 
     /// Absolute, without `.` or `..` components, printable, and at most 1024 bytes.
