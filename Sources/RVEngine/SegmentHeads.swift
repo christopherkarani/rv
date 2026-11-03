@@ -23,6 +23,12 @@ private func isBlank(_ character: Character) -> Bool {
 /// reserved words (also when glued to a paren: `if(rm -r ~)`), function
 /// definition heads, and `case` headers and arm patterns. Carries the
 /// `case ... esac` nesting across the pieces of one split.
+/// A segment rv could not scan (head stripping that never settled, a group
+/// opener that does not peel). It is a dynamic `sh -c` payload, which the
+/// unwrap always limits, so the command fails closed instead of passing on
+/// text nobody inspected.
+let unscannableSegment = #"sh -c "$rv_unscannable""#
+
 struct SegmentHeadState {
     private var caseDepth = 0
 
@@ -30,6 +36,7 @@ struct SegmentHeadState {
     /// (`case x in`, `esac`, a bare pattern list).
     mutating func strip(_ piece: String) -> String? {
         var current = stripLeadingReservedWords(piece)
+        var settled = false
         for _ in 0..<8 {
             let before = current
             if let rest = Self.caseBody(of: current) {
@@ -45,9 +52,12 @@ struct SegmentHeadState {
             } else if let rest = Self.afterFunctionHead(current) {
                 current = stripLeadingReservedWords(rest)
             }
-            if current == before { break }
+            if current == before {
+                settled = true
+                break
+            }
         }
-        return current
+        return settled ? current : unscannableSegment
     }
 
     /// `case WORD in rest` becomes `rest`; nil when `text` is no case header.
@@ -158,7 +168,7 @@ private func dropOptionWords(_ text: Substring, head: String) -> Substring {
         if carriesSubstitutionSyntax(word) { break }
         var remainder = rest.dropFirst(word.count).drop(while: isBlank)
         if head == "exec", execValueOptions.contains(String(word)) {
-            let value = remainder.prefix { isBlank($0) == false }
+            let value = shellWordPrefix(remainder)
             if carriesSubstitutionSyntax(value) { break }
             remainder = remainder.dropFirst(value.count).drop(while: isBlank)
         }
@@ -166,6 +176,29 @@ private func dropOptionWords(_ text: Substring, head: String) -> Substring {
         if word == "--" { break }
     }
     return rest
+}
+
+/// The first shell word of `text`: blanks end it unless quoted.
+private func shellWordPrefix(_ text: Substring) -> Substring {
+    var quote: Character?
+    var end = text.startIndex
+    while end < text.endIndex {
+        let char = text[end]
+        if let open = quote {
+            if char == "\\", open == "\"" {
+                end = text.index(after: end)
+                if end == text.endIndex { break }
+            } else if char == open {
+                quote = nil
+            }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if isBlank(char) {
+            break
+        }
+        end = text.index(after: end)
+    }
+    return text[text.startIndex..<end]
 }
 
 private func carriesSubstitutionSyntax(_ word: Substring) -> Bool {
