@@ -266,6 +266,12 @@
     { "id": "db.allow.r8-node-json-open-key", "command": "node -p 'JSON.stringify({open:true})'", "expected": "allow" },
     { "id": "db.allow.r8-ruby-puts-open-in-string", "command": "ruby -e 'puts \"Could not open file\"'", "expected": "allow" },
     { "id": "db.deny.r8-python-alias-open-write", "command": "python3 -c \"f=open;f('/tmp/x','w')\"", "expected": "deny" },
-    { "id": "db.deny.r8-node-bracket-writefile", "command": "node -e \"require('fs')['writeFileSync']('/x','y')\"", "expected": "deny" }
+    { "id": "db.deny.r8-node-bracket-writefile", "command": "node -e \"require('fs')['writeFileSync']('/x','y')\"", "expected": "deny" },
+    { "id": "db.deny.r9-echo-dq-semicolon", "command": "echo \"x\"; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-echo-sq-space-semicolon", "command": "echo 'x y'; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-echo-sq-backslash-semicolon", "command": "echo 'a\\'; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-printf-quoted-amp", "command": "printf \"%s\" \"x\"&& rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-ls-quoted-pipe-xargs", "command": "ls \"a\"|xargs rm -r", "expected": "deny" },
+    { "id": "db.deny.r9-echo-dq-semicolon-nospace", "command": "echo \"x\";rm -r ~", "expected": "deny" }
   ]
 }

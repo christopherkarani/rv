@@ -310,6 +310,12 @@ func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: Strin
             sedScriptPending = false
         }
     }
+    // `'a\'; cmd`: the quotes are gone from the view, so a literal backslash
+    // ending the quoted run would read as escaping the unquoted separator
+    // glued to it. Double it so the separator still splits.
+    for index in tokens.indices where tokens[index].wasQuoted && tokens[index].isRedirectStructural {
+        tokens[index].lexeme = tokens[index].lexeme.replacingOccurrences(of: "\\", with: "\\\\")
+    }
     return (joinTokenLexemes(tokens), masked)
 }
 
