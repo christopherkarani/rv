@@ -153,6 +153,15 @@ extension SecretsConfiguration {
                 if binding.surfaces != GatewaySurface.defaults {
                     fields["surfaces"] = GatewaySurface.ordered(binding.surfaces).map(\.rawValue)
                 }
+                if binding.allow.isEmpty == false {
+                    fields["allow"] = binding.allow.map { allowance -> Any in
+                        switch allowance {
+                        case .preset(let preset): return preset.rawValue
+                        case .rule(let rule):
+                            return ["methods": rule.methods.map { $0.sorted() as Any } ?? "*", "path": rule.path]
+                        }
+                    }
+                }
                 entry["delivery"] = ["gateway": fields]
             }
             return entry

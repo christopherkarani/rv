@@ -50,16 +50,22 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var placeholderPrefix: String
     /// Where the placeholder may be swapped; anywhere else is refused.
     public var surfaces: Set<GatewaySurface>
+    /// Methods and paths the secret may be used for. Empty allows any.
+    public var allow: [GatewayAllowance]
 
     public init(
         upstream: URL, baseURLEnv: String, placeholderPrefix: String = "",
-        surfaces: Set<GatewaySurface> = GatewaySurface.defaults
+        surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = []
     ) {
         self.upstream = upstream
         self.baseURLEnv = baseURLEnv
         self.placeholderPrefix = placeholderPrefix
         self.surfaces = surfaces
+        self.allow = allow
     }
+
+    /// `allow` with presets expanded.
+    public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
 }
 
 public enum SecretDelivery: Sendable, Equatable {
@@ -360,7 +366,7 @@ enum SecretsDecoding {
             try onlyKeys(fields, [], at: place)
             return .environment
         case "gateway":
-            try onlyKeys(fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces"], at: place)
+            try onlyKeys(fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces", "allow"], at: place)
             guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
@@ -372,8 +378,10 @@ enum SecretsDecoding {
                 throw Failure("\(place).placeholderPrefix must be up to 32 letters, digits, _ or -")
             }
             let surfaces = try self.surfaces(fields["surfaces"], at: "\(place).surfaces")
+            let allow = try self.allow(fields["allow"], at: "\(place).allow")
             return .gateway(SecretGatewayBinding(
-                upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces))
+                upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
+                allow: allow))
         default:
             throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -390,6 +398,52 @@ enum SecretsDecoding {
         let surfaces = list.compactMap(GatewaySurface.init(rawValue:))
         guard surfaces.count == list.count else { throw Failure("\(place) must list distinct surfaces from \(names)") }
         return Set(surfaces)
+    }
+
+    /// Absent allows everything. Present must be non-empty, so `[]` cannot
+    /// be mistaken for "allow nothing".
+    static func allow(_ value: Any?, at place: String) throws -> [GatewayAllowance] {
+        guard let value else { return [] }
+        guard let list = value as? [Any], list.isEmpty == false, list.count <= GatewayAllowance.maximumEntries else {
+            throw Failure("\(place) must list 1 to \(GatewayAllowance.maximumEntries) presets or rules")
+        }
+        let presets = GatewayAccessPreset.allCases.map(\.rawValue).joined(separator: ", ")
+        return try list.enumerated().map { index, entry in
+            let at = "\(place)[\(index)]"
+            if let name = entry as? String {
+                guard let preset = GatewayAccessPreset(rawValue: name) else {
+                    throw Failure("\(at) preset \(DisplayedText.field(name)) is unknown; use \(presets)")
+                }
+                return .preset(preset)
+            }
+            guard let object = entry as? [String: Any] else {
+                throw Failure("\(at) must be a preset name or {methods, path}")
+            }
+            try onlyKeys(object, ["methods", "path"], at: at)
+            let methods: Set<String>?
+            switch object["methods"] {
+            case let star as String where star == "*":
+                methods = nil
+            case let names as [String] where Set(names).count == names.count:
+                methods = Set(names)
+            default:
+                throw Failure("\(at).methods must be \"*\" or a list of distinct upper-case HTTP methods")
+            }
+            guard let path = object["path"] as? String else {
+                throw Failure("\(at).path must be a /-rooted glob")
+            }
+            guard let rule = GatewayAccessRule(methods: methods, path: path) else {
+                if let methods, methods.isEmpty || methods.count > GatewayAccessRule.maximumMethods
+                    || methods.allSatisfy(GatewayAccessRule.isMethod) == false
+                {
+                    throw Failure("\(at).methods must be \"*\" or a list of distinct upper-case HTTP methods")
+                }
+                throw Failure(
+                    "\(at).path must be a /-rooted glob without . or .. segments, //, %, ?, #, ;, or \\, "
+                        + "and at most two **")
+            }
+            return .rule(rule)
+        }
     }
 
     static func variable(_ value: String) -> Bool {

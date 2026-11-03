@@ -43,6 +43,18 @@ public struct SecretPlaceholder: Sendable, Hashable {
         return found
     }
 
+    /// `text` with every placeholder token replaced, for audit records.
+    static func redacted(_ text: String) -> String {
+        let bytes = Array(text.utf8)
+        var output: [UInt8] = []
+        var cursor = 0
+        for occurrence in occurrences(in: bytes) {
+            output += bytes[cursor..<occurrence.start] + Array("rvph_[redacted]".utf8)
+            cursor = occurrence.start + marker.count + tokenLength
+        }
+        return String(decoding: output + bytes[cursor...], as: UTF8.self)
+    }
+
     private static func isLowerHex(_ byte: UInt8) -> Bool {
         (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
     }
@@ -193,13 +205,19 @@ enum GatewayRefusal: Error, Equatable {
     /// A second placeholder on one surface, e.g. a copy in another header
     /// that the upstream might log or echo.
     case repeatedPlaceholder
+    /// Method or path outside the secret's allow rules.
+    case outsideAllowRules
+    /// With allow rules, a path an upstream could read differently from the
+    /// matcher: encoded `/` or dots, `..`, `;`, `//`, or double encoding.
+    case ambiguousPath
 
     var status: Int {
         switch self {
-        case .malformed, .unsafeValue, .encodedPlaceholder: 400
+        case .malformed, .unsafeValue, .encodedPlaceholder, .ambiguousPath: 400
         case .unknownRoute: 404
         case .noPlaceholder: 401
-        case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder: 403
+        case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules:
+            403
         case .tooLarge: 413
         case .echoMethod: 405
         }
@@ -218,6 +236,8 @@ enum GatewayRefusal: Error, Equatable {
         case .encodedPlaceholder: "placeholder is percent-encoded; send it as-is"
         case .surfaceNotAllowed: "placeholder is not allowed in this part of the request for this secret"
         case .repeatedPlaceholder: "placeholder may appear once per surface (header, query, path)"
+        case .outsideAllowRules: "method and path are outside this secret's allow rules"
+        case .ambiguousPath: "path has encoded separators, dot segments, or ;; send it plainly"
         }
     }
 }
@@ -227,7 +247,8 @@ enum GatewayRefusal: Error, Equatable {
 /// refused per position so it cannot change the request's shape: a path
 /// segment stays one segment, a query value one value, a header one line.
 /// A placeholder off its binding's surfaces, or a second one on a surface,
-/// is refused before any value is placed.
+/// is refused before any value is placed, as is a request outside the
+/// binding's allow rules.
 enum GatewaySubstitution {
     struct Live {
         var token: String
@@ -235,6 +256,10 @@ enum GatewaySubstitution {
         var prefix: String
         var value: SecretValue
         var surfaces: Set<GatewaySurface>
+        /// Expanded allow rules; empty allows any method and path.
+        var rules: [GatewayAccessRule] = []
+        /// The upstream URL's own path, which rules match in front of the route's.
+        var basePath = ""
     }
 
     /// Where a placeholder sits in the request head.
@@ -275,6 +300,11 @@ enum GatewaySubstitution {
             for occurrence in found {
                 guard let live = lookup(occurrence.token) else { return .failure(.unknownPlaceholder) }
                 guard live.secret == route.secret else { return .failure(.foreignPlaceholder) }
+                if let refusal = GatewayAccess.refusal(
+                    live.rules, method: head.method, route: route, basePath: live.basePath)
+                {
+                    return .failure(refusal)
+                }
                 guard live.surfaces.contains(position.surface) else { return .failure(.surfaceNotAllowed) }
                 guard filled.insert(position.surface).inserted else { return .failure(.repeatedPlaceholder) }
                 guard let value = encode(live.value.bytes, at: position) else { return .failure(.unsafeValue) }
