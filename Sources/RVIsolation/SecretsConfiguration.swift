@@ -28,6 +28,9 @@ public enum SecretSource: Sendable, Equatable {
     /// An AWS CLI profile's credential set, read with
     /// `aws configure export-credentials`. Only `awsSigV4` delivery spends it.
     case awsProfile(profile: String)
+    /// A short-lived OAuth access token minted from credentials in the
+    /// Keychain. Only `gateway` delivery spends it.
+    case oauth(OAuthSource)
 
     public var kind: String {
         switch self {
@@ -41,7 +44,42 @@ public enum SecretSource: Sendable, Equatable {
         case .gcp: "gcp"
         case .azure: "azure"
         case .awsProfile: "awsProfile"
+        case .oauth: "oauth"
         }
+    }
+}
+
+/// A Keychain generic-password item.
+public struct SecretKeychainItem: Sendable, Equatable, Hashable {
+    public var service: String
+    public var account: String
+
+    public init(service: String, account: String) {
+        self.service = service
+        self.account = account
+    }
+}
+
+/// An RFC 6749 token-endpoint grant. With `refreshToken` it is the
+/// `refresh_token` grant, and a rotated refresh token is written back to
+/// that item; without, `client_credentials`, which needs `clientSecret`.
+/// Both are obtained outside rv; rv runs no browser flow.
+public struct OAuthSource: Sendable, Equatable {
+    public var tokenURL: URL
+    public var clientID: String
+    public var clientSecret: SecretKeychainItem?
+    public var refreshToken: SecretKeychainItem?
+    public var scope: String?
+
+    public init(
+        tokenURL: URL, clientID: String, clientSecret: SecretKeychainItem? = nil,
+        refreshToken: SecretKeychainItem? = nil, scope: String? = nil
+    ) {
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.refreshToken = refreshToken
+        self.scope = scope
     }
 }
 
@@ -350,6 +388,9 @@ enum SecretsDecoding {
         switch (source, delivery) {
         case (.awsProfile, .awsSigV4): break
         case (.awsProfile, _): throw Failure("\(name).source.awsProfile needs awsSigV4 delivery")
+        // An access token outlives no runtime: it is minted for, and refreshed by, gateway requests.
+        case (.oauth, .gateway): break
+        case (.oauth, _): throw Failure("\(name).source.oauth needs gateway delivery")
         case (_, .awsSigV4): throw Failure("\(name).delivery.awsSigV4 needs an awsProfile source")
         default: break
         }
@@ -472,6 +513,29 @@ enum SecretsDecoding {
                 profile.isEmpty == false, profile.utf8.allSatisfy({ placeholderByte($0) || $0 == 46 })
             else { throw Failure("\(place).profile must be an AWS profile name: letters, digits, ., _ or -") }
             return .awsProfile(profile: profile)
+        case "oauth":
+            try onlyKeys(fields, ["tokenURL", "clientID", "clientSecret", "refreshToken", "scope"], at: place)
+            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
+                throw Failure("\(place).tokenURL must be an https URL with no query")
+            }
+            guard let clientID = fields["clientID"] as? String, oauthText(clientID, max: 256, spaces: false) else {
+                throw Failure("\(place).clientID must be 1 to 256 printable ASCII characters without spaces")
+            }
+            let clientSecret = try keychainItem(fields["clientSecret"], at: "\(place).clientSecret")
+            let refreshToken = try keychainItem(fields["refreshToken"], at: "\(place).refreshToken")
+            var scope: String?
+            if let raw = fields["scope"] {
+                guard let text = raw as? String, oauthText(text, max: 1024, spaces: true) else {
+                    throw Failure("\(place).scope must be space-separated printable ASCII")
+                }
+                scope = text
+            }
+            guard refreshToken != nil || clientSecret != nil else {
+                throw Failure("\(place) needs refreshToken, or clientSecret for the client credentials grant")
+            }
+            return .oauth(OAuthSource(
+                tokenURL: tokenURL, clientID: clientID, clientSecret: clientSecret, refreshToken: refreshToken,
+                scope: scope))
         default:
             throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -657,7 +721,24 @@ enum SecretsDecoding {
             && value.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
     }
 
-    static func httpsUpstream(_ text: String) -> URL? {
+    static func keychainItem(_ value: Any?, at place: String) throws -> SecretKeychainItem? {
+        guard let value else { return nil }
+        guard let fields = value as? [String: Any] else { throw Failure("\(place) needs service and account") }
+        try onlyKeys(fields, ["service", "account"], at: place)
+        guard let service = fields["service"] as? String, label(service, max: 256),
+            let account = fields["account"] as? String, label(account, max: 256)
+        else { throw Failure("\(place) needs service and account") }
+        return SecretKeychainItem(service: service, account: account)
+    }
+
+    static func oauthText(_ value: String, max: Int, spaces: Bool) -> Bool {
+        value.isEmpty == false && value.utf8.count <= max && value.hasPrefix(" ") == false && value.hasSuffix(" ") == false
+            && value.utf8.allSatisfy { (0x21...0x7E).contains($0) || (spaces && $0 == 0x20) }
+    }
+
+    /// `keepingTrailingSlash` for a URL that is used as given, such as a token
+    /// endpoint: `/o/token/` and `/o/token` can be different resources.
+    static func httpsUpstream(_ text: String, keepingTrailingSlash: Bool = false) -> URL? {
         guard let components = URLComponents(string: text), components.scheme?.lowercased() == "https",
             let host = components.host, host.isEmpty == false,
             components.user == nil, components.password == nil,
@@ -667,7 +748,7 @@ enum SecretsDecoding {
         var normalized = components
         normalized.scheme = "https"
         normalized.host = host.lowercased()
-        if normalized.path.hasSuffix("/") { normalized.path.removeLast() }
+        if keepingTrailingSlash == false, normalized.path.hasSuffix("/") { normalized.path.removeLast() }
         return normalized.url
     }
 

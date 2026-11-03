@@ -467,6 +467,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
                 HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
+                HelpRow(name: "rv secrets oauth-reset <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
@@ -520,7 +521,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "sources",
-                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile"
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile, oauth"
                 ),
                 HelpRow(
                     name: "aws",
@@ -529,6 +530,14 @@ enum HelpCatalog {
                 HelpRow(
                     name: "aws refusals",
                     description: "Another key id is 403 (misuse); signed-chunk uploads 400 (UNSIGNED-PAYLOAD is S3 only); a response with SecretAccessKey is 502; re-read every 5m or a shorter refresh, expired credentials are re-read first"
+                ),
+                HelpRow(
+                    name: "oauth",
+                    description: "oauth source {tokenURL, clientID, refreshToken?, clientSecret? {service, account} (at least one), scope}: gateway only; re-minted on the token's lifetime"
+                ),
+                HelpRow(
+                    name: "oauth recovery",
+                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one or `rv secrets oauth-reset <name>` lifts the block (state: ~/.config/rv/secrets-oauth/)"
                 ),
                 HelpRow(
                     name: "approve",

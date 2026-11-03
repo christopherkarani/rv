@@ -308,6 +308,77 @@ makes the gateway sign instead:
 | `awsCredentialsInResponse` | 502 | no | the upstream's answer contains a `SecretAccessKey` field (a non-S3 binding). The upstream produced it, not the agent, so it is not misuse; the response is not forwarded |
 | `awsSignedStreaming` | 400 | no | `X-Amz-Content-Sha256` is a signed-chunk or event-stream mode (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, `...-TRAILER`, `...-EVENTS`, ECDSA). Each chunk signature chains to the seed signature the gateway replaces. Configure the SDK for unsigned payloads with trailing checksums |
 
+## OAuth tokens
+
+An `oauth` source mints short-lived access tokens at an RFC 6749 token
+endpoint. rv runs no browser flow: obtain the refresh token or client secret
+elsewhere and store it in the Keychain
+(`security add-generic-password -U -s SERVICE -a ACCOUNT -w`).
+
+```json
+"source": {"oauth": {
+  "tokenURL": "https://oauth2.example.com/token",
+  "clientID": "my-client",
+  "clientSecret": {"service": "rv.oauth", "account": "example-client-secret"},
+  "refreshToken": {"service": "rv.oauth", "account": "example-refresh"},
+  "scope": "repo"
+}}
+```
+
+- With `refreshToken`, rv uses the `refresh_token` grant and writes a
+  rotated refresh token back to that item. Without it, rv uses
+  `client_credentials`, which needs `clientSecret`. The client secret is
+  sent in the form body (`client_secret_post`).
+- Only `gateway` delivery spends an `oauth` source. The cage gets a
+  placeholder, and the access token is bound like any gateway value:
+  surfaces, `allow`, `approve`, runtime binding, audit, and scrubbing.
+- A token is minted at launch and again only while the runtime uses it.
+  Past half its lifetime, the next request mints in the background; at
+  expiry, a request waits for a new one, even when the token lives under
+  the 15 s pacing floor. `refresh` caps the interval. A token without a
+  positive `expires_in` is re-minted every 30 minutes, and `expires_in` is
+  clamped to 1 s through 1 day, so an issuer cannot claim an unbounded
+  lifetime. Once the definition's own `expires` has passed, nothing is
+  minted: the request is refused `refreshFailed`, without an exchange that
+  would rotate the refresh token for nothing.
+- `tokenURL` must be https with no query, and is used exactly as written
+  (a trailing `/` is kept). Redirects are not followed.
+- Exchanges of one refresh token are serialized across rv processes, by a
+  lock in `~/.config/rv/secrets-oauth`. Before each one, rv records the
+  refresh token's HMAC fingerprint there, never the token.
+- Each failure names a recovery:
+
+  | recovery | when | then |
+  |----------|------|------|
+  | `retry` | no connection; an RFC 6749 error with an unknown code, on any status; client credentials: any HTTP 5xx | a later request tries again |
+  | `fixConfiguration` | `invalid_client`, `unauthorized_client`, `invalid_scope`, `unsupported_grant_type`, `invalid_request`, a redirect; `invalid_grant` on client credentials | a later request tries again; fix secrets.json |
+  | `reauthorize` | `invalid_grant`; no answer after the request was sent; a 200 without a usable bearer token; refresh grant: an HTTP 5xx without an OAuth `error` body (a proxy may answer after the issuer rotated); a rotated refresh token rv could not store | that refresh token is never sent again |
+  | `investigate` | rv stopped mid-exchange | that refresh token is never sent again |
+
+  A 200 whose JSON carries `error` and no `access_token` (GitHub does this)
+  is classified by the same code table as a 4xx: nothing was issued. A
+  rotated `refresh_token` that arrives with an unusable access token is
+  stored before the access token is rejected.
+
+  Storing a different refresh token in the item lifts `reauthorize` and
+  `investigate`. So does `rv secrets oauth-reset NAME`, for an issuer that
+  does not rotate refresh tokens (Google, say), where a timeout or an rv
+  quit mid-refresh would otherwise block the only token for good. It
+  deletes the state file for NAME's refresh-token item,
+  `~/.config/rv/secrets-oauth/<key>.json` (`<key>` is the first 32 hex
+  digits of SHA-256 of `service NUL account`; the file holds the recovery
+  class and the token's HMAC, never the token), waiting out an exchange in
+  flight. It reads, sends, and prints no token. If the issuer does rotate
+  refresh tokens and the earlier refresh may have been spent, store a new
+  token instead: resending a spent one can make the issuer revoke the
+  grant. rv shows only the issuer's `error` code, filtered, and never its
+  description or body.
+- A request that needs a new token and cannot get one is refused with
+  `refreshFailed` (503), and the `event: refresh` audit record carries the
+  recovery. `rv secrets check` mints once and prints the access token's
+  fingerprint, the one the gateway audits. `rv secrets scan`
+  looks for the stored refresh token and client secret and never mints.
+
 ## Request approvals
 
 `approve` on `gateway` or `awsSigV4` delivery takes rules in the same

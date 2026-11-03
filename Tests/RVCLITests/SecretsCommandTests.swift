@@ -780,6 +780,119 @@ struct SecretsCommandTests {
         #expect(check.first?.error == "the AWS profile did not return usable credentials")
     }
 
+    @Test func oauthSecretsAreScannedForStoredCredentialsWithoutMintingAndCheckedByMinting() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let refreshToken = "rt-leaked-0000111122223333"
+        try Data("refresh=\(refreshToken)\n".utf8).write(to: work.appendingPathComponent("notes.txt"))
+        let source = OAuthSource(
+            tokenURL: URL(string: "https://issuer.example.com/token")!, clientID: "client-1",
+            clientSecret: SecretKeychainItem(service: "rv.oauth", account: "cs"),
+            refreshToken: SecretKeychainItem(service: "rv.oauth", account: "rt"))
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .oauth(source), delivery: .gateway(SecretGatewayBinding(
+                upstream: URL(string: "https://api.example.com")!, baseURLEnv: "GH_API")))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let minted = Mutex(0)
+        let answer = Mutex(#"{"access_token":"at-1","expires_at":1900000000}"#)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { source in
+            switch source {
+            case .keychain(_, "rt"): return .success(SecretValue(refreshToken)!)
+            case .keychain(_, "cs"): return .success(SecretValue("client-secret-0000111122223333")!)
+            case .oauth:
+                minted.withLock { $0 += 1 }
+                return .success(SecretValue(answer.withLock { $0 })!)
+            default: return .failure(.notFound("unexpected"))
+            }
+        }
+
+        let report = try SecretsRun.scan(root: work, configuration: configuration, environment: environment).get()
+        #expect(report.findings.map(\.secret) == ["GH"])
+        #expect(minted.withLock { $0 } == 0)
+        #expect(try SecretsRun.check(configuration, names: [], environment: environment).get().map(\.ok) == [true])
+        #expect(minted.withLock { $0 } == 1)
+        #expect(SecretsRun.describe(configuration).secrets.map(\.delivery) == ["gateway"])
+
+        answer.withLock { $0 = "not a token" }
+        let check = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(check.map(\.ok) == [false])
+        #expect(check.first?.error == "the token endpoint's answer could not be used")
+    }
+
+    private func oauthConfiguration(_ fixture: SecretsCLIFixture, refreshToken: Bool = true) throws -> SecretsConfiguration {
+        let source = OAuthSource(
+            tokenURL: URL(string: "https://issuer.example.com/token")!, clientID: "client-1",
+            clientSecret: SecretKeychainItem(service: "rv.oauth", account: "cs"),
+            refreshToken: refreshToken ? SecretKeychainItem(service: "rv.oauth", account: "rt") : nil)
+        let configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .oauth(source), delivery: .gateway(SecretGatewayBinding(
+                upstream: URL(string: "https://api.example.com")!, baseURLEnv: "GH_API")))
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        return configuration
+    }
+
+    @Test func checkFingerprintsTheAccessTokenTheGatewayAudits() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let configuration = try oauthConfiguration(fixture)
+        var environment = fixture.environment()
+        environment.resolver = SecretResolver { _ in
+            .success(SecretValue(#"{"access_token":"at-fake-0001","expires_at":1900000000}"#)!)
+        }
+        let row = try #require(try SecretsRun.check(configuration, names: [], environment: environment).get().first)
+        let expected = try #require(SecretFingerprinter.load(configDirectory: fixture.directory))
+            .fingerprint(of: SecretValue("at-fake-0001")!)
+        #expect(row.ok)
+        #expect(row.fingerprint == expected)
+    }
+
+    @Test func oauthResetClearsOnlyTheBlockFileForThatSecretsRefreshToken() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        _ = try oauthConfiguration(fixture)
+        let environment = fixture.environment()
+        let item = SecretKeychainItem(service: "rv.oauth", account: "rt")
+        let other = SecretKeychainItem(service: "rv.oauth", account: "other")
+        let block = OAuthRefreshBlock.stateFile(item, configDirectory: fixture.directory)
+        let unrelated = OAuthRefreshBlock.stateFile(other, configDirectory: fixture.directory)
+        try FileManager.default.createDirectory(at: block.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"recovery":"reauthorize","token":"fp"}"#.utf8).write(to: block)
+        try Data(#"{"recovery":"reauthorize","token":"fp"}"#.utf8).write(to: unrelated)
+
+        let cleared = try SecretsRun.oauthReset(name: "GH", environment: environment).get()
+        #expect(cleared.contains("Cleared the block on GH"))
+        #expect(FileManager.default.fileExists(atPath: block.path) == false)
+        #expect(FileManager.default.fileExists(atPath: unrelated.path), "another secret's block stays")
+        #expect(try SecretsRun.oauthReset(name: "GH", environment: environment).get().contains("No block is recorded"))
+    }
+
+    @Test func oauthResetRefusesWhatIsNotAnOAuthSecretAndNeedsNoStateForClientCredentials() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        var configuration = try oauthConfiguration(fixture, refreshToken: false)
+        configuration.secrets.append(SecretDefinition(
+            name: "PLAIN", source: .hostEnvironment(variable: "PLAIN"), delivery: .environment))
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let environment = fixture.environment()
+        #expect(try SecretsRun.oauthReset(name: "GH", environment: environment).get().contains("client credentials"))
+        guard case .failure(let notOAuth) = SecretsRun.oauthReset(name: "PLAIN", environment: environment) else {
+            Issue.record("a non-oauth secret was accepted")
+            return
+        }
+        #expect(notOAuth.message.contains("not an oauth secret"))
+        guard case .failure(let missing) = SecretsRun.oauthReset(name: "NOPE", environment: environment) else {
+            Issue.record("an unknown secret was accepted")
+            return
+        }
+        #expect(missing.message.contains("not defined"))
+    }
+
     @Test func scanAndHookRunStillResolveEnvironmentDeliveredSecretsWhenOnlyTheDeliveryRuleIsSet() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }

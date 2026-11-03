@@ -111,6 +111,8 @@ public struct SecretResolver: Sendable {
                 return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
             case .awsProfile(let profile):
                 return SecretCommandProviders.awsProfile(profile, environment: environment)
+            case .oauth(let oauth):
+                return OAuthTokenMinter.live(home: home).mint(oauth)
             }
         }, version: { source in
             guard case .keychain(let service, let account) = source else { return nil }

@@ -28,15 +28,20 @@ public struct SecretRefreshPolicy: Sendable {
     /// The probe's marker when the launch value was read.
     public var marker: String?
     public var probe: (@Sendable () -> String?)?
+    /// The interval is half the value's remaining lifetime at each resolve
+    /// (capped by `interval`), so a refresh starts past half-life and a
+    /// request waits for one at expiry.
+    public var followsExpiry: Bool
     public var resolve: @Sendable () -> Result<SecretRefreshed, SecretResolutionError>
 
     public init(
         interval: TimeInterval?, marker: String? = nil, probe: (@Sendable () -> String?)? = nil,
-        resolve: @escaping @Sendable () -> Result<SecretRefreshed, SecretResolutionError>
+        followsExpiry: Bool = false, resolve: @escaping @Sendable () -> Result<SecretRefreshed, SecretResolutionError>
     ) {
         self.interval = interval
         self.marker = marker
         self.probe = probe
+        self.followsExpiry = followsExpiry
         self.resolve = resolve
     }
 }
@@ -72,12 +77,13 @@ struct SecretRotationState: Sendable {
     var flight: SecretRefreshFlight?
 
     /// What a request at `now` must do for an entry refreshed every `interval`.
-    /// A failure is retried no sooner than a quarter interval later.
-    func step(now: Date, interval: TimeInterval) -> Step {
+    /// A failure is retried no sooner than a quarter interval later. With
+    /// `expired`, the value is spent: no grace, the request waits for a refresh.
+    func step(now: Date, interval: TimeInterval, expired: Bool = false) -> Step {
         let age = now.timeIntervalSince(resolvedAt)
-        guard age >= interval else { return .serve }
+        guard age >= interval || expired else { return .serve }
         let retry = failedAt.map { now.timeIntervalSince($0) >= interval / 4 } ?? true
-        if age < interval * 2 { return retry && flight == nil ? .background : .serve }
+        if age < interval * 2, expired == false { return retry && flight == nil ? .background : .serve }
         return retry || flight != nil ? .wait : .refuse
     }
 }
@@ -87,6 +93,22 @@ extension SecretGateway {
     static let historyDepth = 8
     /// The probe is cheap but runs on the request path, so at most this often per entry.
     static let probeSpacing: TimeInterval = 2
+    /// Floor for a lifetime-paced interval, so a nearly spent token is not re-minted per request.
+    static let minimumLifetimeInterval: TimeInterval = 15
+    /// Pace for a lifetime-paced value that came without an expiry.
+    static let unexpiringInterval: TimeInterval = 30 * 60
+
+    /// The refresh interval in force for `entry` now.
+    static func refreshInterval(_ entry: Entry) -> TimeInterval? {
+        guard let refresh = entry.refresh else { return nil }
+        guard refresh.followsExpiry else { return refresh.interval }
+        guard let expires = entry.expires, let resolvedAt = entry.rotation?.resolvedAt else {
+            return refresh.interval ?? unexpiringInterval
+        }
+        let half = max(expires.timeIntervalSince(resolvedAt) / 2, minimumLifetimeInterval)
+        return min(refresh.interval ?? half, half)
+    }
+
     /// An expired AWS entry is re-read on a request no sooner than this after the last read.
     static let expiredRetrySpacing: TimeInterval = 5
     /// How long a request waits for a refresh: the provider command timeout
@@ -102,8 +124,7 @@ extension SecretGateway {
             refresh(token, restart: true)
         }
         lock.lock()
-        let interval = entries[token]?.refresh?.interval
-        let step = interval.flatMap { entries[token]?.rotation?.step(now: now(), interval: $0) } ?? .serve
+        let step = rotationStep(token) ?? .serve
         lock.unlock()
         switch step {
         case .serve:
@@ -117,7 +138,8 @@ extension SecretGateway {
         case .wait:
             refresh(token, restart: false)
             lock.lock()
-            let after = interval.flatMap { entries[token]?.rotation?.step(now: now(), interval: $0) }
+            // A refresh moves a token's expiry, and with it the interval.
+            let after = rotationStep(token)
             lock.unlock()
             if after == .wait || after == .refuse { return .refreshFailed }
         }
@@ -129,6 +151,17 @@ extension SecretGateway {
         guard let entry = entries[token] else { return .unknownPlaceholder }
         if let expires = entry.expires, now() >= expires { return .expired }
         return nil
+    }
+
+    /// What a request now must do for `token`. Caller holds `lock`.
+    /// A lifetime-paced value past its expiry is spent whatever the pacing floor
+    /// says, so the request waits for a fresh one rather than being refused behind
+    /// a background refresh. (AWS credentials past expiry have `expiredAndDue`.)
+    private func rotationStep(_ token: String) -> SecretRotationState.Step? {
+        guard let entry = entries[token], let interval = Self.refreshInterval(entry) else { return nil }
+        let at = now()
+        let spent = entry.refresh?.followsExpiry == true && entry.expires.map { at >= $0 } == true
+        return entry.rotation?.step(now: at, interval: interval, expired: spent)
     }
 
     /// True for a refreshable AWS entry past its expiry that has not been read
