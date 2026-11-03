@@ -34,7 +34,8 @@ struct SecretGatewayEntryModeTests {
         let entry = try substitution(surfaces: [.header, .query])
         #expect(entry.surfaces == [.header, .query])
         #expect(entry.isSigning == false)
-        #expect(entry.mode == .substitute(surfaces: [.header, .query]))
+        #expect(entry.mode == .substitute(prefix: "sk-", surfaces: [.header, .query]))
+        #expect(entry.prefix == "sk-")
     }
 
     @Test func substitutionEntryDefaultsToTheDefaultSurfaces() throws {

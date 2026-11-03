@@ -2,11 +2,11 @@ import Foundation
 
 extension SecretGateway.Entry {
     /// How the gateway spends an entry's value. The two modes share nothing,
-    /// so an AWS entry cannot hold substitution surfaces and a substitution
-    /// entry cannot hold a signing binding.
+    /// so an AWS entry cannot hold a placeholder prefix or substitution
+    /// surfaces and a substitution entry cannot hold a signing binding.
     enum SpendMode: Sendable, Equatable {
-        /// Swap the placeholder for `value` on these request surfaces.
-        case substitute(surfaces: Set<GatewaySurface>)
+        /// Swap the placeholder, minted with `prefix`, for `value` on these request surfaces.
+        case substitute(prefix: String, surfaces: Set<GatewaySurface>)
         /// AWS SigV4: `value` is a credential set, and the gateway re-signs
         /// instead of substituting.
         case sign(AWSSigningBinding)
@@ -22,8 +22,8 @@ extension SecretGateway.Entry {
         rotation: SecretRotationState? = nil
     ) {
         self.init(
-            secret: secret, prefix: prefix, value: value, upstream: upstream, fingerprint: fingerprint,
-            runtime: runtime, mode: .substitute(surfaces: surfaces), rules: rules, processGroup: processGroup,
+            secret: secret, value: value, upstream: upstream, fingerprint: fingerprint, runtime: runtime,
+            mode: .substitute(prefix: prefix, surfaces: surfaces), rules: rules, processGroup: processGroup,
             expires: expires, refresh: refresh, approvals: approvals, approver: approver, binaries: binaries,
             generation: generation, previous: previous, rotation: rotation)
     }
@@ -38,17 +38,26 @@ extension SecretGateway.Entry {
         previous: [SecretValue] = [], rotation: SecretRotationState? = nil
     ) {
         self.init(
-            secret: secret, prefix: "", value: value, upstream: upstream, fingerprint: fingerprint,
-            runtime: runtime, mode: .sign(signing), rules: rules, processGroup: processGroup, expires: expires,
-            refresh: refresh, approvals: approvals, approver: approver, binaries: binaries, generation: generation,
+            secret: secret, value: value, upstream: upstream, fingerprint: fingerprint, runtime: runtime,
+            mode: .sign(signing), rules: rules, processGroup: processGroup, expires: expires, refresh: refresh,
+            approvals: approvals, approver: approver, binaries: binaries, generation: generation,
             previous: previous, rotation: rotation)
+    }
+
+    /// The prefix the agent's placeholder carries. Empty for an AWS entry,
+    /// whose key id is the bare placeholder.
+    var prefix: String {
+        switch mode {
+        case .substitute(let prefix, _): prefix
+        case .sign: ""
+        }
     }
 
     /// Surfaces a placeholder may appear on. Empty for an AWS entry, whose
     /// credential set is never written into a request.
     var surfaces: Set<GatewaySurface> {
         switch mode {
-        case .substitute(let surfaces): surfaces
+        case .substitute(_, let surfaces): surfaces
         case .sign: []
         }
     }

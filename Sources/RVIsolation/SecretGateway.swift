@@ -93,12 +93,11 @@ public struct SecretUpstreamTransport: Sendable {
 public final class SecretGateway: @unchecked Sendable {
     public struct Entry: Sendable {
         public var secret: String
-        public var prefix: String
         public var value: SecretValue
         public var upstream: URL
         public var fingerprint: String?
         public var runtime: String?
-        /// Substitute on request surfaces, or re-sign as AWS SigV4.
+        /// Substitute a prefixed placeholder on request surfaces, or re-sign as AWS SigV4.
         var mode: SpendMode
         /// Expanded allow rules; empty allows any method and path.
         public var rules: [GatewayAccessRule] = []
