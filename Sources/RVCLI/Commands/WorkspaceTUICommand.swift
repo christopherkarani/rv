@@ -57,7 +57,12 @@ enum WorkspaceTUICommand {
         }
         let openedLayout: WorkspaceLayoutOpenResult
         do {
-            openedLayout = try WorkspaceLayoutStore.open(canonicalOriginalProject: described.project)
+            guard let configurationDirectory = HomeDirectory.processConfigDirectory() else {
+                throw WorkspaceLayoutStoreError.unsafeDirectory
+            }
+            openedLayout = try WorkspaceLayoutStore.open(
+                canonicalOriginalProject: described.project,
+                configurationDirectory: configurationDirectory)
         } catch {
             session.close()
             throw ValidationError("workspace layout could not be opened: \(error)")

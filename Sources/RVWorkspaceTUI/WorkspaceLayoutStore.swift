@@ -111,8 +111,10 @@ public enum WorkspaceLayoutStore {
     public static let maximumDocumentBytes = 65_536
 
     /// `canonicalOriginalProject` is the host's resolved original project path, never a mounted workspace path.
+    /// `configurationDirectory` is the rv config root (`~/.config/rv` in production); layouts live under
+    /// `workspace-layouts/<project digest>` inside it. This module never reads HOME itself.
     public static func open(canonicalOriginalProject: String,
-                            configurationDirectory: URL? = nil) throws -> WorkspaceLayoutOpenResult {
+                            configurationDirectory: URL) throws -> WorkspaceLayoutOpenResult {
         try openImpl(canonicalOriginalProject: canonicalOriginalProject,
                      configurationDirectory: configurationDirectory,
                      failDirectorySyncAfterRename: false)
@@ -126,7 +128,7 @@ public enum WorkspaceLayoutStore {
                      failDirectorySyncAfterRename: failDirectorySyncAfterRename)
     }
 
-    private static func openImpl(canonicalOriginalProject: String, configurationDirectory: URL?,
+    private static func openImpl(canonicalOriginalProject: String, configurationDirectory: URL,
                                  failDirectorySyncAfterRename: Bool) throws -> WorkspaceLayoutOpenResult {
         guard canonicalOriginalProject.hasPrefix("/"),
               let resolved = realpath(canonicalOriginalProject, nil) else {
@@ -144,17 +146,7 @@ public enum WorkspaceLayoutStore {
         let digest = SHA256.hash(data: Data(canonicalOriginalProject.utf8))
             .map { String(format: "%02x", $0) }.joined()
         let primaryID = ViewID(deterministicUUID(digest))
-        let root: URL
-        if let configurationDirectory {
-            root = configurationDirectory
-        } else {
-            guard let home = ProcessInfo.processInfo.environment["HOME"],
-                  home.hasPrefix("/"), !home.contains("\0") else {
-                throw WorkspaceLayoutStoreError.unsafeDirectory
-            }
-            root = URL(fileURLWithPath: home, isDirectory: true)
-                .appendingPathComponent(".config/rv", isDirectory: true)
-        }
+        let root = configurationDirectory
         let directoryURL = root.appendingPathComponent("workspace-layouts", isDirectory: true)
             .appendingPathComponent(digest, isDirectory: true)
         let directoryFD = try createTrustedDirectory(directoryURL.path, privateFrom: root.path)
