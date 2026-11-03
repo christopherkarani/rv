@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import RVMicroVMCore
@@ -152,7 +153,9 @@ struct MacVMPreparer {
         } else {
             remote = try await latestSupportedURL()
         }
-        let target = layout.cache.appendingPathComponent(remote.lastPathComponent)
+        // Keyed by the full URL, so two images sharing a file name never share a cache entry.
+        let digest = SHA256.hash(data: Data(remote.absoluteString.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        let target = layout.cache.appendingPathComponent("\(digest)-\(remote.lastPathComponent)")
         if FileManager.default.fileExists(atPath: target.path) {
             try requireFreeSpace(downloadBytes: 0)
             return (target, false)
@@ -445,9 +448,30 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var received: Int64 = 0
     private var expected: Int64 = 0
     private var lastDecile = -1
+    private var resumeOffset: Int64 = 0
+
+    /// A resumed response that does not continue where the partial file ends.
+    private struct ResumeMismatch: Error {}
 
     func download(_ url: URL, to destination: URL) async throws {
+        do {
+            try await attempt(url, to: destination)
+        } catch is ResumeMismatch {
+            // Restart from zero: the server answered the range with something else.
+            let partial = destination.appendingPathExtension("partial")
+            try? FileManager.default.removeItem(at: partial)
+            try? FileManager.default.removeItem(at: Self.etagFile(partial))
+            try await attempt(url, to: destination)
+        }
+    }
+
+    private static func etagFile(_ partial: URL) -> URL { partial.appendingPathExtension("etag") }
+
+    private func attempt(_ url: URL, to destination: URL) async throws {
         let partial = destination.appendingPathExtension("partial")
+        let etag = (try? String(contentsOf: Self.etagFile(partial), encoding: .utf8))
+        if etag == nil { try? FileManager.default.removeItem(at: partial) }
+        resumeOffset = 0
         if !FileManager.default.fileExists(atPath: partial.path) {
             FileManager.default.createFile(atPath: partial.path, contents: nil)
         }
@@ -455,8 +479,10 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         var request = URLRequest(url: url)
         // Byte ranges must address the file itself, not a compressed encoding.
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-        if existing > 0 {
+        if existing > 0, let etag {
             request.setValue("bytes=\(existing)-", forHTTPHeaderField: "Range")
+            request.setValue(etag, forHTTPHeaderField: "If-Range")
+            resumeOffset = existing
             report("resuming at \(existing >> 20) MiB")
         }
         self.partial = partial
@@ -468,6 +494,7 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             session.dataTask(with: request).resume()
         }
         try FileManager.default.moveItem(at: partial, to: destination)
+        try? FileManager.default.removeItem(at: Self.etagFile(partial))
     }
 
     func urlSession(
@@ -477,6 +504,15 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         guard let http = response as? HTTPURLResponse, [200, 206].contains(http.statusCode), let partial else {
             finish(SetupError("download failed with HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)"))
             return completionHandler(.cancel)
+        }
+        if http.statusCode == 206,
+            !(http.value(forHTTPHeaderField: "Content-Range") ?? "").hasPrefix("bytes \(resumeOffset)-")
+        {
+            finish(ResumeMismatch())
+            return completionHandler(.cancel)
+        }
+        if let etag = http.value(forHTTPHeaderField: "ETag"), !etag.hasPrefix("W/") {
+            try? etag.write(to: Self.etagFile(partial), atomically: true, encoding: .utf8)
         }
         do {
             let handle = try FileHandle(forWritingTo: partial)
