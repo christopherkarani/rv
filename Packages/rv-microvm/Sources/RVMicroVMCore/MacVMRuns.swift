@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 /// The VMs `rv-macvm` has running, one directory each under `runs/`. A run
 /// holds an exclusive `flock` on its directory's `lock` file for as long as
@@ -27,7 +28,7 @@ public enum MacVMRuns {
     /// `limit` runs are live.
     public static func claim(in runs: URL, limit: Int) -> Result<MacVMRunClaim, ClaimError> {
         withGuard(runs) {
-            let live = sweepLocked(runs)
+            let live = sweepLocked(runs).live
             guard live < limit else { return .failure(.limit(live: live, allowed: limit)) }
             let directory = runs.appendingPathComponent(MacVMRunDirectory.name(pid: getpid()), isDirectory: true)
             do {
@@ -35,9 +36,18 @@ public enum MacVMRuns {
             } catch {
                 return .failure(.io("cannot create \(directory.path): \(error.localizedDescription)"))
             }
-            guard let descriptor = openLock(directory, create: true), flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let descriptor: Int32
+            switch openLock(directory, create: true) {
+            case .success(let opened): descriptor = opened
+            case .failure(let failure):
                 try? FileManager.default.removeItem(at: directory)
-                return .failure(.io("cannot lock \(directory.path): \(String(cString: strerror(errno)))"))
+                return .failure(.io("cannot lock \(directory.path): \(String(cString: strerror(failure.code)))"))
+            }
+            guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                let code = errno
+                close(descriptor)
+                try? FileManager.default.removeItem(at: directory)
+                return .failure(.io("cannot lock \(directory.path): \(String(cString: strerror(code)))"))
             }
             return .success(MacVMRunClaim(directory: directory, descriptor: descriptor))
         }
@@ -46,37 +56,45 @@ public enum MacVMRuns {
     /// Removes the directories of dead runs; returns how many.
     @discardableResult
     public static func sweep(in runs: URL) -> Int {
-        let before = entries(runs).count
-        let live = (try? withGuard(runs) { .success(sweepLocked(runs)) }.get()) ?? before
-        return before - live
+        (try? withGuard(runs) { .success(sweepLocked(runs).removed) }.get()) ?? 0
     }
 
-    /// Under the guard: removes every run nobody holds; returns the live count.
-    private static func sweepLocked(_ runs: URL) -> Int {
+    /// Under the guard: removes every run nobody holds. A lock that exists
+    /// but cannot be opened might be held, so that run counts as live.
+    private static func sweepLocked(_ runs: URL) -> (live: Int, removed: Int) {
         var live = 0
+        var removed = 0
         for name in entries(runs) {
             let directory = runs.appendingPathComponent(name, isDirectory: true)
-            if let descriptor = openLock(directory, create: false) {
+            switch openLock(directory, create: false) {
+            case .success(let descriptor):
                 defer { close(descriptor) }
                 if flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
                     live += 1
                     continue
                 }
+            case .failure(let failure) where failure.code == ENOENT || failure.code == ENOTDIR:
+                break  // No lock at all (an older layout, or not a directory): nobody owns it.
+            case .failure:
+                live += 1
+                continue
             }
-            // Unlocked, or no lock at all (an older layout): nobody owns it.
-            try? FileManager.default.removeItem(at: directory)
+            if (try? FileManager.default.removeItem(at: directory)) != nil { removed += 1 }
         }
-        return live
+        return (live, removed)
     }
 
     private static func entries(_ runs: URL) -> [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: runs.path)) ?? []).filter { !$0.hasPrefix(".") }
     }
 
-    private static func openLock(_ directory: URL, create: Bool) -> Int32? {
+    /// The lock's descriptor, or the `errno` of the failed open.
+    private struct OpenFailure: Error { let code: Int32 }
+
+    private static func openLock(_ directory: URL, create: Bool) -> Result<Int32, OpenFailure> {
         let path = directory.appendingPathComponent(lockName).path
         let descriptor = create ? open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600) : open(path, O_RDONLY | O_CLOEXEC)
-        return descriptor >= 0 ? descriptor : nil
+        return descriptor >= 0 ? .success(descriptor) : .failure(OpenFailure(code: errno))
     }
 
     private static func withGuard<T>(
@@ -96,18 +114,23 @@ public enum MacVMRuns {
 }
 
 /// A live run: its directory, locked until `release` or process exit.
-public final class MacVMRunClaim: @unchecked Sendable {
+public final class MacVMRunClaim: Sendable {
     public let directory: URL
-    private let descriptor: Int32
+    private let descriptor: Mutex<Int32?>
 
     init(directory: URL, descriptor: Int32) {
         self.directory = directory
-        self.descriptor = descriptor
+        self.descriptor = Mutex(descriptor)
     }
 
-    /// Deletes the run's directory (its clones), then unlocks it.
+    /// Deletes the run's directory (its clones), then unlocks it. Only the
+    /// first call does anything.
     public func release() {
-        try? FileManager.default.removeItem(at: directory)
-        close(descriptor)
+        descriptor.withLock { held in
+            guard let descriptor = held else { return }
+            held = nil
+            try? FileManager.default.removeItem(at: directory)
+            close(descriptor)
+        }
     }
 }

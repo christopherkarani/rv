@@ -52,18 +52,10 @@ struct MacVMPreparer {
         }
         try fm.createDirectory(at: layout.cache, withIntermediateDirectories: true)
         try fm.createDirectory(at: layout.images, withIntermediateDirectories: true)
-        sweepStaging()
-        // The install and setup boots are VMs too: they count toward
-        // Apple's limit like a run.
-        let slot: MacVMRunClaim
-        switch MacVMRuns.claim(in: layout.runs, limit: MacVMRunner.concurrentLimit) {
-        case .failure(let error): throw SetupError(error.description)
-        case .success(let claimed): slot = claimed
-        }
-        defer { slot.release() }
 
         let (restoreURL, downloaded) = try await restoreImage()
-        defer { if downloaded, !keepIPSW { try? fm.removeItem(at: restoreURL) } }
+        var keepRestore = keepIPSW
+        defer { if downloaded, !keepRestore { try? fm.removeItem(at: restoreURL) } }
         let restore = try await loadRestoreImage(restoreURL)
         guard let requirements = restore.mostFeaturefulSupportedConfiguration, requirements.hardwareModel.isSupported else {
             throw SetupError("this Mac cannot run macOS \(versionString(restore.operatingSystemVersion)) guests")
@@ -72,11 +64,20 @@ struct MacVMPreparer {
             throw SetupError("unattended setup needs a macOS 27 or later restore image (got \(versionString(restore.operatingSystemVersion)))")
         }
 
-        let staging = layout.images.appendingPathComponent(".staging-\(MacVMRunDirectory.name(pid: getpid()))", isDirectory: true)
-        try? fm.removeItem(at: staging)
-        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
-        var committed = false
-        defer { if !committed { try? fm.removeItem(at: staging) } }
+        // The install and setup boots are VMs too: they count toward
+        // Apple's limit like a run. The image is staged in the run's
+        // directory, so a killed prepare's ~30 GB is swept like a run's clone.
+        let slot: MacVMRunClaim
+        switch MacVMRuns.claim(in: layout.runs, limit: MacVMRunner.concurrentLimit) {
+        case .failure(let error):
+            // Keep a fresh download for the retry once a slot frees.
+            keepRestore = true
+            throw SetupError("\(error.description); the restore image stays at \(restoreURL.path) for the next prepare")
+        case .success(let claimed): slot = claimed
+        }
+        defer { slot.release() }
+        let staging = slot.directory.appendingPathComponent("image", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: false)
         let disk = staging.appendingPathComponent(MacVMLayout.diskName)
         let auxiliary = staging.appendingPathComponent(MacVMLayout.auxiliaryStorageName)
         try createSparseDisk(disk, gib: diskGiB)
@@ -116,13 +117,12 @@ struct MacVMPreparer {
         )
         try JSONEncoder().encode(record).write(to: staging.appendingPathComponent(MacVMLayout.recordName))
         try commit(staging)
-        committed = true
         report("image \(name) is ready")
     }
 
     /// Moves `staging` into place. An existing image is swapped out in one
     /// step, so `run` sees the old image or the new one, never neither, and
-    /// the old one is then deleted with the staging directory. Runs already
+    /// the old one is then deleted with the run directory. Runs already
     /// started use their own clones.
     private func commit(_ staging: URL) throws {
         let image = layout.image(name)
@@ -133,18 +133,6 @@ struct MacVMPreparer {
         guard replace else { throw SetupError("image \(name) appeared while preparing; pass --replace to rebuild it") }
         guard renamex_np(staging.path, image.path, UInt32(RENAME_SWAP)) == 0 else {
             throw SetupError("cannot swap in the new image: \(String(cString: strerror(errno)))")
-        }
-        try? FileManager.default.removeItem(at: staging)
-    }
-
-    /// Staging directories of prepares that died (each can hold ~30 GB).
-    private func sweepStaging() {
-        let prefix = ".staging-"
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.images.path)) ?? []
-        let owned = names.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
-        for stale in MacVMRunDirectory.stale(owned, isAlive: { kill($0, 0) == 0 || errno == EPERM }) {
-            report("removing the staging directory of an interrupted prepare")
-            try? FileManager.default.removeItem(at: layout.images.appendingPathComponent(prefix + stale))
         }
     }
 

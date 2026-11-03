@@ -198,20 +198,27 @@ public struct MacVMExecRequest: Codable, Sendable, Equatable {
     /// under, or one under it. Compared as the guest volume names files:
     /// normalization-insensitive, with full case folding (`ſ` is `s`).
     static func coveredSystemRoot(_ workspace: String) -> String? {
-        let path = volumeName(workspace)
+        let path = volumeComponents(workspace)
         return guestSystemRoots.first { root in
-            let root = volumeName(root)
-            return path == root || path.hasPrefix(root + "/") || root.hasPrefix(path + "/")
+            let root = volumeComponents(root)
+            return path.starts(with: root) || root.starts(with: path)
         }
     }
 
-    static func volumeName(_ path: String) -> String {
-        path.decomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
+    /// Path components as the guest volume compares them.
+    static func volumeComponents(_ path: String) -> [String] {
+        components(path).map { $0.decomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil) }
+    }
+
+    /// Splits on the `/` byte, as the filesystem does. Swift's Character
+    /// split would not: `/` plus a combining mark is a single Character.
+    static func components(_ path: String) -> [String] {
+        path.utf8.split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
     }
 
     /// True for `/a/b`: no empty, `.` or `..` components, no trailing `/`.
     static func isCanonical(_ path: String) -> Bool {
-        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        let components = components(path)
         return components.count > 1 && components.first == ""
             && components.dropFirst().allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }

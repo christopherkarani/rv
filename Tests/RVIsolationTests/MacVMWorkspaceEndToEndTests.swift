@@ -114,10 +114,27 @@ struct MacVMWorkspaceEndToEndTests {
         for setuid in "/usr/bin/sudo -n /usr/bin/true" "/usr/bin/crontab -l"; do
           case "$($setuid 2>&1)" in *"not permitted"*) echo "setuid=denied" ;; *) echo "setuid=allowed: $setuid" ;; esac
         done
-        /bin/launchctl submit -l dev.rv.e2e-escape -- /usr/bin/touch "$PWD/.git/hooks/escaped" 2>/dev/null
-        /bin/launchctl bootstrap user/$(id -u) /dev/null 2>/dev/null
+        # Either job, run outside the sandbox, could write the hooks directory.
+        /bin/launchctl submit -l dev.rv.e2e-escape -- /usr/bin/touch "$PWD/.git/hooks/escaped-submit" 2>/dev/null
+        cat > escape.plist <<PLIST
+        <?xml version="1.0" encoding="UTF-8"?>
+        <plist version="1.0"><dict><key>Label</key><string>dev.rv.e2e-escape-bootstrap</string>
+        <key>ProgramArguments</key><array><string>/usr/bin/touch</string><string>$PWD/.git/hooks/escaped-bootstrap</string></array>
+        <key>RunAtLoad</key><true/></dict></plist>
+        PLIST
+        for domain in gui user; do /bin/launchctl bootstrap $domain/$(id -u) "$PWD/escape.plist" 2>/dev/null; done
+        rm -f escape.plist
         sleep 2
-        if [ -e .git/hooks/escaped ]; then echo launchd=escaped; else echo launchd=denied; fi
+        if ls .git/hooks/escaped-* >/dev/null 2>&1; then echo launchd=escaped; else echo launchd=denied; fi
+        # LaunchServices starts an opened app outside the caller's sandbox.
+        mkdir -p Probe.app/Contents/MacOS
+        printf '#!/bin/sh\\ntouch "%s/.git/hooks/opened"\\n' "$PWD" > Probe.app/Contents/MacOS/probe
+        chmod 755 Probe.app/Contents/MacOS/probe
+        printf '<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>probe</string><key>CFBundleIdentifier</key><string>dev.rv.e2e-open</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\\n' > Probe.app/Contents/Info.plist
+        /usr/bin/open -g -j Probe.app 2>/dev/null
+        sleep 2
+        rm -rf Probe.app
+        if [ -e .git/hooks/opened ]; then echo open=escaped; else echo open=denied; fi
         """
         let running = try supervisor.launch(
             host: nil,
@@ -129,7 +146,7 @@ struct MacVMWorkspaceEndToEndTests {
             sessionStore: .file(tree.rootURL.appendingPathComponent("runtime.jsonl"))
         ).get()
         let output = try runToExit(supervisor, running.id.rawValue, expect: nil)
-        for denied in ["hook", "config", "renamegit", "rmgit", "rvnew", "cfgnew", "launchd"] {
+        for denied in ["hook", "config", "renamegit", "rmgit", "rvnew", "cfgnew", "launchd", "open"] {
             #expect(output.contains("\(denied)=denied"), "\(denied): \(output)")
         }
         #expect(output.components(separatedBy: "setuid=denied").count == 3, "\(output)")

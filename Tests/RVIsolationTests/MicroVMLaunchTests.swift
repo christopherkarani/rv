@@ -355,32 +355,44 @@ struct MacOSGuestLaunchTests {
     @Test("the guest sandbox profile is the host cage's workspace control rules")
     func guestProfile() {
         let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
-        #expect(profile.hasPrefix("(version 1)\n(allow default)\n"))
+        // LaunchServices would start an opened app outside the sandbox.
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n"))
         #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
     }
 
     #if os(macOS)
     /// The guest profile allows everything but the control paths, so it
     /// must not leave a way to start a process outside the sandbox: such a
-    /// process could write `.git/hooks`. Seatbelt itself refuses launchd
-    /// job bootstraps from sandboxed callers and exec of setuid binaries.
+    /// process could write `.git/hooks`. Each launchd and LaunchServices
+    /// route runs once unsandboxed, where it must write its marker (else the
+    /// probe proves nothing), and once under the profile, where it must not.
+    /// Setuid binaries must meet sandbox-exec's own refusal.
     @Test("nothing under the guest profile can start an unsandboxed process")
     func guestProfileHasNoEscape() throws {
         let scratch = try #require(posixRealpath(NSTemporaryDirectory()))
         let directory = URL(fileURLWithPath: scratch).appendingPathComponent("rv-guest-escape-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let label = "dev.rv.guest-escape-probe-\(getpid())"
-        let marker = directory.appendingPathComponent("escaped")
-        let plist = directory.appendingPathComponent("\(label).plist")
-        let job: [String: Any] = ["Label": label, "ProgramArguments": ["/usr/bin/touch", marker.path], "RunAtLoad": true]
-        try PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
         let profile = macOSGuestSandboxProfile(workspacePath: directory.path)
-        func sandboxed(_ arguments: [String]) throws -> (status: Int32, error: String) {
+        let domain = "gui/\(getuid())"
+        let base = "dev.rv.guest-escape-probe-\(getpid())"
+        var jobs: [String] = []
+        defer {
+            for label in jobs {
+                for job in [["bootout", "\(domain)/\(label)"], ["remove", label]] {
+                    let cleanup = Process()
+                    cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                    cleanup.arguments = job
+                    cleanup.standardError = FileHandle.nullDevice
+                    if (try? cleanup.run()) != nil { cleanup.waitUntilExit() }
+                }
+            }
+        }
+        func launch(_ arguments: [String], sandboxed: Bool) throws -> (status: Int32, error: String) {
             let process = Process()
             let errors = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-            process.arguments = ["-p", profile] + arguments
+            process.executableURL = URL(fileURLWithPath: sandboxed ? "/usr/bin/sandbox-exec" : arguments[0])
+            process.arguments = sandboxed ? ["-p", profile] + arguments : Array(arguments.dropFirst())
             process.standardOutput = FileHandle.nullDevice
             process.standardError = errors
             try process.run()
@@ -388,29 +400,54 @@ struct MacOSGuestLaunchTests {
             process.waitUntilExit()
             return (process.terminationStatus, error)
         }
-        #expect(try sandboxed(["/usr/bin/true"]).status == 0)
-        let domain = "gui/\(getuid())"
-        #expect(try sandboxed(["/bin/launchctl", "bootstrap", domain, plist.path]).status != 0)
-        #expect(try sandboxed(["/bin/launchctl", "bootstrap", "user/\(getuid())", plist.path]).status != 0)
-        let submitted = "\(label)-submit"
-        _ = try sandboxed(["/bin/launchctl", "submit", "-l", submitted, "--", "/usr/bin/touch", marker.path])
+        /// The routes, each writing its own marker if its process runs.
+        func routes(_ tag: String) throws -> [(name: String, arguments: [String], marker: URL)] {
+            func marker(_ name: String) -> URL { directory.appendingPathComponent("\(tag)-\(name)") }
+            let bootstrapped = "\(base)-\(tag)-bootstrap"
+            let submitted = "\(base)-\(tag)-submit"
+            jobs += [bootstrapped, submitted]
+            let plist = directory.appendingPathComponent("\(bootstrapped).plist")
+            let job: [String: Any] = [
+                "Label": bootstrapped, "ProgramArguments": ["/usr/bin/touch", marker("bootstrap").path], "RunAtLoad": true,
+            ]
+            try PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
+            let app = directory.appendingPathComponent("\(tag)-probe.app")
+            let executable = app.appendingPathComponent("Contents/MacOS/probe")
+            try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("#!/bin/sh\n/usr/bin/touch '\(marker("open").path)'\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            let info: [String: Any] = [
+                "CFBundleExecutable": "probe", "CFBundleIdentifier": "\(base)-\(tag)-open", "CFBundlePackageType": "APPL",
+            ]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+                .write(to: app.appendingPathComponent("Contents/Info.plist"))
+            return [
+                ("launchctl bootstrap", ["/bin/launchctl", "bootstrap", domain, plist.path], marker("bootstrap")),
+                ("launchctl submit", ["/bin/launchctl", "submit", "-l", submitted, "--", "/usr/bin/touch", marker("submit").path], marker("submit")),
+                ("open", ["/usr/bin/open", "-g", "-j", app.path], marker("open")),
+            ]
+        }
+        #expect(try launch(["/usr/bin/true"], sandboxed: true).status == 0)
+        let controls = try routes("control")
+        let probes = try routes("sandboxed")
+        for route in controls { _ = try launch(route.arguments, sandboxed: false) }
+        for route in probes { _ = try launch(route.arguments, sandboxed: true) }
         // Setuid binaries fail on their own too (no crontab, no password),
         // so only sandbox-exec's own refusal proves the exec was blocked.
         for setuid in [["/usr/bin/crontab", "-l"], ["/usr/bin/sudo", "-n", "/usr/bin/true"]] {
-            let result = try sandboxed(setuid)
+            let result = try launch(setuid, sandboxed: true)
             #expect(result.status == 71 && result.error.contains("Operation not permitted"), "\(setuid): \(result)")
         }
-        Thread.sleep(forTimeInterval: 1)
-        let leaked = FileManager.default.fileExists(atPath: marker.path)
-        for job in ["bootout \(domain)/\(label)", "remove \(submitted)"] {
-            let cleanup = Process()
-            cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            cleanup.arguments = job.split(separator: " ").map(String.init)
-            cleanup.standardError = FileHandle.nullDevice
-            try? cleanup.run()
-            cleanup.waitUntilExit()
+        Thread.sleep(forTimeInterval: 2)
+        for route in controls {
+            try #require(
+                FileManager.default.fileExists(atPath: route.marker.path),
+                "unsandboxed \(route.name) started nothing here, so its sandboxed probe would prove nothing"
+            )
         }
-        #expect(leaked == false)
+        for route in probes {
+            #expect(!FileManager.default.fileExists(atPath: route.marker.path), "\(route.name) escaped the sandbox")
+        }
     }
     #endif
 

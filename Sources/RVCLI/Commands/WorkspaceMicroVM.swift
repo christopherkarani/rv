@@ -50,9 +50,16 @@ enum WorkspaceMicroVM {
     static func ensurePrepared(_ options: MicroVMLaunchOptions, project: String) throws {
         let name = MicroVMHelper.executableName(for: options.guest)
         guard let helper = MicroVMHelper.locate(workspace: project, guest: options.guest) else {
-            throw ValidationError(
-                "VM launches need \(name) next to rv; reinstall rv or run Scripts/build-microvm.sh"
-            )
+            switch options.guest {
+            case .linux:
+                throw ValidationError("VM launches need \(name) next to rv; reinstall rv or run Scripts/build-microvm.sh")
+            case .macOS:
+                // Releases built with an SDK older than macOS 27 leave it out.
+                throw ValidationError(
+                    "macOS VM launches need \(name) next to rv, and this rv was built without it; "
+                        + "build it with Scripts/build-microvm.sh using the macOS 27 SDK"
+                )
+            }
         }
         let warns = options.guest == .macOS
         if try run(helper, statusArguments(image: options.image), output: false, errors: warns) == 0 { return }

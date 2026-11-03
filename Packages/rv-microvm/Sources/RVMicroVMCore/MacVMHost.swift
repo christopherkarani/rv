@@ -29,20 +29,10 @@ public enum DHCPLeases {
     }
 }
 
-/// `runs/<pid>-<suffix>`: one clone per `rv-macvm run`, owned by that pid.
+/// `runs/<pid>-<suffix>`: one directory per running VM (see `MacVMRuns`).
 public enum MacVMRunDirectory {
     public static func name(pid: Int32) -> String {
         "\(pid)-\(UUID().uuidString.prefix(8).lowercased())"
-    }
-
-    public static func owner(of name: String) -> Int32? {
-        guard let dash = name.firstIndex(of: "-") else { return nil }
-        return Int32(name[..<dash]).flatMap { $0 > 0 ? $0 : nil }
-    }
-
-    /// Directories whose owning process is gone (a SIGKILLed run).
-    public static func stale(_ names: [String], isAlive: (Int32) -> Bool) -> [String] {
-        names.filter { name in owner(of: name).map { isAlive($0) == false } ?? false }
     }
 }
 
