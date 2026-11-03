@@ -231,7 +231,16 @@ private let xargsShells: Set<String> = ["bash", "sh", "zsh", "dash", "ksh"]
 
 /// Stdin supplies unknowable trailing arguments, so a mutating program is
 /// treated as unanalyzable. Read-only programs peel normally.
-private func xargsInnerIsMutating(_ words: [String], replace: String?) -> Bool {
+private func xargsInnerIsMutating(_ original: [String], replace: String?, depth: Int = 0) -> Bool {
+    let words = dropXargsLauncherPrefixes(original)
+    guard depth < 4 else { return true }
+    if let peeled = xargsPeeledWords(words) {
+        // Wrapper flags carry values (`sudo -u root rm`), so the real head
+        // comes from the shared unwrap, not from skipping `-` words.
+        if peeled.limited || xargsInnerIsMutating(peeled.words, replace: replace, depth: depth + 1) {
+            return true
+        }
+    }
     guard let headIndex = words.firstIndex(where: isXargsEffectiveHead) else { return true }
     let head = unescapeBackslashPairs(basename(words[headIndex])).lowercased()
     let tail = words[(headIndex + 1)...]
@@ -244,6 +253,44 @@ private func xargsInnerIsMutating(_ words: [String], replace: String?) -> Bool {
         return tail.contains { $0.contains(replace) }
     }
     return false
+}
+
+/// `stdbuf [-i|-o|-e MODE]… cmd` and `busybox applet …` run the next word as
+/// the command; their own words must not be mistaken for it.
+private func dropXargsLauncherPrefixes(_ words: [String]) -> [String] {
+    var rest = words[...]
+    while let first = rest.first {
+        let name = unescapeBackslashPairs(basename(first)).lowercased()
+        if name == "busybox" {
+            rest = rest.dropFirst()
+        } else if name == "stdbuf" {
+            rest = rest.dropFirst()
+            while let flag = rest.first, flag.hasPrefix("-"), flag != "--" {
+                rest = rest.dropFirst()
+                if ["-i", "-o", "-e"].contains(flag), rest.isEmpty == false { rest = rest.dropFirst() }
+            }
+            if rest.first == "--" { rest = rest.dropFirst() }
+        } else {
+            break
+        }
+    }
+    return Array(rest)
+}
+
+/// The command left after peeling known wrappers, `limited` when the unwrap
+/// cannot decide; nil when `words` is not a wrapper invocation.
+private func xargsPeeledWords(_ words: [String]) -> (words: [String], limited: Bool)? {
+    guard words.isEmpty == false else { return nil }
+    let text = renderCommand(words.map { ShellPipeline.Token(lexeme: $0, wasQuoted: false) })
+    switch ShellPipeline.unwrap(
+        text, workingDirectory: nil, budget: .default, depth: 0, layers: [], splitChains: false
+    ) {
+    case .limited:
+        return ([], true)
+    case .complete(let unwrapped):
+        guard unwrapped.layers.isEmpty == false else { return nil }
+        return (ShellPipeline.tokenize(unwrapped.command.rawValue).map(\.lexeme), false)
+    }
 }
 
 /// `-i`, `-i.bak`, `-ni`, `-Ei`, `--in-place[=SUFFIX]`: sed only writes

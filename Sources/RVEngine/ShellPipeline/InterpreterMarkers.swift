@@ -115,7 +115,20 @@ func nodeCodeCanSpawn(_ code: String) -> Bool {
             pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|writeFile|writeFileSync|rename|renameSync)\b"#
         )
         || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork"])
+        || nodeReachesFileSystem(code)
         || matches(code, pattern: #"\b(require|import)\s*\(\s*[^'"\s)]"#)
+}
+
+/// The `fs` module under any alias or destructuring (`const f = require("fs")`,
+/// `import {rmSync} from "node:fs"`), or a bare call of a deleting/moving
+/// function. Mirrors python, where a bare `os` mention is already limited.
+private func nodeReachesFileSystem(_ code: String) -> Bool {
+    matches(code, pattern: #"\b(require|import)\b[^;]*['"`](node:)?fs(/promises)?['"`]"#)
+        || matches(code, pattern: #"\bfrom\s*['"`](node:)?fs(/promises)?['"`]"#)
+        || containsAnyWord(code, [
+            "rm", "rmSync", "unlink", "unlinkSync", "rmdir", "rmdirSync", "rename", "renameSync",
+            "writeFile", "writeFileSync",
+        ])
 }
 
 // MARK: ruby

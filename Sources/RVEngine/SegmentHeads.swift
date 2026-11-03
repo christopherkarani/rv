@@ -130,7 +130,7 @@ private func dropCoprocName(_ text: Substring) -> Substring {
 /// `function x {`), `coproc NAME`, or a `case` arm pattern (`x) (`).
 func prefixIntroducesBody(_ prefix: String) -> Bool {
     var words = prefix.split(whereSeparator: isBlank).map(String.init)
-    while let first = words.first, leadingReservedWords.contains(first) {
+    while let first = words.first, first != "coproc", leadingReservedWords.contains(first) {
         words.removeFirst()
     }
     guard let first = words.first, let last = words.last else { return true }

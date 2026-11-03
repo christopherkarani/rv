@@ -112,6 +112,18 @@
     { "id": "db.allow.r2-npm-test", "command": "npm test", "expected": "allow" },
     { "id": "db.allow.r2-case-echo", "command": "case x in x) echo hi;; esac", "expected": "allow" },
     { "id": "db.allow.r2-time-ls", "command": "time ls", "expected": "allow" },
-    { "id": "db.allow.r2-func-echo", "command": "x() { echo hi; }; x", "expected": "allow" }
+    { "id": "db.allow.r2-func-echo", "command": "x() { echo hi; }; x", "expected": "allow" },
+    { "id": "db.deny.f488-case-header-subst-rm", "command": "case $(rm${IFS}-r${IFS}~) in esac", "expected": "deny" },
+    { "id": "db.deny.f488-case-arm-subst-rm", "command": "case x in $(rm${IFS}-r${IFS}~)) ;; esac", "expected": "deny" },
+    { "id": "db.deny.f488-coproc-named-brace-rm", "command": "coproc X { rm -r ~; }", "expected": "deny" },
+    { "id": "db.deny.f488-xargs-sudo-u-rm", "command": "ls | xargs sudo -u root rm -r", "expected": "deny" },
+    { "id": "db.deny.f488-xargs-sudo-g-rm", "command": "ls | xargs sudo -g wheel rm -r", "expected": "deny" },
+    { "id": "db.deny.f488-xargs-doas-u-rm", "command": "ls | xargs doas -u root rm -r", "expected": "deny" },
+    { "id": "db.deny.f488-xargs-stdbuf-rm", "command": "ls | xargs stdbuf -oL rm -r", "expected": "deny" },
+    { "id": "db.deny.f488-xargs-busybox-rm", "command": "ls | xargs busybox rm -r", "expected": "deny" },
+    { "id": "db.deny.f488-node-require-fs-var-rm", "command": "node -e 'const f=require(\"fs\"); f.rmSync(require(\"os\").homedir(),{recursive:true})'", "expected": "deny" },
+    { "id": "db.deny.f488-node-require-fs-inline-rm", "command": "node -e 'require(\"fs\").rmSync(process.env.HOME,{recursive:true})'", "expected": "deny" },
+    { "id": "db.deny.f488-node-destructured-rm", "command": "node -e 'const {rmSync}=require(\"fs\"); rmSync(\"/x\")'", "expected": "deny" },
+    { "id": "db.allow.f488-awk-print-dev-stderr", "command": "awk '{print $1 > \"/dev/stderr\"}' f", "expected": "allow" }
   ]
 }

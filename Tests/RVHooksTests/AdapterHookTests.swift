@@ -715,10 +715,14 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     #expect(result.spawnCount == 0)
 }
 
-@Test func piTemplate_toolCallHandlerFailsClosedOnThrow() throws {
-    let source = try adapterSource(for: .pi, rvPath: "/opt/rv")
-    #expect(source.contains("return await guardToolCall(pi, event, ctx);"))
-    #expect(source.contains("catch {\n      return { block: true, reason: RV_FAILED_REASON };"))
+@Test func piAdapter_missingRvBinaryFailsClosed() async throws {
+    // The spawn of rv throws (ENOENT); the handler must block, not pass.
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git status"]],
+        stub: .missing
+    )
+    #expect(result.block == true)
+    #expect(result.reason?.isEmpty == false)
 }
 
 @Test func piAdapter_legacyAskBlocksWithoutConfirmOrSpend() async throws {
