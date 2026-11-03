@@ -582,6 +582,65 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
     }
 }
 
+/// AC-006 across processes. The in-process mutex serializes the threaded test
+/// above, so only a second process exercises the sidecar `flock`. The peer
+/// writes each line in two halves while holding the sidecar lock: an
+/// unexcluded append would land between them and split a line.
+@Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/perl")))
+func egressDenialCrossProcessWritersLoseNoLines() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-ac006x-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    let script = """
+        use Fcntl qw(:flock);
+        my $f = $ARGV[0];
+        open(my $l, '>>', "$f.lock") or die;
+        open(my $o, '>>', $f) or die;
+        $| = 1; print "ready\\n";
+        for my $i (0..499) {
+            flock($l, LOCK_EX) or die;
+            syswrite($o, '{"host":"p-' . $i . '.example","port":"443",');
+            select(undef, undef, undef, 0.0005);
+            syswrite($o, '"reason":"denied-policy","recordedAt":"1700000000.0"}' . "\\n");
+            flock($l, LOCK_UN);
+        }
+        """
+    let peer = Process()
+    peer.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+    peer.arguments = ["-e", script, url.path]
+    let ready = Pipe()
+    peer.standardOutput = ready
+    try peer.run()
+    _ = ready.fileHandleForReading.readData(ofLength: 6)
+    for index in 0..<500 {
+        let denial = EgressProxyDenial(
+            host: "s-\(index).example", port: 443, reason: .deniedPolicy,
+            recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        #expect(EgressProxy.writeDenial(denial, to: url, diagnose: { _ in }))
+    }
+    peer.waitUntilExit()
+    #expect(peer.terminationStatus == 0)
+    let lines = try String(contentsOf: url, encoding: .utf8)
+        .split(separator: "\n", omittingEmptySubsequences: true)
+    #expect(lines.count == 1000)
+    var hosts: [String] = []
+    for line in lines {
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: String]
+        )
+        #expect(Set(object.keys) == ["host", "port", "reason", "recordedAt"])
+        hosts.append(object["host"] ?? "")
+    }
+    // The writers overlapped: some in-process line sits between peer lines.
+    let peerIndices = hosts.indices.filter { hosts[$0].hasPrefix("p-") }
+    if let first = peerIndices.first, let last = peerIndices.last {
+        #expect(hosts[first...last].contains { $0.hasPrefix("s-") })
+    }
+}
+
 @Test func egressDenialFileIsOwnerOnlyAndSymlinkRefused() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-egress-mode-\(UUID().uuidString)", isDirectory: true)
