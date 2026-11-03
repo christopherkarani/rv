@@ -671,6 +671,55 @@ request.
   SDKs that support one, giving `LOCAL_PEERPID` for free?
 - Should a mismatch be cached per connection?
 
+**As built** (`secrets/t3-07-binary-binding`). Corrections to the proposal above:
+- **Hook point.** The check cannot run before the head is read: until the
+  placeholder is known there is no secret, and so no `binaries` list. It
+  runs in `verifyPeer`, after the runtime-membership check and before
+  `prepare` (refresh), for every presented entry that lists binaries.
+- **Identity.** No content hash. Each path is resolved once at lease and
+  pinned by (device, inode, size, ctime). ctime replaces the proposed
+  mtime: `utimes` can restore an mtime, but nothing in user space sets
+  ctime, so an in-place rewrite is caught without hashing. The pins live on
+  the gateway entry, so an upgrade takes effect at the next launch.
+  `EgressProxy`'s TOFU pins are not shared: they are keyed for egress
+  identity and outlive a lease.
+- **Holders.** The scan collects every runtime process holding the client
+  socket (the group, the leader's descendants, the leader's session). A
+  forked child inherits the socket, so every holder must pass. An
+  unreadable descriptor table makes the answer `runtimeUnverified`.
+- **Ancestors.** The walk stops at the runtime leader or launchd, at most
+  64 levels; a walk that hits the bound first is `unverifiable`. The
+  holder's start time is read before its descriptors and checked against
+  the walk's first lookup. A re-check then requires each walked process's
+  start time and parent pid unchanged, and no parent started after its
+  child.
+- **Unpinnable paths.** `/usr/bin/git`, `python3`, `make`, and `clang` are
+  `xcrun` trampolines that exec the real tool in the same process, so no
+  process runs as them; a `#!` script reports its interpreter. Both are
+  refused at lease with an error naming the real tool (shims are found by
+  reading `DEVELOPER_DIR`, `/var/db/xcode_select_link`, and the Command Line
+  Tools directory, never by spawning `xcrun`). Examples use
+  `/opt/homebrew/bin/gh`.
+- **Limit.** The scan reads descriptor tables, so a socket parked in an
+  `SCM_RIGHTS` message is held by no process. An idle pinned holder plus a
+  passed socket lets a hostile agent in the runtime reclaim it after the
+  check (which runs after the head, before the body) and send the body.
+  Documented, not fixed.
+- **Caching.** None: a gateway connection serves one request (open question
+  answered).
+- **Unix socket** (open question): not pursued; the TCP scan covers every
+  SDK.
+- **Tests.** The real-scan tests run in a fresh process group led by a
+  known `perl` process, so no stray shell sits between a holder and the
+  leader: a pinned `curl` is admitted, an unpinned one is refused, a `curl`
+  under a pinned `bash` is admitted by ancestry, and a socket shared by an
+  unpinned parent and a pinned child is refused (every holder must pass). A
+  swapped binary is covered by the pin tests (rename over the path, and an
+  in-place rewrite with the mtime restored). Pid reuse and the 64-level
+  bound are covered by unit seams (`GatewayBinaryScan.verdict` with a
+  wrong holder start time or a small `limit`, and the pure `ordered` check);
+  no test races a real pid reuse.
+
 ---
 
 ## (i) Remaining rv gaps outside the Tier 1/2 stack

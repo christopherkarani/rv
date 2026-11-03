@@ -49,6 +49,10 @@ struct GatewayPeer: Equatable, Sendable {
 /// Decides whether a peer belongs to a runtime.
 struct GatewayPeerCheck: Sendable {
     var verify: @Sendable (GatewayPeer, ProcessGroupFact) -> GatewayPeerVerdict
+    /// For secrets bound to `binaries`: whether every runtime process
+    /// holding the peer's socket runs, or descends from, a pinned binary.
+    var binaries: @Sendable (GatewayPeer, ProcessGroupFact, [GatewayBinaryPin]) -> GatewayBinaryVerdict =
+        { _, _, _ in .unverifiable }
 
     /// The peer is a member when a process of the runtime holds the client
     /// socket, found by its port pair. The cage denies the `setsid` and
@@ -59,21 +63,73 @@ struct GatewayPeerCheck: Sendable {
     /// membership. A runtime's processes are its leader, the live
     /// descendants of its leader, and, when the leader leads a session
     /// (terminal runtimes), that session.
-    static let runtime = GatewayPeerCheck { peer, group in
-        #if os(macOS)
-        GatewayPeerScan.verdict(peer, group: group)
-        #else
-        // No libproc; contained launches are refused on Linux before exec,
-        // so no runtime there holds a gateway placeholder.
-        .unverifiable
-        #endif
-    }
+    static let runtime = GatewayPeerCheck(
+        verify: { peer, group in
+            #if os(macOS)
+            GatewayPeerScan.verdict(peer, group: group)
+            #else
+            // No libproc; contained launches are refused on Linux before exec,
+            // so no runtime there holds a gateway placeholder.
+            .unverifiable
+            #endif
+        },
+        binaries: { peer, group, pins in
+            #if os(macOS)
+            guard let holders = GatewayPeerScan.holders(peer, group: group) else { return .unverifiable }
+            // A forked child inherits the socket; every holder must pass.
+            var verdict = GatewayBinaryVerdict.allowed
+            for holder in holders {
+                switch GatewayBinaryScan.verdict(holder: holder, leader: group.pgid.rawValue, pins: pins) {
+                case .allowed: continue
+                case .mismatch: verdict = .mismatch
+                case .unverifiable: return .unverifiable
+                }
+            }
+            return verdict
+            #else
+            .unverifiable
+            #endif
+        })
 }
 
 #if os(macOS)
 enum GatewayPeerScan {
     /// Bounds the descendant walk; past it the answer is `unverifiable`.
     static let maximumDescendants = 4_096
+
+    /// Every runtime process holding the peer's socket: the leader, its
+    /// descendants, and the session it leads (group membership alone proves
+    /// nothing, as in `verdict`). Nil when any of them could not be read, or
+    /// none holds it.
+    static func holders(_ peer: GatewayPeer, group: ProcessGroupFact) -> [GatewayHolder]? {
+        let leader = group.pgid.rawValue
+        guard isLeader(leader, of: group) else { return nil }
+        let (parents, complete) = descendants(of: leader)
+        guard complete else { return nil }
+        var candidates = Set(parents.keys).union([leader])
+        if getsid(leader) == leader {
+            guard let processes = userProcesses() else { return nil }
+            candidates.formUnion(processes.filter { getsid($0) == leader })
+        }
+        var found: [GatewayHolder] = []
+        for pid in candidates.sorted() {
+            // Read before the descriptors: the ancestor walk compares it, so
+            // a pid reused after this point is not taken for the holder.
+            switch ProcessGroupRecovery.lookup(pid) {
+            case .absent: continue
+            case .unavailable: return nil
+            case .found(let info):
+                switch holdsSocket(pid, peer) {
+                case .some(true):
+                    found.append(GatewayHolder(
+                        pid: pid, startSeconds: info.pbi_start_tvsec, startMicroseconds: info.pbi_start_tvusec))
+                case .some(false): continue
+                case .none: return nil
+                }
+            }
+        }
+        return found.isEmpty ? nil : found
+    }
 
     static func verdict(_ peer: GatewayPeer, group: ProcessGroupFact) -> GatewayPeerVerdict {
         let leader = group.pgid.rawValue

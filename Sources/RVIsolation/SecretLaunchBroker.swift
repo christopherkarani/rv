@@ -23,6 +23,9 @@ enum SecretLeaseError: Error, Sendable, Equatable {
     case awsCredentialsUnusable(String)
     /// Two secrets in one launch would set the same variable, e.g. two AWS profiles.
     case variableCollision(variable: String, secrets: [String])
+    /// A path in the definition's `binaries` cannot be pinned: not a regular
+    /// file now, or one nothing would ever run as (a script, a developer shim).
+    case binaryUnavailable(secret: String, path: String, reason: GatewayBinaryPin.Unpinnable)
 
     var message: String {
         switch self {
@@ -41,6 +44,8 @@ enum SecretLeaseError: Error, Sendable, Equatable {
                 + "(expected credential_process JSON with AccessKeyId, SecretAccessKey, and a valid Expiration)"
         case .variableCollision(let variable, let secrets):
             "secrets \(secrets.joined(separator: " and ")) would both set \(variable); stage one per launch"
+        case .binaryUnavailable(let name, let path, let reason):
+            "secret \(name): binary \(path) in its binaries list \(reason.reason)"
         }
     }
 }
@@ -176,6 +181,13 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
             }
             let fingerprint = fingerprint(value)
+            var pins: [GatewayBinaryPin] = []
+            for path in definition.binaries ?? [] {
+                switch GatewayBinaryPin.pin(path) {
+                case .success(let pin): pins.append(pin)
+                case .failure(let reason): return fail(.binaryUnavailable(secret: name, path: path, reason: reason))
+                }
+            }
             switch definition.delivery {
             case .environment:
                 guard let text = value.text, text.utf8.count <= Self.maximumEnvironmentValueBytes else {
@@ -191,7 +203,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
                     secret: name, prefix: binding.placeholderPrefix, value: value,
                     upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
                     surfaces: binding.surfaces, rules: binding.rules, expires: expires,
-                    refresh: refreshPolicy(definition, marker: marker), approvals: binding.approvalRules))
+                    refresh: refreshPolicy(definition, marker: marker), approvals: binding.approvalRules,
+                    binaries: pins))
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
@@ -208,7 +221,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                     secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
                     runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: marker), signing: binding,
-                    approvals: binding.approvalRules))
+                    approvals: binding.approvalRules, binaries: pins))
                 placeholders.append(placeholder)
                 environment.append(("AWS_ACCESS_KEY_ID", placeholder.text))
                 environment.append(("AWS_SECRET_ACCESS_KEY", Self.throwawaySecret()))

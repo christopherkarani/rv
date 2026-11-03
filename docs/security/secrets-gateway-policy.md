@@ -136,12 +136,83 @@ therefore honored only on a connection from the runtime it was leased to.
   recorded group. The gateway fails closed.
 
 Limits: the check binds to the runtime, not to a binary inside it; any of
-its processes may spend the placeholder. A process whose parent exited
+its processes may spend the placeholder unless the secret lists `binaries`
+(next section). A process whose parent exited
 (reparented to launchd) is no longer a descendant, even if it stayed in the
 leader's group; unless it is in a terminal runtime's session, its requests are refused as
 `runtimeMismatch`. Linux has no check (no
 libproc), so every gateway request there is `runtimeUnverified`. Contained
 launches on Linux are already refused before exec.
+
+## Binary binding
+
+`binaries` on a `gateway` or `awsSigV4` secret narrows the runtime check
+to the processes running listed programs:
+
+```json
+{"name": "GH_TOKEN", "binaries": ["/opt/homebrew/bin/git", "/opt/homebrew/bin/gh"], ...}
+```
+
+- 1 to 16 distinct absolute paths, without `.` or `..` components.
+  Environment delivery refuses the field: rv cannot see which process
+  reads an environment variable.
+- At launch, rv resolves each path (symlinks followed) and pins the file
+  by device, inode, size, and change time. A path that is not a regular
+  file fails the launch, and so does one nothing would ever run as, with an
+  error that says why: a `#!` script (the kernel reports its interpreter,
+  so list the interpreter or the program that runs it), or an Xcode
+  developer-tool shim. `/usr/bin/git`, `python3`, `make`, and `clang` are
+  `xcrun` trampolines that exec the real tool in the same process, so no
+  process ever runs as `/usr/bin/git`. rv detects a shim without running
+  anything: a file in `/usr/bin` whose name also exists in the `usr/bin` of
+  `DEVELOPER_DIR`, the `xcode-select` target, or the Command Line Tools.
+  The error names that real path (`xcrun --find git` prints it); list it,
+  or a Homebrew binary such as `/opt/homebrew/bin/git`. ctime is pinned, not mtime, because `utimes` can
+  restore an mtime and nothing in user space sets ctime. So a binary
+  replaced or rewritten after launch no longer matches. An upgrade (for
+  example `brew upgrade gh`) takes effect at the next launch.
+- After the runtime check passes, rv finds every runtime process holding
+  the client socket (a forked child inherits it). Each one must run a
+  pinned binary or descend from one that does. The ancestor walk follows
+  parent pids up to the runtime leader or launchd, at most 64 levels. The
+  holder's start time is read before its descriptors, and the walk checks
+  it against the first process it reads. After the walk, rv re-reads every
+  process: the start time and parent pid must be unchanged, and no parent
+  may have started after its child. So a pid reused between the descriptor
+  scan and the walk, or during it, is `unverifiable`, as is a walk that
+  hits the 64-level bound before reaching the leader or launchd. The kernel reports an executable by its real path, so a script's
+  interpreter is what is matched.
+- Mismatch: `403`, refusal `binaryMismatch`, and a `secret.misuse`
+  finding. Cannot tell (a process exited or changed mid-walk, a descriptor
+  table or path could not be read): `403`, `runtimeUnverified`, no
+  misuse finding.
+- Each connection serves one request, so the answer is not cached.
+
+| refusal | status | misuse | when |
+|---------|--------|--------|------|
+| `binaryMismatch` | 403 | yes | a process holding the connection runs no listed binary and descends from none, up to the runtime leader |
+
+Limits:
+- An ancestor match is coarse: every child of an allowed `git` (hooks, a
+  credential helper, `core.sshCommand`) is admitted, and an agent can make
+  git start any command (`git -c alias.x='!cmd' x`). Against a hostile
+  agent, list binaries that cannot be told to run others, and note that
+  even those do not stop the socket-passing trick below.
+- The check runs once the request head is read, before the body. A process
+  that sends the head and then execs an allowed binary, keeping the socket,
+  passes.
+- The scan reads process descriptor tables, so a socket in transit does not
+  count. A process can pass the connection over a Unix socket
+  (`SCM_RIGHTS`) and leave it parked in a message, held by no process. If
+  an idle pinned binary is then the only visible holder, the request
+  passes, and the sender reclaims the socket to send the body and read the
+  response. Against a hostile agent in the same runtime this defeats binary
+  binding, whatever binaries are listed. It is a limit rv does not close.
+- An interpreter (`node`, `python3`) as an allowed binary admits any
+  script it runs.
+- A binary without the hardened runtime can be made to load other code
+  (`DYLD_INSERT_LIBRARIES`) and still match.
+- A process outside the runtime fails the runtime check first.
 
 ## Response scrubbing
 
@@ -478,7 +549,7 @@ A `blocked` request also writes a `secret.misuse` event with
 `detail.severity: high`: the refusal code, method, and redacted path. The
 codes are `foreignPlaceholder`, `surfaceNotAllowed`, `repeatedPlaceholder`,
 `outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, `echoMethod`,
-`runtimeMismatch`, and `awsKeyMismatch`. The event's `runtime` is the runtime the presented
+`runtimeMismatch`, `awsKeyMismatch`, and `binaryMismatch`. The event's `runtime` is the runtime the presented
 placeholder was leased to (absent for a percent-encoded placeholder, which
 is never looked up). A client using its placeholder as configured never
 triggers one, so it usually means a prompt-injected agent is probing, or a
