@@ -61,7 +61,8 @@ public enum MCPLaunchPlanner {
         baseEnvironment: [String: String],
         requireSandbox: Bool = MCPSandbox.enforced,
         oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
-        sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) }
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) },
+        now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
         for name in names {
@@ -72,7 +73,7 @@ public enum MCPLaunchPlanner {
                 let resolved: [String: String]
                 switch resolve(
                     remote.secretNames, server: name, configuration: configuration, secrets: secrets, resolver: resolver,
-                    into: .remoteHeader)
+                    into: .remoteHeader, now: now)
                 {
                 case .failure(let error): return .failure(error)
                 case .success(let values): resolved = values
@@ -105,7 +106,7 @@ public enum MCPLaunchPlanner {
             let resolved: [String: String]
             switch resolve(
                 referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
-                into: .stdioProcess)
+                into: .stdioProcess, now: now)
             {
             case .failure(let error): return .failure(error)
             case .success(let values): resolved = values
@@ -141,45 +142,43 @@ public enum MCPLaunchPlanner {
 
     static func resolve(
         _ names: [String], server: String, configuration: MCPConfiguration, secrets: SecretsConfiguration,
-        resolver: SecretResolver, into target: SecretTarget
+        resolver: SecretResolver, into target: SecretTarget, now: @escaping @Sendable () -> Date
     ) -> Result<[String: String], MCPLaunchError> {
-        var resolved: [String: String] = [:]
+        var definitions: [SecretDefinition] = []
         for secretName in names {
             guard let secret = secrets.secret(named: secretName) else {
                 return .failure(.secretUndefined(server: server, secret: secretName))
             }
-            if secret.gatewayOnly {
-                return .failure(.secretUnavailable(
-                    server: server, secret: secretName,
-                    reason: "\(secret.source.kind) secrets are spent only by the secret gateway, not by MCP servers"))
-            }
-            if configuration.managed?.allowsSecretSource(secret.source.kind) == false {
-                return .failure(.secretUnavailable(
-                    server: server, secret: secretName,
-                    reason: "organization policy does not allow \(secret.source.kind) secrets"))
-            }
-            // A stdio server holds the real value whatever the secret's own
-            // `delivery` says, so environment-only policy forbids it outright.
-            if target == .stdioProcess, configuration.managed?.secrets.allowEnvironmentDelivery == false {
-                return .failure(.secretUnavailable(
-                    server: server, secret: secretName,
-                    reason: "organization policy sets secrets.allowEnvironmentDelivery to false, "
-                        + "and a stdio server receives secrets in its environment or arguments"))
-            }
-            switch resolver.resolve(secret.source) {
-            case .failure(let error):
-                return .failure(.secretUnavailable(server: server, secret: secretName, reason: error.message))
-            case .success(let value):
-                guard let text = String(validating: value.revealed(), as: UTF8.self),
-                    text.contains("\0") == false,
-                    target == .stdioProcess || text.unicodeScalars.allSatisfy({ $0 != "\r" && $0 != "\n" })
-                else {
-                    return .failure(.secretUnavailable(server: server, secret: secretName, reason: "not usable as text"))
-                }
-                resolved[secretName] = text
-            }
+            definitions.append(secret)
         }
-        return .success(resolved)
+        let release = SecretRelease(resolver: resolver, policy: configuration.managed, now: now)
+        switch release.release(definitions, to: target == .stdioProcess ? .stdioServer : .header) {
+        case .failure(.policyInvalid(let reason)):
+            return .failure(.secretUnavailable(
+                server: server, secret: names.first ?? "", reason: "organization policy is invalid: \(reason)"))
+        case .failure(.refused(let secretName, let reason)):
+            let kind = secrets.secret(named: secretName)?.source.kind ?? ""
+            return .failure(.secretUnavailable(server: server, secret: secretName, reason: unavailable(reason, kind: kind)))
+        case .success(let released):
+            var resolved: [String: String] = [:]
+            for secret in released { resolved[secret.definition.name] = secret.text }
+            return .success(resolved)
+        }
+    }
+
+    static func unavailable(_ reason: SecretRefusal.Reason, kind: String) -> String {
+        switch reason {
+        case .gatewayOnly: "\(kind) secrets are spent only by the secret gateway, not by MCP servers"
+        case .organizationPolicy(.source): "organization policy does not allow \(kind) secrets"
+        // A stdio server holds the real value whatever the secret's own
+        // `delivery` says, so environment-only policy forbids it outright.
+        case .organizationPolicy(.environmentDelivery):
+            "organization policy sets secrets.allowEnvironmentDelivery to false, "
+                + "and a stdio server receives secrets in its environment or arguments"
+        case .expired(let date): "expired at \(SecretExpiry.text(date))"
+        case .resolution(let error): error.message
+        case .unusableToken, .unusableCredentials, .unusableEnvironmentValue, .notText, .lineBreak: "not usable as text"
+        }
     }
 
     /// Host environment a sandboxed upstream may see. Credentials the host
