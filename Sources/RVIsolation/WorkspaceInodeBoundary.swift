@@ -1043,11 +1043,13 @@ final class WorkspaceInodeBoundary: Sendable {
                 savedMutation(unlinkatWithinCopyClock(parent.fd, stage, 0))
             else { return (false, []) }
         }
+        // Owner-only until bytes and xattrs land; `fsetxattr` checks the
+        // inode mode. The fchmod after the copy sets the published mode.
         let opened = openatOutcomeWithinCopyClock(
             parent.fd,
             stage,
             O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
-            mode
+            0o600
         )
         // A parked O_CREAT can still create the stage after the saved
         // tree is renamed onto the workspace. Fence it.
@@ -1069,7 +1071,7 @@ final class WorkspaceInodeBoundary: Sendable {
             }
             return (false, undo)
         }
-        return (true, undo)
+        return (savedMutation(fchmodWithinCopyClock(dest, mode)), undo)
     }
 
     /// Rename a finished stage onto its name. `RENAME_EXCL` never replaces
