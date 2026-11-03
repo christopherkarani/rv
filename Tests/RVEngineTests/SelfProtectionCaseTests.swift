@@ -71,6 +71,18 @@ struct SelfProtectionCaseTests {
         "R\\V packs disable core.git",
         "SUDO RV uninstall",
         "Env RV_X=1 RV safety normal",
+        // APFS folds U+017F and U+FB01: `baſh`, `ſudo`, `ﬁsh` resolve to bash, sudo, fish.
+        "baſh -c 'rv uninstall'",
+        "/bin/baſh -c 'rv packs disable core.git'",
+        "ﬁsh -c 'rv uninstall'",
+        "ſudo rv uninstall",
+        // Backslash-escaped launchers (`\command` skips aliases).
+        "\\command rv uninstall",
+        "\\sudo rv uninstall",
+        "su\\do RV uninstall",
+        "\\env rv uninstall",
+        "\\exec rv uninstall",
+        "\\timeout 5 rv uninstall",
     ]
 
     @Test("case-folded and escaped rv invocations still hit the self-protection floor", arguments: weakening)

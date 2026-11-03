@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 
 /// Every simple command `raw` launches, as decoded argv words.
@@ -6,7 +7,7 @@ import RVDomain
 /// `$(...)`/backtick inners). Leading `NAME=value` assignments and plain
 /// launchers (`sudo`, `env`, `command`, `exec`, `nohup`, `time`, `nice`,
 /// `timeout`, `doas`, `builtin`) are dropped, argv0 is reduced to its
-/// basename, and `sh`/`bash`/`zsh -c` payloads recurse. Shared by the
+/// `commandName`, and `sh`/`bash`/`zsh -c` payloads recurse. Shared by the
 /// inline-program and self-protection floors; never evaluates policy.
 func launchedCommands(_ raw: String) -> [[String]] {
     launchedCommands(raw, depth: 0)
@@ -23,7 +24,7 @@ private func launchedCommands(_ raw: String, depth: Int) -> [[String]] {
             .map(\.lexeme)
         let argv = dropLaunchers(words)
         guard let head = argv.first else { continue }
-        let program = unescapeBackslashPairs(basename(head)).lowercased()
+        let program = commandName(head)
         if shellNames.contains(program),
            let flag = argv.dropFirst().firstIndex(where: isShellCommandFlag),
            flag + 1 < argv.count
@@ -34,6 +35,13 @@ private func launchedCommands(_ raw: String, depth: Int) -> [[String]] {
         commands.append([program] + argv.dropFirst())
     }
     return commands
+}
+
+/// A command word as a case-insensitive filesystem resolves it: basename,
+/// backslash-unescaped, then Unicode case-folded the way APFS folds
+/// (`BASH`, `r\v`, `baſh`, `ﬁsh`). `lowercased()` alone misses `ſ`/`ﬁ`.
+private func commandName(_ word: String) -> String {
+    unescapeBackslashPairs(basename(word)).folding(options: .caseInsensitive, locale: nil)
 }
 
 private let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish"]
@@ -74,7 +82,7 @@ private func dropLaunchers(_ words: [String]) -> [String] {
             index += 1
             continue
         }
-        let name = basename(word).lowercased()
+        let name = commandName(word)
         if name == "sudo" || name == "env" || name == "timeout" || plainLaunchers.contains(name) {
             launcher = name
             index += 1
