@@ -90,29 +90,21 @@ extension SecretDelivery {
 
 extension SecretDefinition {
     /// Gateway only: re-resolve from the provider this often while a runtime lives.
-    public var refresh: SecretRefreshInterval? {
-        get { delivery.limits?.refresh }
-        set {
-            guard var limits = delivery.limits else { return }
-            limits.refresh = newValue
-            delivery = delivery.with(limits: limits)
-        }
-    }
+    /// Read-only here so an environment secret cannot silently drop a write; set it
+    /// with `setRefresh(_:)` or through the gateway payload's `limits`.
+    public var refresh: SecretRefreshInterval? { delivery.limits?.refresh }
 
     /// Gateway only: absolute paths of the binaries that may spend the value.
-    public var binaries: [String]? {
-        get { delivery.limits?.binaries }
-        set {
-            guard var limits = delivery.limits else { return }
-            limits.binaries = newValue
-            delivery = delivery.with(limits: limits)
-        }
-    }
+    public var binaries: [String]? { delivery.limits?.binaries }
 
     /// Sets or clears the refresh interval. Clearing always succeeds; setting
     /// one on an environment secret is refused.
     public mutating func setRefresh(_ interval: SecretRefreshInterval?) throws(SecretDefinitionError) {
-        if interval != nil, let error = SecretDefinitionError.refresh(name, delivery) { throw error }
-        refresh = interval
+        guard var limits = delivery.limits else {
+            if interval != nil, let error = SecretDefinitionError.refresh(name, delivery) { throw error }
+            return
+        }
+        limits.refresh = interval
+        delivery = delivery.with(limits: limits)
     }
 }

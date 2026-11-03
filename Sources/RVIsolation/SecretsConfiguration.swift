@@ -96,6 +96,7 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var allow: [GatewayAllowance]
     /// Methods and paths that need a human's approval per request. Empty needs none.
     public var approve: [GatewayAllowance]
+    /// How often the value is re-resolved and which binaries may spend it.
     public var limits: SecretGatewayLimits
 
     public init(
@@ -152,6 +153,7 @@ public struct AWSSigningBinding: Sendable, Equatable {
     public var allow: [GatewayAllowance]
     /// Methods and paths that need a human's approval per request. Empty needs none.
     public var approve: [GatewayAllowance]
+    /// How often the value is re-resolved and which binaries may spend it.
     public var limits: SecretGatewayLimits
 
     public init(
