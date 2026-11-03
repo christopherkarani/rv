@@ -218,6 +218,19 @@ import RVIsolation
     #expect(required.contains("only when"))
 }
 
+@Test func publishRejectedTextNamesTheRetainedImageAndHowToRecoverOrRemoveIt() {
+    let image = "/var/folders/ab/T/rv-rejected-abc-20261102T101500Z.sparseimage"
+    let text = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: image))
+    #expect(text.contains(image))
+    #expect(text.contains("nothing was published"))
+    #expect(text.contains("project directory is unchanged"))
+    #expect(text.contains("hdiutil attach -readonly -nobrowse"))
+    #expect(text.contains("rm \(image)"))
+    let missing = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: ""))
+    #expect(missing.contains("nothing was published"))
+    #expect(missing.contains("hdiutil") == false)
+}
+
 @Test func abandonFailedTextDoesNotClaimTheWorkspaceWasLeftAsIs() {
     let reasons: [WorkspaceRecoveryBlock.Reason?] = [nil, .publicationConflict, .tornLog, .missingVolume]
     for reason in reasons {

@@ -99,6 +99,9 @@ struct MCPInventoryTests {
             """)
         try fake.write(".gemini/settings.json", #"{"mcpServers": {"MCP_DOCKER": {"command": "docker", "args": ["mcp", "gateway", "run"]}, "hosted": {"httpUrl": "https://g.example.com/mcp"}}}"#)
         try fake.write(".codeium/windsurf/mcp_config.json", #"{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/"]}}}"#)
+        try fake.write(
+            ".config/muse/settings.json",
+            #"{"schema_version": 1, "mcpServers": {"wax": {"command": "wax-mcp", "args": ["--store-path", "/x"], "env": {}, "transport": "stdio", "mode": "optional"}}}"#)
         try fake.write(".gemini/antigravity/mcp_config.json", "{not json")
         try fake.write(".mcp.json", under: fake.project, #"{"mcpServers": {"team": {"command": "uvx", "args": ["team-mcp"]}}}"#)
         try fake.write(".vscode/mcp.json", under: fake.project, #"{"servers": {"vs": {"type": "stdio", "command": "node", "args": ["v.js"]}}, /* c */ }"#)
@@ -112,7 +115,7 @@ struct MCPInventoryTests {
         #expect(names == [
             "claude-code:wax", "claude-code:local-one", "claude-code:team", "cursor:github",
             "codex:context7", "codex:stripe", "codex:node", "opencode:oc", "opencode:remote",
-            "gemini:MCP_DOCKER", "gemini:hosted", "windsurf:filesystem", "vscode:vs",
+            "gemini:MCP_DOCKER", "gemini:hosted", "windsurf:filesystem", "vscode:vs", "muse:wax",
         ])
         #expect(inventory.problems.count == 1)
         #expect(inventory.problems.first?.path.hasSuffix("antigravity/mcp_config.json") == true)
@@ -197,6 +200,17 @@ struct MCPInventoryTests {
             host: .cursor, scope: .user, configPath: "/x", name: "github",
             transport: .stdio(command: fake.rv.path, args: ["mcp", "serve", "--server=github"]))
         #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: fake.rv.path) == .governed)
+
+        // Installed layout: setup writes the `rv` shim path while the
+        // answering process is its `rv-cli` sibling — still governed.
+        let rvCLI = fake.home.appendingPathComponent("bin/rv-cli")
+        #expect(FileManager.default.createFile(atPath: rvCLI.path, contents: Data()))
+        #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: rvCLI.path) == .governed)
+        // A different directory's binary named rv-cli does not inherit that.
+        let foreign = fake.home.appendingPathComponent("elsewhere/rv-cli")
+        try FileManager.default.createDirectory(at: foreign.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(FileManager.default.createFile(atPath: foreign.path, contents: Data()))
+        #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: foreign.path) == .bypass)
     }
 
     @Test func unreadableAndOversizedHostFilesFailTheInventory() throws {

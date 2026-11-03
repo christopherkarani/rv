@@ -87,9 +87,9 @@ public struct ActionScope: Sendable, Equatable, Codable {
 
 /// Effect-only shell: stored fingerprint/effects/resources with no analyzed subject.
 public struct EffectShell: Sendable, Equatable, Codable {
-    public var fingerprint: ActionFingerprint
-    public var effects: ActionEffects
-    public var resources: ResourceScope
+    public let fingerprint: ActionFingerprint
+    public let effects: ActionEffects
+    public let resources: ResourceScope
     public var scope: ActionScope
     /// Supporting evidence only. Never the primary review input.
     public var supportingCommand: ShellCommand?
@@ -110,12 +110,15 @@ public struct EffectShell: Sendable, Equatable, Codable {
 }
 
 /// Analyzed shell: effects/resources computed from the non-optional subject.
+///
+/// `fingerprint` and `analysis` are immutable together: a fingerprint can
+/// never drift from the subject it was computed for.
 public struct AnalyzedShell: Sendable, Equatable, Codable {
-    public var fingerprint: ActionFingerprint
+    public let fingerprint: ActionFingerprint
     public var scope: ActionScope
     /// Supporting evidence only. Never the primary review input.
     public var supportingCommand: ShellCommand?
-    public var analysis: SemanticAction
+    public let analysis: SemanticAction
 
     public var effects: ActionEffects { analysis.effects }
     public var resources: ResourceScope { analysis.resources }
@@ -331,8 +334,8 @@ public enum ShellAction: Sendable, Equatable, Codable {
 /// disagreeing with its subject is unrepresentable (ShellAction analyzed
 /// pattern). `scope` stays stored: it is request context, not a file fact.
 public struct FileAction: Sendable, Equatable, Codable {
-    public var fingerprint: ActionFingerprint
-    public var file: FileToolAction
+    public let fingerprint: ActionFingerprint
+    public let file: FileToolAction
     public var scope: ActionScope
 
     /// File tools carry no typed effects; policy reviews the subject.
@@ -388,6 +391,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
     case shell(ShellAction)
     case file(FileAction)
     case http(HTTPAction)
+    /// A secret gateway request held for a human by the secret's `approve` rule.
+    case secretRequest(SecretRequestAction)
 
     public var fingerprint: ActionFingerprint {
         switch self {
@@ -396,6 +401,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         case .file(let action):
             return action.fingerprint
         case .http(let action):
+            return action.fingerprint
+        case .secretRequest(let action):
             return action.fingerprint
         }
     }
@@ -406,7 +413,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.supportingCommand
-        case .file, .http:
+        case .file, .http, .secretRequest:
             return nil
         }
     }
@@ -419,6 +426,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
             return action.effects
         case .http(let action):
             return action.effects
+        case .secretRequest(let action):
+            return action.effects
         }
     }
 
@@ -429,6 +438,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         case .file(let action):
             return action.resources
         case .http(let action):
+            return action.resources
+        case .secretRequest(let action):
             return action.resources
         }
     }
@@ -441,6 +452,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
             return action.scope
         case .http(let action):
             return action.scope
+        case .secretRequest(let action):
+            return action.scope
         }
     }
 
@@ -448,7 +461,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.gitAction
-        case .file, .http:
+        case .file, .http, .secretRequest:
             return nil
         }
     }

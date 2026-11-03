@@ -112,12 +112,12 @@ public struct MCPApprovalStore: Sendable {
     public static let maximumRequests = 256
 
     public var configDirectory: URL
-    public var keys: MCPApprovalKeyStore
+    public var signing: MCPApprovalSigning
     public var clock: @Sendable () -> Date
 
-    public init(configDirectory: URL, keys: MCPApprovalKeyStore, clock: @escaping @Sendable () -> Date = { Date() }) {
+    public init(configDirectory: URL, signing: MCPApprovalSigning, clock: @escaping @Sendable () -> Date = { Date() }) {
         self.configDirectory = configDirectory
-        self.keys = keys
+        self.signing = signing
         self.clock = clock
     }
 
@@ -129,36 +129,44 @@ public struct MCPApprovalStore: Sendable {
 
     /// Reusing a pending request mints a fresh code: only the newest printed code works.
     public func request(server: String, tool: String, argumentsHash: String, argumentKeys: [String]) -> MCPApprovalTicket? {
-        guard keys.honorsGrants else { return nil }
-        let signer = keys.loadOrCreate()
+        guard signing.honorsGrants else { return nil }
         return withLockedRequests { requests in
-            let code = signer.map { _ in MCPConfirmationCode.generate() }
+            // The code exists only if its MAC could be made (this enrolls
+            // the key on first use). A ticket is still recorded without
+            // one, exactly as when no key could be loaded before.
+            let codeCandidate = MCPConfirmationCode.generate()
             func codeMAC(_ id: String) -> String? {
-                guard let signer, let code else { return nil }
-                return signer.mac(
+                signing.mac(
                     "code", Self.codeFields(
                         id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
-                        code: code))
+                        code: codeCandidate),
+                    true)
             }
             func keysMAC(_ id: String) -> String? {
-                guard let signer else { return nil }
-                return signer.mac(
+                signing.mac(
                     "argument-keys", Self.boundFields(
-                        id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys))
+                        id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys),
+                    true)
+            }
+            func liveCode(for mac: String?) -> String? {
+                mac == nil ? nil : codeCandidate
             }
             if let index = requests.firstIndex(where: {
                 $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .pending
             }) {
                 requests[index].argumentKeys = argumentKeys
                 requests[index].argumentKeysMAC = keysMAC(requests[index].id)
-                requests[index].codeMAC = codeMAC(requests[index].id)
-                return MCPApprovalTicket(id: requests[index].id, code: code)
+                let mac = codeMAC(requests[index].id)
+                requests[index].codeMAC = mac
+                return MCPApprovalTicket(id: requests[index].id, code: liveCode(for: mac))
             }
             let id = Self.newID()
+            let mac = codeMAC(id)
+            let code = liveCode(for: mac)
             let request = MCPApprovalRequest(
                 id: id, server: server, tool: tool, argumentsHash: argumentsHash,
                 argumentKeys: argumentKeys, requestedAt: clock(), state: .pending,
-                codeMAC: codeMAC(id), argumentKeysMAC: keysMAC(id))
+                codeMAC: mac, argumentKeysMAC: keysMAC(id))
             requests.append(request)
             while requests.count > Self.maximumRequests {
                 guard let index = requests.firstIndex(where: { $0.state == .pending && $0.id != request.id }) else {
@@ -174,41 +182,44 @@ public struct MCPApprovalStore: Sendable {
     public func consumeGrant(
         server: String, tool: String, argumentsHash: String, argumentKeys: [String]
     ) -> MCPGrantLookup {
-        guard keys.honorsGrants else { return .none }
-        let signer = keys.load()
+        guard signing.honorsGrants else { return .none }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: {
                 $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .granted
             }) else { return MCPGrantLookup.none }
             // The hash alone is not the call. A grant signed for other key names stays put.
             guard requests[index].argumentKeys == argumentKeys else { return MCPGrantLookup.none }
-            // No key to verify with: leave the grant for a keyed gateway
-            // instead of deleting a legitimate approval as "forged".
-            guard let signer else { return MCPGrantLookup.none }
-            let entry = requests.remove(at: index)
-            guard signer.verify(entry.grantMAC, "grant", entry.grantFields) else {
-                return .forged(id: entry.id)
+            // Verify the row as read under this lock. No key to verify
+            // with (nil): leave the grant for a keyed gateway instead of
+            // deleting a legitimate approval as "forged".
+            switch signing.verify(requests[index].grantMAC, "grant", requests[index].grantFields) {
+            case .none:
+                return MCPGrantLookup.none
+            case .some(false):
+                return .forged(id: requests.remove(at: index).id)
+            case .some(true):
+                return .granted(id: requests.remove(at: index).id)
             }
-            return .granted(id: entry.id)
         } ?? MCPGrantLookup.none
     }
 
     /// Whether the stored names are the names inside `argumentKeysMAC`.
     /// A missing MAC or a rewritten list is not something to show or sign.
     public func argumentKeysAreBound(_ request: MCPApprovalRequest) -> Bool {
-        guard let signer = keys.load(), let mac = request.argumentKeysMAC else { return false }
-        return signer.verify(mac, "argument-keys", request.grantFields)
+        signing.verify(request.argumentKeysMAC, "argument-keys", request.grantFields) == true
     }
 
     /// Whether `typed` is the code for this pending request as it stands now.
     /// Server, tool, argument hash, and argument key names are part of the MAC, so a rewrite fails.
     public func verifyCode(id: String, typed: String) -> Bool {
-        guard keys.honorsGrants, let signer = keys.load() else { return false }
+        guard signing.honorsGrants else { return false }
         let request = withLockedRequests { requests in requests.first { $0.id == id && $0.state == .pending } } ?? nil
         guard let request else { return false }
-        return signer.verify(request.codeMAC, "code", Self.codeFields(
+        // The row is read before the verify call, so the MAC judges the
+        // row as it stands now, not one swapped in during a key load.
+        return signing.verify(request.codeMAC, "code", Self.codeFields(
             id: request.id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
-            argumentKeys: request.argumentKeys, code: typed))
+            argumentKeys: request.argumentKeys, code: typed)) == true
     }
 
     public func hasCode(id: String) -> Bool {
@@ -223,17 +234,17 @@ public struct MCPApprovalStore: Sendable {
     public func grant(
         id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String]
     ) -> MCPApprovalRequest? {
-        guard keys.honorsGrants, let signer = keys.loadOrCreate() else { return nil }
+        guard signing.honorsGrants else { return nil }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: { $0.id == id && $0.state == .pending }) else { return nil }
             guard requests[index].server == server, requests[index].tool == tool,
                 requests[index].argumentsHash == argumentsHash, requests[index].argumentKeys == argumentKeys
             else { return nil }
-            guard let keysMAC = requests[index].argumentKeysMAC,
-                signer.verify(keysMAC, "argument-keys", requests[index].grantFields)
+            guard signing.verify(requests[index].argumentKeysMAC, "argument-keys", requests[index].grantFields) == true,
+                let grantMAC = signing.mac("grant", requests[index].grantFields, true)
             else { return nil }
             requests[index].state = .granted
-            requests[index].grantMAC = signer.mac("grant", requests[index].grantFields)
+            requests[index].grantMAC = grantMAC
             return requests[index]
         } ?? nil
     }

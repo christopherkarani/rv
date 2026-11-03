@@ -14,6 +14,11 @@ public enum IndeterminateReason: String, Sendable, Equatable, Codable {
     case budgetExhausted
     case commandTooLarge
     case corePacksUnavailable
+    /// An inline interpreter/awk/sed program carries spawn, eval, delete,
+    /// or secret-read markers and no judge was available to score it.
+    case inlineProgramNeedsJudge
+    /// An `rv` invocation that would weaken rv; the owner runs it in Terminal.
+    case selfProtection
 }
 
 /// Pack-door evaluate result: allow, deny, or indeterminate. Never Ask.

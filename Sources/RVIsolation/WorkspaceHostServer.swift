@@ -1034,7 +1034,7 @@ final class WorkspaceHostServer: Sendable {
                 attached: 0
             )
         case .failure(let error):
-            response = failure(message, workspaceControlCode(error))
+            response = failure(message, workspaceControlCode(error), detail: workspaceControlDetail(error))
         case .success:
             response = failure(message, .workspaceClosed)
         }

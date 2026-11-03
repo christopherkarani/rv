@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 @testable import RVService
+import RVXPC
 
 struct OnceResumeTests {
     @Test func secondResumeIsIgnored() async throws {

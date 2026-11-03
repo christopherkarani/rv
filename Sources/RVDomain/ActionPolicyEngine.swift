@@ -59,8 +59,8 @@ public struct ActionPolicyExplanation: Sendable, Equatable, Codable {
 }
 
 public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
-    public var decision: HardPolicyDecision
-    public var explanation: ActionPolicyExplanation
+    public let decision: HardPolicyDecision
+    public let explanation: ActionPolicyExplanation
 
     package init(decision: HardPolicyDecision, explanation: ActionPolicyExplanation) {
         self.decision = decision
@@ -126,6 +126,11 @@ public enum ActionPolicyEngine: Sendable {
             reason: "No semantic rule covered this action."
         )
 
+        public static let secretRequestApproval = Deny(
+            ruleID: RuleID(pack: pack, pattern: "secret-request-approval"),
+            reason: "The secret's approve rule requires a human for this request."
+        )
+
         public static let packIncomplete = Deny(
             ruleID: RuleID(pack: pack, pattern: "pack-incomplete"),
             reason: "Pack evaluation did not finish."
@@ -185,6 +190,14 @@ public enum ActionPolicyEngine: Sendable {
             return evaluateFile(file, policy: policy)
         case .http(let http):
             return evaluateHTTP(http, policy: policy)
+        case .secretRequest:
+            // The secret's own `approve` rule asked for this; nothing downgrades it.
+            return ActionPolicyVerdict(
+                decision: .mandatoryHuman(Builtin.secretRequestApproval),
+                explanation: ActionPolicyExplanation(
+                    zone: HardPolicyDecision.mandatoryHuman(Builtin.secretRequestApproval).zone,
+                    ruleID: Builtin.secretRequestApproval.ruleID,
+                    reason: Builtin.secretRequestApproval.reason))
         }
     }
 

@@ -510,6 +510,18 @@ final class RuntimeAdmissionSession: Sendable {
         self.parkTimeout = parkTimeout
     }
 
+    /// The approval service this channel asks, if any.
+    var askBackend: (any ActionApprovalAsking)? { configuration.askBackend }
+
+    /// The subject a request submitted now would carry, with its principal
+    /// resolved fresh, as `submitCore` does.
+    func currentSubject() -> RuntimeAdmissionSubject {
+        let snapshot = state.withLock { ($0.binding, $0.agentRegistry) }
+        var subject = subject
+        subject.agent = snapshot.0.flatMap { snapshot.1?.context(forBinding: $0) }
+        return subject
+    }
+
     func sendGrant() {
         let snapshot = state.withLock { ($0.binding, $0.responseWrite) }
         guard let binding = snapshot.0, snapshot.1 >= 0 else { return }
@@ -1282,7 +1294,8 @@ final class RuntimeAdmissionSession: Sendable {
         credential: BrokeredCredentialInjection?
     ) -> AdmissionPerformResult {
         switch allowed.action {
-        case .file:
+        case .file, .secretRequest:
+            // A secret request is performed by the gateway that asked, never here.
             return .shell(.failure(.compileFailed))
         case .shell:
             switch configuration.executor {

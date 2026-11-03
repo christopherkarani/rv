@@ -49,7 +49,7 @@ func env(
     installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics(),
     companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 ) -> SetupEnvironment {
-    SetupEnvironment(
+    var environment = SetupEnvironment(
         home: testHomeDirectory(home.path),
         pathEntries: pathEntries,
         rvPath: rvPath,
@@ -63,6 +63,8 @@ func env(
         installAnalytics: installAnalytics,
         companionPresence: companionPresence
     )
+    environment.sleep = { _ in }
+    return environment
 }
 
 func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
@@ -800,6 +802,59 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_custodianLaunchAgentTemplate_rendersEmbeddedResource() throws {
+    let plist = try LaunchAgentTemplate.renderedCustodian(custodianPath: "/opt/RVApprovals.app/Contents/MacOS/rv-mcp-custodian")
+    #expect(plist.contains("/opt/RVApprovals.app/Contents/MacOS/rv-mcp-custodian"))
+    #expect(plist.contains("@CUSTODIAN_PATH@") == false)
+    let keys = try launchdPlist(plist)
+    #expect(keys["Label"] as? String == "dev.rv.mcp-custodian")
+    #expect(keys["KeepAlive"] as? Bool == false)
+    #expect(keys["RunAtLoad"] as? Bool == false)
+    let services = try #require(keys["MachServices"] as? [String: Bool])
+    #expect(services["dev.rv.mcp-custodian"] == true)
+}
+
+@Test func setup_writesCustodianLaunchAgentOnlyWhenBundleExists() throws {
+    try withTempHome { home, layout, launchctl in
+        let absent = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(absent.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.custodianLaunchAgent) == false)
+
+        let macOS = (layout.custodianAppExecutable as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: macOS, withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(toFile: layout.custodianAppExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: layout.custodianAppExecutable)
+
+        let present = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(present.exitCode == 0)
+        let plist = try String(contentsOfFile: layout.custodianLaunchAgent, encoding: .utf8)
+        #expect(plist.contains(layout.custodianAppExecutable))
+    }
+}
+
+@Test func setup_writeLaunchAgentLeavesTheCustodianAlone() throws {
+    // `rv service restart` and the companion-uninstall KeepAlive repair call
+    // writeLaunchAgent; they must reload rvd only, never boot out the
+    // custodian (that would kill an approval waiting on Touch ID).
+    try withTempHome { home, layout, launchctl in
+        let macOS = (layout.custodianAppExecutable as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: macOS, withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(toFile: layout.custodianAppExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: layout.custodianAppExecutable)
+
+        _ = try SetupRun.writeLaunchAgent(
+            env: env(home: home, launchctl: launchctl), layout: layout,
+            files: FileOps(fileManager: .default), keepAlive: false)
+
+        #expect(FileManager.default.fileExists(atPath: layout.custodianLaunchAgent) == false)
+        #expect(launchctl.bootouts.contains(SetupRun.custodianLaunchAgentLabel) == false)
+        #expect(launchctl.bootstraps.contains { $0.path == layout.custodianLaunchAgent } == false)
+        #expect(launchctl.bootstraps.contains { $0.path == layout.launchAgent })
+    }
+}
+
 @Test func setup_launchAgentTemplate_rendersEmbeddedResource() throws {
     let plist = try LaunchAgentTemplate.rendered(rvdPath: "/opt/rvd")
     #expect(plist.contains("/opt/rvd"))
@@ -850,20 +905,15 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
-@Test func setup_resolveRvd_prefersSiblingOverHomeLocalBin() throws {
-    try withTempHome { home, _, _ in
-        let running = home.appendingPathComponent("running", isDirectory: true)
-        let siblingRv = running.appendingPathComponent("rv")
-        let siblingRvd = running.appendingPathComponent("rvd")
-        try makeExecutable(siblingRv, contents: "sibling-rv")
-        try makeExecutable(siblingRvd, contents: "sibling-rvd")
-        let decoy = home.appendingPathComponent(".local/bin/rvd")
-        try makeExecutable(decoy, contents: "decoy-rvd")
-        let resolved = SetupEnvironment.resolveRvd(
-            nextTo: siblingRv.path,
-            home: home.path
+@Test func setup_resolveRvd_isHookSiblingInHomeLocalBin() throws {
+    try withTempHome { home, layout, _ in
+        // The hook `rv` pins the daemon to its sibling `rvd`; the plist must
+        // name that same binary, never the `rvd` beside a `.build` rv-cli.
+        #expect(SetupEnvironment.resolveRvd(home: home.path) == layout.localRvd)
+        #expect(
+            (SetupEnvironment.resolveRv(home: home.path) as NSString).deletingLastPathComponent
+                == (layout.localRvd as NSString).deletingLastPathComponent
         )
-        #expect(resolved == siblingRvd.path)
     }
 }
 
@@ -893,6 +943,9 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
         #expect(outcome.stdout.contains(setupRobotCompleteLine))
+        // Hooks are wired with no daemon behind them: say so, with a repair.
+        #expect(outcome.stderr.contains("rvd not found at \(missing)"))
+        #expect(outcome.stderr.contains("fix: reinstall rv"))
     }
 }
 
@@ -1035,6 +1088,30 @@ private func fixtureLoginHome() throws -> URL {
             .setup,
             EX_UNAVAILABLE,
             "rv setup failed: unable to load LaunchAgent\n"
+                + "hooks are wired but rvd is not loaded, so agent tool calls will be denied\n"
+                + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
+        ),
+        (
+            .launchctlApplyFailed(.bootstrap),
+            .serviceRestart,
+            EX_UNAVAILABLE,
+            "rv service restart failed: unable to load LaunchAgent\n"
+                + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
+        ),
+        (
+            .notInstalledCopy(running: "/src/.build/debug/rv-cli", installedRv: "/h/.local/bin/rv"),
+            .setup,
+            EX_USAGE,
+            "rv setup failed: /src/.build/debug/rv-cli is not the installed rv\n"
+                + "hooks only trust the rvd beside /h/.local/bin/rv\n"
+                + "fix: install this build first (install.sh), then run /h/.local/bin/rv setup\n"
+        ),
+        (
+            .rvdMissing("/h/.local/bin/rvd"),
+            .serviceRestart,
+            EX_UNAVAILABLE,
+            "rv service restart failed: rvd not found at /h/.local/bin/rvd\n"
+                + "fix: reinstall rv (curl -fsSL https://rykanv.com/install | sh)\n"
         ),
         (
             .launchctlApplyFailed(.bootout),
@@ -1084,7 +1161,7 @@ private func fixtureLoginHome() throws -> URL {
     try withTempHome { home, _, _ in
         let outcome = SetupRun.setup(env(home: home, launchctl: FailingLaunchctl()))
         #expect(outcome.stdout.isEmpty)
-        #expect(outcome.stderr == "rv setup failed: unable to load LaunchAgent\n")
+        #expect(outcome.stderr.hasPrefix("rv setup failed: unable to load LaunchAgent\n"))
         #expect(outcome.exitCode == EX_UNAVAILABLE)
     }
 }
@@ -1194,6 +1271,11 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
     }
 
     func bootout(domain _: String, label _: String) throws {}
+
+    /// SSH / Background session: no Aqua login, so no `gui/<uid>` domain.
+    func domainExists(_ domain: String) -> Bool {
+        domain.hasPrefix("gui/") == false
+    }
 }
 
 @Test func setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() throws {
@@ -1207,14 +1289,14 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
     }
 }
 
-@Test func setup_guiBootstrapMiss_fallsBackToUserDomain() throws {
+@Test func setup_guiDomainMissing_bootstrapsUserDomainOnly() throws {
     try withTempHome { home, layout, _ in
         let launchctl = GuiMissUserOKLaunchctl()
         var environment = env(home: home, launchctl: launchctl)
         environment.uid = { 4242 }
         let outcome = SetupRun.setup(environment)
         #expect(outcome.exitCode == 0)
-        #expect(launchctl.bootstrapDomains == ["gui/4242", "user/4242"])
+        #expect(launchctl.bootstrapDomains == ["user/4242"])
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
     }
 }
@@ -1224,7 +1306,9 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
         let outcome = SetupRun.setup(env(home: home, launchctl: FailingLaunchctl()))
         #expect(outcome.stdout.isEmpty)
-        #expect(outcome.stderr == "rv setup failed: unable to load LaunchAgent\n")
+        #expect(outcome.stderr.hasPrefix("rv setup failed: unable to load LaunchAgent\n"))
+        #expect(outcome.stderr.contains("hooks are wired but rvd is not loaded"))
+        #expect(outcome.stderr.contains("fix: rv service restart"))
         #expect(outcome.exitCode == EX_UNAVAILABLE)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))

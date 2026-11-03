@@ -18,6 +18,10 @@ enum WorkspaceSessionError: Error, Sendable, Equatable {
     /// A child process group was still alive. The workspace was not published.
     case childTeardownFailed
     case cleanupFailed(IsolationApplyError)
+    /// Publish refused an escaping symlink and wrote nothing. The original
+    /// directory is restored; the agent's volume was not discarded but kept
+    /// as the detached disk image at `retainedImage`.
+    case publishRejected(retainedImage: String)
     case alreadyClosed
     case unknownRuntime(RuntimeSessionID)
     /// The workspace is active, and the concurrent running-runtime cap is full.
@@ -50,6 +54,8 @@ enum WorkspaceSessionFailure {
             error
         case .childTeardownFailed:
             .lifetimeBoundaryFailed
+        case .publishRejected:
+            .workspaceInodeBoundaryFailed
         case .notAcceptingRuntime, .alreadyClosed, .unknownRuntime, .runtimeLimit:
             .workspaceInodeBoundaryFailed
         case .preparationFailed, .unknownPreparedLaunch, .redemptionAlreadyAccepted:
@@ -100,21 +106,12 @@ struct WorkspaceControlFile: Equatable, Sendable {
 final class WorkspaceSessionSupervisor: Sendable {
     #if os(macOS)
     private struct State: Sendable {
-        var lifecycle: WorkspaceLifecycle
-        var closeAccepted = false
-        var closeLeader = false
+        var close = WorkspaceCloseState()
         var children: [RuntimeSessionID: WorkspaceChild] = [:]
         var publishCount = 0
-        var finishedClose: Result<Void, WorkspaceSessionError>?
         var recordError: IsolationApplyError?
         var abandoned = false
         var reviewTask: Task<Void, Never>?
-    }
-
-    private enum CloseRole {
-        case lead(publish: Bool)
-        case wait
-        case finished(Result<Void, WorkspaceSessionError>)
     }
 
     let id: WorkspaceSessionID
@@ -171,7 +168,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         self.lifecycleLog = lifecycleLog
         self.ownerLock = ownerLock
         self.agentInstances = AgentInstanceRegistry(journal: instanceJournal)
-        self.state = Mutex(State(lifecycle: .creating))
+        self.state = Mutex(State())
         // No shared CONNECT proxy: each runtime gets its own credentialed
         // instance at the spawn seam (REQ-2-1), so no open loopback proxy
         // survives as a cross-runtime authority (SEC-2-2, separation —
@@ -353,11 +350,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             reviewConfigDirectory: reviewConfigDirectory,
             denialRecorder: denialRecorder
         )
-        let activated = supervisor.state.withLock { state -> Bool in
-            guard let active = state.lifecycle.transition(.becameActive) else { return false }
-            state.lifecycle = active
-            return true
-        }
+        let activated = supervisor.state.withLock { $0.close.activate() }
         guard activated else {
             switch boundary.discardAndRestore() {
             case .success:
@@ -484,7 +477,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             // A close that never reached `.closed` leaves the volume mounted.
             // Dropping the supervisor puts the original directory back once
             // every child is gone. A successful close has already released it.
-            guard state.lifecycle != .closed, boundary.isReleased == false else {
+            guard state.close.lifecycle != .closed, boundary.isReleased == false else {
                 return false
             }
             return children.allSatisfy { $0.watchFinished && $0.isProcessGone }
@@ -503,7 +496,7 @@ final class WorkspaceSessionSupervisor: Sendable {
                 originalPath: original,
                 protectedPath: protected,
                 createdAt: createdAt,
-                phase: state.lifecycle,
+                phase: state.close.lifecycle,
                 policyWorkspace: original
             )
         }
@@ -617,9 +610,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         // close detaches the mounted volume, so the anchor below would
         // fail against the restored original. Precedence only — the
         // insert-time check below remains the atomic one.
-        let preActive = state.withLock({
-            $0.lifecycle.acceptsRuntime && $0.closeAccepted == false
-        })
+        let preActive = state.withLock({ $0.close.acceptsRuntime })
         guard preActive else {
             return .failure(.workspaceNotActive)
         }
@@ -734,7 +725,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         )
         enum InsertOutcome { case inserted, inactive, full }
         let outcome = state.withLock { state -> InsertOutcome in
-            guard state.lifecycle.acceptsRuntime, state.closeAccepted == false else {
+            guard state.close.acceptsRuntime else {
                 return .inactive
             }
             return preparedLaunches.insert(prepared, now: now) ? .inserted : .full
@@ -785,7 +776,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         now: Date = Date()
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let fresh = state.withLock { state in
-            state.lifecycle.acceptsRuntime && state.closeAccepted == false
+            state.close.acceptsRuntime
                 && prepared.binding.workspace == id
                 && preparedLaunches.isUsable(prepared.binding.preparedLaunchID, now: now)
         }
@@ -896,7 +887,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             case accepted(PreparedWorkspaceLaunch)
         }
         let outcome = state.withLock { state -> AcceptOutcome in
-            guard state.lifecycle.acceptsRuntime, state.closeAccepted == false else {
+            guard state.close.acceptsRuntime else {
                 return .refused
             }
             if let runningLimit {
@@ -1380,7 +1371,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         _ runtime: RuntimeSessionID
     ) -> Result<Void, WorkspaceSessionError> {
         let child = state.withLock { state -> WorkspaceChild? in
-            guard state.lifecycle == .active || state.lifecycle == .closing else { return nil }
+            guard state.close.acceptsCancel else { return nil }
             return state.children[runtime]
         }
         guard let child else { return .failure(.unknownRuntime(runtime)) }
@@ -1413,14 +1404,7 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// still reports the live terminal for the whole teardown. A later
     /// `close()` still leads the real teardown. Not a client operation.
     func testingBeginClose() -> Bool {
-        state.withLock { state in
-            guard let closing = state.lifecycle.transition(.beginClose) else {
-                return false
-            }
-            state.lifecycle = closing
-            state.closeAccepted = true
-            return true
-        }
+        state.withLock { $0.close.beginCloseWithoutLeader() }
     }
 
     func savedFile(_ relative: String) -> Data? {
@@ -1606,8 +1590,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
         var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
-            guard state.closeAccepted == false, state.lifecycle.acceptsRuntime else {
-                return .failure(.notAcceptingRuntime(state.lifecycle))
+            guard state.close.acceptsRuntime else {
+                return .failure(.notAcceptingRuntime(state.close.lifecycle))
             }
             if let preparedID {
                 // Re-validated at spawn commit, inside the same critical
@@ -1738,7 +1722,7 @@ final class WorkspaceSessionSupervisor: Sendable {
                     return .failure(.apply(.sessionRecordFailed))
                 }
             }
-            switch recordProcessGroup(child, spawnFault: request.spawnFault) {
+            switch recordProcessGroup(child, lease: lease, spawnFault: request.spawnFault) {
             case .failure(let error):
                 retireUnrecorded(child)
                 return .failure(error)
@@ -1800,6 +1784,7 @@ final class WorkspaceSessionSupervisor: Sendable {
 
     private func recordProcessGroup(
         _ child: WorkspaceChild,
+        lease: SecretLease,
         spawnFault: RuntimeSpawnFault?
     ) -> Result<Void, WorkspaceSessionError> {
         // Request-scoped: a global flag here would fail parallel sibling
@@ -1811,6 +1796,12 @@ final class WorkspaceSessionSupervisor: Sendable {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
         child.provenGroup = fact
+        // Before resume: the gateway honors the lease only from this runtime.
+        secretBroker?.bind(lease, processGroup: fact)
+        // `approve` rules ask through this runtime's admission channel.
+        if let approver = child.live.admission.secretRequestApprover() {
+            secretBroker?.bind(lease, approver: approver)
+        }
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .runtimeStarted,
@@ -1858,8 +1849,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
         // The staged private home holds credential copies; the watch path
         // removes it on the normal teardown, so the retire path must too.
-        // `remove` is `try? rm -rf`: idempotent if a watcher also fires.
-        child.live.resources?.remove()
+        // Removal is idempotent if a watcher also fires; a failure is
+        // reported, not swallowed.
+        child.live.resources?.removeReportingFailure()
         noteRuntimeEnded(session, reason: .spawnFailed)
     }
 
@@ -1893,53 +1885,26 @@ final class WorkspaceSessionSupervisor: Sendable {
         return .failure(.apply(child.live.terminalError ?? .seatbeltNotEstablished))
     }
 
-    /// Whether a leader's close failure is cached for replay (terminal) or
-    /// released so a later close can lead again (retryable). Only a close
-    /// that stopped with children alive stays retryable: the children may
-    /// die after the wait, so a later close must still be able to publish.
-    /// Every other failure is terminal and replays without new work.
+    /// Whether a leader's close failure is cached for replay. See
+    /// `WorkspaceCloseState.failureIsTerminal(_:)`.
     static func closeFailureIsTerminal(_ error: WorkspaceSessionError) -> Bool {
-        switch error {
-        case .childTeardownFailed:
-            return false
-        case .apply, .notAcceptingRuntime, .cleanupFailed, .alreadyClosed,
-            .unknownRuntime, .runtimeLimit, .ownedByLiveProcess,
-            .recoveryInProgress, .unresolvedWorkspace, .preparationFailed,
-            .unknownPreparedLaunch, .redemptionAlreadyAccepted:
-            return true
-        }
+        WorkspaceCloseState.failureIsTerminal(error)
     }
 
     private func finish(publish: Bool) -> Result<Void, WorkspaceSessionError> {
         if state.withLock({ $0.abandoned }) {
             return .failure(.alreadyClosed)
         }
-        let role: CloseRole = state.withLock { state in
-            if let finished = state.finishedClose {
-                return .finished(finished)
+        let role = state.withLock { state -> WorkspaceCloseState.Role in
+            let role = state.close.elect(publish: publish)
+            if case .lead = role {
+                // Prepared launches die with the active workspace. This runs
+                // inside the election lock, so a preparation that won the race
+                // is dropped here, and any later preparation sees the closed
+                // lifecycle and fails: entries can never reappear after close.
+                preparedLaunches.invalidateAll()
             }
-            if state.lifecycle == .closed {
-                return .finished(.failure(.alreadyClosed))
-            }
-            if state.closeLeader {
-                return .wait
-            }
-            if state.lifecycle == .active {
-                guard let closing = state.lifecycle.transition(.beginClose) else {
-                    return .finished(.failure(.notAcceptingRuntime(state.lifecycle)))
-                }
-                state.lifecycle = closing
-            } else if state.lifecycle != .closing {
-                return .finished(.failure(.notAcceptingRuntime(state.lifecycle)))
-            }
-            state.closeLeader = true
-            state.closeAccepted = true
-            // Prepared launches die with the active workspace. This runs
-            // inside the election lock, so a preparation that won the race
-            // is dropped here, and any later preparation sees the closed
-            // lifecycle and fails: entries can never reappear after close.
-            preparedLaunches.invalidateAll()
-            return .lead(publish: publish)
+            return role
         }
         switch role {
         case .finished(let result):
@@ -1948,15 +1913,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             return waitForLeader()
         case .lead(let publish):
             let result = performFinish(publish: publish)
-            state.withLock { state in
-                if case .failure(let error) = result, Self.closeFailureIsTerminal(error) == false {
-                    // The children may die after this wait. A later close has
-                    // to be able to publish; caching this failure would not.
-                    state.closeLeader = false
-                } else {
-                    state.finishedClose = result
-                }
-            }
+            state.withLock { $0.close.complete(result) }
             return result
         }
     }
@@ -1988,15 +1945,14 @@ final class WorkspaceSessionSupervisor: Sendable {
         let restored = publish ? boundary.publishAndRestore() : boundary.discardAndRestore()
         switch restored {
         case .failure(let error):
+            if let image = boundary.retainedRejectedImagePath {
+                return .failure(.publishRejected(retainedImage: image))
+            }
             return .failure(.cleanupFailed(error))
         case .success:
             break
         }
-        state.withLock { state in
-            if let closed = state.lifecycle.transition(.becameClosed) {
-                state.lifecycle = closed
-            }
-        }
+        state.withLock { $0.close.markClosed() }
         let logged = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .closed,
@@ -2029,17 +1985,7 @@ final class WorkspaceSessionSupervisor: Sendable {
     private func waitForLeader() -> Result<Void, WorkspaceSessionError> {
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
-            let finished = state.withLock { state -> Result<Void, WorkspaceSessionError>? in
-                if let finished = state.finishedClose {
-                    return finished
-                }
-                // The leader stopped without publishing. Concurrent waiters
-                // must observe that failure instead of waiting out the timeout.
-                if state.closeLeader == false, state.lifecycle == .closing {
-                    return .failure(.childTeardownFailed)
-                }
-                return nil
-            }
+            let finished = state.withLock { $0.close.waiterOutcome() }
             if let finished {
                 return finished
             }

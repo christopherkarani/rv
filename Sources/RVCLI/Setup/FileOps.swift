@@ -1,4 +1,5 @@
 import Foundation
+import RVMCP
 
 enum FileOpsError: Error, Equatable, Sendable {
     case symbolicLink
@@ -25,14 +26,20 @@ struct FileOps {
         try contents.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
-    func writeData(_ data: Data, to path: String) throws {
+    /// Atomically replaces a shared user config. Different bytes already
+    /// there are first kept by `ConfigBackup.preserve`. Returns that backup
+    /// path, or nil when nothing was replaced.
+    @discardableResult
+    func writeData(_ data: Data, to path: String) throws -> String? {
         try createDirectory(atPath: (path as NSString).deletingLastPathComponent)
         if isSymbolicLink(path) {
             throw FileOpsError.symbolicLink
         }
         let mode = posixMode(at: path) ?? 0o600
+        let backup = try ConfigBackup.preserve(path, before: data, fileManager: fileManager)
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         try fileManager.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+        return backup
     }
 
     func isSymbolicLink(_ path: String) -> Bool {

@@ -256,6 +256,8 @@ public struct MCPSetupResult: Sendable, Equatable {
     public var changed: [String] = []
     public var skipped: [String] = []
     public var manualSteps: [String] = []
+    /// Copies of host config files taken before rv rewrote them.
+    public var backups: [String] = []
 }
 
 public enum MCPSetupError: Error, Sendable, Equatable {
@@ -263,6 +265,7 @@ public enum MCPSetupError: Error, Sendable, Equatable {
     case hasComments(String)
     case writeFailed(String)
     case manifest(String)
+    case symbolicLink(String)
 
     public var message: String {
         switch self {
@@ -270,6 +273,8 @@ public enum MCPSetupError: Error, Sendable, Equatable {
         case .hasComments(let path): "\(MCPDisplayedText.field(path)) has comments or trailing commas rv would lose; edit it by hand"
         case .writeFailed(let path): "could not write \(MCPDisplayedText.field(path))"
         case .manifest(let reason): "setup manifest: \(reason)"
+        case .symbolicLink(let path):
+            "\(MCPDisplayedText.field(path)) is a symbolic link; rv will not replace a symlinked config, so edit its target by hand"
         }
     }
 }
@@ -287,6 +292,11 @@ public enum MCPHostSetup {
             return .object(entry)
         }
         if original["type"] != nil { entry["type"] = .string("stdio") }
+        // The gateway is always a stdio command, so a host `transport`
+        // marker becomes "stdio" (a remote value would be left without its
+        // url). Other unmodelled metadata (Muse: mode) is kept as is.
+        if original["transport"] != nil { entry["transport"] = .string("stdio") }
+        if let mode = original["mode"] { entry["mode"] = mode }
         entry["command"] = .string(rvPath)
         entry["args"] = .array(["mcp", "serve", "--server", server].map(JSONValue.string))
         return .object(entry)
@@ -345,6 +355,8 @@ public enum MCPHostSetup {
                     changed = true
                 }
                 guard changed else { continue }
+                // Replacing a link would drop it and copy its target's bytes here.
+                guard isSymbolicLink(file.path) == false else { return .failure(.symbolicLink(file.path.path)) }
                 guard (try? JSONValue.parse(data, maximumDepth: 128)) != nil else {
                     return .failure(.hasComments(file.path.path))
                 }
@@ -352,7 +364,9 @@ public enum MCPHostSetup {
                     return .failure(.writeFailed(file.path.path))
                 }
                 guard saveManifest(records, configDirectory) else { return .failure(.manifest("could not save")) }
-                guard writePreservingMode(Data(updated.prettyText.utf8), to: file.path) else {
+                guard writePreservingMode(
+                    Data(updated.prettyText.utf8), to: file.path, backupDirectory: backupDirectory(configDirectory),
+                    backups: &result.backups) else {
                     return .failure(.writeFailed(file.path.path))
                 }
             }
@@ -372,7 +386,12 @@ public enum MCPHostSetup {
             (host == nil || records[index].host == host?.rawValue) && wanted(records[index].name, filter)
         }
         var done = Set<Int>()
-        for path in Set(selected.map { records[$0].configPath }).sorted() {
+        let paths = Set(selected.map { records[$0].configPath }).sorted()
+        // Refuse up front so a later linked file cannot strand earlier restores outside the manifest.
+        if let linked = paths.first(where: { isSymbolicLink(URL(fileURLWithPath: $0)) }) {
+            return .failure(.symbolicLink(linked))
+        }
+        for path in paths {
             let url = URL(fileURLWithPath: path)
             let mine = selected.filter { records[$0].configPath == path }
             guard case .data(let data) = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
@@ -397,7 +416,9 @@ public enum MCPHostSetup {
                 changed = true
                 result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
             }
-            if changed, writePreservingMode(Data(root.prettyText.utf8), to: url) == false {
+            if changed, writePreservingMode(
+                Data(root.prettyText.utf8), to: url, backupDirectory: backupDirectory(configDirectory),
+                backups: &result.backups) == false {
                 return .failure(.writeFailed(path))
             }
         }
@@ -429,10 +450,31 @@ public enum MCPHostSetup {
         return .object(object)
     }
 
+    /// Whether the leaf itself is a link; links in parent directories are fine.
+    static func isSymbolicLink(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
+    }
+
     /// Temp file + rename in the same directory, keeping the original mode.
-    static func writePreservingMode(_ data: Data, to url: URL) -> Bool {
+    /// Refuses a symlinked leaf: the rename would replace the link itself.
+    /// The replaced bytes are kept first (`ConfigBackup`) under
+    /// `backupDirectory`, never beside the file: project-scoped configs
+    /// (`.mcp.json`, `.cursor/mcp.json`) sit in a repository, and a sibling
+    /// copy would escape their ignore patterns with the original credentials.
+    /// That copy's path is appended to `backups`.
+    static func writePreservingMode(
+        _ data: Data, to url: URL, backupDirectory: String, backups: inout [String]
+    ) -> Bool {
+        guard isSymbolicLink(url) == false else { return false }
         var info = stat()
         let mode = lstat(url.path, &info) == 0 ? info.st_mode & 0o777 : 0o600
+        let backup: String?
+        do {
+            backup = try ConfigBackup.preserve(url.path, before: data, directory: backupDirectory)
+        } catch {
+            return false
+        }
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).rv-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: mode]),
             rename(temporary.path, url.path) == 0
@@ -440,7 +482,12 @@ public enum MCPHostSetup {
             unlink(temporary.path)
             return false
         }
+        if let backup { backups.append(backup) }
         return true
+    }
+
+    static func backupDirectory(_ configDirectory: URL) -> String {
+        configDirectory.appendingPathComponent("backups").path
     }
 
     static func manifestURL(_ configDirectory: URL) -> URL {

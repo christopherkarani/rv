@@ -39,6 +39,9 @@ public protocol ServiceTransport: Sendable {
     /// Hook-consult send: daemon identity may use the sibling pin when no
     /// trust manifest is installed (see `XPCEvaluateClient.DaemonTrustMode`).
     func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data
+    /// Hello over the hook-consult session: proves the daemon the way hooks
+    /// do, so a healthy manifest-free install reads as reachable.
+    func helloHookConsult(clientSemver: String) async throws -> HelloAckView
     /// Drops the current transport connection after a failed or skewed handshake.
     func invalidate()
 }
@@ -54,6 +57,10 @@ extension ServiceTransport {
     public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
         try await send(body, timeoutMs: timeoutMs)
     }
+
+    public func helloHookConsult(clientSemver: String) async throws -> HelloAckView {
+        try await hello(clientSemver: clientSemver)
+    }
 }
 
 #if canImport(XPC)
@@ -64,11 +71,22 @@ public struct XPCServiceTransport: ServiceTransport {
     private let session: XPCEvaluateClient
     private let hookSession: XPCEvaluateClient
 
-    public init(connectTimeoutMs: Int = 200, requestTimeoutMs: Int = 500) {
+    /// `hookSiblingDaemonPath` pins the hook-consult session to a specific
+    /// `rvd` (doctor/status pass `~/.local/bin/rvd`, the binary hooks pin);
+    /// nil pins the `rvd` beside the running executable.
+    public init(
+        connectTimeoutMs: Int = 200,
+        requestTimeoutMs: Int = 500,
+        hookSiblingDaemonPath: String? = nil
+    ) {
         self.connectTimeoutMs = connectTimeoutMs
         self.requestTimeoutMs = requestTimeoutMs
         self.session = XPCEvaluateClient(serviceName: Self.serviceName)
-        self.hookSession = XPCEvaluateClient(serviceName: Self.serviceName, daemonTrust: .hookConsult)
+        self.hookSession = XPCEvaluateClient(
+            serviceName: Self.serviceName,
+            daemonTrust: .hookConsult,
+            siblingDaemonPath: hookSiblingDaemonPath
+        )
     }
 
     public func hello(clientSemver: String) async throws -> HelloAckView {
@@ -79,6 +97,18 @@ public struct XPCServiceTransport: ServiceTransport {
             return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
         } catch {
             session.invalidate()
+            throw ServiceTransportError.decodeFailed
+        }
+    }
+
+    public func helloHookConsult(clientSemver: String) async throws -> HelloAckView {
+        let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: clientSemver)
+        let body = try IPCJSON.encode(hello)
+        let reply = try await perform(body, timeoutMs: connectTimeoutMs, on: hookSession)
+        do {
+            return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
+        } catch {
+            hookSession.invalidate()
             throw ServiceTransportError.decodeFailed
         }
     }

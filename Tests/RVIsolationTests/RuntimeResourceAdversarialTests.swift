@@ -82,7 +82,7 @@ import Testing
         credentials: [.init(source: escape.path, destination: "staged.auth")]
     )
     let manifest = RuntimeResourceManifest(profile)
-    defer { manifest.remove() }
+    defer { _ = manifest.remove() }
     #expect(manifest.stage().isFailure(.credential(destination: "staged.auth")))
     #expect(FileManager.default.fileExists(atPath: manifest.privateHome) == false)
     #expect(try String(contentsOf: original, encoding: .utf8) == "synthetic-secret")

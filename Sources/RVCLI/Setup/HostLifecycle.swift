@@ -35,6 +35,7 @@ enum HostLifecycle {
             muse: .skipped,
             wrote: []
         )
+        var serviceSkippedMissingRvd: String?
 
         for step in plan.steps {
             switch step {
@@ -45,7 +46,7 @@ enum HostLifecycle {
                     throw SetupError.configDirectoryCreateFailed
                 }
             case .skipLaunchAgent:
-                break
+                serviceSkippedMissingRvd = env.rvdPath
             case .writeLaunchAgent:
                 switch env.supervisor {
                 case .launchd:
@@ -55,6 +56,7 @@ enum HostLifecycle {
                         files: files,
                         keepAlive: env.companionPresence.presence().keepAlive
                     )
+                    try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
                 case .systemdUser:
                     try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
                 }
@@ -75,7 +77,7 @@ enum HostLifecycle {
             }
         }
 
-        let report = SetupReport(
+        var report = SetupReport(
             grok: slots.grok,
             pi: slots.pi,
             openCode: slots.openCode,
@@ -88,6 +90,7 @@ enum HostLifecycle {
             muse: slots.muse,
             wrote: slots.wrote
         )
+        report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
     }

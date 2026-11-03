@@ -7,11 +7,7 @@ public let commandByteCap = 65_536
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
-    secrets: SecretPathCatalog = .dayOne,
-    safety: SafetyLevel = .normal,
-    allowPaths: SecretAllowPathSet = .empty,
-    home: HomePath? = nil,
-    pathResolution: SecretPathResolution? = nil,
+    secretPaths: SecretPathDecider = .dayOne,
     engine: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -35,14 +31,9 @@ public func evaluate<E: PatternEngine>(
     let matchingView = Normalize.matchingView(of: request.command)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return foldSecretPathIfAllow(
-            EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
-            catalog: secrets,
-            safety: safety,
-            allowPaths: allowPaths,
-            home: home,
-            resolution: pathResolution
-        )
+        return floorSelfProtection(request.command, secretPaths.fold(
+            EvaluationResult(outcome: .quickRejected, matchingView: matchingView)
+        ))
     }
 
     var attempts = 0
@@ -77,54 +68,19 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return foldSecretPathIfAllow(
-            viewed,
-            catalog: secrets,
-            safety: safety,
-            allowPaths: allowPaths,
-            home: home,
-            resolution: pathResolution
-        )
+        return floorSelfProtection(request.command, secretPaths.fold(viewed))
     }
-    return foldSecretPathIfAllow(
-        EvaluationResult(outcome: .plain, matchingView: matchingView),
-        catalog: secrets,
-        safety: safety,
-        allowPaths: allowPaths,
-        home: home,
-        resolution: pathResolution
-    )
+    return floorSelfProtection(request.command, secretPaths.fold(
+        EvaluationResult(outcome: .plain, matchingView: matchingView)
+    ))
 }
 
-private func foldSecretPathIfAllow(
-    _ result: EvaluationResult,
-    catalog: SecretPathCatalog,
-    safety: SafetyLevel,
-    allowPaths: SecretAllowPathSet,
-    home: HomePath?,
-    resolution: SecretPathResolution? = nil
-) -> EvaluationResult {
-    switch result.outcome {
-    case .quickRejected, .plain, .safeOnly, .hit:
-        break
-    case .deny, .indeterminate:
-        return result
-    }
-    guard !catalog.rules.isEmpty else { return result }
-    guard let matched = SecretPathGuard.firstHit(
-        in: result.matchingView,
-        catalog: catalog,
-        includeMetadata: safety == .strict,
-        resolution: resolution,
-        exempts: { path, rule in allowPaths.exempts(path, rule: rule, home: home) }
-    ) else {
-        return result
-    }
+/// An allowed `rv` invocation that weakens rv is indeterminate: the owner
+/// runs rv administration in Terminal, never the agent it guards.
+private func floorSelfProtection(_ command: ShellCommand, _ result: EvaluationResult) -> EvaluationResult {
+    guard result.decision == .allow, SelfProtectionGuard.weakensPolicy(command) else { return result }
     return EvaluationResult(
-        outcome: .deny(
-            Deny(ruleID: matched.ruleID, reason: matched.reason),
-            matched: matched
-        ),
+        outcome: .indeterminate(.selfProtection),
         matchingView: result.matchingView
     )
 }
