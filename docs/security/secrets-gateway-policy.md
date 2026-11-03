@@ -104,6 +104,45 @@ Enforcement:
   after one decode (`%252e`). A path such as GitLab's
   `projects/group%2Fproject` therefore needs no rules on its binding.
 
+## Runtime binding
+
+The gateway listens on `127.0.0.1`, and the cage may reach any loopback port
+(dev servers bind ephemeral ports, so the Seatbelt profile cannot name
+them). Loopback is shared by every process on the host. A placeholder is
+therefore honored only on a connection from the runtime it was leased to.
+
+- rv records the runtime leader (its pid, which is also its process group,
+  and its start time) after spawn and before the runtime runs.
+- A runtime's processes are: its leader; every live descendant of the
+  leader; and, when the leader leads its own session (terminal runtimes),
+  that session. The group is not membership: the cage denies the `setsid`
+  and `setpgid` syscalls, but `posix_spawn` with `POSIX_SPAWN_SETPGROUP`
+  lets any process in the same session join a group, so a sibling runtime
+  could otherwise join this one. The same flag, and `POSIX_SPAWN_SETSID`
+  (Node's `detached: true`), moves a child out of the group, and the
+  descendant walk keeps those children in.
+- On each request, rv takes the connection's port pair and looks, with
+  libproc, for one of those processes holding the client socket: the leader
+  first, then the descendants (at most 4096), then the session. Each match
+  is re-checked after the scan so a reused pid does not count. Every
+  placeholder in the request is checked, so one runtime cannot spend
+  another's placeholder beside its own.
+- Not a member: `403`, refusal `runtimeMismatch`, and a `secret.misuse`
+  finding. Another runtime, a host shell, or any other local process
+  holding a copied placeholder lands here.
+- Cannot tell: `403`, refusal `runtimeUnverified`, no misuse finding. This
+  covers a libproc failure, a group whose leader is gone or was reused, a
+  descendant walk past its bound, and a placeholder whose runtime has no
+  recorded group. The gateway fails closed.
+
+Limits: the check binds to the runtime, not to a binary inside it; any of
+its processes may spend the placeholder. A process whose parent exited
+(reparented to launchd) is no longer a descendant, even if it stayed in the
+leader's group; unless it is in a terminal runtime's session, its requests are refused as
+`runtimeMismatch`. Linux has no check (no
+libproc), so every gateway request there is `runtimeUnverified`. Contained
+launches on Linux are already refused before exec.
+
 ## Response scrubbing
 
 The real value never goes back to the agent. Before any response header or
@@ -151,7 +190,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
 
 - Other `detail` fields: `refusal` (code), `method`, `path` (placeholders
@@ -164,9 +203,12 @@ them carries the value, the placeholder, or the query string.
 A `blocked` request also writes a `secret.misuse` event with
 `detail.severity: high`: the refusal code, method, and redacted path. The
 codes are `foreignPlaceholder`, `surfaceNotAllowed`, `repeatedPlaceholder`,
-`outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, and
-`echoMethod`. A client using its placeholder as configured never triggers
-one, so it usually means a prompt-injected agent is probing. In
+`outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, `echoMethod`,
+and `runtimeMismatch`. The event's `runtime` is the runtime the presented
+placeholder was leased to (absent for a percent-encoded placeholder, which
+is never looked up). A client using its placeholder as configured never
+triggers one, so it usually means a prompt-injected agent is probing, or a
+placeholder was copied out of its runtime. In
 `--format ocsf` it is a Detection Finding (2004), severity High,
 `is_alert: true`. `rv audit --kind secret` shows both kinds.
 

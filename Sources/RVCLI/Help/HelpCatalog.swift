@@ -488,6 +488,10 @@ enum HelpCatalog {
                     description: "Agents hold a per-launch placeholder; rv swaps in the value toward the upstream only"
                 ),
                 HelpRow(
+                    name: "runtime",
+                    description: "A placeholder works only from processes of the runtime it was issued to; elsewhere 403"
+                ),
+                HelpRow(
                     name: "rejected",
                     description: "An upstream 401 reaches the agent as 502 with no challenge; update the value with set"
                 ),
@@ -520,7 +524,7 @@ enum HelpCatalog {
                 HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
                 HelpRow(
                     name: "audit",
-                    description: "rv audit --kind secret.use shows each use; secret.misuse flags policy refusals (high severity)"
+                    description: "rv audit --kind secret.use: forward and outcome records per request; secret.misuse flags policy and runtime refusals (high)"
                 ),
             ]),
         ],

@@ -50,6 +50,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
         configDirectory: URL,
         resolver: SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
+        peers: GatewayPeerCheck = .runtime,
         workspace: String?,
         managed: (@Sendable () -> ManagedPolicyState)? = nil
     ) {
@@ -58,7 +59,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
         self.workspace = workspace
         self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
         let directory = configDirectory
-        gateway = SecretGateway(transport: transport) { record in
+        gateway = SecretGateway(transport: transport, peers: peers) { record in
             let landed = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)
             if let finding = Self.misuseEvent(record, workspace: workspace) {
                 _ = AuditLog.append(finding, configDirectory: directory)
@@ -163,6 +164,13 @@ final class SecretLaunchBroker: @unchecked Sendable {
         lock.lock()
         byRuntime[runtime, default: []].append(contentsOf: lease.placeholders)
         lock.unlock()
+    }
+
+    /// Called once the runtime is spawned and before it runs: from then on
+    /// only that runtime's processes may spend the lease.
+    func bind(_ lease: SecretLease, processGroup: ProcessGroupFact) {
+        guard lease.placeholders.isEmpty == false else { return }
+        gateway.bind(lease.placeholders, processGroup: processGroup)
     }
 
     func revoke(_ lease: SecretLease) {

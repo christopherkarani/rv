@@ -119,13 +119,13 @@ enum ProcessGroupRecovery {
         }
     }
 
-    private enum Lookup {
+    enum Lookup {
         case found(proc_bsdinfo)
         case absent
         case unavailable
     }
 
-    private static func lookup(_ pid: pid_t) -> Lookup {
+    static func lookup(_ pid: pid_t) -> Lookup {
         var info = proc_bsdinfo()
         errno = 0
         let size = Int32(MemoryLayout<proc_bsdinfo>.stride)

@@ -111,9 +111,11 @@ struct SecretLaunchBrokerTests {
         let upstream = RecordingUpstream(status: 200)
         let broker = SecretLaunchBroker(
             configDirectory: fixture.directory, resolver: fakeResolver,
-            transport: upstream.transport, workspace: nil)
+            transport: upstream.transport, peers: .fixed(.member), workspace: nil)
         defer { broker.stop() }
         let lease = try broker.lease(names: ["MAPS_KEY"], agent: nil).get()
+        broker.bind(lease, runtime: "R1")
+        broker.bind(lease, processGroup: testProcessGroup)
         let placeholder = try #require(lease.placeholders.first).text
         let port = try #require(broker.gatewayPort)
 
@@ -229,6 +231,8 @@ struct SecretLaunchBrokerTests {
 extension SecretLaunchBrokerTests {
     private func leasedPlaceholder(_ broker: SecretLaunchBroker) throws -> (port: Int, text: String, token: String) {
         let lease = try broker.lease(names: ["OPENAI_API_KEY"], agent: "codex").get()
+        broker.bind(lease, runtime: "R1")
+        broker.bind(lease, processGroup: testProcessGroup)
         let text = try #require(lease.environment.first { $0.name == "OPENAI_API_KEY" }?.value)
         return (try #require(broker.gatewayPort), text, String(text.suffix(SecretPlaceholder.tokenLength)))
     }
@@ -238,7 +242,7 @@ extension SecretLaunchBrokerTests {
         defer { fixture.tearDown() }
         let broker = SecretLaunchBroker(
             configDirectory: fixture.directory, resolver: fakeResolver,
-            transport: RecordingUpstream().transport, workspace: "W1")
+            transport: RecordingUpstream().transport, peers: .fixed(.member), workspace: "W1")
         defer { broker.stop() }
         let placeholder = try leasedPlaceholder(broker)
         // The binding allows only the header surface.
@@ -258,6 +262,8 @@ extension SecretLaunchBrokerTests {
         let refusals = misuse.compactMap { ($0["detail"] as? [String: String])?["refusal"] }
         #expect(refusals == ["surfaceNotAllowed", "encodedPlaceholder"])
         #expect(misuse.allSatisfy { ($0["detail"] as? [String: String])?["severity"] == "high" })
+        // The encoded placeholder is never looked up, so only the first names a runtime.
+        #expect(misuse.map { $0["runtime"] as? String } == ["R1", nil])
         let denied = fixture.auditLines.filter {
             $0["kind"] as? String == "secret.use" && ($0["detail"] as? [String: String])?["event"] == "request"
         }
@@ -288,7 +294,8 @@ extension SecretLaunchBrokerTests {
         defer { fixture.tearDown() }
         let upstream = RecordingUpstream(status: 200, chunks: [Data("ok".utf8)])
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, transport: upstream.transport, workspace: nil)
+            configDirectory: fixture.directory, resolver: fakeResolver, transport: upstream.transport,
+            peers: .fixed(.member), workspace: nil)
         defer { broker.stop() }
         let placeholder = try leasedPlaceholder(broker)
         let ledger = fixture.directory.appendingPathComponent("audit.jsonl")
@@ -299,6 +306,25 @@ extension SecretLaunchBrokerTests {
         #expect(response.status == 503)
         #expect(response.body.contains("audit log"))
         #expect(upstream.requests.isEmpty)
+    }
+
+    @Test func aPlaceholderSpentFromOutsideItsRuntimeIsAMisuseFindingForThatRuntime() throws {
+        let fixture = try SecretsFixture(SecretsFixture.standard)
+        defer { fixture.tearDown() }
+        let upstream = RecordingUpstream(status: 200)
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver, transport: upstream.transport,
+            peers: .fixed(.outsider), workspace: "W1")
+        defer { broker.stop() }
+        let placeholder = try leasedPlaceholder(broker)
+        let response = try gatewayExchange(port: placeholder.port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 403)
+        #expect(upstream.requests.isEmpty)
+        let misuse = try #require(fixture.auditLines.first { $0["kind"] as? String == "secret.misuse" })
+        #expect(misuse["runtime"] as? String == "R1")
+        #expect((misuse["detail"] as? [String: String])?["refusal"] == "runtimeMismatch")
+        #expect(fixture.auditText.contains(placeholder.token) == false)
     }
 
     @Test func activityEventsCarrySurfacesStatusAndDuration() {
