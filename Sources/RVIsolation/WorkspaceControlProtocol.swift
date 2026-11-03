@@ -20,10 +20,11 @@ public enum WorkspaceControlLimits {
     public static let maxRuntimes = 64
     public static let maxProjectBytes = 1_024
     public static let maxErrorBytes = 64
-    /// Bounded operator-legible denial detail. Carries only names from
-    /// the operator's own policy file (link names, credential
-    /// destinations), never host paths or internal error text.
-    public static let maxDetailBytes = 128
+    /// Bounded operator-legible denial detail. Carries names from the
+    /// operator's own policy file (link names, credential destinations) and,
+    /// for `publishRejected`, the retained image path the operator needs to
+    /// recover their work. Never internal error text.
+    public static let maxDetailBytes = 256
     public static let maxHookBytes = 32
     public static let maxOperationBytes = 64
     public static let maxFeatures = 32
@@ -53,6 +54,9 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case recoveryRequired
     case childTeardownFailed
     case runtimeLimit
+    /// Close refused an escaping symlink and published nothing. The
+    /// `detail` is the path of the retained disk image.
+    case publishRejected
     case terminalUnavailable
     case terminalBusy
     case terminalLimit
@@ -812,6 +816,8 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .runtimeNotFound
     case .childTeardownFailed:
         .childTeardownFailed
+    case .publishRejected:
+        .publishRejected
     case .runtimeLimit:
         .runtimeLimit
     case .ownedByLiveProcess, .recoveryInProgress, .unresolvedWorkspace:
@@ -821,6 +827,12 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
     case .apply, .cleanupFailed, .preparationFailed:
         .invalidRequest
     }
+}
+
+/// The operator-facing detail that travels with `workspaceControlCode`.
+func workspaceControlDetail(_ error: WorkspaceSessionError) -> String? {
+    if case .publishRejected(let image) = error { return image }
+    return nil
 }
 
 // MARK: - Typed control RPC (T6)

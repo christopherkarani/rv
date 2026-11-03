@@ -5,6 +5,8 @@
 # proof). Fixture processes do not use the login HOME.
 # Compatible with macOS /bin/bash 3.2.
 set -euo pipefail
+# Proofs pin the default fallback posture (ask; Grok has no ask, so deny).
+unset RV_HOOK_WHEN_DOWN
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${RV_RELEASE_STAGE:-$ROOT/.build/release-stage}"
@@ -50,13 +52,14 @@ clang_c_hook() {
     "$ROOT/Sources/rv-c/json_escape.c" \
     "$ROOT/Sources/rv-c/json_reply.c" \
     "$ROOT/Sources/rv-c/daemon_trust.c" \
+    "$ROOT/Sources/rv-c/hook_fallback.c" \
     "$ROOT/Sources/rv-c/rv.c"
   chmod 755 "$dest"
 }
 
 linux_c_hook_proof() {
   # Verified-daemon contract: with no daemon socket every hook call denies
-  # with the boundary reason and never execs rv-cli; with a fake daemon on
+  # with the unreachable reason and never execs rv-cli; with a fake daemon on
   # the socket the hook verifies the peer before sending (SO_PEERCRED +
   # sibling rvd) and denies without sending a single byte.
   local out home bin st
@@ -80,8 +83,8 @@ linux_c_hook_proof() {
   if ! grep -q '"decision":"deny"' "$out/deny.out"; then
     fail "no-daemon deny missing decision JSON"
   fi
-  if ! grep -q 'operation-bound owner authorization' "$out/deny.out"; then
-    fail "no-daemon deny missing boundary reason"
+  if ! grep -q 'RV daemon is not reachable' "$out/deny.out"; then
+    fail "no-daemon deny missing unreachable reason"
   fi
   if grep -q 'git reset --hard' "$out/deny.out"; then
     fail "no-daemon deny echoes the command"
@@ -445,8 +448,9 @@ PY
 
 failclosed_deny_ok() {
   # Post-8B no-replay contract: transport failure, malformed input, and
-  # untrusted daemon answers deny with the boundary reason and never
-  # exec rv-cli. Callers assert the quiet side separately.
+  # untrusted daemon answers deny with a classified fallback reason
+  # (hook_fallback.c) and never exec rv-cli. Callers assert the quiet
+  # side separately.
   python3 - "$1" <<'PY'
 import json
 import sys
@@ -459,7 +463,7 @@ obj = json.loads(text)
 if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
 reason = obj.get("reason") or ""
-if "operation-bound owner authorization" not in reason:
+if not (reason.startswith("RV daemon ") or reason.startswith("RV could not read this hook request")):
     raise SystemExit("reason=%r" % (reason,))
 if "git reset --hard" in reason:
     raise SystemExit("reason echoes command")
@@ -580,7 +584,7 @@ if [[ -f "$LIVE_PLIST" ]]; then
 fi
 
 # Shipped posture with no daemon reachable: staged rv denies with the
-# boundary reason, no evaluation, no command echo.
+# unreachable reason, no evaluation, no command echo.
 bootout_label
 wait_unloaded
 set +e
@@ -592,8 +596,8 @@ set -e
 [[ "$st" -eq 0 ]] || fail "staged rv deny must exit 0, got $st"
 grep -q '"decision":"deny"' "$PROOF_ROOT/staged-deny.out" \
   || fail "staged rv deny missing decision JSON"
-grep -q 'operation-bound owner authorization' "$PROOF_ROOT/staged-deny.out" \
-  || fail "staged rv deny missing boundary reason"
+grep -q 'RV daemon is not reachable' "$PROOF_ROOT/staged-deny.out" \
+  || fail "staged rv deny missing unreachable reason"
 if grep -q 'git reset --hard' "$PROOF_ROOT/staged-deny.out"; then
   fail "staged rv deny echoes the command"
 fi

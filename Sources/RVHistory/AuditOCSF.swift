@@ -19,7 +19,7 @@ public enum AuditOCSF {
         let mapped = mappedClass(event)
         let (statusID, status) = self.status(event.decision)
         let (dispositionID, disposition) = self.disposition(event.decision)
-        let (severityID, severity) = self.severity(event.decision)
+        let (severityID, severity) = event.kind == .secretMisuse ? (4, "High") : self.severity(event.decision)
         var object: [String: Any] = [
             "class_uid": mapped.uid,
             "class_name": mapped.name,
@@ -65,6 +65,13 @@ public enum AuditOCSF {
             object["src_endpoint"] = ["hostname": hostName]
         case 1007:
             object["process"] = ["name": event.detail["tool"] ?? "command"]
+        case 2004:
+            object["is_alert"] = true
+            object["finding_info"] = [
+                "uid": "rv.secret.misuse",
+                "title": "Secret placeholder used against its policy",
+                "types": [event.detail["refusal"] ?? "unknown"],
+            ] as [String: Any]
         default:
             object["app"] = ["name": "rv", "version": ProductVersion.semver]
         }
@@ -101,6 +108,9 @@ public enum AuditOCSF {
         let kind = event.kind
         if kind == .mcpCall || kind == .mcpApproval || kind == .secretUse {
             return Class(uid: 6003, name: "API Activity", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other")
+        }
+        if kind == .secretMisuse {
+            return Class(uid: 2004, name: "Detection Finding", category: 2, categoryName: "Findings", activity: 1, activityName: "Create")
         }
         if kind == .egressDenied {
             return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 5, activityName: "Refuse")

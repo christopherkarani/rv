@@ -296,6 +296,105 @@ struct MCPHostSetupTests {
         #expect(try MCPHostSetup.undo(host: .claudeCode, servers: nil, configDirectory: box.config).get().changed.isEmpty)
     }
 
+    @Test func setupMusePreservesTransportAndMode() throws {
+        // Muse entries carry host metadata rv does not model; the
+        // gateway rewrite must change the command and nothing else, and
+        // unrelated top-level settings keys must survive.
+        let box = Sandbox()
+        let original = """
+            {"schema_version": 1, "model": "x", "mcpServers": {"wax": {"command": "wax-mcp", "args": ["--store-path", "/x"], "env": {}, "transport": "stdio", "mode": "optional"}}}
+            """
+        let file = try box.write(".config/muse/settings.json", original)
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.muse), configuration: configuration, servers: ["wax"], rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 1)
+
+        let rewritten = try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64)
+        #expect(rewritten["schema_version"] == .int(1))
+        #expect(rewritten["model"] == .string("x"))
+        #expect(rewritten["mcpServers"]?["wax"] == .object([
+            "command": .string("/opt/rv"),
+            "args": .array(["mcp", "serve", "--server", "wax"].map(JSONValue.string)),
+            "transport": .string("stdio"),
+            "mode": .string("optional"),
+        ]))
+
+        let undone = try MCPHostSetup.undo(host: .muse, servers: nil, configDirectory: box.config).get()
+        #expect(undone.changed.count == 1)
+        #expect(try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64) == JSONValue.parse(Data(original.utf8), maximumDepth: 64))
+    }
+
+    @Test func setupMuseRemoteEntryBecomesStdioGateway() throws {
+        // The gateway entry is always a stdio command; copying a remote
+        // `transport` onto it would leave an HTTP transport with no url.
+        let box = Sandbox()
+        let original = """
+            {"mcpServers": {"docs": {"transport": "streamableHttp", "url": "https://docs.example/mcp", "headers": {"X-Key": "k"}, "mode": "required"}}}
+            """
+        let file = try box.write(".config/muse/settings.json", original)
+        let configuration = MCPConfiguration(servers: [MCPServerDefinition(name: "docs", command: "docs-bin")])
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.muse), configuration: configuration, servers: ["docs"], rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 1)
+
+        let rewritten = try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64)
+        #expect(rewritten["mcpServers"]?["docs"] == .object([
+            "command": .string("/opt/rv"),
+            "args": .array(["mcp", "serve", "--server", "docs"].map(JSONValue.string)),
+            "transport": .string("stdio"),
+            "mode": .string("required"),
+        ]))
+
+        let undone = try MCPHostSetup.undo(host: .muse, servers: nil, configDirectory: box.config).get()
+        #expect(undone.changed.count == 1)
+        #expect(try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64) == JSONValue.parse(Data(original.utf8), maximumDepth: 64))
+    }
+
+    @Test func setupAndUndoBackUpEachReplacedVersionAndKeepLayout() throws {
+        let box = Sandbox()
+        let original = #"{"zeta": 1.0, "big": 12345678901234567890, "mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let file = try box.write(".cursor/mcp.json", original)
+        let backupRoot = box.config.appendingPathComponent("backups")
+        let backups = {
+            try FileManager.default.contentsOfDirectory(atPath: backupRoot.path)
+                .filter { $0.contains(".rv-backup-") }
+                .map { backupRoot.appendingPathComponent($0).path }
+        }
+        // Project-scoped configs live in a repository: no copy may land beside them.
+        let beside = {
+            try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
+                .filter { $0.contains(".rv-backup-") }
+        }
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        let setupBackup = try #require(result.backups.first)
+        #expect(result.backups.count == 1)
+        #expect(try backups() == [setupBackup])
+        #expect(try beside().isEmpty)
+        let mode = try FileManager.default.attributesOfItem(atPath: setupBackup)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o600)
+        #expect(FileManager.default.contents(atPath: setupBackup) == Data(original.utf8))
+        let routed = try String(contentsOf: file, encoding: .utf8)
+        #expect(routed.hasPrefix("{\n  \"zeta\": 1.0,\n  \"big\": 12345678901234567890,\n  \"mcpServers\""))
+
+        let undone = try MCPHostSetup.undo(host: .cursor, servers: nil, configDirectory: box.config).get()
+        let undoBackup = try #require(undone.backups.first)
+        #expect(undoBackup != setupBackup)
+        #expect(Set(try backups()) == [setupBackup, undoBackup])
+        #expect(FileManager.default.contents(atPath: setupBackup) == Data(original.utf8))
+        #expect(FileManager.default.contents(atPath: undoBackup) == Data(routed.utf8))
+        #expect(try beside().isEmpty)
+    }
+
     @Test func undoLeavesEntriesTheUserChanged() throws {
         let box = Sandbox()
         let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
@@ -320,6 +419,107 @@ struct MCPHostSetupTests {
             configDirectory: box.config)
         #expect(outcome == .failure(.hasComments(file.path)))
         #expect(try String(contentsOf: file, encoding: .utf8) == text)
+    }
+
+    private func isSymbolicLink(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    @Test func setupRefusesASymlinkedHostConfig() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let target = try box.write("dotfiles/mcp.json", text)
+        chmod(target.path, 0o600)
+        let link = box.home.appendingPathComponent(".cursor/mcp.json")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(link.path)))
+        #expect(isSymbolicLink(link))
+        #expect(try String(contentsOf: target, encoding: .utf8) == text)
+        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        #expect(MCPHostSetup.loadManifest(box.config).isEmpty)
+        guard case .failure(let error) = outcome else { return }
+        #expect(error.message.contains("symbolic link"))
+    }
+
+    @Test func undoRefusesASymlinkedHostConfig() throws {
+        let box = Sandbox()
+        let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
+        _ = try MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        let rewritten = try Data(contentsOf: file)
+        let target = box.home.appendingPathComponent("dotfiles/mcp.json")
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try rewritten.write(to: target)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.undo(host: .cursor, servers: nil, configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(file.path)))
+        #expect(isSymbolicLink(file))
+        #expect(try Data(contentsOf: target) == rewritten)
+        #expect(MCPHostSetup.loadManifest(box.config).map(\.name) == ["wax"])
+    }
+
+    @Test func undoRefusesBeforeRestoringAnyFileWhenOneIsASymlink() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let claude = try box.write(".claude.json", text)
+        let cursor = try box.write(".cursor/mcp.json", text)
+        _ = try MCPHostSetup.setup(
+            files: box.files(.claudeCode) + box.files(.cursor), configuration: configuration, servers: nil,
+            rvPath: "/opt/rv", configDirectory: box.config
+        ).get()
+        let rewritten = try Data(contentsOf: claude)
+        let target = try box.write("dotfiles/mcp.json", String(decoding: try Data(contentsOf: cursor), as: UTF8.self))
+        try FileManager.default.removeItem(at: cursor)
+        try FileManager.default.createSymbolicLink(at: cursor, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.undo(host: nil, servers: nil, configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(cursor.path)))
+        #expect(try Data(contentsOf: claude) == rewritten)
+        #expect(MCPHostSetup.loadManifest(box.config).map(\.host).sorted() == ["claude-code", "cursor"])
+    }
+
+    @Test func writerRefusesToReplaceASymbolicLink() throws {
+        let box = Sandbox()
+        let target = try box.write("dotfiles/mcp.json", "{}")
+        let link = box.home.appendingPathComponent("link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        var backups: [String] = []
+        #expect(MCPHostSetup.writePreservingMode(
+            Data("[]".utf8), to: link,
+            backupDirectory: MCPHostSetup.backupDirectory(box.config), backups: &backups
+        ) == false)
+        #expect(backups.isEmpty)
+        #expect(isSymbolicLink(link))
+        #expect(try String(contentsOf: target, encoding: .utf8) == "{}")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: box.home.path)
+        #expect(leftovers.sorted() == ["dotfiles", "link.json"])
+    }
+
+    @Test func setupWritesThroughASymlinkedParentDirectory() throws {
+        let box = Sandbox()
+        let real = try box.write("dotfiles/cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
+        let linkedDirectory = box.home.appendingPathComponent(".cursor")
+        try FileManager.default.createSymbolicLink(at: linkedDirectory, withDestinationURL: real.deletingLastPathComponent())
+
+        let result = try MCPHostSetup.setup(
+            files: box.files(.cursor), configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 1)
+        #expect(isSymbolicLink(linkedDirectory))
+        #expect(isSymbolicLink(real) == false)
+        #expect(try String(contentsOf: real, encoding: .utf8).contains("/opt/rv"))
     }
 
     @Test func rewritesOpencodeShapeAndPrintsCodexSteps() throws {

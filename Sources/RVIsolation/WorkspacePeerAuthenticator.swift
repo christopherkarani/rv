@@ -12,6 +12,10 @@ public enum TrustedRVComponentRole: String, Sendable, Codable, CaseIterable, Has
     /// UI code — never that the human authorized anything. Least privilege:
     /// review ceremonies only; no execution, policy, approval, or secret access.
     case operatorUI
+    /// The MCP approvals custodian (`rv-mcp-custodian` in RVApprovals.app).
+    /// It alone may hold the approvals keychain item; the role proves code
+    /// identity to its clients, never human authorization.
+    case mcpCustodian
 }
 
 public struct PeerCodeIdentity: Sendable, Equatable {
@@ -87,9 +91,22 @@ import Security
 /// No environment variable or user-owned file can add a component role.
 /// An administrator installs this manifest and its artifacts under protected paths.
 public struct ProtectedPeerTrustConfiguration: Sendable {
-    struct Entry: Codable, Sendable {
+    struct Entry: Sendable {
         var role: TrustedRVComponentRole
         var requirement: String
+        var requiredIdentifier: String?
+        var requiredTeamIdentifier: String?
+        var developmentCDHash: String?
+        var developmentExecutablePath: String?
+    }
+
+    /// Wire shape before role resolution. `role` stays a string so an entry
+    /// written by a newer RV (a role this build does not know) is skipped
+    /// instead of invalidating the whole manifest. Known roles are then
+    /// validated exactly as before. Mirrors `Sources/rv-c/daemon_trust.c`.
+    private struct WireEntry: Decodable {
+        var role: String
+        var requirement: String?
         var requiredIdentifier: String?
         var requiredTeamIdentifier: String?
         var developmentCDHash: String?
@@ -130,6 +147,9 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
 
     private init(entries: [Entry]) { self.entries = entries }
 
+    /// Roles this configuration can grant, in manifest order.
+    var configuredRoles: [TrustedRVComponentRole] { entries.map(\.role) }
+
     public static func load(from url: URL) throws -> Self {
         guard protectedPath(url.path, file: true) else {
             throw PeerAuthenticationError.invalidTrustConfiguration
@@ -153,8 +173,31 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
             bytes.append(contentsOf: buffer.prefix(n))
             guard bytes.count <= 65_536 else { throw PeerAuthenticationError.invalidTrustConfiguration }
         }
-        guard let entries = try? JSONDecoder().decode([Entry].self, from: bytes),
-              Set(entries.map(\.role)).count == entries.count else {
+        return try parse(bytes)
+    }
+
+    /// Manifest bytes → validated configuration. File ownership, mode and
+    /// ACL checks belong to `load(from:)`; this is the content contract.
+    static func parse(_ bytes: Data) throws -> Self {
+        guard let wire = try? JSONDecoder().decode([WireEntry].self, from: bytes) else {
+            throw PeerAuthenticationError.invalidTrustConfiguration
+        }
+        var entries: [Entry] = []
+        for item in wire {
+            guard let role = TrustedRVComponentRole(rawValue: item.role) else { continue }
+            guard let requirement = item.requirement else {
+                throw PeerAuthenticationError.invalidTrustConfiguration
+            }
+            entries.append(Entry(
+                role: role,
+                requirement: requirement,
+                requiredIdentifier: item.requiredIdentifier,
+                requiredTeamIdentifier: item.requiredTeamIdentifier,
+                developmentCDHash: item.developmentCDHash,
+                developmentExecutablePath: item.developmentExecutablePath
+            ))
+        }
+        guard Set(entries.map(\.role)).count == entries.count else {
             throw PeerAuthenticationError.invalidTrustConfiguration
         }
         for entry in entries {
@@ -328,12 +371,19 @@ public enum MacOSPeerCodeVerifier {
     /// the live peer must be the exact on-disk sibling bytes (same canonical
     /// executable path, same CDHash). Any lookup failure is a mismatch.
     public static func matchesSibling(peer: PeerCodeIdentity, siblingPath: String) -> Bool {
+        matches(peer: peer, path: siblingPath)
+    }
+
+    /// Path-pin check: the live peer must be the exact on-disk bytes at
+    /// `path` (same canonical executable path, same CDHash). Used for the
+    /// sibling `rvd` and for the bundled approvals custodian alike.
+    public static func matches(peer: PeerCodeIdentity, path: String) -> Bool {
         guard !peer.cdHash.isEmpty,
               let peerPath = posixRealpath(peer.executablePath),
-              let expectedPath = posixRealpath(siblingPath),
+              let expectedPath = posixRealpath(path),
               peerPath == expectedPath,
-              let sibling = try? staticIdentity(ofPath: siblingPath) else { return false }
-        return peer.cdHash == sibling.cdHash
+              let onDisk = try? staticIdentity(ofPath: path) else { return false }
+        return peer.cdHash == onDisk.cdHash
     }
 
     public static func capture(
