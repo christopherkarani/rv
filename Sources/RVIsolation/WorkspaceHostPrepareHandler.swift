@@ -31,7 +31,7 @@ enum WorkspaceHostPrepareHandler {
         }
         let selected: Result<ResolvedAgentLaunch, AgentLaunchSelectionError>
         switch request.kind {
-        case "named":
+        case .named:
             guard request.executable == nil, request.expectedDigest == nil,
                 let raw = request.definitionID,
                 let id = AgentDefinitionID(validating: raw)
@@ -41,7 +41,7 @@ enum WorkspaceHostPrepareHandler {
             selected = AgentLaunchSelection.resolveNamed(
                 id: id, definitions: definitions, project: project
             )
-        case "custom":
+        case .custom:
             guard request.definitionID == nil, let executable = request.executable,
                 let digest = request.expectedDigest
             else {
@@ -50,8 +50,6 @@ enum WorkspaceHostPrepareHandler {
             selected = AgentLaunchSelection.resolveCustom(
                 executable: executable, expectedContentDigestSHA256: digest
             )
-        default:
-            return refuse("invalidRequest")
         }
         let selection: ResolvedAgentLaunch
         switch selected {
@@ -124,7 +122,7 @@ enum WorkspaceHostPrepareHandler {
             generation: description.binding.generation.rawValue,
             preparedID: description.binding.preparedLaunchID.rawValue,
             requestID: description.requestID,
-            target: summary.kind.rawValue,
+            target: summary.kind,
             definitionID: summary.definitionID,
             revisionDigest: summary.definitionRevisionDigest,
             executable: summary.executable,

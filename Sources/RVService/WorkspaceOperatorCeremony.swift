@@ -360,8 +360,7 @@ actor WorkspaceOperatorCeremonyService {
             current.workspace.rawValue == description.workspaceSessionID,
             current.host.rawValue == description.hostID,
             current.generation.rawValue == description.generation,
-            current.connectionID == hostConnectionID,
-            let kind = Self.operationKind(forTarget: description.target)
+            current.connectionID == hostConnectionID
         else {
             // Stale registration or channel: burn the issued permit without
             // consuming it. Best-effort; the operation may already be
@@ -372,6 +371,7 @@ actor WorkspaceOperatorCeremonyService {
                 description: description, outcome: "stale host registration")
             return
         }
+        let kind = Self.operationKind(forTarget: description.target)
         guard let definition = Self.definitionBinding(
             kind: kind,
             definitionID: description.definitionID,
@@ -415,7 +415,7 @@ actor WorkspaceOperatorCeremonyService {
             generation: current.generation.rawValue,
             preparedID: description.preparedID,
             intentDigestHex: description.intentDigestHex,
-            kind: kind == .launchAgent ? "launchAgent" : "launchCustom",
+            kind: kind.wireName,
             definitionID: description.definitionID,
             revisionDigest: description.revisionDigest)
         emit(.redemptionRequested, operationID: id.rawValue,
@@ -469,13 +469,11 @@ actor WorkspaceOperatorCeremonyService {
         }
     }
 
-    /// Maps the host's closed target vocabulary to the Step 3 operation
-    /// kind. Nil rejects; anything outside the closed pair fails closed.
-    static func operationKind(forTarget target: String) -> WorkspaceOperationKind? {
+    /// Maps the host's closed target vocabulary to the Step 3 operation kind.
+    static func operationKind(forTarget target: WorkspaceLaunchKind) -> WorkspaceOperationKind {
         switch target {
-        case "named": .launchAgent
-        case "custom": .launchCustom
-        default: nil
+        case .named: .launchAgent
+        case .custom: .launchCustom
         }
     }
 
@@ -622,7 +620,7 @@ actor WorkspaceOperatorCeremonyService {
             throw WorkspaceOperatorCeremonyError.descriptionMismatch
         }
         switch description.target {
-        case "named":
+        case .named:
             guard let rawID = description.definitionID,
                 AgentDefinitionID(validating: rawID) != nil,
                 let revisionHex = description.revisionDigest,
@@ -641,7 +639,7 @@ actor WorkspaceOperatorCeremonyService {
                 definition: WorkspaceOperationDefinitionBinding(
                     definitionID: AgentDefinitionID(rawValue: rawID),
                     revision: AgentDefinitionRevision(digestHex: revisionHex)))
-        case "custom":
+        case .custom:
             guard description.definitionID == nil,
                 description.revisionDigest == nil,
                 let expected = description.expectedDigest,
@@ -685,8 +683,6 @@ actor WorkspaceOperatorCeremonyService {
                 intentDigestHex: description.intentDigestHex,
                 kind: .launchCustom,
                 definition: nil)
-        default:
-            throw WorkspaceOperatorCeremonyError.descriptionMismatch
         }
     }
 
@@ -733,7 +729,7 @@ actor WorkspaceOperatorCeremonyService {
             }
         }
         switch params.kind {
-        case "named":
+        case .named:
             guard let definitionID = params.definitionID,
                 !definitionID.isEmpty,
                 definitionID.count <= WorkspaceControlLimits.maxProjectBytes,
@@ -743,7 +739,7 @@ actor WorkspaceOperatorCeremonyService {
                 return false
             }
             return true
-        case "custom":
+        case .custom:
             guard params.definitionID == nil,
                 let executable = params.executable,
                 !executable.isEmpty,
@@ -754,8 +750,6 @@ actor WorkspaceOperatorCeremonyService {
                 return false
             }
             return true
-        default:
-            return false
         }
     }
 
@@ -836,7 +830,7 @@ actor WorkspaceOperatorCeremonyService {
         let description = retained.description
         return UIReviewItemDTO(
             operationID: id.rawValue,
-            kind: description.target == "named" ? "launchAgent" : "launchCustom",
+            kind: Self.operationKind(forTarget: description.target).wireName,
             definitionID: description.definitionID,
             definitionRevisionDigest: description.revisionDigest,
             executable: description.executable,
@@ -857,7 +851,7 @@ actor WorkspaceOperatorCeremonyService {
             challengeID: challenge.id.rawValue,
             operationID: challenge.operationID.rawValue,
             intentDigestHex: challenge.intentDigest.sha256Hex,
-            kind: challenge.kind == .launchAgent ? "launchAgent" : "launchCustom",
+            kind: challenge.kind.wireName,
             uiConnectionID: challenge.uiConnection.rawValue,
             issuedWall: challenge.issuedWall,
             advisoryLifetimeSeconds: WorkspaceOperatorAuthorizationLimits.challengeLifetime)
@@ -880,7 +874,7 @@ actor WorkspaceOperatorCeremonyService {
             generation: description?.generation,
             preparedID: description?.preparedID,
             intentDigestHex: description?.intentDigestHex,
-            operationKind: description?.target,
+            operationKind: description?.target.rawValue,
             runtimeSessionID: runtime,
             agentInstanceID: instance,
             wall: clock(),

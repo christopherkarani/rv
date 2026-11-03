@@ -159,14 +159,10 @@ public final class WorkspaceHostBridgeClient: Sendable {
     ) async throws -> HostActionApprovalCreatedDTO {
         let (authority, connection, reference) = try approvalReference(for: subject)
         let agent = try approvalAgent(for: subject)
-        let reasonRaw: String = switch reason {
-        case .mandatoryHuman: "mandatoryHuman"
-        case .reviewAsk: "reviewAsk"
-        }
         let dto = HostActionApprovalCreateDTO(
             reference: reference,
             action: action,
-            reason: reasonRaw,
+            reason: reason,
             policyContext: policyContext,
             definitionID: agent.instance.definitionID,
             definitionRevision: agent.instance.definitionRevision)

@@ -289,8 +289,7 @@ public enum HostPrepareWire {
 /// description's own bindings are authoritative, never these fields.
 public struct HostPrepareRequestDTO: Sendable, Equatable, Codable {
     public let requestID: UUID
-    /// "named" or "custom".
-    public let kind: String
+    public let kind: WorkspaceLaunchKind
     public let definitionID: String?
     public let executable: String?
     public let expectedDigest: String?
@@ -298,7 +297,7 @@ public struct HostPrepareRequestDTO: Sendable, Equatable, Codable {
     public let io: UIIODTO
 
     public init(
-        requestID: UUID, kind: String, definitionID: String?, executable: String?,
+        requestID: UUID, kind: WorkspaceLaunchKind, definitionID: String?, executable: String?,
         expectedDigest: String?, arguments: [String], io: UIIODTO
     ) {
         self.requestID = requestID
@@ -319,8 +318,7 @@ public struct HostPreparedDescriptionDTO: Sendable, Equatable, Codable {
     public let generation: UUID
     public let preparedID: UUID
     public let requestID: UUID?
-    /// "named" or "custom".
-    public let target: String
+    public let target: WorkspaceLaunchKind
     public let definitionID: String?
     public let revisionDigest: String?
     public let executable: String
@@ -336,7 +334,7 @@ public struct HostPreparedDescriptionDTO: Sendable, Equatable, Codable {
 
     public init(
         workspaceSessionID: UUID, hostID: UUID, generation: UUID, preparedID: UUID,
-        requestID: UUID?, target: String, definitionID: String?, revisionDigest: String?,
+        requestID: UUID?, target: WorkspaceLaunchKind, definitionID: String?, revisionDigest: String?,
         executable: String, expectedDigest: String?, workingDirectory: String,
         arguments: [String], io: UIIODTO, environmentPolicy: String, intentDigestHex: String,
         environmentDigestHex: String, preparedAt: Date, expiresAt: Date
