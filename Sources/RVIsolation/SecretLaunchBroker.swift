@@ -132,13 +132,14 @@ final class SecretLaunchBroker: @unchecked Sendable {
             gateway.revoke(placeholders)
             return .failure(error)
         }
-        for definition in definitions {
+        let prefetched = resolver.prefetch(definitions.map(\.source))
+        for (index, definition) in definitions.enumerated() {
             let name = definition.name
             // Read before the value, so a write in between shows up as a change.
             // Only gateway entries can rotate.
             let marker = definition.delivery == .environment ? nil : resolver.version(definition.source)
             let value: SecretValue
-            switch resolver.resolve(definition.source) {
+            switch prefetched[index] ?? resolver.resolve(definition.source) {
             case .failure(let error): return fail(.resolution(secret: name, error))
             case .success(let resolved): value = resolved
             }
