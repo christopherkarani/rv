@@ -100,12 +100,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
     }
 
     static func production(workspace: String?) -> SecretLaunchBroker? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"],
-            home.hasPrefix("/"), home.contains("\0") == false
+        guard let home = HomeDirectory.processValidatedHome(),
+            let directory = HomeDirectory.configRoot(for: home)
         else { return nil }
-        let directory = URL(fileURLWithPath: home, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("rv", isDirectory: true)
         return SecretLaunchBroker(
             configDirectory: directory, resolver: .live(home: home), workspace: workspace)
     }
