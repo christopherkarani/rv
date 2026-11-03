@@ -175,7 +175,13 @@ struct RuntimeAdmissionEventWireTests {
     }
 
     @Test func responseAuthorizationCoversEveryAnswer() {
+        let receipt = HTTPExecutionReceipt(status: 200, destination: "example.com", headers: [], body: Data())
+        let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "no")
         #expect(RuntimeAdmissionResponse.executed(exitStatus: 0).authorization == .allowed)
+        #expect(RuntimeAdmissionResponse.http(receipt).authorization == .allowed)
+        #expect(RuntimeAdmissionResponse.denied(deny).authorization == .denied)
+        #expect(RuntimeAdmissionResponse.pending(.reviewAsk).authorization == .pending)
+        #expect(RuntimeAdmissionResponse.rejected(.replay).authorization == .rejected)
         #expect(RuntimeAdmissionResponse.executorFailed(.cancelled).authorization == .executorFailed)
         #expect(RuntimeAdmissionResponse.httpFailed(.timedOut).authorization == .executorFailed)
         #expect(RuntimeAdmissionResponse.evaluationFailed.authorization == .evaluationFailed)

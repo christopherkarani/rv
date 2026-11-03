@@ -146,7 +146,7 @@ struct ParkHarness {
     let session: RuntimeAdmissionSession
 
     init(backend: FakeAskBackend? = nil, parkPollInterval: TimeInterval = 0.005,
-        parkTimeout: TimeInterval = 5
+        parkTimeout: TimeInterval = 5, responseWrite: Int32 = -1
     ) throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-park-\(UUID().uuidString)", isDirectory: true)
@@ -213,7 +213,7 @@ struct ParkHarness {
                 workspacePath: workspace.rawValue
             ),
             requestRead: -1,
-            responseWrite: -1,
+            responseWrite: responseWrite,
             parkPollInterval: parkPollInterval,
             parkTimeout: parkTimeout
         )
@@ -389,6 +389,35 @@ struct ActionApprovalParkTests {
             Issue.record("parked action must be the shell command")
         }
         #expect(harness.session.parkedApprovalCountForTesting == 1)
+    }
+
+    @Test func parkedAskPutsExactlyOneFrameOnTheWire() async throws {
+        // The superseded pending projection must never reach the runtime:
+        // the parked decision carries no wire response, so the only frame
+        // is the waiter's answer after the human decides.
+        var pipes = RuntimeAdmissionPipes()
+        let opened = pipes.open()
+        try #require(opened)
+        defer { pipes.closeRemaining() }
+        // Non-blocking read end: an empty pipe reads as empty.
+        _ = fcntl(pipes.responseRead, F_SETFL, fcntl(pipes.responseRead, F_GETFL) | O_NONBLOCK)
+        let harness = try ParkHarness(responseWrite: pipes.responseWrite)
+        pipes.responseWrite = -1
+        defer { harness.cleanup() }
+        let request = try RuntimeAdmissionCodec.encodeRequest(harness.frame("echo hello")).get()
+        let decisions = harness.session.accept(request)
+        #expect(decisions.count == 1)
+        #expect(decisions.first?.responseDeferred == true)
+        #expect(harness.session.parkedApprovalCountForTesting == 1)
+        #expect(admissionReadAvailable(pipes.responseRead).isEmpty)
+
+        harness.backend.authorizeAll()
+        await waitFor("execution") { harness.effect.runs == 1 }
+        await waitFor("completion") { harness.session.queuedCompletionCountForTesting == 1 }
+        harness.session.drainCompletions()
+        let wire = String(decoding: admissionReadAvailable(pipes.responseRead), as: UTF8.self)
+        #expect(wire.components(separatedBy: "\"status\":").count - 1 == 1)
+        #expect(wire.contains("\"status\":\"executed\""))
     }
 
     @Test func allowOnceExecutesExactlyOnce() async throws {
