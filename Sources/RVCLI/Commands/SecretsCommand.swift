@@ -15,6 +15,7 @@ struct SecretsEnvironment: Sendable {
     var resolver: SecretResolver
     var keychain: SecretKeychainWriter
     var managed: ManagedPolicyState = .none
+    var now: @Sendable () -> Date = { Date() }
 
     static func live(home: HomeDirectory) -> SecretsEnvironment {
         SecretsEnvironment(
@@ -273,32 +274,36 @@ enum SecretsRun {
             selected = picked
         }
         let fingerprinter = SecretFingerprinter.load(configDirectory: environment.configDirectory)
+        // Check answers "would a launch get this value?": the same release a cage launch runs.
+        let release = SecretRelease(resolver: environment.resolver, managed: environment.managed, now: environment.now)
         return .success(selected.map { secret in
-            if let reason = environment.managed.invalidReason
-                ?? SecretOrganizationRules.violation(secret, policy: environment.managed.policy)
-            {
-                return CheckRow(
-                    name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
-                    error: "organization policy: \(reason)")
-            }
-            switch environment.resolver.resolve(secret.source) {
-            case .success(let value) where secret.credentialParts(value) == nil:
-                return CheckRow(
-                    name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
-                    error: secret.unusableCredentials)
-            case .success(let value):
+            switch release.release([secret], to: .cage) {
+            case .success(let released):
                 // The gateway audits the access token itself, not the JSON an oauth source resolves to.
-                var shown = value
-                if case .oauth = secret.source, let token = secret.credentialParts(value)?.first { shown = token }
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: true,
-                    fingerprint: fingerprinter?.fingerprint(of: shown), error: nil)
-            case .failure(let error):
+                    fingerprint: released.first.flatMap { fingerprinter?.fingerprint(of: $0.value) }, error: nil)
+            case .failure(let refusal):
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
-                    error: error.message)
+                    error: checkError(refusal, secret))
             }
         })
+    }
+
+    static func checkError(_ refusal: SecretRefusal, _ secret: SecretDefinition) -> String {
+        switch refusal {
+        case .policyInvalid(let reason): return "organization policy: \(reason)"
+        case .refused(_, let reason):
+            switch reason {
+            case .organizationPolicy(let rule): return "organization policy: \(rule.message(secret: secret.name))"
+            case .expired(let date): return "expired at \(SecretExpiry.text(date))"
+            case .resolution(let error): return error.message
+            case .unusableToken, .unusableCredentials: return secret.unusableCredentials
+            case .gatewayOnly, .unusableEnvironmentValue, .notText, .lineBreak:
+                return "cannot be delivered as an environment variable (not UTF-8 text or over 8 KiB)"
+            }
+        }
     }
 
     static func checkText(_ rows: [CheckRow]) -> String {
