@@ -46,8 +46,8 @@ public struct SecretUseRecord: Sendable, Equatable {
     /// What the upstream answered, when it answered.
     public var upstreamStatus: Int?
     public var activity: SecretGatewayActivity
-    /// `GatewayRefusal` case name for blocked and refused requests.
-    public var refusal: String?
+    /// Why a blocked or refused request was refused; `refusal.code` is the audit spelling.
+    public var refusal: GatewayRefusal?
     public var reason: String?
     /// Request surfaces the value was placed on.
     public var surfaces: [String]
@@ -649,7 +649,7 @@ public final class SecretGateway: @unchecked Sendable {
         record.activity = sink.upstreamStatus == nil ? .error : .brokered
         if let refusal = sink.refusal {
             record.activity = .refused
-            record.refusal = refusal.code
+            record.refusal = refusal
         }
         record.reason = sink.failure
         record.responseBytes = sink.bytesWritten
@@ -726,7 +726,7 @@ public final class SecretGateway: @unchecked Sendable {
             secret: secret, runtime: runtime, upstreamHost: nil, method: method, path: path, status: refusal.status,
             upstreamStatus: nil,
             activity: refusal.isMisuse && holdsLivePlaceholder(for: secret) ? .blocked : .refused,
-            refusal: refusal.code, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
+            refusal: refusal, reason: refusal.reason, surfaces: [], fingerprint: nil, responseBytes: 0,
             durationMilliseconds: Self.milliseconds(since: started), stage: .complete
         ))
     }

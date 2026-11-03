@@ -401,7 +401,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             detail: compact([
                 "event": record.stage == .forward ? "forward" : "request",
                 "activity": record.activity.rawValue,
-                "refusal": record.refusal,
+                "refusal": record.refusal?.code,
                 "method": record.method,
                 "path": record.path,
                 "surfaces": record.surfaces.isEmpty ? nil : record.surfaces.joined(separator: ","),
@@ -429,7 +429,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             workspace: workspace,
             runtime: record.runtime,
             source: "secret-gateway",
-            detail: ["refusal": refusal, "method": record.method, "path": record.path, "severity": "high"]
+            detail: ["refusal": refusal.code, "method": record.method, "path": record.path, "severity": "high"]
         )
     }
 

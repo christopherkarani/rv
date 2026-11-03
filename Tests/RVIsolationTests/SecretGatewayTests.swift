@@ -378,7 +378,7 @@ struct SecretGatewayTests {
         let records = audit.items.withLock { $0 }
         #expect(records.map(\.stage) == [.forward, .complete])
         #expect(records.last?.activity == .refused)
-        #expect(records.last?.refusal == "auditUnavailable")
+        #expect(records.last?.refusal?.code == "auditUnavailable")
         #expect(records.last?.status == 503)
     }
 
@@ -420,7 +420,7 @@ struct SecretGatewayTests {
         _ = try gatewayExchange(port: port, "GET /s/AWS_SECRET/rvph%5F\(fake) HTTP/1.1\r\n\r\n")
         _ = try gatewayExchange(port: port, "TRACE /s/OPENAI_API_KEY/x HTTP/1.1\r\n\r\n")
         let records = audit.items.withLock { $0 }
-        #expect(records.map(\.refusal) == ["echoMethod", "encodedPlaceholder", "echoMethod"])
+        #expect(records.map(\.refusal?.code) == ["echoMethod", "encodedPlaceholder", "echoMethod"])
         #expect(records.map(\.activity) == [.refused, .refused, .blocked])
     }
 
@@ -433,7 +433,7 @@ struct SecretGatewayTests {
         _ = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/m HTTP/1.1\r\n\r\n")
         let records = audit.items.withLock { $0 }
         #expect(records.map(\.activity) == [.blocked, .refused])
-        #expect(records.map(\.refusal) == ["surfaceNotAllowed", "noPlaceholder"])
+        #expect(records.map(\.refusal?.code) == ["surfaceNotAllowed", "noPlaceholder"])
         #expect(records.allSatisfy { $0.allowed == false && $0.stage == .complete })
 
         let failing = AuditRecords()
