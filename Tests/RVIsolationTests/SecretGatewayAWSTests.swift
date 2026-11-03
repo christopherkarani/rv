@@ -73,6 +73,7 @@ struct SecretGatewayAWSTests {
         let broker: SecretLaunchBroker
         let upstream: RecordingUpstream
         let clock: TestClock
+        let lease: SecretLease
         let environment: [String: String]
         let port: Int
 
@@ -97,7 +98,7 @@ struct SecretGatewayAWSTests {
         let lease = try broker.lease(names: ["AWS_DEV"], agent: nil).get()
         broker.bind(lease, processGroup: testProcessGroup)
         return Harness(
-            fixture: fixture, broker: broker, upstream: upstream, clock: clock,
+            fixture: fixture, broker: broker, upstream: upstream, clock: clock, lease: lease,
             environment: Dictionary(lease.environment.map { ($0.name, $0.value) }) { $1 },
             port: try #require(broker.gatewayPort))
     }
@@ -282,6 +283,32 @@ struct SecretGatewayAWSTests {
         #expect(other.status == 403)
         #expect(h.upstream.requests.count == 1)
         #expect(refusals(h.fixture) == ["outsideAllowRules", "outsideAllowRules"])
+    }
+
+    @Test func approveRulesHoldTheSignedRequestUntilAHumanSaysYes() throws {
+        let json = Self.secretsJSON().replacingOccurrences(
+            of: #""endpointEnv":"AWS_ENDPOINT_URL_S3""#,
+            with: #""endpointEnv":"AWS_ENDPOINT_URL_S3","approve":[{"methods":["DELETE"],"path":"/**"}]"#)
+        let h = try harness(json)
+        defer { h.tearDown() }
+        let park = try ParkHarness()
+        defer { park.cleanup() }
+        h.broker.bind(h.lease, approver: try #require(park.session.secretRequestApprover()))
+        park.backend.authorizeAll()
+        #expect(try sigV4(h).status == 200)
+        #expect(park.backend.snapshot.creates.isEmpty)
+        #expect(try sigV4(h, method: "DELETE", target: "/s/AWS_DEV/my-bucket/k").status == 200)
+        let asked = try #require(park.backend.snapshot.creates.first?.action)
+        guard case .secretRequest(let request) = asked else {
+            Issue.record("filed \(asked), not a secret request")
+            return
+        }
+        #expect(request.secret == "AWS_DEV")
+        #expect(request.method == "DELETE")
+        #expect(request.path == "/my-bucket/k")
+        #expect(park.backend.snapshot.consumeCalls.count == 1)
+        #expect(h.upstream.requests.count == 2)
+        #expect(try verifies(try #require(h.upstream.requests.last), at: Self.start))
     }
 
     @Test func aConnectionFromOutsideTheRuntimeIsRefused() throws {

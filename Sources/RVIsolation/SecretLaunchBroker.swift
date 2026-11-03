@@ -71,7 +71,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
         peers: GatewayPeerCheck = .runtime,
         workspace: String?,
         managed: (@Sendable () -> ManagedPolicyState)? = nil,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        approvalTiming: GatewayApprovalTiming = .standard
     ) {
         self.configDirectory = configDirectory
         self.resolver = resolver
@@ -89,7 +90,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 }
                 return landed
             },
-            now: now)
+            now: now,
+            approvalTiming: approvalTiming)
     }
 
     static func production(workspace: String?) -> SecretLaunchBroker? {
@@ -180,7 +182,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                     secret: name, prefix: binding.placeholderPrefix, value: value,
                     upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
                     surfaces: binding.surfaces, rules: binding.rules, expires: definition.expires,
-                    refresh: refreshPolicy(definition, marker: marker)))
+                    refresh: refreshPolicy(definition, marker: marker), approvals: binding.approvalRules))
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
@@ -196,7 +198,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
                     runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
-                    refresh: refreshPolicy(definition, marker: marker), signing: binding))
+                    refresh: refreshPolicy(definition, marker: marker), signing: binding,
+                    approvals: binding.approvalRules))
                 placeholders.append(placeholder)
                 environment.append(("AWS_ACCESS_KEY_ID", placeholder.text))
                 environment.append(("AWS_SECRET_ACCESS_KEY", Self.throwawaySecret()))
@@ -230,6 +233,13 @@ final class SecretLaunchBroker: @unchecked Sendable {
     func bind(_ lease: SecretLease, processGroup: ProcessGroupFact) {
         guard lease.placeholders.isEmpty == false else { return }
         gateway.bind(lease.placeholders, processGroup: processGroup)
+    }
+
+    /// The runtime's admission channel files `approve` requests for a human.
+    /// Without one, a request an `approve` rule matches is refused.
+    func bind(_ lease: SecretLease, approver: SecretRequestApprover) {
+        guard lease.placeholders.isEmpty == false else { return }
+        gateway.bind(lease.placeholders, approver: approver)
     }
 
     func revoke(_ lease: SecretLease) {

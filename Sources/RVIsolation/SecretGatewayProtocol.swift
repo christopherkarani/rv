@@ -234,12 +234,22 @@ enum GatewayRefusal: Error, Equatable {
     /// A signed-chunk or event-stream payload: each chunk signature chains to
     /// the agent's seed signature, which the gateway replaces.
     case awsSignedStreaming
+    /// An `approve` rule holds this request and no human has said yes yet.
+    case approvalPending
+    /// The human denied it, the approval lapsed, or the grant could not be consumed.
+    case approvalDenied
+    /// No approval service can be asked: no admission channel, no live agent
+    /// principal, or the service declined to file it.
+    case approvalUnavailable
     /// An unsigned-payload mode on a service other than S3, whose signature
     /// the gateway cannot produce for it.
     case awsUnsignedPayload
     /// The upstream's answer carried a `SecretAccessKey`: credentials minted
     /// by the call, which would otherwise reach the agent unscrubbed.
     case awsCredentialsInResponse
+
+    /// Seconds a client should wait before retrying, sent as `Retry-After`.
+    var retryAfter: Int? { self == .approvalPending ? 5 : nil }
 
     /// The case name, a stable code for audit records.
     var code: String { "\(self)" }
@@ -253,7 +263,7 @@ enum GatewayRefusal: Error, Equatable {
             true
         case .malformed, .unknownRoute, .noPlaceholder, .unknownPlaceholder, .tooLarge, .unsafeValue,
             .auditUnavailable, .runtimeUnverified, .expired, .refreshFailed, .awsSignedStreaming, .awsUnsignedPayload,
-            .awsCredentialsInResponse:
+            .awsCredentialsInResponse, .approvalPending, .approvalDenied, .approvalUnavailable:
             false
         }
     }
@@ -268,7 +278,8 @@ enum GatewayRefusal: Error, Equatable {
         case .unknownRoute: 404
         case .noPlaceholder: 401
         case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder, .outsideAllowRules,
-            .runtimeMismatch, .runtimeUnverified, .expired, .awsKeyMismatch:
+            .runtimeMismatch, .runtimeUnverified, .expired, .awsKeyMismatch, .approvalPending, .approvalDenied,
+            .approvalUnavailable:
             403
         case .tooLarge: 413
         case .echoMethod: 405
@@ -298,6 +309,11 @@ enum GatewayRefusal: Error, Equatable {
         case .awsKeyMismatch: "the request is signed with an access key other than this secret's AWS_ACCESS_KEY_ID"
         case .awsSignedStreaming:
             "signed streaming payloads cannot be re-signed; send UNSIGNED-PAYLOAD or STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+        case .approvalPending:
+            "this request needs a human's approval in rv; once approved, retry the identical request"
+        case .approvalDenied: "the approval for this request was denied, expired, or already used"
+        case .approvalUnavailable:
+            "this request needs a human's approval, and no approver is available for this runtime"
         case .awsUnsignedPayload:
             "unsigned payload modes are accepted for S3 only; send the body with a payload hash for this service"
         case .awsCredentialsInResponse:

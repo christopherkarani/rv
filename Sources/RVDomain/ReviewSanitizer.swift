@@ -11,6 +11,9 @@ public enum ReviewSanitizer: Sendable {
             return .file(sanitize(file))
         case .http(let http):
             return .http(http.redactingQuery())
+        case .secretRequest:
+            // Built without the query or any placeholder.
+            return action
         }
     }
 

@@ -308,6 +308,74 @@ makes the gateway sign instead:
 | `awsCredentialsInResponse` | 502 | no | the upstream's answer contains a `SecretAccessKey` field (a non-S3 binding). The upstream produced it, not the agent, so it is not misuse; the response is not forwarded |
 | `awsSignedStreaming` | 400 | no | `X-Amz-Content-Sha256` is a signed-chunk or event-stream mode (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, `...-TRAILER`, `...-EVENTS`, ECDSA). Each chunk signature chains to the seed signature the gateway replaces. Configure the SDK for unsigned payloads with trailing checksums |
 
+## Request approvals
+
+`approve` on `gateway` or `awsSigV4` delivery takes rules in the same
+shape as `allow`. A request they match needs a human's yes, every time:
+
+```json
+"approve": [{"methods": ["POST", "DELETE"], "path": "/repos/**"}]
+```
+
+- `allow` is checked first; `approve` only holds requests `allow` lets
+  through. An ambiguous path is held, not passed. `approve` matching is
+  also forgiving where `allow` is exact: a request is held when it matches
+  a rule as sent, or after the method is upper-cased, the path is
+  lower-cased, and a trailing slash is dropped from path and rule. So
+  `DELETE /repos/*/*` also holds `DELETE /repos/o/r/` and `/Repos/O/R`.
+  `allow` keeps exact matching.
+- The gateway files the request with rv's action-approval service as a
+  `secretRequest` action (mandatory human, nothing downgrades it). The
+  approver sees the secret's name, method, host, the redacted path without
+  its query, the body's size and SHA-256, and the operation-selecting
+  headers the request carries (`x-amz-target`, `x-amz-copy-source`,
+  `stripe-account`, `content-type`; names and values, placeholders
+  redacted, long values cut at 200 bytes). Never the secret value, the
+  placeholder, the `Authorization` value, or the body.
+- The action binds the full request target (query included), the body, and
+  the request headers by SHA-256. A retry with any other query, body or
+  bound header is a different action and a new approval. Headers are
+  hashed before substitution with names lowercased and sorted and
+  placeholders redacted, so the hash does not depend on the runtime.
+  These volatile headers, which an SDK changes between retries of one
+  call, are left out: `authorization`, `date`, `x-amz-date`,
+  `x-amz-content-sha256` (the body is bound separately),
+  `x-amz-security-token`, `amz-sdk-invocation-id`, `amz-sdk-request`,
+  `user-agent`, `x-amz-user-agent`, `content-length`, `traceparent`,
+  `tracestate`, `x-amzn-trace-id`, `x-request-id`, `idempotency-key`, and
+  hop-by-hop headers (`connection`, `keep-alive`, `te`, `trailer`,
+  `transfer-encoding`, `upgrade`, `expect`, `accept-encoding`, `host`,
+  `proxy-*`). Every other header is bound, so a client whose other headers
+  vary between calls is asked again, never waved through.
+- An approval is filed for one placeholder, so one runtime. Another
+  runtime's identical request files its own approval and never waits on or
+  spends this one.
+- The request is held up to 20 seconds. Then it is refused with
+  `approvalPending` and `Retry-After: 5`. Once the human approves, the next
+  identical request consumes the approval and is forwarded. Each approval
+  forwards one request.
+- At most 16 requests are held at once (the gateway has 64 connection
+  slots); past that, a request checks once and is refused if still pending.
+- After the human approves, the gateway reads the secret again before it
+  forwards: a placeholder revoked or expired during the hold is refused
+  (`unknownPlaceholder`, `expired`), and a value refreshed during the hold
+  is substituted fresh.
+- The approval is consumed before the AWS signature and before the
+  `event: forward` audit record. If either then fails (`auditUnavailable`,
+  a signing refusal), the request is not forwarded and the approval is
+  spent; the next request asks again. The forward record has to stay last
+  before the send, so this order is deliberate.
+- Approvals need the runtime's admission channel and a live agent
+  principal: a runtime launched with an agent definition. Otherwise, a
+  request `approve` matches is refused with `approvalUnavailable`.
+- Revoking the lease or ending the runtime cancels its open approvals.
+
+| refusal | status | misuse | when |
+|---------|--------|--------|------|
+| `approvalPending` | 403 | no | filed and not yet approved; retry the identical request (`Retry-After: 5`) |
+| `approvalDenied` | 403 | no | the human denied it, it expired or was cancelled, or the approval could not be consumed. The next request files a new one |
+| `approvalUnavailable` | 403 | no | no approval service for this runtime, no live agent principal, or the service declined to file it (for example, 8 approvals already open for the agent) |
+
 ## Audit
 
 Every gateway request writes `secret.use` events to `audit.jsonl`. None of
@@ -323,7 +391,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse` | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse`, `approvalPending`, `approvalDenied`, `approvalUnavailable` | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
   | `refreshed` | `event: refresh`; a refresh swapped in a new value (new `fingerprint`) | info |
   | `refreshFailed` | `event: refresh`; a refresh could not read the provider (`reason`) | failed |

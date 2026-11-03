@@ -35,7 +35,7 @@ public func compileExecutable(
     switch allowed.action {
     case .file:
         return .failure(.fileActionUnsupported)
-    case .http:
+    case .http, .secretRequest:
         return .failure(.httpActionUnsupported)
     case .shell(let shell):
         switch compileSimpleArgv(shell.supportingCommand) {

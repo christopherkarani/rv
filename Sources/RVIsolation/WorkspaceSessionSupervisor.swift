@@ -1778,6 +1778,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         child.provenGroup = fact
         // Before resume: the gateway honors the lease only from this runtime.
         secretBroker?.bind(lease, processGroup: fact)
+        // `approve` rules ask through this runtime's admission channel.
+        if let approver = child.live.admission.secretRequestApprover() {
+            secretBroker?.bind(lease, approver: approver)
+        }
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .runtimeStarted,

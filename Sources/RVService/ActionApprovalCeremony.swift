@@ -758,6 +758,11 @@ actor ActionApprovalCeremonyService {
             let target = http.destination.auditedResource
             let address = http.destination.address.map { "\($0)" } ?? "unresolved"
             return (kind, target, "\(http.method.rawValue) \(http.destination.host):\(http.destination.port)\(http.destination.path) → \(address)")
+        case .secretRequest(let request):
+            return (
+                "secret request: \(request.secret)", "\(request.host)\(request.path)",
+                "\(request.method), \(request.bodyBytes)-byte body sha256 \(request.bodySHA256)"
+                    + (request.headerSummary.map { ", headers \($0)" } ?? ""))
         }
     }
 
