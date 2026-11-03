@@ -201,6 +201,10 @@ public struct SeatbeltProfile: Sendable, Equatable {
     /// 27): matches 127.0.0.1, ::1, and the host's own interface addresses
     /// (which route via lo0). It does NOT match the rest of 127/8
     /// (127.0.0.2 is EPERM). Use 127.0.0.1 or ::1 literally.
+    ///
+    /// Any loopback port stays reachable on purpose (ephemeral dev-server
+    /// ports cannot be named before spawn), so loopback services that hold
+    /// authority check their peer themselves, as the secret gateway does.
     func allowingLoopbackEgress() -> SeatbeltProfile {
         let addition = """
 

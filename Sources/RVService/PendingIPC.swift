@@ -102,6 +102,8 @@ enum PendingListProjection {
                 base = "shell"
             case .http:
                 base = "https get"
+            case .secretRequest:
+                base = "secret request"
             }
         } else {
             base = labels.joined(separator: ", ")

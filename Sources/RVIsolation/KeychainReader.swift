@@ -22,6 +22,31 @@ struct KeychainReader: Sendable {
     static let denied = KeychainReader(read: { _, _ in nil }, allowsSecrets: false)
 }
 
+extension KeychainReader {
+    /// The item's creation and modification dates, read without its data,
+    /// so it never prompts. Changes when `rv secrets set` rewrites the item.
+    static func modificationMarker(_ service: String, _ account: String) -> String? {
+        #if os(macOS)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+            let attributes = result as? [String: Any]
+        else { return nil }
+        let created = (attributes[kSecAttrCreationDate as String] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+        let modified = (attributes[kSecAttrModificationDate as String] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+        return "\(created)/\(modified)"
+        #else
+        return nil
+        #endif
+    }
+}
+
 #if os(macOS)
 private func readKeychainItem(_ service: String, _ account: String) -> Data? {
     let query: [String: Any] = [

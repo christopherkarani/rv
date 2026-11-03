@@ -467,7 +467,11 @@ Profiles in `runtime-resources.json` gain `"secrets": ["STRIPE_SECRET_KEY"]`.
 - [x] Audit each request as `secret.use` into the unified `audit.jsonl`
       (`AuditLog.append`, so `rv audit tail --kind secret.use` shows it):
       secret, runtime, upstream host, method, path (no query), status, bytes,
-      fingerprint. Leases also record a `staged` event with delivery + provider.
+      fingerprint. A forwarded request writes a pair: `forward` before it
+      leaves (fail closed if it cannot land) and `request` with the outcome.
+      Policy and runtime-binding refusals also write a high-severity
+      `secret.misuse` naming the placeholder's runtime. Leases also record a
+      `staged` event with delivery + provider.
 - [x] Wire into launch: `SecretLaunchBroker` (per workspace supervisor)
       leases profile `secrets` in `WorkspaceSessionSupervisor.spawn` before
       the state lock, binds the lease to the runtime ID inside the lock,
