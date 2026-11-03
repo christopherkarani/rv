@@ -432,7 +432,9 @@ public final class SecretGateway: @unchecked Sendable {
             method: head.method,
             scrub: [(live.value.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))] + echoes
         )
-        transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: rewritten.headers, body: body), sink)
+        // Identity encoding so the scrubber sees the bytes the agent will get.
+        let headers = rewritten.headers + [GatewayHeaders.identityEncoding]
+        transport.send(SecretUpstreamRequest(method: head.method, url: url, headers: headers, body: body), sink)
         audit(SecretUseRecord(
             secret: live.secret,
             runtime: live.runtime,
@@ -486,8 +488,9 @@ public final class SecretGateway: @unchecked Sendable {
 final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     private let fd: Int32
     private let method: String
-    private let pairs: [(needle: [UInt8], replacement: [UInt8])]
     private let lock = NSLock()
+    /// Unused copy for header values; `scrubber` carries the body's held-back bytes.
+    private let headerScrubber: SecretScrubber
     private var scrubber: SecretScrubber
     private var wroteHead = false
     private var framed = true
@@ -499,8 +502,8 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
     init(fd: Int32, method: String, scrub pairs: [(needle: [UInt8], replacement: [UInt8])]) {
         self.fd = fd
         self.method = method
-        self.pairs = pairs
         scrubber = SecretScrubber(pairs)
+        headerScrubber = scrubber
     }
 
     func head(status: Int, headers: [(name: String, value: String)]) {
@@ -519,11 +522,22 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
                 status: 502, reason: "the brokered credential was rejected upstream; update it with `rv secrets set`"))
             return
         }
-        self.status = status
         framed = method != "HEAD" && status != 204 && status != 304 && (status < 100 || status >= 200)
+        // Fail closed: a body rv cannot decode is a body it cannot scrub.
+        if framed, GatewayHeaders.isIdentityEncoded(headers) == false {
+            self.status = 502
+            failure = "upstream response is compressed and cannot be scanned for the secret"
+            closed = true
+            GatewaySocket.writeAll(fd, GatewaySocket.plainResponse(
+                status: 502, reason: "upstream response is compressed and cannot be scanned for the secret"))
+            return
+        }
+        self.status = status
         var text = "HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status).capitalized)\r\n"
         for header in headers where GatewayHeaders.dropOnResponse.contains(header.name.lowercased()) == false {
-            let value = SecretScrubber.scrub(header.value, pairs)
+            var scrubber = headerScrubber
+            let value = String(
+                decoding: scrubber.process(Array(header.value.utf8)) + scrubber.finish(), as: UTF8.self)
             guard value.contains("\r") == false, value.contains("\n") == false else { continue }
             text += "\(header.name): \(value)\r\n"
         }

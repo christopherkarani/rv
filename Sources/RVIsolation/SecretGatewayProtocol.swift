@@ -462,60 +462,6 @@ enum GatewaySubstitution {
     }
 }
 
-/// Streaming replace of real values with their placeholders. Holds back at
-/// most `longest - 1` bytes so a value split across chunks is still caught.
-struct SecretScrubber {
-    private let pairs: [(needle: [UInt8], replacement: [UInt8])]
-    private let keep: Int
-    private var pending: [UInt8] = []
-
-    init(_ pairs: [(needle: [UInt8], replacement: [UInt8])]) {
-        self.pairs = pairs.filter { $0.needle.isEmpty == false }.sorted { $0.needle.count > $1.needle.count }
-        keep = max(0, (self.pairs.first?.needle.count ?? 1) - 1)
-    }
-
-    mutating func process(_ chunk: [UInt8]) -> [UInt8] {
-        pending += chunk
-        return drain(final: false)
-    }
-
-    mutating func finish() -> [UInt8] {
-        drain(final: true)
-    }
-
-    private mutating func drain(final: Bool) -> [UInt8] {
-        guard pairs.isEmpty == false else {
-            defer { pending.removeAll() }
-            return pending
-        }
-        var output: [UInt8] = []
-        output.reserveCapacity(pending.count)
-        var index = 0
-        scan: while index < pending.count {
-            for pair in pairs where pending.count - index >= pair.needle.count {
-                if pending[index] == pair.needle[0],
-                    pending[index..<index + pair.needle.count].elementsEqual(pair.needle)
-                {
-                    output += pair.replacement
-                    index += pair.needle.count
-                    continue scan
-                }
-            }
-            if final == false, pending.count - index <= keep { break }
-            output.append(pending[index])
-            index += 1
-        }
-        pending.removeFirst(index)
-        return output
-    }
-
-    static func scrub(_ text: String, _ pairs: [(needle: [UInt8], replacement: [UInt8])]) -> String {
-        var scrubber = SecretScrubber(pairs)
-        let bytes = scrubber.process(Array(text.utf8)) + scrubber.finish()
-        return String(decoding: bytes, as: UTF8.self)
-    }
-}
-
 enum GatewayHeaders {
     static let echoMethods: Set<String> = ["TRACE", "TRACK"]
 
@@ -542,6 +488,16 @@ enum GatewayHeaders {
                 && methodOverrides.contains(name) == false && named.contains(name) == false
         }
     }
+    /// Sent on every upstream request in place of the agent's own value.
+    static let identityEncoding = (name: "Accept-Encoding", value: "identity")
+
+    /// True when no `Content-Encoding` names anything but `identity`.
+    static func isIdentityEncoded(_ headers: [(name: String, value: String)]) -> Bool {
+        headers.filter { $0.name.lowercased() == "content-encoding" }
+            .flatMap { $0.value.split(separator: ",") }
+            .allSatisfy { $0.trimmingCharacters(in: .whitespaces).lowercased() == "identity" }
+    }
+
     static let dropOnResponse: Set<String> = [
         "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "te", "trailer",
         "transfer-encoding", "upgrade", "content-length", "content-encoding", "www-authenticate",

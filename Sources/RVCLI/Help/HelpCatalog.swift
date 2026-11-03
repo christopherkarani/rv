@@ -492,6 +492,10 @@ enum HelpCatalog {
                     description: "An upstream 401 reaches the agent as 502 with no challenge; update the value with set"
                 ),
                 HelpRow(
+                    name: "responses",
+                    description: "Echoed values, raw, %-encoded, or JSON-escaped, become the placeholder; base64 [rv:redacted]; compressed 502"
+                ),
+                HelpRow(
                     name: "basic",
                     description: "Basic user:placeholder is decoded and swapped (git over https); encoded placeholders are refused"
                 ),

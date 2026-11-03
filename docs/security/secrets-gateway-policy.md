@@ -103,3 +103,35 @@ Enforcement:
   `;` parameters, backslashes, control bytes, invalid UTF-8, and a `%` left
   after one decode (`%252e`). A path such as GitLab's
   `projects/group%2Fproject` therefore needs no rules on its binding.
+
+## Response scrubbing
+
+The real value never goes back to the agent. Before any response header or
+body byte reaches the cage, the gateway replaces the value with the
+placeholder, including these encoded forms:
+
+- percent-encoded (`%2F` or `%2f`, `+` for a space, any mix of raw and
+  encoded bytes);
+- JSON-string-escaped (`\/`, `\"`, `\\`, `\n`, `\uXXXX` including
+  surrogate pairs).
+
+Base64 and base64url copies, at any of the three byte alignments inside a
+larger blob, become `[rv:redacted]`. The placeholder is not used there
+because the value's edge characters share bits with the neighbouring bytes
+and its length would shift the rest of the blob, so no replacement still
+decodes correctly. At most two edge characters, under 12 bits of the value,
+can remain beside the marker. Base64 runs shorter than 8 characters are not
+matched.
+
+A value split across response chunks is still caught. The gateway holds back
+only a trailing partial match, so streamed output (SSE, token streams) that
+cannot be the start of the value is forwarded at once.
+
+Compressed bodies cannot be scanned. The gateway sends
+`Accept-Encoding: identity` upstream in place of the agent's own header. If
+a response with a body still carries a `Content-Encoding` other than
+`identity`, the gateway returns `502` and forwards none of it.
+
+Not covered: double encodings (percent inside JSON, base64 of an escaped
+value), hex, HTML entities, and payloads that are themselves archives
+(`application/zip`, `application/gzip`).

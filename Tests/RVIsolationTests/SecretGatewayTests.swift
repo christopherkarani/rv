@@ -170,7 +170,7 @@ struct SecretGatewayTests {
         #expect(seen.method == "POST")
         #expect(seen.url == "https://api.example.com/v1/chat/completions?stream=false")
         #expect(seen.headers["authorization"] == "Bearer \(secret)")
-        #expect(seen.headers["accept-encoding"] == nil)
+        #expect(seen.headers["accept-encoding"] == "identity")
         #expect(seen.headers["host"] == nil)
         #expect(seen.body == Data("{\"a\":\"b\"}\r\n".utf8))
 
@@ -314,7 +314,7 @@ struct SecretGatewayTests {
         let seen = try #require(upstream.requests.first)
         #expect(seen.method == "POST")
         #expect(URL(string: seen.url)?.host == "api.example.com")
-        #expect(Set(seen.headers.keys) == ["authorization", "x-kept"])
+        #expect(Set(seen.headers.keys) == ["authorization", "x-kept", "accept-encoding"])
         #expect(seen.headers["authorization"] == "Bearer sk-live-REAL-0123456789")
     }
 
@@ -350,6 +350,56 @@ struct SecretGatewayTests {
         let record = try #require(audit.items.withLock { $0.first })
         #expect(record.status == 502)
         #expect(record.reason?.contains("401") == true)
+    }
+
+    @Test func compressedResponsesAreRefusedBecauseTheyCannotBeScanned() throws {
+        let gzipped = Data([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03])
+        for coding in ["gzip", "br", "deflate, gzip", "zstd"] {
+            let upstream = RecordingUpstream(
+                status: 200, headers: [("Content-Encoding", coding), ("Content-Type", "application/json")],
+                chunks: [gzipped])
+            let audit = AuditRecords()
+            let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+            defer { gateway.stop() }
+            let response = try gatewayExchange(port: port,
+                "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+            #expect(upstream.requests.first?.headers["accept-encoding"] == "identity")
+            #expect(response.status == 502, "\(coding)")
+            #expect(response.body.contains("compressed"))
+            #expect(response.body.utf8.contains(0x8b) == false)
+            let record = try #require(audit.items.withLock { $0.first })
+            #expect(record.status == 502)
+            #expect(record.reason?.contains("compressed") == true)
+        }
+    }
+
+    @Test func identityEncodedAndBodilessCompressedResponsesPass() throws {
+        for (method, coding) in [("GET", "identity"), ("HEAD", "gzip")] {
+            let upstream = RecordingUpstream(
+                status: 200, headers: [("Content-Encoding", coding)], chunks: method == "GET" ? [Data("ok".utf8)] : [])
+            let audit = AuditRecords()
+            let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+            defer { gateway.stop() }
+            let response = try gatewayExchange(port: port,
+                "\(method) /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+            #expect(response.status == 200, "\(method) \(coding)")
+        }
+    }
+
+    @Test func encodedEchoesOfTheValueAreScrubbedEndToEnd() throws {
+        let secret = "sk-live-REAL-0123456789"
+        let base64 = Data(secret.utf8).base64EncodedString()
+        let upstream = RecordingUpstream(
+            status: 200, headers: [("Content-Type", "application/json")],
+            chunks: [Data("{\"b64\":\"\(base64.prefix(10))".utf8), Data("\(base64.dropFirst(10))\",\"pct\":\"sk%2Dlive".utf8),
+                Data("-REAL-0123456789\"}".utf8)])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 200)
+        #expect(response.body == "{\"b64\":\"[rv:redacted]\",\"pct\":\"\(placeholder.text)\"}")
     }
 
     @Test func basicAuthTokensWorkAndEncodedPlaceholdersNeverLeaveTheGateway() throws {
