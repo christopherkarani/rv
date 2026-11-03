@@ -166,21 +166,21 @@ final class SecretLaunchBroker: @unchecked Sendable {
             // Read before the value, so a write in between shows up as a change.
             // Only gateway entries can rotate.
             let marker = definition.delivery == .environment ? nil : resolver.version(definition.source)
-            var value: SecretValue
+            let value: SecretValue
             switch prefetched[index] ?? resolver.resolve(definition.source) {
             case .failure(let error): return fail(.resolution(secret: name, error))
-            case .success(let resolved): value = resolved
+            case .success(let read): value = read
             }
-            var expires = definition.expires
-            if case .oauth = definition.source {
-                guard let minted = OAuthAccessToken(value) else {
-                    return fail(.resolution(secret: name, .invalidValue(OAuthAccessToken.unusable)))
+            guard let resolved = ResolvedSecret.parse(value, for: definition) else {
+                switch definition.delivery {
+                case .awsSigV4: return fail(.awsCredentialsUnusable(name))
+                case .gateway, .environment:
+                    return fail(.resolution(secret: name, .invalidValue(definition.unusableCredentials)))
                 }
-                value = minted.token
-                expires = [expires, minted.expires].compactMap { $0 }.min()
-                if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
             }
-            let fingerprint = fingerprint(value)
+            let expires = [definition.expires, resolved.expires].compactMap { $0 }.min()
+            if case .oauth = resolved, let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
+            let fingerprint = fingerprint(resolved.fingerprintInput)
             var pins: [GatewayBinaryPin] = []
             for path in definition.binaries ?? [] {
                 switch GatewayBinaryPin.pin(path) {
@@ -190,17 +190,20 @@ final class SecretLaunchBroker: @unchecked Sendable {
             }
             switch definition.delivery {
             case .environment:
-                guard let text = value.text, text.utf8.count <= Self.maximumEnvironmentValueBytes else {
+                guard let text = resolved.lastingToken?.text, text.utf8.count <= Self.maximumEnvironmentValueBytes else {
                     return fail(.environmentValueUnusable(name))
                 }
                 environment.append((name, text))
             case .gateway(let binding):
+                guard let credential = SecretGateway.Entry.Credential(resolved, delivery: definition.delivery) else {
+                    return fail(.resolution(secret: name, .invalidValue(definition.unusableCredentials)))
+                }
                 guard case .success = gateway.start(), let baseURL = gateway.baseURL(secret: name) else {
                     return fail(.gatewayUnavailable)
                 }
                 let placeholder = SecretPlaceholder.mint(prefix: binding.placeholderPrefix)
                 gateway.register(placeholder, entry: SecretGateway.Entry(
-                    secret: name, prefix: binding.placeholderPrefix, value: value,
+                    secret: name, prefix: binding.placeholderPrefix, credential: credential,
                     upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
                     surfaces: binding.surfaces, rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: marker), approvals: binding.approvalRules,
@@ -209,8 +212,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
             case .awsSigV4(let binding):
-                guard let credentials = AWSCredentialSet(value) else { return fail(.awsCredentialsUnusable(name)) }
-                let expires = [definition.expires, credentials.expires].compactMap { $0 }.min()
+                guard let credential = SecretGateway.Entry.Credential(resolved, delivery: definition.delivery) else {
+                    return fail(.awsCredentialsUnusable(name))
+                }
                 if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
                 guard case .success = gateway.start(), let baseURL = gateway.baseURL(secret: name) else {
                     return fail(.gatewayUnavailable)
@@ -218,9 +222,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 // The SDK signs with these; the gateway discards that signature.
                 let placeholder = SecretPlaceholder.mint(prefix: "")
                 gateway.register(placeholder, entry: SecretGateway.Entry(
-                    secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
-                    runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
-                    refresh: refreshPolicy(definition, marker: marker), signing: binding,
+                    secret: name, prefix: "", credential: credential, upstream: binding.upstream,
+                    fingerprint: fingerprint, runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
+                    refresh: refreshPolicy(definition, marker: marker),
                     approvals: binding.approvalRules, binaries: pins))
                 placeholders.append(placeholder)
                 environment.append(("AWS_ACCESS_KEY_ID", placeholder.text))
@@ -335,21 +339,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
         case .none:
             break
         }
-        return resolver.resolve(current.source).flatMap { value in
-            var value = value
-            var expires = current.expires
-            if case .oauth = current.source {
-                guard let minted = OAuthAccessToken(value) else { return .failure(.invalidValue(OAuthAccessToken.unusable)) }
-                value = minted.token
-                expires = [expires, minted.expires].compactMap { $0 }.min()
-            }
-            if case .awsSigV4 = current.delivery {
-                guard let credentials = AWSCredentialSet(value) else {
-                    return .failure(.invalidValue(AWSSigningBinding.unusableCredentials))
-                }
-                expires = [expires, credentials.expires].compactMap { $0 }.min()
-            }
-            return .success(SecretRefreshed(value: value, fingerprint: fingerprint(value), expires: expires))
+        return resolver.resolveCredential(current).map { resolved in
+            SecretRefreshed(
+                value: resolved, fingerprint: fingerprint(resolved.fingerprintInput),
+                expires: [current.expires, resolved.expires].compactMap { $0 }.min())
         }
     }
 

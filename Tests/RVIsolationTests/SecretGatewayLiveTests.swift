@@ -25,7 +25,7 @@ struct SecretGatewayLiveTests {
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "")
         gateway.register(placeholder, entry: SecretGateway.Entry(
-            secret: "ECHO_TOKEN", prefix: "", value: try #require(SecretValue(secret)),
+            secret: "ECHO_TOKEN", prefix: "", credential: .substituted(try #require(SecretValue(secret))),
             upstream: try #require(URL(string: "https://postman-echo.com")), fingerprint: nil, runtime: nil,
             surfaces: [.header, .query], processGroup: testProcessGroup))
 
@@ -51,7 +51,7 @@ struct SecretGatewayLiveTests {
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "")
         gateway.register(placeholder, entry: SecretGateway.Entry(
-            secret: "ECHO_TOKEN", prefix: "", value: try #require(SecretValue("redirect-secret")),
+            secret: "ECHO_TOKEN", prefix: "", credential: .substituted(try #require(SecretValue("redirect-secret"))),
             upstream: try #require(URL(string: "https://postman-echo.com")), fingerprint: nil, runtime: nil,
             processGroup: testProcessGroup))
         let response = try gatewayExchange(port: port,

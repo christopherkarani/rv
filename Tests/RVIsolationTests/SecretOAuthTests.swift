@@ -85,7 +85,10 @@ struct SecretOAuthTests {
 
     private func token(_ result: Result<SecretValue, SecretResolutionError>) -> OAuthAccessToken? {
         guard case .success(let value) = result else { return nil }
-        return OAuthAccessToken(value)
+        guard case .oauth(let minted)? = ResolvedSecret.parse(value, source: .oauth(Self.source), delivery: .environment) else {
+            return nil
+        }
+        return minted
     }
 
     private func message(_ result: Result<SecretValue, SecretResolutionError>) -> String {

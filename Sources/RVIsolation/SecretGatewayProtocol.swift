@@ -342,7 +342,8 @@ enum GatewaySubstitution {
         var token: String
         var secret: String
         var prefix: String
-        var value: SecretValue
+        /// Nil for an entry the gateway signs with, which is never written into a request.
+        var value: SecretValue?
         var surfaces: Set<GatewaySurface>
         /// Expanded allow rules; empty allows any method and path.
         var rules: [GatewayAccessRule] = []
@@ -395,7 +396,7 @@ enum GatewaySubstitution {
                 }
                 guard live.surfaces.contains(position.surface) else { return .failure(.surfaceNotAllowed) }
                 guard filled.insert(position.surface).inserted else { return .failure(.repeatedPlaceholder) }
-                guard let value = encode(live.value.bytes, at: position) else { return .failure(.unsafeValue) }
+                guard let secret = live.value, let value = encode(secret.bytes, at: position) else { return .failure(.unsafeValue) }
                 let prefix = Array(live.prefix.utf8)
                 var start = occurrence.start
                 if prefix.isEmpty == false, start >= prefix.count,
@@ -448,7 +449,9 @@ enum GatewaySubstitution {
         guard let used else { return .failure(.noPlaceholder) }
         if basicRewritten {
             let placeholder = Array(SecretPlaceholder(token: used.token, prefix: used.prefix).text.utf8)
-            echoes += base64Fragments(of: used.value.bytes).map { Echo(needle: $0, replacement: placeholder) }
+            if let value = used.value {
+                echoes += base64Fragments(of: value.bytes).map { Echo(needle: $0, replacement: placeholder) }
+            }
         }
         return .success((rewritten, used, filled, echoes))
     }

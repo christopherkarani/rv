@@ -22,36 +22,6 @@ enum OAuthRecovery: String, Sendable, Equatable {
     case fixConfiguration
 }
 
-/// The access token an `oauth` source resolves to and when it expires.
-/// It crosses the resolver as `{"access_token": …, "expires_at": epoch}` so
-/// the broker can bound the gateway entry by it, as with an AWS credential set.
-struct OAuthAccessToken: Sendable {
-    static let unusable = "the token endpoint's answer could not be used"
-
-    let token: SecretValue
-    let expires: Date?
-
-    init?(_ value: SecretValue) {
-        guard let object = (try? JSONSerialization.jsonObject(with: Data(value.bytes))) as? [String: Any],
-            let text = object["access_token"] as? String, OAuthTokenMinter.usableToken(text),
-            let token = SecretValue(text)
-        else { return nil }
-        self.token = token
-        expires = (object["expires_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
-    }
-
-    static func encode(token: String, expires: Date?) -> SecretValue? {
-        var object: [String: Any] = ["access_token": token]
-        if let expires {
-            // A date this far out has no epoch second to write; leave it off rather than trap.
-            guard let epoch = Int(exactly: expires.timeIntervalSince1970.rounded(.down)) else { return nil }
-            object["expires_at"] = epoch
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
-        return SecretValue(String(decoding: data, as: UTF8.self))
-    }
-}
-
 /// Mints access tokens at an RFC 6749 token endpoint from credentials held
 /// in the Keychain. A refresh token that rotates is written back; an
 /// exchange whose outcome is unknown blocks that refresh token for good,

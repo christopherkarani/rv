@@ -50,7 +50,7 @@ struct SecretGatewayRuntimeBindingTests {
         runtime: String, group: ProcessGroupFact?, surfaces: Set<GatewaySurface> = [.header]
     ) throws -> SecretGateway.Entry {
         SecretGateway.Entry(
-            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            secret: "OPENAI_API_KEY", prefix: "sk-", credential: .substituted(try #require(SecretValue("sk-live-REAL-0123456789"))),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: runtime,
             surfaces: surfaces, processGroup: group)
     }

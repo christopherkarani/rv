@@ -156,7 +156,7 @@ struct SecretGatewayTests {
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: prefix)
         gateway.register(placeholder, entry: SecretGateway.Entry(
-            secret: "OPENAI_API_KEY", prefix: prefix, value: try #require(SecretValue(value)),
+            secret: "OPENAI_API_KEY", prefix: prefix, credential: .substituted(try #require(SecretValue(value))),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
             surfaces: surfaces, rules: rules, processGroup: testProcessGroup))
         return (gateway, port, placeholder)
@@ -442,7 +442,7 @@ struct SecretGatewayTests {
         defer { broken.stop() }
         let brokenPort = try broken.start().get()
         broken.register(placeholder, entry: SecretGateway.Entry(
-            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            secret: "OPENAI_API_KEY", prefix: "sk-", credential: .substituted(try #require(SecretValue("sk-live-REAL-0123456789"))),
             upstream: try #require(URL(string: "https://api.example.com")), fingerprint: nil, runtime: nil,
             processGroup: testProcessGroup))
         let response = try gatewayExchange(port: brokenPort,

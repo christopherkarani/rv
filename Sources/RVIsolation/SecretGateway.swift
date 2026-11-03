@@ -94,7 +94,8 @@ public final class SecretGateway: @unchecked Sendable {
     public struct Entry: Sendable {
         public var secret: String
         public var prefix: String
-        public var value: SecretValue
+        /// What the gateway spends: a value it substitutes, or the AWS credential set it signs with.
+        var credential: Credential
         public var upstream: URL
         public var fingerprint: String?
         public var runtime: String?
@@ -108,9 +109,6 @@ public final class SecretGateway: @unchecked Sendable {
         public var expires: Date?
         /// How the value is re-resolved while the runtime lives; nil keeps the launch value.
         public var refresh: SecretRefreshPolicy?
-        /// Set for AWS SigV4 delivery: `value` is a credential set, and the
-        /// gateway re-signs instead of substituting.
-        var signing: AWSSigningBinding?
         /// Expanded `approve` rules; a matching request needs a human's yes.
         var approvals: [GatewayAccessRule] = []
         /// Set at bind when the runtime has an admission channel that can ask.
@@ -119,9 +117,12 @@ public final class SecretGateway: @unchecked Sendable {
         var binaries: [GatewayBinaryPin] = []
         /// Bumped each time a refresh swaps the value.
         var generation = 0
-        /// Values this entry held before, newest first, still scrubbed from responses.
-        var previous: [SecretValue] = []
+        /// Credentials this entry held before, newest first, still scrubbed from responses.
+        var previous: [Credential] = []
         var rotation: SecretRotationState?
+
+        /// Set for AWS SigV4 delivery: the gateway re-signs instead of substituting.
+        var signing: AWSSigningBinding? { credential.signing }
     }
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
@@ -542,7 +543,7 @@ public final class SecretGateway: @unchecked Sendable {
                 deny(refusal)
                 return
             }
-            if entry(result.used.token)?.value != result.used.value { substituted = substitute() }
+            if entry(result.used.token)?.credential.substitutable != result.used.value { substituted = substitute() }
         }
         var rewritten: GatewayRequestHead
         let token: String
@@ -591,7 +592,7 @@ public final class SecretGateway: @unchecked Sendable {
                 deny(.unknownPlaceholder)
                 return
             }
-            if current.value != live.value {
+            if current.credential != live.credential {
                 switch substitute() {
                 case .failure(let refusal):
                     deny(refusal)

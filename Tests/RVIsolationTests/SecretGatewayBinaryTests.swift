@@ -43,7 +43,7 @@ struct SecretGatewayBinaryTests {
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "sk-")
         gateway.register(placeholder, entry: SecretGateway.Entry(
-            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            secret: "OPENAI_API_KEY", prefix: "sk-", credential: .substituted(try #require(SecretValue("sk-live-REAL-0123456789"))),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
             surfaces: [.header], processGroup: group, binaries: pins))
         return (gateway, port, placeholder)
@@ -410,7 +410,7 @@ struct SecretGatewayBinaryTests {
         let group = try #require(ProcessGroupRecovery.capture(pid: leader))
         let placeholder = SecretPlaceholder.mint(prefix: "sk-")
         gateway.register(placeholder, entry: SecretGateway.Entry(
-            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
+            secret: "OPENAI_API_KEY", prefix: "sk-", credential: .substituted(try #require(SecretValue("sk-live-REAL-0123456789"))),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
             surfaces: [.header], processGroup: group, binaries: try pins(leader)))
         try Data("\(port) \(placeholder.text)".utf8).write(to: URL(fileURLWithPath: go))

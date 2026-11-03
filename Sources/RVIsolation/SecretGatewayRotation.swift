@@ -3,11 +3,11 @@ import Foundation
 
 /// A provider's current value for a gateway entry, plus the expiry now on file.
 public struct SecretRefreshed: Sendable {
-    public var value: SecretValue
+    var value: ResolvedSecret
     public var fingerprint: String?
     public var expires: Date?
 
-    public init(value: SecretValue, fingerprint: String?, expires: Date?) {
+    init(value: ResolvedSecret, fingerprint: String?, expires: Date?) {
         self.value = value
         self.fingerprint = fingerprint
         self.expires = expires
@@ -246,16 +246,22 @@ extension SecretGateway {
         var record: (activity: SecretGatewayActivity, reason: String)?
         switch result {
         case .success(let refreshed):
-            if refreshed.value != entry.value {
-                entry.previous = Array(([entry.value] + entry.previous).prefix(Self.historyDepth))
-                entry.value = refreshed.value
-                entry.generation += 1
-                record = (.refreshed, "value rotated from the provider (generation \(entry.generation))")
+            if let next = entry.credential.replacing(with: refreshed.value) {
+                if next != entry.credential {
+                    entry.previous = Array(([entry.credential] + entry.previous).prefix(Self.historyDepth))
+                    entry.credential = next
+                    entry.generation += 1
+                    record = (.refreshed, "value rotated from the provider (generation \(entry.generation))")
+                }
+                entry.fingerprint = refreshed.fingerprint
+                entry.expires = refreshed.expires
+                entry.rotation?.resolvedAt = at
+                entry.rotation?.failedAt = nil
+            } else {
+                // The provider answered with another kind of credential than the entry spends.
+                entry.rotation?.failedAt = at
+                record = (.refreshFailed, "refresh failed: unusable value: the provider returned a different kind of credential")
             }
-            entry.fingerprint = refreshed.fingerprint
-            entry.expires = refreshed.expires
-            entry.rotation?.resolvedAt = at
-            entry.rotation?.failedAt = nil
         case .failure(let error):
             entry.rotation?.failedAt = at
             record = (.refreshFailed, "refresh failed: \(error.message)")

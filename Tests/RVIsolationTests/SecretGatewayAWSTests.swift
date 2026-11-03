@@ -661,7 +661,13 @@ struct SecretGatewayAWSTests {
         chmod(script.path, 0o755)
         let environment = ["PATH": directory.path, "HOME": directory.path]
         let value = try SecretCommandProviders.awsProfile("dev", environment: environment).get()
-        #expect(AWSCredentialSet(value)?.expires == Self.start)
+        let definition = try #require(
+            try SecretsConfiguration.decode(Data(Self.secretsJSON().utf8)).get().secret(named: "AWS_DEV"))
+        guard case .awsCredentials(let set)? = ResolvedSecret.parse(value, for: definition) else {
+            Issue.record("the export-credentials output was not read as an AWS credential set")
+            return
+        }
+        #expect(set.expires == Self.start)
         #expect(String(describing: value) == "<redacted>")
         let args = try String(contentsOf: directory.appendingPathComponent("args"), encoding: .utf8)
         #expect(args == "configure export-credentials --profile dev --format process\n")

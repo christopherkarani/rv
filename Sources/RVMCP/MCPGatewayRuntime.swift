@@ -148,11 +148,6 @@ public enum MCPLaunchPlanner {
             guard let secret = secrets.secret(named: secretName) else {
                 return .failure(.secretUndefined(server: server, secret: secretName))
             }
-            if secret.gatewayOnly {
-                return .failure(.secretUnavailable(
-                    server: server, secret: secretName,
-                    reason: "\(secret.source.kind) secrets are spent only by the secret gateway, not by MCP servers"))
-            }
             if configuration.managed?.allowsSecretSource(secret.source.kind) == false {
                 return .failure(.secretUnavailable(
                     server: server, secret: secretName,
@@ -166,10 +161,14 @@ public enum MCPLaunchPlanner {
                     reason: "organization policy sets secrets.allowEnvironmentDelivery to false, "
                         + "and a stdio server receives secrets in its environment or arguments"))
             }
-            switch resolver.resolve(secret.source) {
+            switch resolver.resolveText(secret) {
             case .failure(let error):
                 return .failure(.secretUnavailable(server: server, secret: secretName, reason: error.message))
-            case .success(let value):
+            case .success(nil):
+                return .failure(.secretUnavailable(
+                    server: server, secret: secretName,
+                    reason: "\(secret.source.kind) secrets are spent only by the secret gateway, not by MCP servers"))
+            case .success(let value?):
                 guard let text = String(validating: value.revealed(), as: UTF8.self),
                     text.contains("\0") == false,
                     target == .stdioProcess || text.unicodeScalars.allSatisfy({ $0 != "\r" && $0 != "\n" })

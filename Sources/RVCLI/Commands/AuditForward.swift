@@ -255,13 +255,12 @@ enum AuditForwardRun {
             if let reason = SecretOrganizationRules.sourceViolation(secret, policy: policy) {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)): organization policy: \(reason)"))
             }
-            if secret.gatewayOnly {
+            switch resolver.resolveText(secret) {
+            case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
+            case .success(nil):
                 return .failure(CommandFailure(
                     "header secret \(DisplayedText.field(name)): \(secret.source.kind) secrets are spent only by the secret gateway"))
-            }
-            switch resolver.resolve(secret.source) {
-            case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
-            case .success(let value):
+            case .success(let value?):
                 guard let text = String(validating: value.revealed(), as: UTF8.self) else {
                     return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not text"))
                 }

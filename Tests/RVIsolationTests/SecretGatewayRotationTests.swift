@@ -40,7 +40,7 @@ final class FakeRefresher: Sendable {
             return state.results.count > 1 ? state.results.removeFirst() : state.results[0]
         }
         gate?.wait()
-        return next.map { SecretRefreshed(value: SecretValue($0)!, fingerprint: "fp-\($0.suffix(4))", expires: expires) }
+        return next.map { SecretRefreshed(value: .token(SecretValue($0)!), fingerprint: "fp-\($0.suffix(4))", expires: expires) }
     }
 }
 
@@ -66,7 +66,7 @@ struct SecretGatewayRotationTests {
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: "sk-")
         gateway.register(placeholder, entry: SecretGateway.Entry(
-            secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue(Self.old)),
+            secret: "OPENAI_API_KEY", prefix: "sk-", credential: .substituted(try #require(SecretValue(Self.old))),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "fp-old", runtime: "R1",
             processGroup: testProcessGroup, expires: expires, refresh: refresh))
         return (gateway, port, placeholder)
