@@ -41,7 +41,7 @@ import RVDomain
 @Test func evaluateFileTool_allowPathSuppressesProjectEnv() {
     let result = evaluateFileTool(
         FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/rv-oracle/.env")),
-        allowPaths: SecretAllowPathSet(literals: ["/tmp/rv-oracle/.env"])
+        secretPaths: SecretPathDecider(allowPaths: SecretAllowPathSet(literals: ["/tmp/rv-oracle/.env"]))
     )
     #expect(result.decision == .allow)
 }
@@ -52,7 +52,7 @@ import RVDomain
             kind: .read,
             path: FileToolPath(rawValue: "~/.claude/.credentials.json")
         ),
-        allowPaths: SecretAllowPathSet(literals: ["~/.claude/.credentials.json"])
+        secretPaths: SecretPathDecider(allowPaths: SecretAllowPathSet(literals: ["~/.claude/.credentials.json"]))
     )
     guard case .deny(let deny, _) = result.outcome else {
         Issue.record("expected host-auth deny")
@@ -85,7 +85,7 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
 @Test func evaluateFileTool_symlinkResolvesToSecretPath() {
     let result = evaluateFileTool(
         FileToolAction(kind: .read, path: FileToolPath(rawValue: "$HOME/ss/k")),
-        pathResolution: mapping(["$HOME/ss/k": "~/.ssh/id_rsa"])
+        secretPaths: SecretPathDecider(resolution: mapping(["$HOME/ss/k": "~/.ssh/id_rsa"]))
     )
     guard case .deny(let deny, _) = result.outcome else {
         Issue.record("expected deny for resolved id_rsa")
@@ -98,8 +98,10 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
 @Test func evaluateFileTool_resolvedAliasExemptable() {
     let result = evaluateFileTool(
         FileToolAction(kind: .read, path: FileToolPath(rawValue: "$HOME/ss/k")),
-        allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
-        pathResolution: mapping(["$HOME/ss/k": "~/.env"])
+        secretPaths: SecretPathDecider(
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
+            resolution: mapping(["$HOME/ss/k": "~/.env"])
+        )
     )
     #expect(result.decision == .allow)
 }
@@ -107,8 +109,10 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
 @Test func evaluateFileTool_typedExemptDoesNotExemptResolved() {
     let result = evaluateFileTool(
         FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/b/.env")),
-        allowPaths: SecretAllowPathSet(literals: ["~/b/.env"]),
-        pathResolution: mapping(["~/b/.env": "~/.aws/config"])
+        secretPaths: SecretPathDecider(
+            allowPaths: SecretAllowPathSet(literals: ["~/b/.env"]),
+            resolution: mapping(["~/b/.env": "~/.aws/config"])
+        )
     )
     guard case .deny(let deny, _) = result.outcome else {
         Issue.record("expected deny for resolved aws config")
@@ -122,7 +126,7 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
     // to it must not deny on cosmetics.
     let result = evaluateFileTool(
         FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/.env")),
-        pathResolution: mapping(["~/.env": "/tmp/ok.txt"])
+        secretPaths: SecretPathDecider(resolution: mapping(["~/.env": "/tmp/ok.txt"]))
     )
     #expect(result.decision == .allow)
 }

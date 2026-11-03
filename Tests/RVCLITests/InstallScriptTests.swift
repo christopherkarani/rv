@@ -196,6 +196,13 @@ private func runInstallScript(
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
 }
 
+@Test func installSh_installsCustodianBundleOnDarwin() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    #expect(text.contains("rv-approvals-darwin-arm64.zip"))
+    #expect(text.contains("RVApprovals.app"))
+    #expect(text.contains("Applications"))
+}
+
 @Test func installSh_setsRVFromInstallBeforeSetup() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("RV_FROM_INSTALL=1 exec \"$bin/rv\" setup"))

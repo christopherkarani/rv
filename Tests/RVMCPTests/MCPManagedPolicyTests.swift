@@ -1,6 +1,7 @@
 import Foundation
 import RVIsolation
 import RVPolicy
+import Synchronization
 import Testing
 @testable import RVMCP
 
@@ -85,6 +86,111 @@ struct MCPManagedPolicyTests {
         }
         #expect(plan("envy") == .secretUnavailable(
             server: "envy", secret: "HOST_TOKEN", reason: "organization policy does not allow hostEnvironment secrets"))
+    }
+
+    @Test func stdioServersCannotReceiveSecretsWhenPolicyForbidsEnvironmentDelivery() throws {
+        var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(
+                name: "envy", command: "e", secrets: ["TOKEN": "API_TOKEN"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "argy", command: "e", args: ["--token=${secret:API_TOKEN}"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "remote",
+                remote: MCPRemoteServer(
+                    url: try #require(URL(string: "https://mcp.example.com/mcp")),
+                    headers: ["Authorization": "Bearer ${secret:API_TOKEN}"])),
+        ])
+        let secrets = SecretsConfiguration(secrets: [
+            // Declared gateway-only, yet a stdio server would still get the real value.
+            SecretDefinition(
+                name: "API_TOKEN", source: .keychain(service: "rv", account: "api"),
+                delivery: .gateway(SecretGatewayBinding(
+                    upstream: try #require(URL(string: "https://api.example.com")), baseURLEnv: "API_BASE_URL")))
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("v")!)
+        }
+        func plan(_ name: String) -> MCPLaunchError? {
+            if case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            {
+                return error
+            }
+            return nil
+        }
+        configuration.managed = try organization("""
+            {"version": 1, "secrets": {"allowEnvironmentDelivery": false}}
+            """)
+        let reason = "organization policy sets secrets.allowEnvironmentDelivery to false, "
+            + "and a stdio server receives secrets in its environment or arguments"
+        #expect(plan("envy") == .secretUnavailable(server: "envy", secret: "API_TOKEN", reason: reason))
+        #expect(plan("argy") == .secretUnavailable(server: "argy", secret: "API_TOKEN", reason: reason))
+        #expect(resolved.withLock { $0 } == 0, "a refused secret must not be resolved")
+        // Remote headers are spent host-side by the gateway, never in a child's environment.
+        #expect(plan("remote") == nil)
+        #expect(resolved.withLock { $0 } == 1)
+        configuration.managed = try organization(#"{"version":1,"secrets":{"allowEnvironmentDelivery":true}}"#)
+        #expect(plan("envy") == nil)
+    }
+
+    @Test func gatewayOnlySecretsAreRefusedToEveryServerBeforeResolving() throws {
+        let configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(
+                name: "envy", command: "e", secrets: ["TOKEN": "AWS_DEV"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "remote",
+                remote: MCPRemoteServer(
+                    url: try #require(URL(string: "https://mcp.example.com/mcp")),
+                    headers: ["Authorization": "Bearer ${secret:AWS_DEV}"])),
+        ])
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "AWS_DEV", source: .awsProfile(profile: "dev"),
+                delivery: .awsSigV4(AWSSigningBinding(
+                    upstream: try #require(URL(string: "https://s3.us-east-1.amazonaws.com")), region: "us-east-1",
+                    service: "s3", endpointEnv: "AWS_ENDPOINT_URL_S3")))
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("v")!)
+        }
+        let oauth = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "AWS_DEV",
+                source: .oauth(OAuthSource(
+                    tokenURL: try #require(URL(string: "https://issuer.example.com/token")), clientID: "c",
+                    refreshToken: SecretKeychainItem(service: "rv.oauth", account: "dev"))),
+                delivery: .gateway(SecretGatewayBinding(
+                    upstream: try #require(URL(string: "https://api.example.com")), baseURLEnv: "API_URL")))
+        ])
+        for name in ["envy", "remote"] {
+            guard case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: oauth, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            else {
+                Issue.record("\(name) was given an OAuth token")
+                continue
+            }
+            #expect(error == .secretUnavailable(
+                server: name, secret: "AWS_DEV",
+                reason: "oauth secrets are spent only by the secret gateway, not by MCP servers"))
+        }
+        let reason = "awsProfile secrets are spent only by the secret gateway, not by MCP servers"
+        for name in ["envy", "remote"] {
+            guard case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            else {
+                Issue.record("\(name) was given an AWS credential set")
+                continue
+            }
+            #expect(error == .secretUnavailable(server: name, secret: "AWS_DEV", reason: reason))
+        }
+        #expect(resolved.withLock { $0 } == 0)
     }
 
     @Test func organizationThresholdsUseTheExactIntegerSpelling() throws {

@@ -97,7 +97,7 @@ private let maxSegmentDepth = 8
 
 private func expandSegment(_ text: String, depth: Int) -> [String] {
     let pieces = splitTopLevel(text)
-    guard depth < maxSegmentDepth else { return pieces }
+    guard depth < maxSegmentDepth else { return pieces + [unscannableSegment] }
     var out: [String] = []
     out.reserveCapacity(pieces.count * 2)
     var heads = SegmentHeadState()
@@ -115,6 +115,16 @@ private func expandSegment(_ text: String, depth: Int) -> [String] {
         guard let piece = stripped else { continue }
         if let peeled = peelGrouping(piece) {
             out.append(contentsOf: expandSegment(peeled, depth: depth + 1))
+        } else if let (inner, redirect) = groupingWithRedirectTail(piece) {
+            // `( cmd ) > file`: the group's commands, plus the redirect alone.
+            out.append(contentsOf: expandSegment(inner, depth: depth + 1))
+            out.append(": " + redirect)
+        } else if startsWithGroupOpener(piece) {
+            // A head that is still `{`/`(` but does not peel was not understood.
+            out.append(unscannableSegment)
+            for inner in substitutionInners(piece) {
+                out.append(contentsOf: expandSegment(inner, depth: depth + 1))
+            }
         } else {
             out.append(piece)
             for inner in substitutionInners(piece) {
@@ -375,6 +385,43 @@ private func indexSkippingEscape(_ utf8: String.UTF8View, at index: String.Index
     let escaped = utf8.index(after: index)
     guard escaped < utf8.endIndex else { return escaped }
     return utf8.index(after: escaped)
+}
+
+private func startsWithGroupOpener(_ segment: String) -> Bool {
+    let first = segment.trimmingCharacters(in: .whitespaces).first
+    return first == "(" || first == "{"
+}
+
+/// `( cmd ) > file` / `{ cmd; } 2>&1`: the group's inner text and the
+/// redirect tail, when only redirects follow the closing bracket.
+private func groupingWithRedirectTail(_ segment: String) -> (inner: String, redirect: String)? {
+    let trimmed = segment.trimmingCharacters(in: .whitespaces)
+    guard startsWithGroupOpener(trimmed) else { return nil }
+    var depth = 0
+    var quote: Character?
+    var index = trimmed.startIndex
+    while index < trimmed.endIndex {
+        let char = trimmed[index]
+        if let open = quote {
+            if char == open { quote = nil }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "(" || char == "{" {
+            depth += 1
+        } else if char == ")" || char == "}" {
+            depth -= 1
+            if depth == 0 {
+                let rest = trimmed[trimmed.index(after: index)...].trimmingCharacters(in: .whitespaces)
+                guard let lead = rest.first, lead == ">" || lead == "<" || lead == "&" || lead.isNumber else {
+                    return nil
+                }
+                let inner = trimmed[trimmed.index(after: trimmed.startIndex)..<index]
+                return (String(inner).trimmingCharacters(in: .whitespaces), rest)
+            }
+        }
+        trimmed.formIndex(after: &index)
+    }
+    return nil
 }
 
 /// Strips one layer of fully-wrapping `(...)`/`{...}` grouping.

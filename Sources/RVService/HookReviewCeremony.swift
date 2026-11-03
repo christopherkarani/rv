@@ -393,6 +393,8 @@ actor HookReviewCeremonyService {
                 ReviewSanitizer.redactCredentials(in: command),
                 http.scope.workingDirectory?.rawValue ?? "—"
             )
+        case .secretRequest(let request):
+            return ("secret request", ReviewSanitizer.redactCredentials(in: request.summary), "—")
         }
     }
 }

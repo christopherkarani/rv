@@ -234,6 +234,26 @@
     { "id": "db.deny.r5-perl-0777-open-write", "command": "perl -0777pe 'open(F,\">\",\"/tmp/x\")' f", "expected": "deny" },
     { "id": "db.deny.r5-gawk-inplace-awk-suffix", "command": "gawk -i inplace.awk '{print}' ~/.bashrc", "expected": "deny" },
     { "id": "db.allow.r5-git-checkout-merge-branch", "command": "git checkout -m main", "expected": "allow" },
-    { "id": "db.allow.r5-git-checkout-merge-long-branch", "command": "git checkout --merge main", "expected": "allow" }
+    { "id": "db.allow.r5-git-checkout-merge-long-branch", "command": "git checkout --merge main", "expected": "allow" },
+    { "id": "db.deny.r6-func-case-arm-rm", "command": "f() { case \"$1\" in a) rm -r ~;; esac; }; f a", "expected": "deny" },
+    { "id": "db.deny.r6-brace-case-arm-rm", "command": "{ case x in x) rm -r ~;; esac; }", "expected": "deny" },
+    { "id": "db.deny.r6-paren-case-arm-rm", "command": "( case x in x) rm -r ~;; esac )", "expected": "deny" },
+    { "id": "db.deny.r6-time-p-brace-rm", "command": "time -p { rm -r ~; }", "expected": "deny" },
+    { "id": "db.deny.r6-time-dashdash-brace-rm", "command": "time -- { rm -r ~; }", "expected": "deny" },
+    { "id": "db.deny.r6-brace-bang-paren-rm", "command": "{ ! ( rm -r ~ ); }", "expected": "deny" },
+    { "id": "db.deny.r6-brace-if-paren-rm", "command": "{ if ( rm -r ~ ); then :; fi; }", "expected": "deny" },
+    { "id": "db.deny.r6-brace-while-paren-rm", "command": "{ while ( rm -r ~ ); do :; done; }", "expected": "deny" },
+    { "id": "db.deny.r6-exec-a-dquote-value", "command": "exec -a \"x y\" rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r6-exec-a-squote-value", "command": "exec -a 'x y' rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r6-quote-semicolon-rm", "command": "echo \"x\"; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r6-squote-amp-rm", "command": "echo 'x y'&& rm -r ~", "expected": "deny" },
+    { "id": "db.allow.r6-top-level-case-echo", "command": "case x in x) echo hi;; esac", "expected": "allow" },
+    { "id": "db.allow.r6-if-case-echo", "command": "if :; then case x in x) echo hi;; esac; fi", "expected": "allow" },
+    { "id": "db.allow.r6-for-case-echo", "command": "for i in 1; do case $i in 1) echo hi;; esac; done", "expected": "allow" },
+    { "id": "db.allow.r6-time-make-test", "command": "time make test", "expected": "allow" },
+    { "id": "db.allow.r6-builtin-cd", "command": "builtin cd foo", "expected": "allow" },
+    { "id": "db.allow.r6-exec-a-quoted-ls", "command": "exec -a \"x y\" ls", "expected": "allow" },
+    { "id": "db.allow.r6-echo-quoted-semicolon-text", "command": "echo \"a; b\"", "expected": "allow" },
+    { "id": "db.allow.r6-commit-msg-semicolon", "command": "git commit -m \"fix; thing\"", "expected": "allow" }
   ]
 }

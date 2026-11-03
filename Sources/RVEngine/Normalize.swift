@@ -107,6 +107,18 @@ func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: Strin
         let token = tokens[index]
         let decoded = token.lexeme
 
+        // `exec -a "x y" cmd`: the quoted value is argv0's display name, pure
+        // data. Left as spaces it would split into words and the head
+        // stripper would take the tail for the command (`y cmd`).
+        if token.wasQuoted, token.containsInlineCode == false, index >= 2,
+           tokens[index - 1].lexeme == "-a", tokens[index - 2].lexeme == "exec",
+           decoded.contains(where: \.isWhitespace)
+        {
+            masked.append(decoded)
+            tokens[index].lexeme = String(repeating: "_", count: max(decoded.count, 1))
+            continue
+        }
+
         if pendingInterpreterPayload {
             if token.wasQuoted, token.containsInlineCode == false {
                 masked.append(decoded)
