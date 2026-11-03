@@ -1,61 +1,65 @@
 /// Escaping for one fingerprint component. `\`, `,` and `:` are the
 /// structural characters of a fingerprint, so a component that contains one
 /// is escaped (`\\`, `\,`, `\:`). Every other component is the identity.
+///
+/// Works on Unicode scalars, not `Character`s: a structural scalar followed by
+/// a combining mark is a single `Character` that is not `":"`, and would
+/// otherwise slip through unescaped.
 public enum FingerprintComponent {
-    private static let escapeMarker: Character = "\\"
-    private static let structural: Set<Character> = ["\\", ",", ":"]
+    private static let escapeMarker: Unicode.Scalar = "\\"
+    private static let structural: Set<Unicode.Scalar> = ["\\", ",", ":"]
 
     public static func escape(_ component: String) -> String {
-        guard component.contains(where: { structural.contains($0) }) else { return component }
-        var out = ""
-        for character in component {
-            if structural.contains(character) { out.append(escapeMarker) }
-            out.append(character)
+        guard component.unicodeScalars.contains(where: { structural.contains($0) }) else { return component }
+        var out = String.UnicodeScalarView()
+        for scalar in component.unicodeScalars {
+            if structural.contains(scalar) { out.append(escapeMarker) }
+            out.append(scalar)
         }
-        return out
+        return String(out)
     }
 
     /// Splits `encoded` on unescaped `separator`, leaving escapes intact.
-    public static func split(_ encoded: String, separator: Character) -> [String] {
+    public static func split(_ encoded: String, separator: Unicode.Scalar) -> [String] {
         var parts: [String] = []
-        var current = ""
+        var current = String.UnicodeScalarView()
         var escaped = false
-        for character in encoded {
+        for scalar in encoded.unicodeScalars {
             if escaped {
-                current.append(character)
+                current.append(scalar)
                 escaped = false
-            } else if character == escapeMarker {
-                current.append(character)
+            } else if scalar == escapeMarker {
+                current.append(scalar)
                 escaped = true
-            } else if character == separator {
-                parts.append(current)
-                current = ""
+            } else if scalar == separator {
+                parts.append(String(current))
+                current = String.UnicodeScalarView()
             } else {
-                current.append(character)
+                current.append(scalar)
             }
         }
-        parts.append(current)
+        parts.append(String(current))
         return parts
     }
 
     /// Inverse of `escape`. Nil when `encoded` has a dangling or unknown escape.
     public static func unescape(_ encoded: String) -> String? {
-        var out = ""
+        var out = String.UnicodeScalarView()
         var escaped = false
-        for character in encoded {
+        for scalar in encoded.unicodeScalars {
             if escaped {
-                guard structural.contains(character) else { return nil }
-                out.append(character)
+                guard structural.contains(scalar) else { return nil }
+                out.append(scalar)
                 escaped = false
-            } else if character == escapeMarker {
+            } else if scalar == escapeMarker {
                 escaped = true
-            } else if structural.contains(character) {
+            } else if structural.contains(scalar) {
                 return nil
             } else {
-                out.append(character)
+                out.append(scalar)
             }
         }
-        return escaped ? nil : out
+        return escaped ? nil : String(out)
     }
 }
 
@@ -63,13 +67,18 @@ public enum FingerprintComponent {
 public enum FingerprintSegment: Sendable, Equatable {
     /// A single component.
     case field(String)
-    /// Items joined with `,`.
+    /// Items joined with `,`. An empty list is `\[]`, an escape `escape`
+    /// never produces, so it differs from a list of one empty item (`""`).
     case list([String])
+
+    private static let emptyListToken = "\\[]"
 
     fileprivate var encoded: String {
         switch self {
         case .field(let value):
             return FingerprintComponent.escape(value)
+        case .list(let items) where items.isEmpty:
+            return Self.emptyListToken
         case .list(let items):
             return items.map(FingerprintComponent.escape).joined(separator: ",")
         }

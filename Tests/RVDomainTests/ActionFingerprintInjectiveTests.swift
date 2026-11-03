@@ -124,4 +124,35 @@ struct ActionFingerprintInjectiveTests {
                 != ActionFingerprint.make("k", [.field("a"), .field(#"\b"#)]))
         #expect(ActionFingerprint.make("k", [.field("a"), .list(["b", "c"])]).rawValue == "k:a:b,c")
     }
+
+    @Test func make_emptyListDiffersFromListOfOneEmptyItem() {
+        let empty = ActionFingerprint.make("k", [.list([]), .field("a")])
+        let oneEmpty = ActionFingerprint.make("k", [.list([""]), .field("a")])
+        #expect(empty != oneEmpty)
+        #expect(oneEmpty.rawValue == "k::a")
+        // The empty-list token is one segment and never decodes as a component.
+        let segments = FingerprintComponent.split(empty.rawValue, separator: ":")
+        #expect(segments.count == 3)
+        #expect(FingerprintComponent.unescape(segments[1]) == nil)
+        #expect(
+            git(.discardWorktree(pathspecs: [], source: nil))
+                != git(.discardWorktree(pathspecs: [""], source: nil)))
+    }
+
+    /// A structural scalar followed by a combining mark is one `Character`
+    /// that is not `":"`; escaping must still see the `:` scalar.
+    @Test func make_combiningMarkAfterStructuralScalarDoesNotCollide() {
+        #expect(
+            ActionFingerprint.make("k", [.field("x"), .field("\u{301}y")])
+                != ActionFingerprint.make("k", [.field("x:\u{301}y")]))
+        #expect(
+            ActionFingerprint.make("k", [.list(["a", "\u{301}b"])])
+                != ActionFingerprint.make("k", [.list(["a,\u{301}b"])]))
+        #expect(FingerprintComponent.escape("x:\u{301}") == "x\\:\u{301}")
+        for raw in ["x:\u{301}", ",\u{301}", "\\\u{301}", "\u{301}:"] {
+            #expect(FingerprintComponent.unescape(FingerprintComponent.escape(raw)) == raw)
+        }
+        let encoded = ActionFingerprint.make("k", [.field("x"), .field("\u{301}y")]).rawValue
+        #expect(FingerprintComponent.split(encoded, separator: ":").count == 3)
+    }
 }
