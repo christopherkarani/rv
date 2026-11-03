@@ -48,7 +48,7 @@ func awkCodeCanSpawn(_ code: String) -> Bool {
         case ")", "]":
             depth = max(0, depth - 1)
         case ">":
-            if inPrint, depth == 0 { return true }
+            if inPrint, depth == 0, awkRedirectTargetIsStdStream(chars, after: index) == false { return true }
         case ";", "}", "\n":
             if depth == 0 { inPrint = false }
         default:
@@ -56,6 +56,21 @@ func awkCodeCanSpawn(_ code: String) -> Bool {
         }
         if char.isWhitespace == false { previous = char }
         index += 1
+    }
+    return false
+}
+
+/// `> "/dev/stdout"`, `> "/dev/stderr"`, `> "/dev/null"` (also `>>`): the
+/// redirect writes to a standard stream, not a file.
+private func awkRedirectTargetIsStdStream(_ chars: [Character], after index: Int) -> Bool {
+    var cursor = index + 1
+    if cursor < chars.count, chars[cursor] == ">" { cursor += 1 }
+    while cursor < chars.count, chars[cursor] == " " || chars[cursor] == "\t" { cursor += 1 }
+    for target in ["/dev/stdout", "/dev/stderr", "/dev/null"] {
+        let literal = Array("\"\(target)\"")
+        if cursor + literal.count <= chars.count, Array(chars[cursor..<cursor + literal.count]) == literal {
+            return true
+        }
     }
     return false
 }

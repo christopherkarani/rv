@@ -102,7 +102,17 @@ private func expandSegment(_ text: String, depth: Int) -> [String] {
     out.reserveCapacity(pieces.count * 2)
     var heads = SegmentHeadState()
     for rawPiece in pieces {
-        guard let piece = heads.strip(rawPiece) else { continue }
+        let stripped = heads.strip(rawPiece)
+        // A stripped head (`case $(cmd) in`, arm patterns) still executes
+        // its substitutions, even when no command text remains.
+        let dropped = stripped.map { rawPiece.hasSuffix($0) ? String(rawPiece.dropLast($0.count)) : rawPiece }
+            ?? rawPiece
+        if dropped.isEmpty == false {
+            for inner in substitutionInners(dropped) {
+                out.append(contentsOf: expandSegment(inner, depth: depth + 1))
+            }
+        }
+        guard let piece = stripped else { continue }
         if let peeled = peelGrouping(piece) {
             out.append(contentsOf: expandSegment(peeled, depth: depth + 1))
         } else {
