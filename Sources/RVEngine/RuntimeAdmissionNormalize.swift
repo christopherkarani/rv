@@ -96,8 +96,12 @@ private func normalizeRuntimeShell(
             )
         )
     )
-    let fingerprint = ActionFingerprint(
-        rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):\(command.rawValue)"
+    let fingerprint = ActionFingerprint.make(
+        "runtime",
+        [
+            .field(subject.session.id.rawValue.uuidString), .field(subject.policyWorkspace.rawValue),
+            .field(command.rawValue),
+        ]
     )
     let scope = ActionScope(workingDirectory: subject.policyWorkspace)
     switch analysis.innermost {

@@ -286,9 +286,12 @@ package func makeRuntimeHTTPAction(
         address: address
     )
     let token = canonical.query.map { HTTPDigest.sha256Hex(Array($0.utf8)) } ?? "none"
-    let fingerprint = ActionFingerprint(
-        rawValue: "runtime:\(subject.session.id.rawValue.uuidString):"
-            + "\(subject.policyWorkspace.rawValue):http:GET:\(destination.auditedResource):q:\(token)"
+    let fingerprint = ActionFingerprint.make(
+        "runtime",
+        [
+            .field(subject.session.id.rawValue.uuidString), .field(subject.policyWorkspace.rawValue),
+            .field("http"), .field("GET"), .field(destination.auditedResource), .field("q"), .field(token),
+        ]
     )
     return HTTPAction(
         fingerprint: fingerprint,

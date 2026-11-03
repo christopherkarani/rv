@@ -216,7 +216,7 @@ public enum EgressProposal: Sendable {
     public static let proposalAgent: HookHost = .grok
 
     public static func fingerprint(for rule: LiveNetworkRule) -> ActionFingerprint {
-        ActionFingerprint(rawValue: "\(fingerprintPrefix)\(rule.host):\(rule.port)")
+        .make("egress", [.field(rule.host), .field(String(rule.port))])
     }
 
     /// Strict re-parse of a stored fingerprint. File text is untrusted, so
@@ -225,10 +225,10 @@ public enum EgressProposal: Sendable {
     public static func parse(_ fingerprint: ActionFingerprint) -> LiveNetworkRule? {
         let raw = fingerprint.rawValue
         guard raw.hasPrefix(fingerprintPrefix) else { return nil }
-        let rest = String(raw.dropFirst(fingerprintPrefix.count))
-        guard let colon = rest.lastIndex(of: ":") else { return nil }
-        let host = String(rest[..<colon])
-        let portText = String(rest[rest.index(after: colon)...])
+        let parts = FingerprintComponent.split(String(raw.dropFirst(fingerprintPrefix.count)), separator: ":")
+        guard parts.count == 2, let host = FingerprintComponent.unescape(parts[0]),
+            let portText = FingerprintComponent.unescape(parts[1])
+        else { return nil }
         // Canonical port spelling only: `Int` also accepts `+443`/`0443`,
         // which no fingerprint this code mints ever contains.
         guard let port = Int(portText), String(port) == portText else { return nil }
