@@ -1661,7 +1661,7 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
         valueLongs: sedValueLongs,
         bareShorts: sedBareShorts,
         bareLongs: sedBareLongs,
-        conflictedShorts: ["i"]
+        conflictedShorts: ["i", "I"]
     )
     var dests: [String] = []
     // The main scan drops bare `=`-longs, so `--in-place=.bak` also needs
@@ -1680,6 +1680,7 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     }
     if scan.failed == false, scan.sawHelp == false,
         scan.bareShortHits.contains("i") || scan.flagValues["i"] != nil
+            || scan.bareShortHits.contains("I") || scan.flagValues["I"] != nil
             || scan.bareLongHits.contains("in-place") || inPlaceLong
     {
         let scriptGiven = scan.flagValues["e"] != nil || scan.flagValues["f"] != nil

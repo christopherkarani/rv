@@ -6,12 +6,16 @@ import Foundation
 struct SedScriptEffects: Equatable {
     var writeTargets: [String] = []
     var executes = false
+    /// The scan stopped on text it could not parse; effects are unknown.
+    var unparseable = false
 }
 
 /// Scans one sed script (one `-e` fragment or the script operand). `w` and
 /// `e` only count at command position: inside a regex, a replacement, a
 /// `y` table, an `a`/`i`/`c` text, a label, or a comment they are data.
-/// An unparseable tail stops the scan; sed itself rejects such scripts.
+/// An unparseable tail stops the scan and sets `unparseable`: the rest of
+/// the script is unknown, so callers fail closed rather than assume it is
+/// harmless.
 func sedScriptEffects(_ script: String) -> SedScriptEffects {
     var scanner = SedScanner(chars: Array(script))
     scanner.run()
@@ -22,7 +26,21 @@ func sedScriptEffects(_ script: String) -> SedScriptEffects {
 /// every `-e`/`--expression` value, else the first operand. A `-f` script
 /// file is unreadable here and contributes nothing.
 func sedScriptTexts(_ args: [String]) -> [String] {
+    sedScriptSources(args).scripts
+}
+
+/// True when a `-f`/`--file` script comes from stdin, `/dev/*`, `/proc/*`
+/// or a substitution: content rv cannot read, so it must be limited.
+func sedScriptFileIsUnreadable(_ args: [String]) -> Bool {
+    sedScriptSources(args).files.contains { file in
+        file == "-" || file.hasPrefix("/dev/") || file.hasPrefix("/proc/")
+            || file.hasPrefix("<(") || file.contains("$(") || file.contains("`")
+    }
+}
+
+private func sedScriptSources(_ args: [String]) -> (scripts: [String], files: [String]) {
     var scripts: [String] = []
+    var files: [String] = []
     var operands: [String] = []
     var scriptFromFile = false
     var index = 0
@@ -35,14 +53,17 @@ func sedScriptTexts(_ args: [String]) -> [String] {
         }
         if word.hasPrefix("--") {
             let (name, attached) = splitLongOption(word)
-            if "expression".hasPrefix(name), name.count >= 2 {
+            if "expression".hasPrefix(name), name.isEmpty == false {
                 if let attached { scripts.append(attached) } else if index < args.count {
                     scripts.append(args[index])
                     index += 1
                 }
             } else if "file".hasPrefix(name), name.count >= 2 {
                 scriptFromFile = true
-                if attached == nil { index += 1 }
+                if let attached { files.append(attached) } else if index < args.count {
+                    files.append(args[index])
+                    index += 1
+                }
             } else if "line-length".hasPrefix(name), name.count >= 2, attached == nil {
                 index += 1
             }
@@ -53,12 +74,12 @@ func sedScriptTexts(_ args: [String]) -> [String] {
             continue
         }
         index += consumeSedCluster(word, next: index < args.count ? args[index] : nil, scripts: &scripts,
-                                   scriptFromFile: &scriptFromFile)
+                                   scriptFromFile: &scriptFromFile, files: &files)
     }
     if scripts.isEmpty, scriptFromFile == false, let first = operands.first(where: { $0.isEmpty == false }) {
         scripts.append(first)
     }
-    return scripts
+    return (scripts, files)
 }
 
 private func splitLongOption(_ word: String) -> (name: String, attached: String?) {
@@ -73,7 +94,8 @@ private func consumeSedCluster(
     _ word: String,
     next: String?,
     scripts: inout [String],
-    scriptFromFile: inout Bool
+    scriptFromFile: inout Bool,
+    files: inout [String]
 ) -> Int {
     let letters = Array(word.dropFirst())
     for (offset, letter) in letters.enumerated() {
@@ -88,7 +110,9 @@ private func consumeSedCluster(
             return 1
         case "f":
             scriptFromFile = true
-            return attached.isEmpty ? 1 : 0
+            if attached.isEmpty == false { files.append(attached); return 0 }
+            if let next { files.append(next) }
+            return 1
         case "l":
             return attached.isEmpty ? 1 : 0
         default:
@@ -102,6 +126,7 @@ private struct SedScanner {
     let chars: [Character]
     var index = 0
     var effects = SedScriptEffects()
+    private var addressFailed = false
 
     init(chars: [Character]) {
         self.chars = chars
@@ -114,9 +139,19 @@ private struct SedScanner {
             skip { $0.isWhitespace || $0 == ";" }
             guard peek != nil else { return }
             skipAddresses()
-            guard let command = peek else { return }
+            if addressFailed {
+                effects.unparseable = true
+                return
+            }
+            guard let command = peek else {
+                effects.unparseable = true
+                return
+            }
             index += 1
-            guard scanCommand(command) else { return }
+            guard scanCommand(command) else {
+                effects.unparseable = true
+                return
+            }
         }
     }
 
@@ -131,7 +166,8 @@ private struct SedScanner {
         case "s":
             return scanSubstitute()
         case "y":
-            return skipDelimited() && skipDelimited(delimiter: chars[index - 1])
+            guard skipDelimited() else { return false }
+            return skipDelimited(delimiter: chars[index - 1])
         case "w", "W":
             addWriteTarget(readToEndOfLine())
             return true
@@ -158,7 +194,9 @@ private struct SedScanner {
     private mutating func scanSubstitute() -> Bool {
         guard let delimiter = peek, delimiter != "\n", delimiter != "\\" else { return false }
         index += 1
-        guard skipDelimited(delimiter: delimiter), skipDelimited(delimiter: delimiter) else { return false }
+        guard skipDelimited(delimiter: delimiter, brackets: true),
+            skipDelimited(delimiter: delimiter)
+        else { return false }
         while let flag = peek {
             switch flag {
             case "e":
@@ -208,7 +246,9 @@ private struct SedScanner {
     }
 
     /// Skips through the next unescaped `delimiter`; false when unterminated.
-    private mutating func skipDelimited(delimiter: Character? = nil) -> Bool {
+    /// In a regex (`brackets`), a delimiter inside a POSIX bracket
+    /// expression (`[/]`, `[^/]`, `[]/]`, `[[:alpha:]/]`) is a literal.
+    private mutating func skipDelimited(delimiter: Character? = nil, brackets: Bool = false) -> Bool {
         let close = delimiter ?? peek
         if delimiter == nil { index += 1 }
         guard let close else { return false }
@@ -217,8 +257,34 @@ private struct SedScanner {
                 index += 2
                 continue
             }
+            if brackets, char == "[", skipBracketExpression() { continue }
             index += 1
             if char == close { return true }
+        }
+        return false
+    }
+
+    /// Consumes `[...]` at `index` (a `[`); false (and no move) when the
+    /// bracket expression never closes.
+    private mutating func skipBracketExpression() -> Bool {
+        var cursor = index + 1
+        if cursor < chars.count, chars[cursor] == "^" { cursor += 1 }
+        if cursor < chars.count, chars[cursor] == "]" { cursor += 1 }
+        while cursor < chars.count {
+            let char = chars[cursor]
+            if char == "[", cursor + 1 < chars.count, ":.=".contains(chars[cursor + 1]) {
+                let kind = chars[cursor + 1]
+                var close = cursor + 2
+                while close + 1 < chars.count, !(chars[close] == kind && chars[close + 1] == "]") { close += 1 }
+                guard close + 1 < chars.count else { return false }
+                cursor = close + 2
+                continue
+            }
+            if char == "]" {
+                index = cursor + 1
+                return true
+            }
+            cursor += 1
         }
         return false
     }
@@ -261,8 +327,9 @@ private struct SedScanner {
                 delimiter = custom
                 index += 1
             }
-            guard skipDelimited(delimiter: delimiter) else {
+            guard skipDelimited(delimiter: delimiter, brackets: true) else {
                 index = chars.count
+                addressFailed = true
                 return false
             }
             skip { $0 == "I" || $0 == "M" }

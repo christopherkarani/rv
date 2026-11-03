@@ -137,19 +137,27 @@ struct ResidualInterpreterWriteTests {
         #expect(scope("sed -i 's/a/b/' src/x.swift") == .insideRepository)
         #expect(scope("perl -pi -e 's/a/b/' ~/.bashrc") != .insideRepository)
         #expect(scope("sed 'w /tmp/x' f") != .insideRepository)
+        #expect(scope(#"python3 -c "import json; json.dump({}, open('out.json','w'))""#) == .insideRepository)
+        #expect(scope(#"node -e "require('fs').writeFileSync('out.txt','y')""#) == .insideRepository)
+        #expect(scope(#"python3 -c "open('/tmp/x','w')""#) != .insideRepository)
     }
 
     // MARK: python / node / ruby file writes
 
     @Test func pythonFileWritesLimit() {
-        expectLimited(#"python3 -c 'open("/Users/x/.bashrc","w").write("x")'"#, .python)
-        expectLimited(#"python3 -c 'open("/Users/x/.bashrc", "a").write("x")'"#, .python)
-        expectLimited(#"python3 -c 'open("f", "x")'"#, .python)
-        expectLimited(#"python3 -c 'open("f", "r+")'"#, .python)
-        expectLimited(#"python3 -c 'open("f", "wb")'"#, .python)
-        expectLimited(#"python3 -c 'open("f", mode="w")'"#, .python)
+        expectComplete(#"python3 -c 'open("/Users/x/.bashrc","w").write("x")'"#, inner: "tee -- /Users/x/.bashrc", layers: [.python])
+        expectComplete(#"python3 -c 'open("/Users/x/.bashrc", "a").write("x")'"#, inner: "tee -- /Users/x/.bashrc", layers: [.python])
+        expectComplete(#"python3 -c 'open("f", "x")'"#, inner: "tee -- f", layers: [.python])
+        expectComplete(#"python3 -c 'open("f", "r+")'"#, inner: "tee -- f", layers: [.python])
+        expectComplete(#"python3 -c 'open("f", "wb")'"#, inner: "tee -- f", layers: [.python])
+        expectComplete(#"python3 -c 'open("f", mode="w")'"#, inner: "tee -- f", layers: [.python])
         expectLimited(#"python3 -c 'open(os.path.expanduser("~/.bashrc"),"a")'"#, .python)
-        expectLimited(#"python3 -c 'import io; io.open("f", "w")'"#, .python)
+        expectComplete(#"python3 -c 'import io; io.open("f", "w")'"#, inner: "tee -- f", layers: [.python])
+        expectComplete(#"python3 -c 'import io; io.FileIO("/tmp/x", "w")'"#, inner: "tee -- /tmp/x", layers: [.python])
+        expectLimited(#"python3 -c 'from pathlib import Path; p=Path("/tmp/x"); p.open("w")'"#, .python)
+        expectLimited(#"python3 -c 'f=open; f("/tmp/x","w")'"#, .python)
+        expectLimited(#"python3 -c '(open)("/tmp/x","w")'"#, .python)
+        expectLimited(#"python3 -c 'open(*["/tmp/x","w"])'"#, .python)
         expectLimited(#"python3 -c 'open("f", m)'"#, .python)
         expectLimited(#"python3 -c 'import os; os.open("f", os.O_WRONLY)'"#, .python)
         expectLimited(#"python3 -c 'from pathlib import Path; Path("f").open("w")'"#, .python)
@@ -168,14 +176,18 @@ struct ResidualInterpreterWriteTests {
     }
 
     @Test func nodeFileWritesLimit() {
-        expectLimited(#"node -e 'fs.writeFileSync("/x","y")'"#, .node)
-        expectLimited(#"node -e 'require("fs").appendFileSync("/x","y")'"#, .node)
-        expectLimited(#"node -e 'require("fs").writeFileSync("/x","y")'"#, .node)
-        expectLimited(#"node -e 'fs.promises.writeFile("/x","y")'"#, .node)
-        expectLimited(#"node -e 'const {writeFileSync}=require("fs"); writeFileSync("/x","y")'"#, .node)
-        expectLimited(#"node -e 'require("fs").createWriteStream("/x")'"#, .node)
-        expectLimited(#"node -e 'require("fs").openSync("/x","w")'"#, .node)
-        expectLimited(#"node -e 'require("fs").copyFileSync("a","/x")'"#, .node)
+        expectComplete(#"node -e 'fs.writeFileSync("/x","y")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'require("fs").appendFileSync("/x","y")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'require("fs").writeFileSync("/x","y")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'fs.promises.writeFile("/x","y")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'const {writeFileSync}=require("fs"); writeFileSync("/x","y")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'require("fs").createWriteStream("/x")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'require("fs").openSync("/x","w")'"#, inner: "tee -- /x", layers: [.node])
+        expectComplete(#"node -e 'require("fs").copyFileSync("a","/x")'"#, inner: "tee -- /x", layers: [.node])
+        expectLimited(#"node -e 'require("fs")["writeFileSync"]("/x","y")'"#, .node)
+        expectLimited(#"node -e 'const {writeFileSync: w}=require("fs"); w("/x","y")'"#, .node)
+        expectLimited(#"node -e 'const fs=require("fs"); fs.openSync(p, fs.constants.O_WRONLY|fs.constants.O_CREAT)'"#, .node)
+        expectLimited(#"node -e 'require("fs").writeFileSync(p,"y")'"#, .node)
     }
 
     @Test func nodeFileReadsStayAllowed() {
@@ -185,11 +197,14 @@ struct ResidualInterpreterWriteTests {
 
     @Test func rubyFileWritesLimit() {
         expectLimited(#"ruby -e 'File.write("/x","y")'"#, .ruby)
-        expectLimited(#"ruby -e 'File.open("/x","w")'"#, .ruby)
-        expectLimited(#"ruby -e 'File.open("/x", "a") { |f| f.puts 1 }'"#, .ruby)
-        expectLimited(#"ruby -e 'File.open("/x", mode: "w")'"#, .ruby)
-        expectLimited(#"ruby -e 'File.new("/x", "w")'"#, .ruby)
-        expectLimited(#"ruby -e 'open("/x", "w")'"#, .ruby)
+        expectComplete(#"ruby -e 'File.open("/x","w")'"#, inner: "tee -- /x", layers: [.ruby])
+        expectComplete(#"ruby -e 'File.open("/x", "a") { |f| f.puts 1 }'"#, inner: "tee -- /x", layers: [.ruby])
+        expectComplete(#"ruby -e 'File.open("/x", mode: "w")'"#, inner: "tee -- /x", layers: [.ruby])
+        expectComplete(#"ruby -e 'File.new("/x", "w")'"#, inner: "tee -- /x", layers: [.ruby])
+        expectComplete(#"ruby -e 'open("/x", "w")'"#, inner: "tee -- /x", layers: [.ruby])
+        expectComplete("ruby -e \"File.open '/tmp/x', 'w' do |f| f.puts 1 end\"", inner: "tee -- /tmp/x", layers: [.ruby])
+        expectComplete("ruby -e \"open '/tmp/x', 'w' do |f| f.puts 1 end\"", inner: "tee -- /tmp/x", layers: [.ruby])
+        expectLimited(#"ruby -e 'File.open(p, "w")'"#, .ruby)
         expectLimited(#"ruby -e 'File.open("/x", File::WRONLY)'"#, .ruby)
     }
 
@@ -197,6 +212,63 @@ struct ResidualInterpreterWriteTests {
         expectNotWrapper(#"ruby -e 'puts File.read("f")'"#)
         expectNotWrapper(#"ruby -e 'File.open("f") { |f| puts f.read }'"#)
         expectNotWrapper(#"ruby -e 'File.open("f", "r") { |f| puts f.read }'"#)
+        expectNotWrapper(#"ruby -e 'File.open("f", File::RDONLY) { |f| puts f.read }'"#)
+    }
+
+    // MARK: round-3 review of #491
+
+    @Test func proxyQuotesOperandsThatAreShellSyntax() {
+        expectComplete("perl -pi -e 1 ';' ~/.bashrc", inner: "tee -- ';' ~/.bashrc", layers: [.perl])
+        expectComplete("perl -pi -e 1 '|' ~/.bashrc", inner: "tee -- '|' ~/.bashrc", layers: [.perl])
+        expectComplete("perl -pi -e 1 '&&' ~/.bashrc", inner: "tee -- '&&' ~/.bashrc", layers: [.perl])
+    }
+
+    @Test func perlCapitalCTakesNoSeparateValue() {
+        expectComplete("perl -C -pi -e 's/a/b/' ~/.bashrc", inner: "tee -- ~/.bashrc", layers: [.perl])
+    }
+
+    @Test func sedScriptFromUnreadableSourceLimits() {
+        expectLimited("sed -f - f", .sed)
+        expectLimited("sed -f /dev/stdin f", .sed)
+        expectLimited("sed -f <(echo 'e id') f", .sed)
+        expectLimited("sed --file=/proc/self/fd/0 f", .sed)
+    }
+
+    @Test func sedBracketDelimitersAndUnparseableScripts() {
+        expectComplete("sed -n '/[/]/w /tmp/evil' f", inner: "tee -- /tmp/evil", layers: [.sed])
+        expectComplete("sed 's/[/]/x/w /tmp/evil' f", inner: "tee -- /tmp/evil", layers: [.sed])
+        expectComplete("sed 's/[^/]*/x/w /tmp/evil' f", inner: "tee -- /tmp/evil", layers: [.sed])
+        expectLimited("sed -n 'p;k;w /tmp/evil' f", .sed)
+        expectNotWrapper("sed -n '/^#/p' f")
+        expectNotWrapper("sed 's/[/]/x/' f")
+        #expect(sedScriptEffects("p;k").unparseable)
+        #expect(sedScriptEffects("s/a/b/;/x").unparseable)
+        #expect(sedScriptEffects("s/a/b/;p").unparseable == false)
+    }
+
+    @Test func sedAbbreviatedExpressionOption() {
+        expectComplete("gsed --e='w /tmp/evil' f", inner: "tee -- /tmp/evil", layers: [.sed])
+    }
+
+    @Test func awkInPlaceWritesItsOperands() {
+        expectComplete("gawk -i inplace '{print}' ~/.bashrc", inner: "tee -- ~/.bashrc", layers: [.awk])
+        expectComplete("awk -i inplace -v a=1 '{print}' f g", inner: "tee -- f g", layers: [.awk])
+        expectNotWrapper("gawk '{print}' ~/.bashrc")
+    }
+
+    @Test func perlOpenForWriteAndInPlaceVariableLimit() {
+        expectLimited(#"perl -e 'open(F, ">", "/tmp/x")'"#, .perl)
+        expectLimited(#"perl -e 'open F, ">/tmp/x"'"#, .perl)
+        expectLimited(#"perl -e 'open(F, ">>/tmp/x")'"#, .perl)
+        expectLimited(#"perl -e 'open(F, "+<", "/tmp/x")'"#, .perl)
+        expectLimited(#"perl -pe 'BEGIN{$^I=""}' ~/.bashrc"#, .perl)
+        expectNotWrapper(#"perl -e 'open(F, "<", "f"); print <F>'"#)
+    }
+
+    @Test func literalInRepoWritesProxyToLocationCheck() {
+        expectComplete(#"python3 -c "import json; json.dump({}, open('out.json','w'))""#, inner: "tee -- out.json", layers: [.python])
+        expectComplete(#"node -e "require('fs').writeFileSync('out.txt','y')""#, inner: "tee -- out.txt", layers: [.node])
+        expectNotWrapper(#"python3 -c "import zipfile; zipfile.ZipFile('a.zip').open('member.txt')""#)
     }
 
     // MARK: awk -f with an unknowable source

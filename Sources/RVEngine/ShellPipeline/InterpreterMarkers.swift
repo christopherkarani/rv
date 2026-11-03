@@ -66,7 +66,7 @@ private func isDangerousModuleAttribute(module: String, attribute: String) -> Bo
 /// including `os.getcwd()` and `re.compile(...)`, is not flagged.
 func pythonCodeCanSpawn(_ code: String) -> Bool {
     let program = removingBenignEval(code, arithmeticLiterals: true, blockEval: false)
-    if pythonOpensFileForWrite(program) { return true }
+    if pythonFileWrites(program).opaque { return true }
     if containsAnyWord(program, pythonDangerousWords) { return true }
     if matches(program, pattern: #"(?<![.\w])(exec|eval|compile|getattr)\s*\("#) { return true }
     if matches(program, pattern: #"\bsys\s*\.\s*modules\b"#) { return true }
@@ -109,24 +109,22 @@ func nodeCodeCanSpawn(_ code: String) -> Bool {
     code.contains("child_process") || code.contains("process.binding")
         || matches(
             code,
-            pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|writeFile|writeFileSync|rename|renameSync)\b"#
+            pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync)\b"#
         )
         || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork"])
-        || nodeWritesFiles(code)
+        || nodeFileWrites(code).opaque
         || nodeReachesFileSystem(code)
         || matches(code, pattern: #"\b(require|import)\s*\(\s*[^'"\s)]"#)
 }
 
-/// The `fs` module under any alias or destructuring (`const f = require("fs")`,
-/// `import {rmSync} from "node:fs"`), or a bare call of a deleting/moving
-/// function. Mirrors python, where a bare `os` mention is already limited.
+/// A bare call of a deleting or moving `fs` function, however `fs` was
+/// obtained (`const f = require("fs"); f.rmSync(...)`, `const {rmSync} =
+/// require("fs"); rmSync(...)`). Writes are scanned separately
+/// (`nodeFileWrites`) so a literal in-repo path can still pass.
 private func nodeReachesFileSystem(_ code: String) -> Bool {
-    matches(code, pattern: #"\b(require|import)\b[^;]*['"`](node:)?fs(/promises)?['"`]"#)
-        || matches(code, pattern: #"\bfrom\s*['"`](node:)?fs(/promises)?['"`]"#)
-        || containsAnyWord(code, [
-            "rm", "rmSync", "unlink", "unlinkSync", "rmdir", "rmdirSync", "rename", "renameSync",
-            "writeFile", "writeFileSync",
-        ])
+    containsAnyWord(code, [
+        "rm", "rmSync", "unlink", "unlinkSync", "rmdir", "rmdirSync", "rename", "renameSync",
+    ])
 }
 
 // MARK: ruby
@@ -152,7 +150,7 @@ func rubyCodeCanSpawn(_ code: String) -> Bool {
         #"\bIO\.(read|readlines|foreach|binread)\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
         #"(?<![.\w])open\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
     ]
-    return patterns.contains { matches(code, pattern: $0) } || rubyOpensFileForWrite(code)
+    return patterns.contains { matches(code, pattern: $0) } || rubyFileWrites(code).opaque
 }
 
 // MARK: perl
@@ -165,6 +163,10 @@ func perlCodeCanSpawn(_ code: String) -> Bool {
             "system", "exec", "qx", "unlink", "rmtree", "remove_tree", "rmdir", "rename", "fork", "eval",
         ])
         || matches(program, pattern: #"\bopen\s*\(?[^;]*\|"#)
+        // Write/append/update opens (`open(F, ">", p)`, `open F, ">p"`) and
+        // the in-place variable `$^I`.
+        || matches(program, pattern: #"\bopen\b[^;]*["']\s*(\+<|\+>|>)"#)
+        || matches(program, pattern: #"\$\^I"#)
 }
 
 // MARK: php

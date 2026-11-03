@@ -64,9 +64,10 @@ private func consumePerlSwitches(_ word: String, next: String?, scan: inout Perl
             // Optional octal digits only; the cluster continues after them.
             offset += 1
             while offset < letters.count, letters[offset].isNumber { offset += 1 }
-        case "I", "C":
+        case "I":
             return attached || next == nil ? 0 : 1
-        case "M", "m", "F", "d", "D", "x", "V":
+        case "C", "M", "m", "F", "d", "D", "x", "V":
+            // `-C` (like `-M`) takes only an attached value, never the next word.
             return 0
         default:
             offset += 1

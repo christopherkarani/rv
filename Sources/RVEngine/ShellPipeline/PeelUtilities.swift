@@ -298,7 +298,7 @@ private func xargsPeeledWords(_ words: [String]) -> (words: [String], limited: B
 /// files in place; otherwise it filters its input.
 private func isSedInPlaceFlag(_ word: String) -> Bool {
     if word.hasPrefix("--") { return "--in-place".hasPrefix(word.prefix { $0 != "=" }) && word.count >= 4 }
-    return word.hasPrefix("-") && word.dropFirst().contains("i")
+    return word.hasPrefix("-") && (word.dropFirst().contains("i") || word.dropFirst().contains("I"))
 }
 
 private func isXargsEffectiveHead(_ word: String) -> Bool {
@@ -328,15 +328,61 @@ private func peelScriptInterpreter(
         return flagValues(words, flags: ["-e"]).contains(where: luaCodeCanSpawn) ? .limited(.lua) : nil
     }
     if head == "sed" || head == "gsed" {
-        let executes = sedScriptTexts(Array(words.dropFirst())).contains { sedScriptEffects($0).executes }
-        if executes { return .limited(.sed) }
-        return writeProxy(sedScriptWrites(Array(words.dropFirst())), .sed, workingDirectory)
+        let args = Array(words.dropFirst())
+        if sedScriptFileIsUnreadable(args) { return .limited(.sed) }
+        let effects = sedScriptTexts(args).map(sedScriptEffects)
+        if effects.contains(where: { $0.executes || $0.unparseable }) { return .limited(.sed) }
+        return writeProxy(sedScriptWrites(args), .sed, workingDirectory)
     }
     if ["awk", "gawk", "mawk", "nawk"].contains(head) {
         let sources = awkSources(words)
-        return sources.readsStdin || sources.programs.contains(where: awkCodeCanSpawn) ? .limited(.awk) : nil
+        if sources.readsStdin || sources.programs.contains(where: awkCodeCanSpawn) { return .limited(.awk) }
+        guard awkRequestsInPlace(words) else { return nil }
+        let files = awkFileOperands(words)
+        return files.isEmpty ? .limited(.awk) : writeProxy(files, .awk, workingDirectory)
     }
     return nil
+}
+
+/// gawk `-i inplace` / `--include=inplace` rewrites its file operands.
+private func awkRequestsInPlace(_ words: [String]) -> Bool {
+    for (index, word) in words.enumerated().dropFirst() {
+        if word == "-iinplace" || word == "--include=inplace" { return true }
+        if word == "-i" || word == "--include", index + 1 < words.count, words[index + 1] == "inplace" {
+            return true
+        }
+    }
+    return false
+}
+
+/// The file operands of an awk invocation: words after the options and the
+/// program (unless `-f`/`--file`/`--source` gave it), less `var=value`.
+private func awkFileOperands(_ words: [String]) -> [String] {
+    let valueFlags: Set<String> = ["-F", "-v", "-f", "-i", "-e", "-E", "-l", "--file", "--include", "--source",
+                                   "--field-separator", "--assign", "--load"]
+    var operands: [String] = []
+    var programGiven = false
+    var index = 1
+    while index < words.count {
+        let word = words[index]
+        index += 1
+        if word == "--" {
+            operands += words[index...]
+            break
+        }
+        if word.hasPrefix("-"), word.count > 1 {
+            if ["-f", "--file", "-e", "--source"].contains(word) || word.hasPrefix("--file=")
+                || word.hasPrefix("--source=") || (word.hasPrefix("-f") && word.count > 2)
+            {
+                programGiven = true
+            }
+            if valueFlags.contains(word) { index += 1 }
+            continue
+        }
+        operands.append(word)
+    }
+    if programGiven == false, operands.isEmpty == false { operands.removeFirst() }
+    return operands.filter { $0.contains("=") == false || $0.hasPrefix("/") || $0.hasPrefix(".") }
 }
 
 /// Files a sed invocation writes because of its script (`w`, `s///w`) plus
@@ -355,8 +401,7 @@ private func sedScriptWrites(_ args: [String]) -> [String] {
 /// classifies (outside the repo denies, inside allows). Nil for no paths.
 private func writeProxy(_ paths: [String], _ kind: WrapperKind, _ workingDirectory: WorkingDirectory?) -> Peel? {
     guard paths.isEmpty == false else { return nil }
-    let tokens = (["tee", "--"] + paths).map { ShellPipeline.Token(lexeme: $0, wasQuoted: false) }
-    return .next(renderCommand(tokens), kind, workingDirectory)
+    return .next(writeProxyCommand(paths), kind, workingDirectory)
 }
 
 private func flagValues(_ words: [String], flags: Set<String>) -> [String] {

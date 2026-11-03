@@ -16,6 +16,8 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
     var forceCreate = false
     var orphan = false
     var force = false
+    var mergeish = false
+    var pathspecFile = false
     var pendingName = false
     var before: [String] = []
     var after: [String] = []
@@ -49,8 +51,10 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
         case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
-                case "q", "l", "t", "m":
+                case "q", "l", "t":
                     break
+                case "m":
+                    mergeish = true
                 case "f":
                     force = true
                 case "b":
@@ -67,8 +71,14 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
             }
         case .long("force", nil):
             force = true
-        case .long("conflict", let attached) where attached != nil:
+        case .long("conflict", _):
+            mergeish = true
+        case .long("pathspec-from-file", _):
+            pathspecFile = true
+        case .long("pathspec-file-nul", nil):
             break
+        case .long(let flag, nil) where ["ours", "theirs", "merge"].contains(flag):
+            mergeish = true
         case .long(let flag, nil) where checkoutSkipLongs.contains(flag):
             break
         case .positional(let word):
@@ -91,6 +101,14 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
     if seenDash {
         return .discardWorktree(pathspecs: after, source: before.first)
     }
+    // Pathspecs read from a file are unknown: treat as the whole tree.
+    if pathspecFile { return .discardWorktree(pathspecs: ["."], source: nil) }
+    // `--ours`/`--theirs`/`-m`/`--conflict=` take paths, so any positional is one.
+    if mergeish, before.isEmpty == false {
+        return .discardWorktree(pathspecs: before, source: nil)
+    }
+    // A bare `-f` discards every local change.
+    if force, before.isEmpty, after.isEmpty { return .discardWorktree(pathspecs: ["."], source: nil) }
     if force, let name = before.first, before.count == 1, after.isEmpty {
         return .switchBranch(name: name, force: true)
     }
@@ -109,7 +127,10 @@ private func pathCheckoutWithoutDash(_ words: [String]) -> GitAction? {
     if words.count >= 2, let source = words.first {
         return .discardWorktree(pathspecs: Array(words.dropFirst()), source: source)
     }
-    if words.count == 1, let path = words.first, path.hasPrefix(".") {
+    // `.`-prefixed, `:`-magic, and glob words cannot be ref names.
+    if words.count == 1, let path = words.first,
+        path.hasPrefix(".") || path.hasPrefix(":") || path.contains(where: { "*?[".contains($0) })
+    {
         return .discardWorktree(pathspecs: [path], source: nil)
     }
     return nil

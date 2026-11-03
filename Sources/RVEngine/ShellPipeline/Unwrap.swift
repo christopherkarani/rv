@@ -609,7 +609,8 @@ private func extractPython(_ code: String) -> InterpreterExtract {
     if pythonCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = pythonFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
 
 private func pythonShellCommand(_ code: String) -> String? {
@@ -661,7 +662,8 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     if nodeCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = nodeFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
 
 private func nodeShellCommand(_ code: String) -> String? {
@@ -698,7 +700,8 @@ private func extractRuby(_ code: String) -> InterpreterExtract {
     if rubyCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = rubyFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
 
 private func rubyShellCommand(_ code: String) -> String? {
