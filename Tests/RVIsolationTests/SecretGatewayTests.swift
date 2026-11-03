@@ -139,14 +139,15 @@ final class AuditRecords: Sendable {
 struct SecretGatewayTests {
     private func harness(
         upstream: RecordingUpstream, value: String = "sk-live-REAL-0123456789", prefix: String = "sk-",
-        audit: AuditRecords
+        surfaces: Set<GatewaySurface> = [.header], audit: AuditRecords
     ) throws -> (SecretGateway, Int, SecretPlaceholder) {
         let gateway = SecretGateway(transport: upstream.transport) { record in audit.items.withLock { $0.append(record) } }
         let port = try gateway.start().get()
         let placeholder = SecretPlaceholder.mint(prefix: prefix)
         gateway.register(placeholder, entry: SecretGateway.Entry(
             secret: "OPENAI_API_KEY", prefix: prefix, value: try #require(SecretValue(value)),
-            upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1"))
+            upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
+            surfaces: surfaces))
         return (gateway, port, placeholder)
     }
 
@@ -215,7 +216,8 @@ struct SecretGatewayTests {
         let upstream = RecordingUpstream(status: 200)
         let audit = AuditRecords()
         let (gateway, port, placeholder) = try harness(
-            upstream: upstream, value: "x?admin=1&/../admin\r\nX-Injected: yes", prefix: "", audit: audit)
+            upstream: upstream, value: "x?admin=1&/../admin\r\nX-Injected: yes", prefix: "",
+            surfaces: Set(GatewaySurface.allCases), audit: audit)
         defer { gateway.stop() }
 
         let query = try gatewayExchange(port: port,
@@ -233,6 +235,26 @@ struct SecretGatewayTests {
         #expect(header.status == 400)
         #expect(header.body.contains("x?admin") == false)
         #expect(upstream.requests.count == 1)
+    }
+
+    @Test func placeholdersOffTheirSurfacesOrRepeatedNeverReachUpstream() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let query = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models?key=\(placeholder.text) HTTP/1.1\r\n\r\n")
+        #expect(query.status == 403)
+        #expect(query.body.contains("not allowed"))
+        let twice = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "X-Debug: \(placeholder.text)\r\n\r\n")
+        #expect(twice.status == 403)
+        #expect(upstream.requests.isEmpty)
+        #expect(audit.items.withLock { $0.count == 2 && $0.allSatisfy { $0.allowed == false } })
+        let header = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(header.status == 200)
     }
 
     @Test func echoMethodsAreRefusedBeforeTheCredentialIsInjected() throws {

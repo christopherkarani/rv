@@ -55,8 +55,23 @@ enum SecretsRun {
     }
 
     enum Definition: Equatable {
-        case gateway(upstream: String, baseURLEnv: String, placeholderPrefix: String)
+        case gateway(
+            upstream: String, baseURLEnv: String, placeholderPrefix: String,
+            surfaces: Set<GatewaySurface> = GatewaySurface.defaults)
         case environment
+    }
+
+    /// `--surface` values. Nil when none were passed, so the default applies.
+    static func surfaces(_ names: [String]) -> Result<Set<GatewaySurface>?, CommandFailure> {
+        guard names.isEmpty == false else { return .success(nil) }
+        var surfaces: Set<GatewaySurface> = []
+        for name in names {
+            guard let surface = GatewaySurface(rawValue: name) else {
+                return .failure("--surface must be header, query, or path, not \(DisplayedText.field(name))")
+            }
+            surfaces.insert(surface)
+        }
+        return .success(surfaces)
     }
 
     /// Delivery for `rv secrets set`: explicit flags win; otherwise a new
@@ -66,11 +81,15 @@ enum SecretsRun {
     /// established update-value and pass-a-delivery behaviors.
     static func definitionForSet(
         name: String, isNew: Bool, gateway: String?, baseURLEnv: String?,
-        placeholderPrefix: String, environment: Bool
+        placeholderPrefix: String, environment: Bool, surfaces: Set<GatewaySurface>? = nil
     ) -> (definition: Definition?, note: String?) {
+        let surfaces = surfaces ?? GatewaySurface.defaults
         if let gateway, let baseURLEnv {
             return (
-                .gateway(upstream: gateway, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix), nil)
+                .gateway(
+                    upstream: gateway, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix,
+                    surfaces: surfaces),
+                nil)
         }
         if environment {
             return (.environment, nil)
@@ -78,7 +97,7 @@ enum SecretsRun {
         guard isNew, let known = KnownSecretDefaults.gateway(for: name) else { return (nil, nil) }
         let prefix = placeholderPrefix.isEmpty ? known.placeholderPrefix : placeholderPrefix
         let definition = Definition.gateway(
-            upstream: known.upstream, baseURLEnv: known.baseURLEnv, placeholderPrefix: prefix)
+            upstream: known.upstream, baseURLEnv: known.baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces)
         let note =
             "Using known defaults for \(DisplayedText.field(name)): gateway \(known.upstream) via $\(known.baseURLEnv).\n"
         return (definition, note)
@@ -226,9 +245,10 @@ enum SecretsRun {
             switch definition {
             case .environment:
                 delivery = .environment
-            case .gateway(let upstream, let baseURLEnv, let prefix):
+            case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces):
                 guard let url = URL(string: upstream) else { return .failure("--gateway must be an https URL") }
-                delivery = .gateway(SecretGatewayBinding(upstream: url, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
+                delivery = .gateway(SecretGatewayBinding(
+                    upstream: url, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces))
             }
             updated.secrets.append(SecretDefinition(
                 name: name, description: description, agents: agents.isEmpty ? nil : agents,
@@ -627,6 +647,10 @@ struct SecretsSet: AsyncParsableCommand {
     var baseURLEnv: String?
     @Option(name: .customLong("placeholder-prefix"), help: "Prefix kept on the placeholder (for SDK format checks).")
     var placeholderPrefix: String = ""
+    @Option(
+        name: .customLong("surface"),
+        help: "Where the placeholder may be swapped: header, query, or path (repeatable; default header).")
+    var surfaces: [String] = []
     @Flag(help: "Put the real value in the cage environment instead (weaker).") var environment = false
     @Option(name: .customLong("agent"), help: "Only stage for this agent tag (repeatable).") var agents: [String] = []
     @Option(help: "Short description.") var description: String?
@@ -637,6 +661,8 @@ struct SecretsSet: AsyncParsableCommand {
         if environment, gateway != nil { throw ValidationError("pass either --gateway or --environment, not both") }
         if gateway != nil, baseURLEnv == nil { throw ValidationError("--gateway needs --base-url-env") }
         if gateway == nil, baseURLEnv != nil { throw ValidationError("--base-url-env needs --gateway") }
+        if environment, surfaces.isEmpty == false { throw ValidationError("--surface applies to gateway delivery") }
+        if case .failure(let failure) = SecretsRun.surfaces(surfaces) { throw ValidationError(failure.message) }
     }
 
     func run() throws {
@@ -650,8 +676,13 @@ struct SecretsSet: AsyncParsableCommand {
         let isNew = configuration.secret(named: name) == nil
         let resolved = SecretsRun.definitionForSet(
             name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
-            placeholderPrefix: placeholderPrefix, environment: self.environment)
+            placeholderPrefix: placeholderPrefix, environment: self.environment,
+            surfaces: try? SecretsRun.surfaces(surfaces).get())
         let definition = resolved.definition
+        if surfaces.isEmpty == false, definition == nil, isNew == false {
+            try ctx.fail(
+                "rv secrets set: \(DisplayedText.field(name)) is already defined; edit secrets.json to change its surfaces\n")
+        }
         let inferredNote = resolved.note
         if let profile {
             switch RuntimeResourcePolicyStore.load(from: environment.configDirectory) {

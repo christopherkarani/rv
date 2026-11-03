@@ -150,6 +150,9 @@ extension SecretsConfiguration {
                     "upstream": binding.upstream.absoluteString, "baseURLEnv": binding.baseURLEnv,
                 ]
                 if binding.placeholderPrefix.isEmpty == false { fields["placeholderPrefix"] = binding.placeholderPrefix }
+                if binding.surfaces != GatewaySurface.defaults {
+                    fields["surfaces"] = GatewaySurface.ordered(binding.surfaces).map(\.rawValue)
+                }
                 entry["delivery"] = ["gateway": fields]
             }
             return entry

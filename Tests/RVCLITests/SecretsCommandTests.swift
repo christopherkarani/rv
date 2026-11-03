@@ -118,6 +118,44 @@ struct SecretsCommandTests {
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/OPENAI_API_KEY"] } == Data("sk-rotated".utf8))
     }
 
+    @Test func setStoresGatewaySurfacesFromFlagsOrDefaults() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        #expect(SecretsRun.surfaces(["query", "header"]) == .success([.header, .query]))
+        #expect(SecretsRun.surfaces([]) == .success(nil))
+        #expect(SecretsRun.surfaces(["body"])
+            == .failure("--surface must be header, query, or path, not body"))
+        let explicit = SecretsRun.definitionForSet(
+            name: "ACME_KEY", isNew: true, gateway: "https://api.acme.example", baseURLEnv: "ACME_URL",
+            placeholderPrefix: "", environment: false, surfaces: [.query])
+        #expect(explicit.definition == .gateway(
+            upstream: "https://api.acme.example", baseURLEnv: "ACME_URL", placeholderPrefix: "", surfaces: [.query]))
+        let known = SecretsRun.definitionForSet(
+            name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+            environment: false, surfaces: [.header, .path])
+        _ = try SecretsRun.set(
+            name: "ACME_KEY", value: Data("acme-1234".utf8), definition: explicit.definition, agents: [],
+            description: nil, environment: environment).get()
+        _ = try SecretsRun.set(
+            name: "GITHUB_TOKEN", value: Data("ghp-1234".utf8), definition: known.definition, agents: [],
+            description: nil, environment: environment).get()
+        _ = try SecretsRun.set(
+            name: "OPENAI_API_KEY", value: Data("sk-1234".utf8),
+            definition: SecretsRun.definitionForSet(
+                name: "OPENAI_API_KEY", isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "",
+                environment: false).definition,
+            agents: [], description: nil, environment: environment).get()
+        let configuration = try SecretsRun.configuration(environment).get()
+        func surfaces(_ name: String) -> Set<GatewaySurface>? {
+            guard case .gateway(let binding) = configuration.secret(named: name)?.delivery else { return nil }
+            return binding.surfaces
+        }
+        #expect(surfaces("ACME_KEY") == [.query])
+        #expect(surfaces("GITHUB_TOKEN") == [.header, .path])
+        #expect(surfaces("OPENAI_API_KEY") == [.header])
+    }
+
     @Test func setRefusesAmbiguousOrForeignSecrets() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }

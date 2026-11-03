@@ -26,7 +26,8 @@ struct SecretGatewayLiveTests {
         let placeholder = SecretPlaceholder.mint(prefix: "")
         gateway.register(placeholder, entry: SecretGateway.Entry(
             secret: "ECHO_TOKEN", prefix: "", value: try #require(SecretValue(secret)),
-            upstream: try #require(URL(string: "https://postman-echo.com")), fingerprint: nil, runtime: nil))
+            upstream: try #require(URL(string: "https://postman-echo.com")), fingerprint: nil, runtime: nil,
+            surfaces: [.header, .query]))
 
         let response = try gatewayExchange(port: port,
             "GET /s/ECHO_TOKEN/get?token=\(placeholder.text) HTTP/1.1\r\nHost: 127.0.0.1\r\n"

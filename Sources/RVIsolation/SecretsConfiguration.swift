@@ -48,11 +48,17 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var upstream: URL
     public var baseURLEnv: String
     public var placeholderPrefix: String
+    /// Where the placeholder may be swapped; anywhere else is refused.
+    public var surfaces: Set<GatewaySurface>
 
-    public init(upstream: URL, baseURLEnv: String, placeholderPrefix: String = "") {
+    public init(
+        upstream: URL, baseURLEnv: String, placeholderPrefix: String = "",
+        surfaces: Set<GatewaySurface> = GatewaySurface.defaults
+    ) {
         self.upstream = upstream
         self.baseURLEnv = baseURLEnv
         self.placeholderPrefix = placeholderPrefix
+        self.surfaces = surfaces
     }
 }
 
@@ -354,7 +360,7 @@ enum SecretsDecoding {
             try onlyKeys(fields, [], at: place)
             return .environment
         case "gateway":
-            try onlyKeys(fields, ["upstream", "baseURLEnv", "placeholderPrefix"], at: place)
+            try onlyKeys(fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces"], at: place)
             guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
@@ -365,10 +371,25 @@ enum SecretsDecoding {
             guard prefix.utf8.count <= 32, prefix.utf8.allSatisfy(placeholderByte) else {
                 throw Failure("\(place).placeholderPrefix must be up to 32 letters, digits, _ or -")
             }
-            return .gateway(SecretGatewayBinding(upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
+            let surfaces = try self.surfaces(fields["surfaces"], at: "\(place).surfaces")
+            return .gateway(SecretGatewayBinding(
+                upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces))
         default:
             throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
         }
+    }
+
+    /// Absent means the default. Present must be a non-empty list of
+    /// distinct known names, so a typo never widens or silently narrows.
+    static func surfaces(_ value: Any?, at place: String) throws -> Set<GatewaySurface> {
+        guard let value else { return GatewaySurface.defaults }
+        let names = GatewaySurface.allCases.map(\.rawValue).joined(separator: ", ")
+        guard let list = value as? [String], list.isEmpty == false, Set(list).count == list.count else {
+            throw Failure("\(place) must list distinct surfaces from \(names)")
+        }
+        let surfaces = list.compactMap(GatewaySurface.init(rawValue:))
+        guard surfaces.count == list.count else { throw Failure("\(place) must list distinct surfaces from \(names)") }
+        return Set(surfaces)
     }
 
     static func variable(_ value: String) -> Bool {

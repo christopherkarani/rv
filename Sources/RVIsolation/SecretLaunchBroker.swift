@@ -133,7 +133,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 let placeholder = SecretPlaceholder.mint(prefix: binding.placeholderPrefix)
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: binding.placeholderPrefix, value: value,
-                    upstream: binding.upstream, fingerprint: fingerprint, runtime: nil))
+                    upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
+                    surfaces: binding.surfaces))
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))

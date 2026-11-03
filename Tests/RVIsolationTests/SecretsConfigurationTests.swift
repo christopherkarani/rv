@@ -93,6 +93,39 @@ struct SecretsConfigurationTests {
         #expect(upstream("https://api.example.com/v1") == nil)
     }
 
+    private func gatewayJSON(_ extra: String) -> String {
+        #"{"version":1,"secrets":[{"name":"A","source":{"hostEnvironment":{"variable":"X"}},"#
+            + #""delivery":{"gateway":{"upstream":"https://api.example.com","baseURLEnv":"A_BASE"\#(extra)}}}]}"#
+    }
+
+    private func binding(_ json: String) throws -> SecretGatewayBinding {
+        let secret = try #require(try decode(json).get().secret(named: "A"))
+        guard case .gateway(let binding) = secret.delivery else { throw SecretsDecoding.Failure("not a gateway") }
+        return binding
+    }
+
+    @Test func gatewaySurfacesDefaultToHeaderAndRoundTrip() throws {
+        #expect(try binding(gatewayJSON("")).surfaces == [.header])
+        let opened = try binding(gatewayJSON(#","surfaces":["query","header"]"#))
+        #expect(opened.surfaces == [.header, .query])
+
+        let configuration = try decode(gatewayJSON(#","surfaces":["path"]"#)).get()
+        let encoded = String(decoding: configuration.encoded(), as: UTF8.self)
+        #expect(encoded.contains(#""surfaces" : ["#))
+        #expect(try SecretsConfiguration.decode(configuration.encoded()).get() == configuration)
+        let plain = String(decoding: try decode(gatewayJSON("")).get().encoded(), as: UTF8.self)
+        #expect(plain.contains("surfaces") == false)
+    }
+
+    @Test func gatewaySurfacesAreStrict() {
+        let refusal = "A.delivery.gateway.surfaces must list distinct surfaces from header, query, path"
+        #expect(invalidReason(gatewayJSON(#","surfaces":[]"#)) == refusal)
+        #expect(invalidReason(gatewayJSON(#","surfaces":["body"]"#)) == refusal)
+        #expect(invalidReason(gatewayJSON(#","surfaces":["header","header"]"#)) == refusal)
+        #expect(invalidReason(gatewayJSON(#","surfaces":"header""#)) == refusal)
+        #expect(invalidReason(gatewayJSON(#","surfaces":["Header"]"#)) == refusal)
+    }
+
     @Test func providerFieldsAreTypeChecked() {
         func source(_ body: String) -> String? {
             invalidReason(

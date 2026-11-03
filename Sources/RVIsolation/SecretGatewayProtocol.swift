@@ -188,13 +188,18 @@ enum GatewayRefusal: Error, Equatable {
     case echoMethod
     /// A percent-encoded placeholder: never swapped, so never forwarded.
     case encodedPlaceholder
+    /// The placeholder sits on a surface its binding does not allow.
+    case surfaceNotAllowed
+    /// A second placeholder on one surface, e.g. a copy in another header
+    /// that the upstream might log or echo.
+    case repeatedPlaceholder
 
     var status: Int {
         switch self {
         case .malformed, .unsafeValue, .encodedPlaceholder: 400
         case .unknownRoute: 404
         case .noPlaceholder: 401
-        case .unknownPlaceholder, .foreignPlaceholder: 403
+        case .unknownPlaceholder, .foreignPlaceholder, .surfaceNotAllowed, .repeatedPlaceholder: 403
         case .tooLarge: 413
         case .echoMethod: 405
         }
@@ -211,6 +216,8 @@ enum GatewayRefusal: Error, Equatable {
         case .unsafeValue: "secret value cannot be placed safely at this placeholder's position"
         case .echoMethod: "method would echo the brokered credential back"
         case .encodedPlaceholder: "placeholder is percent-encoded; send it as-is"
+        case .surfaceNotAllowed: "placeholder is not allowed in this part of the request for this secret"
+        case .repeatedPlaceholder: "placeholder may appear once per surface (header, query, path)"
         }
     }
 }
@@ -219,12 +226,15 @@ enum GatewayRefusal: Error, Equatable {
 /// header values. Body bytes pass through untouched. The value is encoded or
 /// refused per position so it cannot change the request's shape: a path
 /// segment stays one segment, a query value one value, a header one line.
+/// A placeholder off its binding's surfaces, or a second one on a surface,
+/// is refused before any value is placed.
 enum GatewaySubstitution {
     struct Live {
         var token: String
         var secret: String
         var prefix: String
         var value: SecretValue
+        var surfaces: Set<GatewaySurface>
     }
 
     /// Where a placeholder sits in the request head.
@@ -234,6 +244,14 @@ enum GatewaySubstitution {
         case header
         /// The user half of decoded Basic credentials, where `:` would move the split.
         case basicUser
+
+        var surface: GatewaySurface {
+            switch self {
+            case .path: .path
+            case .query: .query
+            case .header, .basicUser: .header
+            }
+        }
     }
 
     static func apply(
@@ -242,6 +260,7 @@ enum GatewaySubstitution {
         lookup: (String) -> Live?
     ) -> Result<(head: GatewayRequestHead, used: Live, echoes: [Echo]), GatewayRefusal> {
         var used: Live?
+        var filled: Set<GatewaySurface> = []
         var echoes: [Echo] = []
         var basicRewritten = false
         func rewrite(_ bytes: [UInt8], at position: Position) -> Result<[UInt8], GatewayRefusal> {
@@ -256,6 +275,8 @@ enum GatewaySubstitution {
             for occurrence in found {
                 guard let live = lookup(occurrence.token) else { return .failure(.unknownPlaceholder) }
                 guard live.secret == route.secret else { return .failure(.foreignPlaceholder) }
+                guard live.surfaces.contains(position.surface) else { return .failure(.surfaceNotAllowed) }
+                guard filled.insert(position.surface).inserted else { return .failure(.repeatedPlaceholder) }
                 guard let value = encode(live.value.bytes, at: position) else { return .failure(.unsafeValue) }
                 let prefix = Array(live.prefix.utf8)
                 var start = occurrence.start
