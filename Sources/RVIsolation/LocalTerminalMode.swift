@@ -196,140 +196,10 @@ private enum LocalTerminalSignal {
     }
 }
 
-public enum WorkspaceTerminalDriveError: Error, Equatable {
-    case exited(Int32)
-    case client(WorkspaceClientFailure)
-}
-
-/// Proving client for `rv workspace run`. Restores the local terminal before
-/// it returns or throws. The runtime PTY is a different descriptor.
-public enum WorkspaceTerminalDriver {
-    public static func drive(
-        client: WorkspaceClient,
-        runtime: UUID,
-        rows: Int,
-        columns: Int,
-        input: Int32,
-        output: FileHandle,
-        restorer: LocalTerminalRestorer?
-    ) throws {
-        let previousPipe = ignoreSIGPIPE()
-        let bridge = TerminalStdinBridge(client: client, runtime: runtime, input: input)
-        bridge.start()
-        defer {
-            // The reader blocks in `read`. Closing that descriptor from the
-            // caller waits behind it, and a pending read makes restore set
-            // PENDIN. Stop the reader before either of those.
-            bridge.stop()
-            restorer?.restore()
-            restoreSIGPIPE(previousPipe)
-        }
-        var currentRows = rows
-        var currentColumns = columns
-        while true {
-            if bridge.didEnd {
-                // Output copied onto this PTY can come back as stdin and end
-                // the bridge before the exit event is read. Take that event
-                // before returning.
-                switch client.nextTerminalEvent(timeout: 0.5) {
-                case .failure(let error):
-                    _ = client.detach()
-                    throw WorkspaceTerminalDriveError.client(error)
-                case .success(.event(let event)) where event.runtime == runtime:
-                    if case .exited(let status) = event.body {
-                        _ = client.detach()
-                        throw WorkspaceTerminalDriveError.exited(status)
-                    }
-                    _ = client.detach()
-                    return
-                case .success:
-                    _ = client.detach()
-                    return
-                }
-            }
-            if let size = LocalTerminalWindow.current(fd: output.fileDescriptor),
-                size.rows != currentRows || size.columns != currentColumns
-            {
-                currentRows = size.rows
-                currentColumns = size.columns
-                _ = client.resizeTerminal(runtime, rows: size.rows, columns: size.columns)
-            }
-            switch client.nextTerminalEvent(timeout: 0.2) {
-            case .failure(let error):
-                _ = client.detach()
-                throw WorkspaceTerminalDriveError.client(error)
-            case .success(.waiting):
-                continue
-            case .success(.event(let event)):
-                guard event.runtime == runtime else { continue }
-                switch event.body {
-                case .replay(_, let bytes), .output(_, let bytes):
-                    guard writeOutput(output.fileDescriptor, bytes) else {
-                        throw WorkspaceTerminalDriveError.client(.disconnected)
-                    }
-                case .exited(let status):
-                    // Workspace close kills the child, so the signal status
-                    // can arrive before `workspaceClosed`. The close is the
-                    // failure the driver must report.
-                    switch client.nextTerminalEvent(timeout: 0.3) {
-                    case .failure(let error) where error == .workspaceClosed || error == .disconnected:
-                        _ = client.detach()
-                        throw WorkspaceTerminalDriveError.client(error)
-                    case .failure, .success:
-                        break
-                    }
-                    _ = client.detach()
-                    throw WorkspaceTerminalDriveError.exited(status)
-                case .overflow:
-                    _ = client.detach()
-                    throw WorkspaceTerminalDriveError.client(.terminalLimit)
-                case .inputOwner, .replayBegin, .replayEnd, .window:
-                    // Replay boundaries describe this attachment only; this local
-                    // terminal does not use them as a durable output offset.
-                    // Window notices only matter to emulating observers.
-                    break
-                }
-            }
-        }
-    }
-
-    private static func writeOutput(_ fd: Int32, _ bytes: Data) -> Bool {
-        let raw = [UInt8](bytes)
-        var offset = 0
-        while offset < raw.count {
-            let count = raw.withUnsafeBytes { buffer -> Int in
-                guard let base = buffer.baseAddress else { return -1 }
-                return Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
-            }
-            if count > 0 {
-                offset += count
-                continue
-            }
-            if count < 0, errno == EINTR { continue }
-            return false
-        }
-        return true
-    }
-}
-
-private func ignoreSIGPIPE() -> sigaction {
-    var action = sigaction()
-    var previous = sigaction()
-    action.__sigaction_u.__sa_handler = SIG_IGN
-    sigemptyset(&action.sa_mask)
-    action.sa_flags = 0
-    sigaction(SIGPIPE, &action, &previous)
-    return previous
-}
-
-private func restoreSIGPIPE(_ previous: sigaction) {
-    var copy = previous
-    sigaction(SIGPIPE, &copy, nil)
-}
-
 /// Reads one file descriptor on `rv-terminal-stdin` and writes those bytes
-/// to the runtime. `rv workspace run` and the proving driver share this type
-/// so the CLI module stays free of classes.
+/// to the runtime. `rv workspace run` and `WorkspaceTerminalSession` each
+/// start one while they own the runtime's input. It lives here so the CLI
+/// module stays free of classes.
 public final class TerminalStdinBridge: Sendable {
     private let client: WorkspaceClient
     private let runtime: UUID
@@ -354,11 +224,9 @@ public final class TerminalStdinBridge: Sendable {
         self.init(client: client, runtime: runtime, input: STDIN_FILENO)
     }
 
-    public var didEnd: Bool {
+    public var inputEnded: Bool {
         state.withLock { $0.ended }
     }
-
-    public var inputEnded: Bool { didEnd }
 
     public func start() {
         let bridge = self
@@ -381,17 +249,32 @@ public final class TerminalStdinBridge: Sendable {
         drainInput()
     }
 
+    /// Upper bound on bytes `drainInput` discards, so a flood cannot hold
+    /// `stop()` forever.
+    static let maximumDrainBytes = 1 << 20
+
     private func drainInput() {
+        _ = Self.drain(input)
+    }
+
+    /// Discards keystrokes typed while raw before the terminal is restored,
+    /// and returns how many bytes it discarded. Only a terminal needs this:
+    /// a file or pipe such as `/dev/zero` may never run dry, and its unread
+    /// bytes are not keystrokes. Stops once `limit` is reached.
+    static func drain(_ input: Int32, limit: Int = maximumDrainBytes) -> Int {
+        guard isatty(input) == 1 else { return 0 }
         let flags = fcntl(input, F_GETFL)
-        guard flags >= 0 else { return }
-        guard fcntl(input, F_SETFL, flags | O_NONBLOCK) >= 0 else { return }
+        guard flags >= 0 else { return 0 }
+        guard fcntl(input, F_SETFL, flags | O_NONBLOCK) >= 0 else { return 0 }
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
+        var drained = 0
+        while drained < limit {
             let count = Darwin.read(input, &buffer, buffer.count)
-            if count > 0 { continue }
-            break
+            if count <= 0 { break }
+            drained += count
         }
         _ = fcntl(input, F_SETFL, flags)
+        return drained
     }
 
     private func read() {

@@ -61,27 +61,27 @@ int main(void) {
     /* Forward compatibility: a role from a newer build is skipped, not
      * fatal, so an older client keeps verifying the service. */
     expect_valid("unknown_role_skipped",
-                 "[" ENTRY("service", "dev.rv.rvd") "," ENTRY("mcpCustodian", "dev.rv.mcp") "]", 1);
+                 "[" ENTRY("service", "dev.rv.rvd") "," ENTRY("futureRoleFromNewerBuild", "dev.rv.mcp") "]", 1);
     expect_valid("unknown_role_first",
-                 "[" ENTRY("mcpCustodian", "dev.rv.mcp") "," ENTRY("service", "dev.rv.rvd") "]", 1);
-    expect_valid("only_unknown_role", "[" ENTRY("mcpCustodian", "dev.rv.mcp") "]", 0);
+                 "[" ENTRY("futureRoleFromNewerBuild", "dev.rv.mcp") "," ENTRY("service", "dev.rv.rvd") "]", 1);
+    expect_valid("only_unknown_role", "[" ENTRY("futureRoleFromNewerBuild", "dev.rv.mcp") "]", 0);
     expect_valid("unknown_role_new_key",
                  "[" ENTRY("service", "dev.rv.rvd") ","
-                 "{\"role\":\"mcpCustodian\",\"socketPath\":\"/x\",\"requirement\":\"nonsense\"}]", 1);
+                 "{\"role\":\"futureRoleFromNewerBuild\",\"socketPath\":\"/x\",\"requirement\":\"nonsense\"}]", 1);
     expect_valid("duplicate_unknown_roles",
-                 "[" ENTRY("mcpCustodian", "a.b") "," ENTRY("mcpCustodian", "c.d") ","
+                 "[" ENTRY("futureRoleFromNewerBuild", "a.b") "," ENTRY("futureRoleFromNewerBuild", "c.d") ","
                  ENTRY("service", "dev.rv.rvd") "]", 1);
 
     /* Unknown-role entries must still be well-formed flat string objects. */
     expect_invalid("unknown_role_number_value",
-                   "[" ENTRY("service", "dev.rv.rvd") ",{\"role\":\"mcpCustodian\",\"port\":7}]");
+                   "[" ENTRY("service", "dev.rv.rvd") ",{\"role\":\"futureRoleFromNewerBuild\",\"port\":7}]");
     expect_invalid("unknown_role_nested_value",
-                   "[" ENTRY("service", "dev.rv.rvd") ",{\"role\":\"mcpCustodian\",\"x\":{}}]");
+                   "[" ENTRY("service", "dev.rv.rvd") ",{\"role\":\"futureRoleFromNewerBuild\",\"x\":{}}]");
     expect_invalid("unknown_role_duplicate_key",
-                   "[" ENTRY("service", "dev.rv.rvd") ",{\"role\":\"mcpCustodian\",\"role\":\"cli\"}]");
+                   "[" ENTRY("service", "dev.rv.rvd") ",{\"role\":\"futureRoleFromNewerBuild\",\"role\":\"cli\"}]");
     expect_invalid("entry_without_role",
                    "[" ENTRY("service", "dev.rv.rvd") ",{\"requirement\":\"" REQ("a.b") "\"}]");
-    expect_invalid("entry_not_object", "[" ENTRY("service", "dev.rv.rvd") ",\"mcpCustodian\"]");
+    expect_invalid("entry_not_object", "[" ENTRY("service", "dev.rv.rvd") ",\"futureRoleFromNewerBuild\"]");
 
     /* Known roles stay exactly as strict. */
     expect_invalid("known_role_unknown_key",
