@@ -36,6 +36,7 @@ enum HelpCatalog {
         case .workspace: workspace
         case .`operator`: operatorHelp
         case .egress: egress
+        case .login: login
         }
     }
 
@@ -699,6 +700,45 @@ enum HelpCatalog {
         ]
     )
 
+
+    static let login = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv login [list] [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv login check [<provider>...] [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv login connect <provider> [--stdin] [--resource-profile <id>]"),
+                HelpRow(name: "rv login logout <provider>"),
+            ]),
+            HelpSection(heading: "Providers", rows: [
+                HelpRow(name: "vercel", description: "Vercel (VERCEL_TOKEN, api.vercel.com)"),
+                HelpRow(name: "github", description: "GitHub (GITHUB_TOKEN, api.github.com)"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--stdin", description: "Skip importing; read the token from stdin (hidden prompt on a terminal)"),
+                HelpRow(name: "--resource-profile", description: "Wire the secret into this runtime profile (see `rv init`)"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "connect",
+                    description: "Imports an existing CLI login, token environment variable, or `gh auth token`; otherwise prompts"
+                ),
+                HelpRow(
+                    name: "storage",
+                    description: "Kept in the Keychain as the provider's secret with gateway delivery; agents get a placeholder, never the value"
+                ),
+                HelpRow(name: "check", description: "Resolves logins and shows fingerprints, never values"),
+                HelpRow(name: "logout", description: "Removes the login definition and the rv-stored Keychain value"),
+            ]),
+        ],
+        examples: [
+            "rv login",
+            "rv login connect vercel",
+            "printf %s \"$VERCEL_TOKEN\" | rv login connect vercel --stdin",
+            "rv login check github",
+        ]
+    )
 
     static let egress = HelpViewModel(
         title: "",

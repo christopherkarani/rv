@@ -220,6 +220,26 @@ import RVTheme
     }
 }
 
+@Test func helpTopic_everyParserCommand_resolvesToOwnTopic() {
+    let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }
+    #expect(names.isEmpty == false)
+    for name in names {
+        let viaHelp = HelpDispatch.topic(arguments: ["help", name])
+        #expect(viaHelp != nil && viaHelp != .root, "`rv help \(name)` falls back to root")
+        let viaFlag = HelpDispatch.topic(arguments: [name, "--help"])
+        #expect(viaFlag != nil && viaFlag != .root, "`rv \(name) --help` has no styled topic")
+    }
+}
+
+@Test func helpText_login_documentsSubcommandsAndFlags() {
+    #expect(HelpDispatch.topic(arguments: ["login", "connect", "--help"]) == .login)
+    let text = HelpDispatch.text(.login, palette: colorOffPalette)
+    #expect(text.split(separator: "\n").first.map(String.init) == "Usage")
+    for needle in ["rv login connect", "rv login logout", "rv login check", "--stdin", "--resource-profile", "vercel", "github"] {
+        #expect(text.contains(needle), "login help missing \(needle)")
+    }
+}
+
 @Test func helpText_test_documentsDenyExitCode() {
     let text = HelpDispatch.text(.test, palette: colorOffPalette)
     #expect(text.contains("Exit codes"))
