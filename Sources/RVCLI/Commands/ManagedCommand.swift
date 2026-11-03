@@ -149,23 +149,16 @@ enum ManagedRun {
     }
 
     /// Robot JSON for `rv managed`. `JSONEncoder` already writes ESC as
-    /// `\u001b`. U+2028, U+2029, and U+202E stay raw unless they are replaced
-    /// after encoding. The result is still valid JSON. Policy strings are not
-    /// fielded first: that would turn ESC into the literal spelling `\\u001b`.
+    /// `\u001b` but leaves separators, NEL, bidi controls, and other format
+    /// scalars raw; `DisplayedText.escapeJSONScalars` escapes every one
+    /// `DisplayedText.needsEscape` flags. The result is still valid JSON.
+    /// Policy strings are not fielded first: that would turn ESC into the
+    /// literal spelling `\\u001b`.
     static func robotJSON<T: Encodable>(_ value: T) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(value), var text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        text += "\n"
-        let scalars: [(Character, String)] = [
-            ("\u{2028}", "\\u2028"),
-            ("\u{2029}", "\\u2029"),
-            ("\u{202E}", "\\u202e"),
-        ]
-        for (scalar, escaped) in scalars {
-            text = text.replacingOccurrences(of: String(scalar), with: escaped)
-        }
-        return text
+        guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
+        return DisplayedText.escapeJSONScalars(text + "\n")
     }
 }
 
