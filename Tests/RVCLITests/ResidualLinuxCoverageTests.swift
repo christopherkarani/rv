@@ -119,7 +119,9 @@ struct ResidualLinuxCoverageTests {
         let applications = homeURL.appendingPathComponent("Applications", isDirectory: true)
         try FileManager.default.createDirectory(at: applications, withIntermediateDirectories: true)
         let fromHome = FilesystemCompanionPresence(home: home.rawValue)
-        #expect(fromHome.presence() == .absent)
+        #expect(fromHome.searchRoots.map(\.path) == ["/Applications", applications.path])
+        // Probe only the isolated root: `/Applications` is machine state.
+        #expect(FilesystemCompanionPresence(searchRoots: [applications]).presence() == .absent)
         #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.app"))
         #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.") == false)
         #expect(FilesystemCompanionPresence.isCompanionBundleId("dev.rv.evaluate") == false)
