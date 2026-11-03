@@ -367,11 +367,11 @@ public struct MCPConfiguration: Sendable, Equatable {
     }
 
     /// Writes and signs mcp.json (`MCPIntegrity`), so `rv mcp check` knows rv wrote it.
-    public func write(configDirectory: URL, signer: MCPSigner) -> Result<Void, MCPConfigurationError> {
+    public func write(configDirectory: URL, signing: MCPApprovalSigning) -> Result<Void, MCPConfigurationError> {
         let data = Data(encoded().prettyText.utf8)
         if case .failure(let error) = Self.decode(data) { return .failure(error) }
         guard OwnerOnlyFile.write(data, to: Self.fileURL(configDirectory: configDirectory)),
-            MCPIntegrity.sign(data, configDirectory: configDirectory, signer: signer)
+            MCPIntegrity.sign(data, configDirectory: configDirectory, signing: signing)
         else {
             return .failure(.unreadable)
         }

@@ -56,6 +56,7 @@ enum HostLifecycle {
                         files: files,
                         keepAlive: env.companionPresence.presence().keepAlive
                     )
+                    try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
                 case .systemdUser:
                     try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
                 }
