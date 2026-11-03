@@ -41,6 +41,8 @@ private let pythonDangerousWords: [String] = [
     "__subclasses__", "__globals__", "runpy", "popen", "posix", "unlink", "rmdir", "rmtree",
     "write_text", "write_bytes", "rename", "chmod", "chown", "symlink_to", "touch",
     "O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC",
+    // A changed cwd breaks the repo-relative resolution of literal write paths.
+    "chdir", "fchdir", "chroot",
 ]
 
 /// Modules whose attributes spawn processes or delete/move files.
@@ -111,7 +113,7 @@ func nodeCodeCanSpawn(_ code: String) -> Bool {
             code,
             pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync)\b"#
         )
-        || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork"])
+        || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork", "chdir", "chroot"])
         || nodeFileWrites(code).opaque
         || nodeReachesFileSystem(code)
         || matches(code, pattern: #"\b(require|import)\s*\(\s*[^'"\s)]"#)
@@ -132,6 +134,7 @@ private func nodeReachesFileSystem(_ code: String) -> Bool {
 private let rubyDangerousWords: [String] = [
     "system", "exec", "spawn", "fork", "eval", "instance_eval", "class_eval", "module_eval",
     "send", "public_send", "__send__", "const_get", "syscall", "Kernel", "FileUtils", "Open3", "PTY",
+    "chdir", "chroot", "fchdir",
 ]
 
 /// Ruby programs that can run a process, delete or rewrite files, or reach
@@ -161,7 +164,11 @@ func perlCodeCanSpawn(_ code: String) -> Bool {
     return program.contains("`")
         || containsAnyWord(program, [
             "system", "exec", "qx", "unlink", "rmtree", "remove_tree", "rmdir", "rename", "fork", "eval",
+            "sysopen", "chdir", "chroot",
         ])
+        || matches(program, pattern: #"\b(IO::File|File::Copy|File::Path|File::Find)\b"#)
+        // A variable open mode or 2-arg path may carry `>`.
+        || matches(program, pattern: #"\bopen\s*\(?\s*[\w$*]+\s*,\s*\$"#)
         || matches(program, pattern: #"\bopen\s*\(?[^;]*\|"#)
         // Write/append/update opens (`open(F, ">", p)`, `open F, ">p"`) and
         // the in-place variable `$^I`.

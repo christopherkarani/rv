@@ -540,6 +540,10 @@ private func peelInterpreter(
             )
         }
         if kind == .ruby, token.hasPrefix("-e"), token.count > 2 {
+            // Same gate as a separate `-e` payload: expanding text is unknown.
+            if tokens[index].wasQuoted == false || token.contains("$") || token.contains("`") {
+                return .limited(kind)
+            }
             return interpreterPeel(
                 extract(String(token.dropFirst(2))),
                 kind: kind,
@@ -600,11 +604,17 @@ private enum InterpreterExtract: Sendable, Equatable {
     case limited
 }
 
+private func shellCallCount(_ code: String, pattern: String) -> Int {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return Int.max }
+    return regex.numberOfMatches(in: code, range: NSRange(code.startIndex..., in: code))
+}
+
 private func extractPython(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = pythonShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return shellCallCount(folded, pattern: #"\b(system|popen|remove|unlink|rmtree|run|call|Popen|check_call|check_output)\s*\("#) > 1 ? .limited : .command(command)
     }
     if pythonCodeCanSpawn(folded) {
         return .limited
@@ -657,7 +667,8 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = nodeShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return shellCallCount(folded, pattern: #"\b(exec|execSync|unlinkSync|rmdirSync|rmSync|rm|unlink|rmdir)\s*\("#) > 1 ? .limited : .command(command)
     }
     if nodeCodeCanSpawn(folded) {
         return .limited
@@ -695,7 +706,8 @@ private func extractRuby(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = rubyShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return shellCallCount(folded, pattern: #"(?:\b(?:system|exec|delete|unlink|rm_rf|remove_entry_secure)\b|`[^`]*`)"#) > 1 ? .limited : .command(command)
     }
     if rubyCodeCanSpawn(folded) {
         return .limited

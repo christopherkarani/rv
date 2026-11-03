@@ -17,6 +17,7 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
     var orphan = false
     var force = false
     var mergeish = false
+    var mergeSwitch = false
     var pathspecFile = false
     var pendingName = false
     var before: [String] = []
@@ -54,7 +55,7 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
                 case "q", "l", "t":
                     break
                 case "m":
-                    mergeish = true
+                    mergeSwitch = true
                 case "f":
                     force = true
                 case "b":
@@ -77,7 +78,9 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
             pathspecFile = true
         case .long("pathspec-file-nul", nil):
             break
-        case .long(let flag, nil) where ["ours", "theirs", "merge"].contains(flag):
+        case .long("merge", nil):
+            mergeSwitch = true
+        case .long(let flag, nil) where ["ours", "theirs"].contains(flag):
             mergeish = true
         case .long(let flag, nil) where checkoutSkipLongs.contains(flag):
             break
@@ -107,6 +110,10 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
     if mergeish, before.isEmpty == false {
         return .discardWorktree(pathspecs: before, source: nil)
     }
+    // `-m`/`--merge` switch branches: only 2+ words or pathspec magic mean paths.
+    if mergeSwitch, before.count >= 2 || before.first.map(isPathspecLike) == true {
+        return .discardWorktree(pathspecs: before, source: nil)
+    }
     // A bare `-f` discards every local change.
     if force, before.isEmpty, after.isEmpty { return .discardWorktree(pathspecs: ["."], source: nil) }
     if force, let name = before.first, before.count == 1, after.isEmpty {
@@ -127,13 +134,15 @@ private func pathCheckoutWithoutDash(_ words: [String]) -> GitAction? {
     if words.count >= 2, let source = words.first {
         return .discardWorktree(pathspecs: Array(words.dropFirst()), source: source)
     }
-    // `.`-prefixed, `:`-magic, and glob words cannot be ref names.
-    if words.count == 1, let path = words.first,
-        path.hasPrefix(".") || path.hasPrefix(":") || path.contains(where: { "*?[".contains($0) })
-    {
+    if words.count == 1, let path = words.first, isPathspecLike(path) {
         return .discardWorktree(pathspecs: [path], source: nil)
     }
     return nil
+}
+
+/// `.`-prefixed, `:`-magic, and glob words cannot be ref names.
+private func isPathspecLike(_ word: String) -> Bool {
+    word.hasPrefix(".") || word.hasPrefix(":") || word.contains(where: { "*?[".contains($0) })
 }
 
 private let checkoutSkipLongs: Set<String> = [

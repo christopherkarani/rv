@@ -346,13 +346,22 @@ private func peelScriptInterpreter(
     return nil
 }
 
-/// gawk `-i inplace` / `--include=inplace` rewrites its file operands.
+/// gawk `-i inplace[.awk]` / `--include=inplace` (also abbreviated) or an
+/// `@include "inplace"` in the program rewrites its file operands.
 private func awkRequestsInPlace(_ words: [String]) -> Bool {
     for (index, word) in words.enumerated().dropFirst() {
-        if word == "-iinplace" || word == "--include=inplace" { return true }
-        if word == "-i" || word == "--include", index + 1 < words.count, words[index + 1] == "inplace" {
+        if word.hasPrefix("-iinplace") { return true }
+        if word.hasPrefix("--inc"), let equals = word.firstIndex(of: "="),
+            "--include".hasPrefix(word[..<equals]), word[word.index(after: equals)...].hasPrefix("inplace")
+        {
             return true
         }
+        if word == "-i" || (word.hasPrefix("--inc") && "--include".hasPrefix(word)),
+            index + 1 < words.count, words[index + 1].hasPrefix("inplace")
+        {
+            return true
+        }
+        if word.contains("@include"), word.contains("inplace") { return true }
     }
     return false
 }
@@ -373,7 +382,7 @@ private func awkFileOperands(_ words: [String]) -> [String] {
             break
         }
         if word.hasPrefix("-"), word.count > 1 {
-            if ["-f", "--file", "-e", "--source"].contains(word) || word.hasPrefix("--file=")
+            if ["-f", "--file", "-e", "--source", "-E", "--exec"].contains(word) || word.hasPrefix("--file=")
                 || word.hasPrefix("--source=") || (word.hasPrefix("-f") && word.count > 2)
             {
                 programGiven = true
@@ -421,7 +430,7 @@ private func perlPrograms(_ words: [String]) -> [String] {
         let word = words[index]
         guard word.hasPrefix("-"), word.hasPrefix("--") == false, word.count >= 2 else { continue }
         let isProgramFlag = word.last == "e" || word.last == "E"
-        let letters = word.dropFirst().allSatisfy { $0.isLetter }
+        let letters = word.dropFirst().allSatisfy { $0.isLetter || $0.isNumber }
         if isProgramFlag, letters, index + 1 < words.count {
             values.append(words[index + 1])
         }

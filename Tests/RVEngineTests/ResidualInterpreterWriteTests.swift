@@ -271,6 +271,68 @@ struct ResidualInterpreterWriteTests {
         expectNotWrapper(#"python3 -c "import zipfile; zipfile.ZipFile('a.zip').open('member.txt')""#)
     }
 
+    // MARK: round-4 review of #491 (literal-path proxy must fail closed)
+
+    @Test func chdirMakesRelativeLiteralPathsUnresolvable() {
+        expectLimited(#"python3 -c "import os; os.chdir('/'); open('tmp/pwn','w').write('x')""#, .python)
+        expectLimited(#"python3 -c "import contextlib; contextlib.chdir('/'); open('tmp/pwn','w').write('x')""#, .python)
+        expectLimited(#"node -e "process.chdir('/'); require('fs').writeFileSync('tmp/pwn','x')""#, .node)
+        expectLimited(#"ruby -e "Dir.chdir('/'); File.open('tmp/pwn','w'){|f| f<<'x'}""#, .ruby)
+    }
+
+    @Test func rubyInterpolatedPathIsNotALiteral() {
+        expectLimited(##"ruby -e '@p="/tmp/x"; File.open("#@p","w"){|f| f<<"x"}'"##, .ruby)
+        expectLimited(##"ruby -e'@p="/tmp/x"; File.open("#@p","w"){|f| f<<"x"}'"##, .ruby)
+    }
+
+    @Test func rubyParenlessCallsFailClosed() {
+        expectComplete(
+            #"ruby -e 'File.open "/Users/me/.bashrc", "a#{}" do |f| f.puts 1 end'"#,
+            inner: "tee -- /Users/me/.bashrc", layers: [.ruby]
+        )
+        expectLimited(
+            "ruby -e \"File.open '/Users/me/.bashrc', ({}.nil? ? 'a':'a') do |f| f.puts 1 end\"", .ruby
+        )
+    }
+
+    @Test func nodeFsUseBeyondDirectLiteralWritersLimits() {
+        expectLimited(#"node -e 'require("fs").cpSync("package.json","/Users/me/.bashrc")'"#, .node)
+        expectLimited(#"node -e 'require("fs").truncateSync(p,0)'"#, .node)
+        expectLimited(#"node -e 'require("fs").symlinkSync("a","/x")'"#, .node)
+        expectLimited(#"node -e 'require("fs").linkSync("a","/x")'"#, .node)
+        expectLimited(#"node -e 'const f=require("fs"); f.truncateSync(p,0)'"#, .node)
+        expectLimited(#"node -e 'const {cpSync}=require("fs"); cpSync(a,"/x")'"#, .node)
+        expectLimited(#"node -e 'require("fs").writeFileSync.call(null,"/x","y")'"#, .node)
+        expectLimited(#"node -e 'require("fs").writeFileSync.apply(null,["/x","y"])'"#, .node)
+        expectLimited(#"node -e 'const w=require("fs").writeFileSync; w("/x","y")'"#, .node)
+        expectLimited(#"node -e 'fs.writeSync(fs.openSync("/x",577),"y")'"#, .node)
+        expectLimited(#"node -e 'require("fs")["write"+"FileSync"]("/x","y")'"#, .node)
+        expectLimited(#"node -e 'fs.cpSync("a","/x")'"#, .node)
+        expectLimited(#"node -e 'require("fs").openSync("/x", 577)'"#, .node)
+        expectNotWrapper(#"node -e 'console.log(require("fs").readFileSync("f","utf8"))'"#)
+        expectNotWrapper(#"node -e 'const fs=require("fs"); console.log(fs.existsSync("f"))'"#)
+    }
+
+    @Test func pythonPathModeVariableAndMultipleShellCalls() {
+        expectLimited(#"python3 -c "import pathlib; m='w'; pathlib.Path('/tmp/x').open(m)""#, .python)
+        expectLimited(#"python3 -c "import os; os.system('true'); os.system('rm -rf ~')""#, .python)
+    }
+
+    @Test func perlDigitClustersAndExtraWriteMarkers() {
+        expectLimited(#"perl -0777pe 'open(F,">","/tmp/x")' f"#, .perl)
+        expectLimited(#"perl -e 'sysopen(F,"/tmp/x",1)'"#, .perl)
+        expectLimited(#"perl -e 'use IO::File; IO::File->new("/tmp/x","w")'"#, .perl)
+        expectLimited(#"perl -e 'use File::Copy; copy("a","/tmp/x")'"#, .perl)
+        expectLimited(#"perl -e 'open(F, $mode, "/tmp/x")'"#, .perl)
+    }
+
+    @Test func awkInPlaceVariants() {
+        expectComplete("gawk -i inplace.awk '{print}' ~/.bashrc", inner: "tee -- ~/.bashrc", layers: [.awk])
+        expectComplete("gawk --inc=inplace '{print}' ~/.bashrc", inner: "tee -- ~/.bashrc", layers: [.awk])
+        expectComplete("gawk --include inplace '{print}' ~/.bashrc", inner: "tee -- ~/.bashrc", layers: [.awk])
+        expectComplete("gawk -E prog.awk -i inplace ~/.bashrc", inner: "tee -- ~/.bashrc", layers: [.awk])
+    }
+
     // MARK: awk -f with an unknowable source
 
     @Test func awkProgramFromProcessSubstitutionLimits() {

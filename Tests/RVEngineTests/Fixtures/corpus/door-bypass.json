@@ -222,6 +222,18 @@
     { "id": "db.deny.f488r2-nested-group-after-do", "command": "( cd /tmp; while :; do ( rm -r ~ ); done )", "expected": "deny" },
     { "id": "db.deny.f488r2-xargs-stdbuf-long-output", "command": "ls | xargs stdbuf --output L rm -r", "expected": "deny" },
     { "id": "db.allow.f488r2-case-word-with-space-echo", "command": "case $(uname -s) in Darwin) echo hi ;; esac", "expected": "allow" },
-    { "id": "db.allow.f488r2-time-p-ls", "command": "time -p ls", "expected": "allow" }
+    { "id": "db.allow.f488r2-time-p-ls", "command": "time -p ls", "expected": "allow" },
+    { "id": "db.deny.r5-node-cpsync-home", "command": "node -e \"require('fs').cpSync('package.json','/Users/me/.bashrc')\"", "expected": "deny" },
+    { "id": "db.deny.r5-node-alias-truncate", "command": "node -e \"const f=require('fs'); f.truncateSync('/Users/me/.bashrc',0)\"", "expected": "deny" },
+    { "id": "db.deny.r5-node-writefile-call", "command": "node -e \"require('fs').writeFileSync.call(null,'/Users/me/.bashrc','y')\"", "expected": "deny" },
+    { "id": "db.deny.r5-node-writesync-open", "command": "node -e \"fs.writeSync(fs.openSync('/Users/me/.bashrc',577),'y')\"", "expected": "deny" },
+    { "id": "db.deny.r5-node-computed-member", "command": "node -e \"require('fs')['write'+'FileSync']('/Users/me/.bashrc','y')\"", "expected": "deny" },
+    { "id": "db.deny.r5-ruby-interpolated-path", "command": "ruby -e '@p=\"/Users/me/.bashrc\"; File.open(\"#@p\",\"w\"){|f| f<<\"x\"}'", "expected": "deny" },
+    { "id": "db.deny.r5-ruby-parenless-interp-mode", "command": "ruby -e 'File.open \"/Users/me/.bashrc\", \"a#{}\" do |f| f.puts 1 end'", "expected": "deny" },
+    { "id": "db.deny.r5-python-two-system-calls", "command": "python3 -c \"import os; os.system('true'); os.system('rm -rf ~')\"", "expected": "deny" },
+    { "id": "db.deny.r5-perl-0777-open-write", "command": "perl -0777pe 'open(F,\">\",\"/tmp/x\")' f", "expected": "deny" },
+    { "id": "db.deny.r5-gawk-inplace-awk-suffix", "command": "gawk -i inplace.awk '{print}' ~/.bashrc", "expected": "deny" },
+    { "id": "db.allow.r5-git-checkout-merge-branch", "command": "git checkout -m main", "expected": "allow" },
+    { "id": "db.allow.r5-git-checkout-merge-long-branch", "command": "git checkout --merge main", "expected": "allow" }
   ]
 }

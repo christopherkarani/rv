@@ -18,7 +18,7 @@ struct InterpreterWrites {
 /// metacharacters are quoted so they stay one word (`;`, `|`, `&&`, `>`);
 /// others stay bare so `~` still resolves to home.
 func writeProxyCommand(_ paths: [String]) -> String {
-    let metacharacters = Set(" \t\n;|&<>()$`\\\"'*?[]{}!#")
+    let metacharacters = Set(" !\t\n;|&<>()$`\\\"'*?[]{}#")
     let tokens = (["tee", "--"] + paths).map { path in
         ShellPipeline.Token(lexeme: path, wasQuoted: path.contains(where: metacharacters.contains))
     }
@@ -54,12 +54,17 @@ func callArguments(in code: String, pattern: CallPattern) -> [[String]]? {
     for match in regex.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
         guard let end = Range(match.range, in: code).map({ code.distance(from: code.startIndex, to: $0.upperBound) })
         else { continue }
-        calls.append(splitArguments(chars, from: end, parenless: match.range.length > 0 && chars[end - 1] != "("))
+        guard let arguments = splitArguments(chars, from: end, parenless: chars[end - 1] != "(") else {
+            return nil
+        }
+        calls.append(arguments)
     }
     return calls
 }
 
-private func splitArguments(_ chars: [Character], from start: Int, parenless: Bool = false) -> [String] {
+/// Nil when the call text ends inside a quote or bracket: the arguments
+/// cannot be trusted, so the caller treats the call as unresolvable.
+private func splitArguments(_ chars: [Character], from start: Int, parenless: Bool = false) -> [String]? {
     if parenless { return splitParenlessArguments(chars, from: start) }
     var arguments: [String] = []
     var current = ""
@@ -100,30 +105,74 @@ private func splitArguments(_ chars: [Character], from start: Int, parenless: Bo
             current.append(char)
         }
     }
-    return arguments.filter { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }
+    // Ran off the end without the closing `)`.
+    return nil
 }
 
 /// Arguments of a ruby call without parentheses: the rest of the statement,
-/// up to a newline, `;`, or a trailing `do`/`{` block.
-private func splitParenlessArguments(_ chars: [Character], from start: Int) -> [String] {
-    var end = start
+/// up to a newline, `;`, or a trailing `do`/`{` block at bracket depth 0.
+/// Quote- and bracket-aware; nil (unresolvable) when the statement ends
+/// inside a quote or bracket.
+private func splitParenlessArguments(_ chars: [Character], from start: Int) -> [String]? {
+    var arguments: [String] = []
+    var current = ""
+    var depth = 0
     var quote: Character?
-    while end < chars.count {
-        let char = chars[end]
+    var index = start
+    func finish() -> [String] {
+        arguments.append(current)
+        return arguments.filter { $0.trimmingCharacters(in: .whitespaces).isEmpty == false }
+    }
+    while index < chars.count {
+        let char = chars[index]
         if let open = quote {
-            if char == "\\" { end += 1 } else if char == open { quote = nil }
-        } else if char == "\"" || char == "'" {
-            quote = char
-        } else if char == "\n" || char == ";" {
-            break
+            current.append(char)
+            if char == "\\", index + 1 < chars.count {
+                current.append(chars[index + 1])
+                index += 1
+            } else if char == open {
+                quote = nil
+            }
+            index += 1
+            continue
         }
-        end += 1
+        switch char {
+        case "\"", "'":
+            quote = char
+            current.append(char)
+        case "(", "[":
+            depth += 1
+            current.append(char)
+        case ")", "]":
+            depth -= 1
+            if depth < 0 { return nil }
+            current.append(char)
+        case "{":
+            if depth == 0 { return finish() }
+            depth += 1
+            current.append(char)
+        case "}":
+            depth -= 1
+            if depth < 0 { return nil }
+            current.append(char)
+        case "\n", ";":
+            if depth == 0 { return finish() }
+            current.append(char)
+        case "," where depth == 0:
+            arguments.append(current)
+            current = ""
+        default:
+            if depth == 0, char == "d", index + 1 < chars.count, chars[index + 1] == "o",
+                index > start, chars[index - 1].isWhitespace,
+                index + 2 == chars.count || chars[index + 2].isWhitespace || chars[index + 2] == "|"
+            {
+                return finish()
+            }
+            current.append(char)
+        }
+        index += 1
     }
-    var text = String(chars[start..<min(end, chars.count)])
-    for pattern in [#"\s+do\b.*$"#, #"\s*\{.*$"#] {
-        text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-    }
-    return splitArguments(Array(text + ")"), from: 0)
+    return quote == nil && depth == 0 ? finish() : nil
 }
 
 private enum ModeLiteral {
@@ -203,6 +252,8 @@ private func literalPath(_ expression: String) -> String? {
         return nil
     }
     let body = String(text.dropFirst().dropLast())
+    // Double-quoted ruby interpolates `#{x}`, `#@x`, `#$x`: any `#` may hide it.
+    if quote == "\"", body.contains("#") { return nil }
     if body.contains("\\") || body.contains("#{") || body.contains("${") || body.contains(quote) { return nil }
     return body
 }
@@ -254,6 +305,9 @@ func pythonFileWrites(_ code: String) -> InterpreterWrites {
         } else if let first {
             if first.trimmingCharacters(in: .whitespaces).hasPrefix("*") {
                 writes.opaque = true
+            } else if literalPath(first) == nil, matches(code, pattern: #"\b(Path|pathlib)\b"#) {
+                // `Path(x).open(m)`: the mode is a variable.
+                writes.opaque = true
             } else if looksLikeMode(first), callOpensForWrite([first], unknownIsWrite: true, modePosition: 1) {
                 writes.opaque = true
             }
@@ -264,6 +318,46 @@ func pythonFileWrites(_ code: String) -> InterpreterWrites {
     return writes
 }
 
+private let nodeWriterNames =
+    "writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|open|openSync"
+private let nodeReaderNames =
+    "readFile|readFileSync|readdir|readdirSync|readlink|readlinkSync|exists|existsSync|stat|statSync|lstat|lstatSync|"
+    + "access|accessSync|realpath|realpathSync|createReadStream"
+private let nodeFsModule = #"['"](?:node:)?fs(?:/promises)?['"]"#
+private let nodeFsReceiver =
+    #"(?:require\s*\(\s*"# + nodeFsModule + #"\s*\)|(?<![\w$.])(?:fs|promises))(?:\s*\.\s*promises)?"#
+
+/// The program with every `fs` use rv fully models removed: direct calls of
+/// a literal-path writer or a read-only member on the `fs` module, an `fs`
+/// alias declaration, and a destructure of only those names. Whatever `fs`
+/// mention is left over is a use the proxy does not understand.
+private func nodeFsResidue(_ code: String) -> String {
+    let names = "(?:\(nodeWriterNames)|\(nodeReaderNames))"
+    var text = code
+    let steps: [(String, String)] = [
+        (#"(?:const|let|var)\s+(?:fs|promises)\s*=\s*require\s*\(\s*"# + nodeFsModule + #"\s*\)\s*;?"#, " "),
+        (#"(?:const|let|var)\s*\{\s*(?:"# + names + #"\s*,?\s*)+\}\s*=\s*require\s*\(\s*"#
+            + nodeFsModule + #"\s*\)\s*;?"#, " "),
+        (nodeFsReceiver + #"\s*\.\s*("# + nodeWriterNames + #")\s*\("#, "$1("),
+        (nodeFsReceiver + #"\s*\.\s*("# + nodeReaderNames + #")\b"#, "$1"),
+    ]
+    for (pattern, template) in steps {
+        text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+    }
+    return text
+}
+
+/// True when `fs` is used beyond what the writer scan models: any module
+/// reference, `fs`/`promises` mention, or writer name that is not called
+/// directly (`.call`, `.bind`, aliasing, bracket access).
+private func nodeFsUseIsUnmodeled(_ code: String) -> Bool {
+    let residue = nodeFsResidue(code)
+    return matches(residue, pattern: #"(?<![\w$])(?:fs|promises)(?![\w$])"#)
+        || matches(residue, pattern: nodeFsModule)
+        || matches(residue, pattern: #"\bimport\b"#)
+        || matches(residue, pattern: #"(?<![\w$])(?:\#(nodeWriterNames))(?![\w$])(?!\s*\()"#)
+}
+
 func nodeFileWrites(_ code: String) -> InterpreterWrites {
     var writes = InterpreterWrites()
     guard let writers = callArguments(in: code, pattern: .nodeWriters),
@@ -272,14 +366,21 @@ func nodeFileWrites(_ code: String) -> InterpreterWrites {
     else { return InterpreterWrites(paths: [], opaque: true) }
     for arguments in writers { record(arguments.first, into: &writes) }
     for arguments in copies { record(arguments.dropFirst().first, into: &writes) }
-    for arguments in opens where callOpensForWrite(arguments, unknownIsWrite: false) {
-        record(arguments.first, into: &writes)
+    for arguments in opens {
+        // A callback (`fs.open(p, (err, fd) => ...)`) is not a mode.
+        let modeArguments = arguments.filter { $0.contains("=>") == false && $0.hasPrefix("function") == false }
+        if callOpensForWrite(modeArguments, unknownIsWrite: true) { recordOpen(modeArguments, into: &writes) }
     }
-    if matches(code, pattern: #"(?<![\w$])(fs|promises)\s*\.\s*(cp|cpSync|truncate|truncateSync|symlink|symlinkSync|link|linkSync)\b"#)
+    if nodeFsUseIsUnmodeled(code)
         || matches(code, pattern: #"\bO_(WRONLY|RDWR|CREAT|APPEND|TRUNC)\b"#)
+        // Receiver-agnostic fs mutators, however `fs` was obtained.
+        || matches(
+            code,
+            pattern: #"(?<![\w$])(cp|cpSync|truncate|truncateSync|ftruncate|ftruncateSync|symlink|symlinkSync|link|linkSync|chmod|chmodSync|fchmod|fchmodSync|chown|chownSync|lchown|lchownSync|utimes|utimesSync|futimes|futimesSync|writeSync|writev|writevSync|mkdtemp|mkdtempSync)\s*[(:]"#
+        )
         // Bracketed or renamed access: `fs["writeFileSync"](...)`, `{writeFileSync: w}`.
         || matches(code, pattern: #"\[\s*['"`](write|append|createWrite|copy)\w*['"`]\s*\]"#)
-        || matches(code, pattern: #"\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync)\s*:"#)
+        || matches(code, pattern: #"\b(\#(nodeWriterNames))\s*:"#)
     {
         writes.opaque = true
     }
