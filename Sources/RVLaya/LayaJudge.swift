@@ -7,8 +7,8 @@ import CoreML
 /// The judge's answer for one command: choice probabilities plus the
 /// laya-guard risk formula (`P(block) + 0.5*P(review)`, max with malicious).
 public struct LayaVerdict: Sendable, Equatable, Codable {
-    public var choice: String
-    public var probabilities: [String: Double]
+    public var choice: Action
+    public var probabilities: [Action: Double]
     public var riskScore: Double
     public var malicious: Double
     public var risk: Double
@@ -18,16 +18,27 @@ public struct LayaVerdict: Sendable, Equatable, Codable {
     /// allow on a truncated view.
     public var truncated: Bool = false
 
-    public enum Action: String, Sendable, Codable {
+    public enum Action: String, Sendable, Codable, CodingKeyRepresentable {
         case allow
         case review
         case block
+
+        /// Parses model/config label strings. An unknown label is a bad
+        /// bundle: it would otherwise read as probability 0 (fail-open).
+        public static func parse(labels: [String]) throws -> [Action] {
+            try labels.map {
+                guard let action = Action(rawValue: $0) else {
+                    throw LayaError.badBundle("unknown action label \"\($0)\"")
+                }
+                return action
+            }
+        }
     }
 
     public func action(blockThreshold: Double = 0.8, reviewThreshold: Double = 0.45) -> Action {
         if risk >= blockThreshold { return .block }
-        if choice == "review" || risk >= reviewThreshold { return .review }
-        return choice == "block" ? .review : .allow
+        if choice == .review || risk >= reviewThreshold { return .review }
+        return choice == .block ? .review : .allow
     }
 }
 
@@ -40,8 +51,8 @@ extension LayaVerdict {
     /// default it to false.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        choice = try c.decode(String.self, forKey: .choice)
-        probabilities = try c.decode([String: Double].self, forKey: .probabilities)
+        choice = try c.decode(Action.self, forKey: .choice)
+        probabilities = try c.decode([Action: Double].self, forKey: .probabilities)
         riskScore = try c.decode(Double.self, forKey: .riskScore)
         malicious = try c.decode(Double.self, forKey: .malicious)
         risk = try c.decode(Double.self, forKey: .risk)
@@ -60,6 +71,11 @@ public struct LayaQuestions: Sendable {
     /// The exact questions laya-guard asks (Korean instruction strings are
     /// part of that project's tuned prompt; Phase 1 measured the English
     /// rendering as worse — see docs/plans/laya-judge-decision-record.md).
+    /// The action question's option labels as typed actions.
+    public func actionLabels() throws -> [LayaVerdict.Action] {
+        try LayaVerdict.Action.parse(labels: action.options.map(\.label))
+    }
+
     public static let guardQuestions = LayaQuestions(
         action: LayaQuestion(
             kind: .choice,
@@ -244,13 +260,13 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         let start = Date()
         let action = try questionProbabilities(state: command, question: questions.action)
         let actionProbs = action.probabilities
-        let labels = questions.action.options.map(\.label)
+        let labels = try questions.actionLabels()
         guard actionProbs.count == labels.count, !labels.isEmpty else {
             throw LayaError.predictionFailed("action probabilities do not match option labels")
         }
-        var probabilities: [String: Double] = [:]
+        var probabilities: [LayaVerdict.Action: Double] = [:]
         for (label, p) in zip(labels, actionProbs) { probabilities[label] = p }
-        let choice = labels.enumerated().max { actionProbs[$0.offset] < actionProbs[$1.offset] }?.element ?? "review"
+        let choice = labels.enumerated().max { actionProbs[$0.offset] < actionProbs[$1.offset] }?.element ?? .review
 
         let score = try questionProbabilities(state: command, question: questions.risk)
         let riskScore = zip(score.probabilities.indices, score.probabilities).reduce(0.0) { $0 + Double($1.0) * $1.1 }
@@ -261,7 +277,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         }
         let malicious = noul.probabilities[1]
 
-        var risk = (probabilities["block"] ?? 0) + 0.5 * (probabilities["review"] ?? 0)
+        var risk = (probabilities[.block] ?? 0) + 0.5 * (probabilities[.review] ?? 0)
         risk = min(1.0, max(0.0, max(risk, malicious)))
         guard risk.isFinite, malicious.isFinite, riskScore.isFinite else {
             throw LayaError.predictionFailed("non-finite verdict")

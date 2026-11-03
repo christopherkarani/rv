@@ -573,7 +573,7 @@ public enum JudgeRuntime {
     ) -> EvaluationResult {
         let isBlock = action == .block
         let reason = verdict.map {
-            "Laya judge: \($0.choice) (risk \(String(format: "%.2f", $0.risk)))"
+            "Laya judge: \($0.choice.rawValue) (risk \(String(format: "%.2f", $0.risk)))"
         } ?? "Laya judge unavailable; failing closed"
         let deny = Deny(
             ruleID: RuleID(pack: .coreJudge, pattern: isBlock ? "laya-block" : "laya-review"),
@@ -632,7 +632,7 @@ public enum JudgeRuntime {
         if let note { row["note"] = note }
         if isPeek { row["peek"] = true }
         if let verdict {
-            row["choice"] = verdict.choice
+            row["choice"] = verdict.choice.rawValue
             row["action"] = (action ?? verdict.action()).rawValue
             row["risk"] = (verdict.risk * 1000).rounded() / 1000
             row["malicious"] = (verdict.malicious * 10000).rounded() / 10000
