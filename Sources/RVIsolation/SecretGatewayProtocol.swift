@@ -197,7 +197,9 @@ struct GatewayRoute: Equatable {
 }
 
 /// Every raw value is the literal audit/OCSF code: renaming a case cannot change
-/// what reaches the log. Raw-value enums cannot carry associated values.
+/// what reaches the log. Raw-value enums cannot carry associated values: a case
+/// that needs a payload drops the raw type and makes `code` an exhaustive
+/// switch returning the same literals, so no code changes with the payload.
 public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
     case malformed = "malformed"
     case unknownRoute = "unknownRoute"

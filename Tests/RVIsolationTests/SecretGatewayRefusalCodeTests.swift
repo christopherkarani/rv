@@ -64,4 +64,16 @@ struct SecretGatewayRefusalCodeTests {
             #expect(SecretLaunchBroker.misuseEvent(record, workspace: nil)?.detail["refusal"] == code)
         }
     }
+
+    /// A blocked request always raises the misuse finding, even if no refusal
+    /// was recorded: the alert fails closed rather than going silent.
+    @Test func blockedWithoutRefusalStillRaisesMisuse() throws {
+        let record = SecretUseRecord(
+            secret: "K", runtime: "r", upstreamHost: nil, method: "GET", path: "/p", status: 403,
+            upstreamStatus: nil, activity: .blocked, refusal: nil, reason: nil, surfaces: [],
+            fingerprint: nil, responseBytes: 0, durationMilliseconds: 0, stage: .complete)
+        let event = try #require(SecretLaunchBroker.misuseEvent(record, workspace: nil))
+        #expect(event.kind == .secretMisuse)
+        #expect(event.detail == ["method": "GET", "path": "/p", "severity": "high"])
+    }
 }
