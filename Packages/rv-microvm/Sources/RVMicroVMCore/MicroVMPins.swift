@@ -13,7 +13,11 @@ public enum MicroVMPins {
     /// Digest of the extracted kernel. Checked after extraction and when a
     /// cached kernel is reused by `prepare`.
     public static let kernelSHA256 = "fb2cfb79eb1ae19447a85d75682d7fa5cfec97e24beb2609a492b806e8072c8d"
-    public static let initImageReference = "ghcr.io/apple/containerization/vminit:0.54.0"
+    /// Manifest-list digest that `vminit:0.54.0` resolved to on 2026-11-03.
+    /// Pulled by digest alone (a reference with a tag would resolve the
+    /// mutable tag), and Containerization refuses substituted content.
+    public static let initImageDigest = "sha256:ab76bf71fbedcbf67a54dc5f37b0acefd68b1ba090d93f752f8e27c9961a685c"
+    public static let initImageReference = "ghcr.io/apple/containerization/vminit@\(initImageDigest)"
     /// Version tag used in cached file names, so a pin bump never reuses a
     /// stale init filesystem.
     public static let initImageTag = "0.54.0"
@@ -31,7 +35,7 @@ public struct MicroVMLayout: Sendable, Equatable {
     public var kernel: URL { kernelDirectory.appendingPathComponent("vmlinux") }
     public var initfs: URL {
         root.appendingPathComponent("initfs", isDirectory: true)
-            .appendingPathComponent("vminit-\(MicroVMPins.initImageTag).ext4")
+            .appendingPathComponent("vminit-\(MicroVMPins.initImageTag)-\(MicroVMDigest.hex(MicroVMPins.initImageDigest) ?? "invalid").ext4")
     }
     /// Containerization `ImageStore` root. Containers live under `containers/`.
     public var store: URL { root.appendingPathComponent("store", isDirectory: true) }

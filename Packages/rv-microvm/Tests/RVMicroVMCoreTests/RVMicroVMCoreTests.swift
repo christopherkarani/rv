@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import RVMicroVMCore
@@ -188,12 +189,15 @@ struct LayoutTests {
         #expect(layout.rootfs(forDigest: "sha256:\(hex)")?.path == "/s/rootfs/\(hex).ext4")
         #expect(layout.rootfs(forDigest: "sha256:../../etc") == nil)
         #expect(layout.rootfs(forDigest: "sha512:\(hex)") == nil)
-        #expect(layout.initfs.lastPathComponent == "vminit-\(MicroVMPins.initImageTag).ext4")
+        let digestHex = MicroVMDigest.hex(MicroVMPins.initImageDigest)
+        #expect(digestHex != nil)
+        #expect(layout.initfs.lastPathComponent == "vminit-\(MicroVMPins.initImageTag)-\(digestHex ?? "").ext4")
     }
 
-    @Test("init image tag matches the pinned reference")
+    @Test("init image is pinned by digest, never a tag")
     func pins() {
-        #expect(MicroVMPins.initImageReference.hasSuffix(":\(MicroVMPins.initImageTag)"))
+        #expect(MicroVMPins.initImageReference.hasSuffix("@\(MicroVMPins.initImageDigest)"))
+        #expect(MicroVMPins.initImageReference.contains(":0") == false)
     }
 
     @Test("guest statuses clamp to 0...255")
@@ -277,6 +281,13 @@ struct WorkspaceControlMountTests {
         #expect(try plan([:]).get().isEmpty)
     }
 
+    @Test("a non-empty .git or .config missing its protected children is refused")
+    func missingChildren() {
+        #expect(plan([".git": .directory, ".git/config": .file]) == .failure(.missingChild("/w/.git/hooks")))
+        #expect(plan([".git": .directory, ".git/hooks": .directory]) == .failure(.missingChild("/w/.git/config")))
+        #expect(plan([".config": .directory]) == .failure(.missingChild("/w/.config/rv")))
+    }
+
     @Test("a symlinked control path is refused: sharing it would follow the link out of the workspace")
     func symlink() {
         #expect(plan([".git": .symlink]) == .failure(.unsupported("/w/.git")))
@@ -286,5 +297,90 @@ struct WorkspaceControlMountTests {
     @Test("other file types are refused")
     func other() {
         #expect(plan([".rv": .other]) == .failure(.unsupported("/w/.rv")))
+    }
+}
+
+@Suite("SocketBridge")
+struct SocketBridgeTests {
+    private func pair() -> (Int32, Int32) {
+        var fds: [Int32] = [0, 0]
+        precondition(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        return (fds[0], fds[1])
+    }
+
+    @Test("a client that drops while upstream is still writing ends the bridge without SIGPIPE")
+    func clientDropsMidStream() async {
+        // The runner may ignore SIGPIPE; the bridge itself must not depend on it.
+        signal(SIGPIPE, SIG_DFL)
+        let (clientPeer, client) = pair()
+        let (upstream, upstreamPeer) = pair()
+        // Guest side vanishes immediately; upstream keeps writing into the bridge.
+        // HostRelay sets this at accept(); macOS rejects setsockopt once the peer is gone.
+        SocketBridge.suppressSigpipe(client)
+        close(clientPeer)
+        SocketBridge.suppressSigpipe(upstreamPeer)  // the test's own writer must not die
+        let writer = Thread {
+            let chunk = [UInt8](repeating: 0x41, count: 65_536)
+            for _ in 0..<64 {
+                let written = chunk.withUnsafeBytes { write(upstreamPeer, $0.baseAddress, $0.count) }
+                if written <= 0 { break }
+            }
+            close(upstreamPeer)
+        }
+        writer.start()
+        await withCheckedContinuation { continuation in
+            Thread.detachNewThread {
+                SocketBridge.bridge(client: client, upstream: upstream)
+                continuation.resume()
+            }
+        }
+        // Reaching here means the process survived and both loops ended.
+        #expect(Bool(true))
+    }
+
+    @Test("bytes flow both ways and EOF ends the bridge")
+    func roundTrip() async {
+        let (clientPeer, client) = pair()
+        let (upstream, upstreamPeer) = pair()
+        async let done: Void = withCheckedContinuation { continuation in
+            Thread.detachNewThread {
+                SocketBridge.bridge(client: client, upstream: upstream)
+                continuation.resume()
+            }
+        }
+        _ = "ping".withCString { write(clientPeer, $0, 4) }
+        var buffer = [UInt8](repeating: 0, count: 4)
+        #expect(read(upstreamPeer, &buffer, 4) == 4)
+        #expect(buffer == Array("ping".utf8))
+        close(clientPeer)
+        close(upstreamPeer)
+        await done
+    }
+}
+
+@Suite("RelayDirectories")
+struct RelayDirectoriesTests {
+    @Test("owner parses only rvmvm-<pid>.<suffix>")
+    func owner() {
+        #expect(RelayDirectories.owner(of: "rvmvm-123.AbC123") == 123)
+        #expect(RelayDirectories.owner(of: "rvmvm.AbC123") == nil)
+        #expect(RelayDirectories.owner(of: "rvmvm-x.AbC123") == nil)
+        #expect(RelayDirectories.owner(of: "rvmvm-123") == nil)
+        #expect(RelayDirectories.owner(of: "other-123.x") == nil)
+    }
+
+    @Test("sweep removes dead-owner directories only")
+    func sweep() throws {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent("rvsweep-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let fm = FileManager.default
+        for name in ["rvmvm-111.aaaaaa", "rvmvm-222.bbbbbb", "rvmvm.legacy", "unrelated"] {
+            try fm.createDirectory(at: parent.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        try "x".write(to: parent.appendingPathComponent("rvmvm-111.aaaaaa/p1.sock"), atomically: true, encoding: .utf8)
+        let removed = RelayDirectories.sweep(in: parent.path) { $0 == 222 }
+        #expect(removed == ["rvmvm-111.aaaaaa"])
+        let left = Set(try fm.contentsOfDirectory(atPath: parent.path))
+        #expect(left == ["rvmvm-222.bbbbbb", "rvmvm.legacy", "unrelated"])
     }
 }

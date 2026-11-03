@@ -53,6 +53,7 @@ final class HostRelay: Sendable {
             if ready <= 0 { continue }
             let client = accept(listener, nil, nil)
             if client < 0 { continue }
+            SocketBridge.suppressSigpipe(client)
             // Over budget: refuse this connection; the guest sees a reset.
             guard budget.tryAcquire() else {
                 close(client)
@@ -70,35 +71,7 @@ final class HostRelay: Sendable {
             close(client)
             return
         }
-        let group = DispatchGroup()
-        group.enter()
-        Thread.detachNewThread {
-            copy(from: client, to: upstream)
-            group.leave()
-        }
-        copy(from: upstream, to: client)
-        group.wait()
-        close(client)
-        close(upstream)
-    }
-
-    /// One direction, blocking. EOF half-closes the peer; the other
-    /// direction keeps flowing on its own thread.
-    private static func copy(from source: Int32, to destination: Int32) {
-        var buffer = [UInt8](repeating: 0, count: 65_536)
-        outer: while true {
-            let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
-            if count < 0, errno == EINTR { continue }
-            if count <= 0 { break }
-            var offset = 0
-            while offset < count {
-                let written = buffer.withUnsafeBytes { write(destination, $0.baseAddress! + offset, count - offset) }
-                if written < 0, errno == EINTR { continue }
-                if written <= 0 { break outer }
-                offset += written
-            }
-        }
-        shutdown(destination, SHUT_WR)
+        SocketBridge.bridge(client: client, upstream: upstream)
     }
 
     private static func connectLoopback(port: Int) -> Int32? {
