@@ -421,6 +421,8 @@ enum SecretsRun {
     struct ScanReport: Encodable, Equatable {
         var findings: [SecretLeakFinding]
         var skipped: [String]
+        /// Files over the scanner's size cap: reported, not read.
+        var tooLarge: [String] = []
     }
 
     static func scan(
@@ -434,7 +436,8 @@ enum SecretsRun {
             case .failure(let error): skipped.append("\(secret.name): \(error.message)")
             }
         }
-        return ScanReport(findings: SecretLeakScanner.scan(root: root, secrets: values), skipped: skipped)
+        let report = SecretLeakScanner.scan(root: root, secrets: values)
+        return ScanReport(findings: report.findings, skipped: skipped, tooLarge: report.tooLarge)
     }
 
     /// Human refusal when `rv secrets scan` is pointed at a file, not a directory.
@@ -444,9 +447,15 @@ enum SecretsRun {
 
     static func scanText(_ report: ScanReport) -> String {
         var lines = report.findings.map { "\(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
-        if report.findings.isEmpty { lines.append("No secret values found.") }
+        if report.findings.isEmpty { lines.append("No secrets found.") }
+        lines += report.tooLarge.map(notScanned)
         lines += report.skipped.map { "could not check \($0)" }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// A file the scanner did not read. A warning, not a finding.
+    static func notScanned(_ path: String) -> String {
+        "not scanned (over \(SecretLeakScanner.maximumFileBytes / 1_048_576) MiB): \(DisplayedText.field(path))"
     }
 
     struct DescribeRow: Encodable, Equatable {
@@ -631,13 +640,21 @@ enum SecretsRun {
             case .failure(let error): skipped.append("could not check \(secret.name): \(error.message)")
             }
         }
-        let findings: [SecretLeakFinding]
+        let report: SecretLeakReport
         switch SecretGitHook.scan(workTree: workTree, secrets: values) {
         case .failure(let reason): return .failure(CommandFailure(reason.message))
-        case .success(let found): findings = found
+        case .success(let found): report = found
         }
-        var lines = findings.map { "\($0.path):\($0.line):\($0.secret)" }
-        if findings.isEmpty { lines.append("No secret values in staged files.") }
+        let findings = report.findings
+        var lines = findings.map { "\(DisplayedText.field($0.path)):\($0.line):\($0.secret)" }
+        if findings.isEmpty {
+            lines.append("No secrets in staged files.")
+        } else {
+            lines.append(
+                "commit blocked. A false positive: add an `rv-secrets:allow` comment on the line, or "
+                    + "path:rule:line to \(SecretLeakIgnore.fileName). Skip the scan: git config \(SecretGitHook.killSwitch) false")
+        }
+        lines += report.tooLarge.map(notScanned)
         lines += skipped
         return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
     }
@@ -878,7 +895,8 @@ struct SecretsRemove: AsyncParsableCommand {
 
 struct SecretsScan: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "scan", abstract: "Find files containing any secret value rv can resolve (exits 1 on findings).")
+        commandName: "scan",
+        abstract: "Find secret values rv can resolve and known token patterns in a tree (exits 1 on findings).")
 
     @Argument(help: "Directory to scan. Default: current directory.") var path: String?
     @OptionGroup var format: FormatFlags
@@ -950,13 +968,13 @@ struct SecretsImport: AsyncParsableCommand {
 struct SecretsHook: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hook",
-        abstract: "Git pre-commit hook that scans staged content for secret values.",
+        abstract: "Git pre-commit hook that scans staged content for secret values and token patterns.",
         subcommands: [SecretsHookInstall.self, SecretsHookUninstall.self, SecretsHookRun.self])
 }
 
 struct SecretsHookInstall: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "install", abstract: "Install the pre-commit hook in this repository. Safe to run again.")
+        commandName: "install", abstract: "Add rv's block to this repository's pre-commit hook. Safe to run again.")
 
     func run() throws {
         let ctx = CommandContext.current(command: "secrets hook install", json: false, robot: false, plain: true, noColor: true)
@@ -970,7 +988,7 @@ struct SecretsHookInstall: AsyncParsableCommand {
 
 struct SecretsHookUninstall: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "uninstall", abstract: "Remove rv's pre-commit hook and restore the previous one.")
+        commandName: "uninstall", abstract: "Remove rv's block from the pre-commit hook, leaving the rest.")
 
     func run() throws {
         let ctx = CommandContext.current(command: "secrets hook uninstall", json: false, robot: false, plain: true, noColor: true)
