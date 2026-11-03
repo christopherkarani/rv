@@ -148,7 +148,7 @@ public enum MicroVMHelper {
 /// host later executes or trusts. Everything else in the guest is allowed:
 /// the VM is the boundary.
 func macOSGuestSandboxProfile(workspacePath: String) -> String {
-    "(version 1)\n(allow default)\n" + workspaceControlDenies(workspacePath: workspacePath)
+    "(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n" + workspaceControlDenies(workspacePath: workspacePath)
 }
 
 /// envp of the helper: a macOS guest also gets its sandbox profile, by

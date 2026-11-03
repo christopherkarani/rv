@@ -355,8 +355,9 @@ struct MacOSGuestLaunchTests {
     @Test("the guest sandbox profile is the host cage's workspace control rules")
     func guestProfile() {
         let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
-        // LaunchServices would start an opened app outside the sandbox.
-        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n"))
+        // LaunchServices would start an opened app outside the sandbox, and an
+        // Apple event can make a running app (System Events) run a shell command there.
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n"))
         #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
     }
 
@@ -425,11 +426,23 @@ struct MacOSGuestLaunchTests {
                 ("launchctl bootstrap", ["/bin/launchctl", "bootstrap", domain, plist.path], marker("bootstrap")),
                 ("launchctl submit", ["/bin/launchctl", "submit", "-l", submitted, "--", "/usr/bin/touch", marker("submit").path], marker("submit")),
                 ("open", ["/usr/bin/open", "-g", "-j", app.path], marker("open")),
+                (
+                    "osascript",
+                    ["/usr/bin/osascript", "-e", "tell application \"System Events\" to do shell script \"/usr/bin/touch '\(marker("osascript").path)'\""],
+                    marker("osascript")
+                ),
             ]
         }
         #expect(try launch(["/usr/bin/true"], sandboxed: true).status == 0)
-        let controls = try routes("control")
-        let probes = try routes("sandboxed")
+        // The launchd and LaunchServices routes need a GUI login session
+        // (`gui/<uid>`) to run even unsandboxed; without one their controls
+        // prove nothing, so they are skipped and only the setuid checks run.
+        let hasGUISession = ((try? launch(["/bin/launchctl", "print", domain], sandboxed: false))?.status ?? 1) == 0
+        if !hasGUISession {
+            print("skipping launchd/LaunchServices routes: no \(domain) session on this host")
+        }
+        let controls = hasGUISession ? try routes("control") : []
+        let probes = hasGUISession ? try routes("sandboxed") : []
         for route in controls { _ = try launch(route.arguments, sandboxed: false) }
         for route in probes { _ = try launch(route.arguments, sandboxed: true) }
         // Setuid binaries fail on their own too (no crontab, no password),
