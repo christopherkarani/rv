@@ -103,16 +103,12 @@ enum PolicyDraftRun {
 
     private static func render(_ result: EnglishCompileResult, robot: Bool) throws -> String {
         if robot {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-            let data: Data
             switch result {
             case .preview(let preview):
-                data = try encoder.encode(preview)
+                return try RobotJSON.encode(preview)
             case .refuse(let reason):
-                data = try encoder.encode(PolicyDraftRobotRefuse(refuse: reason))
+                return try RobotJSON.encode(PolicyDraftRobotRefuse(refuse: reason))
             }
-            return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
         }
         switch result {
         case .preview(let preview):

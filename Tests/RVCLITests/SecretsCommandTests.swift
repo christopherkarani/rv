@@ -523,7 +523,7 @@ struct SecretsCommandTests {
         let text = SecretsRun.describeText(report)
         #expect(text.contains("op://") == false)
         #expect(text.contains("OPENAI_API_KEY  onePassword  environment"))
-        let json = SecretsRun.json(report)
+        let json = try RobotJSON.encode(report, options: .pretty)
         #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
     }
 

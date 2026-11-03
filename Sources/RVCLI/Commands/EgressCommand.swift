@@ -139,12 +139,9 @@ enum EgressReviewRun {
             "loaded generation \(loaded.generation): \(rules) (\(approvals)) as of \(loaded.updatedAt)"
     }
 
+    // REQ-T7 named divergence: egress robot output gains scalar escaping.
     static func robot(_ views: [EgressProposalView]) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(views)
-        return String(decoding: data, as: UTF8.self)
+        try RobotJSON.encode(views, options: .compactISO8601)
     }
 
     struct ShowSnapshot: Sendable, Equatable, Codable {
@@ -165,15 +162,11 @@ enum EgressReviewRun {
         rejectionReason: String?,
         loaded: EgressLoadedSnapshot? = nil
     ) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(
+        try RobotJSON.encode(
             ShowSnapshot(
                 proposal: view, rejectionReason: rejectionReason,
-                loaded: loadedView(for: view, loaded: loaded))
-        )
-        return String(decoding: data, as: UTF8.self)
+                loaded: loadedView(for: view, loaded: loaded)),
+            options: .compactISO8601)
     }
 
     static func prettyShow(
@@ -260,11 +253,7 @@ enum EgressReviewRun {
     }
 
     static func robotDenials(_ views: [EgressDenialView]) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(views)
-        return String(decoding: data, as: UTF8.self)
+        try RobotJSON.encode(views, options: .compactISO8601)
     }
 
     /// Device-owner prompt naming the exact grant. The host plus port

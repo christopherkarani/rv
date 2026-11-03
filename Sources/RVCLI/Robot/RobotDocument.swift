@@ -36,16 +36,9 @@ enum RobotDocument {
     }
 
     private static func jsonString(_ value: some Encodable) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        do {
-            let data = try encoder.encode(value)
-            return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
-        } catch {
-            // Defensive: JSONEncoder cannot fail on these plain Codable
-            // payloads, so no seam exists to test this arm.
-            throw RobotRenderError.encodingFailed(String(describing: error))
-        }
+        // Defensive: JSONEncoder cannot fail on these plain Codable
+        // payloads, so no seam exists to test the failure arm.
+        try RobotJSON.encode(value)
     }
 
     private static func serviceStatusLines(_ report: ServiceStatusReport) -> [String] {

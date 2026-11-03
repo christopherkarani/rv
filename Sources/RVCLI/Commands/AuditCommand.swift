@@ -47,25 +47,13 @@ enum AuditRun {
         }.joined(separator: "\n") + "\n"
     }
 
-    static func jsonArray(_ events: [AuditEvent]) -> String {
-        guard let data = try? encoder.encode(events), let text = String(data: data, encoding: .utf8) else {
-            return "[]\n"
-        }
-        return DisplayedText.escapeJSONScalars(text) + "\n"
+    static func jsonArray(_ events: [AuditEvent]) throws -> String {
+        try RobotJSON.encode(events, options: .compactISO8601) + "\n"
     }
 
-    static func jsonLines(_ events: [AuditEvent]) -> String {
-        events.compactMap { event in
-            (try? encoder.encode(event)).flatMap { String(data: $0, encoding: .utf8) }
-        }.map { DisplayedText.escapeJSONScalars($0) + "\n" }.joined()
+    static func jsonLines(_ events: [AuditEvent]) throws -> String {
+        try RobotJSON.encodeLines(events, options: .compactISO8601)
     }
-
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return encoder
-    }()
 
     private static func iso8601(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
@@ -79,10 +67,8 @@ enum AuditVerifyRun {
         AuditChain.verify(fileURL: url).mapError { CommandFailure($0.message) }
     }
 
-    static func json(_ report: AuditChainReport) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return (try? encoder.encode(report)).map { String(decoding: $0, as: UTF8.self) + "\n" } ?? "{}\n"
+    static func json(_ report: AuditChainReport) throws -> String {
+        try RobotJSON.encode(report, options: .auditVerifyLegacy)
     }
 
     static func text(_ report: AuditChainReport, path: String) -> String {
@@ -133,7 +119,8 @@ struct AuditTail: AsyncParsableCommand {
         let home = try ctx.requireHome()
         let filter = try AuditRun.filter(since: since, kinds: kind, limit: max(0, limit), now: Date())
         let events = AuditRun.events(home: home, filter: filter)
-        ctx.writeStdout(ctx.explicitRobot ? AuditRun.jsonArray(events) : AuditRun.pretty(events))
+        ctx.writeStdout(
+            ctx.explicitRobot ? try AuditRun.jsonArray(events) : AuditRun.pretty(events))
     }
 }
 
@@ -155,7 +142,10 @@ struct AuditVerify: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv audit verify: \(failure.message)\n")
         case .success(let checked): report = checked
         }
-        ctx.writeStdout(ctx.explicitRobot ? AuditVerifyRun.json(report) : AuditVerifyRun.text(report, path: url.path))
+        ctx.writeStdout(
+            ctx.explicitRobot
+                ? try AuditVerifyRun.json(report)
+                : AuditVerifyRun.text(report, path: url.path))
         if report.isIntact == false { throw ExitCode(1) }
     }
 }
@@ -183,7 +173,7 @@ struct AuditExport: AsyncParsableCommand {
         let events = AuditRun.events(home: home, filter: filter)
         switch format {
         case .rv:
-            ctx.writeStdout(AuditRun.jsonLines(events))
+            ctx.writeStdout(try AuditRun.jsonLines(events))
         case .ocsf:
             let host = ProcessInfo.processInfo.hostName
             ctx.writeStdout(events.compactMap { AuditOCSF.jsonLine($0, hostName: host) }.map { $0 + "\n" }.joined())

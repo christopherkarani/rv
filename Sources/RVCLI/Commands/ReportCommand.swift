@@ -227,13 +227,6 @@ enum ReportRun {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    static func json(_ report: Report) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(report), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return DisplayedText.escapeJSONScalars(text) + "\n"
-    }
-
     static var platform: String {
         #if os(macOS)
         "macos"
@@ -275,7 +268,10 @@ struct ReportCommand: AsyncParsableCommand {
             userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
             userID: getuid(),
             approvalSigning: .live(configDirectory: configDirectory, home: home.rawValue)))
-        ctx.writeStdout(ctx.explicitRobot ? ReportRun.json(report) : ReportRun.text(report))
+        ctx.writeStdout(
+            ctx.explicitRobot
+                ? try RobotJSON.encode(report, options: .pretty)
+                : ReportRun.text(report))
         if strict, report.compliant == false { throw ExitCode(1) }
     }
 }
