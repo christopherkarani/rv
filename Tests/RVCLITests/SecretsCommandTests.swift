@@ -282,6 +282,75 @@ struct SecretsCommandTests {
         #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
     }
 
+    @Test func varlockProxyImportsAsGatewayDelivery() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com) @type=string(startsWith=ak_)
+            ACME_KEY=op(op://Eng/Acme/key)
+            """.utf8).write(to: schema)
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("import ACME_KEY: provider onePassword, delivery gateway → api.example.com via $ACME_KEY_BASE_URL"))
+        #expect(text.contains("wrote secrets.json (1 secret)\n"))
+        let stored = try #require(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_KEY"))
+        #expect(stored.delivery == .gateway(SecretGatewayBinding(
+            upstream: URL(string: "https://api.example.com")!, baseURLEnv: "ACME_KEY_BASE_URL", placeholderPrefix: "ak_")))
+    }
+
+    @Test func varlockImportSkipsASecretWhoseVariableSecretsJsonAlreadySets() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.acme.com)
+            ACME_KEY=op(op://Eng/Acme/key)
+            OTHER=op(op://Eng/Other/key)
+            """.utf8).write(to: schema)
+        try SecretsConfiguration(secrets: [
+            SecretDefinition(name: "ACME_KEY_BASE_URL", source: .onePassword(reference: "op://Eng/Url/value"), delivery: .environment),
+        ]).write(configDirectory: fixture.directory).get()
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("skip ACME_KEY: secrets.json or another imported secret already sets $ACME_KEY_BASE_URL"))
+        #expect(text.contains("wrote secrets.json (1 secret)\n"))
+        let stored = try SecretsRun.configuration(fixture.environment()).get()
+        #expect(stored.secret(named: "OTHER") != nil)
+        #expect(stored.secret(named: "ACME_KEY") == nil)
+    }
+
+    @Test func varlockImportSkipsOneOfTwoImportedSecretsSettingTheSameVariable() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com)
+            ACME=op(op://Eng/Acme/key)
+            # @sensitive
+            ACME_BASE_URL=op(op://Eng/Acme/url)
+            """.utf8).write(to: schema)
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("skip ACME_BASE_URL: secrets.json or another imported secret already sets $ACME_BASE_URL"))
+        #expect(try SecretsRun.configuration(fixture.environment()).get().secrets.map(\.name) == ["ACME"])
+    }
+
+    @Test func varlockImportDoesNotBlameAnAlreadyDefinedSecretForAVariableItNoLongerSets() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        try Data("""
+            # @proxy(domain=api.example.com)
+            ACME=op(op://Eng/Acme/key)
+            # @sensitive
+            ACME_BASE_URL=op(op://Eng/Acme/url)
+            """.utf8).write(to: schema)
+        try SecretsConfiguration(secrets: [
+            SecretDefinition(name: "ACME", source: .onePassword(reference: "op://Eng/Acme/key"), delivery: .environment),
+        ]).write(configDirectory: fixture.directory).get()
+        let text = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(text.contains("skip ACME: secrets.json already defines it"))
+        #expect(try SecretsRun.configuration(fixture.environment()).get().secret(named: "ACME_BASE_URL") != nil)
+    }
+
     @Test func varlockImportWiresEveryNameIntoAnExistingProfile() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }
