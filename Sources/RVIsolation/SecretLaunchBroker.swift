@@ -188,8 +188,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 // The SDK signs with these; the gateway discards that signature.
                 let placeholder = SecretPlaceholder.mint(prefix: "")
                 gateway.register(placeholder, entry: SecretGateway.Entry(
-                    secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
-                    runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
+                    secret: name, value: value, upstream: binding.upstream, fingerprint: fingerprint,
+                    runtime: nil, rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: secret.version), signing: binding,
                     approvals: binding.approvalRules, binaries: pins))
                 placeholders.append(placeholder)
