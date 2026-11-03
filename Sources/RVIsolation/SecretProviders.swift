@@ -58,9 +58,16 @@ public enum SecretResolutionError: Error, Sendable, Equatable {
 /// Host-side reads. Tests inject fakes; production uses `.live`.
 public struct SecretResolver: Sendable {
     public var resolve: @Sendable (SecretSource) -> Result<SecretValue, SecretResolutionError>
+    /// A cheap marker that changes when the source's value may have, read
+    /// without the value. Nil when the source has none or cannot be read.
+    public var version: @Sendable (SecretSource) -> String?
 
-    public init(resolve: @escaping @Sendable (SecretSource) -> Result<SecretValue, SecretResolutionError>) {
+    public init(
+        resolve: @escaping @Sendable (SecretSource) -> Result<SecretValue, SecretResolutionError>,
+        version: @escaping @Sendable (SecretSource) -> String? = { _ in nil }
+    ) {
         self.resolve = resolve
+        self.version = version
     }
 
     public static func live(
@@ -98,6 +105,9 @@ public struct SecretResolver: Sendable {
             case .azure(let vault, let name, let version):
                 return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
             }
+        } version: { source in
+            guard case .keychain(let service, let account) = source else { return nil }
+            return KeychainReader.modificationMarker(service, account)
         }
     }
 

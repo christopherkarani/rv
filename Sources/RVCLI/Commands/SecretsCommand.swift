@@ -42,6 +42,9 @@ enum SecretsRun {
         /// Gateway only: where the placeholder may sit, and allow rules (empty allows any).
         var surfaces: [String]?
         var allow: [String]?
+        var expires: String?
+        /// Gateway only: how often a running session re-reads the value.
+        var refresh: String?
     }
 
     struct ListReport: Encodable, Equatable {
@@ -62,6 +65,41 @@ enum SecretsRun {
             upstream: String, baseURLEnv: String, placeholderPrefix: String,
             surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [])
         case environment
+    }
+
+    /// `--expires`: nil keeps what is on file, `none` clears it.
+    static func expiry(_ text: String?) -> Result<Date??, CommandFailure> {
+        guard let text else { return .success(nil) }
+        if text == "none" { return .success(.some(nil)) }
+        guard let date = SecretExpiry.parse(text) else {
+            return .failure(
+                "--expires must be an ISO-8601 date (2026-12-31), a date-time with a zone (2026-12-31T18:00:00Z), or none")
+        }
+        return .success(.some(date))
+    }
+
+    /// `--refresh`: nil keeps what is on file, `none` clears it.
+    static func refresh(_ text: String?) -> Result<SecretRefreshInterval??, CommandFailure> {
+        guard let text else { return .success(nil) }
+        if text == "none" { return .success(.some(nil)) }
+        guard let interval = SecretRefreshInterval(text) else {
+            return .failure("--refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m, or none")
+        }
+        return .success(.some(interval))
+    }
+
+    static let expiryWarningWindow: TimeInterval = 7 * 86_400
+
+    /// A warning for a secret that has expired or expires within a week.
+    static func expiryWarning(_ secret: SecretDefinition, now: Date) -> String? {
+        guard let expires = secret.expires else { return nil }
+        let name = DisplayedText.field(secret.name)
+        let date = SecretExpiry.text(expires)
+        if expires <= now { return "\(name) expired at \(date); launches that use it fail until it is rotated" }
+        guard expires.timeIntervalSince(now) < expiryWarningWindow else { return nil }
+        let days = SecretExpiry.daysLeft(expires, now: now)
+        let when = days == 0 ? "within a day" : days == 1 ? "in 1 day" : "in \(days) days"
+        return "\(name) expires \(when) (\(date)); rotate it with rv secrets set \(name) --expires DATE"
     }
 
     /// `--allow` values: preset names or `METHODS PATH` rules.
@@ -137,7 +175,9 @@ enum SecretsRun {
         return policy.profiles
     }
 
-    static func list(_ configuration: SecretsConfiguration, profiles: [RuntimeResourceProfile]) -> ListReport {
+    static func list(
+        _ configuration: SecretsConfiguration, profiles: [RuntimeResourceProfile], now: Date = Date()
+    ) -> ListReport {
         let rows = configuration.secrets.map { secret -> ListRow in
             var upstream: String?
             var baseURLEnv: String?
@@ -158,10 +198,12 @@ enum SecretsRun {
                 profiles: profiles.filter { $0.secrets.contains(secret.name) }.map(\.id),
                 weaker: secret.delivery == .environment,
                 surfaces: scope?.surfaces,
-                allow: scope?.allow
+                allow: scope?.allow,
+                expires: secret.expires.map(SecretExpiry.text),
+                refresh: secret.refresh?.text
             )
         }
-        var warnings: [String] = []
+        var warnings = configuration.secrets.compactMap { expiryWarning($0, now: now) }
         for profile in profiles {
             for name in profile.secrets where configuration.secret(named: name) == nil {
                 warnings.append("profile \(profile.id) lists \(name), which secrets.json does not define")
@@ -184,6 +226,8 @@ enum SecretsRun {
             if let surfaces = row.surfaces, let allow = row.allow {
                 line += "  surfaces: \(surfaces.joined(separator: ","))  allow: \(allowText(allow))"
             }
+            if let expires = row.expires { line += "  expires: \(expires)" }
+            if let refresh = row.refresh { line += "  refresh: \(refresh)" }
             if row.weaker { line += "  [weaker]" }
             return line
         }
@@ -253,12 +297,21 @@ enum SecretsRun {
 
     /// Stores `value` in the Keychain (`rv.secrets`/NAME) and, when the
     /// secret is new, adds its definition. Returns the confirmation text.
+    ///
+    /// `expires` and `refresh` follow `expiry(_:)` and `refresh(_:)`: nil
+    /// keeps what is on file, `.some(nil)` clears it. Unlike delivery, they
+    /// may change on an existing secret, since a rotated value often
+    /// carries a new expiry.
     static func set(
         name: String, value: Data, definition: Definition?, agents: [String], description: String?,
-        environment: SecretsEnvironment
+        environment: SecretsEnvironment, expires: Date?? = nil, refresh: SecretRefreshInterval?? = nil,
+        now: Date = Date()
     ) -> Result<String, CommandFailure> {
         guard value.isEmpty == false, value.count <= SecretValue.maximumBytes, value.contains(0) == false else {
             return .failure("the value must be 1 byte to 16 KiB with no NUL bytes")
+        }
+        if case .some(.some(let date)) = expires, date <= now {
+            return .failure(CommandFailure("--expires \(SecretExpiry.text(date)) is already past"))
         }
         let current: SecretsConfiguration
         switch configuration(environment) {
@@ -293,6 +346,12 @@ enum SecretsRun {
             updated.secrets.append(SecretDefinition(
                 name: name, description: description, agents: agents.isEmpty ? nil : agents,
                 source: source, delivery: delivery))
+        }
+        if let index = updated.secrets.firstIndex(where: { $0.name == name }) {
+            if let expires { updated.secrets[index].expires = expires }
+            if let refresh { updated.secrets[index].refresh = refresh }
+        }
+        if updated != current {
             switch SecretsConfiguration.decode(updated.encoded()) {
             case .failure(let error): return .failure(CommandFailure(error.message))
             case .success(let normalized): updated = normalized
@@ -398,35 +457,44 @@ enum SecretsRun {
         var source: String
         var surfaces: [String]? = nil
         var allow: [String]? = nil
+        var expires: String? = nil
+        var refresh: String? = nil
     }
 
     struct DescribeReport: Encodable, Equatable {
         var secrets: [DescribeRow]
+        var warnings: [String] = []
     }
 
     /// Names, descriptions, types, delivery, and gateway scope. No values and no provider locators.
-    static func describe(_ configuration: SecretsConfiguration) -> DescribeReport {
-        DescribeReport(secrets: configuration.secrets.map { secret in
-            let scope = gatewayScope(secret.delivery)
-            return DescribeRow(
-                name: secret.name, description: secret.description, type: secret.type,
-                delivery: secret.delivery == .environment ? "environment" : "gateway",
-                source: secret.source.kind, surfaces: scope?.surfaces, allow: scope?.allow)
-        })
+    static func describe(_ configuration: SecretsConfiguration, now: Date = Date()) -> DescribeReport {
+        DescribeReport(
+            secrets: configuration.secrets.map { secret in
+                let scope = gatewayScope(secret.delivery)
+                return DescribeRow(
+                    name: secret.name, description: secret.description, type: secret.type,
+                    delivery: secret.delivery == .environment ? "environment" : "gateway",
+                    source: secret.source.kind, surfaces: scope?.surfaces, allow: scope?.allow,
+                    expires: secret.expires.map(SecretExpiry.text), refresh: secret.refresh?.text)
+            },
+            warnings: configuration.secrets.compactMap { expiryWarning($0, now: now) })
     }
 
     static func describeText(_ report: DescribeReport) -> String {
         guard report.secrets.isEmpty == false else { return "No secrets configured.\n" }
-        return report.secrets.map { row in
+        let rows = report.secrets.map { row in
             var lines = ["\(row.name)  \(row.source)  \(row.delivery)"]
             if let surfaces = row.surfaces, let allow = row.allow {
                 lines.append("  surfaces: \(surfaces.joined(separator: ","))")
                 lines.append("  allow: \(allowText(allow))")
             }
+            if let expires = row.expires { lines.append("  expires: \(expires)") }
+            if let refresh = row.refresh { lines.append("  refresh: \(refresh)") }
             if let type = row.type { lines.append("  type: \(type)") }
             if let description = row.description { lines.append("  \(description)") }
             return lines.joined(separator: "\n")
-        }.joined(separator: "\n") + "\n"
+        }
+        return (rows + report.warnings.map { "warning: \($0)" }).joined(separator: "\n") + "\n"
     }
 
     /// A varlock import read and checked, before anything is written.
@@ -689,6 +757,9 @@ struct SecretsSet: AsyncParsableCommand {
               rv secrets set OPENAI_API_KEY --resource-profile main
               rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
               printf %s "$TOKEN" | rv secrets set GH_TOKEN --environment
+            Setting a new value reaches running sessions that use the gateway on their next
+            request. Environment-delivered values only change for new sessions.
+              rv secrets set GITHUB_TOKEN --expires 2027-01-31
             """
     )
 
@@ -711,6 +782,10 @@ struct SecretsSet: AsyncParsableCommand {
     @Option(help: "Short description.") var description: String?
     @Option(name: .customLong("resource-profile"), help: "Wire the secret into this runtime profile (see `rv init`).")
     var profile: String?
+    @Option(help: "When the value stops being delivered: 2026-12-31 or 2026-12-31T18:00:00Z, or none to clear.")
+    var expires: String?
+    @Option(help: "Gateway only: re-read the value this often in running sessions, e.g. 15m (min 1m), or none.")
+    var refresh: String?
 
     func validate() throws {
         if environment, gateway != nil { throw ValidationError("pass either --gateway or --environment, not both") }
@@ -720,6 +795,11 @@ struct SecretsSet: AsyncParsableCommand {
         if case .failure(let failure) = SecretsRun.surfaces(surfaces) { throw ValidationError(failure.message) }
         if environment, allow.isEmpty == false { throw ValidationError("--allow applies to gateway delivery") }
         if case .failure(let failure) = SecretsRun.allowances(allow) { throw ValidationError(failure.message) }
+        if case .failure(let failure) = SecretsRun.expiry(expires) { throw ValidationError(failure.message) }
+        if case .failure(let failure) = SecretsRun.refresh(refresh) { throw ValidationError(failure.message) }
+        if environment, refresh != nil, refresh != "none" {
+            throw ValidationError("--refresh applies to gateway delivery; an environment value cannot change after launch")
+        }
     }
 
     func run() throws {
@@ -758,7 +838,8 @@ struct SecretsSet: AsyncParsableCommand {
         }
         switch SecretsRun.set(
             name: name, value: value, definition: definition, agents: agents, description: description,
-            environment: environment)
+            environment: environment, expires: try? SecretsRun.expiry(expires).get(),
+            refresh: try? SecretsRun.refresh(refresh).get())
         {
         case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
         case .success(var text):

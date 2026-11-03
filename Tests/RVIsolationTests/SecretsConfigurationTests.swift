@@ -167,6 +167,66 @@ struct SecretsConfigurationTests {
         }
     }
 
+    private func lifetimeJSON(_ fields: String, delivery: String = #"{"gateway":{"upstream":"https://api.example.com","baseURLEnv":"A_BASE"}}"#) -> String {
+        #"{"version":1,"secrets":[{"name":"A","source":{"hostEnvironment":{"variable":"X"}},"delivery":"#
+            + delivery + fields + "}]}"
+    }
+
+    @Test func expiryAndRefreshDecodeAndRoundTrip() throws {
+        let plain = try #require(try decode(lifetimeJSON("")).get().secret(named: "A"))
+        #expect(plain.expires == nil)
+        #expect(plain.refresh == nil)
+
+        let dated = try decode(lifetimeJSON(#","expires":"2026-12-31","refresh":"15m""#)).get()
+        let secret = try #require(dated.secret(named: "A"))
+        #expect(secret.expires == Date(timeIntervalSince1970: 1_798_675_200))
+        #expect(secret.refresh?.seconds == 900)
+        let encoded = String(decoding: dated.encoded(), as: UTF8.self)
+        #expect(encoded.contains(#""expires" : "2026-12-31""#))
+        #expect(encoded.contains(#""refresh" : "15m""#))
+        #expect(try SecretsConfiguration.decode(dated.encoded()).get() == dated)
+
+        let timed = try decode(lifetimeJSON(#","expires":"2026-12-31T12:30:00+02:00","refresh":"2h""#)).get()
+        #expect(timed.secret(named: "A")?.expires == Date(timeIntervalSince1970: 1_798_713_000))
+        let timedText = String(decoding: timed.encoded(), as: UTF8.self)
+        #expect(timedText.contains(#""expires" : "2026-12-31T10:30:00Z""#))
+        #expect(timedText.contains(#""refresh" : "2h""#))
+        #expect(try SecretsConfiguration.decode(timed.encoded()).get() == timed)
+
+        let environment = try decode(lifetimeJSON(#","expires":"2027-01-01T00:00:00Z""#, delivery: #"{"environment":{}}"#)).get()
+        #expect(environment.secret(named: "A")?.expires == Date(timeIntervalSince1970: 1_798_761_600))
+        #expect(String(decoding: environment.encoded(), as: UTF8.self).contains(#""expires" : "2027-01-01""#))
+        #expect(String(decoding: try decode(lifetimeJSON("")).get().encoded(), as: UTF8.self).contains("expires") == false)
+    }
+
+    @Test func expiryAndRefreshAreStrict() {
+        let expires = "A.expires must be an ISO-8601 date (2026-12-31) or date-time with a zone (2026-12-31T18:00:00Z)"
+        for bad in [
+            "2026-12-31T18:00:00", "2026-13-01", "2026-02-30", "31-12-2026", "2026-12-31 18:00:00Z", "tomorrow", "",
+            "2026-12-31T18:00Z", "2026-12-31T18:00:00.5Z", "2026-12-31T25:00:00Z", " 2026-12-31",
+        ] {
+            #expect(invalidReason(lifetimeJSON(#","expires":"\#(bad)""#)) == expires, "\(bad)")
+        }
+        #expect(invalidReason(lifetimeJSON(#","expires":20261231"#)) == expires)
+        let refresh = "A.refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m"
+        for bad in ["30s", "59s", "0m", "15", "15M", "1.5h", "m", "-5m", "31d", "15 m", "0015m", ""] {
+            #expect(invalidReason(lifetimeJSON(#","refresh":"\#(bad)""#)) == refresh, "\(bad)")
+        }
+        #expect(invalidReason(lifetimeJSON(#","refresh":900"#)) == refresh)
+        #expect(invalidReason(lifetimeJSON(#","refresh":"15m""#, delivery: #"{"environment":{}}"#))
+            == "A.refresh applies to gateway delivery; a value in the environment cannot change after launch")
+    }
+
+    @Test func refreshIntervalsParseAndPrint() {
+        #expect(SecretRefreshInterval("60s")?.seconds == 60)
+        #expect(SecretRefreshInterval("90s")?.text == "90s")
+        #expect(SecretRefreshInterval("120s")?.text == "2m")
+        #expect(SecretRefreshInterval("60m")?.text == "1h")
+        #expect(SecretRefreshInterval("48h")?.text == "2d")
+        #expect(SecretRefreshInterval("30d")?.seconds == 2_592_000)
+        #expect(SecretRefreshInterval("59s") == nil)
+    }
+
     @Test func providerFieldsAreTypeChecked() {
         func source(_ body: String) -> String? {
             invalidReason(

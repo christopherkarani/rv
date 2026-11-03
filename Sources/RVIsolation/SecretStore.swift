@@ -109,6 +109,8 @@ extension SecretsConfiguration {
             if let description = secret.description { entry["description"] = description }
             if let type = secret.type { entry["type"] = type }
             if let agents = secret.agents { entry["agents"] = agents }
+            if let expires = secret.expires { entry["expires"] = SecretExpiry.text(expires) }
+            if let refresh = secret.refresh { entry["refresh"] = refresh.text }
             switch secret.source {
             case .keychain(let service, let account):
                 entry["source"] = ["keychain": ["service": service, "account": account]]
