@@ -202,7 +202,7 @@ enum WorkspaceHostRedeemHandler {
         audit: (@Sendable (WorkspaceHostRedemptionAuditEvent) -> Void)? = nil
     ) -> HostRedeemResponseDTO {
         func refuse(
-            _ code: String, commit: HostRedemptionCommit? = nil, outcome: String
+            _ code: HostRedeemOutcome, commit: HostRedemptionCommit? = nil, outcome: String
         ) -> HostRedeemResponseDTO {
             // Unvalidated DTO strings never reach audit: a malformed commit
             // (up to the 1MB transport cap) would otherwise plant unbounded
@@ -226,13 +226,13 @@ enum WorkspaceHostRedeemHandler {
             return HostRedeemResponseDTO(accepted: false, error: code)
         }
         guard let commit = HostRedemptionCommit(request: request) else {
-            return refuse("unknown", outcome: "malformed commit")
+            return refuse(.unknown, outcome: "malformed commit")
         }
         guard commit.host == host,
             commit.generation == generation,
             commit.workspace == supervisor.id
         else {
-            return refuse("unknown", commit: commit, outcome: "not this host incarnation")
+            return refuse(.unknown, commit: commit, outcome: "not this host incarnation")
         }
         switch supervisor.redeemPreparedLaunch(
             commit: commit,
@@ -273,7 +273,7 @@ enum WorkspaceHostRedeemHandler {
                     instance: nil,
                     wall: Date(),
                     outcome: "already accepted"))
-                return HostRedeemResponseDTO(accepted: true, error: "alreadyAccepted")
+                return HostRedeemResponseDTO(accepted: true, error: .alreadyAccepted)
             }
             if accepted {
                 audit?(WorkspaceHostRedemptionAuditEvent(
@@ -289,9 +289,9 @@ enum WorkspaceHostRedeemHandler {
                     instance: nil,
                     wall: Date(),
                     outcome: "launch failed"))
-                return HostRedeemResponseDTO(accepted: true, error: "launchFailed")
+                return HostRedeemResponseDTO(accepted: true, error: .launchFailed)
             }
-            return refuse("unknown", commit: commit, outcome: "refused pre-accept")
+            return refuse(.unknown, commit: commit, outcome: "refused pre-accept")
         }
     }
 }

@@ -237,7 +237,7 @@ struct OperatorRedemptionTests {
 
     @Test func hostRefusalRecordsTerminalFailure() async throws {
         let fixture = try await makeFixture(redeemBehavior: { _ in
-            HostRedeemResponseDTO(accepted: false, error: "unknown")
+            HostRedeemResponseDTO(accepted: false, error: .unknown)
         })
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -260,7 +260,7 @@ struct OperatorRedemptionTests {
 
     @Test func acceptedWithoutLaunchRecordsTerminalFailure() async throws {
         let fixture = try await makeFixture(redeemBehavior: { _ in
-            HostRedeemResponseDTO(accepted: true, error: "launchFailed")
+            HostRedeemResponseDTO(accepted: true, error: .launchFailed)
         })
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -349,7 +349,7 @@ struct OperatorRedemptionTests {
             workspace: fixture.workspace, host: fixture.host,
             generation: WorkspaceHostGeneration(),
             validate: { AgentPrincipalValidity(reference: $0, validity: .active) },
-            prepare: { _ in HostPrepareResponseDTO(description: nil, error: "refused") },
+            prepare: { _ in HostPrepareResponseDTO(description: nil, error: .refused) },
             redeem: fixture.redeemProbe.handler())
         let status = try await completeAuthenticated(
             fixture, operationID: id, challengeID: challenge.challengeID, ui: ui)
@@ -477,7 +477,7 @@ struct OperatorRedemptionTests {
             },
             redeem: { _ in
                 Issue.record("expired ceremony must never redeem")
-                return HostRedeemResponseDTO(accepted: false, error: "unknown")
+                return HostRedeemResponseDTO(accepted: false, error: .unknown)
             })
         let reply = try await ceremonies.propose(
             ProposeLaunchParams(
@@ -616,7 +616,7 @@ struct OperatorRedemptionTests {
                 let pending = HostRedeemPending(continuation)
                 pending.finish(.failure(LiveWorkspaceHostError.redeemRPCFailed))
                 pending.finish(.success(HostRedeemResponseDTO(
-                    accepted: false, error: "unknown")))
+                    accepted: false, error: .unknown)))
             }
         }
     }

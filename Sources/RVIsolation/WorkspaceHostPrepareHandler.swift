@@ -23,11 +23,11 @@ enum WorkspaceHostPrepareHandler {
         generation: WorkspaceHostGeneration,
         project: String
     ) -> HostPrepareResponseDTO {
-        func refuse(_ code: String) -> HostPrepareResponseDTO {
+        func refuse(_ code: HostPrepareRefusal) -> HostPrepareResponseDTO {
             HostPrepareResponseDTO(description: nil, error: code)
         }
         guard supervisor.snapshot.phase.acceptsRuntime else {
-            return refuse("notAccepting")
+            return refuse(.notAccepting)
         }
         let selected: Result<ResolvedAgentLaunch, AgentLaunchSelectionError>
         switch request.kind {
@@ -36,7 +36,7 @@ enum WorkspaceHostPrepareHandler {
                 let raw = request.definitionID,
                 let id = AgentDefinitionID(validating: raw)
             else {
-                return refuse("invalidRequest")
+                return refuse(.invalidRequest)
             }
             selected = AgentLaunchSelection.resolveNamed(
                 id: id, definitions: definitions, project: project
@@ -45,7 +45,7 @@ enum WorkspaceHostPrepareHandler {
             guard request.definitionID == nil, let executable = request.executable,
                 let digest = request.expectedDigest
             else {
-                return refuse("invalidRequest")
+                return refuse(.invalidRequest)
             }
             selected = AgentLaunchSelection.resolveCustom(
                 executable: executable, expectedContentDigestSHA256: digest
@@ -62,14 +62,14 @@ enum WorkspaceHostPrepareHandler {
         switch request.io {
         case .discard:
             guard case .success(let mapped) = workspaceLaunchIO(io: nil, rows: nil, columns: nil) else {
-                return refuse("invalidRequest")
+                return refuse(.invalidRequest)
             }
             io = mapped
         case .pseudoTerminal(let rows, let columns):
             guard case .success(let mapped) = workspaceLaunchIO(
                 io: "terminal", rows: rows, columns: columns
             ) else {
-                return refuse("invalidRequest")
+                return refuse(.invalidRequest)
             }
             io = mapped
         }
@@ -79,26 +79,26 @@ enum WorkspaceHostPrepareHandler {
             host: host, generation: generation, requestID: request.requestID
         ) {
         case .failure:
-            return refuse("preparationFailed")
+            return refuse(.preparationFailed)
         case .success(let retained):
             prepared = retained
         }
         guard let description = supervisor.describePreparedLaunch(prepared.binding.preparedLaunchID) else {
-            return refuse("preparationFailed")
+            return refuse(.preparationFailed)
         }
         return HostPrepareResponseDTO(description: encode(description), error: nil)
     }
 
-    private static func selectionRefusal(_ error: AgentLaunchSelectionError) -> String {
+    private static func selectionRefusal(_ error: AgentLaunchSelectionError) -> HostPrepareRefusal {
         switch error {
-        case .unknownDefinition: return "unknownDefinition"
-        case .invalidDefinition: return "invalidDefinition"
-        case .projectNotEligible: return "projectNotEligible"
-        case .executableUnavailable: return "executableUnavailable"
-        case .invalidExecutable: return "invalidExecutable"
-        case .unsupportedExecutableRequirement: return "unsupportedExecutable"
-        case .credentialIntegrationDeferred: return "credentialDeferred"
-        case .invalidCustomDigest: return "invalidDigest"
+        case .unknownDefinition: return .unknownDefinition
+        case .invalidDefinition: return .invalidDefinition
+        case .projectNotEligible: return .projectNotEligible
+        case .executableUnavailable: return .executableUnavailable
+        case .invalidExecutable: return .invalidExecutable
+        case .unsupportedExecutableRequirement: return .unsupportedExecutable
+        case .credentialIntegrationDeferred: return .credentialDeferred
+        case .invalidCustomDigest: return .invalidDigest
         }
     }
 

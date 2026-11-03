@@ -123,4 +123,16 @@ struct OperatorVocabularyGoldenTests {
             try IPCJSON.decode(HostActionApprovalCreateDTO.self, from: Data(text.utf8))
         }
     }
+
+    @Test func unknownHostOutcomeStringsDecodeConservatively() throws {
+        let prepare = try IPCJSON.decode(
+            HostPrepareResponseDTO.self, from: Data(#"{"error":"somethingNew"}"#.utf8))
+        #expect(prepare.error == .refused)
+        #expect(prepare.description == nil)
+        let redeem = try IPCJSON.decode(
+            HostRedeemResponseDTO.self,
+            from: Data(#"{"accepted":false,"error":"somethingNew"}"#.utf8))
+        #expect(redeem.error == .unknown)
+        #expect(redeem.accepted == false)
+    }
 }

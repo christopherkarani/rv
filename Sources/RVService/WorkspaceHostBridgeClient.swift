@@ -369,7 +369,7 @@ public final class WorkspaceHostBridgeClient: Sendable {
     ) {
         guard isService(event) else { return }
         var size = 0
-        let refusal = HostPrepareResponseDTO(description: nil, error: "invalidRequest")
+        let refusal = HostPrepareResponseDTO(description: nil, error: .invalidRequest)
         guard let bytes = xpc_dictionary_get_data(event, HostBridgeWire.prepareKey, &size),
               size <= HostBridgeWire.maxPrepareBytes,
               let request = try? JSONDecoder().decode(
@@ -402,7 +402,7 @@ public final class WorkspaceHostBridgeClient: Sendable {
     ) {
         guard isService(event) else { return }
         var size = 0
-        let refusal = HostRedeemResponseDTO(accepted: false, error: "unknown")
+        let refusal = HostRedeemResponseDTO(accepted: false, error: .unknown)
         guard let bytes = xpc_dictionary_get_data(event, HostBridgeWire.redeemKey, &size),
               size <= HostBridgeWire.maxRedeemBytes,
               let request = try? JSONDecoder().decode(

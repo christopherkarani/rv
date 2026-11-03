@@ -439,7 +439,7 @@ actor WorkspaceOperatorCeremonyService {
                 recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
                 emit(.redemptionFailed, operationID: id.rawValue,
                     description: description,
-                    outcome: "host: \(Self.knownHostOutcome(response.error))")
+                    outcome: "host: \((response.error ?? .unknown).rawValue)")
             } else {
                 recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
                 emit(.redemptionFailed, operationID: id.rawValue,
@@ -506,21 +506,6 @@ actor WorkspaceOperatorCeremonyService {
             return .some(nil)
         }
     }
-
-    /// Collapses the host outcome code to the closed vocabulary before it
-    /// reaches audit or API surfaces.
-    static func knownHostOutcome(_ error: String?) -> String {
-        guard let error, Self.knownRedeemOutcomes.contains(error) else {
-            return "unknown"
-        }
-        return error
-    }
-
-    /// Exact outcome codes emitted by `WorkspaceHostRedeemHandler`. Closed:
-    /// unknown codes collapse to "unknown".
-    static let knownRedeemOutcomes: Set<String> = [
-        "unknown", "alreadyAccepted", "launchFailed",
-    ]
 
     /// Cancels a review. Pending operations (no challenge yet) may be cancelled
     /// by any authenticated UI; bound ceremonies only by their owning connection.
@@ -767,21 +752,11 @@ actor WorkspaceOperatorCeremonyService {
             // directly (recording an unknown outcome, never an error).
             return .prepareFailed("unavailable")
         case .prepareRefused(let reason):
-            // The host speaks a closed refusal vocabulary; anything else is
-            // not forwarded verbatim to API/CLI surfaces.
-            return .prepareFailed(
-                Self.knownRefusalReasons.contains(reason) ? reason : "refused")
+            // The refusal is a closed enum (unknown host strings decode as
+            // `.refused`), so nothing unbounded reaches API/CLI surfaces.
+            return .prepareFailed(reason.rawValue)
         }
     }
-
-    /// Exact refusal codes emitted by `WorkspaceHostPrepareHandler` (plus the
-    /// bridge's own `invalidRequest`). Closed: unknown reasons collapse.
-    static let knownRefusalReasons: Set<String> = [
-        "notAccepting", "invalidRequest", "preparationFailed",
-        "unknownDefinition", "invalidDefinition", "projectNotEligible",
-        "executableUnavailable", "invalidExecutable", "unsupportedExecutable",
-        "credentialDeferred", "invalidDigest",
-    ]
 
     private func mapAuthorizerError(_ error: any Error) -> WorkspaceOperatorCeremonyError {
         guard let error = error as? WorkspaceOperatorAuthorizationError else {

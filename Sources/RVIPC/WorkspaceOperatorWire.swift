@@ -360,12 +360,37 @@ public struct HostPreparedDescriptionDTO: Sendable, Equatable, Codable {
     }
 }
 
+/// Closed vocabulary of host prepare refusals. Raw values are the wire
+/// strings. Lenient toward newer hosts: the service never forwarded an
+/// unrecognized refusal verbatim (it collapsed it to "refused"), so decoding
+/// maps any unknown string to `.refused` instead of failing the reply.
+public enum HostPrepareRefusal: String, Sendable, Equatable, Codable, CaseIterable {
+    case notAccepting
+    case invalidRequest
+    case preparationFailed
+    case unknownDefinition
+    case invalidDefinition
+    case projectNotEligible
+    case executableUnavailable
+    case invalidExecutable
+    case unsupportedExecutable
+    case credentialDeferred
+    case invalidDigest
+    /// Generic refusal: also the decode fallback for unrecognized strings.
+    case refused
+
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .refused
+    }
+}
+
 public struct HostPrepareResponseDTO: Sendable, Equatable, Codable {
     public let description: HostPreparedDescriptionDTO?
-    /// Machine-readable refusal when description is nil (e.g. "unknownDefinition").
-    public let error: String?
+    /// Machine-readable refusal when description is nil.
+    public let error: HostPrepareRefusal?
 
-    public init(description: HostPreparedDescriptionDTO?, error: String? = nil) {
+    public init(description: HostPreparedDescriptionDTO?, error: HostPrepareRefusal? = nil) {
         self.description = description
         self.error = error
     }

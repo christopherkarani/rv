@@ -72,16 +72,31 @@ public struct HostRedeemCommitDTO: Sendable, Equatable, Codable {
 ///   undifferentiated (absent, expired, invalidated, binding mismatch,
 ///   workspace inactive, or cwd identity changed). No launch occurred and the
 ///   prepared operation is unspent by this refusal.
+public enum HostRedeemOutcome: String, Sendable, Equatable, Codable, CaseIterable {
+    case unknown
+    case alreadyAccepted
+    case launchFailed
+
+    /// Lenient toward newer hosts: the service already collapsed unknown
+    /// outcome codes to "unknown" for audit, and acceptance is carried by
+    /// `accepted` and the IDs, never by this field, so unknown strings decode
+    /// as `.unknown`.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .unknown
+    }
+}
+
 public struct HostRedeemResponseDTO: Sendable, Equatable, Codable {
     public let accepted: Bool
     public let runtimeSessionID: UUID?
     public let agentInstanceID: UUID?
     /// Machine-readable outcome when IDs are absent (see above).
-    public let error: String?
+    public let error: HostRedeemOutcome?
 
     public init(
         accepted: Bool, runtimeSessionID: UUID? = nil, agentInstanceID: UUID? = nil,
-        error: String? = nil
+        error: HostRedeemOutcome? = nil
     ) {
         self.accepted = accepted
         self.runtimeSessionID = runtimeSessionID

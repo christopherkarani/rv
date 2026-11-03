@@ -209,7 +209,7 @@ struct WorkspaceOperatorCeremonyTests {
 
     @Test func hostRefusalSurfacesPrepareFailed() async throws {
         let fixture = try await makeFixture(prepare: { _, _, _ in
-            { _ in HostPrepareResponseDTO(description: nil, error: "unknownDefinition") }
+            { _ in HostPrepareResponseDTO(description: nil, error: .unknownDefinition) }
         })
         await #expect(throws: WorkspaceOperatorCeremonyError.prepareFailed("unknownDefinition")) {
             try await fixture.ceremonies.propose(
@@ -321,7 +321,7 @@ struct WorkspaceOperatorCeremonyTests {
             prepare: { _, _, _ in
                 { _ in
                     connected.withLock { $0 = false }
-                    return HostPrepareResponseDTO(description: nil, error: "gone")
+                    return HostPrepareResponseDTO(description: nil, error: .refused)
                 }
             },
             isConnected: { connected.withLock { $0 } })
@@ -715,7 +715,12 @@ struct WorkspaceOperatorCeremonyTests {
 
     @Test func unknownRefusalReasonCollapses() async throws {
         let fixture = try await makeFixture(prepare: { _, _, _ in
-            { _ in HostPrepareResponseDTO(description: nil, error: "EVIL\nreason") }
+            { _ in
+                // An out-of-vocabulary host string decodes to `.refused`.
+                try! IPCJSON.decode(
+                    HostPrepareResponseDTO.self,
+                    from: Data("{\"error\":\"EVIL\\nreason\"}".utf8))
+            }
         })
         await #expect(throws: WorkspaceOperatorCeremonyError.prepareFailed("refused")) {
             try await fixture.ceremonies.propose(
