@@ -82,7 +82,7 @@ enum ManagedRun {
         for ruled in mcp.rules { lines.append("mcp \(ruled.decision.rawValue): \(ruled.rule.summary)") }
         if mcp.defaultDecision != .allow { lines.append("mcp default for other tools: \(mcp.defaultDecision.rawValue)") }
         if let sources = policy.secrets.allowedSources {
-            lines.append("secret sources allowed: " + (sources.isEmpty ? "none" : SecretSourceKind.allCases.filter(sources.contains).map(\.rawValue).joined(separator: ", ")))
+            lines.append("secret sources allowed: " + (sources.isEmpty ? "none" : sources.map(\.rawValue).joined(separator: ", ")))
         }
         if policy.secrets.allowEnvironmentDelivery == false { lines.append("secrets: gateway delivery only") }
         if let forward = policy.auditForward { lines.append("audit forwarded to \(forward.url)") }

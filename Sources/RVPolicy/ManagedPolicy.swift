@@ -58,8 +58,9 @@ public struct ManagedPolicy: Sendable, Equatable {
     }
 
     public struct Secrets: Sendable, Equatable {
-        /// Source kinds (`keychain`, `vault`, …); nil allows every kind.
-        public var allowedSources: Set<SecretSourceKind>?
+        /// Source kinds (`keychain`, `vault`, …) in policy-file order, which
+        /// `rv managed status` echoes; nil allows every kind.
+        public var allowedSources: [SecretSourceKind]?
         public var allowEnvironmentDelivery = true
 
         public init() {}
@@ -211,15 +212,13 @@ extension ManagedPolicy {
             try keys(secrets, allowed: ["allowedSources", "allowEnvironmentDelivery"], context: "secrets")
             if secrets["allowedSources"] != nil {
                 let names = try strings(secrets["allowedSources"], "secrets.allowedSources")
-                var kinds = Set<SecretSourceKind>()
-                for name in names {
+                policy.secrets.allowedSources = try names.map { name in
                     guard let kind = SecretSourceKind(rawValue: name) else {
                         throw ManagedPolicyError(
                             "unknown secret source \"\(DisplayedText.field(name))\" in secrets.allowedSources")
                     }
-                    kinds.insert(kind)
+                    return kind
                 }
-                policy.secrets.allowedSources = kinds
             }
             policy.secrets.allowEnvironmentDelivery =
                 try bool(secrets["allowEnvironmentDelivery"], "secrets.allowEnvironmentDelivery") ?? true
