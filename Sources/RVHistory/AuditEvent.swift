@@ -16,6 +16,8 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     public static let runtimeStarted = AuditEventKind(rawValue: "runtime.started")
     public static let runtimeEnded = AuditEventKind(rawValue: "runtime.ended")
     public static let secretUse = AuditEventKind(rawValue: "secret.use")
+    /// A gateway request the secret's own policy refused; alert-worthy.
+    public static let secretMisuse = AuditEventKind(rawValue: "secret.misuse")
     public static let mcpCall = AuditEventKind(rawValue: "mcp.call")
     /// Approvals granted, refused, or rejected as forged; trust of mcp.json.
     public static let mcpApproval = AuditEventKind(rawValue: "mcp.approval")

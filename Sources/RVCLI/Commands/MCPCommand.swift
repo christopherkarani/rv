@@ -14,7 +14,7 @@ struct MCPEnvironment: Sendable {
     var processEnvironment: [String: String]
     var keychain: SecretKeychainWriter
     var managed: ManagedPolicyState = .none
-    var approvalKeys: MCPApprovalKeyStore = .unavailable
+    var approvalSigning: MCPApprovalSigning = .unavailable
     var presence = UserPresence { _, _ in .refused("no user presence available") }
     var oauthTokens: MCPOAuthTokenStore = .none
 
@@ -26,20 +26,20 @@ struct MCPEnvironment: Sendable {
             processEnvironment: ProcessInfo.processInfo.environment,
             keychain: .live,
             managed: ManagedRun.installed(home: home),
-            approvalKeys: .live(configDirectory: configDirectory, home: home.rawValue),
+            approvalSigning: .live(configDirectory: configDirectory, home: home.rawValue),
             presence: .live,
             oauthTokens: .live(configDirectory: configDirectory, home: home.rawValue)
         )
     }
 
     var approvals: MCPApprovalStore {
-        MCPApprovalStore(configDirectory: configDirectory, keys: approvalKeys)
+        MCPApprovalStore(configDirectory: configDirectory, signing: approvalSigning)
     }
 
     /// A fresh read of mcp.json. Launching and re-signing must not treat a
     /// passing result as permission to use a configuration read at another time.
     var integrity: MCPIntegrityStatus {
-        MCPIntegrity.status(configDirectory: configDirectory, keys: approvalKeys)
+        MCPIntegrity.status(configDirectory: configDirectory, signing: approvalSigning)
     }
 }
 
@@ -86,8 +86,9 @@ enum MCPRun {
         var configuration: MCPConfiguration
     }
 
-    /// One read of mcp.json, judged and decoded from those bytes. `keys.load`
-    /// may prompt after the read; it cannot change which bytes were judged.
+    /// One read of mcp.json, judged and decoded from those bytes. The
+    /// signing verify may prompt after the read; it cannot change which
+    /// bytes were judged.
     struct MCPBoundConfiguration: Sendable {
         var stored: MCPStoredConfiguration
         var integrity: MCPIntegrityStatus
@@ -136,7 +137,7 @@ enum MCPRun {
         case .success(let loaded): stored = loaded
         }
         let integrity = MCPIntegrity.status(
-            of: stored.bytes, configDirectory: environment.configDirectory, keys: environment.approvalKeys)
+            of: stored.bytes, configDirectory: environment.configDirectory, signing: environment.approvalSigning)
         var configuration = stored.configuration
         configuration.untrusted = integrity.isTrusted == false
         return .success(MCPBoundConfiguration(
@@ -162,13 +163,6 @@ enum MCPRun {
         }
     }
 
-    static func signer(_ environment: MCPEnvironment) -> Result<MCPSigner, CommandFailure> {
-        guard let loaded = environment.approvalKeys.loadOrCreate() else {
-            return .failure("could not create rv's approvals key (\(MCPApprovalKeyStore.keychainService))")
-        }
-        return .success(loaded)
-    }
-
     /// True when mcp.json on disk is exactly `configuration.encoded()`.
     static func fileMatches(_ configuration: MCPConfiguration, configDirectory: URL) -> Bool {
         let expected = Data(configuration.encoded().prettyText.utf8)
@@ -176,16 +170,6 @@ enum MCPRun {
             MCPConfiguration.fileURL(configDirectory: configDirectory), maximumBytes: MCPConfiguration.maximumBytes)
         else { return false }
         return actual == expected
-    }
-
-    /// rv signs mcp.json on every write; refusing over an outside edit keeps
-    /// rv from laundering it into a trusted file.
-    static func signerForWrite(_ environment: MCPEnvironment) -> Result<MCPSigner, CommandFailure> {
-        if let problem = environment.integrity.problem { return .failure(CommandFailure(problem)) }
-        guard let signer = environment.approvalKeys.loadOrCreate() else {
-            return .failure("could not create rv's approvals key (\(MCPApprovalKeyStore.keychainService))")
-        }
-        return .success(signer)
     }
 
     static func report(
@@ -459,7 +443,7 @@ enum MCPRun {
         guard let request = store.pending().first(where: { $0.id == id }) else {
             return .failure("no pending MCP approval has id \(reviewField(id)) (see `rv mcp pending`)")
         }
-        var allowed: (MCPConfiguration, MCPSigner)?
+        var allowed: MCPConfiguration?
         if always {
             switch allowListed(request, environment: environment) {
             case .failure(let failure): return .failure(failure)
@@ -500,8 +484,8 @@ enum MCPRun {
                   always: always, configDirectory: environment.configDirectory)
             return .failure("the approval changed while you reviewed it; nothing was signed")
         }
-        if case let (configuration, signer)? = allowed {
-            if case .failure(let error) = configuration.write(configDirectory: environment.configDirectory, signer: signer) {
+        if let configuration = allowed {
+            if case .failure(let error) = configuration.write(configDirectory: environment.configDirectory, signing: environment.approvalSigning) {
                 _ = store.remove(id: id)
                 return .failure(CommandFailure(error.message))
             }
@@ -517,22 +501,19 @@ enum MCPRun {
             : "approved \(reviewField(request.server)) \(reviewField(request.tool)) once; the agent can retry the same call\n")
     }
 
-    /// mcp.json with the request's tool moved to the allow list, and the signer to write it with.
+    /// mcp.json with the request's tool moved to the allow list.
     /// The configuration is the bytes verified before the keychain prompt, not a later read.
+    /// Signing happens at write time through the environment's signing
+    /// handle, so no key is fetched before the person confirms presence.
     static func allowListed(
         _ request: MCPApprovalRequest, environment: MCPEnvironment
-    ) -> Result<(MCPConfiguration, MCPSigner), CommandFailure> {
+    ) -> Result<MCPConfiguration, CommandFailure> {
         let bound: MCPBoundConfiguration
         switch boundConfiguration(environment) {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): bound = loaded
         }
         if let problem = bound.integrity.problem { return .failure(CommandFailure(problem)) }
-        let signer: MCPSigner
-        switch self.signer(environment) {
-        case .failure(let failure): return .failure(failure)
-        case .success(let loaded): signer = loaded
-        }
         var configuration = bound.configuration
         guard let index = configuration.servers.firstIndex(where: { $0.name == request.server }) else {
             return .failure("mcp.json no longer defines \(reviewField(request.server))")
@@ -555,7 +536,7 @@ enum MCPRun {
             return .failure(
                 "\(reviewField(request.tool)) still matches an ask or deny rule in mcp.json; edit that rule instead")
         }
-        return .success((configuration, signer))
+        return .success(configuration)
     }
 
     static func audit(
@@ -569,6 +550,20 @@ enum MCPRun {
                 time: Date(), kind: .mcpApproval, decision: decision, subject: "\(request.server)/\(request.tool)",
                 reason: reason, source: "rv mcp approve", detail: detail),
             configDirectory: configDirectory)
+    }
+
+    /// Why a signing operation failed, in the operator's terms. On macOS
+    /// the key lives in the approvals custodian; when it cannot be
+    /// reached, approvals stay disabled and the message says so.
+    static func signingFailureText(status: MCPApprovalKeyStatus) -> String {
+        #if os(macOS)
+        if status == .unavailable {
+            return "rv's approvals custodian is unavailable — reinstall rv or run `rv setup`; MCP approvals stay disabled until it is reachable"
+        }
+        #endif
+        return status == .enrolled
+            ? "could not write \(MCPIntegrity.fileName)"
+            : "could not create rv's approvals key (\(MCPApprovalKeyIdentity.keychainService))"
     }
 
     /// Signs mcp.json as it is now, after showing what it allows and confirming presence.
@@ -589,7 +584,7 @@ enum MCPRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let decoded): configuration = decoded
         }
-        if MCPIntegrity.status(of: data, configDirectory: environment.configDirectory, keys: environment.approvalKeys) == .trusted {
+        if MCPIntegrity.status(of: data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) == .trusted {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
@@ -598,16 +593,19 @@ enum MCPRun {
             return .failure("trust review omitted a literal value; nothing signed")
         }
         show(review + "\n")
+        // The reason-bearing confirmation is the authentication: the
+        // custodian's key prompt carries no context about what is trusted.
         let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)\n\(review)", .deviceOwner)
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not trusted: \(refusal)"))
         }
-        guard let signer = environment.approvalKeys.loadOrCreate() else {
-            return .failure("could not create rv's approvals key (\(MCPApprovalKeyStore.keychainService))")
-        }
-        guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signer: signer) else {
-            return .failure("could not write \(MCPIntegrity.fileName)")
+        // The integrity check above may already have authenticated the
+        // custodian's key context; end that window so signing prompts for
+        // itself, after this review rather than before it.
+        environment.approvalSigning.beginFreshAuth()
+        guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
+            return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
         }
         guard environment.integrity == .trusted else {
             return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
@@ -794,20 +792,13 @@ enum MCPRun {
         MCPDisplayedText.field(text)
     }
 
-    /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b`. U+2028,
-    /// U+2029, and U+202E stay raw unless they are replaced after encoding.
-    /// The result is still valid JSON. `SecretsRun.json` itself is unchanged.
+    /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b` but leaves
+    /// separators, NEL, bidi controls, and other format scalars raw;
+    /// `DisplayedText.escapeJSONScalars` escapes every one
+    /// `DisplayedText.needsEscape` flags. The result is still valid JSON.
+    /// `SecretsRun.json` itself is unchanged.
     static func robotJSON<T: Encodable>(_ value: T) -> String {
-        var text = SecretsRun.json(value)
-        let scalars: [(Character, String)] = [
-            ("\u{2028}", "\\u2028"),
-            ("\u{2029}", "\\u2029"),
-            ("\u{202E}", "\\u202e"),
-        ]
-        for (scalar, escaped) in scalars {
-            text = text.replacingOccurrences(of: String(scalar), with: escaped)
-        }
-        return text
+        DisplayedText.escapeJSONScalars(SecretsRun.json(value))
     }
 
     static func denyMissingIDMessage(_ id: String) -> String {
@@ -928,7 +919,17 @@ enum MCPRun {
             servers: names, configuration: verified, secrets: secrets, resolver: resolver,
             baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load, sandbox: sandbox)
         {
-        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .failure(let error):
+            if case .secretUnavailable(let server, let secret, _) = error {
+                // Only the names: the reason may carry resolver detail.
+                auditOrLog(
+                    AuditEvent(
+                        time: Date(), kind: .mcpApproval, decision: .denied, subject: server,
+                        reason: "secret refused at launch", source: "rv mcp serve",
+                        detail: ["server": server, "secret": secret]),
+                    configDirectory: environment.configDirectory)
+            }
+            return .failure(CommandFailure(error.message))
         case .success(let planned): return .success(planned)
         }
     }
@@ -996,14 +997,9 @@ enum MCPRun {
         }
         if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
         let integrity = MCPIntegrity.status(
-            of: base.bytes, configDirectory: environment.configDirectory, keys: environment.approvalKeys)
+            of: base.bytes, configDirectory: environment.configDirectory, signing: environment.approvalSigning)
         if let problem = integrity.problem {
             return .failure(CommandFailure("\(problem); nothing imported"))
-        }
-        let signer: MCPSigner
-        switch self.signer(environment) {
-        case .failure(let failure): return .failure(CommandFailure("\(failure.message); nothing imported"))
-        case .success(let loaded): signer = loaded
         }
         if let definition = plan.secrets.first?.definition,
             let reason = SecretOrganizationRules.violation(definition, policy: environment.managed.policy)
@@ -1059,7 +1055,11 @@ enum MCPRun {
         if let toolModeForFreshConfig, configuration.servers.isEmpty {
             updated.toolMode = toolModeForFreshConfig
         }
-        if case .failure(let error) = updated.write(configDirectory: environment.configDirectory, signer: signer) {
+        // End any custodian auth window an earlier key use opened (the
+        // integrity check) so signing authenticates for itself, after the
+        // confirmed review.
+        environment.approvalSigning.beginFreshAuth()
+        if case .failure(let error) = updated.write(configDirectory: environment.configDirectory, signing: environment.approvalSigning) {
             let restoredSecrets: Bool
             if plan.secrets.isEmpty {
                 restoredSecrets = true
