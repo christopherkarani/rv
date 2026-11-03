@@ -293,7 +293,9 @@ func copyTree(
         let mode = modeBits(status.st_mode)
         switch kind {
         case .directory:
-            guard mkdiratWithinCopyClock(destination, name, mode) == true else {
+            // Owner-only until the children land: a 0555 directory would refuse
+            // their creates. The fchmod below sets the real mode (and sidesteps umask).
+            guard mkdiratWithinCopyClock(destination, name, 0o700) == true else {
                 return false
             }
             let childSource = openatWithinCopyClock(
@@ -317,9 +319,10 @@ func copyTree(
                 expectDevice: expectDevice,
                 isWorkspaceRoot: false
             )
+            let modeOK = copied && fchmodWithinCopyClock(childDest, mode) == true
             close(childSource)
             close(childDest)
-            if copied == false { return false }
+            if modeOK == false { return false }
         case .symlink:
             guard let target = readlinkWithinCopyClock(source, name) else {
                 return false

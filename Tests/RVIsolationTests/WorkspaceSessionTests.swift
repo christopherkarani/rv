@@ -425,10 +425,42 @@ struct WorkspaceSessionTests {
         let opened = try openWorkspace(tree)
         let file = tree.workspaceURL.appendingPathComponent("new-ro.txt")
         try Data("created".utf8).write(to: file)
+        let attribute = "user.rv-test"
+        #expect(setxattr(file.path, attribute, "marker", 6, 0, 0) == 0)
         #expect(chmod(file.path, 0o444) == 0)
         #expect(succeeded(opened.supervisor.close()))
         #expect(try String(contentsOf: file, encoding: .utf8) == "created")
         #expect(fileMode(file.path) == 0o444)
+        var buffer = [CChar](repeating: 0, count: 16)
+        let length = getxattr(file.path, attribute, &buffer, buffer.count, 0, 0)
+        #expect(length == 6)
+    }
+
+    @Test func openAndClosePreserveReadOnlyDirectoryWithReadOnlyChildren() throws {
+        let tree = try ContainmentTree()
+        defer {
+            _ = chmod(tree.workspaceURL.appendingPathComponent("rodir").path, 0o755)
+            tree.tearDown()
+        }
+        let dir = tree.workspaceURL.appendingPathComponent("rodir")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        let file = dir.appendingPathComponent("c.txt")
+        try Data("child".utf8).write(to: file)
+        let other = dir.appendingPathComponent("d.txt")
+        try Data("child2".utf8).write(to: other)
+        #expect(chmod(file.path, 0o400) == 0)
+        #expect(chmod(other.path, 0o444) == 0)
+        #expect(chmod(dir.path, 0o555) == 0)
+        let opened = try openWorkspace(tree)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "child")
+        #expect(fileMode(dir.path) == 0o555)
+        #expect(fileMode(file.path) == 0o400)
+        #expect(fileMode(other.path) == 0o444)
+        #expect(succeeded(opened.supervisor.close()))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "child")
+        #expect(fileMode(dir.path) == 0o555)
+        #expect(fileMode(file.path) == 0o400)
+        #expect(fileMode(other.path) == 0o444)
     }
     @Test func keychainEntryReachesOnlyMatchingAgentRuntime() throws {
         let tree = try ContainmentTree()
