@@ -1097,8 +1097,7 @@ func watchSeatbeltProcess(
         CooperativeLaunchStop.noteCancel()
     }
     let sessionBudget = outcome.cancelled
-        ? DiskImageCancelBudget.boundedWait(
-            spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+        ? CooperativeLaunchStop.boundedWaitSinceCancel(
             cap: DiskImageCancelBudget.sessionDeathWait
         )
         : DiskImageCancelBudget.sessionDeathWait
@@ -1222,8 +1221,7 @@ private func waitForSeatbeltSession(
             }
             if outcome.status == nil {
                 let budget = outcome.cancelled
-                    ? DiskImageCancelBudget.boundedWait(
-                        spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+                    ? CooperativeLaunchStop.boundedWaitSinceCancel(
                         cap: DiskImageCancelBudget.leaderReap
                     )
                     : DiskImageCancelBudget.leaderReap
@@ -1394,8 +1392,7 @@ func resumeAndClaimForeground(_ child: LiveSeatbeltChild) -> Result<Void, Isolat
     case .cancelled:
         terminateSession(pgid: child.pid, also: [child.pid])
         CooperativeLaunchStop.noteCancel()
-        let budget = DiskImageCancelBudget.boundedWait(
-            spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+        let budget = CooperativeLaunchStop.boundedWaitSinceCancel(
             cap: DiskImageCancelBudget.sessionDeathWait
         )
         let dead = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid], budget: budget)

@@ -12,9 +12,7 @@ import Synchronization
 @discardableResult
 func detachWorkspaceDisk(_ disk: String, mountPoint: String?) -> Bool {
     let clock = CooperativeLaunchStop.adoptCancelClock(DiskImageCancelClock())
-    if blockingWorkIsCancelled(), clock.deadline == nil {
-        clock.arm(spentSinceCancel: CooperativeLaunchStop.spentSinceCancel())
-    }
+    clock.armIfWorkCancelled()
     if let mountPoint {
         let plain = clock.deadline == nil
             ? nil
@@ -28,9 +26,7 @@ func detachWorkspaceDisk(_ disk: String, mountPoint: String?) -> Bool {
         )
     }
     if clock.deadline != nil || blockingWorkIsCancelled() {
-        if clock.deadline == nil {
-            clock.arm(spentSinceCancel: CooperativeLaunchStop.spentSinceCancel())
-        }
+        clock.armWithSpentSinceCancel()
         let detachLeft = min(DiskImageCancelBudget.detachCap, clock.remaining)
         if detachLeft <= 0 { return false }
         let cancelledDetach = runTool(

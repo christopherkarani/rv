@@ -234,6 +234,37 @@ struct DiskImageCancellationTests {
         #expect(clock.remaining <= firstRemaining)
     }
 
+    /// The fallback, arm, and spent compositions call sites used to
+    /// restate now live on the clock owner's interface. The local clock
+    /// wins the fallback chain, uncancelled work does not arm, the first
+    /// arm still wins, and spent reads through the owner at one seam.
+    @Test func cancelClockOwnerCompositions() throws {
+        let fallback = Date(timeIntervalSince1970: 0)
+        let clock = DiskImageCancelClock()
+        clock.armIfWorkCancelled()
+        #expect(clock.deadline == nil)
+        clock.armWithSpentSinceCancel()
+        let end = try #require(clock.deadline)
+        let effective = try #require(
+            CooperativeLaunchStop.effectiveDeadline(local: clock, fallback: fallback)
+        )
+        #expect(effective != fallback)
+        #expect(abs(effective.timeIntervalSince(end)) < 0.05)
+        #expect(clock.remaining <= DiskImageCancelBudget.cancelledSequenceBudget)
+        let firstRemaining = clock.remaining
+        clock.armWithSpentSinceCancel()
+        #expect(clock.remaining <= firstRemaining)
+        #expect(
+            CooperativeLaunchStop.boundedWaitSinceCancel(
+                cap: DiskImageCancelBudget.sessionDeathWait
+            ) == DiskImageCancelBudget.sessionDeathWait
+        )
+        #expect(
+            CooperativeLaunchStop.boundedWaitSinceCancel(cap: DiskImageCancelBudget.leaderReap)
+                == DiskImageCancelBudget.leaderReap
+        )
+    }
+
     @Test func failedDetachDoesNotCountAsCleanupOrAllowRetry() {
         #expect(DiskImageCancelBudget.preemptCleanupSucceeded(status: 0, timedOut: false))
         #expect(DiskImageCancelBudget.preemptCleanupSucceeded(status: 1, timedOut: false) == false)

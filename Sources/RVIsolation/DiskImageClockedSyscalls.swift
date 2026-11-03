@@ -98,11 +98,45 @@ private func diskImageCopyClockAllowance() -> TimeInterval? {
 }
 
 @Sendable private func diskImageCopyClockLiveStop() -> Date? {
-    if blockingWorkIsCancelled() { CooperativeLaunchStop.noteCancel() }
-    return diskImageTreeCopyStop(
-        deadline: CooperativeLaunchStop.cancelClock?.deadline,
-        now: Date()
-    )
+    diskImageTreeCopyStop(deadline: diskImageLiveCancelDeadline(), now: Date())
+}
+
+/// Cancel-clock compositions on the clock owner's interface. Call sites
+/// used to restate the local/shared/fallback chain, arm-with-spent, and
+/// spent-bounded waits; the owner now spells each once so a fix lands at
+/// one seam. First-arm-wins and the pure `DiskImageCancelBudget` math are
+/// unchanged.
+extension CooperativeLaunchStop {
+    /// The stop that governs a call: the caller's local clock, then the
+    /// shared clock armed at cancel, then `fallback`.
+    static func effectiveDeadline(
+        local: DiskImageCancelClock?,
+        fallback: Date? = nil
+    ) -> Date? {
+        local?.deadline ?? cancelClock?.deadline ?? fallback
+    }
+
+    /// `DiskImageCancelBudget.boundedWait` with spent read from the
+    /// owner, so leader-reap and session-death waits share the one clock.
+    static func boundedWaitSinceCancel(cap: TimeInterval) -> TimeInterval {
+        DiskImageCancelBudget.boundedWait(
+            spentSinceCancel: spentSinceCancel(),
+            cap: cap
+        )
+    }
+}
+
+extension DiskImageCancelClock {
+    /// Arms with the owner's spent-since-cancel. First arm wins, so a
+    /// caller need not guard on `deadline == nil`.
+    func armWithSpentSinceCancel() {
+        arm(spentSinceCancel: CooperativeLaunchStop.spentSinceCancel())
+    }
+
+    /// Arms only when blocking work is already cancelled.
+    func armIfWorkCancelled() {
+        if blockingWorkIsCancelled() { armWithSpentSinceCancel() }
+    }
 }
 
 /// A proof or image unlink after detach. The copy budget may already be
@@ -118,10 +152,6 @@ func diskImagePerformWithinCancelClock(_ body: @escaping @Sendable () -> Bool) -
     }
     return diskImageWaitForStat(
         allowance: allowance,
-        liveDeadline: {
-            if blockingWorkIsCancelled() { CooperativeLaunchStop.noteCancel() }
-            return CooperativeLaunchStop.cancelClock?.deadline
-        },
         stat: body
     )
 }
