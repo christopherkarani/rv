@@ -40,8 +40,11 @@ OUT="$(cd "$OUT" && pwd)"
 # on `run`.
 products=(rv-microvm rv-macvm rv-macvm-agent)
 macvm=1
-sdk_major="$(xcrun --show-sdk-version 2>/dev/null | cut -d. -f1)"
-if [[ -z "$sdk_major" || "$sdk_major" -lt 27 ]]; then
+# A failing xcrun must not abort the build under `set -e`: no SDK version
+# means the pair is left out like an old SDK.
+sdk_version="$(xcrun --show-sdk-version 2>/dev/null || true)"
+sdk_major="${sdk_version%%.*}"
+if ! [[ "$sdk_major" =~ ^[0-9]+$ ]] || (( sdk_major < 27 )); then
   if [[ "$CONFIG" == "release" ]]; then
     printf 'build-microvm: WARNING: macOS SDK %s is older than 27; leaving out rv-macvm and rv-macvm-agent (--macvm)\n' "${sdk_major:-unknown}" >&2
     products=(rv-microvm)

@@ -102,6 +102,12 @@ struct MacVMProtocolTests {
         (request(workspace: "/./etc/x"), "workspace"),
         (request(workspace: "/Users/me/app/"), "workspace"),
         (request(workspace: "/Users/me/../../etc"), "workspace"),
+        // A `/` followed by a combining mark is one Swift Character but
+        // still a separator to the filesystem.
+        (request(workspace: "/etc/\u{301}x"), "system"),
+        (request(workspace: "/Users/rv/\u{301}"), "system"),
+        (request(workspace: "/tmp/../\u{301}x"), "workspace"),
+        (request(workspace: "/tmp/.\u{0}"), "NUL"),
         (request(arguments: []), "arguments"),
         (request(arguments: ["sh"]), "arguments"),
         (request(arguments: ["/bin/sh", "a\0b"]), "NUL"),
@@ -248,16 +254,6 @@ struct MacVMHostHelperTests {
         #expect(DHCPLeases.address(forMAC: "11:22:33:44:55:66", in: leases) == nil)
     }
 
-    @Test("run directories are owned by a pid; only dead owners are swept")
-    func runOwner() {
-        #expect(MacVMRunDirectory.owner(of: "4242-5f3a") == 4242)
-        #expect(MacVMRunDirectory.owner(of: "x-1") == nil)
-        #expect(MacVMRunDirectory.owner(of: "-1") == nil)
-        let name = MacVMRunDirectory.name(pid: 77)
-        #expect(MacVMRunDirectory.owner(of: name) == 77)
-        #expect(MacVMRunDirectory.stale(["1-a", "2-b", "junk", "3-c"], isAlive: { $0 == 2 }) == ["1-a", "3-c"])
-    }
-
     @Test("a run is live while its process holds the run's lock; dead and unlocked runs are swept")
     func runClaims() throws {
         let runs = FileManager.default.temporaryDirectory.appendingPathComponent("rv-runs-\(UUID().uuidString)")
@@ -278,8 +274,23 @@ struct MacVMHostHelperTests {
         FileManager.default.createFile(atPath: killed.appendingPathComponent(MacVMRuns.lockName).path, contents: nil)
         let legacy = runs.appendingPathComponent("77-nolock", isDirectory: true)
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        // A lock that cannot be opened might be held: never delete that run.
+        // (Root opens a mode-0 file anyway, so the case needs a normal user.)
+        try #require(getuid() != 0, "run as a normal user: root can open a mode-0 lock")
+        let unreadable = runs.appendingPathComponent("99-unreadable", isDirectory: true)
+        try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: unreadable.appendingPathComponent(MacVMRuns.lockName).path, contents: nil, attributes: [.posixPermissions: 0])
         #expect(MacVMRuns.sweep(in: runs) == 2)
-        #expect(Set(try runDirectories(runs)) == [first.directory.lastPathComponent, second.directory.lastPathComponent])
+        #expect(
+            Set(try runDirectories(runs))
+                == [first.directory.lastPathComponent, second.directory.lastPathComponent, unreadable.lastPathComponent])
+        guard case .failure(.limit(3, 2)) = MacVMRuns.claim(in: runs, limit: 2) else {
+            Issue.record("a run whose lock cannot be opened counts as live")
+            return
+        }
+        try FileManager.default.removeItem(at: unreadable)
+        first.release()
         first.release()
         #expect(!FileManager.default.fileExists(atPath: first.directory.path))
         let third = try MacVMRuns.claim(in: runs, limit: 2).get()

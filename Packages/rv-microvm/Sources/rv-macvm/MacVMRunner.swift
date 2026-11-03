@@ -89,8 +89,10 @@ struct MacVMRunner {
         guard descriptor >= 0 else {
             throw SetupError("image \(name) is not prepared; run: rv-macvm prepare --image \(name)")
         }
-        let data = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true).readDataToEndOfFile()
         do {
+            // readToEnd throws on a read error (say, image.json is a directory);
+            // readDataToEndOfFile would raise an uncatchable exception instead.
+            let data = try FileHandle(fileDescriptor: descriptor, closeOnDealloc: true).readToEnd() ?? Data()
             return try JSONDecoder().decode(MacVMImageRecord.self, from: data)
         } catch {
             throw SetupError("image \(name) has an unreadable image.json; prepare it again")
