@@ -48,10 +48,10 @@ struct RuntimeAdmissionBrokerInjectionTests {
         // action being performed, no request-ID lookup.
         #expect(delivered.injection?.host == delivered.action.destination.host)
         let grantedEvents = harness.evidence.snapshot().filter {
-            $0.result.hasPrefix("credential")
+            $0.result.wire.hasPrefix("credential")
         }
         #expect(grantedEvents.count == 1)
-        #expect(grantedEvents.first?.result == "credentialGranted:API_KEY")
+        #expect(grantedEvents.first?.result.wire == "credentialGranted:API_KEY")
         #expect(grantedEvents.first?.authorization == .allowed)
         #expect(grantedEvents.first?.executionAttempted == false)
 
@@ -82,7 +82,7 @@ struct RuntimeAdmissionBrokerInjectionTests {
         #expect(transport.received.first?.injection == nil)
         #expect(
             harness.evidence.snapshot().contains {
-                $0.result == "credentialWithheld:endpointNotApproved" && $0.authorization == .denied
+                $0.result.wire == "credentialWithheld:endpointNotApproved" && $0.authorization == .denied
             }
         )
     }
@@ -107,10 +107,10 @@ struct RuntimeAdmissionBrokerInjectionTests {
         }
         #expect(transport.runs == 1)
         let brokerEvents = harness.evidence.snapshot().filter {
-            $0.result.hasPrefix("credential")
+            $0.result.wire.hasPrefix("credential")
         }
         #expect(brokerEvents.count == 1)
-        #expect(brokerEvents.first?.result == "credentialUnwired:API_KEY")
+        #expect(brokerEvents.first?.result.wire == "credentialUnwired:API_KEY")
         #expect(brokerEvents.first?.authorization == .executorFailed)
         #expect(brokerEvents.first?.executionAttempted == false)
     }
@@ -140,7 +140,7 @@ struct RuntimeAdmissionBrokerInjectionTests {
         #expect(delivery.all.first?.value == t5SecretValue)
         #expect(
             harness.evidence.snapshot().contains {
-                $0.result == "credentialGranted:API_KEY" && $0.authorization == .allowed
+                $0.result.wire == "credentialGranted:API_KEY" && $0.authorization == .allowed
             }
         )
     }

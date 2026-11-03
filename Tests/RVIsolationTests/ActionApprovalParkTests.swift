@@ -343,7 +343,7 @@ struct ActionApprovalParkTests {
         #expect(harness.effect.runs == 0)
         #expect(harness.session.parkedApprovalCountForTesting == 0)
         let events = harness.evidence.snapshot()
-        #expect(events.contains { $0.result == "principalRevoked" })
+        #expect(events.contains { $0.result.wire == "principalRevoked" })
         #expect(events.contains { $0.executionAttempted } == false)
     }
 
@@ -366,7 +366,7 @@ struct ActionApprovalParkTests {
         #expect(harness.effect.runs == 0)
         #expect(harness.session.parkedApprovalCountForTesting == 0)
         let events = harness.evidence.snapshot()
-        #expect(events.contains { $0.result == "principalRevoked" })
+        #expect(events.contains { $0.result.wire == "principalRevoked" })
         #expect(events.contains { $0.executionAttempted } == false)
     }
 
@@ -459,7 +459,7 @@ struct ActionApprovalParkTests {
         await waitFor("replay rejection") { harness.session.queuedCompletionCountForTesting == 1 }
         #expect(harness.effect.runs == 1)
         let events = harness.evidence.snapshot()
-        #expect(events.last?.result == "replay")
+        #expect(events.last?.result.wire == "replay")
         #expect(events.last?.authorization == .rejected)
     }
 
@@ -504,7 +504,7 @@ struct ActionApprovalParkTests {
         #expect(harness.effect.runs == 0)
         #expect(harness.backend.snapshot.cancels.count == 1)
         let events = harness.evidence.snapshot()
-        #expect(events.last?.result == "approvalTimeout")
+        #expect(events.last?.result.wire == "approvalTimeout")
     }
 
     @Test func unknownStatusFailsClosed() async throws {
