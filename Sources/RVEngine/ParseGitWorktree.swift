@@ -98,6 +98,20 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
     if force, let source = before.first, before.count > 1, after.isEmpty {
         return .discardWorktree(pathspecs: Array(before.dropFirst()), source: source)
     }
+    return pathCheckoutWithoutDash(before)
+}
+
+/// `git checkout <tree-ish> <paths>...` (two or more words) and
+/// `git checkout .` overwrite working-tree files like the `--` form. A lone
+/// word stays a branch switch (nil) unless it starts with `.`, which no ref
+/// name can.
+private func pathCheckoutWithoutDash(_ words: [String]) -> GitAction? {
+    if words.count >= 2, let source = words.first {
+        return .discardWorktree(pathspecs: Array(words.dropFirst()), source: source)
+    }
+    if words.count == 1, let path = words.first, path.hasPrefix(".") {
+        return .discardWorktree(pathspecs: [path], source: nil)
+    }
     return nil
 }
 
