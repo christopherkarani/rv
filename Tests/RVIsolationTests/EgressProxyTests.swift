@@ -584,8 +584,12 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
 
 /// AC-006 across processes. The in-process mutex serializes the threaded test
 /// above, so only a second process exercises the sidecar `flock`. The peer
-/// writes each line in two halves while holding the sidecar lock: an
-/// unexcluded append would land between them and split a line.
+/// writes each line in two halves while holding the sidecar lock, and signals
+/// readiness only once it is mid-way through its first line and holding that
+/// lock for 200ms. The in-process writer therefore starts while exclusion is
+/// provably held: an unexcluded append lands between the halves and corrupts
+/// that line. Nothing here depends on how the two writers interleave
+/// afterwards (flock is not fair), so a correct implementation always passes.
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/perl")))
 func egressDenialCrossProcessWritersLoseNoLines() throws {
     let directory = FileManager.default.temporaryDirectory
@@ -598,11 +602,12 @@ func egressDenialCrossProcessWritersLoseNoLines() throws {
         my $f = $ARGV[0];
         open(my $l, '>>', "$f.lock") or die;
         open(my $o, '>>', $f) or die;
-        $| = 1; print "ready\\n";
+        $| = 1;
         for my $i (0..499) {
             flock($l, LOCK_EX) or die;
             syswrite($o, '{"host":"p-' . $i . '.example","port":"443",');
-            select(undef, undef, undef, 0.0005);
+            if ($i == 0) { print "ready\\n"; select(undef, undef, undef, 0.2); }
+            else { select(undef, undef, undef, 0.0005); }
             syswrite($o, '"reason":"denied-policy","recordedAt":"1700000000.0"}' . "\\n");
             flock($l, LOCK_UN);
         }
@@ -634,11 +639,11 @@ func egressDenialCrossProcessWritersLoseNoLines() throws {
         #expect(Set(object.keys) == ["host", "port", "reason", "recordedAt"])
         hosts.append(object["host"] ?? "")
     }
-    // The writers overlapped: some in-process line sits between peer lines.
-    let peerIndices = hosts.indices.filter { hosts[$0].hasPrefix("p-") }
-    if let first = peerIndices.first, let last = peerIndices.last {
-        #expect(hosts[first...last].contains { $0.hasPrefix("s-") })
-    }
+    // The peer held the lock mid-line before the first append began, so its
+    // first line is whole and first. Every line of both writers is present.
+    #expect(hosts.first == "p-0.example")
+    #expect(hosts.filter { $0.hasPrefix("p-") }.count == 500)
+    #expect(hosts.filter { $0.hasPrefix("s-") }.count == 500)
 }
 
 @Test func egressDenialFileIsOwnerOnlyAndSymlinkRefused() throws {
@@ -667,6 +672,29 @@ func egressDenialCrossProcessWritersLoseNoLines() throws {
     #expect(EgressProxy.writeDenial(denial, to: link, diagnose: diagnostics.record) == false)
     #expect(diagnostics.all.isEmpty == false)
     #expect(try String(contentsOf: target, encoding: .utf8) == "untouched")
+}
+
+@Test func egressDenialLockFailureReportsCapturedErrno() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-lockerr-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let denial = EgressProxyDenial(
+        host: "lock.example", port: 443, reason: .deniedPolicy,
+        recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    let target = directory.appendingPathComponent("target.txt")
+    try Data("untouched".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(
+        at: url.appendingPathExtension("lock"), withDestinationURL: target
+    )
+    let diagnostics = AuditDiagnosticCollector()
+    #expect(EgressProxy.writeDenial(denial, to: url, diagnose: diagnostics.record) == false)
+    let message = try #require(diagnostics.all.first)
+    #expect(message.contains("lock failed"))
+    #expect(message.contains("errno=\(ELOOP)"))
+    #expect(FileManager.default.fileExists(atPath: url.path) == false)
 }
 
 @Test func egressDenialReasonsPinLogSpellings() {

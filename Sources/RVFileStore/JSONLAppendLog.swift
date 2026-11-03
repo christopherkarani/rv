@@ -22,8 +22,9 @@ public enum JSONLAppendLog {
     public enum AppendError: Error, Equatable, Sendable {
         /// The parent directory could not be created.
         case directory
-        /// The `<name>.lock` sidecar could not be opened or `flock`ed.
-        case lock
+        /// The `<name>.lock` sidecar could not be opened (`ELOOP` for a
+        /// symlink) or `flock`ed. `errno` is captured at the failing call.
+        case lock(errno: Int32)
         /// The ledger could not be opened (`ELOOP` for a symlink).
         case open(errno: Int32)
         /// The ledger path is not a regular file.
@@ -72,16 +73,21 @@ public enum JSONLAppendLog {
             return .failure(.directory)
         }
         let lockURL = url.appendingPathExtension("lock")
-        let fd = lockURL.path.withCString { path in
-            open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        var openError: Int32 = 0
+        let fd = lockURL.path.withCString { path -> Int32 in
+            let opened = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            if opened < 0 {
+                openError = errno
+            }
+            return opened
         }
         guard fd >= 0 else {
-            return .failure(.lock)
+            return .failure(.lock(errno: openError))
         }
         defer { close(fd) }
         return processLock.withLock { _ in
-            guard lock(fd) else {
-                return .failure(.lock)
+            if let failure = lock(fd) {
+                return .failure(failure)
             }
             defer { _ = flock(fd, LOCK_UN) }
             return body(url)
@@ -114,17 +120,21 @@ public enum JSONLAppendLog {
         return .success(())
     }
 
-    /// Excludes other processes. Callers already hold `processLock`.
-    private static func lock(_ fd: Int32) -> Bool {
+    /// Excludes other processes. Callers already hold `processLock`. Returns
+    /// nil once the lock is held, else the failure with `errno` captured
+    /// immediately at the failing `flock`.
+    private static func lock(_ fd: Int32) -> AppendError? {
+        var code: Int32 = EINTR
         for _ in 0..<16 {
             if flock(fd, LOCK_EX) == 0 {
-                return true
+                return nil
             }
-            if errno != EINTR {
-                return false
+            code = errno
+            if code != EINTR {
+                break
             }
         }
-        return false
+        return .lock(errno: code)
     }
 
     /// If the log does not end on a record boundary, close that partial line.

@@ -1431,7 +1431,7 @@ public final class EgressProxy: @unchecked Sendable {
             let detail: String
             switch error {
             case .directory: detail = "directory failed path=\(url.path)"
-            case .lock: detail = "lock failed path=\(url.path)"
+            case .lock(let code): detail = "lock failed path=\(url.path) errno=\(code)"
             case .open(let code): detail = "create failed path=\(url.path) errno=\(code)"
             case .notRegularFile: detail = "create failed path=\(url.path) error=not a regular file"
             case .write(let code): detail = "append failed path=\(url.path) errno=\(code)"

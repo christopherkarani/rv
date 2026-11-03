@@ -81,7 +81,7 @@ struct JSONLAppendLogTests {
         try FileManager.default.createSymbolicLink(
             at: url.appendingPathExtension("lock"), withDestinationURL: victim
         )
-        #expect(throws: JSONLAppendLog.AppendError.lock) {
+        #expect(throws: JSONLAppendLog.AppendError.lock(errno: ELOOP)) {
             try JSONLAppendLog.append(Data("x".utf8), to: url)
         }
         #expect(FileManager.default.fileExists(atPath: url.path) == false)

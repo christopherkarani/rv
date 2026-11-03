@@ -136,7 +136,7 @@ func appendAdmissionEvent(
         let detail: String
         switch error {
         case .directory: detail = "directory failed path=\(url.path) error=directory create failed"
-        case .lock: detail = "lock failed path=\(url.path) errno=\(errno)"
+        case .lock(let code): detail = "lock failed path=\(url.path) errno=\(code)"
         case .open(let code): detail = "open failed path=\(url.path) errno=\(code)"
         case .notRegularFile: detail = "open failed path=\(url.path) error=not a regular file"
         case .write(let code): detail = "write failed path=\(url.path) errno=\(code)"
