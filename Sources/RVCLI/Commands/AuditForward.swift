@@ -49,42 +49,25 @@ enum AuditForwardRun {
     /// https anywhere; plain http only to this machine. No userinfo, fragment,
     /// path secret, or query secret (including a query value that is a URL
     /// with userinfo). `--install` copies `--to` into a plist and a crontab
-    /// line, so a refusal names the problem and not the secret.
+    /// line, so a refusal names the problem and not the secret. A thin
+    /// adapter over the one classification in `SecretFreeEndpoint` — the
+    /// same seam MCP endpoints cross, parsed loopback and non-canonical
+    /// refusal included (REQ-T6) — keeping audit forwarding's sentences.
     static func destination(_ text: String) -> Result<URL, CommandFailure> {
-        guard let url = URL(string: text),
-            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-            let scheme = components.scheme?.lowercased(), let rawHost = components.host, rawHost.isEmpty == false
-        else {
+        guard let url = URL(string: text) else {
             return .failure("--to must be an absolute URL")
         }
-        let host = rawHost.lowercased()
-        if components.user != nil || components.password != nil {
-            return .failure("--to must not include a username or password")
+        switch SecretFreeEndpoint.problemKind(url: url, rawSpelling: text) {
+        case nil: return .success(url)
+        case .malformed: return .failure("--to must be an absolute URL")
+        case .scheme: return .failure("audit forwarding needs https (plain http is allowed only to localhost)")
+        case .nonCanonicalHost: return .failure("--to must name its host as a canonical IP address or DNS name")
+        case .credentials: return .failure("--to must not include a username or password")
+        case .fragment: return .failure("--to must not have a fragment")
+        case .hostSecret: return .failure("--to must not carry a secret in its host")
+        case .querySecret: return .failure("--to must not carry a secret in its query")
+        case .pathSecret, .userinfoSpelling: return .failure("--to must not carry a secret in its path")
         }
-        if components.fragment != nil {
-            return .failure("--to must not have a fragment")
-        }
-        if MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "")
-            || MCPRedaction.authorityCarriesPassword(text)
-        {
-            return .failure("--to must not carry a secret in its host")
-        }
-        if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
-            return .failure("--to must not carry a secret in its path")
-        }
-        let rawQuery = components.percentEncodedQuery ?? MCPRedaction.rawQuery(text)
-        if MCPRedaction.queryCarriesSecret(encoded: rawQuery, items: components.queryItems)
-            || MCPRedaction.rawQuery(text).map({ MCPRedaction.queryCarriesSecret(encoded: $0, items: nil) }) == true
-        {
-            return .failure("--to must not carry a secret in its query")
-        }
-        // `user:/su?password@host` is split into a path and a query before those checks.
-        if components.user == nil, components.password == nil, MCPRedaction.containsUserinfoSpelling(text) {
-            return .failure("--to must not carry a secret in its path")
-        }
-        if scheme == "https" { return .success(url) }
-        if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }
-        return .failure("audit forwarding needs https (plain http is allowed only to localhost)")
     }
 
     static func stateDirectory(_ configDirectory: URL) -> URL {
