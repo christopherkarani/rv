@@ -151,9 +151,28 @@ func rubyCodeCanSpawn(_ code: String) -> Bool {
         // Kernel#open and IO class readers run a command for a leading `|`;
         // only a literal path that does not start with one is safe.
         #"\bIO\.(read|readlines|foreach|binread)\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
-        #"(?<![.\w])open\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
     ]
-    return patterns.contains { matches(code, pattern: $0) } || rubyFileWrites(code).opaque
+    return patterns.contains { matches(code, pattern: $0) } || rubyOpenIsUnsafe(code)
+        || rubyFileWrites(code).opaque
+}
+
+/// A bare `open` (Kernel#open runs a command for a leading `|`) unless a
+/// literal path that does not start with `|` follows. Candidates are found
+/// with string contents and comments blanked, so prose such as "Could not
+/// open file" does not count; the literal check reads the original text.
+private func rubyOpenIsUnsafe(_ code: String) -> Bool {
+    let masked = maskingLiteralsAndComments(code, language: .ruby)
+    guard let regex = try? NSRegularExpression(pattern: #"(?<![.\w])open\b(?>\s*(?:\(\s*)?)"#) else { return true }
+    let units = Array(code.utf16)
+    for match in regex.matches(in: masked, range: NSRange(masked.startIndex..., in: masked)) {
+        let end = match.range.location + match.range.length
+        guard end + 1 < units.count else { return true }
+        let quote = units[end]
+        let next = units[end + 1]
+        let isQuote = quote == 0x22 || quote == 0x27
+        if isQuote == false || next == 0x7C || next == quote { return true }
+    }
+    return false
 }
 
 // MARK: perl

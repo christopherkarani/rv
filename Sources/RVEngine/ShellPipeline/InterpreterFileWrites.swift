@@ -39,7 +39,9 @@ struct CallPattern: Sendable {
     static let pythonFunctions = CallPattern("open|ZipFile|TarFile|FileIO")
     static let pythonMethods = CallPattern(#"(?<=\.\s{0,3})open"#)
     static let nodeOpen = CallPattern("open|openSync")
-    static let nodeWriters = CallPattern("writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream")
+    static let nodeWriters = CallPattern(
+        "writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|mkdir|mkdirSync"
+    )
     static let nodeCopies = CallPattern("copyFile|copyFileSync")
     static let rubyOpen = CallPattern(#"File\s*\.\s*(?:open|new)|IO\s*\.\s*open|open"#, parenless: true)
 }
@@ -47,11 +49,16 @@ struct CallPattern: Sendable {
 /// Top-level (depth-0, outside string literals) argument texts of every
 /// call matching `pattern`. Nil when the pattern failed to compile: callers
 /// treat that as an unresolvable write (fail closed).
-func callArguments(in code: String, pattern: CallPattern) -> [[String]]? {
+func callArguments(
+    in code: String, pattern: CallPattern, locatingIn language: LiteralMaskLanguage? = nil
+) -> [[String]]? {
     guard let regex = pattern.regex else { return nil }
     let chars = Array(code)
     var calls: [[String]] = []
-    for match in regex.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
+    // Call sites are located with literals blanked (a word inside prose is
+    // not a call); the arguments are still read from the original text.
+    let searchable = language.map { maskingLiteralsAndComments(code, language: $0) } ?? code
+    for match in regex.matches(in: searchable, range: NSRange(searchable.startIndex..., in: searchable)) {
         guard let end = Range(match.range, in: code).map({ code.distance(from: code.startIndex, to: $0.upperBound) })
         else { continue }
         guard let arguments = splitArguments(chars, from: end, parenless: chars[end - 1] != "(") else {
@@ -314,12 +321,14 @@ func pythonFileWrites(_ code: String) -> InterpreterWrites {
         }
     }
     // A bare `open` that is not called (`f = open`, `(open)(...)`) hides its mode.
-    if matches(code, pattern: #"(?<![.\w'"])open\b(?!\s*\()(?![\w'"])"#) { writes.opaque = true }
+    let bareCode = maskingLiteralsAndComments(code, language: .python)
+    if matches(bareCode, pattern: #"(?<![.\w'"])open\b(?!\s*\()(?![\w'"])"#) { writes.opaque = true }
     return writes
 }
 
 private let nodeWriterNames =
-    "writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|open|openSync"
+    "writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|open|openSync|"
+    + "mkdir|mkdirSync"
 private let nodeReaderNames =
     "readFile|readFileSync|readdir|readdirSync|readlink|readlinkSync|exists|existsSync|stat|statSync|lstat|lstatSync|"
     + "access|accessSync|realpath|realpathSync|createReadStream"
@@ -355,7 +364,13 @@ private func nodeFsUseIsUnmodeled(_ code: String) -> Bool {
     return matches(residue, pattern: #"(?<![\w$])(?:fs|promises)(?![\w$])"#)
         || matches(residue, pattern: nodeFsModule)
         || matches(residue, pattern: #"\bimport\b"#)
-        || matches(residue, pattern: #"(?<![\w$])(?:\#(nodeWriterNames))(?![\w$])(?!\s*\()"#)
+        // A writer name used as a value (`const w = writeFileSync`). It only
+        // matters once the fs module is in play: `{open: true}` is data.
+        || (matches(code, pattern: nodeFsModule + #"|(?<![\w$])(?:fs|promises)(?![\w$])"#)
+            && matches(
+                maskingLiteralsAndComments(residue, language: .node),
+                pattern: #"(?<![\w$])(?:\#(nodeWriterNames))(?![\w$])(?!\s*\()"#
+            ))
 }
 
 func nodeFileWrites(_ code: String) -> InterpreterWrites {
@@ -371,16 +386,21 @@ func nodeFileWrites(_ code: String) -> InterpreterWrites {
         let modeArguments = arguments.filter { $0.contains("=>") == false && $0.hasPrefix("function") == false }
         if callOpensForWrite(modeArguments, unknownIsWrite: true) { recordOpen(modeArguments, into: &writes) }
     }
+    let bareCode = maskingLiteralsAndComments(code, language: .node)
     if nodeFsUseIsUnmodeled(code)
         || matches(code, pattern: #"\bO_(WRONLY|RDWR|CREAT|APPEND|TRUNC)\b"#)
-        // Receiver-agnostic fs mutators, however `fs` was obtained.
+        // Receiver-agnostic fs mutators, however `fs` was obtained. Bare
+        // identifiers only: prose in a string ("link: x") is not a call.
         || matches(
-            code,
+            bareCode,
             pattern: #"(?<![\w$])(cp|cpSync|truncate|truncateSync|ftruncate|ftruncateSync|symlink|symlinkSync|link|linkSync|chmod|chmodSync|fchmod|fchmodSync|chown|chownSync|lchown|lchownSync|utimes|utimesSync|futimes|futimesSync|writeSync|writev|writevSync|mkdtemp|mkdtempSync)\s*[(:]"#
         )
         // Bracketed or renamed access: `fs["writeFileSync"](...)`, `{writeFileSync: w}`.
         || matches(code, pattern: #"\[\s*['"`](write|append|createWrite|copy)\w*['"`]\s*\]"#)
-        || matches(code, pattern: #"\b(\#(nodeWriterNames))\s*:"#)
+        // Renamed destructure (`{writeFileSync: w}`); an object key such as
+        // `{open: true}` is only suspect once `fs` or a loader is in play.
+        || (matches(bareCode, pattern: #"\b(\#(nodeWriterNames))\s*:"#)
+            && matches(bareCode, pattern: #"\b(require|import|process|fs|promises)\b"#))
     {
         writes.opaque = true
     }
@@ -390,7 +410,7 @@ func nodeFileWrites(_ code: String) -> InterpreterWrites {
 func rubyFileWrites(_ code: String) -> InterpreterWrites {
     var writes = InterpreterWrites()
     if matches(code, pattern: #"\bFile::(WRONLY|RDWR|CREAT|APPEND|TRUNC|EXCL)\b"#) { writes.opaque = true }
-    guard let opens = callArguments(in: code, pattern: .rubyOpen) else {
+    guard let opens = callArguments(in: code, pattern: .rubyOpen, locatingIn: .ruby) else {
         return InterpreterWrites(paths: [], opaque: true)
     }
     for arguments in opens where callOpensForWrite(arguments, unknownIsWrite: true) {

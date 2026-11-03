@@ -140,6 +140,28 @@ struct ResidualInterpreterWriteTests {
         #expect(scope(#"python3 -c "import json; json.dump({}, open('out.json','w'))""#) == .insideRepository)
         #expect(scope(#"node -e "require('fs').writeFileSync('out.txt','y')""#) == .insideRepository)
         #expect(scope(#"python3 -c "open('/tmp/x','w')""#) != .insideRepository)
+        #expect(scope(#"node -e "require('fs').mkdirSync('dist',{recursive:true})""#) == .insideRepository)
+        #expect(scope(#"node -e "require('fs').mkdirSync('/tmp/x')""#) != .insideRepository)
+    }
+
+    @Test func proseInLiteralsIsNotACall() {
+        expectNotWrapper(#"python3 -c 'print("Could not open file")'"#)
+        expectNotWrapper(#"python3 -c 'print(1) # open the file'"#)
+        expectNotWrapper(#"node -e 'console.log("link: x")'"#)
+        expectNotWrapper(#"node -p 'JSON.stringify({open:true})'"#)
+        expectNotWrapper(#"node -e 'console.log("cp: done") // truncate'"#)
+        expectNotWrapper(#"ruby -e 'puts "Could not open file"'"#)
+        expectNotWrapper(#"ruby -e 'puts 1 # open it'"#)
+        // Masking must not hide a real use.
+        expectLimited(#"python3 -c "f=open;f('/tmp/x','w')""#, .python)
+        expectLimited(#"python3 -c 'print("a"); f=open; f("/tmp/x","w")'"#, .python)
+        expectLimited(#"python3 -c 'f"{open}"'"#, .python)
+        expectLimited(#"node -e "require('fs')['writeFileSync']('/x','y')""#, .node)
+        expectLimited(#"node -e 'const w=require("fs").writeFileSync; w("/x","y")'"#, .node)
+        expectLimited(#"node -e 'const {writeFileSync: w}=require("fs"); w("/x","y")'"#, .node)
+        expectLimited(#"ruby -e 'open "|rm -r ~"'"#, .ruby)
+        expectLimited(#"ruby -e 'f = "x"; open f'"#, .ruby)
+        expectLimited(##"ruby -e 'puts "#{open("|id")}"'"##, .ruby)
     }
 
     // MARK: python / node / ruby file writes

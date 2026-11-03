@@ -254,6 +254,18 @@
     { "id": "db.allow.r6-builtin-cd", "command": "builtin cd foo", "expected": "allow" },
     { "id": "db.allow.r6-exec-a-quoted-ls", "command": "exec -a \"x y\" ls", "expected": "allow" },
     { "id": "db.allow.r6-echo-quoted-semicolon-text", "command": "echo \"a; b\"", "expected": "allow" },
-    { "id": "db.allow.r6-commit-msg-semicolon", "command": "git commit -m \"fix; thing\"", "expected": "allow" }
+    { "id": "db.allow.r6-commit-msg-semicolon", "command": "git commit -m \"fix; thing\"", "expected": "allow" },
+    { "id": "db.deny.r7-python-second-call-execvp", "command": "python3 -c \"import os; os.system('ls'); os.execvp('rm',['rm','-r','/Users/me'])\"", "expected": "deny" },
+    { "id": "db.deny.r7-node-second-call-spawnsync", "command": "node -e \"require('child_process').execSync('ls'); require('child_process').spawnSync('rm',['-r','/Users/me'])\"", "expected": "deny" },
+    { "id": "db.deny.r7-ruby-second-call-popen", "command": "ruby -e \"system('ls'); IO.popen('rm -r ~')\"", "expected": "deny" },
+    { "id": "db.allow.r7-python-single-ls", "command": "python3 -c \"import os; os.system('ls')\"", "expected": "allow" },
+    { "id": "db.allow.r7-node-single-ls", "command": "node -e \"require('child_process').execSync('ls')\"", "expected": "allow" },
+    { "id": "db.allow.r7-ruby-single-ls", "command": "ruby -e \"system('ls')\"", "expected": "allow" },
+    { "id": "db.allow.r8-python-print-open-in-string", "command": "python3 -c 'print(\"Could not open file\")'", "expected": "allow" },
+    { "id": "db.allow.r8-node-log-link-in-string", "command": "node -e 'console.log(\"link: x\")'", "expected": "allow" },
+    { "id": "db.allow.r8-node-json-open-key", "command": "node -p 'JSON.stringify({open:true})'", "expected": "allow" },
+    { "id": "db.allow.r8-ruby-puts-open-in-string", "command": "ruby -e 'puts \"Could not open file\"'", "expected": "allow" },
+    { "id": "db.deny.r8-python-alias-open-write", "command": "python3 -c \"f=open;f('/tmp/x','w')\"", "expected": "deny" },
+    { "id": "db.deny.r8-node-bracket-writefile", "command": "node -e \"require('fs')['writeFileSync']('/x','y')\"", "expected": "deny" }
   ]
 }
