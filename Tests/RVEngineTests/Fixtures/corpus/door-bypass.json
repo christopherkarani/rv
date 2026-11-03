@@ -157,6 +157,12 @@
     { "id": "db.allow.r6-builtin-cd", "command": "builtin cd foo", "expected": "allow" },
     { "id": "db.allow.r6-exec-a-quoted-ls", "command": "exec -a \"x y\" ls", "expected": "allow" },
     { "id": "db.allow.r6-echo-quoted-semicolon-text", "command": "echo \"a; b\"", "expected": "allow" },
-    { "id": "db.allow.r6-commit-msg-semicolon", "command": "git commit -m \"fix; thing\"", "expected": "allow" }
+    { "id": "db.allow.r6-commit-msg-semicolon", "command": "git commit -m \"fix; thing\"", "expected": "allow" },
+    { "id": "db.deny.r9-echo-dq-semicolon", "command": "echo \"x\"; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-echo-sq-space-semicolon", "command": "echo 'x y'; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-echo-sq-backslash-semicolon", "command": "echo 'a\\'; rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-printf-quoted-amp", "command": "printf \"%s\" \"x\"&& rm -r ~", "expected": "deny" },
+    { "id": "db.deny.r9-ls-quoted-pipe-xargs", "command": "ls \"a\"|xargs rm -r", "expected": "deny" },
+    { "id": "db.deny.r9-echo-dq-semicolon-nospace", "command": "echo \"x\";rm -r ~", "expected": "deny" }
   ]
 }
