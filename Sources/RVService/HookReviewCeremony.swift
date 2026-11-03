@@ -50,9 +50,10 @@ actor HookReviewCeremonyService {
     private let grants: EphemeralAllowOnceTable
     private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
-    /// The daemon's live compile set, resolved per peek so a
-    /// `setPackEnabled` rebuild after init is visible (AC-001).
-    private let gated: @Sendable () -> GatedEvaluate
+    /// The daemon's live compile-set module: peeks request its ready
+    /// door per call, so a `setPackEnabled` rebuild after init is
+    /// visible and no peek evaluates against a stale snapshot (AC-001).
+    private let compileSet: LiveCompileSet
     private var challenges: [ApprovalID: Challenge] = [:]
 
     init(
@@ -60,7 +61,7 @@ actor HookReviewCeremonyService {
         allowOnce: AllowOnceStore,
         grants: EphemeralAllowOnceTable,
         home: HomeDirectory?,
-        gated: @escaping @Sendable () -> GatedEvaluate,
+        compileSet: LiveCompileSet,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.pending = pending
@@ -68,7 +69,7 @@ actor HookReviewCeremonyService {
         self.grants = grants
         self.home = home
         self.clock = clock
-        self.gated = gated
+        self.compileSet = compileSet
     }
 
     // MARK: - UI review surface
@@ -291,22 +292,10 @@ actor HookReviewCeremonyService {
 
     // MARK: - Private
 
-    /// Allow-once peek on the `gated` current at peek time, never a
-    /// per-peek `EvaluationWorld.assemble`.
+    /// Allow-once peek at the compile-set seam: door freshness resolves
+    /// inside the module per peek, never a per-peek world assembly here.
     private func peek() -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
-        let home = home
-        let store = allowOnce
-        let grants = grants
-        let gated = gated
-        return { command, cwd, now in
-            await LiveEvaluateWorld(
-                home: home,
-                store: store,
-                grants: grants,
-                gated: gated(),
-                clock: { now }
-            ).peek(command: command, cwd: cwd)
-        }
+        compileSet.livePeek(home: home, store: allowOnce, grants: grants)
     }
 
     private func prune() {

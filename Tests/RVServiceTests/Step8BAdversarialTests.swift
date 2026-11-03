@@ -130,10 +130,10 @@ struct Step8BAdversarialTests {
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         // One shared memory table: the ceremony plants, the world spends.
         let memory = EphemeralAllowOnceTable()
-        let dayOne = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         let ceremonies = HookReviewCeremonyService(
             pending: pending, allowOnce: grants, grants: memory, home: home,
-            gated: { dayOne }, clock: { self.now })
+            compileSet: LiveCompileSet(snapshots: nil, catalog: nil, home: home),
+            clock: { self.now })
         let cwd = wd("/tmp/ws")
         let feature = ShellCommand(rawValue: "git push origin feature")
         let created = try await pending.create(
@@ -240,10 +240,10 @@ struct Step8BAdversarialTests {
         let pending = PendingApprovalStore.makeLive(home: home)
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         let wall = WallBox(now)
-        let dayOne = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         let ceremonies = HookReviewCeremonyService(
             pending: pending, allowOnce: grants, grants: EphemeralAllowOnceTable(), home: home,
-            gated: { dayOne }, clock: { wall.now })
+            compileSet: LiveCompileSet(snapshots: nil, catalog: nil, home: home),
+            clock: { wall.now })
         let cwd = wd("/tmp/ws")
         let shell = ShellCommand(rawValue: "git reset --hard")
         _ = try await pending.create(
