@@ -25,6 +25,9 @@ public enum SecretSource: Sendable, Equatable {
     case gcp(secret: String, project: String?, version: String)
     /// Azure Key Vault via `az keyvault secret show`.
     case azure(vault: String, name: String, version: String?)
+    /// An AWS CLI profile's credential set, read with
+    /// `aws configure export-credentials`. Only `awsSigV4` delivery spends it.
+    case awsProfile(profile: String)
 
     public var kind: String {
         switch self {
@@ -37,6 +40,7 @@ public enum SecretSource: Sendable, Equatable {
         case .bitwarden: "bitwarden"
         case .gcp: "gcp"
         case .azure: "azure"
+        case .awsProfile: "awsProfile"
         }
     }
 }
@@ -68,10 +72,60 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
 }
 
+/// AWS SDKs in the cage sign with a placeholder key id against
+/// `http://127.0.0.1:<port>/s/<NAME>` (exported in `endpointEnv`); rv drops
+/// that signature and re-signs with the real credentials for `upstream`.
+public struct AWSSigningBinding: Sendable, Equatable {
+    /// Variables rv stages itself for an AWS-signed secret.
+    public static let stagedVariables: Set<String> = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
+
+    /// Signing names whose calls return new credentials (AssumeRole,
+    /// CreateAccessKey, GetCredentials, GetAuthorizationToken, ...). The agent
+    /// would receive credentials the gateway never scrubs, so no binding may
+    /// sign for them.
+    public static let credentialMintingServices: Set<String> = [
+        "sts", "iam", "sso", "sso-oauth", "awsssoportal", "awsssooidc", "signin", "cognito-identity", "cognito-idp",
+        "s3express", "ecr", "ecr-public", "codeartifact",
+    ]
+
+    /// Signing names of services that also take their action as a query
+    /// parameter on `GET /`, so a method or path rule cannot tell a read from
+    /// a write (`GET /?Action=TerminateInstances`).
+    public static let queryProtocolServices: Set<String> = [
+        "ec2", "sqs", "sns", "rds", "elasticloadbalancing", "autoscaling", "cloudformation", "elasticache", "redshift",
+        "ses", "sdb", "cloudsearch", "importexport", "monitoring",
+    ]
+
+    public var upstream: URL
+    public var region: String
+    /// The SigV4 signing name: `s3`, `bedrock`, `ec2`, ...
+    public var service: String
+    /// `AWS_ENDPOINT_URL` or a per-service `AWS_ENDPOINT_URL_<SERVICE>`.
+    public var endpointEnv: String
+    /// Methods and paths the secret may be used for. Empty allows any.
+    public var allow: [GatewayAllowance]
+
+    public init(upstream: URL, region: String, service: String, endpointEnv: String, allow: [GatewayAllowance] = []) {
+        self.upstream = upstream
+        self.region = region
+        self.service = service
+        self.endpointEnv = endpointEnv
+        self.allow = allow
+    }
+
+    /// `allow` with presets expanded.
+    public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
+
+    /// S3 signs the path as sent and accepts unsigned payloads.
+    var isS3: Bool { service == "s3" }
+}
+
 public enum SecretDelivery: Sendable, Equatable {
     case gateway(SecretGatewayBinding)
     /// Real value in the cage environment. Explicit opt-in; weaker.
     case environment
+    /// AWS SigV4 re-signing by the gateway. Requires an `awsProfile` source.
+    case awsSigV4(AWSSigningBinding)
 }
 
 public struct SecretDefinition: Sendable, Equatable {
@@ -216,7 +270,16 @@ extension SecretDefinition {
         switch delivery {
         case .gateway(let binding): [name, binding.baseURLEnv]
         case .environment: [name]
+        // The AWS_* credential variables are shared by every AWS secret, so
+        // two in one launch are refused when leased, not here.
+        case .awsSigV4(let binding): [binding.endpointEnv]
         }
+    }
+
+    /// Every variable a launch staging this secret sets.
+    var stagedVariables: [String] {
+        guard case .awsSigV4 = delivery else { return exportedVariables }
+        return exportedVariables + AWSSigningBinding.stagedVariables.sorted()
     }
 }
 
@@ -269,6 +332,13 @@ enum SecretsDecoding {
         }
         let source = try self.source(object["source"], secret: name)
         let delivery = try self.delivery(object["delivery"], secret: name)
+        // A profile's value is a credential set, not a token, and signing needs one.
+        switch (source, delivery) {
+        case (.awsProfile, .awsSigV4): break
+        case (.awsProfile, _): throw Failure("\(name).source.awsProfile needs awsSigV4 delivery")
+        case (_, .awsSigV4): throw Failure("\(name).delivery.awsSigV4 needs an awsProfile source")
+        default: break
+        }
         var expires: Date?
         if let raw = object["expires"] {
             guard let text = raw as? String, let date = SecretExpiry.parse(text) else {
@@ -282,7 +352,7 @@ enum SecretsDecoding {
             guard let text = raw as? String, let interval = SecretRefreshInterval(text) else {
                 throw Failure("\(name).refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m")
             }
-            guard case .gateway = delivery else {
+            if case .environment = delivery {
                 throw Failure(
                     "\(name).refresh applies to gateway delivery; a value in the environment cannot change after launch")
             }
@@ -382,6 +452,12 @@ enum SecretsDecoding {
             else { throw Failure("\(place) needs vault and name") }
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
+        case "awsProfile":
+            try onlyKeys(fields, ["profile"], at: place)
+            guard let profile = fields["profile"] as? String, profile.utf8.count <= 64, profile.hasPrefix("-") == false,
+                profile.isEmpty == false, profile.utf8.allSatisfy({ placeholderByte($0) || $0 == 46 })
+            else { throw Failure("\(place).profile must be an AWS profile name: letters, digits, ., _ or -") }
+            return .awsProfile(profile: profile)
         default:
             throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -411,6 +487,35 @@ enum SecretsDecoding {
             return .gateway(SecretGatewayBinding(
                 upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
                 allow: allow))
+        case "awsSigV4":
+            try onlyKeys(fields, ["upstream", "region", "service", "endpointEnv", "allow"], at: place)
+            guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
+                throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
+            }
+            // Both are credential-scope parts: `/` or spaces would forge another scope.
+            guard let region = fields["region"] as? String, regionName(region) else {
+                throw Failure("\(place).region must be an AWS region such as us-east-1")
+            }
+            guard let service = fields["service"] as? String, regionName(service) else {
+                throw Failure("\(place).service must be the SigV4 signing name, such as s3 or bedrock")
+            }
+            guard let endpointEnv = fields["endpointEnv"] as? String, variable(endpointEnv),
+                reservedVariables.contains(endpointEnv) == false,
+                AWSSigningBinding.stagedVariables.contains(endpointEnv) == false, endpointEnv != secret
+            else {
+                throw Failure("\(place).endpointEnv must be a distinct variable such as AWS_ENDPOINT_URL_S3")
+            }
+            guard AWSSigningBinding.credentialMintingServices.contains(service) == false else {
+                throw Failure("\(place).service \(service) mints credentials, which would reach the agent unscrubbed")
+            }
+            let allow = try self.allow(fields["allow"], at: "\(place).allow")
+            if AWSSigningBinding.queryProtocolServices.contains(service), allow.contains(.preset(.readOnly)) {
+                throw Failure(
+                    "\(place).allow read-only cannot limit \(service): it takes its action as a query parameter on GET; "
+                        + "scope the profile's IAM policy instead")
+            }
+            return .awsSigV4(AWSSigningBinding(
+                upstream: upstream, region: region, service: service, endpointEnv: endpointEnv, allow: allow))
         default:
             throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
         }

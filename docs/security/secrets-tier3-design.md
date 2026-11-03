@@ -63,16 +63,21 @@ the cage.
       public var endpointEnv: String  // AWS_ENDPOINT_URL or AWS_ENDPOINT_URL_<SVC>
   }
   ```
-- **Gateway entry.** Generalize `Entry.value` into
-  `enum GatewayCredential { case bearer(SecretValue); case aws(AWSCredentials) }`.
-  `AWSCredentials` holds three `SecretValue`s and an expiry.
+- **Gateway entry.** *Corrected when built (t3-04):* `Entry.value` stays a
+  single `SecretValue` holding the profile's raw JSON, and
+  `Entry.signing: AWSSigningBinding?` marks an AWS entry. A `GatewayCredential`
+  enum would have forked PR 14's rotation, history, and fingerprints, which
+  compare and store one value. `AWSCredentialSet` parses the three keys and
+  `Expiration` from that value when signing, refreshing, and scrubbing.
 - **Pure signer.** A new `SecretGatewaySigV4.swift`. It builds the canonical
   request and string-to-sign, and derives the key with `RVDigest.hmacSHA256`,
   which works on both platforms. Signed bodies use the SHA-256 of the
   buffered body (the gateway already buffers up to 32 MiB). Chunked uploads
-  use UNSIGNED-PAYLOAD.
-- **Hook point in `handle`.** For an `.aws` entry, skip
-  `GatewaySubstitution` for `Authorization`. Instead:
+  use UNSIGNED-PAYLOAD (S3 only).
+- **Hook point in `handle`.** *As built:* a request whose `Authorization`
+  starts with `AWS4-` takes `admitAWS` instead of `GatewaySubstitution`, and
+  an AWS entry offers no substitution surface, so its placeholder spent as a
+  bearer token is `surfaceNotAllowed`. Then:
   1. Parse the SigV4 `Credential=` access-key id.
   2. Require that it equals the placeholder.
   3. Drop `Authorization`, `X-Amz-Date`, `X-Amz-Security-Token`, and
@@ -80,7 +85,12 @@ the cage.
   4. Sign for the upstream host.
 
   This replaces lines `:387-401` for that kind only.
-- **Emulated container-credentials endpoint.** The gateway serves
+- **Emulated container-credentials endpoint.** *Deferred (2026-11-02).*
+  As built, the lease stages `AWS_ACCESS_KEY_ID` (the placeholder), a
+  throwaway `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `endpointEnv`. SDKs
+  read environment keys before container credentials, so an endpoint staged
+  beside them would never be called. Environment keys also work for
+  non-SDK tools (`curl --aws-sigv4`). The original proposal follows. The gateway serves
   `GET /aws/creds/<NAME>`. The lease stages:
   - `AWS_CONTAINER_CREDENTIALS_FULL_URI=http://127.0.0.1:P/aws/creds/<NAME>`;
   - `AWS_CONTAINER_AUTHORIZATION_TOKEN=<placeholder>`;
@@ -102,7 +112,7 @@ the cage.
 - The credentials endpoint must not be reachable by a process outside the
   runtime (PR 13).
 - Response scrubbing must cover the real access-key id, which S3 error
-  bodies echo.
+  bodies echo, and its hex form in the canonical request those bodies print.
 
 **Test plan.**
 - Use the AWS SigV4 test suite vectors against the pure signer.
@@ -117,12 +127,21 @@ the cage.
 **Size.** M. About 300 lines for the signer, 200 for the endpoint and wiring,
 and 300 for tests.
 
-**Open questions.**
-- S3 virtual-host addressing behind a custom endpoint may need
-  `AWS_S3_FORCE_PATH_STYLE`, or per-bucket upstreams.
-- One upstream per secret fights multi-region use. Should
-  `upstream` become a host pattern restricted to `*.amazonaws.com`?
-- Should event-stream signing (Bedrock, Transcribe) be refused, or supported?
+**Open questions (decided 2026-11-02).**
+- S3 addressing: path-style. `AWS_S3_FORCE_PATH_STYLE` is not an
+  environment variable SDKs read; it is an endpoint-ruleset builtin. The S3
+  ruleset already forces path-style for an IP endpoint, and the gateway is
+  `127.0.0.1`, so nothing is staged.
+- One `upstream` per secret (one region). A host pattern is deferred.
+- Signed-chunk and event-stream payloads are refused (`awsSignedStreaming`,
+  400). `UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` pass for
+  an S3 binding; any other service refuses them (`awsUnsignedPayload`, 400).
+- Credential-minting services (`sts`, `iam`, `sso`, ...) are refused by the
+  decoder, and a non-S3 response carrying `SecretAccessKey` is refused
+  (`awsCredentialsInResponse`, 502): the gateway scrubs only the profile's
+  own keys, so keys minted by a call would reach the agent.
+- `read-only` is refused for query-protocol services, where the action is a
+  parameter and a method rule cannot limit it.
 
 ---
 

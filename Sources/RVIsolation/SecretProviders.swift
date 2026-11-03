@@ -109,6 +109,8 @@ public struct SecretResolver: Sendable {
                 return SecretCommandProviders.gcp(secret: secret, project: project, version: version, environment: environment)
             case .azure(let vault, let name, let version):
                 return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
+            case .awsProfile(let profile):
+                return SecretCommandProviders.awsProfile(profile, environment: environment)
             }
         }, version: { source in
             guard case .keychain(let service, let account) = source else { return nil }
@@ -217,6 +219,18 @@ enum SecretCommandProviders {
             let picked = object[field] as? String
         else { return .failure(.notFound("field \(field) in \(secretID)")) }
         return SecretResolver.value(Array(picked.utf8), from: "\(secretID).\(field)")
+    }
+
+    /// The profile's credential set as the `credential_process` JSON the AWS
+    /// CLI prints. `AWSCredentialSet` checks its shape before anything signs.
+    static func awsProfile(_ profile: String, environment: [String: String]) -> Result<SecretValue, SecretResolutionError> {
+        guard let aws = executable("aws", environment: environment) else {
+            return .failure(.providerUnavailable("AWS CLI `aws` is not installed"))
+        }
+        return command(
+            aws, ["configure", "export-credentials", "--profile", profile, "--format", "process"],
+            environment: environment, label: "aws profile \(profile)"
+        ) { $0 }
     }
 
     static func infisical(

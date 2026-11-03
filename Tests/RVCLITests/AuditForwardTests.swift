@@ -263,6 +263,29 @@ struct AuditForwardTests {
         #expect(resolved.withLock { $0 } == 0)
     }
 
+    @Test func gatewayOnlySecretsAreRefusedAsHeadersBeforeResolving() throws {
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "SIEM", source: .awsProfile(profile: "dev"),
+                delivery: .awsSigV4(AWSSigningBinding(
+                    upstream: try #require(URL(string: "https://s3.us-east-1.amazonaws.com")), region: "us-east-1",
+                    service: "s3", endpointEnv: "AWS_ENDPOINT_URL_S3")))
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("tok123")!)
+        }
+        guard case .failure(let refused) = AuditForwardRun.resolveHeaders(
+            ["Authorization": "Bearer ${secret:SIEM}"], secrets: { .success(secrets) }, resolver: resolver, policy: nil)
+        else {
+            Issue.record("an AWS credential set was resolved into a header")
+            return
+        }
+        #expect(refused.message == "header secret SIEM: awsProfile secrets are spent only by the secret gateway")
+        #expect(resolved.withLock { $0 } == 0)
+    }
+
     @Test func headerSecretsIgnoreTheEnvironmentDeliveryRuleBecauseTheyNeverEnterACage() throws {
         let secrets = SecretsConfiguration(secrets: [
             SecretDefinition(name: "SIEM", source: .hostEnvironment(variable: "SIEM"), delivery: .environment)

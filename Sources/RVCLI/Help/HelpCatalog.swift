@@ -520,7 +520,15 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "sources",
-                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile"
+                ),
+                HelpRow(
+                    name: "aws",
+                    description: "awsProfile source + awsSigV4 delivery {upstream, region, service, endpointEnv, allow}: the cage gets a placeholder key id; rv re-signs. Credential-minting services (sts, iam, sso, ...) are refused; read-only is refused for query-protocol services (ec2, sqs, sns, ...)"
+                ),
+                HelpRow(
+                    name: "aws refusals",
+                    description: "Another key id is 403 (misuse); signed-chunk uploads 400 (UNSIGNED-PAYLOAD is S3 only); a response with SecretAccessKey is 502; re-read every 5m or a shorter refresh, expired credentials are re-read first"
                 ),
                 HelpRow(
                     name: "defaults",

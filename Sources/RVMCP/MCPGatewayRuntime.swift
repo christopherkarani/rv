@@ -148,6 +148,11 @@ public enum MCPLaunchPlanner {
             guard let secret = secrets.secret(named: secretName) else {
                 return .failure(.secretUndefined(server: server, secret: secretName))
             }
+            if secret.gatewayOnly {
+                return .failure(.secretUnavailable(
+                    server: server, secret: secretName,
+                    reason: "\(secret.source.kind) secrets are spent only by the secret gateway, not by MCP servers"))
+            }
             if configuration.managed?.allowsSecretSource(secret.source.kind) == false {
                 return .failure(.secretUnavailable(
                     server: server, secret: secretName,

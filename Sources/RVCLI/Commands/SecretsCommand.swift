@@ -182,9 +182,15 @@ enum SecretsRun {
             var upstream: String?
             var baseURLEnv: String?
             let scope = gatewayScope(secret.delivery)
-            if case .gateway(let binding) = secret.delivery {
+            switch secret.delivery {
+            case .gateway(let binding):
                 upstream = binding.upstream.absoluteString
                 baseURLEnv = binding.baseURLEnv
+            case .awsSigV4(let binding):
+                upstream = binding.upstream.absoluteString
+                baseURLEnv = binding.endpointEnv
+            case .environment:
+                break
             }
             return ListRow(
                 name: secret.name,
@@ -236,9 +242,14 @@ enum SecretsRun {
     }
 
     /// Surfaces and allow rules of a gateway binding; nil for environment delivery.
+    /// An AWS placeholder is only ever the key id in the `Authorization` header.
     static func gatewayScope(_ delivery: SecretDelivery) -> (surfaces: [String], allow: [String])? {
-        guard case .gateway(let binding) = delivery else { return nil }
-        return (GatewaySurface.ordered(binding.surfaces).map(\.rawValue), binding.allow.map(\.text))
+        switch delivery {
+        case .gateway(let binding):
+            (GatewaySurface.ordered(binding.surfaces).map(\.rawValue), binding.allow.map(\.text))
+        case .awsSigV4(let binding): ([GatewaySurface.header.rawValue], binding.allow.map(\.text))
+        case .environment: nil
+        }
     }
 
     static func allowText(_ allow: [String]) -> String {
@@ -271,6 +282,10 @@ enum SecretsRun {
                     error: "organization policy: \(reason)")
             }
             switch environment.resolver.resolve(secret.source) {
+            case .success(let value) where secret.credentialParts(value) == nil:
+                return CheckRow(
+                    name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
+                    error: AWSSigningBinding.unusableCredentials)
             case .success(let value):
                 return CheckRow(
                     name: secret.name, source: secret.source.locator, ok: true,
@@ -455,7 +470,12 @@ enum SecretsRun {
                 continue
             }
             switch environment.resolver.resolve(secret.source) {
-            case .success(let value): values.append((secret.name, value))
+            case .success(let value):
+                guard let parts = secret.credentialParts(value) else {
+                    skipped.append("\(skippedPrefix)\(secret.name): \(AWSSigningBinding.unusableCredentials)")
+                    continue
+                }
+                values += parts.map { (secret.name, $0) }
             case .failure(let error): skipped.append("\(skippedPrefix)\(secret.name): \(error.message)")
             }
         }
@@ -504,7 +524,7 @@ enum SecretsRun {
                 let scope = gatewayScope(secret.delivery)
                 return DescribeRow(
                     name: secret.name, description: secret.description, type: secret.type,
-                    delivery: secret.delivery == .environment ? "environment" : "gateway",
+                    delivery: secret.delivery.kind,
                     source: secret.source.kind, surfaces: scope?.surfaces, allow: scope?.allow,
                     expires: secret.expires.map(SecretExpiry.text), refresh: secret.refresh?.text)
             },

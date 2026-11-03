@@ -162,6 +162,11 @@ decodes correctly. At most two edge characters, under 12 bits of the value,
 can remain beside the marker. Base64 runs shorter than 8 characters are not
 matched.
 
+Hex copies of the value, contiguous or space-separated and in either case,
+also become `[rv:redacted]`. S3 `SignatureDoesNotMatch` bodies print the
+canonical request, signed session token included, as space-separated hex
+bytes. Hex runs shorter than 8 characters are not matched.
+
 A value split across response chunks is still caught. The gateway holds back
 only a trailing partial match, so streamed output (SSE, token streams) that
 cannot be the start of the value is forwarded at once.
@@ -172,7 +177,7 @@ a response with a body still carries a `Content-Encoding` other than
 `identity`, the gateway returns `502` and forwards none of it.
 
 Not covered: double encodings (percent inside JSON, base64 of an escaped
-value), hex, HTML entities, and payloads that are themselves archives
+value), HTML entities, and payloads that are themselves archives
 (`application/zip`, `application/gzip`).
 
 ## Expiry and rotation
@@ -217,6 +222,92 @@ session to pick up a new value. Removing a secret does not revoke it from a
 running session; end the session. Dynamic secrets with leases and
 revoke-on-exit are not supported, since rv has no dynamic sources.
 
+## AWS SigV4 signing
+
+AWS requests carry no bearer value to swap: the SDK signs each request with
+the secret key, and the signature covers the host, so it cannot be forwarded
+to AWS from `127.0.0.1`. An `awsProfile` source with `awsSigV4` delivery
+makes the gateway sign instead:
+
+```json
+{"name": "AWS_DEV",
+ "source": {"awsProfile": {"profile": "dev"}},
+ "delivery": {"awsSigV4": {
+   "upstream": "https://s3.us-east-1.amazonaws.com", "region": "us-east-1",
+   "service": "s3", "endpointEnv": "AWS_ENDPOINT_URL_S3",
+   "allow": ["read-only"]}}}
+```
+
+- The source runs `aws configure export-credentials --profile P --format
+  process`, so SSO, assumed roles, and `credential_process` profiles work as
+  the AWS CLI resolves them. The output must be version 1 JSON with
+  `AccessKeyId` and `SecretAccessKey`; `SessionToken` and `Expiration` are
+  optional. Anything else fails the launch with a message that never quotes
+  the output. The two kinds only pair with each other.
+- The cage gets `AWS_ACCESS_KEY_ID` set to a placeholder, a random
+  `AWS_SECRET_ACCESS_KEY` that signs nothing upstream, `AWS_REGION`, and
+  `endpointEnv` set to `http://127.0.0.1:<port>/s/<NAME>`. No
+  `AWS_SESSION_TOKEN` is staged. For S3 the SDK's endpoint rules choose path
+  style for an IP endpoint, so buckets appear in the path and `allow` rules
+  match `/<bucket>/...`. One `upstream` means one region per secret. Two AWS
+  secrets in one launch would both set `AWS_ACCESS_KEY_ID`, so that launch is
+  refused (`variableCollision`).
+- A request is AWS-signed when `Authorization` starts with `AWS4-`. Its
+  `Credential=` key id must be exactly this route's placeholder. The gateway
+  drops `Authorization`, `X-Amz-Date`, `X-Amz-Security-Token`, and
+  `X-Amz-Content-Sha256`, then signs for the upstream host with the real
+  keys and session token. It signs `host`, `content-type`, `content-md5`, and
+  every remaining `x-amz-*` header. The body is hashed by the gateway; the
+  agent's hash is ignored unless it chose `UNSIGNED-PAYLOAD` or
+  `STREAMING-UNSIGNED-PAYLOAD-TRAILER`, which only an S3 binding accepts;
+  any other `service` refuses them (`awsUnsignedPayload`).
+- The AWS placeholder has no substitution surface. As a bearer token, in a
+  query (presigned URLs), or anywhere besides the key id, it is refused with
+  `surfaceNotAllowed`. `allow` rules, runtime binding, the audit-first
+  forward record, and response scrubbing all apply as for
+  `gateway` delivery.
+- Expiry is the earlier of `expires` and the credentials' `Expiration`.
+  Credentials are re-read every 5 minutes, or every `refresh` when that is
+  shorter (a longer `refresh` never stretches the 5 minutes), using the
+  refresh path in "Expiry and rotation"; each refresh takes the new
+  `Expiration`. A request that arrives after `Expiration` waits for a fresh
+  read before it is refused with `expired`; a failed read is not repeated for
+  5 seconds.
+- Responses are scrubbed of each generation's key id, secret key, and session
+  token; each becomes the placeholder. S3 error bodies echo the key id.
+- A binding cannot sign for a service that mints credentials. The decoder
+  refuses `sts`, `iam`, `sso`, `sso-oauth`, `awsssoportal`, `awsssooidc`,
+  `signin`, `cognito-identity`, `cognito-idp`, `s3express`, `ecr`,
+  `ecr-public`, and `codeartifact`: a call such as `AssumeRole`,
+  `CreateAccessKey`, or `GetAuthorizationToken` would return new credentials
+  the gateway has no way to scrub. As defence in depth, for every service except `s3` a response
+  that contains the field name `SecretAccessKey` is refused
+  (`awsCredentialsInResponse`). While the first 64 KiB of the response are
+  held, the agent gets a plain `502` and none of it; if the name shows up
+  later, the stream is cut short just before it. An S3 binding passes object
+  bodies through untouched.
+- The credential set is spent only by the gateway. An MCP server or an
+  `audit forward` header that names an `awsProfile` secret is refused
+  before the profile is read.
+- Limit: query-protocol services (`ec2`, `sqs`, `sns`, `rds`,
+  `elasticloadbalancing`, `autoscaling`, `cloudformation`, `elasticache`,
+  `redshift`, `ses`, `sdb`, `cloudsearch`, `importexport`, `monitoring`) take
+  the action as a parameter, so `GET /?Action=TerminateInstances` is a GET on
+  `/`. Method and path rules cannot tell a read from a write there, and the
+  decoder refuses the `read-only` preset for them. Scope the profile's IAM
+  policy for those services.
+- Limit: `allow` matches the method and path only. Signed headers such as
+  `x-amz-copy-source` name other resources, so a `PUT` allowed on
+  `/my-bucket/*` can still copy from a bucket the rules do not list. Scope
+  the profile's IAM policy as well; the gateway never widens it.
+
+| refusal | status | misuse | when |
+|---------|--------|--------|------|
+| `awsKeyMismatch` | 403 | yes | the key id in `Credential=` is not this secret's placeholder, or names a non-AWS secret |
+| `awsUnsignedPayload` | 400 | no | `X-Amz-Content-Sha256` is `UNSIGNED-PAYLOAD` or `STREAMING-UNSIGNED-PAYLOAD-TRAILER` on a binding whose `service` is not `s3`. Send the body with a payload hash |
+| `awsCredentialsInResponse` | 502 | no | the upstream's answer contains a `SecretAccessKey` field (a non-S3 binding). The upstream produced it, not the agent, so it is not misuse; the response is not forwarded |
+| `awsSignedStreaming` | 400 | no | `X-Amz-Content-Sha256` is a signed-chunk or event-stream mode (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, `...-TRAILER`, `...-EVENTS`, ECDSA). Each chunk signature chains to the seed signature the gateway replaces. Configure the SDK for unsigned payloads with trailing checksums |
+
 ## Audit
 
 Every gateway request writes `secret.use` events to `audit.jsonl`. None of
@@ -232,7 +323,7 @@ them carries the value, the placeholder, or the query string.
   |------------|-----------------------------------------------------------------|----------|
   | `brokered` | value placed and forwarded; the upstream answered               | allowed  |
   | `blocked`  | refused by the secret's own policy (see below)                   | denied   |
-  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed` | denied |
+  | `refused`  | refused for another reason: malformed, no or unknown placeholder, too large, unsafe value, audit unavailable, runtime unverified, `expired`, `refreshFailed`, `awsSignedStreaming`, `awsUnsignedPayload`, `awsCredentialsInResponse` | denied |
   | `error`    | forwarded, but no upstream response arrived                     | failed   |
   | `refreshed` | `event: refresh`; a refresh swapped in a new value (new `fingerprint`) | info |
   | `refreshFailed` | `event: refresh`; a refresh could not read the provider (`reason`) | failed |
@@ -248,7 +339,7 @@ A `blocked` request also writes a `secret.misuse` event with
 `detail.severity: high`: the refusal code, method, and redacted path. The
 codes are `foreignPlaceholder`, `surfaceNotAllowed`, `repeatedPlaceholder`,
 `outsideAllowRules`, `encodedPlaceholder`, `ambiguousPath`, `echoMethod`,
-and `runtimeMismatch`. The event's `runtime` is the runtime the presented
+`runtimeMismatch`, and `awsKeyMismatch`. The event's `runtime` is the runtime the presented
 placeholder was leased to (absent for a percent-encoded placeholder, which
 is never looked up). A client using its placeholder as configured never
 triggers one, so it usually means a prompt-injected agent is probing, or a

@@ -87,6 +87,8 @@ extension SecretGateway {
     static let historyDepth = 8
     /// The probe is cheap but runs on the request path, so at most this often per entry.
     static let probeSpacing: TimeInterval = 2
+    /// An expired AWS entry is re-read on a request no sooner than this after the last read.
+    static let expiredRetrySpacing: TimeInterval = 5
     /// How long a request waits for a refresh: the provider command timeout
     /// (30 s) plus a margin. A refresh that outlasts it counts as failed for
     /// that request, so a provider that never answers cannot pin handler
@@ -119,11 +121,28 @@ extension SecretGateway {
             lock.unlock()
             if after == .wait || after == .refuse { return .refreshFailed }
         }
+        // Past its Expiration an AWS credential set is read again before the
+        // request is refused, however long the interval has left to run.
+        if expiredAndDue(token) { refresh(token, restart: false) }
         lock.lock()
         defer { lock.unlock() }
         guard let entry = entries[token] else { return .unknownPlaceholder }
         if let expires = entry.expires, now() >= expires { return .expired }
         return nil
+    }
+
+    /// True for a refreshable AWS entry past its expiry that has not been read
+    /// in the last `expiredRetrySpacing`, so a provider that keeps returning
+    /// expired credentials is not spawned on every request.
+    private func expiredAndDue(_ token: String) -> Bool {
+        let at = now()
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[token], entry.signing != nil, entry.refresh != nil, let expires = entry.expires,
+            at >= expires, let state = entry.rotation
+        else { return false }
+        let last = max(state.resolvedAt, state.failedAt ?? state.resolvedAt)
+        return at.timeIntervalSince(last) >= Self.expiredRetrySpacing
     }
 
     /// True when the probe, if due, reports a marker other than the last one.
