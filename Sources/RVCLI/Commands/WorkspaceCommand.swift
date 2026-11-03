@@ -597,108 +597,41 @@ enum WorkspaceCommandRun {
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
             throw ValidationError("terminal size is out of range")
         }
-        let launched: Result<WorkspaceRuntimeReport, WorkspaceClientFailure>
-        switch selection {
-        case .legacy(let executable, let hook):
-            launched = client.launchRuntime(
-                executable: executable, arguments: arguments, hookHost: hook,
-                terminalRows: rows, terminalColumns: columns,
-                resourceProfileID: resourceProfileID
+        let outcome: WorkspaceTerminalOutcome
+        do {
+            // A pipe or /dev/null EOFs immediately; only a terminal EOF
+            // (Ctrl-D) means the user wants out.
+            outcome = try WorkspaceTerminalSession.run(
+                client: client,
+                launch: { client in
+                    switch selection {
+                    case .legacy(let executable, let hook):
+                        client.launchRuntime(
+                            executable: executable, arguments: arguments, hookHost: hook,
+                            terminalRows: rows, terminalColumns: columns,
+                            resourceProfileID: resourceProfileID
+                        )
+                    case .named(let definitionID):
+                        client.launchAgentRuntime(
+                            definitionID: definitionID, arguments: arguments,
+                            terminalRows: rows, terminalColumns: columns
+                        )
+                    case .custom(let executable, let digest):
+                        client.launchCustomRuntime(
+                            executable: executable, arguments: arguments, expectedContentDigestSHA256: digest,
+                            terminalRows: rows, terminalColumns: columns
+                        )
+                    }
+                },
+                rows: rows,
+                columns: columns,
+                abandonOnInputEnd: isatty(STDIN_FILENO) == 1
             )
-        case .named(let definitionID):
-            launched = client.launchAgentRuntime(
-                definitionID: definitionID, arguments: arguments,
-                terminalRows: rows, terminalColumns: columns
-            )
-        case .custom(let executable, let digest):
-            launched = client.launchCustomRuntime(
-                executable: executable, arguments: arguments, expectedContentDigestSHA256: digest,
-                terminalRows: rows, terminalColumns: columns
-            )
-        }
-        let runtime: UUID
-        switch launched {
-        case .failure(let error):
-            _ = client.detach()
+        } catch {
             throw ValidationError(text(error, resourceProfileID: resourceProfileID))
-        case .success(let report):
-            guard report.terminal else {
-                _ = client.detach()
-                throw ValidationError("runtime has no terminal")
-            }
-            runtime = report.runtime
         }
-        if case .failure(let error) = client.subscribeTerminal(runtime) {
-            _ = client.detach()
-            throw ValidationError(text(error))
-        }
-        let ownsInput: Bool
-        switch client.acquireTerminalInput(runtime) {
-        case .success:
-            ownsInput = true
-        case .failure(.terminalUnavailable):
-            // The runtime can exit before this client takes input. The exit
-            // status is still on the stream.
-            ownsInput = false
-        case .failure(let error):
-            _ = client.detach()
-            throw ValidationError(text(error))
-        }
-        let restorer = ownsInput ? LocalTerminalRestorer.engage(STDIN_FILENO) : nil
-        defer { restorer?.restore() }
-        let bridge = TerminalStdinBridge(client: client, runtime: runtime)
-        if ownsInput {
-            bridge.start()
-        }
-        // A pipe or /dev/null EOFs immediately; only a terminal EOF (Ctrl-D)
-        // means the user wants out. Abandoning on any EOF cuts slow
-        // commands short with a success exit.
-        let stdinIsTTY = isatty(STDIN_FILENO) == 1
-        var exitCode: Int32 = 1
-        var currentRows = rows
-        var currentColumns = columns
-        while true {
-            if abandonRunOnInputEnd(ownsInput: ownsInput, stdinIsTTY: stdinIsTTY, inputEnded: bridge.inputEnded) {
-                restorer?.restore()
-                _ = client.detach()
-                return
-            }
-            if let size = LocalTerminalWindow.current(fd: STDOUT_FILENO),
-                size.rows != currentRows || size.columns != currentColumns
-            {
-                currentRows = size.rows
-                currentColumns = size.columns
-                _ = client.resizeTerminal(runtime, rows: size.rows, columns: size.columns)
-            }
-            switch client.nextTerminalEvent(timeout: 0.2) {
-            case .failure(let error):
-                restorer?.restore()
-                _ = client.detach()
-                throw ValidationError(text(error))
-            case .success(.waiting):
-                continue
-            case .success(.event(let event)):
-                guard event.runtime == runtime else { continue }
-                switch event.body {
-                case .replayBegin, .replayEnd:
-                    // The direct CLI writes a fresh byte stream to stdout; it
-                    // has no retained terminal screen to reconcile.
-                    break
-                case .replay(_, let bytes), .output(_, let bytes):
-                    FileHandle.standardOutput.write(bytes)
-                case .exited(let status):
-                    exitCode = status
-                    restorer?.restore()
-                    _ = client.detach()
-                    throw ExitCode(exitCode)
-                case .overflow:
-                    restorer?.restore()
-                    _ = client.detach()
-                    throw ValidationError("terminal client fell behind")
-                case .inputOwner, .window:
-                    break
-                }
-            }
+        if case .exited(let status) = outcome {
+            throw ExitCode(status)
         }
         #endif
     }
@@ -880,6 +813,17 @@ enum WorkspaceCommandRun {
         }
     }
 
+    /// `workspace run` session failure text. Only a launch failure echoes
+    /// the requested profile.
+    static func text(_ failure: WorkspaceTerminalSessionFailure, resourceProfileID: String?) -> String {
+        switch failure {
+        case .launch(let error): text(error, resourceProfileID: resourceProfileID)
+        case .noTerminal: "runtime has no terminal"
+        case .client(let error): text(error)
+        case .fellBehind: "terminal client fell behind"
+        }
+    }
+
     /// Launch-failure text with the requested profile echoed. The id appears
     /// only when the request carried one; other failures are unchanged.
     static func text(_ error: WorkspaceClientFailure, resourceProfileID: String?) -> String {
@@ -953,12 +897,4 @@ enum WorkspaceCommandRun {
         }
     }
     #endif
-}
-
-/// Whether a local stdin EOF abandons `workspace run` instead of waiting
-/// for the runtime to exit. Only an interactive terminal EOFs on purpose
-/// (Ctrl-D); a pipe or /dev/null EOFs immediately and must not cut a slow
-/// command's output short with a success exit.
-func abandonRunOnInputEnd(ownsInput: Bool, stdinIsTTY: Bool, inputEnded: Bool) -> Bool {
-    ownsInput && stdinIsTTY && inputEnded
 }
