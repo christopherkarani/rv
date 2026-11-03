@@ -171,9 +171,11 @@ public enum PolicyDiffRisk {
             new: newScope.destinations
         )
         findings += binaryFindings(old: oldScope.binaries, new: newScope.binaries)
-        findings += safetyFindings(old: oldDocument.safetyLevel, new: newDocument.safetyLevel)
-        findings += ruleFindings(old: oldDocument.rules, new: newDocument.rules)
-        findings += exemptionFindings(old: oldDocument.allowPaths, new: newDocument.allowPaths)
+        findings += evaluateReplacement(
+            existing: oldDocument,
+            incoming: newDocument,
+            secretExemptionSeverity: .advisory
+        ).findings
         return PolicyDiffRiskReport(findings: findings)
     }
 
@@ -192,6 +194,58 @@ public enum PolicyDiffRisk {
         incoming: PolicyDocument
     ) -> PolicyDiffRiskReport {
         PolicyDiffRiskReport(findings: shareRuleFindings(existing: existing.rules, incoming: incoming.rules))
+    }
+
+    /// Replacement decision: the finding set for replacing `existing`
+    /// with `incoming`, where omissions are real removals. This seam
+    /// owns strictest dedup, share, removed, safety, and exemption
+    /// checks so a fix lands once in depth instead of once per caller.
+    ///
+    /// Duplicate predicates collapse to the strictest row first,
+    /// matching the verdict enforcement applies; an allow-then-deny
+    /// pair therefore reads as the deny, and finding detail keeps
+    /// naming that strictest row. Reviving an allow is advisory;
+    /// dropping one is narrowing and stays silent.
+    ///
+    /// `secretExemptionSeverity` is explicit at the interface because
+    /// the two callers differ on purpose: the CLI `evaluate` keeps a
+    /// new exemption advisory, rollback keeps it blocking.
+    public static func evaluateReplacement(
+        existing: PolicyDocument,
+        incoming: PolicyDocument,
+        secretExemptionSeverity: PolicyDiffRiskFinding.Severity
+    ) -> PolicyDiffRiskReport {
+        let existingRules = strictestRules(existing.rules)
+        let incomingRules = strictestRules(incoming.rules)
+        var findings: [PolicyDiffRiskFinding] = []
+        findings += safetyFindings(old: existing.safetyLevel, new: incoming.safetyLevel)
+        findings += ruleFindings(old: existingRules, new: incomingRules)
+        findings += exemptionFindings(
+            old: existing.allowPaths,
+            new: incoming.allowPaths,
+            severity: secretExemptionSeverity
+        )
+        return PolicyDiffRiskReport(findings: findings)
+    }
+
+    /// Legacy `typed-rules.json` keeps every row for a predicate while
+    /// enforcement ranks the strictest, so the first row must not hide
+    /// a later deny from the share match or the removal check. An
+    /// allow-then-deny pair would otherwise read as allow here, and
+    /// replacing it with an allow would seal that allow over the live
+    /// deny.
+    private static func strictestRules(_ rules: [PolicyDocumentRule]) -> [PolicyDocumentRule] {
+        var merged: [PolicyDocumentRule] = []
+        for rule in rules {
+            if let index = merged.firstIndex(where: { $0.predicate == rule.predicate }) {
+                if restrictionRank(rule.verdict) > restrictionRank(merged[index].verdict) {
+                    merged[index] = rule
+                }
+            } else {
+                merged.append(rule)
+            }
+        }
+        return merged
     }
 
     /// Text entry point. Throws fail-closed when either side is unparseable.
@@ -565,10 +619,9 @@ public enum PolicyDiffRisk {
     /// Replacement direction: a protective rule (deny or ask) whose predicate
     /// vanishes from the new side no longer constrains anything, which widens
     /// exactly like a relaxation to allow. Removed allows are narrowing and
-    /// stay silent. Full-document `evaluate` and rollback
-    /// (`refuseRelaxingRollback`) use this. `evaluateShare` must not treat a
-    /// partial share's omissions as deletes.
-    static func removedRuleFindings(
+    /// stay silent. Only `evaluateReplacement` uses this; `evaluateShare`
+    /// must not treat a partial share's omissions as deletes.
+    private static func removedRuleFindings(
         old: [PolicyDocumentRule],
         new: [PolicyDocumentRule]
     ) -> [PolicyDiffRiskFinding] {
@@ -586,19 +639,26 @@ public enum PolicyDiffRisk {
         }
     }
 
-    private static func exemptionFindings(old: [String], new: [String]) -> [PolicyDiffRiskFinding] {
+    private static func exemptionFindings(
+        old: [String],
+        new: [String],
+        severity: PolicyDiffRiskFinding.Severity
+    ) -> [PolicyDiffRiskFinding] {
         let added = Array(Set(new).subtracting(Set(old))).sorted()
         return added.map {
             PolicyDiffRiskFinding(
                 kind: .newSecretExemption,
-                severity: .advisory,
+                severity: severity,
                 detail: $0
             )
         }
     }
 
-    /// Same ordering as `PolicyDocumentTOML.mergeLayer`: allow < ask < deny.
-    private static func restrictionRank(_ verdict: TypedRuleVerdict) -> Int {
+    /// The one verdict ranking for the module: allow < ask < deny.
+    /// Tighten-only merges (`PolicyDocumentTOML.mergeLayer`, the store
+    /// layer merge) read it through this seam, so the ordering has
+    /// depth here and locality everywhere else.
+    static func restrictionRank(_ verdict: TypedRuleVerdict) -> Int {
         switch verdict {
         case .allow: 0
         case .ask: 1
