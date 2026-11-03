@@ -18,6 +18,7 @@ struct InitCommandTests {
         var home: URL { root.appendingPathComponent("home", isDirectory: true) }
         var config: URL { home.appendingPathComponent(".config/rv", isDirectory: true) }
         var bin: URL { home.appendingPathComponent("bin", isDirectory: true) }
+        var project: URL { home.appendingPathComponent("proj", isDirectory: true) }
 
         func write(_ relative: String, _ text: String, executable: Bool = false) throws {
             let url = home.appendingPathComponent(relative)
@@ -175,20 +176,61 @@ struct InitCommandTests {
         #expect(missing.failureMessage?.contains("rv init") == true)
     }
 
-    @Test func varlockFreshNamesSkipsLiteralsAndExisting() throws {
-        let text = """
-            NEW_KEY=op(op://vault/item/field)
-            LITERAL=hardcoded-value
-            """
-        let empty = SecretsConfiguration()
-        #expect(InitRun.varlockFreshNames(text: text, current: empty) == ["NEW_KEY"])
-        let defined = SecretsConfiguration(secrets: [
-            SecretDefinition(
-                name: "NEW_KEY", source: .onePassword(reference: "op://vault/item/field"),
-                delivery: .environment),
-        ])
-        #expect(InitRun.varlockFreshNames(text: text, current: defined).isEmpty)
-        #expect(InitRun.varlockFreshNames(text: "\0", current: empty).isEmpty)
+    /// Runs `rv init` against the fixture's home and returns its output.
+    private func runInit(_ arguments: [String], fixture: Fixture) throws -> String {
+        let secrets = SecretsEnvironment(
+            configDirectory: fixture.config, resolver: FakeKeychain().resolver(host: [:]), keychain: FakeKeychain().writer)
+        return try Init.parse(arguments)
+            .execute(root: fixture.project, environment: fixture.environment(), secretsEnvironment: secrets).get()
+    }
+
+    private func writeSchema(_ fixture: Fixture) throws {
+        try fixture.write("proj/.env.schema", """
+            # @sensitive
+            OPENAI_API_KEY=op(op://Private/OpenAI/credential)
+            """)
+    }
+
+    // A cloned repo's .env.schema must not bind the user's vault secrets.
+    @Test func projectSchemaIsSuggestedButNeverImported() throws {
+        let fixture = Fixture()
+        defer { fixture.tearDown() }
+        try writeSchema(fixture)
+        let schema = fixture.project.appendingPathComponent(".env.schema").path
+
+        let dry = try runInit(["--dry-run"], fixture: fixture)
+        #expect(dry.contains("varlock \(schema): found, not imported"))
+        #expect(dry.contains("rerun with --varlock \(schema)"))
+
+        let wrote = try runInit([], fixture: fixture)
+        #expect(wrote.contains("found, not imported"))
+        #expect(wrote.contains("rv secrets import --varlock \(schema) --resource-profile main"))
+        #expect(wrote.contains("OPENAI_API_KEY") == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
+        let profile = try RuntimeResourcePolicyStore.load(from: fixture.config).get().profiles.first
+        #expect(profile?.id == "main")
+        #expect(profile?.secrets.isEmpty == true)
+    }
+
+    @Test func explicitVarlockShowsAndImportsEachSecret() throws {
+        let fixture = Fixture()
+        defer { fixture.tearDown() }
+        try writeSchema(fixture)
+        let schema = fixture.project.appendingPathComponent(".env.schema").path
+        let line = "import OPENAI_API_KEY: provider onePassword, delivery environment (real value in the cage)"
+
+        let dry = try runInit(["--varlock", schema, "--dry-run"], fixture: fixture)
+        #expect(dry.contains("varlock \(schema): would import 1 secret"))
+        #expect(dry.contains(line))
+        #expect(dry.contains("found, not imported") == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
+
+        let wrote = try runInit(["--varlock", schema], fixture: fixture)
+        #expect(wrote.contains(line))
+        let stored = try SecretsConfiguration.load(configDirectory: fixture.config).get()
+        #expect(stored.secret(named: "OPENAI_API_KEY")?.source == .onePassword(reference: "op://Private/OpenAI/credential"))
+        let profile = try RuntimeResourcePolicyStore.load(from: fixture.config).get().profiles.first
+        #expect(profile?.secrets == ["OPENAI_API_KEY"])
     }
 
     @Test func policyFileEncodeRoundTrips() throws {
