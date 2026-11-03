@@ -343,6 +343,39 @@ struct SecretGatewayAWSTests {
         #expect(response.body.contains("<AWSAccessKeyId>\(h.placeholder)</AWSAccessKeyId>"))
     }
 
+    @Test func theStagedFingerprintIsTakenOverTheProvidersExactBytes() throws {
+        let raw = Self.credentials(expires: Self.start.addingTimeInterval(3_600))
+        let h = try harness(provider: Provider([.success(raw)]))
+        defer { h.tearDown() }
+        let expected = try #require(SecretFingerprinter.load(configDirectory: h.fixture.directory))
+            .fingerprint(try #require(SecretValue(raw)))
+        let staged = h.fixture.auditLines.compactMap { ($0["detail"] as? [String: String]) }
+            .filter { $0["event"] == "staged" }
+        #expect(staged.map { $0["fingerprint"] } == [expected])
+    }
+
+    @Test func aRotatedAwsCredentialSetStillScrubsEveryPartOfTheOldOne() throws {
+        let echo = "<Error><K>\(Self.realKey)</K><T>\(Self.realToken)</T><S>\(Self.realSecret)</S></Error>"
+        let provider = Provider([
+            .success(Self.credentials(expires: Self.start.addingTimeInterval(600))),
+            .success(Self.credentials(
+                key: "AKIAROTATEDKEY000002", secret: "rotated/secret", token: "rotated-token-000",
+                expires: Self.start.addingTimeInterval(4_200))),
+        ])
+        let h = try harness(provider: provider, upstream: RecordingUpstream(status: 403, chunks: [Data(echo.utf8)]))
+        defer { h.tearDown() }
+        h.clock.advance(SecretLaunchBroker.awsRefreshInterval + 1)
+        _ = try sigV4(h)
+        #expect(eventually {
+            (try? self.sigV4(h))?.status == 403
+                && h.upstream.requests.last?.headers["authorization"]?.contains("AKIAROTATEDKEY000002") == true
+        })
+        let response = try sigV4(h)
+        for old in [Self.realKey, Self.realToken, Self.realSecret] {
+            #expect(response.body.contains(old) == false)
+        }
+    }
+
     // MARK: Expiry and refresh
 
     @Test func expiryComesFromTheCredentialsExpiration() throws {
