@@ -113,7 +113,11 @@ struct SecretGatewayBinaryTests {
         let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: real))
         try handle.write(contentsOf: Data("v2".utf8))
         try handle.close()
+        #if canImport(Darwin)
         var times = [original.st_atimespec, original.st_mtimespec]
+        #else
+        var times = [original.st_atim, original.st_mtim]
+        #endif
         #expect(utimensat(AT_FDCWD, real, &times, 0) == 0)
         #expect(pinned.matches(real) == false)
 
