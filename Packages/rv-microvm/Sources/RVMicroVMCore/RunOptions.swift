@@ -2,6 +2,7 @@ import Foundation
 
 public enum MicroVMOptionError: Error, Sendable, Equatable, CustomStringConvertible {
     case rootMustBeAbsolute
+    case relayDirectoryMustBeAbsolute(String)
     case workspaceMustBeAbsolute
     case commandMissing
     case commandMustBeAbsolute(String)
@@ -22,6 +23,7 @@ public enum MicroVMOptionError: Error, Sendable, Equatable, CustomStringConverti
     public var description: String {
         switch self {
         case .rootMustBeAbsolute: "--root must be an absolute path"
+        case .relayDirectoryMustBeAbsolute(let path): "relay directory must be an absolute path: \(path)"
         case .workspaceMustBeAbsolute: "--workspace must be an absolute path"
         case .commandMissing: "no guest command after --"
         case .commandMustBeAbsolute(let exe): "guest executable must be an absolute path inside the image: \(exe)"
@@ -206,6 +208,7 @@ public struct RelayPlan: Sendable, Equatable {
     public let entries: [Entry]
 
     public static func make(ports: [Int], hostDirectory: String) -> Result<RelayPlan, MicroVMOptionError> {
+        guard hostDirectory.hasPrefix("/") else { return .failure(.relayDirectoryMustBeAbsolute(hostDirectory)) }
         var entries: [Entry] = []
         for port in ports {
             let host = "\(hostDirectory)/p\(port).sock"

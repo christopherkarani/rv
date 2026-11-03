@@ -289,6 +289,17 @@ struct MicroVMControlPlaceholderTests {
         #expect(exists(ws, ".git/objects") && exists(ws, ".config/nvim"))
     }
 
+    @Test("two acquires on a plain folder leave .git empty with no children")
+    func secondAcquireKeepsEmptyGitEmpty() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".git") && exists(ws, ".config"))
+        #expect(exists(ws, ".git/hooks") == false && exists(ws, ".git/config") == false && exists(ws, ".config/rv") == false)
+    }
+
     @Test("a later run re-creates control children under a placeholder .git another runtime filled")
     func secondAcquireReensuresChildren() throws {
         let ws = try makeWorkspace()

@@ -110,6 +110,11 @@ struct AssetPreparer {
         guard rename(staged.path, layout.initfs.path) == 0 else {
             throw AssetError("cannot install init filesystem: \(String(cString: strerror(errno)))")
         }
+        // Drop init filesystems cached under an older pin.
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        where name.hasPrefix("vminit-") && name.hasSuffix(".ext4") && name != layout.initfs.lastPathComponent {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        }
     }
 
     private func prepareImage(_ reference: String, store: ImageStore) async throws {

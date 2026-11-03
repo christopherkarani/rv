@@ -1402,7 +1402,7 @@ This is the "VM backend" extension named in [the remediation plan](runtime-remed
   - The runtime-managed name set and any `*_PROXY` name are not forwardable from profiles.
 - **Host relay budget.** `rv-microvm` bridges at most 128 concurrent guest connections and refuses any beyond that, so a guest looping `connect` cannot exhaust host threads or descriptors.
 - **Lifetime.** Killing the process group kills `rv-microvm`, and the Virtualization XPC service exits with its client. Cancel and close therefore tear down the VM. `rv-microvm` writes the handshake before the guest command starts, so a failed handshake never follows agent activity.
-- **Offline launch.** The CLI checks the image with `rv-microvm status` and runs `prepare` before it asks the host to launch, so the launch itself never pulls. An unprepared image fails before the handshake (exit 125). The kernel (Kata 3.32.0, sha256-pinned) and `vminit:0.54.0` are pinned in `MicroVMPins`.
+- **Offline launch.** The CLI checks the image with `rv-microvm status` and runs `prepare` before it asks the host to launch, so the launch itself never pulls. An unprepared image fails before the handshake (exit 125). The kernel (Kata 3.32.0, sha256-pinned) and the `vminit` 0.54.0 init image (pulled by manifest digest `sha256:ab76bf71…`, never by tag) are pinned in `MicroVMPins`; the cached initfs filename carries the digest.
 
 ### What it refuses (fail closed)
 
@@ -1419,7 +1419,7 @@ This is the "VM backend" extension named in [the remediation plan](runtime-remed
 - **Image contents are not vetted.** Images are pulled by reference (tag or digest) into `~/.config/rv/microvm`. rv does not pin or scan the user's image. That cache, like the rest of `~/.config/rv`, is writable by the same uid.
 - **Guest processes share guest loopback.** Every process in the VM can reach the relayed proxy and gateway ports. The proxy credential is per runtime, not per guest process.
 - **Placeholders can be left behind.** If the host process dies mid-run, or a run's process group outlives the watch's death budget, empty control placeholders stay in the project and publish with it. An empty `.rv`, `.config/rv` or `.git/hooks` has no effect on rv or git.
-- **Host leftovers on SIGKILL.** A killed `rv-microvm` leaves its `/tmp/rvmvm.*` relay directory and its `containers/rv-<pid>-*` rootfs clone. Clones are swept on a later run once the pid is dead. Relay directories are not swept yet.
+- **Host leftovers on SIGKILL.** A killed `rv-microvm` leaves its `/tmp/rvmvm-<pid>.*` relay directory and its `containers/rv-<pid>-*` rootfs clone. Both are swept on a later run once the pid is dead. Relay directories are always absolute under `/tmp`, never the cwd (the workspace is guest-writable).
 
 ### Verification
 
