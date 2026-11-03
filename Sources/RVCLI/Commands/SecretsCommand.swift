@@ -1044,7 +1044,7 @@ struct SecretsDescribe: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv secrets describe: \(failure.message)\n")
         case .success(let configuration):
             let report = SecretsRun.describe(configuration)
-            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.describeText(report))
+            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.describeText(report))
         }
     }
 }
