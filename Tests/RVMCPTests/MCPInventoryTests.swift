@@ -99,6 +99,9 @@ struct MCPInventoryTests {
             """)
         try fake.write(".gemini/settings.json", #"{"mcpServers": {"MCP_DOCKER": {"command": "docker", "args": ["mcp", "gateway", "run"]}, "hosted": {"httpUrl": "https://g.example.com/mcp"}}}"#)
         try fake.write(".codeium/windsurf/mcp_config.json", #"{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/"]}}}"#)
+        try fake.write(
+            ".config/muse/settings.json",
+            #"{"schema_version": 1, "mcpServers": {"wax": {"command": "wax-mcp", "args": ["--store-path", "/x"], "env": {}, "transport": "stdio", "mode": "optional"}}}"#)
         try fake.write(".gemini/antigravity/mcp_config.json", "{not json")
         try fake.write(".mcp.json", under: fake.project, #"{"mcpServers": {"team": {"command": "uvx", "args": ["team-mcp"]}}}"#)
         try fake.write(".vscode/mcp.json", under: fake.project, #"{"servers": {"vs": {"type": "stdio", "command": "node", "args": ["v.js"]}}, /* c */ }"#)
@@ -112,7 +115,7 @@ struct MCPInventoryTests {
         #expect(names == [
             "claude-code:wax", "claude-code:local-one", "claude-code:team", "cursor:github",
             "codex:context7", "codex:stripe", "codex:node", "opencode:oc", "opencode:remote",
-            "gemini:MCP_DOCKER", "gemini:hosted", "windsurf:filesystem", "vscode:vs",
+            "gemini:MCP_DOCKER", "gemini:hosted", "windsurf:filesystem", "vscode:vs", "muse:wax",
         ])
         #expect(inventory.problems.count == 1)
         #expect(inventory.problems.first?.path.hasSuffix("antigravity/mcp_config.json") == true)

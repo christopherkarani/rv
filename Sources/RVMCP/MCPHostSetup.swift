@@ -292,6 +292,11 @@ public enum MCPHostSetup {
             return .object(entry)
         }
         if original["type"] != nil { entry["type"] = .string("stdio") }
+        // The gateway is always a stdio command, so a host `transport`
+        // marker becomes "stdio" (a remote value would be left without its
+        // url). Other unmodelled metadata (Muse: mode) is kept as is.
+        if original["transport"] != nil { entry["transport"] = .string("stdio") }
+        if let mode = original["mode"] { entry["mode"] = mode }
         entry["command"] = .string(rvPath)
         entry["args"] = .array(["mcp", "serve", "--server", server].map(JSONValue.string))
         return .object(entry)
