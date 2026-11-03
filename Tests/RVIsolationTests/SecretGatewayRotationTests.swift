@@ -505,15 +505,19 @@ struct SecretLaunchBrokerRotationTests {
     }
 
     /// Characterization: limits are not part of the route, so an on-disk edit that
-    /// touches only `refresh` or only `binaries` must not stop a running session refreshing.
+    /// touches only `refresh` or only `binaries` must not stop a running session refreshing,
+    /// whether the session launched without limits or with them.
     @Test(arguments: [
-        #","refresh":"15m""#,
-        #","binaries":["/usr/bin/curl"]"#,
-        #","refresh":"1h","binaries":["/usr/bin/curl","/usr/bin/git"]"#,
+        ("", #","refresh":"15m""#),
+        ("", #","binaries":["/usr/bin/curl"]"#),
+        ("", #","refresh":"1h","binaries":["/usr/bin/curl","/usr/bin/git"]"#),
+        (#","refresh":"15m""#, #","refresh":"1h""#),
+        (#","refresh":"15m""#, ""),
+        (#","refresh":"15m""#, #","refresh":"15m","binaries":["/usr/bin/curl"]"#),
     ])
-    func aLimitsOnlyEditKeepsARunningSessionRefreshing(extra: String) throws {
-        #expect(Self.gatewayJSON(adding: extra) != Self.keychainJSON())
-        let fixture = try SecretsFixture(Self.keychainJSON())
+    func aLimitsOnlyEditKeepsARunningSessionRefreshing(launched: String, edited: String) throws {
+        #expect(Self.gatewayJSON(adding: launched) != Self.gatewayJSON(adding: edited))
+        let fixture = try SecretsFixture(Self.gatewayJSON(adding: launched))
         defer { fixture.tearDown() }
         let keychain = RotatingKeychain()
         keychain.store("OPENAI_API_KEY", "sk-live-OLD-0123456789")
@@ -529,7 +533,7 @@ struct SecretLaunchBrokerRotationTests {
         let port = try #require(broker.gatewayPort)
 
         keychain.store("OPENAI_API_KEY", "sk-live-NEW-9876543210")
-        try rewrite(fixture, Self.gatewayJSON(adding: extra))
+        try rewrite(fixture, Self.gatewayJSON(adding: edited))
         clock.advance(3)
         #expect(try call(port, placeholder).status == 200)
         #expect(upstream.requests.first?.headers["authorization"] == "Bearer sk-live-NEW-9876543210")

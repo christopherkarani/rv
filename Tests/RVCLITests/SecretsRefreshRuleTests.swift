@@ -35,10 +35,9 @@ struct SecretsRefreshRuleTests {
         _ = try SecretsRun.set(
             name: "GH_TOKEN", value: Data("ghp-original".utf8), definition: .environment, agents: [],
             description: nil, environment: environment).get()
-        let result = SecretsRun.set(
+        _ = try SecretsRun.set(
             name: "GH_TOKEN", value: Data("ghp-rotated".utf8), definition: nil, agents: [], description: nil,
-            environment: environment, refresh: .some(nil))
-        #expect((try? result.get()) != nil)
+            environment: environment, refresh: .some(nil)).get()
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == Data("ghp-rotated".utf8))
     }
 }
