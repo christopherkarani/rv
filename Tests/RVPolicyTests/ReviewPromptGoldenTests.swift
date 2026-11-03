@@ -27,7 +27,7 @@ struct ReviewPromptGoldenTests {
         environment: EnvironmentReviewContext(labels: ["development"], isCI: false)
     )
 
-    @Test func forcePushShell_withCredential_promptBytes() {
+    @Test func forcePushShell_withCredential_promptBytes() throws {
         let action = ProposedAction.shell(
             ShellAction.effectOnly(
                 EffectShell(
@@ -46,9 +46,10 @@ struct ReviewPromptGoldenTests {
                 )
             )
         )
-        let text = ReviewPromptBuilder.payload(
-            for: ReviewRequest(action: action, context: context)
-        ).text
+        let request = ReviewRequest(action: action, context: context)
+        let decoded = try JSONDecoder().decode(ReviewRequest.self, from: JSONEncoder().encode(request))
+        #expect(decoded == request)
+        let text = ReviewPromptBuilder.payload(for: decoded).text
         #expect(text == """
             \(ReviewPromptBuilder.instructions)
 
@@ -127,8 +128,13 @@ struct ReviewPromptGoldenTests {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(ReviewRequest(action: action, context: context))
+        let request = ReviewRequest(action: action, context: context)
+        let data = try encoder.encode(request)
         let json = String(decoding: data, as: UTF8.self)
         #expect(json == #"{"action":{"file":{"_0":{"effects":{"kinds":[]},"file":{"kind":"write","path":"[redacted]"},"fingerprint":"[redacted]","resources":{"filesystemScope":{"unknown":{}},"path":"[redacted]","resourceKind":"unknown"},"scope":{"workingDirectory":"\/tmp\/ws"}}}},"context":{"environment":{"isCI":false,"labels":["development"]},"metadata":{},"repository":{"currentBranch":"main","name":"rv"}}}"#)
+        // Decoding re-sanitizes; that must be idempotent so round trips never drift.
+        let decoded = try JSONDecoder().decode(ReviewRequest.self, from: data)
+        #expect(decoded == request)
+        #expect(try encoder.encode(decoded) == data)
     }
 }

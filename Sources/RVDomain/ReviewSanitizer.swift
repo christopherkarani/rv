@@ -71,8 +71,10 @@ public struct RedactedShell: Sendable, Equatable, Encodable {
     public var resources: ResourceScope { sanitized.resources }
     public var scope: ActionScope { sanitized.scope }
     public var supportingCommand: ShellCommand? { sanitized.supportingCommand }
-    public var gitAction: GitAction? { sanitized.gitAction }
-    public var filesystemAction: FilesystemAction? { sanitized.filesystemAction }
+    // Internal (tests only): a public `GitAction`/`FilesystemAction` would
+    // rebuild a `ProposedAction` via `proposedAction(command:workingDirectory:)`.
+    var gitAction: GitAction? { sanitized.gitAction }
+    var filesystemAction: FilesystemAction? { sanitized.filesystemAction }
 
     public func encode(to encoder: Encoder) throws {
         try sanitized.encode(to: encoder)
