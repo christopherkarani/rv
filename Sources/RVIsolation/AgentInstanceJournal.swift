@@ -5,6 +5,8 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
+import RVPolicy
 
 /// One line in the Agent Instance journal: a description of what happened.
 ///
@@ -125,14 +127,7 @@ enum AgentInstanceJournal {
 
     /// `$HOME/.config/rv/agent-instances.jsonl`. Ignores `XDG_CONFIG_HOME`.
     static func productionURL() -> URL? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"],
-            home.hasPrefix("/"), home.contains("\0") == false
-        else {
-            return nil
-        }
-        return URL(fileURLWithPath: home, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("rv", isDirectory: true)
+        HomeDirectory.processConfigDirectory()?
             .appendingPathComponent("agent-instances.jsonl", isDirectory: false)
     }
 

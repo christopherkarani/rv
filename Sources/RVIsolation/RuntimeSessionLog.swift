@@ -5,7 +5,8 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
-import Synchronization
+import RVFileStore
+import RVPolicy
 
 /// One persisted start record. The launch path writes this before spawn.
 struct RuntimeSessionRecord: Equatable, Sendable {
@@ -55,14 +56,7 @@ enum RuntimeSessionLog {
 
     /// `$HOME/.config/rv/runtime-sessions.jsonl`. Ignores `XDG_CONFIG_HOME`.
     static func productionURL() -> URL? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"],
-            home.hasPrefix("/"), home.contains("\0") == false
-        else {
-            return nil
-        }
-        return URL(fileURLWithPath: home, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("rv", isDirectory: true)
+        HomeDirectory.processConfigDirectory()?
             .appendingPathComponent("runtime-sessions.jsonl", isDirectory: false)
     }
 
@@ -87,182 +81,17 @@ enum RuntimeSessionLog {
         return appendExclusiveLine(data, to: url)
     }
 
-    /// One fsynced JSON line. The in-process mutex is taken before `flock`
-    /// because macOS `flock` does not exclude another thread in this process.
+    /// One fsynced JSON line through the shared hardened append primitive.
     static func appendExclusiveLine(
         _ data: Data,
         to url: URL
     ) -> Result<Void, IsolationApplyError> {
-        guard
-            let result = withExclusiveFileLock(at: url, body: { locked in
-                appendLocked(data, to: locked)
-            })
-        else {
-            return .failure(.sessionRecordFailed)
-        }
-        return result
-    }
-
-    /// Runs `body` with cross-thread and cross-process exclusion for writers
-    /// of `url`. The lock lives on a `<name>.lock` sidecar so maintenance
-    /// can atomically replace the log: `body` opens the target only after
-    /// exclusion is held, so no append is lost to a rename, and lock-free
-    /// readers always see the old or the new file whole, never a partial
-    /// rewrite. Returns nil when the lock cannot be taken.
-    static func withExclusiveFileLock<T: Sendable>(
-        at url: URL,
-        body: (URL) -> T
-    ) -> T? {
-        let directory = url.deletingLastPathComponent()
         do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
+            try JSONLAppendLog.append(data, to: url)
+            return .success(())
         } catch {
-            return nil
-        }
-        let lockURL = url.appendingPathExtension("lock")
-        let fd = lockURL.path.withCString { path in
-            open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
-        }
-        guard fd >= 0 else {
-            return nil
-        }
-        defer { close(fd) }
-        return AppendLock.shared.withLock {
-            guard lock(fd) else {
-                return nil
-            }
-            defer { _ = flock(fd, LOCK_UN) }
-            return body(url)
-        }
-    }
-
-    /// Runs under `withExclusiveFileLock`. Opens the target after exclusion
-    /// so a concurrent compaction rename cannot strand this append on a
-    /// replaced inode.
-    private static func appendLocked(
-        _ data: Data,
-        to url: URL
-    ) -> Result<Void, IsolationApplyError> {
-        let fd = url.path.withCString { path in
-            open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC, 0o600)
-        }
-        guard fd >= 0 else {
             return .failure(.sessionRecordFailed)
         }
-        defer { close(fd) }
-        guard closeTornLine(fd), writeAll(fd, data), sync(fd) else {
-            return .failure(.sessionRecordFailed)
-        }
-        return .success(())
-    }
-
-    /// Threads in this process. macOS `flock` does not block them.
-    private final class AppendLock: Sendable {
-        static let shared = AppendLock()
-        private let mutex = Mutex<Void>(())
-
-        func withLock<T: Sendable>(_ body: () -> T) -> T {
-            mutex.withLock { _ in body() }
-        }
-    }
-
-    /// Excludes other processes. Callers already hold `AppendLock`.
-    private static func lock(_ fd: Int32) -> Bool {
-        for _ in 0..<16 {
-            if flock(fd, LOCK_EX) == 0 {
-                return true
-            }
-            if errno != EINTR {
-                return false
-            }
-        }
-        return false
-    }
-
-    /// If the log does not end on a record boundary, close that partial line.
-    private static func closeTornLine(_ fd: Int32) -> Bool {
-        let end = lseek(fd, 0, SEEK_END)
-        if end < 0 {
-            return false
-        }
-        if end == 0 {
-            return true
-        }
-        var last = UInt8(0)
-        var interrupts = 0
-        while true {
-            var readError: Int32 = 0
-            let count = withUnsafeMutablePointer(to: &last) { pointer -> Int in
-                let read = pread(fd, pointer, 1, end - 1)
-                if read < 0 {
-                    readError = errno
-                }
-                return read
-            }
-            if count == 1 {
-                break
-            }
-            if count < 0, readError == EINTR, interrupts < 16 {
-                interrupts += 1
-                continue
-            }
-            return false
-        }
-        if last == UInt8(ascii: "\n") {
-            return true
-        }
-        return writeAll(fd, Data([UInt8(ascii: "\n")]))
-    }
-
-    /// Writes `data` in full. A short write is finished or closed with a newline
-    /// so the next append cannot be concatenated onto a partial JSON line.
-    private static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
-        let bytes = [UInt8](data)
-        var offset = 0
-        var interrupts = 0
-        while offset < bytes.count {
-            var writeError: Int32 = 0
-            let count = bytes.withUnsafeBytes { buffer -> Int in
-                guard let base = buffer.baseAddress else { return -1 }
-                let wrote = write(fd, base.advanced(by: offset), bytes.count - offset)
-                if wrote < 0 {
-                    writeError = errno
-                }
-                return wrote
-            }
-            if count > 0 {
-                offset += count
-                interrupts = 0
-                continue
-            }
-            if count < 0, writeError == EINTR, interrupts < 16 {
-                interrupts += 1
-                continue
-            }
-            if offset > 0 {
-                var newline = UInt8(ascii: "\n")
-                _ = withUnsafePointer(to: &newline) { pointer in
-                    write(fd, pointer, 1)
-                }
-            }
-            return false
-        }
-        return true
-    }
-
-    private static func sync(_ fd: Int32) -> Bool {
-        for _ in 0..<16 {
-            if fsync(fd) == 0 {
-                return true
-            }
-            if errno != EINTR {
-                return false
-            }
-        }
-        return false
     }
 
     static func records(at url: URL) -> [RuntimeSessionRecord] {
