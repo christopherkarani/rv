@@ -91,6 +91,12 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
 Not sure why something blocked? `rv explain 'git reset --hard'` shows
 exactly which pack and rule fired.
 
+**Known limitations: search tools.** rv gates explicit secret paths and
+secret-selecting globs in search tools (Claude `Grep`/`Glob`, Cursor
+`Grep`). A search with no explicit path scans the working directory and
+can still match inside non-ignored secret files there, because rv does
+not inspect file contents.
+
 ## When you're blocked (and you meant it)
 
 Every hook deny prints a six-character code. Redeem it once, from
