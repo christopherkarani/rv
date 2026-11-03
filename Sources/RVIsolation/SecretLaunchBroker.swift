@@ -53,7 +53,6 @@ enum SecretLeaseError: Error, Sendable, Equatable {
 /// Per-workspace owner of the secret gateway. Each launch leases fresh
 /// placeholders; they die with the runtime.
 final class SecretLaunchBroker: @unchecked Sendable {
-    static let maximumEnvironmentValueBytes = 8_192
     /// How often AWS credentials are re-read when `refresh` is unset: well
     /// inside the shortest STS session (15 minutes), so the gateway does not
     /// sign with an expired one.
@@ -123,23 +122,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
         case .failure(let error): return .failure(.configuration(error))
         case .success(let loaded): configuration = loaded
         }
-        let organization: ManagedPolicy?
-        switch managed() {
-        case .invalid(let reason): return .failure(.organizationPolicy("invalid, so secrets are not staged: \(reason)"))
-        case .none: organization = nil
-        case .active(let bundle): organization = bundle.policy
-        }
         var definitions: [SecretDefinition] = []
         for name in names {
             guard let definition = configuration.secret(named: name) else { return .failure(.unknownSecret(name)) }
             guard definition.stages(forAgent: agent) else { continue }
-            if let reason = SecretOrganizationRules.violation(definition, policy: organization) {
-                return .failure(.organizationPolicy(reason))
-            }
-            // Like an unresolvable secret, an expired one fails the launch rather than being dropped.
-            if let expires = definition.expires, now() >= expires {
-                return .failure(.expired(secret: name, at: expires))
-            }
             definitions.append(definition)
         }
         var stagedBy: [String: String] = [:]
@@ -157,26 +143,17 @@ final class SecretLaunchBroker: @unchecked Sendable {
             gateway.revoke(placeholders)
             return .failure(error)
         }
-        let prefetched = resolver.prefetch(definitions.map(\.source))
-        for (index, definition) in definitions.enumerated() {
+        // Like an unresolvable secret, an expired or forbidden one fails the launch rather than being dropped.
+        let released: [ReleasedSecret]
+        switch SecretRelease(resolver: resolver, managed: managed(), now: now).release(definitions, to: .cage) {
+        case .failure(let refusal): return .failure(Self.leaseError(refusal))
+        case .success(let secrets): released = secrets
+        }
+        for secret in released {
+            let definition = secret.definition
             let name = definition.name
-            // Read before the value, so a write in between shows up as a change.
-            // Only gateway entries can rotate.
-            let marker = definition.delivery == .environment ? nil : resolver.version(definition.source)
-            var value: SecretValue
-            switch prefetched[index] ?? resolver.resolve(definition.source) {
-            case .failure(let error): return fail(.resolution(secret: name, error))
-            case .success(let resolved): value = resolved
-            }
-            var expires = definition.expires
-            if case .oauth = definition.source {
-                guard let minted = OAuthAccessToken(value) else {
-                    return fail(.resolution(secret: name, .invalidValue(OAuthAccessToken.unusable)))
-                }
-                value = minted.token
-                expires = [expires, minted.expires].compactMap { $0 }.min()
-                if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
-            }
+            let value = secret.value
+            let expires = secret.expires
             let fingerprint = fingerprint(value)
             var pins: [GatewayBinaryPin] = []
             for path in definition.binaries ?? [] {
@@ -187,9 +164,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
             }
             switch definition.delivery {
             case .environment:
-                guard let text = value.text, text.utf8.count <= Self.maximumEnvironmentValueBytes else {
-                    return fail(.environmentValueUnusable(name))
-                }
+                // Release guarantees text within the environment limit for this delivery.
+                guard let text = secret.text else { return fail(.environmentValueUnusable(name)) }
                 environment.append((name, text))
             case .gateway(let binding):
                 guard case .success = gateway.start(), let baseURL = gateway.baseURL(secret: name) else {
@@ -200,15 +176,12 @@ final class SecretLaunchBroker: @unchecked Sendable {
                     secret: name, prefix: binding.placeholderPrefix, value: value,
                     upstream: binding.upstream, fingerprint: fingerprint, runtime: nil,
                     surfaces: binding.surfaces, rules: binding.rules, expires: expires,
-                    refresh: refreshPolicy(definition, marker: marker), approvals: binding.approvalRules,
+                    refresh: refreshPolicy(definition, marker: secret.version), approvals: binding.approvalRules,
                     binaries: pins))
                 placeholders.append(placeholder)
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
             case .awsSigV4(let binding):
-                guard let credentials = AWSCredentialSet(value) else { return fail(.awsCredentialsUnusable(name)) }
-                let expires = [definition.expires, credentials.expires].compactMap { $0 }.min()
-                if let expires, now() >= expires { return fail(.expired(secret: name, at: expires)) }
                 guard case .success = gateway.start(), let baseURL = gateway.baseURL(secret: name) else {
                     return fail(.gatewayUnavailable)
                 }
@@ -217,7 +190,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
                     runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
-                    refresh: refreshPolicy(definition, marker: marker), signing: binding,
+                    refresh: refreshPolicy(definition, marker: secret.version), signing: binding,
                     approvals: binding.approvalRules, binaries: pins))
                 placeholders.append(placeholder)
                 environment.append(("AWS_ACCESS_KEY_ID", placeholder.text))
@@ -314,39 +287,45 @@ final class SecretLaunchBroker: @unchecked Sendable {
         guard let current = configuration.secret(named: name) else {
             return .failure(.notFound("\(name) is no longer defined in secrets.json"))
         }
-        guard current.source == launched.source, current.delivery == launched.delivery else {
+        guard current.source == launched.source, current.delivery.route == launched.delivery.route else {
             return .failure(.failed("\(name) now has a different source or delivery; start a new session to use it"))
         }
         // Past the definition's own expiry nothing is minted: the exchange would rotate the
         // refresh token only for the gateway to refuse the result.
-        if case .oauth = current.source, let expires = current.expires, now() >= expires {
-            return .failure(.failed("\(name) has passed its expiry; extend it with `rv secrets set \(name) --expires`"))
-        }
-        switch managed() {
-        case .invalid(let reason):
+        switch SecretRelease(resolver: resolver, managed: managed(), now: now).release([current], to: .cage) {
+        case .success(let released):
+            guard let secret = released.first else { return .failure(.failed("\(name) could not be released")) }
+            return .success(SecretRefreshed(
+                value: secret.value, fingerprint: fingerprint(secret.value), expires: secret.expires))
+        case .failure(.policyInvalid(let reason)):
             return .failure(.failed("organization policy is invalid: \(reason)"))
-        case .active(let bundle):
-            if let reason = SecretOrganizationRules.violation(current, policy: bundle.policy) {
-                return .failure(.failed("organization policy: \(reason)"))
+        case .failure(.refused(_, let reason)):
+            switch reason {
+            case .organizationPolicy(let rule): return .failure(.failed("organization policy: \(rule.message(secret: name))"))
+            case .expired:
+                return .failure(.failed("\(name) has passed its expiry; extend it with `rv secrets set \(name) --expires`"))
+            case .resolution(let error): return .failure(error)
+            case .unusableToken: return .failure(.invalidValue(OAuthAccessToken.unusable))
+            case .unusableCredentials: return .failure(.invalidValue(AWSSigningBinding.unusableCredentials))
+            case .gatewayOnly, .unusableEnvironmentValue, .notText, .lineBreak:
+                return .failure(.invalidValue("not usable for its delivery"))
             }
-        case .none:
-            break
         }
-        return resolver.resolve(current.source).flatMap { value in
-            var value = value
-            var expires = current.expires
-            if case .oauth = current.source {
-                guard let minted = OAuthAccessToken(value) else { return .failure(.invalidValue(OAuthAccessToken.unusable)) }
-                value = minted.token
-                expires = [expires, minted.expires].compactMap { $0 }.min()
+    }
+
+    /// The launch-time wording for a refused release.
+    static func leaseError(_ refusal: SecretRefusal) -> SecretLeaseError {
+        switch refusal {
+        case .policyInvalid(let reason): return .organizationPolicy("invalid, so secrets are not staged: \(reason)")
+        case .refused(let name, let reason):
+            switch reason {
+            case .organizationPolicy(let rule): return .organizationPolicy(rule.message(secret: name))
+            case .expired(let date): return .expired(secret: name, at: date)
+            case .resolution(let error): return .resolution(secret: name, error)
+            case .unusableToken: return .resolution(secret: name, .invalidValue(OAuthAccessToken.unusable))
+            case .unusableCredentials: return .awsCredentialsUnusable(name)
+            case .gatewayOnly, .unusableEnvironmentValue, .notText, .lineBreak: return .environmentValueUnusable(name)
             }
-            if case .awsSigV4 = current.delivery {
-                guard let credentials = AWSCredentialSet(value) else {
-                    return .failure(.invalidValue(AWSSigningBinding.unusableCredentials))
-                }
-                expires = [expires, credentials.expires].compactMap { $0 }.min()
-            }
-            return .success(SecretRefreshed(value: value, fingerprint: fingerprint(value), expires: expires))
         }
     }
 
@@ -442,28 +421,5 @@ extension SecretDelivery {
         case .environment: "environment"
         case .awsSigV4: "awsSigV4"
         }
-    }
-}
-
-/// What a managed policy forbids for one secret definition.
-public enum SecretOrganizationRules {
-    /// The source rule alone: callers that resolve a secret on the host and
-    /// deliver nothing into a cage (scan, hook run, audit-forward headers)
-    /// check only this, as `MCPGatewayRuntime.resolve` does for remote headers.
-    public static func sourceViolation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
-        guard let policy else { return nil }
-        if policy.allowsSecretSource(definition.source.kind) == false {
-            return "\(definition.name) uses a \(definition.source.kind) source, which is not allowed"
-        }
-        return nil
-    }
-
-    /// The source rule plus the delivery rule, for secrets that reach a cage.
-    public static func violation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
-        if let reason = sourceViolation(definition, policy: policy) { return reason }
-        if let policy, case .environment = definition.delivery, policy.secrets.allowEnvironmentDelivery == false {
-            return "\(definition.name) is delivered as an environment variable, which is not allowed; use the gateway"
-        }
-        return nil
     }
 }
