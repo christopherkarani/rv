@@ -722,13 +722,13 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "connect",
-                    description: "Imports an existing CLI login, token environment variable, or `gh auth token`; otherwise prompts"
+                    description: "Imports an existing CLI login, token environment variable, or `gh auth token`; otherwise reads a hidden prompt or piped stdin"
                 ),
                 HelpRow(
                     name: "storage",
-                    description: "Kept in the Keychain as the provider's secret with gateway delivery; agents get a placeholder, never the value"
+                    description: "Kept in the Keychain as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
                 ),
-                HelpRow(name: "check", description: "Resolves logins and shows fingerprints, never values"),
+                HelpRow(name: "check", description: "Resolves the named (default: connected) logins and shows fingerprints, never values; exit 1 if any fails"),
                 HelpRow(name: "logout", description: "Removes the login definition and the rv-stored Keychain value"),
             ]),
         ],

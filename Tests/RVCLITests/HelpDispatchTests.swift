@@ -232,10 +232,21 @@ import RVTheme
 }
 
 @Test func helpText_login_documentsSubcommandsAndFlags() {
-    #expect(HelpDispatch.topic(arguments: ["login", "connect", "--help"]) == .login)
+    #expect(HelpDispatch.topic(arguments: ["help", "login"]) == .login)
+    #expect(HelpDispatch.topic(arguments: ["login", "--help"]) == .login)
     let text = HelpDispatch.text(.login, palette: colorOffPalette)
     #expect(text.split(separator: "\n").first.map(String.init) == "Usage")
-    for needle in ["rv login connect", "rv login logout", "rv login check", "--stdin", "--resource-profile", "vercel", "github"] {
+    let subcommands = Login.configuration.subcommands.compactMap { $0.configuration.commandName }
+    #expect(subcommands.isEmpty == false)
+    for name in subcommands {
+        #expect(HelpDispatch.topic(arguments: ["login", name, "--help"]) == .login, "`rv login \(name) --help` is not the login page")
+        #expect(HelpDispatch.topic(arguments: ["help", "login", name]) == .login, "`rv help login \(name)` is not the login page")
+        #expect(text.contains("rv login \(name)") || text.contains("rv login [\(name)]"), "login help missing `rv login \(name)`")
+    }
+    for provider in LoginProvider.all {
+        #expect(text.contains(provider.id), "login help missing provider \(provider.id)")
+    }
+    for needle in ["--stdin", "--resource-profile"] {
         #expect(text.contains(needle), "login help missing \(needle)")
     }
 }
