@@ -2083,6 +2083,20 @@ private func corrupt(_ assets: URL, _ name: String) throws {
     #expect(run.stderr.contains("checksum") == false)
 }
 
+@Test func installSh_checksumsVerifyUnderATmpdirWithNewlineAndBackslash() throws {
+    // sha256sum / shasum prefix the digest with `\` when the path holds a
+    // newline or backslash; hashing via stdin keeps the digest bare.
+    let parent = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-sums-nl-\(UUID().uuidString)", isDirectory: true)
+    let nasty = parent.appendingPathComponent("odd\nname\\x", isDirectory: true)
+    try FileManager.default.createDirectory(at: nasty, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let run = try runChecksumInstall(environment: ["TMPDIR": nasty.path])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("checksum mismatch") == false, "\(run.stderr)")
+}
+
 @Test func installSh_darwinShapedChecksumMismatchAborts() throws {
     let run = try runChecksumInstall(darwin: true) { assets in
         try corrupt(assets, "rvd-darwin-arm64")

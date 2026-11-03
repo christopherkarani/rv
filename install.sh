@@ -273,11 +273,13 @@ resolve_release_tag() {
   release_base="$release_repo/download/$tag"
 }
 
+# Hash via stdin: with a path argument, sha256sum / shasum prefix the digest
+# with `\` when the path holds a newline or backslash (e.g. an odd TMPDIR).
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum < "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 < "$1" | awk '{print $1}'
   else
     return 1
   fi
