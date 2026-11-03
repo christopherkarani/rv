@@ -112,11 +112,12 @@ extension SecretDefinition {
 /// The credential set an `awsProfile` source resolves to: the
 /// `credential_process` JSON that `aws configure export-credentials` prints.
 struct AWSCredentialSet: Sendable, Equatable {
-    var accessKeyID: SecretValue
-    var secretAccessKey: SecretValue
-    var sessionToken: SecretValue?
+    // Immutable, so the parts the gateway signs with always come from `raw`.
+    let accessKeyID: SecretValue
+    let secretAccessKey: SecretValue
+    let sessionToken: SecretValue?
     /// From `Expiration`; nil for long-term keys.
-    var expires: Date?
+    let expires: Date?
     /// The provider's exact bytes, which the audit fingerprint is taken over.
     let raw: SecretValue
 
@@ -134,10 +135,14 @@ struct AWSCredentialSet: Sendable, Equatable {
         if let rawToken = object["SessionToken"] {
             guard let token = rawToken as? String, Self.printable(token), let tokenValue = SecretValue(token) else { return nil }
             sessionToken = tokenValue
+        } else {
+            sessionToken = nil
         }
         if let rawExpiration = object["Expiration"] {
             guard let text = rawExpiration as? String, let instant = Self.instant(text) else { return nil }
             expires = instant
+        } else {
+            expires = nil
         }
     }
 
