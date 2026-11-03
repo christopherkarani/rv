@@ -551,6 +551,65 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
     #expect(diagnostics.all.isEmpty == false)
 }
 
+@Test func egressDenialConcurrentWritersLoseNoLines() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-ac006-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    await withTaskGroup(of: Void.self) { group in
+        for writer in 0..<2 {
+            group.addTask {
+                DispatchQueue.global().sync {
+                    for index in 0..<500 {
+                        let denial = EgressProxyDenial(
+                            host: "w\(writer)-\(index).example", port: 443, reason: .deniedPolicy,
+                            recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                        )
+                        EgressProxy.writeDenial(denial, to: url, diagnose: { _ in })
+                    }
+                }
+            }
+        }
+    }
+    let lines = try String(contentsOf: url, encoding: .utf8)
+        .split(separator: "\n", omittingEmptySubsequences: true)
+    #expect(lines.count == 1000)
+    for line in lines {
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: String]
+        )
+        #expect(Set(object.keys) == ["host", "port", "reason", "recordedAt"])
+    }
+}
+
+@Test func egressDenialFileIsOwnerOnlyAndSymlinkRefused() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-mode-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let denial = EgressProxyDenial(
+        host: "mode.example", port: 443, reason: .deniedPolicy,
+        recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let url = directory.appendingPathComponent("nested/egress-denials.jsonl")
+    #expect(EgressProxy.writeDenial(denial, to: url, diagnose: { _ in }))
+    let fileMode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+    let dirMode = try FileManager.default.attributesOfItem(
+        atPath: url.deletingLastPathComponent().path)[.posixPermissions] as? Int
+    #expect(fileMode == 0o600)
+    #expect(dirMode == 0o700)
+
+    let target = directory.appendingPathComponent("target.txt")
+    try Data("untouched".utf8).write(to: target)
+    let link = directory.appendingPathComponent("link/egress-denials.jsonl")
+    try FileManager.default.createDirectory(
+        at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+    let diagnostics = AuditDiagnosticCollector()
+    #expect(EgressProxy.writeDenial(denial, to: link, diagnose: diagnostics.record) == false)
+    #expect(diagnostics.all.isEmpty == false)
+    #expect(try String(contentsOf: target, encoding: .utf8) == "untouched")
+}
+
 @Test func egressDenialReasonsPinLogSpellings() {
     // `egress-denials.jsonl` readers (including out-of-repo ones) match on
     // these spellings, so adding a reason is a log-format change. The full
