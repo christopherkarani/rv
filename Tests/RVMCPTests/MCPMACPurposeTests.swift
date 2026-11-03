@@ -29,8 +29,12 @@ struct MCPMACPurposeTests {
         #expect(try Self.bytes(MCPCustodianResponse.verify(nil)) == #"{"verify":{}}"#)
     }
 
-    @Test func purposesRoundTripAndAreExactlyTheWireVocabulary() {
+    @Test func purposesRoundTripAndAreExactlyTheWireVocabulary() throws {
         #expect(Set(MCPMACPurpose.allCases.map(\.rawValue)) == ["grant", "code", "argument-keys", "mcp.json"])
+        for purpose in MCPMACPurpose.allCases {
+            let request = MCPCustodianRequest.verify(candidate: "00", purpose: purpose, fields: ["a"])
+            #expect(try JSONDecoder().decode(MCPCustodianRequest.self, from: JSONEncoder().encode(request)) == request)
+        }
     }
 
     @Test(arguments: ["enrollment", "bogus", "", "Grant"])
