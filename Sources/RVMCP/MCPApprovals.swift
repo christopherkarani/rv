@@ -190,7 +190,7 @@ public struct MCPApprovalStore: Sendable {
             // The hash alone is not the call. A grant signed for other key names stays put.
             guard requests[index].argumentKeys == argumentKeys else { return MCPGrantLookup.none }
             // Verify the row as read under this lock. No key to verify
-            // with (nil): leave the grant for a keyed gateway instead of
+            // with (.noKey): leave the grant for a keyed gateway instead of
             // deleting a legitimate approval as "forged".
             switch signing.verify(requests[index].grantMAC, .grant, requests[index].grantFields) {
             case .noKey:

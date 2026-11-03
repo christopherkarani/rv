@@ -37,6 +37,19 @@ struct MCPMACPurposeTests {
         }
     }
 
+    /// Stored approval rows and mcp-integrity.json carry MACs computed over
+    /// these literals, so the typed API must keep MAC'ing exactly them.
+    @Test(arguments: [
+        (MCPMACPurpose.grant, "grant"), (.code, "code"), (.argumentKeys, "argument-keys"), (.mcpJSON, "mcp.json"),
+    ])
+    func macsAreOverThePurposeStringsAlreadyStored(purpose: MCPMACPurpose, literal: String) throws {
+        let signer = try #require(MCPSigner(key: [UInt8](repeating: 7, count: 32)))
+        let signing = MCPApprovalSigning.inProcess(load: { signer }, loadOrCreate: { signer })
+        let mac = try #require(signing.mac(purpose, ["a", "b"], true))
+        #expect(mac == signer.mac(literal, ["a", "b"]))
+        #expect(signing.verify(signer.mac(literal, ["a", "b"]), purpose, ["a", "b"]) == .valid)
+    }
+
     @Test(arguments: ["enrollment", "bogus", "", "Grant"])
     func unknownPurposesFailToDecode(purpose: String) {
         let mac = Data(#"{"mac":{"createIfMissing":true,"fields":[],"purpose":"\#(purpose)"}}"#.utf8)
