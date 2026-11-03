@@ -66,7 +66,7 @@ func parseFilesystemSegments(
     // C-F7). The threaded budget tells them apart: each collected value
     // excuses at most one bare segment, inners already being siblings.
     var budget = assignmentValues
-    let claimed = segments.filter { segment in
+    let claimed = segments.flatMap(peeledSegments).filter { segment in
         guard isBareSubstitution(segment),
             let match = budget.firstIndex(where: { assignmentValueMatches($0, segment) })
         else {

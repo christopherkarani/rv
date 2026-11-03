@@ -94,6 +94,10 @@ func parseCheckout(_ argv: Argv) -> GitAction? {
     if force, let name = before.first, before.count == 1, after.isEmpty {
         return .switchBranch(name: name, force: true)
     }
+    // `git checkout -f <tree-ish> <paths>...` overwrites those paths.
+    if force, let source = before.first, before.count > 1, after.isEmpty {
+        return .discardWorktree(pathspecs: Array(before.dropFirst()), source: source)
+    }
     return nil
 }
 

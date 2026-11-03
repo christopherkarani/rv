@@ -690,6 +690,41 @@ func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
     #expect(result.rendererProbe == .missing)
 }
 
+@Test(arguments: [
+    #"{"toolName":"bash","input":{}}"#,
+    #"{"toolName":"bash","input":{"command":""}}"#,
+    #"{"toolName":"bash","input":{"command":42}}"#,
+    #"{"toolName":"bash"}"#,
+])
+func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
+    let event = try #require(
+        JSONSerialization.jsonObject(with: Data(eventJSON.utf8)) as? [String: Any]
+    )
+    let result = try await runPiAdapter(event: event, stub: .stdout("", exit: 0))
+    #expect(result.block == true)
+    #expect(result.reason?.isEmpty == false)
+    #expect(result.spawnCount == 0)
+}
+
+@Test func piAdapter_nonBashToolStillPasses() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "read", "input": ["path": "README.md"]],
+        stub: .stdout("", exit: 0)
+    )
+    #expect(result.block == nil)
+    #expect(result.spawnCount == 0)
+}
+
+@Test func piAdapter_missingRvBinaryFailsClosed() async throws {
+    // The spawn of rv throws (ENOENT); the handler must block, not pass.
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git status"]],
+        stub: .missing
+    )
+    #expect(result.block == true)
+    #expect(result.reason?.isEmpty == false)
+}
+
 @Test func piAdapter_legacyAskBlocksWithoutConfirmOrSpend() async throws {
     // Step 8B: host dialogs never authorize. A legacy `ask` decision
     // blocks like a deny; the human approves in RVOperatorUI.

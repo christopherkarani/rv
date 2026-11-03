@@ -115,7 +115,8 @@ extension ShellPipeline {
         workingDirectory: WorkingDirectory?,
         budget: UnwrapBudget,
         depth: Int,
-        layers: [WrapperKind]
+        layers: [WrapperKind],
+        splitChains: Bool = true
     ) -> UnwrapOutcome {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -150,6 +151,17 @@ extension ShellPipeline {
                 depth: depth,
                 layers: layers
             )
+        }
+        if splitChains,
+            let chained = unwrapChain(
+                trimmed,
+                workingDirectory: workingDirectory,
+                budget: budget,
+                depth: depth,
+                layers: layers
+            )
+        {
+            return chained
         }
         let tokens = ShellPipeline.tokenize(trimmed)
         let argv = Argv(tokens: tokens)
@@ -282,6 +294,9 @@ extension ShellPipeline {
                 workingDirectory: workingDirectory
             )
         }
+        if let peel = peelUtility(head, tokens: tokens, workingDirectory: workingDirectory) {
+            return peel
+        }
         return .notWrapper
     }
 }
@@ -345,7 +360,10 @@ private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: Working
                 index += 2
                 continue
             }
-            if sudoShortArgFlags.contains(token) {
+            if shortClusterConsumesValue(token, valueLetters: ["D"]) {
+                return .limited(.sudo)
+            }
+            if shortClusterConsumesValue(token, valueLetters: sudoShortArgLetters) {
                 guard index + 1 < tokens.count else { return .limited(.sudo) }
                 index += 2
                 continue
@@ -360,7 +378,7 @@ private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: Working
     return .next(renderCommand(rest), .sudo, cwd)
 }
 
-private let sudoShortArgFlags: Set<String> = ["-u", "-g", "-h", "-p", "-C", "-U", "-T"]
+private let sudoShortArgLetters: Set<Character> = ["u", "g", "h", "p", "C", "U", "T", "r", "t"]
 private let sudoLongArgFlags: Set<String> = [
     "--user", "--group", "--host", "--prompt", "--close-from", "--chdir",
     "--other-user", "--command-timeout",
@@ -588,29 +606,11 @@ private func extractPython(_ code: String) -> InterpreterExtract {
     if let command = pythonShellCommand(folded) {
         return .command(command)
     }
-    if looksLikePythonSpawn(folded) {
+    if pythonCodeCanSpawn(folded) {
         return .limited
     }
     return .dataOnly
 }
-
-private func looksLikePythonSpawn(_ code: String) -> Bool {
-    pythonSpawnMarkers.contains { code.contains($0) }
-}
-
-private let pythonSpawnMarkers: [String] = [
-    "os.system(", "os.system (",
-    "os.popen(", "os.popen (",
-    "subprocess.run(", "subprocess.run (",
-    "subprocess.call(", "subprocess.call (",
-    "subprocess.Popen(", "subprocess.Popen (",
-    "subprocess.check_call(", "subprocess.check_call (",
-    "subprocess.check_output(", "subprocess.check_output (",
-    "shutil.rmtree(", "shutil.rmtree (",
-    "os.remove(", "os.remove (",
-    "os.unlink(", "os.unlink (",
-    "__import__('os').system(", #"__import__("os").system("#,
-]
 
 private func pythonShellCommand(_ code: String) -> String? {
     if let command = callStringArgument(code, names: ["os.system", "os.popen"]) {
@@ -658,24 +658,11 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     if let command = nodeShellCommand(folded) {
         return .command(command)
     }
-    if looksLikeNodeSpawn(folded) {
+    if nodeCodeCanSpawn(folded) {
         return .limited
     }
     return .dataOnly
 }
-
-private func looksLikeNodeSpawn(_ code: String) -> Bool {
-    nodeSpawnMarkers.contains { code.contains($0) }
-}
-
-private let nodeSpawnMarkers: [String] = [
-    "child_process.exec",
-    "child_process.execSync",
-    "fs.unlinkSync(", "fs.unlinkSync (",
-    "fs.rmdirSync(", "fs.rmdirSync (",
-    "fs.rmSync(", "fs.rmSync (",
-    "fs.rm(", "fs.rm (",
-]
 
 private func nodeShellCommand(_ code: String) -> String? {
     let execNames = [
@@ -708,27 +695,11 @@ private func extractRuby(_ code: String) -> InterpreterExtract {
     if let command = rubyShellCommand(folded) {
         return .command(command)
     }
-    if looksLikeRubySpawn(folded) {
+    if rubyCodeCanSpawn(folded) {
         return .limited
     }
     return .dataOnly
 }
-
-private func looksLikeRubySpawn(_ code: String) -> Bool {
-    if code.contains("`") || code.contains("%x") {
-        return true
-    }
-    return rubySpawnMarkers.contains { code.contains($0) }
-}
-
-private let rubySpawnMarkers: [String] = [
-    "system(", "system (",
-    "exec(", "exec (",
-    "File.delete(", "File.delete (",
-    "File.unlink(", "File.unlink (",
-    "FileUtils.rm_rf(", "FileUtils.rm_rf (",
-    "FileUtils.remove_entry_secure(", "FileUtils.remove_entry_secure (",
-]
 
 private func rubyShellCommand(_ code: String) -> String? {
     if let command = callStringArgument(code, names: ["system", "exec"]) {
@@ -867,7 +838,7 @@ private func quoteIfNeeded(_ value: String) -> String {
     return value
 }
 
-private func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
+func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
     tokens.map(renderToken).joined(separator: " ")
 }
 
