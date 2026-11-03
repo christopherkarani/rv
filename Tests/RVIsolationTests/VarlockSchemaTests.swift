@@ -113,6 +113,40 @@ struct VarlockSchemaTests {
         #expect(plan.notes.contains { $0.contains("typo-id") && $0.contains("not one of the declared instances") })
     }
 
+    @Test func everyProviderNamesItsInitDecoratorWhenTheInstanceIsAmbiguous() throws {
+        let providers: [(call: String, decorator: String)] = [
+            ("infisical()", "initInfisical"),
+            ("bitwarden(\"12345678-1234-1234-1234-123456789abc\")", "initBitwarden"),
+            ("gsm(\"key\")", "initGsm"),
+            ("azureSecret(\"key\")", "initAzure"),
+            ("vaultSecret(\"secret/data/app#token\")", "initHcpVault"),
+            ("awsSecret(\"prod/thing\")", "initAws"),
+        ]
+        for (call, decorator) in providers {
+            let plan = try VarlockSchema.plan("""
+                # @\(decorator)(id=prod)
+                # @sensitive
+                K=\(call)
+                """).get()
+            #expect(plan.secrets.isEmpty, "\(call)")
+            #expect(
+                plan.notes.contains { $0.contains("no @\(decorator) without an id; name the instance") },
+                "\(call): \(plan.notes)")
+        }
+    }
+
+    @Test func unknownAndUnsupportedProviderCallsAreSkipped() throws {
+        let plan = try VarlockSchema.plan("""
+            # @sensitive
+            A=awsParam("x")
+            # @sensitive
+            B=mystery("x")
+            """).get()
+        #expect(plan.secrets.isEmpty)
+        #expect(plan.notes.contains { $0.contains("rv has no AWS Parameter Store provider") })
+        #expect(plan.notes.count == 2)
+    }
+
     @Test func spacedAssignmentImports() throws {
         let plan = try VarlockSchema.plan("# @sensitive\nSPACED = op(op://v/i/f)\n").get()
         #expect(plan.secrets.map(\.name) == ["SPACED"])

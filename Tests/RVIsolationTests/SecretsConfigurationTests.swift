@@ -18,6 +18,38 @@ struct SecretsConfigurationTests {
         return reason
     }
 
+    private static let everySourceJSON = """
+        {"version":1,"secrets":[
+          {"name":"S_KEYCHAIN","source":{"keychain":{"service":"svc","account":"acct"}},"delivery":{"environment":{}}},
+          {"name":"S_HOST","source":{"hostEnvironment":{"variable":"HOST_VAR"}},"delivery":{"environment":{}}},
+          {"name":"S_OP","source":{"onePassword":{"reference":"op://Eng/Item/key"}},"delivery":{"environment":{}}},
+          {"name":"S_VAULT","source":{"vault":{"path":"secret/data/db","field":"password","address":"https://vault.corp.example"}},"delivery":{"environment":{}}},
+          {"name":"S_AWSSM","source":{"awsSecretsManager":{"secretID":"prod/thing","field":"key","region":"us-east-1"}},"delivery":{"environment":{}}},
+          {"name":"S_INFISICAL","source":{"infisical":{"name":"KEY","project":"proj","environment":"dev","path":"/"}},"delivery":{"environment":{}}},
+          {"name":"S_BITWARDEN","source":{"bitwarden":{"id":"11111111-2222-3333-4444-555555555555"}},"delivery":{"environment":{}}},
+          {"name":"S_GCP","source":{"gcp":{"secret":"sec","project":"proj","version":"3"}},"delivery":{"environment":{}}},
+          {"name":"S_AZURE","source":{"azure":{"vault":"v","name":"n","version":"abc"}},"delivery":{"environment":{}}},
+          {"name":"S_AWSPROFILE","source":{"awsProfile":{"profile":"dev"}},"delivery":{"awsSigV4":{"upstream":"https://s3.us-east-1.amazonaws.com","region":"us-east-1","service":"s3","endpointEnv":"AWS_ENDPOINT_URL_S3"}}},
+          {"name":"S_OAUTH","source":{"oauth":{"tokenURL":"https://auth.example.com/token","clientID":"cid","refreshToken":{"service":"rv.oauth","account":"refresh"}}},"delivery":{"gateway":{"upstream":"https://api.example.com/","baseURLEnv":"EX_BASE"}}}
+        ]}
+        """
+
+    @Test func everySourceKindEncodesToPinnedBytesAndRoundTrips() throws {
+        let configuration = try decode(Self.everySourceJSON).get()
+        #expect(configuration.secrets.map { "\($0.source.kind)" } == [
+            "keychain", "hostEnvironment", "onePassword", "vault", "awsSecretsManager", "infisical", "bitwarden",
+            "gcp", "azure", "awsProfile", "oauth",
+        ])
+        let encoded = String(decoding: configuration.encoded(), as: UTF8.self)
+        #expect(encoded == Self.everySourceEncoded)
+        #expect(try SecretsConfiguration.decode(configuration.encoded()).get() == configuration)
+    }
+
+    @Test func unknownSourceKindStaysUnsupported() {
+        let json = #"{"version":1,"secrets":[{"name":"X","source":{"keychian":{"service":"s","account":"a"}},"delivery":{"environment":{}}}]}"#
+        #expect(invalidReason(json) == "X.source kind keychian is not supported")
+    }
+
     @Test func decodesEveryProviderAndDelivery() throws {
         let json = """
             {"version":1,"secrets":[
@@ -325,4 +357,179 @@ struct SecretsConfigurationTests {
         #expect(missing.message.contains("\\u2028"))
         #expect(missing.message.contains("not found: keychain item"))
     }
+}
+
+extension SecretsConfigurationTests {
+    /// secrets.json bytes for one definition per source kind; the file format is a contract.
+    static let everySourceEncoded = #"""
+    {
+      "secrets" : [
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_KEYCHAIN",
+          "source" : {
+            "keychain" : {
+              "account" : "acct",
+              "service" : "svc"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_HOST",
+          "source" : {
+            "hostEnvironment" : {
+              "variable" : "HOST_VAR"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_OP",
+          "source" : {
+            "onePassword" : {
+              "reference" : "op://Eng/Item/key"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_VAULT",
+          "source" : {
+            "vault" : {
+              "address" : "https://vault.corp.example",
+              "field" : "password",
+              "path" : "secret/data/db"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_AWSSM",
+          "source" : {
+            "awsSecretsManager" : {
+              "field" : "key",
+              "region" : "us-east-1",
+              "secretID" : "prod/thing"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_INFISICAL",
+          "source" : {
+            "infisical" : {
+              "environment" : "dev",
+              "name" : "KEY",
+              "path" : "/",
+              "project" : "proj"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_BITWARDEN",
+          "source" : {
+            "bitwarden" : {
+              "id" : "11111111-2222-3333-4444-555555555555"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_GCP",
+          "source" : {
+            "gcp" : {
+              "project" : "proj",
+              "secret" : "sec",
+              "version" : "3"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "environment" : {
+
+            }
+          },
+          "name" : "S_AZURE",
+          "source" : {
+            "azure" : {
+              "name" : "n",
+              "vault" : "v",
+              "version" : "abc"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "awsSigV4" : {
+              "endpointEnv" : "AWS_ENDPOINT_URL_S3",
+              "region" : "us-east-1",
+              "service" : "s3",
+              "upstream" : "https://s3.us-east-1.amazonaws.com"
+            }
+          },
+          "name" : "S_AWSPROFILE",
+          "source" : {
+            "awsProfile" : {
+              "profile" : "dev"
+            }
+          }
+        },
+        {
+          "delivery" : {
+            "gateway" : {
+              "baseURLEnv" : "EX_BASE",
+              "upstream" : "https://api.example.com"
+            }
+          },
+          "name" : "S_OAUTH",
+          "source" : {
+            "oauth" : {
+              "clientID" : "cid",
+              "refreshToken" : {
+                "account" : "refresh",
+                "service" : "rv.oauth"
+              },
+              "tokenURL" : "https://auth.example.com/token"
+            }
+          }
+        }
+      ],
+      "version" : 1
+    }
+    """# + "\n"
 }

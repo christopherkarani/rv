@@ -196,7 +196,7 @@ enum SecretsRun {
                 name: secret.name,
                 description: secret.description,
                 source: secret.source.locator,
-                provider: secret.source.kind,
+                provider: secret.source.kind.rawValue,
                 delivery: secret.delivery.summary,
                 upstream: upstream,
                 baseURLEnv: baseURLEnv,
@@ -569,7 +569,7 @@ enum SecretsRun {
                 return DescribeRow(
                     name: secret.name, description: secret.description, type: secret.type,
                     delivery: secret.delivery.kind,
-                    source: secret.source.kind, surfaces: scope?.surfaces, allow: scope?.allow,
+                    source: secret.source.kind.rawValue, surfaces: scope?.surfaces, allow: scope?.allow,
                     expires: secret.expires.map(SecretExpiry.text), refresh: secret.refresh?.text)
             },
             warnings: configuration.secrets.compactMap { expiryWarning($0, now: now) })
