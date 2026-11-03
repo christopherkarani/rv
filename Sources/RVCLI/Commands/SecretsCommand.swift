@@ -372,7 +372,7 @@ enum SecretsRun {
         }
         if let index = updated.secrets.firstIndex(where: { $0.name == name }) {
             if let expires { updated.secrets[index].expires = expires }
-            if let refresh { updated.secrets[index].refresh = refresh }
+            if let refresh, let failure = updated.secrets[index].applyRefresh(refresh) { return .failure(failure) }
         }
         if updated != current {
             switch SecretsConfiguration.decode(updated.encoded()) {
