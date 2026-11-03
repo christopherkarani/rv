@@ -64,6 +64,15 @@ struct SecretResolvedTests {
         #expect(ResolvedSecret.parse(SecretValue(Self.oauthJSON)!, for: try oauth)?.lastingToken == nil)
     }
 
+    @Test func aGatewayOnlySourceIsNeverATokenWhateverItsDelivery() throws {
+        for (name, definition, json) in [("awsProfile", try aws, Self.awsJSON), ("oauth", try oauth, Self.oauthJSON)] {
+            for delivery in [SecretDelivery.environment, try aws.delivery, try oauth.delivery] {
+                let parsed = ResolvedSecret.parse(SecretValue(json)!, source: definition.source, delivery: delivery)
+                #expect(parsed?.lastingToken == nil, "\(name) read as text under \(delivery.kind) delivery")
+            }
+        }
+    }
+
     @Test func textConsumersGetNilForGatewayOnlySecretsWithoutTheSourceBeingRead() throws {
         let reads = Mutex(0)
         let resolver = SecretResolver { source in
@@ -120,6 +129,39 @@ struct SecretResolvedTests {
         ]
         for text in rendered {
             for secret in secrets { #expect(text.contains(secret) == false) }
+        }
+    }
+
+    /// Swift Testing renders a failed `#expect` operand, and `dump` renders any
+    /// value, from its `Mirror` children, not from `description`.
+    private func reflectedContents(_ value: Any, depth: Int = 0) -> [[UInt8]] {
+        guard depth < 12 else { return [] }
+        if let bytes = value as? [UInt8] { return [bytes] }
+        if let text = value as? String { return [Array(text.utf8)] }
+        return Mirror(reflecting: value).children.flatMap { reflectedContents($0.value, depth: depth + 1) }
+    }
+
+    @Test func nothingReflectsSecretMaterial() throws {
+        let secrets = ["AKIAREAL", "realSecretKey", "real-session-token", "at-REAL-oauth", "plain-REAL-value"]
+        let resolvedAWS = try #require(ResolvedSecret.parse(SecretValue(Self.awsJSON)!, for: try aws))
+        let resolvedOAuth = try #require(ResolvedSecret.parse(SecretValue(Self.oauthJSON)!, for: try oauth))
+        let credential = try #require(SecretGateway.Entry.Credential(resolvedAWS, delivery: try aws.delivery))
+        let entry = SecretGateway.Entry(
+            secret: "AWS_DEV", prefix: "", credential: credential,
+            upstream: URL(string: "https://s3.us-east-1.amazonaws.com")!, previous: [credential])
+        let values: [Any] = [
+            SecretValue("plain-REAL-value")!, SecretValue(Self.awsJSON)!, resolvedAWS, resolvedOAuth,
+            ResolvedSecret.token(SecretValue("plain-REAL-value")!), credential, entry,
+            SecretRefreshed(value: resolvedAWS, fingerprint: nil, expires: nil),
+        ]
+        for value in values {
+            var dumped = ""
+            dump(value, to: &dumped)
+            #expect(dumped.contains("bytes") == false)
+            for contents in reflectedContents(value) {
+                let text = String(decoding: contents, as: UTF8.self)
+                for secret in secrets { #expect(text.contains(secret) == false) }
+            }
         }
     }
 

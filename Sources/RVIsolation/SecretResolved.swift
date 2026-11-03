@@ -49,12 +49,14 @@ enum ResolvedSecret: Sendable, Equatable {
         }
     }
 
-    /// Reads `value` as the kind `source` and `delivery` call for. Nil when
-    /// an `oauth` or `awsSigV4` value is not usable; a plain token never fails.
+    /// Reads `value` as the kind `source` and `delivery` call for. An `oauth`
+    /// or `awsProfile` source is never a token, whatever its delivery. Nil
+    /// when an `oauth`, `awsProfile` or `awsSigV4` value is not usable; a
+    /// plain token never fails.
     static func parse(_ value: SecretValue, source: SecretSource, delivery: SecretDelivery) -> ResolvedSecret? {
         switch (source, delivery) {
         case (.oauth, _): OAuthAccessToken(value).map { .oauth($0) }
-        case (_, .awsSigV4): AWSCredentialSet(value).map { .awsCredentials($0) }
+        case (.awsProfile, _), (_, .awsSigV4): AWSCredentialSet(value).map { .awsCredentials($0) }
         case (_, .gateway), (_, .environment): .token(value)
         }
     }
