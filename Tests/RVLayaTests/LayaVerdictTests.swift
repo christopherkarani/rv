@@ -55,4 +55,37 @@ struct LayaVerdictTests {
             try LayaVerdict.Action.parse(labels: ["allow", "review", "deny"])
         }
     }
+
+    /// A label set without `block` would score P(block) as 0: fail-open.
+    @Test(arguments: [["allow", "review"], ["allow", "allow", "block"], ["allow", "review", "block", "block"]])
+    func incompleteOrDuplicatedLabelsFailLoading(labels: [String]) {
+        #expect(throws: LayaError.self) { try LayaVerdict.Action.parse(labels: labels) }
+    }
+
+    @Test func guardQuestionsWithoutBlockFailLoading() {
+        var questions = LayaQuestions.guardQuestions
+        questions.action.options.removeLast()
+        #expect(throws: LayaError.self) { try questions.actionLabels() }
+    }
+
+    #if canImport(CoreML)
+    /// AC-004 end to end: the bundle's config labels are checked at load,
+    /// before any model file is touched.
+    @Test func fineTunedBundleWithUnknownLabelFailsLoading() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("laya-labels-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8)
+            .write(to: dir.appendingPathComponent("tokenizer.json"))
+        try Data(#"{"labels":["allow","review","deny"]}"#.utf8)
+            .write(to: dir.appendingPathComponent("config.json"))
+        #expect {
+            _ = try FineTunedJudge(bundleDir: dir)
+        } throws: { error in
+            guard case LayaError.badBundle(let why) = error else { return false }
+            return why.contains("deny")
+        }
+    }
+    #endif
 }

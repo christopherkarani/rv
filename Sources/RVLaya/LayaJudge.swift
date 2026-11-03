@@ -23,15 +23,21 @@ public struct LayaVerdict: Sendable, Equatable, Codable {
         case review
         case block
 
-        /// Parses model/config label strings. An unknown label is a bad
-        /// bundle: it would otherwise read as probability 0 (fail-open).
+        /// Parses model/config label strings, in model order. The result is
+        /// exactly allow/review/block, each once: an unknown, missing or
+        /// duplicated label is a bad bundle, since risk reads probabilities
+        /// by action and a missing one would score 0 (fail-open).
         public static func parse(labels: [String]) throws -> [Action] {
-            try labels.map {
+            let actions = try labels.map {
                 guard let action = Action(rawValue: $0) else {
                     throw LayaError.badBundle("unknown action label \"\($0)\"")
                 }
                 return action
             }
+            guard actions.count == 3, Set(actions).count == 3 else {
+                throw LayaError.badBundle("action labels are not exactly allow/review/block")
+            }
+            return actions
         }
     }
 
@@ -68,14 +74,14 @@ public struct LayaQuestions: Sendable {
     public var risk: LayaQuestion
     public var malicious: LayaQuestion
 
-    /// The exact questions laya-guard asks (Korean instruction strings are
-    /// part of that project's tuned prompt; Phase 1 measured the English
-    /// rendering as worse — see docs/plans/laya-judge-decision-record.md).
     /// The action question's option labels as typed actions.
     public func actionLabels() throws -> [LayaVerdict.Action] {
         try LayaVerdict.Action.parse(labels: action.options.map(\.label))
     }
 
+    /// The exact questions laya-guard asks (Korean instruction strings are
+    /// part of that project's tuned prompt; Phase 1 measured the English
+    /// rendering as worse — see docs/plans/laya-judge-decision-record.md).
     public static let guardQuestions = LayaQuestions(
         action: LayaQuestion(
             kind: .choice,

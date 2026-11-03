@@ -114,9 +114,6 @@ public final class FineTunedJudge: @unchecked Sendable {
         // probabilities are read by label name, so a label set without
         // exactly allow/review/block would silently score risk 0.
         let parsedLabels = try LayaVerdict.Action.parse(labels: labels)
-        guard parsedLabels.count == 3, Set(parsedLabels).count == 3 else {
-            throw LayaError.badBundle("config labels are not exactly allow/review/block")
-        }
         guard (16...8192).contains(maxLen) else {
             throw LayaError.badBundle("implausible max_len in config.json")
         }
