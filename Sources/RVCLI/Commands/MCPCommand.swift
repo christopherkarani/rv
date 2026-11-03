@@ -794,20 +794,13 @@ enum MCPRun {
         MCPDisplayedText.field(text)
     }
 
-    /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b`. U+2028,
-    /// U+2029, and U+202E stay raw unless they are replaced after encoding.
-    /// The result is still valid JSON. `SecretsRun.json` itself is unchanged.
+    /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b` but leaves
+    /// separators, NEL, bidi controls, and other format scalars raw;
+    /// `DisplayedText.escapeJSONScalars` escapes every one
+    /// `DisplayedText.needsEscape` flags. The result is still valid JSON.
+    /// `SecretsRun.json` itself is unchanged.
     static func robotJSON<T: Encodable>(_ value: T) -> String {
-        var text = SecretsRun.json(value)
-        let scalars: [(Character, String)] = [
-            ("\u{2028}", "\\u2028"),
-            ("\u{2029}", "\\u2029"),
-            ("\u{202E}", "\\u202e"),
-        ]
-        for (scalar, escaped) in scalars {
-            text = text.replacingOccurrences(of: String(scalar), with: escaped)
-        }
-        return text
+        DisplayedText.escapeJSONScalars(SecretsRun.json(value))
     }
 
     static func denyMissingIDMessage(_ id: String) -> String {
