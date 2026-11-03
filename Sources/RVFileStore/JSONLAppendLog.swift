@@ -17,21 +17,30 @@ import Synchronization
 /// parent directory is 0700; a torn trailing line is closed before the
 /// record lands; `fsync` runs unless the caller opts out per call.
 public enum JSONLAppendLog {
-    /// The append did not land. Callers fail closed.
+    /// Why an append did not land. Callers fail closed; the stage (and errno
+    /// where one exists) is for their diagnostics.
     public enum AppendError: Error, Equatable, Sendable {
-        case failed
+        /// The parent directory could not be created.
+        case directory
+        /// The `<name>.lock` sidecar could not be opened or `flock`ed.
+        case lock
+        /// The ledger could not be opened (`ELOOP` for a symlink).
+        case open(errno: Int32)
+        /// The ledger path is not a regular file.
+        case notRegularFile
+        /// Closing a torn line or writing the record failed.
+        case write(errno: Int32)
+        /// `fsync` failed.
+        case sync(errno: Int32)
     }
 
     private static let processLock = Mutex<Void>(())
 
     /// Appends `line` (a newline is added when absent) as one whole record.
-    public static func append(_ line: Data, to url: URL, sync: Bool = true) throws {
-        let outcome = withExclusiveLock(at: url) { locked in
+    public static func append(_ line: Data, to url: URL, sync: Bool = true) throws(AppendError) {
+        try exclusively(at: url) { locked in
             appendLocked(line, to: locked, sync: sync)
-        }
-        guard outcome == true else {
-            throw AppendError.failed
-        }
+        }.get()
     }
 
     /// Runs `body` with cross-thread and cross-process exclusion for writers
@@ -39,11 +48,19 @@ public enum JSONLAppendLog {
     /// can atomically replace the log: `body` opens the target only after
     /// exclusion is held, so no append is lost to a rename, and lock-free
     /// readers always see the old or the new file whole, never a partial
-    /// rewrite. Returns nil when the lock cannot be taken.
+    /// rewrite. Returns nil when the lock cannot be taken. Not reentrant:
+    /// `body` must not call `append` or `withExclusiveLock`.
     public static func withExclusiveLock<T: Sendable>(
         at url: URL,
         body: (URL) -> T
     ) -> T? {
+        try? exclusively(at: url) { locked in .success(body(locked)) }.get()
+    }
+
+    private static func exclusively<T: Sendable>(
+        at url: URL,
+        body: (URL) -> Result<T, AppendError>
+    ) -> Result<T, AppendError> {
         let directory = url.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(
@@ -52,46 +69,49 @@ public enum JSONLAppendLog {
                 attributes: [.posixPermissions: 0o700]
             )
         } catch {
-            return nil
+            return .failure(.directory)
         }
         let lockURL = url.appendingPathExtension("lock")
         let fd = lockURL.path.withCString { path in
             open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         }
         guard fd >= 0 else {
-            return nil
+            return .failure(.lock)
         }
         defer { close(fd) }
         return processLock.withLock { _ in
             guard lock(fd) else {
-                return nil
+                return .failure(.lock)
             }
             defer { _ = flock(fd, LOCK_UN) }
             return body(url)
         }
     }
 
-    /// Runs under `withExclusiveLock`.
-    private static func appendLocked(_ line: Data, to url: URL, sync: Bool) -> Bool {
+    /// Runs under `exclusively`.
+    private static func appendLocked(_ line: Data, to url: URL, sync: Bool) -> Result<Void, AppendError> {
         let fd = url.path.withCString { path in
             open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         }
         guard fd >= 0 else {
-            return false
+            return .failure(.open(errno: errno))
         }
         defer { close(fd) }
         var info = stat()
         guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
-            return false
+            return .failure(.notRegularFile)
         }
         var record = line
         if record.last != UInt8(ascii: "\n") {
             record.append(UInt8(ascii: "\n"))
         }
         guard closeTornLine(fd), writeAll(fd, record) else {
-            return false
+            return .failure(.write(errno: errno))
         }
-        return sync ? syncFile(fd) : true
+        if sync, !syncFile(fd) {
+            return .failure(.sync(errno: errno))
+        }
+        return .success(())
     }
 
     /// Excludes other processes. Callers already hold `processLock`.

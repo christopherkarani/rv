@@ -154,7 +154,12 @@ enum AgentInstanceJournal {
             return .failure(.sessionRecordFailed)
         }
         data.append(UInt8(ascii: "\n"))
-        return RuntimeSessionLog.appendExclusiveLine(data, to: url)
+        do {
+            try JSONLAppendLog.append(data, to: url)
+        } catch {
+            return .failure(.sessionRecordFailed)
+        }
+        return .success(())
     }
 
     static func records(at url: URL) -> [AgentInstanceJournalRecord] {

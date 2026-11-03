@@ -51,7 +51,7 @@ struct JSONLAppendLogTests {
         try Data("keep\n".utf8).write(to: victim)
         let url = dir.appendingPathComponent("a.jsonl")
         try FileManager.default.createSymbolicLink(at: url, withDestinationURL: victim)
-        #expect(throws: JSONLAppendLog.AppendError.failed) {
+        #expect(throws: JSONLAppendLog.AppendError.open(errno: ELOOP)) {
             try JSONLAppendLog.append(Data("x".utf8), to: url)
         }
         #expect(try text(victim) == "keep\n")
@@ -62,13 +62,39 @@ struct JSONLAppendLogTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("fifo.jsonl")
         #expect(url.path.withCString { mkfifo($0, 0o600) } == 0)
-        #expect(throws: JSONLAppendLog.AppendError.failed) {
+        #expect(throws: JSONLAppendLog.AppendError.notRegularFile) {
             try JSONLAppendLog.append(Data("x".utf8), to: url)
         }
         let directory = dir.appendingPathComponent("dir.jsonl", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        #expect(throws: JSONLAppendLog.AppendError.failed) {
+        #expect(throws: JSONLAppendLog.AppendError.open(errno: EISDIR)) {
             try JSONLAppendLog.append(Data("x".utf8), to: directory)
+        }
+    }
+
+    @Test func refusesSymlinkAtLockSidecar() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let victim = dir.appendingPathComponent("victim.txt")
+        try Data("keep\n".utf8).write(to: victim)
+        let url = dir.appendingPathComponent("a.jsonl")
+        try FileManager.default.createSymbolicLink(
+            at: url.appendingPathExtension("lock"), withDestinationURL: victim
+        )
+        #expect(throws: JSONLAppendLog.AppendError.lock) {
+            try JSONLAppendLog.append(Data("x".utf8), to: url)
+        }
+        #expect(FileManager.default.fileExists(atPath: url.path) == false)
+        #expect(JSONLAppendLog.withExclusiveLock(at: url) { _ in true } == nil)
+    }
+
+    @Test func reportsUncreatableDirectory() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blocker = dir.appendingPathComponent("not-a-directory")
+        try Data("x".utf8).write(to: blocker)
+        #expect(throws: JSONLAppendLog.AppendError.directory) {
+            try JSONLAppendLog.append(Data("x".utf8), to: blocker.appendingPathComponent("a.jsonl"))
         }
     }
 
@@ -133,5 +159,28 @@ struct JSONLAppendLogTests {
         #expect(replaced == true)
         try JSONLAppendLog.append(Data("more".utf8), to: url)
         #expect(try text(url) == "new\nmore\n")
+    }
+
+    @Test func withExclusiveLockSerializesBodies() async throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("counter.txt")
+        try Data("0".utf8).write(to: url)
+        let workers = 16
+        // Non-atomic read-sleep-write: any overlap between bodies loses an increment.
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<workers {
+                group.addTask {
+                    _ = JSONLAppendLog.withExclusiveLock(at: url) { locked -> Bool in
+                        guard let text = try? String(contentsOf: locked, encoding: .utf8),
+                            let value = Int(text)
+                        else { return false }
+                        usleep(2_000)
+                        return (try? Data(String(value + 1).utf8).write(to: locked)) != nil
+                    }
+                }
+            }
+        }
+        #expect(try text(url) == String(workers))
     }
 }

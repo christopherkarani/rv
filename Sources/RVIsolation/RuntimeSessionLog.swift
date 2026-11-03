@@ -78,20 +78,12 @@ enum RuntimeSessionLog {
             return .failure(.sessionRecordFailed)
         }
         data.append(UInt8(ascii: "\n"))
-        return appendExclusiveLine(data, to: url)
-    }
-
-    /// One fsynced JSON line through the shared hardened append primitive.
-    static func appendExclusiveLine(
-        _ data: Data,
-        to url: URL
-    ) -> Result<Void, IsolationApplyError> {
         do {
             try JSONLAppendLog.append(data, to: url)
-            return .success(())
         } catch {
             return .failure(.sessionRecordFailed)
         }
+        return .success(())
     }
 
     static func records(at url: URL) -> [RuntimeSessionRecord] {
