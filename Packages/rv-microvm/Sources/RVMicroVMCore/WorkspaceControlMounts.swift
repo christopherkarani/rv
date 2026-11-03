@@ -15,8 +15,9 @@
 /// An empty `.git` or `.config` is mounted read-only whole: it is not a
 /// repository, and RVIsolation creates such empty placeholders for missing
 /// control paths before a run (`MicroVMControlPlaceholders`), because a
-/// path that does not exist cannot be mounted over. Paths still absent at
-/// launch get no mount.
+/// path that does not exist cannot be mounted over. A `.git` or `.config` directory that is
+/// not empty but lacks a protected child is refused. `.git` / `.config` / `.rv`
+/// themselves, when absent, get no mount.
 public enum WorkspaceControlMounts {
     public enum Kind: Equatable, Sendable {
         case absent, directory, emptyDirectory, file, symlink, other
@@ -36,9 +37,14 @@ public enum WorkspaceControlMounts {
         /// A symlink would be followed out of the workspace when shared;
         /// any other type cannot be shared at all.
         case unsupported(String)
+        /// A pinned control directory is writable, so a protected child that
+        /// is absent could be planted by the guest and carried to the host.
+        case missingChild(String)
 
         public var description: String {
             switch self {
+            case .missingChild(let path):
+                "workspace control path \(path) is missing; micro-VM launches refuse to leave it unprotected"
             case .unsupported(let path):
                 "workspace control path \(path) is not a plain file or directory; micro-VM launches refuse it"
             }
@@ -68,6 +74,9 @@ public enum WorkspaceControlMounts {
             case .directory:
                 mounts.append(Mount(path: "\(workspace)/\(relative)", readOnly: false))
                 for child in children {
+                    if kind("\(relative)/\(child)") == .absent {
+                        return .missingChild("\(workspace)/\(relative)/\(child)")
+                    }
                     if let refusal = readOnly("\(relative)/\(child)") { return refusal }
                 }
                 return nil

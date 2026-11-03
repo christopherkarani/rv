@@ -42,16 +42,18 @@ final class MicroVMControlPlaceholders: Sendable {
 
     func acquire(workspace: String) -> Result<Void, IsolationApplyError> {
         entries.withLock { entries in
-            if var entry = entries[workspace] {
-                entry.holders += 1
-                entries[workspace] = entry
-                return .success(())
-            }
+            // Every acquire re-ensures the control paths, not just the first:
+            // another runtime may have filled a placeholder `.git` since, and
+            // a non-empty `.git` without `hooks`/`config` children has nothing
+            // to pin read-only.
             switch Self.create(workspace: workspace) {
             case .failure(let error):
                 return .failure(error)
             case .success(let created):
-                entries[workspace] = Entry(holders: 1, created: created)
+                var entry = entries[workspace] ?? Entry(holders: 0, created: [])
+                entry.holders += 1
+                entry.created += created
+                entries[workspace] = entry
                 return .success(())
             }
         }

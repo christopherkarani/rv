@@ -359,9 +359,10 @@ struct MacVMPreparer {
     /// ignored (`-F /dev/null`), and a session that stops answering or runs
     /// past `sshDeadlineSeconds` is terminated.
     ///
-    /// Host keys are not checked: the guest is new, its key unknown, and it
-    /// sits on this Mac's private NAT. The password is random, single-use,
-    /// and belongs to an account that exists only in this image.
+    /// Host keys are not checked: the guest is new and its key unknown. It sits
+    /// on vmnet's shared NAT, which other VMs on this Mac can also reach, so an
+    /// on-path VM could answer. The password is random, single-use, and belongs
+    /// to an account that exists only in this image.
     private func ssh(address: String, password: String, input: String, command: String) async throws -> (Int32, String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -461,13 +462,14 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             let partial = destination.appendingPathExtension("partial")
             try? FileManager.default.removeItem(at: partial)
             try? FileManager.default.removeItem(at: Self.etagFile(partial))
-            try await attempt(url, to: destination)
+            // A fresh delegate: the failed attempt's state must not leak in.
+            try await Downloader().attempt(url, to: destination)
         }
     }
 
     private static func etagFile(_ partial: URL) -> URL { partial.appendingPathExtension("etag") }
 
-    private func attempt(_ url: URL, to destination: URL) async throws {
+    fileprivate func attempt(_ url: URL, to destination: URL) async throws {
         let partial = destination.appendingPathExtension("partial")
         let etag = (try? String(contentsOf: Self.etagFile(partial), encoding: .utf8))
         if etag == nil { try? FileManager.default.removeItem(at: partial) }
@@ -501,6 +503,11 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
+        if (response as? HTTPURLResponse)?.statusCode == 416, resumeOffset > 0 {
+            // The partial no longer fits the file on the server: restart from zero.
+            finish(ResumeMismatch())
+            return completionHandler(.cancel)
+        }
         guard let http = response as? HTTPURLResponse, [200, 206].contains(http.statusCode), let partial else {
             finish(SetupError("download failed with HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)"))
             return completionHandler(.cancel)
@@ -511,9 +518,6 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             finish(ResumeMismatch())
             return completionHandler(.cancel)
         }
-        if let etag = http.value(forHTTPHeaderField: "ETag"), !etag.hasPrefix("W/") {
-            try? etag.write(to: Self.etagFile(partial), atomically: true, encoding: .utf8)
-        }
         do {
             let handle = try FileHandle(forWritingTo: partial)
             if http.statusCode == 200 {
@@ -522,6 +526,13 @@ final class Downloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
                 received = 0
             } else {
                 try handle.seekToEnd()
+            }
+            // Only once the file is positioned: a validator for bytes not yet on disk would lie.
+            // A strong ETag, else Last-Modified, is what `If-Range` accepts.
+            let etag = http.value(forHTTPHeaderField: "ETag").flatMap { $0.hasPrefix("W/") ? nil : $0 }
+            try? FileManager.default.removeItem(at: Self.etagFile(partial))
+            if let validator = etag ?? http.value(forHTTPHeaderField: "Last-Modified") {
+                try validator.write(to: Self.etagFile(partial), atomically: true, encoding: .utf8)
             }
             self.handle = handle
             expected = received + max(0, response.expectedContentLength)

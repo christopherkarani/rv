@@ -15,6 +15,8 @@ struct RVMacVM: AsyncParsableCommand {
     /// `prepare` runs this binary as ssh's `SSH_ASKPASS`, which passes only
     /// a prompt: answer before argument parsing.
     static func main() async {
+        // A guest that keeps sending after the host proxy closed must give EPIPE, not kill the host.
+        signal(SIGPIPE, SIG_IGN)
         if let password = MacVMSetup.askpassReply(environment: ProcessInfo.processInfo.environment) {
             print(password)
             Darwin.exit(0)
