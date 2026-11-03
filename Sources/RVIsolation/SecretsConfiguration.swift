@@ -25,6 +25,12 @@ public enum SecretSource: Sendable, Equatable {
     case gcp(secret: String, project: String?, version: String)
     /// Azure Key Vault via `az keyvault secret show`.
     case azure(vault: String, name: String, version: String?)
+    /// An AWS CLI profile's credential set, read with
+    /// `aws configure export-credentials`. Only `awsSigV4` delivery spends it.
+    case awsProfile(profile: String)
+    /// A short-lived OAuth access token minted from credentials in the
+    /// Keychain. Only `gateway` delivery spends it.
+    case oauth(OAuthSource)
 
     public var kind: String {
         switch self {
@@ -37,7 +43,43 @@ public enum SecretSource: Sendable, Equatable {
         case .bitwarden: "bitwarden"
         case .gcp: "gcp"
         case .azure: "azure"
+        case .awsProfile: "awsProfile"
+        case .oauth: "oauth"
         }
+    }
+}
+
+/// A Keychain generic-password item.
+public struct SecretKeychainItem: Sendable, Equatable, Hashable {
+    public var service: String
+    public var account: String
+
+    public init(service: String, account: String) {
+        self.service = service
+        self.account = account
+    }
+}
+
+/// An RFC 6749 token-endpoint grant. With `refreshToken` it is the
+/// `refresh_token` grant, and a rotated refresh token is written back to
+/// that item; without, `client_credentials`, which needs `clientSecret`.
+/// Both are obtained outside rv; rv runs no browser flow.
+public struct OAuthSource: Sendable, Equatable {
+    public var tokenURL: URL
+    public var clientID: String
+    public var clientSecret: SecretKeychainItem?
+    public var refreshToken: SecretKeychainItem?
+    public var scope: String?
+
+    public init(
+        tokenURL: URL, clientID: String, clientSecret: SecretKeychainItem? = nil,
+        refreshToken: SecretKeychainItem? = nil, scope: String? = nil
+    ) {
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+        self.refreshToken = refreshToken
+        self.scope = scope
     }
 }
 
@@ -48,18 +90,94 @@ public struct SecretGatewayBinding: Sendable, Equatable {
     public var upstream: URL
     public var baseURLEnv: String
     public var placeholderPrefix: String
+    /// Where the placeholder may be swapped; anywhere else is refused.
+    public var surfaces: Set<GatewaySurface>
+    /// Methods and paths the secret may be used for. Empty allows any.
+    public var allow: [GatewayAllowance]
+    /// Methods and paths that need a human's approval per request. Empty needs none.
+    public var approve: [GatewayAllowance]
 
-    public init(upstream: URL, baseURLEnv: String, placeholderPrefix: String = "") {
+    public init(
+        upstream: URL, baseURLEnv: String, placeholderPrefix: String = "",
+        surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [],
+        approve: [GatewayAllowance] = []
+    ) {
         self.upstream = upstream
         self.baseURLEnv = baseURLEnv
         self.placeholderPrefix = placeholderPrefix
+        self.surfaces = surfaces
+        self.allow = allow
+        self.approve = approve
     }
+
+    /// `allow` with presets expanded.
+    public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
+    /// `approve` with presets expanded.
+    public var approvalRules: [GatewayAccessRule] { approve.flatMap(\.rules) }
+}
+
+/// AWS SDKs in the cage sign with a placeholder key id against
+/// `http://127.0.0.1:<port>/s/<NAME>` (exported in `endpointEnv`); rv drops
+/// that signature and re-signs with the real credentials for `upstream`.
+public struct AWSSigningBinding: Sendable, Equatable {
+    /// Variables rv stages itself for an AWS-signed secret.
+    public static let stagedVariables: Set<String> = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
+
+    /// Signing names whose calls return new credentials (AssumeRole,
+    /// CreateAccessKey, GetCredentials, GetAuthorizationToken, ...). The agent
+    /// would receive credentials the gateway never scrubs, so no binding may
+    /// sign for them.
+    public static let credentialMintingServices: Set<String> = [
+        "sts", "iam", "sso", "sso-oauth", "awsssoportal", "awsssooidc", "signin", "cognito-identity", "cognito-idp",
+        "s3express", "ecr", "ecr-public", "codeartifact",
+    ]
+
+    /// Signing names of services that also take their action as a query
+    /// parameter on `GET /`, so a method or path rule cannot tell a read from
+    /// a write (`GET /?Action=TerminateInstances`).
+    public static let queryProtocolServices: Set<String> = [
+        "ec2", "sqs", "sns", "rds", "elasticloadbalancing", "autoscaling", "cloudformation", "elasticache", "redshift",
+        "ses", "sdb", "cloudsearch", "importexport", "monitoring",
+    ]
+
+    public var upstream: URL
+    public var region: String
+    /// The SigV4 signing name: `s3`, `bedrock`, `ec2`, ...
+    public var service: String
+    /// `AWS_ENDPOINT_URL` or a per-service `AWS_ENDPOINT_URL_<SERVICE>`.
+    public var endpointEnv: String
+    /// Methods and paths the secret may be used for. Empty allows any.
+    public var allow: [GatewayAllowance]
+    /// Methods and paths that need a human's approval per request. Empty needs none.
+    public var approve: [GatewayAllowance]
+
+    public init(
+        upstream: URL, region: String, service: String, endpointEnv: String, allow: [GatewayAllowance] = [],
+        approve: [GatewayAllowance] = []
+    ) {
+        self.upstream = upstream
+        self.region = region
+        self.service = service
+        self.endpointEnv = endpointEnv
+        self.allow = allow
+        self.approve = approve
+    }
+
+    /// `allow` with presets expanded.
+    public var rules: [GatewayAccessRule] { allow.flatMap(\.rules) }
+    /// `approve` with presets expanded.
+    public var approvalRules: [GatewayAccessRule] { approve.flatMap(\.rules) }
+
+    /// S3 signs the path as sent and accepts unsigned payloads.
+    var isS3: Bool { service == "s3" }
 }
 
 public enum SecretDelivery: Sendable, Equatable {
     case gateway(SecretGatewayBinding)
     /// Real value in the cage environment. Explicit opt-in; weaker.
     case environment
+    /// AWS SigV4 re-signing by the gateway. Requires an `awsProfile` source.
+    case awsSigV4(AWSSigningBinding)
 }
 
 public struct SecretDefinition: Sendable, Equatable {
@@ -72,6 +190,14 @@ public struct SecretDefinition: Sendable, Equatable {
     public var delivery: SecretDelivery
     /// Varlock `@type`, when the secret was imported from a schema. Not a value.
     public var type: String?
+    /// From this instant the value is not delivered: launches fail and the gateway refuses.
+    public var expires: Date?
+    /// Gateway only: re-resolve from the provider this often while a runtime lives.
+    public var refresh: SecretRefreshInterval?
+    /// Gateway only: absolute paths of the binaries that may spend the value.
+    /// A request is served only when every runtime process holding its
+    /// connection runs one of them, or descends from one that does.
+    public var binaries: [String]?
 
     public init(
         name: String,
@@ -79,7 +205,10 @@ public struct SecretDefinition: Sendable, Equatable {
         agents: [String]? = nil,
         source: SecretSource,
         delivery: SecretDelivery,
-        type: String? = nil
+        type: String? = nil,
+        expires: Date? = nil,
+        refresh: SecretRefreshInterval? = nil,
+        binaries: [String]? = nil
     ) {
         self.name = name
         self.description = description
@@ -87,6 +216,9 @@ public struct SecretDefinition: Sendable, Equatable {
         self.source = source
         self.delivery = delivery
         self.type = type
+        self.expires = expires
+        self.refresh = refresh
+        self.binaries = binaries
     }
 
     func stages(forAgent agent: String?) -> Bool {
@@ -192,11 +324,20 @@ extension SecretsConfiguration {
 
 extension SecretDefinition {
     /// Environment names this secret sets in the cage.
-    var exportedVariables: [String] {
+    package var exportedVariables: [String] {
         switch delivery {
         case .gateway(let binding): [name, binding.baseURLEnv]
         case .environment: [name]
+        // The AWS_* credential variables are shared by every AWS secret, so
+        // two in one launch are refused when leased, not here.
+        case .awsSigV4(let binding): [binding.endpointEnv]
         }
+    }
+
+    /// Every variable a launch staging this secret sets.
+    var stagedVariables: [String] {
+        guard case .awsSigV4 = delivery else { return exportedVariables }
+        return exportedVariables + AWSSigningBinding.stagedVariables.sorted()
     }
 }
 
@@ -221,7 +362,9 @@ enum SecretsDecoding {
     static func secret(_ value: Any, index: Int) throws -> SecretDefinition {
         let place = "secrets[\(index)]"
         guard let object = value as? [String: Any] else { throw Failure("\(place) must be an object") }
-        try onlyKeys(object, ["name", "description", "agents", "source", "delivery", "type"], at: place)
+        try onlyKeys(
+            object, ["name", "description", "agents", "source", "delivery", "type", "expires", "refresh", "binaries"],
+            at: place)
         guard let name = object["name"] as? String, variable(name), reservedVariables.contains(name) == false else {
             throw Failure("\(place).name must be an environment variable name")
         }
@@ -248,8 +391,58 @@ enum SecretsDecoding {
         }
         let source = try self.source(object["source"], secret: name)
         let delivery = try self.delivery(object["delivery"], secret: name)
+        // A profile's value is a credential set, not a token, and signing needs one.
+        switch (source, delivery) {
+        case (.awsProfile, .awsSigV4): break
+        case (.awsProfile, _): throw Failure("\(name).source.awsProfile needs awsSigV4 delivery")
+        // An access token outlives no runtime: it is minted for, and refreshed by, gateway requests.
+        case (.oauth, .gateway): break
+        case (.oauth, _): throw Failure("\(name).source.oauth needs gateway delivery")
+        case (_, .awsSigV4): throw Failure("\(name).delivery.awsSigV4 needs an awsProfile source")
+        default: break
+        }
+        var expires: Date?
+        if let raw = object["expires"] {
+            guard let text = raw as? String, let date = SecretExpiry.parse(text) else {
+                throw Failure(
+                    "\(name).expires must be an ISO-8601 date (2026-12-31) or date-time with a zone (2026-12-31T18:00:00Z)")
+            }
+            expires = date
+        }
+        var refresh: SecretRefreshInterval?
+        if let raw = object["refresh"] {
+            guard let text = raw as? String, let interval = SecretRefreshInterval(text) else {
+                throw Failure("\(name).refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m")
+            }
+            if case .environment = delivery {
+                throw Failure(
+                    "\(name).refresh applies to gateway delivery; a value in the environment cannot change after launch")
+            }
+            refresh = interval
+        }
+        var binaries: [String]?
+        if let raw = object["binaries"] {
+            guard let list = raw as? [String], (1...16).contains(list.count), list.allSatisfy(binaryPath),
+                Set(list).count == list.count
+            else {
+                throw Failure("\(name).binaries must be 1 to 16 distinct absolute paths, such as /opt/homebrew/bin/gh")
+            }
+            if case .environment = delivery {
+                throw Failure(
+                    "\(name).binaries applies to gateway delivery; rv cannot see which process reads an environment variable")
+            }
+            binaries = list
+        }
         return SecretDefinition(
-            name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName)
+            name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName,
+            expires: expires, refresh: refresh, binaries: binaries)
+    }
+
+    /// Absolute, without `.` or `..` components, printable, and at most 1024 bytes.
+    static func binaryPath(_ path: String) -> Bool {
+        path.hasPrefix("/") && path.utf8.count <= 1_024
+            && path.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
+            && path.split(separator: "/").allSatisfy { $0 != "." && $0 != ".." }
     }
 
     static func single(_ value: Any?, secret: String, field: String) throws -> (String, [String: Any]) {
@@ -341,6 +534,35 @@ enum SecretsDecoding {
             else { throw Failure("\(place) needs vault and name") }
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
+        case "awsProfile":
+            try onlyKeys(fields, ["profile"], at: place)
+            guard let profile = fields["profile"] as? String, profile.utf8.count <= 64, profile.hasPrefix("-") == false,
+                profile.isEmpty == false, profile.utf8.allSatisfy({ placeholderByte($0) || $0 == 46 })
+            else { throw Failure("\(place).profile must be an AWS profile name: letters, digits, ., _ or -") }
+            return .awsProfile(profile: profile)
+        case "oauth":
+            try onlyKeys(fields, ["tokenURL", "clientID", "clientSecret", "refreshToken", "scope"], at: place)
+            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
+                throw Failure("\(place).tokenURL must be an https URL with no query")
+            }
+            guard let clientID = fields["clientID"] as? String, oauthText(clientID, max: 256, spaces: false) else {
+                throw Failure("\(place).clientID must be 1 to 256 printable ASCII characters without spaces")
+            }
+            let clientSecret = try keychainItem(fields["clientSecret"], at: "\(place).clientSecret")
+            let refreshToken = try keychainItem(fields["refreshToken"], at: "\(place).refreshToken")
+            var scope: String?
+            if let raw = fields["scope"] {
+                guard let text = raw as? String, oauthText(text, max: 1024, spaces: true) else {
+                    throw Failure("\(place).scope must be space-separated printable ASCII")
+                }
+                scope = text
+            }
+            guard refreshToken != nil || clientSecret != nil else {
+                throw Failure("\(place) needs refreshToken, or clientSecret for the client credentials grant")
+            }
+            return .oauth(OAuthSource(
+                tokenURL: tokenURL, clientID: clientID, clientSecret: clientSecret, refreshToken: refreshToken,
+                scope: scope))
         default:
             throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -354,7 +576,8 @@ enum SecretsDecoding {
             try onlyKeys(fields, [], at: place)
             return .environment
         case "gateway":
-            try onlyKeys(fields, ["upstream", "baseURLEnv", "placeholderPrefix"], at: place)
+            try onlyKeys(
+                fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces", "allow", "approve"], at: place)
             guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
@@ -365,9 +588,104 @@ enum SecretsDecoding {
             guard prefix.utf8.count <= 32, prefix.utf8.allSatisfy(placeholderByte) else {
                 throw Failure("\(place).placeholderPrefix must be up to 32 letters, digits, _ or -")
             }
-            return .gateway(SecretGatewayBinding(upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
+            let surfaces = try self.surfaces(fields["surfaces"], at: "\(place).surfaces")
+            let allow = try self.allow(fields["allow"], at: "\(place).allow")
+            let approve = try self.allow(fields["approve"], at: "\(place).approve")
+            return .gateway(SecretGatewayBinding(
+                upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
+                allow: allow, approve: approve))
+        case "awsSigV4":
+            try onlyKeys(fields, ["upstream", "region", "service", "endpointEnv", "allow", "approve"], at: place)
+            guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
+                throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
+            }
+            // Both are credential-scope parts: `/` or spaces would forge another scope.
+            guard let region = fields["region"] as? String, regionName(region) else {
+                throw Failure("\(place).region must be an AWS region such as us-east-1")
+            }
+            guard let service = fields["service"] as? String, regionName(service) else {
+                throw Failure("\(place).service must be the SigV4 signing name, such as s3 or bedrock")
+            }
+            guard let endpointEnv = fields["endpointEnv"] as? String, variable(endpointEnv),
+                reservedVariables.contains(endpointEnv) == false,
+                AWSSigningBinding.stagedVariables.contains(endpointEnv) == false, endpointEnv != secret
+            else {
+                throw Failure("\(place).endpointEnv must be a distinct variable such as AWS_ENDPOINT_URL_S3")
+            }
+            guard AWSSigningBinding.credentialMintingServices.contains(service) == false else {
+                throw Failure("\(place).service \(service) mints credentials, which would reach the agent unscrubbed")
+            }
+            let allow = try self.allow(fields["allow"], at: "\(place).allow")
+            if AWSSigningBinding.queryProtocolServices.contains(service), allow.contains(.preset(.readOnly)) {
+                throw Failure(
+                    "\(place).allow read-only cannot limit \(service): it takes its action as a query parameter on GET; "
+                        + "scope the profile's IAM policy instead")
+            }
+            let approve = try self.allow(fields["approve"], at: "\(place).approve")
+            return .awsSigV4(AWSSigningBinding(
+                upstream: upstream, region: region, service: service, endpointEnv: endpointEnv, allow: allow,
+                approve: approve))
         default:
             throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
+        }
+    }
+
+    /// Absent means the default. Present must be a non-empty list of
+    /// distinct known names, so a typo never widens or silently narrows.
+    static func surfaces(_ value: Any?, at place: String) throws -> Set<GatewaySurface> {
+        guard let value else { return GatewaySurface.defaults }
+        let names = GatewaySurface.allCases.map(\.rawValue).joined(separator: ", ")
+        guard let list = value as? [String], list.isEmpty == false, Set(list).count == list.count else {
+            throw Failure("\(place) must list distinct surfaces from \(names)")
+        }
+        let surfaces = list.compactMap(GatewaySurface.init(rawValue:))
+        guard surfaces.count == list.count else { throw Failure("\(place) must list distinct surfaces from \(names)") }
+        return Set(surfaces)
+    }
+
+    /// Absent allows everything. Present must be non-empty, so `[]` cannot
+    /// be mistaken for "allow nothing".
+    static func allow(_ value: Any?, at place: String) throws -> [GatewayAllowance] {
+        guard let value else { return [] }
+        guard let list = value as? [Any], list.isEmpty == false, list.count <= GatewayAllowance.maximumEntries else {
+            throw Failure("\(place) must list 1 to \(GatewayAllowance.maximumEntries) presets or rules")
+        }
+        let presets = GatewayAccessPreset.allCases.map(\.rawValue).joined(separator: ", ")
+        return try list.enumerated().map { index, entry in
+            let at = "\(place)[\(index)]"
+            if let name = entry as? String {
+                guard let preset = GatewayAccessPreset(rawValue: name) else {
+                    throw Failure("\(at) preset \(DisplayedText.field(name)) is unknown; use \(presets)")
+                }
+                return .preset(preset)
+            }
+            guard let object = entry as? [String: Any] else {
+                throw Failure("\(at) must be a preset name or {methods, path}")
+            }
+            try onlyKeys(object, ["methods", "path"], at: at)
+            let methods: Set<String>?
+            switch object["methods"] {
+            case let star as String where star == "*":
+                methods = nil
+            case let names as [String] where Set(names).count == names.count:
+                methods = Set(names)
+            default:
+                throw Failure("\(at).methods must be \"*\" or a list of distinct upper-case HTTP methods")
+            }
+            guard let path = object["path"] as? String else {
+                throw Failure("\(at).path must be a /-rooted glob")
+            }
+            guard let rule = GatewayAccessRule(methods: methods, path: path) else {
+                if let methods, methods.isEmpty || methods.count > GatewayAccessRule.maximumMethods
+                    || methods.allSatisfy(GatewayAccessRule.isMethod) == false
+                {
+                    throw Failure("\(at).methods must be \"*\" or a list of distinct upper-case HTTP methods")
+                }
+                throw Failure(
+                    "\(at).path must be a /-rooted glob without . or .. segments, //, %, ?, #, ;, or \\, "
+                        + "and at most two **")
+            }
+            return .rule(rule)
         }
     }
 
@@ -430,7 +748,24 @@ enum SecretsDecoding {
             && value.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
     }
 
-    static func httpsUpstream(_ text: String) -> URL? {
+    static func keychainItem(_ value: Any?, at place: String) throws -> SecretKeychainItem? {
+        guard let value else { return nil }
+        guard let fields = value as? [String: Any] else { throw Failure("\(place) needs service and account") }
+        try onlyKeys(fields, ["service", "account"], at: place)
+        guard let service = fields["service"] as? String, label(service, max: 256),
+            let account = fields["account"] as? String, label(account, max: 256)
+        else { throw Failure("\(place) needs service and account") }
+        return SecretKeychainItem(service: service, account: account)
+    }
+
+    static func oauthText(_ value: String, max: Int, spaces: Bool) -> Bool {
+        value.isEmpty == false && value.utf8.count <= max && value.hasPrefix(" ") == false && value.hasSuffix(" ") == false
+            && value.utf8.allSatisfy { (0x21...0x7E).contains($0) || (spaces && $0 == 0x20) }
+    }
+
+    /// `keepingTrailingSlash` for a URL that is used as given, such as a token
+    /// endpoint: `/o/token/` and `/o/token` can be different resources.
+    static func httpsUpstream(_ text: String, keepingTrailingSlash: Bool = false) -> URL? {
         guard let components = URLComponents(string: text), components.scheme?.lowercased() == "https",
             let host = components.host, host.isEmpty == false,
             components.user == nil, components.password == nil,
@@ -440,7 +775,7 @@ enum SecretsDecoding {
         var normalized = components
         normalized.scheme = "https"
         normalized.host = host.lowercased()
-        if normalized.path.hasSuffix("/") { normalized.path.removeLast() }
+        if keepingTrailingSlash == false, normalized.path.hasSuffix("/") { normalized.path.removeLast() }
         return normalized.url
     }
 

@@ -2,7 +2,7 @@
 
 Top finding: rv enforces process-level containment (macOS Seatbelt, deny-default) with hook-grade policy, while OpenShell enforces kernel- and network-level containment (Landlock + seccomp + `network_mode=none` + supervisor proxy) with formally checked policy. OpenShell's boundary is strictly stronger on Linux; rv's strengths are its restrict-only policy merge, fail-closed stores, and refusal to run a weak Linux sandbox.
 
-All claims below are grounded in primary sources: rv source and `docs/security`, NVIDIA's OpenShell docs (v0.1.3) and the [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) repo. The existing `rv-vs-openshell.html` at the repo root is editorial, not evidence, and is not cited.
+All claims below are grounded in primary sources: rv source and `docs/security`, NVIDIA's OpenShell docs (v0.1.3) and the [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) repo. The existing `docs/reports/rv-vs-openshell.html` is editorial, not evidence, and is not cited.
 
 ## 1. How rv isolation works
 
@@ -67,7 +67,7 @@ Policy lifecycle (from [Manage Sandbox Policies](https://docs.nvidia.com/openshe
 | Direct egress | None: loopback-only cage, host proxy dials | None: `network_mode=none`, supervisor dials |
 | Net rule granularity | Host (+port); `publicHTTPS` is any public DNS | Per-binary + host + port + L7 method/path |
 | Binary identity | Absolute-path argv validation | Kernel-reported real path + hash pinning |
-| Credentials | Env denylist; no broker | Providers injected outside agent reach |
+| Credentials | Env denylist; opt-in `SecretGateway` swaps per-launch placeholders, each secret bound to one https upstream (no method/path scoping) | Providers injected outside agent reach |
 | Policy format | TOML layers, restrict-only merge | YAML sections, base vs effective views |
 | Change control | show/validate/export/apply | Revisions, rollback, global policy, hot reload |
 | Change verification | Schema validation | SMT prover: boundary + proposal-risk checks |
@@ -79,7 +79,7 @@ Policy lifecycle (from [Manage Sandbox Policies](https://docs.nvidia.com/openshe
 
 1. Close the Linux gap or keep refusing loudly. OpenShell's whole model is Linux-first (Landlock + seccomp + netns). rv's refusal is honest, but every Linux agent run today is unsandboxed. A Landlock full slice (read + write + truncated DNS/egress story) is the single biggest parity item.
 2. Move from host-only egress to per-binary rules. rv's `publicHTTPS` admits any public DNS for any caged binary; OpenShell attributes each connection to its binary and can restrict method/path. Even binary-scoped host rules would shrink exfiltration paths.
-3. Broker credentials instead of filtering environment. `ContainedEnvironmentPolicy` is default-allow with a denylist, which fails open on every new secret-bearing name. A provider-style model (creds live supervisor-side, injected at approved endpoints only) removes the whole class.
+3. Broker credentials instead of filtering environment. `ContainedEnvironmentPolicy` is default-allow with a denylist, which fails open on every new secret-bearing name. A provider-style model (creds live supervisor-side, injected at approved endpoints only) removes the whole class. Partly done: gateway-delivered secrets now follow this model (`Sources/RVIsolation/SecretGateway.swift`); environment-delivered secrets and the default-allow projection remain.
 4. Add live network-rule updates with a review queue. OpenShell's `policy update` + advisor pattern maps cleanly onto rv's existing allow-once/approval machinery: agent proposes, risk check runs, human approves, no restart.
 5. Add prover-style checks on policy diffs. rv validates schema; OpenShell proves containment against a boundary and flags risky grants. A lightweight version (new destinations, metadata/private ranges, credential-bearing endpoints) would catch the dangerous diffs.
 6. Add revisions, rollback, and base-vs-effective views. rv has the merge semantics (restrict-only, strict-wins) but no history or provider-rule separation to debug "why is this allowed".

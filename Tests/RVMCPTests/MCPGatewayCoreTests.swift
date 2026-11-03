@@ -764,7 +764,7 @@ struct MCPApprovalStoreTests {
     }
 
     static func store(_ directory: URL, clock: @escaping @Sendable () -> Date = { Date() }) -> MCPApprovalStore {
-        MCPApprovalStore(configDirectory: directory, keys: .file(configDirectory: directory), clock: clock)
+        MCPApprovalStore(configDirectory: directory, signing: .file(configDirectory: directory), clock: clock)
     }
 
     @Test func requestGrantConsumeLifecycle() throws {

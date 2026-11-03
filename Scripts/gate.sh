@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Scripts/gate.sh — preflight + filtered swift test via Scripts/swift-6.4.
 # Explicit filter wins. Else infer from git-changed Sources/Tests modules;
-# Package.swift or multi-module → union of affected *Tests. Never unfiltered
-# full suite by default.
+# a changed Sources module also selects every *Tests target that depends on
+# it transitively (from the Package.swift graph). Package.swift → every
+# *Tests. Never unfiltered full suite by default.
 # Compatible with macOS /bin/bash 3.2 (no mapfile).
 set -euo pipefail
 
@@ -27,8 +28,9 @@ Usage: Scripts/gate.sh [--quiet] [--filter NAME] [FilterName ...]
   FilterName        Same as --filter (e.g. RVEngineTests)
 
 With no filters: infer from git changes under Sources/ and Tests/.
-If Package.swift changed or multiple modules are touched, run the union of
-affected *Tests targets. If nothing maps (or an empty --filter was given),
+A changed Sources module selects its own *Tests plus every *Tests target
+that depends on it transitively (reverse dependents, read from
+`swift package dump-package`). If Package.swift changed, run every *Tests. If nothing maps (or an empty --filter was given),
 exit 2 — never exit 0 after preflight alone with zero tests.
 EOF
 }
@@ -97,8 +99,38 @@ else
   "$PREFLIGHT"
 fi
 
+# Print every test target whose transitive target dependencies include one
+# of the given Sources modules, one per line. Reads the evaluated manifest
+# so platform-conditional targets match this host.
+reverse_dependent_tests() {
+  local manifest
+  manifest="$("$SWIFT_WRAP" package dump-package 2>/dev/null)" || return 1
+  printf '%s' "$manifest" | python3 -c '
+import json, sys
+changed = set(sys.argv[1:])
+targets = json.load(sys.stdin)["targets"]
+deps = {}
+for target in targets:
+    names = []
+    for dep in target.get("dependencies", []):
+        for kind in ("target", "byName"):
+            if kind in dep:
+                names.append(dep[kind][0])
+    deps[target["name"]] = names
+def closure(name, seen):
+    for dep in deps.get(name, []):
+        if dep not in seen:
+            seen.add(dep)
+            closure(dep, seen)
+    return seen
+for target in targets:
+    if target.get("type") == "test" and closure(target["name"], set()) & changed:
+        print(target["name"])
+' "$@"
+}
+
 infer_filters() {
-  local files f base m package_touched=0
+  local files f base m t package_touched=0 changed_modules=""
   files="$(
     {
       git diff --name-only origin/main...HEAD 2>/dev/null || true
@@ -136,6 +168,9 @@ infer_filters() {
           *Tests) add_filter "$m" ;;
           *) add_filter "${m}Tests" ;;
         esac
+        case "$f" in
+          Sources/*) changed_modules="${changed_modules:+$changed_modules }$m" ;;
+        esac
         ;;
     esac
   done <<<"$files"
@@ -145,6 +180,16 @@ infer_filters() {
       [[ -d "$d" ]] || continue
       add_filter "$(basename "$d")"
     done
+  elif [[ -n "$changed_modules" ]]; then
+    local dependents
+    # shellcheck disable=SC2086  # word-split the module list on purpose
+    if dependents="$(reverse_dependent_tests $changed_modules)"; then
+      while IFS= read -r t; do
+        add_filter "$t"
+      done <<<"$dependents"
+    else
+      printf "gate: could not read the package graph; dependents' tests not added\n" >&2
+    fi
   fi
 
   # Session forensics suite once the module exists (AC-015).

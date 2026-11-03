@@ -194,12 +194,16 @@ enum InitRun {
         }
     }
 
-    /// Fresh names a varlock import would add: sensitive items with provider
-    /// references that secrets.json does not already define. Mirrors the
-    /// write path's filter so the profile wires exactly what lands.
-    static func varlockFreshNames(text: String, current: SecretsConfiguration) -> [String] {
-        guard case .success(let plan) = VarlockSchema.plan(text) else { return [] }
-        return plan.secrets.map(\.name).filter { current.secret(named: $0) == nil }
+    /// A project's `.env.schema` is repo-controlled: a cloned repo could
+    /// name the user's own vault items. `rv init` only points at it; the
+    /// import needs an explicit flag. After a real run the profile exists,
+    /// so the suggestion is the command that wires into it.
+    static func unimportedSchemaLine(_ schema: URL, profileID: String, dryRun: Bool) -> String {
+        let path = shellWord(schema.path)
+        let command = dryRun
+            ? "rerun with --varlock \(path)"
+            : "run: rv secrets import --varlock \(path) --resource-profile \(profileID)"
+        return "varlock \(schema.path): found, not imported (a project file cannot bind your secrets); review it, then \(command)"
     }
 
     static func planText(
@@ -270,9 +274,10 @@ struct Init: AsyncParsableCommand {
         commandName: "init",
         abstract: "Generate a runtime resource profile for this project.",
         discussion: """
-            Inspects installed agent binaries and credential files, imports
-            .env.schema when present, and appends one profile to
-            runtime-resources.json. Launches still name the profile explicitly.
+            Inspects installed agent binaries and credential files and appends
+            one profile to runtime-resources.json. A project .env.schema is
+            only reported; pass --varlock to import it. Launches still name
+            the profile explicitly.
             """
     )
 
@@ -282,59 +287,64 @@ struct Init: AsyncParsableCommand {
     var agents: [String] = []
     @Option(name: .customLong("secret"), help: "Wire this secret name into the profile (repeatable).")
     var secrets: [String] = []
-    @Option(name: .customLong("varlock"), help: "Varlock .env.schema to import. Default: <project>/.env.schema when present.")
+    @Option(name: .customLong("varlock"), help: "Varlock .env.schema to import. Never read implicitly.")
     var varlock: String?
     @Flag(name: .customLong("dry-run"), help: "Show the plan; write nothing.") var dryRun = false
 
     func run() throws {
         let ctx = CommandContext.current(command: "init", json: false, robot: false, plain: true, noColor: true)
         let home = try ctx.requireHome()
-        let environment = InitEnvironment.live(home: home)
         let root = URL(fileURLWithPath: project ?? FileManager.default.currentDirectoryPath, isDirectory: true)
             .standardizedFileURL.resolvingSymlinksInPath()
+        switch execute(
+            root: root, environment: InitEnvironment.live(home: home),
+            secretsEnvironment: SecretsEnvironment.live(home: home))
+        {
+        case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+
+    /// The whole command against injected seams; returns the plan text.
+    func execute(
+        root: URL, environment: InitEnvironment, secretsEnvironment: SecretsEnvironment
+    ) -> Result<String, CommandFailure> {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            try ctx.fail("rv init: \(DisplayedText.field(root.path)) is not a directory\n")
+            return .failure("\(DisplayedText.field(root.path)) is not a directory")
         }
         let schemaURL: URL?
+        let unimportedSchema: URL?
         if let varlock {
             schemaURL = URL(fileURLWithPath: varlock).standardizedFileURL
+            unimportedSchema = nil
             guard FileManager.default.fileExists(atPath: schemaURL?.path ?? "") else {
-                try ctx.fail("rv init: \(DisplayedText.field(varlock)) does not exist\n")
+                return .failure("\(DisplayedText.field(varlock)) does not exist")
             }
         } else {
+            schemaURL = nil
             let candidate = root.appendingPathComponent(".env.schema", isDirectory: false)
-            schemaURL = FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+            unimportedSchema = FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
         }
-        let secretsEnvironment = SecretsEnvironment.live(home: home)
         var varlockLines: [String] = []
         var importedNames: [String] = []
         // Read and plan the schema before any write, so invalid input,
         // a bad plan, or a duplicate profile id fails with nothing
         // imported and nothing written.
-        var schemaText: String?
+        var pendingImport: SecretsRun.VarlockImport?
         if let schemaURL {
-            guard let data = try? Data(contentsOf: schemaURL),
-                data.count <= VarlockSchema.maximumBytes,
-                let text = String(data: data, encoding: .utf8)
-            else {
-                try ctx.fail("rv init: could not read \(schemaURL.path)\n")
-            }
-            schemaText = text
-            let current: SecretsConfiguration
-            switch SecretsRun.configuration(secretsEnvironment) {
-            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-            case .success(let loaded): current = loaded
-            }
-            if case .success(let schemaPlan) = VarlockSchema.plan(text) {
+            switch SecretsRun.planVarlockImport(path: schemaURL, environment: secretsEnvironment) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let pending):
+                pendingImport = pending
                 // Every schema name is defined once the import below has
                 // run: fresh names land, existing names already are.
-                importedNames = schemaPlan.secrets.map(\.name)
-            }
-            if dryRun {
-                let fresh = InitRun.varlockFreshNames(text: text, current: current)
-                varlockLines.append(
-                    "varlock \(schemaURL.path): would import \(fresh.count) secret\(fresh.count == 1 ? "" : "s")")
+                importedNames = pending.names
+                if dryRun {
+                    let count = pending.fresh.count
+                    varlockLines = ["varlock \(schemaURL.path): would import \(count) secret\(count == 1 ? "" : "s")"]
+                        + pending.lines
+                }
             }
         }
         let plan: InitRun.Plan
@@ -342,25 +352,28 @@ struct Init: AsyncParsableCommand {
             profileID: profileID, project: root.path, agents: agents,
             secretNames: secrets + importedNames, environment: environment)
         {
-        case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+        case .failure(let failure): return .failure(failure)
         case .success(let built): plan = built
         }
         if dryRun == false {
-            switch InitRun.ensureProfileCanBeAdded(profileID, configDirectory: environment.configDirectory) {
-            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-            case .success: break
+            if case .failure(let failure) = InitRun.ensureProfileCanBeAdded(
+                profileID, configDirectory: environment.configDirectory)
+            {
+                return .failure(failure)
             }
-            if let schemaURL, schemaText != nil {
-                switch SecretsRun.importVarlock(path: schemaURL, dryRun: false, environment: secretsEnvironment) {
-                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+            if let pendingImport {
+                switch SecretsRun.commitVarlockImport(pendingImport, environment: secretsEnvironment) {
+                case .failure(let failure): return .failure(failure)
                 case .success(let text):
                     varlockLines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
                 }
             }
-            switch InitRun.writeProfile(plan.profile, configDirectory: environment.configDirectory) {
-            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-            case .success: break
+            if case .failure(let failure) = InitRun.writeProfile(plan.profile, configDirectory: environment.configDirectory) {
+                return .failure(failure)
             }
+        }
+        if let unimportedSchema {
+            varlockLines.append(InitRun.unimportedSchemaLine(unimportedSchema, profileID: profileID, dryRun: dryRun))
         }
         let defined: [String: Bool]
         switch SecretsRun.configuration(secretsEnvironment) {
@@ -370,7 +383,7 @@ struct Init: AsyncParsableCommand {
             defined = Dictionary(
                 uniqueKeysWithValues: plan.profile.secrets.map { ($0, configuration.secret(named: $0) != nil) })
         }
-        ctx.writeStdout(InitRun.planText(
+        return .success(InitRun.planText(
             plan, project: root.path, secretDefined: defined, varlockLines: varlockLines,
             dryRun: dryRun, wrote: dryRun == false))
     }

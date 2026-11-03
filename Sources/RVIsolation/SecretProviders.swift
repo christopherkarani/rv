@@ -58,16 +58,28 @@ public enum SecretResolutionError: Error, Sendable, Equatable {
 /// Host-side reads. Tests inject fakes; production uses `.live`.
 public struct SecretResolver: Sendable {
     public var resolve: @Sendable (SecretSource) -> Result<SecretValue, SecretResolutionError>
+    /// A cheap marker that changes when the source's value may have, read
+    /// without the value. Nil when the source has none or cannot be read.
+    public var version: @Sendable (SecretSource) -> String?
+    /// Resolves the sources a provider can fetch together, keyed by their
+    /// index in the input. Anything missing is resolved with `resolve`.
+    public var prefetch: @Sendable ([SecretSource]) -> [Int: Result<SecretValue, SecretResolutionError>]
 
-    public init(resolve: @escaping @Sendable (SecretSource) -> Result<SecretValue, SecretResolutionError>) {
+    public init(
+        resolve: @escaping @Sendable (SecretSource) -> Result<SecretValue, SecretResolutionError>,
+        version: @escaping @Sendable (SecretSource) -> String? = { _ in nil },
+        prefetch: @escaping @Sendable ([SecretSource]) -> [Int: Result<SecretValue, SecretResolutionError>] = { _ in [:] }
+    ) {
         self.resolve = resolve
+        self.version = version
+        self.prefetch = prefetch
     }
 
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: String
     ) -> SecretResolver {
-        SecretResolver { source in
+        SecretResolver(resolve: { source in
             switch source {
             case .keychain(let service, let account):
                 guard let data = KeychainReader.live.read(service, account) else {
@@ -97,8 +109,26 @@ public struct SecretResolver: Sendable {
                 return SecretCommandProviders.gcp(secret: secret, project: project, version: version, environment: environment)
             case .azure(let vault, let name, let version):
                 return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
+            case .awsProfile(let profile):
+                return SecretCommandProviders.awsProfile(profile, environment: environment)
+            case .oauth(let oauth):
+                return OAuthTokenMinter.live(home: home).mint(oauth)
             }
-        }
+        }, version: { source in
+            guard case .keychain(let service, let account) = source else { return nil }
+            return KeychainReader.modificationMarker(service, account)
+        }, prefetch: { sources in
+            // Only 1Password batches today: one `op inject` instead of one unlock per secret.
+            let references = sources.enumerated().compactMap { index, source -> (Int, String)? in
+                guard case .onePassword(let reference) = source else { return nil }
+                return (index, reference)
+            }
+            guard Set(references.map(\.1)).count > 1 else { return [:] }
+            let resolved = SecretCommandProviders.onePasswordBatch(references.map(\.1), environment: environment)
+            var results: [Int: Result<SecretValue, SecretResolutionError>] = [:]
+            for (index, reference) in references { results[index] = resolved[reference] }
+            return results
+        })
     }
 
     static func value(_ bytes: [UInt8], from origin: String) -> Result<SecretValue, SecretResolutionError> {
@@ -128,6 +158,44 @@ enum SecretCommandProviders {
         return SecretResolver.value(run.stdout, from: reference)
     }
 
+    /// Resolves several 1Password references with one `op inject`, so a
+    /// launch unlocks 1Password once rather than once per secret. The
+    /// template goes to `op` on stdin and the output stays in memory;
+    /// neither touches disk. One bad reference fails the whole call, so a
+    /// failed batch falls back to `op read` per reference, which also names
+    /// the bad one.
+    static func onePasswordBatch(
+        _ references: [String],
+        environment: [String: String]
+    ) -> [String: Result<SecretValue, SecretResolutionError>] {
+        let unique = Array(Set(references)).sorted()
+        func individually(_ refs: [String]) -> [String: Result<SecretValue, SecretResolutionError>] {
+            Dictionary(uniqueKeysWithValues: refs.map { ($0, onePassword($0, environment: environment)) })
+        }
+        let batchable = unique.filter(OnePasswordInject.canTemplate)
+        guard batchable.count > 1, let op = executable("op", environment: environment) else {
+            return individually(unique)
+        }
+        var results = individually(unique.filter { OnePasswordInject.canTemplate($0) == false })
+        let inject = OnePasswordInject(references: batchable)
+        let cap = batchable.count * (SecretValue.maximumBytes + 128) + inject.template.count
+        guard let run = BoundedProcess.run(
+            op, ["inject"], environment: environment, maximumOutputBytes: cap + 1, input: inject.template)
+        else {
+            // A timeout is usually an unanswered unlock prompt; retrying per
+            // reference would only prompt again for each.
+            for reference in batchable { results[reference] = .failure(.timedOut("1Password inject of \(reference)")) }
+            return results
+        }
+        guard run.status == 0, run.stdout.count <= cap else { return results.merging(individually(batchable)) { $1 } }
+        let values = inject.parse(run.stdout)
+        for reference in batchable {
+            results[reference] = values[reference].map { SecretResolver.value($0, from: reference) }
+                ?? onePassword(reference, environment: environment)
+        }
+        return results
+    }
+
     static func aws(
         secretID: String,
         field: String?,
@@ -153,6 +221,18 @@ enum SecretCommandProviders {
             let picked = object[field] as? String
         else { return .failure(.notFound("field \(field) in \(secretID)")) }
         return SecretResolver.value(Array(picked.utf8), from: "\(secretID).\(field)")
+    }
+
+    /// The profile's credential set as the `credential_process` JSON the AWS
+    /// CLI prints. `AWSCredentialSet` checks its shape before anything signs.
+    static func awsProfile(_ profile: String, environment: [String: String]) -> Result<SecretValue, SecretResolutionError> {
+        guard let aws = executable("aws", environment: environment) else {
+            return .failure(.providerUnavailable("AWS CLI `aws` is not installed"))
+        }
+        return command(
+            aws, ["configure", "export-credentials", "--profile", profile, "--format", "process"],
+            environment: environment, label: "aws profile \(profile)"
+        ) { $0 }
     }
 
     static func infisical(
@@ -233,6 +313,45 @@ enum SecretCommandProviders {
             if access(candidate, X_OK) == 0 { return candidate }
         }
         return nil
+    }
+}
+
+/// One `op inject` template: `RV_1P_<n>={{ <reference> }}<separator>` per
+/// reference. The separator is random and printable because values can hold
+/// newlines and `op inject` strips control characters.
+struct OnePasswordInject {
+    let references: [String]
+    let separator: String
+    let template: [UInt8]
+
+    init(references: [String], separator: String = "__RV_1P_SEP_\(UUID().uuidString)__") {
+        self.references = references
+        self.separator = separator
+        template = Array(references.enumerated().map { "RV_1P_\($0.offset)={{ \($0.element) }}\(separator)" }.joined().utf8)
+    }
+
+    /// References that cannot break out of their `{{ }}` slot.
+    static func canTemplate(_ reference: String) -> Bool {
+        reference.contains("{") == false && reference.contains("}") == false
+            && reference.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
+    }
+
+    /// Reference to raw value bytes. Text outside a known key is ignored.
+    func parse(_ output: [UInt8]) -> [String: [UInt8]] {
+        let marker = Array(separator.utf8)
+        var values: [String: [UInt8]] = [:]
+        var start = 0
+        for end in SecretLeakScanner.occurrences(of: marker, in: output) + [output.count] {
+            let segment = output[start..<end]
+            start = end + marker.count
+            guard let equals = segment.firstIndex(of: UInt8(ascii: "=")) else { continue }
+            let key = String(decoding: segment[segment.startIndex..<equals], as: UTF8.self)
+            guard key.hasPrefix("RV_1P_"), let index = Int(key.dropFirst(6)), references.indices.contains(index) else {
+                continue
+            }
+            values[references[index]] = Array(segment[(equals + 1)...])
+        }
+        return values
     }
 }
 
@@ -347,25 +466,46 @@ enum BoundedProcess {
         _ executable: String,
         _ arguments: [String],
         environment: [String: String],
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30,
+        maximumOutputBytes: Int = 1_048_576,
+        input: [UInt8]? = nil
     ) -> Outcome? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
+        let stdin = input.map { _ in Pipe() }
+        process.standardInput = stdin ?? FileHandle.nullDevice
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
         process.standardError = err
-        let stdout = Collector()
-        let stderr = Collector()
+        let stdout = Collector(limit: maximumOutputBytes)
+        let stderr = Collector(limit: 1_048_576)
         // terminationHandler, not a GCD block: the global pool can starve
         // for longer than the deadline under full-suite parallel load, and
         // a finished child then looks like a timeout.
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
+        if let stdin, let input {
+            // Fed through a pipe, never a file. A detached writer keeps a
+            // child that does not read stdin from deadlocking the wait, and
+            // blocking SIGPIPE on that thread only turns an early child exit
+            // into EPIPE instead of killing rv.
+            let writer = stdin.fileHandleForWriting
+            #if canImport(Darwin)
+            _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+            #endif
+            Thread.detachNewThread {
+                var blocked = sigset_t()
+                sigemptyset(&blocked)
+                sigaddset(&blocked, SIGPIPE)
+                pthread_sigmask(SIG_BLOCK, &blocked, nil)
+                try? writer.write(contentsOf: Data(input))
+                try? writer.close()
+            }
+        }
         // Drain both pipes on dedicated threads while waiting: polling
         // isRunning plus a post-exit readDataToEndOfFile never observes the
         // exit under swift-corelibs, so a finished child looked like a
@@ -399,10 +539,12 @@ enum BoundedProcess {
 
     private final class Collector: @unchecked Sendable {
         private let lock = NSLock()
+        private let limit: Int
         private var data: [UInt8] = []
+        init(limit: Int) { self.limit = limit }
         func append(_ chunk: Data) {
             lock.lock()
-            if data.count < 1_048_576 { data.append(contentsOf: chunk.prefix(1_048_576 - data.count)) }
+            if data.count < limit { data.append(contentsOf: chunk.prefix(limit - data.count)) }
             lock.unlock()
         }
         var bytes: [UInt8] { lock.lock(); defer { lock.unlock() }; return data }

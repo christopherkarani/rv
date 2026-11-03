@@ -14,6 +14,7 @@ enum HelpCatalog {
         case .explain: explain
         case .service: service
         case .serviceStatus: serviceStatus
+        case .serviceRestart: serviceRestart
         case .hook: hook
         case .setup: setup
         case .initialize: initialize
@@ -63,6 +64,7 @@ enum HelpCatalog {
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
+                HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
                 HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
                 HelpRow(name: "egress", description: "Review blocked network egress"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
@@ -207,9 +209,11 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv service"),
                 HelpRow(name: "rv service status"),
+                HelpRow(name: "rv service restart"),
             ]),
             HelpSection(heading: "Subcommands", rows: [
                 HelpRow(name: "status", description: "Print whether rvd is running, down, or skewed (default)"),
+                HelpRow(name: "restart", description: "Restart rvd (after an upgrade or repair)"),
             ]),
         ],
         examples: [
@@ -234,6 +238,23 @@ enum HelpCatalog {
         examples: [
             "rv service status",
             "rv service status --robot",
+        ]
+    )
+
+    static let serviceRestart = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv service restart"),
+            ]),
+            HelpSection(heading: "Behavior", rows: [
+                HelpRow(name: "loaded", description: "launchctl kickstart -k the rvd LaunchAgent"),
+                HelpRow(name: "not loaded", description: "Rewrite the LaunchAgent for ~/.local/bin/rvd and load it"),
+            ]),
+        ],
+        examples: [
+            "rv service restart",
         ]
     )
 
@@ -292,7 +313,7 @@ enum HelpCatalog {
                 HelpRow(name: "--profile-id", description: "Profile id to create. Default: main"),
                 HelpRow(name: "--agent", description: "Serve this agent tag (repeatable). Default: detect installed agents"),
                 HelpRow(name: "--secret", description: "Wire this secret name into the profile (repeatable)"),
-                HelpRow(name: "--varlock", description: ".env.schema to import. Default: <project>/.env.schema when present"),
+                HelpRow(name: "--varlock", description: ".env.schema to import. A project .env.schema is only reported, never imported"),
                 HelpRow(name: "--dry-run", description: "Show the plan; write nothing"),
             ]),
             HelpSection(heading: "Notes", rows: [
@@ -419,7 +440,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest (OCSF 1.3.0 with --format ocsf)"),
                 HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
-                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
+                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward; fails if the org policy is invalid"),
                 HelpRow(name: "--install", description: "macOS LaunchAgent every 5 min; prints a LaunchDaemon template for root"),
                 HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it (unkeyed: anchoring needs the forwarded head)"),
                 HelpRow(name: "verify", description: "Finds edits, deletions, and reordering that did not recompute the chain; exit 1 at the first break"),
@@ -444,19 +465,25 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
+                HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
+                HelpRow(name: "rv secrets oauth-reset <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
-                HelpRow(name: "rv secrets import --varlock <.env.schema> [--dry-run]"),
+                HelpRow(name: "rv secrets import --varlock <.env.schema> [--resource-profile <id>] [--dry-run]"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
                 HelpRow(name: "--base-url-env", description: "Variable that receives the gateway base URL"),
                 HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
+                HelpRow(name: "--surface", description: "Where the placeholder is swapped: header (default), query, path; repeatable"),
+                HelpRow(name: "--allow", description: "read-only, github-clone, github-read, or \"GET,HEAD /repos/**\"; repeatable"),
                 HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
                 HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
-                HelpRow(name: "--resource-profile", description: "Wire the secret into this runtime profile (see `rv init`)"),
+                HelpRow(name: "--resource-profile", description: "Wire the secret (or every imported name) into this runtime profile (see `rv init`)"),
+                HelpRow(name: "--expires", description: "2026-12-31 or 2026-12-31T18:00:00Z; past it launches fail and the gateway refuses"),
+                HelpRow(name: "--refresh", description: "Gateway only: re-read the value this often in running sessions, e.g. 15m"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
@@ -465,17 +492,91 @@ enum HelpCatalog {
                     description: "Agents hold a per-launch placeholder; rv swaps in the value toward the upstream only"
                 ),
                 HelpRow(
+                    name: "runtime",
+                    description: "A placeholder works only from processes of the runtime it was issued to; elsewhere 403"
+                ),
+                HelpRow(
+                    name: "rejected",
+                    description: "An upstream 401 reaches the agent as 502 with no challenge; update the value with set"
+                ),
+                HelpRow(
+                    name: "responses",
+                    description: "Echoed values, raw, %-encoded, or JSON-escaped, become the placeholder; base64 [rv:redacted]; compressed 502"
+                ),
+                HelpRow(
+                    name: "basic",
+                    description: "Basic user:placeholder is decoded and swapped (git over https); encoded placeholders are refused"
+                ),
+                HelpRow(
+                    name: "surfaces",
+                    description: "Off its surfaces, or twice on one (a second header), a placeholder is refused with 403"
+                ),
+                HelpRow(
+                    name: "allow",
+                    description: "Without rules any method and path is allowed; outside them 403, ambiguous paths 400"
+                ),
+                HelpRow(
+                    name: "rotation",
+                    description: "set reaches running gateway sessions on the next request; environment values need a restart"
+                ),
+                HelpRow(
                     name: "sources",
-                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, awsProfile, oauth"
+                ),
+                HelpRow(
+                    name: "aws",
+                    description: "awsProfile source + awsSigV4 delivery {upstream, region, service, endpointEnv, allow}: the cage gets a placeholder key id; rv re-signs. Credential-minting services (sts, iam, sso, ...) are refused; read-only is refused for query-protocol services (ec2, sqs, sns, ...)"
+                ),
+                HelpRow(
+                    name: "aws refusals",
+                    description: "Another key id is 403 (misuse); signed-chunk uploads 400 (UNSIGNED-PAYLOAD is S3 only); a response with SecretAccessKey is 502; re-read every 5m or a shorter refresh, expired credentials are re-read first"
+                ),
+                HelpRow(
+                    name: "oauth",
+                    description: "oauth source {tokenURL, clientID, refreshToken?, clientSecret? {service, account} (at least one), scope}: gateway only; re-minted on the token's lifetime"
+                ),
+                HelpRow(
+                    name: "oauth recovery",
+                    description: "retry and fixConfiguration try again; reauthorize and investigate never resend that refresh token until the item holds a new one or `rv secrets oauth-reset <name>` lifts the block (state: ~/.config/rv/secrets-oauth/)"
+                ),
+                HelpRow(
+                    name: "approve",
+                    description: "approve [{methods, path}] on gateway or awsSigV4: each matching request needs a human's yes in rv"
+                ),
+                HelpRow(
+                    name: "approve refusals",
+                    description: "403 approvalPending + Retry-After until approved, then retry the identical request once; approvalDenied; approvalUnavailable"
+                ),
+                HelpRow(
+                    name: "binaries",
+                    description: "binaries [\"/opt/homebrew/bin/gh\"] on gateway or awsSigV4: only processes running, or started by, these spend it"
+                ),
+                HelpRow(
+                    name: "binaries refusal",
+                    description: "403 binaryMismatch (misuse); a binary replaced since launch no longer matches; scripts and Xcode shims such as /usr/bin/git are refused at launch (list the real tool)"
                 ),
                 HelpRow(
                     name: "defaults",
                     description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
                 ),
-                HelpRow(name: "describe", description: "Names, descriptions, types, and delivery for agents; never a value"),
-                HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, and provider refs; literals are skipped"),
-                HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
-                HelpRow(name: "audit", description: "rv audit --kind secret.use shows each use with a fingerprint"),
+                HelpRow(name: "describe", description: "Names, descriptions, types, delivery, surfaces, and allow rules for agents; never a value"),
+                HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, @proxy, and provider refs; @proxy(domain=) imports as gateway, literals are skipped"),
+                HelpRow(
+                    name: "hook",
+                    description: "Adds an rv block to pre-commit that scans staged blobs and prints path:line:rule; the rest of the hook is kept"
+                ),
+                HelpRow(
+                    name: "rules",
+                    description: "scan and hook match resolved values plus built-in token patterns (AWS, GitHub, Slack, Stripe, OpenAI, Anthropic, Google, keys, JWT)"
+                ),
+                HelpRow(
+                    name: "allow",
+                    description: "Silence a pattern hit with an rv-secrets:allow comment or path:rule:line in .rv-secrets-ignore; skip the hook with git config rv.secretsScan false"
+                ),
+                HelpRow(
+                    name: "audit",
+                    description: "rv audit --kind secret.use: forward and outcome records per request; secret.misuse flags policy and runtime refusals (high)"
+                ),
             ]),
         ],
         examples: [
@@ -538,7 +639,7 @@ enum HelpCatalog {
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",
-                    description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf"
+                    description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf, Muse"
                 ),
                 HelpRow(name: "redaction", description: "Env and header values never shown; credential-like args masked"),
                 HelpRow(name: "audit", description: "rv audit tail --kind mcp.call shows every tool call"),

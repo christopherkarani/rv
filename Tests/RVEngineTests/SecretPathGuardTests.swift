@@ -63,11 +63,13 @@ private func run(
             budget: budget
         ),
         packs: packs,
-        secrets: secrets,
-        safety: safety,
-        allowPaths: allowPaths,
-        home: home,
-        pathResolution: nameResolution,
+        secretPaths: SecretPathDecider(
+            catalog: secrets,
+            safety: safety,
+            allowPaths: allowPaths,
+            home: home,
+            resolution: nameResolution
+        ),
         engine: engine,
         compiled: compiled
     )

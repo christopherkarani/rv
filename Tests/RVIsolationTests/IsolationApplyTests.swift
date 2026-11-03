@@ -355,6 +355,23 @@ struct IsolationApplyTests {
         #expect(recoverOrphanedSavedTree(at: workspace.path) == .blocked)
         #expect(FileManager.default.fileExists(atPath: savedAgain.path))
     }
+
+    @Test func orphanRecoveryBlocksWhenParentIsUnreadable() throws {
+        guard getuid() != 0 else { return }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-orphan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            chmod(root.path, 0o700)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let workspace = root.appendingPathComponent("project", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        // Search-only parent: the workspace resolves, but no orphan marker
+        // can be ruled out, so recovery must fail closed.
+        #expect(chmod(root.path, 0o300) == 0)
+        #expect(recoverOrphanedSavedTree(at: workspace.path) == .blocked)
+    }
     #endif
 
     @Test func containedLaunchResult_reportsTeardownFailure() throws {

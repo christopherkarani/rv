@@ -562,7 +562,7 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     #expect(shell.snapshot().terminal?.title == "shell")
     #expect(shell.snapshot().terminal?.lease == .owned)
     shell.launchDefaultRuntimeIfEmpty()
-    Thread.sleep(forTimeInterval: 0.05)
+    shell.waitForRoutedEffects()
     #expect(session.launchAttempts == 1)
 }
 
@@ -860,7 +860,7 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     try shell.connect().get()
     #expect(shell.snapshot().terminal?.lease == .readOnly)
     shell.handle(.character("B"))
-    Thread.sleep(forTimeInterval: 0.05)
+    shell.waitForRoutedEffects()
     #expect(session.writes.isEmpty)
 }
 

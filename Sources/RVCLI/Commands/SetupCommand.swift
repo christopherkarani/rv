@@ -1,9 +1,11 @@
 import ArgumentParser
 import Foundation
+import RVDomain
+import RVPolicy
 import RVPresentation
 import RVTheme
 
-struct Setup: ParsableCommand {
+struct Setup: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "setup",
         abstract: "Wire rv-owned host hooks and the rvd LaunchAgent."
@@ -24,7 +26,7 @@ struct Setup: ParsableCommand {
     @Flag(name: .customLong("force"), help: "Replace occupied owned hooks (backs up to *.bak).")
     var force = false
 
-    func run() throws {
+    func run() async throws {
         // Step 8B P9: one-click install. `rv setup` only writes rv-owned
         // hooks, the LaunchAgent, and config — it adds oversight and cannot
         // manufacture ALLOW — so it runs without device-owner
@@ -36,8 +38,8 @@ struct Setup: ParsableCommand {
             plain: plain,
             noColor: noColor
         )
-        let outcome = SetupFlow.live().run(
-            SetupIntent(
+        let outcome = await setupOutcome(
+            intent: SetupIntent(
                 kind: .install,
                 force: force,
                 appearance: resolved.appearance,
@@ -50,8 +52,76 @@ struct Setup: ParsableCommand {
         try CeremonyCLI.emit(outcome)
     }
 
+    /// Setup flow plus the post-setup service warning, without emitting:
+    /// tests assert the outcome fields directly instead of capturing fds,
+    /// which deadlocks under parallel test execution.
+    func setupOutcome(
+        intent: SetupIntent,
+        clock: LiveSetupCeremonyClock,
+        write: @escaping (String) -> Void,
+        probeService: (HomeDirectory) async -> Bool = Setup.liveServiceProbe
+    ) async -> SetupOutcome {
+        var outcome = SetupFlow.live().run(intent, clock: clock, write: write)
+        await appendHookServiceWarningIfNeeded(to: &outcome, probeService: probeService)
+        return outcome
+    }
+
+    /// Liveness of the service the installed hooks talk to. Only the XPC
+    /// door can be probed from the Swift client; Linux hooks reach rvd over
+    /// a unix socket this client does not speak, so liveness is unknown
+    /// there and "unknown" must not print a false "rvd is down" warning.
+    static func liveServiceProbe(home: HomeDirectory) async -> Bool {
+        #if canImport(XPC)
+        return await ServiceClient.probing(home: home).verifyHookService()
+        #else
+        return true
+        #endif
+    }
+
+    /// After a green setup, a wired slot with a dead service blocks or prompts
+    /// on every command. Say so on stderr (robot stdout stays parseable) instead of
+    /// leaving the user to discover it one blocked command at a time.
+    private func appendHookServiceWarningIfNeeded(
+        to outcome: inout SetupOutcome,
+        probeService: (HomeDirectory) async -> Bool
+    ) async {
+        guard outcome.exitCode == 0 else { return }
+        guard let home = CLIProcess.home() else { return }
+        guard hasWiredHosts(home: home) else { return }
+        let serviceUp = await probeService(home)
+        guard SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: serviceUp) else { return }
+        if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
+            outcome.stderr += "\n"
+        }
+        outcome.stderr += SetupServiceWarning.text + "\n"
+    }
+
+    private func hasWiredHosts(home: HomeDirectory) -> Bool {
+        let pathEntries = (CLIProcess.environment()["PATH"] ?? "").split(separator: ":").map(String.init)
+        guard let snapshot = try? HostAdapterInstallation.inspect(
+            paths: OwnedPaths(home: home),
+            pathEntries: pathEntries,
+            fileManager: .default
+        ) else { return false }
+        return HookHost.setupSlotOrder.contains { host in
+            if case .wired = snapshot.installation(for: host) { return true }
+            return false
+        }
+    }
+
     static func helpText() -> String {
         HelpDispatch.text(.setup, palette: colorOffPalette)
+    }
+}
+
+/// Post-setup service warning: hooks without a reachable daemon block or
+/// prompt on every command, so a green setup with a down service must say so.
+enum SetupServiceWarning {
+    static let text =
+        "Warning: the RV background service (rvd) is not answering. Installed hooks will block or prompt on every command until it is up. Run `rv doctor`."
+
+    static func needed(hasWiredHosts: Bool, serviceUp: Bool) -> Bool {
+        hasWiredHosts && serviceUp == false
     }
 }
 
