@@ -48,8 +48,9 @@ struct MicroVMRunner {
         // the VM still up.
         let interrupt = InterruptState()
         let signals = AsyncSignalHandler.create(notify: [SIGTERM, SIGHUP, SIGINT, SIGWINCH])
+        let stream = signals.signals
         let forwarder = Task {
-            for await signal in signals.signals { await interrupt.handle(signal) }
+            for await signal in stream { await interrupt.handle(signal) }
         }
         defer { forwarder.cancel() }
         let problems = await AssetStatus(layout: layout).problems(image: nil)
@@ -104,6 +105,7 @@ struct MicroVMRunner {
             root: layout.store
         )
         let ready = ReadyLatch()
+        interrupt.attach(ready: ready)
         let relayErrors = CapturedOutput()
         let container = try await manager.create(
             id,
@@ -188,6 +190,7 @@ struct MicroVMRunner {
         // Establish before the guest command runs, like the Seatbelt
         // launcher writing its nonce before exec: a failed handshake must
         // never follow agent activity.
+        try interrupt.check()
         try writeHandshake()
         do {
             try await guest.start()
@@ -237,9 +240,11 @@ struct MicroVMRunner {
     /// Short private directory for the host relay sockets. The state root is
     /// usually too deep for AF_UNIX's 104-byte path limit.
     private func makePrivateDirectory() throws -> String {
-        RelayDirectories.sweep(in: "/tmp", isAlive: { kill($0, 0) == 0 || errno != ESRCH })
-        var template = Array("\(RelayDirectories.prefix)\(getpid()).XXXXXX".utf8CString)
-        guard let created = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }) else {
+        RelayDirectories.sweep(in: RelayDirectories.parent, isAlive: { kill($0, 0) == 0 || errno != ESRCH })
+        var template = Array(RelayDirectories.template(pid: getpid()).utf8CString)
+        guard let created = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }),
+            String(cString: created).hasPrefix("/")
+        else {
             throw SetupError("cannot create relay directory: \(String(cString: strerror(errno)))")
         }
         return String(cString: created)
@@ -276,6 +281,7 @@ final class InterruptState: Sendable {
         var interrupted: Int32?
         var guest: LinuxProcess?
         var terminal: Terminal?
+        var ready: ReadyLatch?
     }
 
     private let state = Mutex<State>(State())
@@ -284,6 +290,15 @@ final class InterruptState: Sendable {
         if let signal = state.withLock({ $0.interrupted }) {
             throw SetupError("interrupted by signal \(signal) before the guest command started")
         }
+    }
+
+    /// Lets an early signal abort the ready wait instead of sitting out its timeout.
+    func attach(ready: ReadyLatch) {
+        let pending = state.withLock { state -> Bool in
+            state.ready = ready
+            return state.interrupted != nil
+        }
+        if pending { ready.fail() }
     }
 
     func attach(guest: LinuxProcess, terminal: Terminal?) async {
@@ -296,10 +311,11 @@ final class InterruptState: Sendable {
     }
 
     func handle(_ signal: Int32) async {
-        let (guest, terminal) = state.withLock { state -> (LinuxProcess?, Terminal?) in
+        let (guest, terminal, ready) = state.withLock { state -> (LinuxProcess?, Terminal?, ReadyLatch?) in
             if signal != SIGWINCH, state.guest == nil { state.interrupted = signal }
-            return (state.guest, state.terminal)
+            return (state.guest, state.terminal, state.guest == nil && signal != SIGWINCH ? state.ready : nil)
         }
+        ready?.fail()
         guard let guest else { return }
         if signal == SIGWINCH {
             if let terminal, let size = try? terminal.size { try? await guest.resize(to: size) }

@@ -197,7 +197,9 @@ struct LayoutTests {
     @Test("init image is pinned by digest, never a tag")
     func pins() {
         #expect(MicroVMPins.initImageReference.hasSuffix("@\(MicroVMPins.initImageDigest)"))
-        #expect(MicroVMPins.initImageReference.contains(":0") == false)
+        let name = MicroVMPins.initImageReference.split(separator: "@", maxSplits: 1)[0]
+        let lastComponent = name.split(separator: "/").last ?? ""
+        #expect(lastComponent.contains(":") == false, "no :tag before the digest")
     }
 
     @Test("guest statuses clamp to 0...255")
@@ -360,6 +362,18 @@ struct SocketBridgeTests {
 
 @Suite("RelayDirectories")
 struct RelayDirectoriesTests {
+    @Test("the template is absolute and under /tmp, never the cwd")
+    func template() {
+        let t = RelayDirectories.template(pid: 42)
+        #expect(t == "/tmp/rvmvm-42.XXXXXX")
+        #expect(RelayDirectories.owner(of: String(t.dropFirst("/tmp/".count)).replacingOccurrences(of: "XXXXXX", with: "abc123")) == 42)
+    }
+
+    @Test("a relative relay directory is rejected")
+    func relativeRejected() {
+        #expect(RelayPlan.make(ports: [4000], hostDirectory: "rvmvm-1.abc") == .failure(.relayDirectoryMustBeAbsolute("rvmvm-1.abc")))
+    }
+
     @Test("owner parses only rvmvm-<pid>.<suffix>")
     func owner() {
         #expect(RelayDirectories.owner(of: "rvmvm-123.AbC123") == 123)

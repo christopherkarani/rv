@@ -117,6 +117,9 @@ final class MicroVMControlPlaceholders: Sendable {
             case .unsupported:
                 return path
             case .directory:
+                // An empty directory is mounted read-only whole; adding
+                // children would make a later run mount it read-write.
+                if let entries = try? FileManager.default.contentsOfDirectory(atPath: path), entries.isEmpty { return nil }
                 for (child, isDirectory) in children {
                     let childPath = "\(path)/\(child)"
                     switch kind(childPath) {

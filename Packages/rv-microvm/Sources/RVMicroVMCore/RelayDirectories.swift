@@ -4,6 +4,13 @@ import Foundation
 /// name so a run that was SIGKILLed (supervisor cancel) can be swept later.
 public enum RelayDirectories {
     public static let prefix = "rvmvm-"
+    /// The one parent directory. Never relative: the process cwd is the
+    /// guest-writable workspace, where the guest could swap a socket for a
+    /// symlink to any host socket.
+    public static let parent = "/tmp"
+
+    /// `mkdtemp` template for the directory owned by `pid`.
+    public static func template(pid: pid_t) -> String { "\(parent)/\(prefix)\(pid).XXXXXX" }
 
     /// Owning pid from `rvmvm-<pid>.<suffix>`, nil for anything else.
     public static func owner(of name: String) -> pid_t? {
