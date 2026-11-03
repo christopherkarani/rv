@@ -289,6 +289,23 @@ struct MicroVMControlPlaceholderTests {
         #expect(exists(ws, ".git/objects") && exists(ws, ".config/nvim"))
     }
 
+    @Test("a later run re-creates control children under a placeholder .git another runtime filled")
+    func secondAcquireReensuresChildren() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".git/hooks") == false)
+        // A Seatbelt run (or the host) writes into the placeholder while run A holds it.
+        try "ref: refs/heads/main\n".write(to: ws.appendingPathComponent(".git/HEAD"), atomically: true, encoding: .utf8)
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".git/hooks") && exists(ws, ".git/config"), "run B must get children to pin")
+        registry.release(workspace: ws.path)
+        registry.release(workspace: ws.path)
+        #expect(exists(ws, ".git/hooks") == false && exists(ws, ".git/config") == false)
+        #expect(exists(ws, ".git/HEAD"))
+    }
+
     @Test("a placeholder that gained content is left in place")
     func nonEmptyStays() throws {
         let ws = try makeWorkspace()
