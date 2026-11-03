@@ -98,7 +98,8 @@ public final class SecretGateway: @unchecked Sendable {
         public var upstream: URL
         public var fingerprint: String?
         public var runtime: String?
-        public var surfaces: Set<GatewaySurface> = GatewaySurface.defaults
+        /// Substitute on request surfaces, or re-sign as AWS SigV4.
+        var mode: SpendMode
         /// Expanded allow rules; empty allows any method and path.
         public var rules: [GatewayAccessRule] = []
         /// The runtime leader's process group, set once it is spawned. Only
@@ -108,9 +109,6 @@ public final class SecretGateway: @unchecked Sendable {
         public var expires: Date?
         /// How the value is re-resolved while the runtime lives; nil keeps the launch value.
         public var refresh: SecretRefreshPolicy?
-        /// Set for AWS SigV4 delivery: `value` is a credential set, and the
-        /// gateway re-signs instead of substituting.
-        var signing: AWSSigningBinding?
         /// Expanded `approve` rules; a matching request needs a human's yes.
         var approvals: [GatewayAccessRule] = []
         /// Set at bind when the runtime has an admission channel that can ask.
@@ -610,7 +608,7 @@ public final class SecretGateway: @unchecked Sendable {
             live = current
         }
         var headers = rewritten.headers
-        if let signing = live.signing {
+        if let signing = live.signingBinding {
             switch awsSigned(
                 live, binding: signing, method: head.method, url: url, headers: headers, body: body,
                 payloadMode: forwarded.header("X-Amz-Content-Sha256"))
@@ -638,7 +636,7 @@ public final class SecretGateway: @unchecked Sendable {
                 ($0.bytes, Array(SecretPlaceholder(token: token, prefix: live.prefix).text.utf8))
             } + echoes,
             // A call that mints credentials answers with a new key the scrubber has never seen.
-            tripwires: live.signing?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
+            tripwires: live.signingBinding?.isS3 == false ? [GatewayResponseWriter.mintedCredentialsField] : []
         )
         // Identity encoding so the scrubber sees the bytes the agent will get.
         headers.append(GatewayHeaders.identityEncoding)

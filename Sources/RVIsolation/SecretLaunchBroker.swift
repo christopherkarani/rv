@@ -219,7 +219,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 let placeholder = SecretPlaceholder.mint(prefix: "")
                 gateway.register(placeholder, entry: SecretGateway.Entry(
                     secret: name, prefix: "", value: value, upstream: binding.upstream, fingerprint: fingerprint,
-                    runtime: nil, surfaces: [], rules: binding.rules, expires: expires,
+                    runtime: nil, rules: binding.rules, expires: expires,
                     refresh: refreshPolicy(definition, marker: marker), signing: binding,
                     approvals: binding.approvalRules, binaries: pins))
                 placeholders.append(placeholder)
