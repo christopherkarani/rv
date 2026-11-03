@@ -325,7 +325,10 @@ public struct GatedEvaluate: Sendable {
             intent, request, cwd: cwd, home: home, grants: grants, now: now,
             allowlist: allowlist, host: host, tool: tool, inputs: inputs()
         )
-        Self.perform(decided.effects, home: home)
+        // Exemption audit and judge log are file appends: keep them off the
+        // cooperative pool, as they were when they ran inside the offload.
+        let effects = decided.effects
+        await JudgeOffload.run { Self.perform(effects, home: home) }
         return decided.result
     }
 
