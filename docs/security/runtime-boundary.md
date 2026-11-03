@@ -1532,7 +1532,7 @@ Like the Linux backend, this is a "VM backend" extension under [the remediation 
   - control-path denial with git writes still working, and no way out of the sandbox (setuid exec refused by Seatbelt, launchd jobs never run);
   - cancel teardown, and the cancelled run's clone removed by the next `status`;
   - an unprepared image fails.
-  Last run: macOS 27.2 (26B123) guest on a macOS 27 host, 2026-11-03, all four tests passing, on an image prepared with the current agent.
+  Last run: macOS 27.2 (26B123) guest on a macOS 27 host, 2026-11-03, all four tests passing (including the LaunchServices probe), on an image rebuilt with `prepare --replace` for the current agent; `runs/` was empty afterwards.
 - **Signed binaries.** `rv-macvm` and `rv-macvm-agent` were signed as `sign-macos.sh` does: Developer ID, hardened runtime, and the virtualization entitlement on `rv-macvm`, without a timestamp or notarization. With them, a full `prepare` and `run` worked. In the guest, the LaunchDaemon agent kept its Developer ID signature and hardened runtime. Notarization itself is untested locally.
 - **Early signals.** A SIGTERM sent the moment `rv-macvm` reports `started` reached the command in 5 of 5 runs (exit 143), and in 3 of 3 again after signals moved behind the unreaped-leader lock. Before the fix it was lost.
   Hosted runners cannot boot macOS guests, so this suite runs on developer machines.
