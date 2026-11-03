@@ -135,4 +135,32 @@ struct OperatorVocabularyGoldenTests {
         #expect(redeem.error == .unknown)
         #expect(redeem.accepted == false)
     }
+
+    /// The service-side readers of launch kind fail closed: an unknown
+    /// proposal kind or host-reported target fails the whole message.
+    @Test func unknownProposalKindAndDescriptionTargetFailDecode() {
+        let propose = Self.proposeNamed.replacingOccurrences(of: "\"named\"", with: "\"other\"")
+        #expect(throws: (any Error).self) {
+            try IPCJSON.decode(ProposeLaunchParams.self, from: Data(propose.utf8))
+        }
+        let description = Self.descriptionNamed.replacingOccurrences(
+            of: "\"named\"", with: "\"other\"")
+        #expect(throws: (any Error).self) {
+            try IPCJSON.decode(
+                HostPrepareResponseDTO.self,
+                from: Data("{\"description\":\(description)}".utf8))
+        }
+    }
+
+    /// Leniency covers unknown strings only: a non-string outcome is a type
+    /// error (transport failure), never a coerced vocabulary value.
+    @Test func nonStringHostOutcomesFailDecode() {
+        #expect(throws: (any Error).self) {
+            try IPCJSON.decode(HostPrepareResponseDTO.self, from: Data(#"{"error":7}"#.utf8))
+        }
+        #expect(throws: (any Error).self) {
+            try IPCJSON.decode(
+                HostRedeemResponseDTO.self, from: Data(#"{"accepted":true,"error":7}"#.utf8))
+        }
+    }
 }

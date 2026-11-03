@@ -187,11 +187,6 @@ func verifyExecutableContentDigest(
 /// binding to match its retained prepared operation. Refusals are coarse
 /// machine-readable codes, never internal errors or paths.
 enum WorkspaceHostRedeemHandler {
-    /// Closed refusal/failure vocabulary. Anything else is never emitted.
-    static let knownResponseErrors: Set<String> = [
-        "unknown", "alreadyAccepted", "launchFailed",
-    ]
-
     static func redeem(
         _ request: HostRedeemCommitDTO,
         supervisor: WorkspaceSessionSupervisor,

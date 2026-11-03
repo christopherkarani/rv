@@ -59,19 +59,8 @@ public struct HostRedeemCommitDTO: Sendable, Equatable, Codable {
     }
 }
 
-/// Host redemption outcome. Refusals are data, never throws.
-///
-/// - success: `accepted` with runtime/instance IDs (identifiers for audit
-///   attribution only; never capabilities, never secrets).
-/// - spent-but-failed: `accepted` with `error: "launchFailed"`. The
-///   authorization is consumed and the prepared operation is spent; the
-///   caller must not retry.
-/// - in-flight duplicate: `accepted` with `error: "alreadyAccepted"`. Another
-///   attempt holds the single acceptance; no second dispatch occurs.
-/// - refused: `accepted == false` with `error: "unknown"`. Deliberately
-///   undifferentiated (absent, expired, invalidated, binding mismatch,
-///   workspace inactive, or cwd identity changed). No launch occurred and the
-///   prepared operation is unspent by this refusal.
+/// Closed vocabulary of host redemption outcome codes. Raw values are the
+/// wire strings.
 public enum HostRedeemOutcome: String, Sendable, Equatable, Codable, CaseIterable {
     case unknown
     case alreadyAccepted
@@ -87,6 +76,19 @@ public enum HostRedeemOutcome: String, Sendable, Equatable, Codable, CaseIterabl
     }
 }
 
+/// Host redemption outcome. Refusals are data, never throws.
+///
+/// - success: `accepted` with runtime/instance IDs (identifiers for audit
+///   attribution only; never capabilities, never secrets).
+/// - spent-but-failed: `accepted` with `error: "launchFailed"`. The
+///   authorization is consumed and the prepared operation is spent; the
+///   caller must not retry.
+/// - in-flight duplicate: `accepted` with `error: "alreadyAccepted"`. Another
+///   attempt holds the single acceptance; no second dispatch occurs.
+/// - refused: `accepted == false` with `error: "unknown"`. Deliberately
+///   undifferentiated (absent, expired, invalidated, binding mismatch,
+///   workspace inactive, or cwd identity changed). No launch occurred and the
+///   prepared operation is unspent by this refusal.
 public struct HostRedeemResponseDTO: Sendable, Equatable, Codable {
     public let accepted: Bool
     public let runtimeSessionID: UUID?
