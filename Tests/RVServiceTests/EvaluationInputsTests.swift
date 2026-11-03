@@ -172,6 +172,102 @@ struct EvaluationInputsReadOnceTests {
         #expect(deny.ruleID.pattern == "typed-rules-invalid")
     }
 
+    @Test("injected allow-paths drive SecretPathDecider, not the on-disk store")
+    func injectedAllowPathsDriveSecretPaths() throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let base = inputs(.enforce, home: home)
+        func decide(allow: [String]) -> EvaluationResult {
+            let injected = EvaluationInputs(
+                guardMode: .enforce, judge: base.judge,
+                store: PolicyStoreInputs(
+                    allowPaths: SecretAllowPaths.EffectiveAllowPaths(
+                        effective: SecretAllowPathSet(literals: allow), droppedRepoLiterals: []
+                    ),
+                    policy: base.store.policy, safety: .normal
+                )
+            )
+            return GatedEvaluate().evaluateAgent(
+                request(ShellCommand(rawValue: "cat ~/.env")), cwd: nil, home: home, now: now,
+                inputs: injected
+            )
+        }
+        // Disk has no exemptions in either case; only the injected value differs.
+        #expect(decide(allow: ["~/.env"]).decision == .allow)
+        guard case .deny = decide(allow: []).decision else {
+            Issue.record("without the injected exemption the secret path must deny")
+            return
+        }
+    }
+
+    @Test("injected safety drives SecretPathDecider, not the on-disk store")
+    func injectedSafetyDrivesSecretPaths() throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let base = inputs(.enforce, home: home)
+        func decide(disk: SafetyLevel, injected: SafetyLevel) throws -> EvaluationResult {
+            try SafetyStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+                .saveMachine(disk)
+            let gathered = EvaluationInputs(
+                guardMode: .enforce, judge: base.judge,
+                store: PolicyStoreInputs(
+                    allowPaths: base.store.allowPaths, policy: base.store.policy, safety: injected
+                )
+            )
+            return GatedEvaluate().evaluateAgent(
+                request(ShellCommand(rawValue: "ls ~/.ssh/id_rsa")), cwd: nil, home: home,
+                now: now, inputs: gathered
+            )
+        }
+        // Metadata reads of secret paths are only guarded under strict.
+        guard case .deny = try decide(disk: .normal, injected: .strict).decision else {
+            Issue.record("injected strict must guard metadata despite normal on disk")
+            return
+        }
+        #expect(try decide(disk: .strict, injected: .normal).decision == .allow)
+    }
+
+    @Test("injected safety drives the Policy gate, not the on-disk store")
+    func injectedSafetyDrivesPolicyGate() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-gate-repo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("node_modules"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        git.arguments = ["init", "-q", repo.path]
+        try git.run()
+        git.waitUntilExit()
+        let cwd = WorkingDirectory(rawValue: repo.path)
+        let base = inputs(.enforce, home: home)
+        func decide(disk: SafetyLevel, injected: SafetyLevel) async throws -> EvaluationResult {
+            try SafetyStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+                .saveMachine(disk)
+            let gathered = EvaluationInputs(
+                guardMode: .enforce, judge: base.judge,
+                store: PolicyStoreInputs(
+                    allowPaths: base.store.allowPaths, policy: base.store.policy, safety: injected
+                )
+            )
+            return await GatedEvaluate().gated(
+                .apply, request(ShellCommand(rawValue: "rm -rf node_modules")),
+                cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: now,
+                allowlist: { AllowlistSnapshot(entries: []) },
+                host: .tty, tool: .bash, inputs: gathered
+            )
+        }
+        // Balanced (normal) lets contained generated-output deletes through.
+        #expect(try await decide(disk: .strict, injected: .normal).decision == .allow)
+        guard case .deny = try await decide(disk: .normal, injected: .strict).decision else {
+            Issue.record("injected strict must keep the deny despite normal on disk")
+            return
+        }
+    }
+
     /// A script body runs in its package directory, which here is the
     /// parent of cwd: the body reads that directory's store (broken repo
     /// typed rules), not the gathered cwd store. Holds before and after T6.
