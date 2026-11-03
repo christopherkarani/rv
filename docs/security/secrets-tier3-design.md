@@ -591,16 +591,15 @@ request.
 
 Each line was re-verified against the current tree.
 
-1. **MCP stdio servers ignore `allowEnvironmentDelivery`.**
+1. **MCP stdio servers ignored `allowEnvironmentDelivery`. Resolved by #481.**
    - The stdio launch path writes resolved real values into the server's
-     environment and args, whatever the secret's `delivery` says
-     (`Sources/RVMCP/MCPGatewayRuntime.swift:110-111`).
-   - `resolve` checks only `allowsSecretSource` (`:140`). An organization
-     that set `secrets.allowEnvironmentDelivery: false` still gets
-     real-value delivery here.
-   - **Fix:** in `resolve`, refuse when the policy forbids environment
-     delivery and the target is a stdio server. Remote MCP headers stay
-     gateway-side. **S.**
+     environment and args, whatever the secret's `delivery` says.
+   - `MCPLaunchPlanner.resolve` (`Sources/RVMCP/MCPGatewayRuntime.swift`)
+     now refuses a stdio target when `secrets.allowEnvironmentDelivery` is
+     `false`, before the secret is read. Remote MCP headers stay
+     gateway-side and are not affected.
+   - `rv mcp serve` writes a `denied` audit event naming only the server and
+     the secret for this refusal and for the `allowedSources` refusal.
 2. **`scan`, `hook run`, and `audit forward` skip managed-policy checks.**
    - Both `SecretsRun.scan` (`Sources/RVCLI/Commands/SecretsCommand.swift:303-315`)
      and `SecretsRun.hookRun` (`:409-422`) resolve every configured secret

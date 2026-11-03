@@ -1,6 +1,7 @@
 import Foundation
 import RVIsolation
 import RVPolicy
+import Synchronization
 import Testing
 @testable import RVMCP
 
@@ -85,6 +86,54 @@ struct MCPManagedPolicyTests {
         }
         #expect(plan("envy") == .secretUnavailable(
             server: "envy", secret: "HOST_TOKEN", reason: "organization policy does not allow hostEnvironment secrets"))
+    }
+
+    @Test func stdioServersCannotReceiveSecretsWhenPolicyForbidsEnvironmentDelivery() throws {
+        var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(
+                name: "envy", command: "e", secrets: ["TOKEN": "API_TOKEN"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "argy", command: "e", args: ["--token=${secret:API_TOKEN}"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "remote",
+                remote: MCPRemoteServer(
+                    url: try #require(URL(string: "https://mcp.example.com/mcp")),
+                    headers: ["Authorization": "Bearer ${secret:API_TOKEN}"])),
+        ])
+        let secrets = SecretsConfiguration(secrets: [
+            // Declared gateway-only, yet a stdio server would still get the real value.
+            SecretDefinition(
+                name: "API_TOKEN", source: .keychain(service: "rv", account: "api"),
+                delivery: .gateway(SecretGatewayBinding(
+                    upstream: try #require(URL(string: "https://api.example.com")), baseURLEnv: "API_BASE_URL")))
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("v")!)
+        }
+        func plan(_ name: String) -> MCPLaunchError? {
+            if case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            {
+                return error
+            }
+            return nil
+        }
+        configuration.managed = try organization("""
+            {"version": 1, "secrets": {"allowEnvironmentDelivery": false}}
+            """)
+        let reason = "organization policy sets secrets.allowEnvironmentDelivery to false, "
+            + "and a stdio server receives secrets in its environment or arguments"
+        #expect(plan("envy") == .secretUnavailable(server: "envy", secret: "API_TOKEN", reason: reason))
+        #expect(plan("argy") == .secretUnavailable(server: "argy", secret: "API_TOKEN", reason: reason))
+        #expect(resolved.withLock { $0 } == 0, "a refused secret must not be resolved")
+        // Remote headers are spent host-side by the gateway, never in a child's environment.
+        #expect(plan("remote") == nil)
+        #expect(resolved.withLock { $0 } == 1)
+        configuration.managed = try organization(#"{"version":1,"secrets":{"allowEnvironmentDelivery":true}}"#)
+        #expect(plan("envy") == nil)
     }
 
     @Test func organizationThresholdsUseTheExactIntegerSpelling() throws {
