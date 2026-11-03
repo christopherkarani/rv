@@ -227,6 +227,89 @@ struct SecretGatewayTests {
         #expect(upstream.requests.count == 1)
     }
 
+    @Test func echoMethodsAreRefusedBeforeTheCredentialIsInjected() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        for method in ["TRACE", "TRACK"] {
+            let response = try gatewayExchange(port: port,
+                "\(method) /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+            #expect(response.status == 405, "\(method)")
+        }
+        #expect(upstream.requests.isEmpty)
+        #expect(audit.items.withLock { $0.count == 2 && $0.allSatisfy { $0.allowed == false } })
+    }
+
+    @Test func hopByHopAndMethodOverrideHeadersAreStrippedAndHostIsPinned() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "POST /s/OPENAI_API_KEY/models HTTP/1.1\r\nHost: evil.example\r\n"
+                + "Authorization: Bearer \(placeholder.text)\r\nConnection: keep-alive, X-Hop\r\nX-Hop: 1\r\n"
+                + "Keep-Alive: timeout=5\r\nProxy-Foo: x\r\nTE: trailers\r\nTrailer: X-T\r\nUpgrade: h2c\r\n"
+                + "X-HTTP-Method-Override: DELETE\r\nX-HTTP-Method: DELETE\r\nX-Method-Override: DELETE\r\n"
+                + "X-Kept: yes\r\nContent-Length: 0\r\n\r\n")
+        #expect(response.status == 200)
+        let seen = try #require(upstream.requests.first)
+        #expect(seen.method == "POST")
+        #expect(URL(string: seen.url)?.host == "api.example.com")
+        #expect(Set(seen.headers.keys) == ["authorization", "x-kept"])
+        #expect(seen.headers["authorization"] == "Bearer sk-live-REAL-0123456789")
+    }
+
+    @Test func placeholdersInStrippedHeadersAreNeverSubstituted() throws {
+        let upstream = RecordingUpstream(status: 200)
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        for headers in [
+            "Connection: X-Smuggle\r\nX-Smuggle: Bearer \(placeholder.text)",
+            "Proxy-Authorization: Bearer \(placeholder.text)",
+            "Connection: Authorization\r\nAuthorization: Bearer \(placeholder.text)",
+        ] {
+            let response = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\n\(headers)\r\n\r\n")
+            #expect(response.status == 401, "\(headers)")
+        }
+        #expect(upstream.requests.isEmpty)
+    }
+
+    @Test func upstreamRejectionOfTheBrokeredCredentialBecomesA502WithoutAChallenge() throws {
+        let upstream = RecordingUpstream(
+            status: 401, headers: [("WWW-Authenticate", "Bearer realm=\"api\""), ("Content-Type", "application/json")],
+            chunks: [Data("{\"error\":\"invalid_api_key\"}".utf8)])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 502)
+        #expect(response.headers["www-authenticate"] == nil)
+        #expect(response.body.contains("brokered credential was rejected"))
+        #expect(response.body.contains("invalid_api_key") == false)
+        let record = try #require(audit.items.withLock { $0.first })
+        #expect(record.status == 502)
+        #expect(record.reason?.contains("401") == true)
+    }
+
+    @Test func upstreamChallengeOnANon401StatusIsPassedThroughWithoutTheChallenge() throws {
+        let upstream = RecordingUpstream(
+            status: 403,
+            headers: [("WWW-Authenticate", "Bearer error=\"insufficient_scope\", scope=\"files.write\""),
+                      ("Content-Type", "application/json")],
+            chunks: [Data("{\"error\":\"insufficient_scope\"}".utf8)])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 403)
+        #expect(response.headers["www-authenticate"] == nil)
+        #expect(response.body.contains("insufficient_scope"))
+    }
+
     @Test func acceptsChunkedBodiesAndExpectContinue() throws {
         let upstream = RecordingUpstream(status: 201, chunks: [Data("created".utf8)])
         let audit = AuditRecords()

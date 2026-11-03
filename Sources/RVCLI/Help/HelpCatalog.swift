@@ -486,6 +486,10 @@ enum HelpCatalog {
                     description: "Agents hold a per-launch placeholder; rv swaps in the value toward the upstream only"
                 ),
                 HelpRow(
+                    name: "rejected",
+                    description: "An upstream 401 reaches the agent as 502 with no challenge; update the value with set"
+                ),
+                HelpRow(
                     name: "sources",
                     description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
                 ),
