@@ -1,6 +1,7 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import Synchronization
 
 /// How a workspace terminal session ended without a failure.
 public enum WorkspaceTerminalOutcome: Sendable, Equatable {
@@ -19,6 +20,9 @@ public enum WorkspaceTerminalSessionFailure: Error, Sendable, Equatable {
     case client(WorkspaceClientFailure)
     /// The host dropped this subscriber's backlog.
     case fellBehind
+    /// Writing runtime output failed, typically because the local reader
+    /// left (`rv workspace run -- yes | head -1`).
+    case outputClosed
 }
 
 /// The local end of `rv workspace run`: launch, attach to the runtime's
@@ -27,6 +31,11 @@ public enum WorkspaceTerminalSession {
     /// Always detaches `client` exactly once, after stopping the stdin bridge
     /// and restoring the local terminal. Restore comes first because detach
     /// can block for the describe timeout.
+    ///
+    /// SIGPIPE is ignored for the whole call, so a closed `output` throws
+    /// `.outputClosed` instead of killing the process with the terminal raw.
+    /// The disposition is process-wide; the prior one comes back after
+    /// detach, last in teardown.
     ///
     /// - Parameters:
     ///   - rows: The row count the runtime was launched with. With
@@ -49,6 +58,7 @@ public enum WorkspaceTerminalSession {
     ) throws(WorkspaceTerminalSessionFailure) -> WorkspaceTerminalOutcome {
         var restorer: LocalTerminalRestorer?
         var bridge: TerminalStdinBridge?
+        BrokenPipe.ignore()
         defer {
             // Stopping an unstarted bridge waits out its full timeout, so
             // only a started one is set here. The reader leaves `input`
@@ -56,6 +66,7 @@ public enum WorkspaceTerminalSession {
             bridge?.stop()
             restorer?.restore()
             _ = client.detach()
+            BrokenPipe.restore()
         }
         let runtime: UUID
         switch launch(client) {
@@ -85,7 +96,6 @@ public enum WorkspaceTerminalSession {
             reader.start()
             bridge = reader
         }
-        let out = FileHandle(fileDescriptor: output, closeOnDealloc: false)
         var window = LocalTerminalWindow(rows: rows, columns: columns)
         while true {
             let inputEnded = bridge?.inputEnded ?? false
@@ -100,7 +110,7 @@ public enum WorkspaceTerminalSession {
             case .idle:
                 continue
             case .write(let bytes):
-                out.write(bytes)
+                guard writeOutput(bytes, to: output) == .written else { throw .outputClosed }
             case .exited(let status):
                 return .exited(status)
             case .failed(let failure):
@@ -145,6 +155,70 @@ public enum WorkspaceTerminalSession {
 
     static func endsOnInput(ownsInput: Bool, abandonOnInputEnd: Bool, inputEnded: Bool) -> Bool {
         ownsInput && abandonOnInputEnd && inputEnded
+    }
+
+    enum OutputWrite: Sendable, Equatable {
+        case written
+        case failed(errno: Int32)
+    }
+
+    /// Writes all of `data` to `fd`, continuing after short writes and EINTR.
+    /// Unlike `FileHandle.write`, a failure is returned rather than raised;
+    /// with SIGPIPE ignored, a closed pipe is `.failed(errno: EPIPE)`.
+    /// EAGAIN from an inherited `O_NONBLOCK` descriptor waits for room, as a
+    /// blocking write would; a gone reader then surfaces as EPIPE.
+    static func writeOutput(_ data: Data, to fd: Int32) -> OutputWrite {
+        data.withUnsafeBytes { buffer -> OutputWrite in
+            guard let base = buffer.baseAddress else { return .written }
+            var offset = 0
+            while offset < buffer.count {
+                let count = Darwin.write(fd, base + offset, buffer.count - offset)
+                if count > 0 {
+                    offset += count
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else if count < 0, errno == EAGAIN {
+                    var ready = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    if poll(&ready, 1, -1) < 0, errno != EINTR { return .failed(errno: errno) }
+                } else {
+                    return .failed(errno: count < 0 ? errno : EIO)
+                }
+            }
+            return .written
+        }
+    }
+
+    /// Scopes `SIG_IGN` for SIGPIPE. The disposition is process-wide, so
+    /// holders are counted: the first saves the prior action, the last puts
+    /// it back. Every `ignore()` needs exactly one `restore()`.
+    enum BrokenPipe {
+        private struct State {
+            var holders = 0
+            var previous = sigaction()
+        }
+
+        private static let state = Mutex(State())
+
+        static func ignore() {
+            state.withLock { state in
+                state.holders += 1
+                guard state.holders == 1 else { return }
+                var action = sigaction()
+                action.__sigaction_u.__sa_handler = SIG_IGN
+                sigemptyset(&action.sa_mask)
+                action.sa_flags = 0
+                sigaction(SIGPIPE, &action, &state.previous)
+            }
+        }
+
+        static func restore() {
+            state.withLock { state in
+                guard state.holders > 0 else { return }
+                state.holders -= 1
+                guard state.holders == 0 else { return }
+                sigaction(SIGPIPE, &state.previous, nil)
+            }
+        }
     }
 }
 #endif

@@ -60,6 +60,9 @@ struct WorkspaceTerminalFailureTextTests {
         ),
         Row(failure: .fellBehind, resourceProfileID: "gpu", text: "terminal client fell behind"),
         Row(failure: .fellBehind, resourceProfileID: nil, text: "terminal client fell behind"),
+        // Not "host disconnected": the host is fine, the local reader left.
+        Row(failure: .outputClosed, resourceProfileID: "gpu", text: "terminal output closed"),
+        Row(failure: .outputClosed, resourceProfileID: nil, text: "terminal output closed"),
     ]
 
     @Test(arguments: rows)

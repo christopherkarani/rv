@@ -821,6 +821,7 @@ enum WorkspaceCommandRun {
         case .noTerminal: "runtime has no terminal"
         case .client(let error): text(error)
         case .fellBehind: "terminal client fell behind"
+        case .outputClosed: "terminal output closed"
         }
     }
 
