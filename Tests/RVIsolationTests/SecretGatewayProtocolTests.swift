@@ -146,6 +146,54 @@ struct SecretGatewayProtocolTests {
         #expect(try refusal("Authorization: Bearer \(mine.text)") == nil)
     }
 
+    private func substituted(_ request: String, value: String) throws -> Result<GatewayRequestHead, GatewayRefusal> {
+        let key = SecretPlaceholder.mint(prefix: "")
+        let parsed = try #require(head(request.replacingOccurrences(of: "PH", with: key.text)))
+        let route = try #require(GatewayRoute(target: parsed.target))
+        return GatewaySubstitution.apply(parsed, route: route) {
+            $0 == key.token ? live(key, secret: "KEY", value: value) : nil
+        }.map { $0.head }
+    }
+
+    @Test func queryValuesArePercentEncodedSoTheyCannotAddParameters() throws {
+        let base = try #require(URL(string: "https://api.example.com/v1"))
+        let rewritten = try substituted("GET /s/KEY/models?key=PH&limit=2 HTTP/1.1\r\nX: y", value: "x?admin=1&").get()
+        #expect(rewritten.target == "/s/KEY/models?key=x%3Fadmin%3D1%26&limit=2")
+        let url = try #require(GatewayRoute(target: rewritten.target)?.upstreamURL(base: base))
+        #expect(url.path == "/v1/models")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(items.map(\.name) == ["key", "limit"])
+        #expect(items.first?.value == "x?admin=1&")
+
+        let traversal = try substituted("GET /s/KEY/models?key=PH HTTP/1.1\r\nX: y", value: "/../admin").get()
+        #expect(traversal.target == "/s/KEY/models?key=%2F..%2Fadmin")
+        #expect(GatewayRoute(target: traversal.target)?.upstreamURL(base: base)?.path == "/v1/models")
+
+        let lines = try substituted("GET /s/KEY/x?key=PH HTTP/1.1\r\nX: y", value: "a\r\nb c+%").get()
+        #expect(lines.target == "/s/KEY/x?key=a%0D%0Ab%20c%2B%25")
+    }
+
+    @Test func pathValuesThatCouldReshapeThePathAreRefused() throws {
+        for value in ["/../admin", "x?x=1&", "a/b", "a\\b", "a#b", "..", "a..b", "a\r\nb"] {
+            #expect(try substituted("GET /s/KEY/botPH/send HTTP/1.1\r\nX: y", value: value) == .failure(.unsafeValue),
+                "value \(value.debugDescription)")
+        }
+        let plain = try substituted("GET /s/KEY/botPH/send HTTP/1.1\r\nX: y", value: "123:ABC-def_~").get()
+        #expect(plain.target == "/s/KEY/bot123:ABC-def_~/send")
+        let encoded = try substituted("GET /s/KEY/botPH/send HTTP/1.1\r\nX: y", value: "a b%é").get()
+        #expect(encoded.target == "/s/KEY/bota%20b%25%C3%A9/send")
+    }
+
+    @Test func headerValuesWithLineBreaksAreRefused() throws {
+        for value in ["sk-1\r\nX-Injected: yes", "sk-1\nX-Injected: yes", "sk-1\rX"] {
+            #expect(try substituted("GET /s/KEY/x HTTP/1.1\r\nAuthorization: Bearer PH", value: value)
+                == .failure(.unsafeValue))
+        }
+        let pem = "-----BEGIN KEY-----\nabc\n-----END KEY-----"
+        #expect(try substituted("GET /s/KEY/x?k=PH HTTP/1.1\r\nX: y", value: pem).map(\.target)
+            == .success("/s/KEY/x?k=-----BEGIN%20KEY-----%0Aabc%0A-----END%20KEY-----"))
+    }
+
     @Test func scrubberCatchesValuesSplitAtEveryBoundary() {
         let secret = Array("sk-live-SECRET-0123456789".utf8)
         let marker = Array("[rv]".utf8)
