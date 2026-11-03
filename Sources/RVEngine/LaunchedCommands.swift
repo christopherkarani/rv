@@ -23,7 +23,7 @@ private func launchedCommands(_ raw: String, depth: Int) -> [[String]] {
             .map(\.lexeme)
         let argv = dropLaunchers(words)
         guard let head = argv.first else { continue }
-        let program = unescapeBackslashPairs(basename(head))
+        let program = unescapeBackslashPairs(basename(head)).lowercased()
         if shellNames.contains(program),
            let flag = argv.dropFirst().firstIndex(where: isShellCommandFlag),
            flag + 1 < argv.count
@@ -74,7 +74,7 @@ private func dropLaunchers(_ words: [String]) -> [String] {
             index += 1
             continue
         }
-        let name = basename(word)
+        let name = basename(word).lowercased()
         if name == "sudo" || name == "env" || name == "timeout" || plainLaunchers.contains(name) {
             launcher = name
             index += 1
