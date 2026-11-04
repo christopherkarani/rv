@@ -242,6 +242,29 @@ private func lines(_ text: String, containing needle: String) -> [String] {
     #expect(text.contains("Does not codesign") == false)
 }
 
+@Test func signDryRunSignsTheMicroVMBackendWithItsEntitlement() throws {
+    let stage = try makeStage()
+    defer { try? FileManager.default.removeItem(at: stage) }
+    for name in ["rv-microvm", "rv-guest-relay"] {
+        let file = stage.appendingPathComponent(name)
+        try Data("fixture \(name)\n".utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+    }
+
+    let run = try runSignScript(["--dry-run", stage.path])
+
+    #expect(run.status == 0, "\(run.output)")
+    let signs = lines(run.stdout, containing: "codesign --force")
+    #expect(signs.count == 7)
+    let microvm = try #require(signs.first { $0.hasSuffix("/rv-microvm") })
+    #expect(microvm.contains("--options runtime"))
+    #expect(microvm.contains("--identifier dev.rv.rv-microvm "))
+    #expect(microvm.contains("--entitlements "))
+    #expect(microvm.contains("Packages/rv-microvm/rv-microvm.entitlements"))
+    // The guest relay is a Linux ELF: not code-signable, never notarized.
+    #expect(signs.contains { $0.contains("rv-guest-relay") } == false)
+}
+
 private func makeCustodianBundle(in stage: URL) throws {
     let macOS = stage.appendingPathComponent("RVApprovals.app/Contents/MacOS", isDirectory: true)
     try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)

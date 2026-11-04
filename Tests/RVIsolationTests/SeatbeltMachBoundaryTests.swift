@@ -322,6 +322,8 @@ struct SeatbeltMachBoundaryTests {
             #expect(session.backend == .seatbelt)
         case .observed, .mediated:
             Issue.record("hardened contained run must establish seatbelt")
+        case .microvm:
+            Issue.record("must not establish a micro-VM")
         }
     }
 

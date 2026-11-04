@@ -9,7 +9,8 @@ Usage: Scripts/sign-macos.sh [--dry-run] [--keychain-from-env] STAGE
 
   codesign (hardened runtime, secure timestamp, identifier dev.rv.<name>)
     libswiftCompatibilitySpan.dylib (when staged), rv, rv-cli, rvd,
-    rv-workspace-host, rv-pty-claim; codesign --verify --strict each;
+    rv-workspace-host, rv-pty-claim, and rv-microvm (when staged, with its
+    virtualization entitlement); codesign --verify --strict each;
   notarytool submit --wait (App Store Connect API key) a zip of them;
   spctl assessment once notarized.
 
@@ -84,6 +85,12 @@ if [[ -e "$stage/libswiftCompatibilitySpan.dylib" || -L "$stage/libswiftCompatib
   binaries+=(libswiftCompatibilitySpan.dylib)
 fi
 binaries+=(rv rv-cli rvd rv-workspace-host rv-pty-claim)
+# Micro-VM backend: Virtualization.framework refuses a binary without the
+# entitlement, and re-signing drops whatever entitlements were there.
+if [[ -e "$stage/rv-microvm" || -L "$stage/rv-microvm" ]]; then
+  binaries+=(rv-microvm)
+fi
+microvm_entitlements="$(cd "$(dirname "$0")/.." && pwd)/Packages/rv-microvm/rv-microvm.entitlements"
 for name in "${binaries[@]}"; do
   path="$stage/$name"
   [[ ! -L "$path" ]] || fail "$name in the stage is a symlink; refusing to sign through it"
@@ -230,7 +237,10 @@ say "Signing ${#binaries[@]} files in $stage"
 for name in "${binaries[@]}"; do
   identifier="dev.rv.$name"
   [[ "$name" != libswiftCompatibilitySpan.dylib ]] || identifier="dev.rv.libswiftCompatibilitySpan"
+  entitlement_args=()
+  [[ "$name" != rv-microvm ]] || entitlement_args=(--entitlements "$microvm_entitlements")
   run codesign --force --options runtime --timestamp ${keychain_args[@]+"${keychain_args[@]}"} \
+    ${entitlement_args[@]+"${entitlement_args[@]}"} \
     --identifier "$identifier" --sign "$identity" "$stage/$name"
 done
 for name in "${binaries[@]}"; do
