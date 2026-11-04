@@ -203,14 +203,15 @@ public enum PolicyDiffRisk {
     ///
     /// Duplicate predicates collapse to the strictest row first,
     /// matching the verdict enforcement applies; an allow-then-deny
-    /// pair therefore reads as the deny, and finding detail keeps
-    /// naming that strictest row. Reviving an allow is advisory;
+    /// pair therefore reads as the deny, so finding detail keeps
+    /// naming that strictest verdict (and, for a removal, the
+    /// strictest row itself). Reviving an allow is advisory;
     /// dropping one is narrowing and stays silent.
     ///
     /// `secretExemptionSeverity` is explicit at the interface because
     /// the two callers differ on purpose: the CLI `evaluate` keeps a
     /// new exemption advisory, rollback keeps it blocking.
-    public static func evaluateReplacement(
+    static func evaluateReplacement(
         existing: PolicyDocument,
         incoming: PolicyDocument,
         secretExemptionSeverity: PolicyDiffRiskFinding.Severity

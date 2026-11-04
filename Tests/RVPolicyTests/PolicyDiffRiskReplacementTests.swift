@@ -1,6 +1,6 @@
 import Testing
 import RVDomain
-import RVPolicy
+@testable import RVPolicy
 
 /// Table tests at the replacement-decision seam: `PolicyDiffRisk`
 /// `evaluateReplacement` owns strictest dedup, share, removed, safety,
@@ -77,6 +77,28 @@ struct PolicyDiffRiskReplacementTests {
                     kind: .verdictRelaxed,
                     severity: .blocking,
                     detail: "typed.git:second deny->removed"
+                )
+            ]
+        )
+    }
+
+    @Test func equalVerdictDuplicatesCollapseToTheFirstRow() {
+        // Tie-break matches the tighten-only merges (`>` wins, ties
+        // keep the earlier row): two deny rows for one predicate read
+        // as the first, so a removal names it once.
+        let existing = PolicyDocument(rules: [
+            rule("first", verdict: .deny),
+            rule("second", verdict: .deny),
+        ])
+
+        let report = replacement(existing: existing, incoming: PolicyDocument())
+
+        #expect(
+            report.findings == [
+                PolicyDiffRiskFinding(
+                    kind: .verdictRelaxed,
+                    severity: .blocking,
+                    detail: "typed.git:first deny->removed"
                 )
             ]
         )
