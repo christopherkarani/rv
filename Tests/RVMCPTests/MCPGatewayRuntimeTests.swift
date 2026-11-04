@@ -176,6 +176,40 @@ struct MCPGatewayRuntimeTests {
         #expect(plan("a") == .secretUndefined(server: "a", secret: "MISSING"))
     }
 
+    @Test func plannerRefusesAnExpiredSecretToEveryServerBeforeResolving() throws {
+        let configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(
+                name: "envy", command: "e", secrets: ["TOKEN": "OLD"], sandbox: MCPSandboxPolicy(network: false)),
+            MCPServerDefinition(
+                name: "remote",
+                remote: MCPRemoteServer(
+                    url: try #require(URL(string: "https://mcp.example.com/mcp")),
+                    headers: ["Authorization": "Bearer ${secret:OLD}"])),
+        ])
+        let expired = Date(timeIntervalSince1970: 946_684_800)
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(
+                name: "OLD", source: .hostEnvironment(variable: "OLD"), delivery: .environment, expires: expired)
+        ])
+        let resolved = Mutex(0)
+        let resolver = SecretResolver { _ in
+            resolved.withLock { $0 += 1 }
+            return .success(SecretValue("v")!)
+        }
+        for name in ["envy", "remote"] {
+            guard case .failure(let error) = MCPLaunchPlanner.plan(
+                servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:],
+                requireSandbox: true)
+            else {
+                Issue.record("\(name) was given an expired secret")
+                continue
+            }
+            #expect(error == .secretUnavailable(
+                server: name, secret: "OLD", reason: "expired at \(SecretExpiry.text(expired))"))
+        }
+        #expect(resolved.withLock { $0 } == 0)
+    }
+
     @Test func untrustedConfigurationDoesNotOpenARemoteServer() throws {
         let remote = MCPServerDefinition(
             name: "remote",

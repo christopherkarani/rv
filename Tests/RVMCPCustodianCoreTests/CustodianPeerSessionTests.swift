@@ -34,7 +34,7 @@ struct CustodianPeerSessionTests {
                 Thread.sleep(forTimeInterval: 0.02)
                 return "00"
             },
-            verify: { _, _, _ in true })
+            verify: { _, _, _ in .valid })
         return CustodianRequestHandler(service: MCPCustodianKeyService(signing: signing))
     }
 
@@ -46,7 +46,7 @@ struct CustodianPeerSessionTests {
 
     static let macFrame = {
         try! JSONEncoder().encode(
-            MCPCustodianRequest.mac(purpose: "grant", fields: ["a"], createIfMissing: true))
+            MCPCustodianRequest.mac(purpose: .grant, fields: ["a"], createIfMissing: true))
     }()
     static let helloFrame = { try! JSONEncoder().encode(MCPCustodianHello()) }()
 

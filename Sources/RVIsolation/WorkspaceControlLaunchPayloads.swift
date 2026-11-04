@@ -7,13 +7,14 @@ import RVDomain
 // and every refusal code matches the legacy per-op guards exactly.
 
 /// Validated `launchRuntime` fields: an absolute command, resolved IO, an
-/// optional hook participant, and the resolved resource profile (nil selects
-/// the base fence).
+/// optional hook participant, the resolved resource profile (nil selects
+/// the base fence), and an optional micro-VM backend (nil selects Seatbelt).
 struct LaunchRuntimePayload: Sendable, Equatable {
     var command: IsolatedCommand
     var io: IsolatedIO
     var hook: HookHost?
     var resourceProfile: RuntimeResourceProfile?
+    var microVM: MicroVMLaunchOptions? = nil
 
     /// Ordered exactly like the legacy handler: executable, profile, hook,
     /// command, IO. The profile lookup precedes hook/command/IO selection,
@@ -58,7 +59,8 @@ struct LaunchRuntimePayload: Sendable, Equatable {
                 command: command,
                 io: io,
                 hook: hook,
-                resourceProfile: resourceProfile
+                resourceProfile: resourceProfile,
+                microVM: request.microvm
             ))
         }
     }
@@ -78,7 +80,10 @@ struct EnsureTerminalRuntimePayload: Sendable, Equatable {
     static func parse(
         _ request: WorkspaceControlRequest
     ) -> Result<EnsureTerminalRuntimePayload, WorkspaceControlCode> {
-        guard let executable = request.executable, executable.hasPrefix("/"),
+        // The reuse shortcut is backend-agnostic; a micro-VM launch must not
+        // silently attach to (or start) a Seatbelt runtime.
+        guard request.microvm == nil,
+            let executable = request.executable, executable.hasPrefix("/"),
             let command = IsolatedCommand(
                 executable: executable,
                 arguments: request.arguments ?? []

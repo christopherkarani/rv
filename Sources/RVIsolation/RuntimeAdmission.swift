@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVDomain
 import RVIPC
+import RVPolicy
 import Synchronization
 
 /// In-memory admission evidence. The shell records the final outcome before
@@ -21,14 +22,7 @@ public final class RuntimeAdmissionEvidence: Sendable {
 
     /// `$HOME/.config/rv/runtime-admission.jsonl`, beside the session start log.
     public static func productionFile() -> URL? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"],
-            home.hasPrefix("/"), home.contains("\0") == false
-        else {
-            return nil
-        }
-        return URL(fileURLWithPath: home, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("rv", isDirectory: true)
+        HomeDirectory.processConfigDirectory()?
             .appendingPathComponent("runtime-admission.jsonl", isDirectory: false)
     }
 
