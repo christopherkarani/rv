@@ -43,9 +43,9 @@ public func applyGitSemantics(
     // parsed git segment; the first deny wins, so a benign prefix cannot
     // hide a risky later segment. The attached analysis stays the
     // whole-command analysis.
-    let view = Normalize.matchingView(of: command.rawValue).rawValue
+    let view = chainSegmentView(of: command)
     let gitContext = gitAnalysisContext(context)
-    if splitSegments(view).count > 1 {
+    if splitSegments(Normalize.matchingView(of: command.rawValue).rawValue).count > 1 {
         if let action = analysis.gitAction,
             let denied = gitSegmentResult(
                 action: action,
