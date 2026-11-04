@@ -9,13 +9,14 @@ struct RobotJSONEscapeTests {
     /// surface encodes through `RobotJSON`, so the escaping contract
     /// is pinned here once instead of per command.
     enum Preset: String, CaseIterable, Sendable {
-        case compact, compactISO8601, pretty
+        case compact, compactISO8601, pretty, auditVerify
 
         var options: RobotJSON.Options {
             switch self {
             case .compact: .compact
             case .compactISO8601: .compactISO8601
             case .pretty: .pretty
+            case .auditVerify: .auditVerify
             }
         }
 
@@ -74,12 +75,14 @@ struct RobotJSONEscapeTests {
         #expect(lines == "{\"a\":\"1\"}\n{\"b\":\"2\"}\n")
     }
 
-    @Test func auditVerifyLegacyPreservesItsBytes() throws {
-        // Not a REQ-T7 gaining surface: escaped slashes, raw scalars.
+    @Test func auditVerifyKeepsEscapedSlashesAndEscapesScalars() throws {
+        // The `\/` spelling is audit-verify's preserved layout byte;
+        // scalar escaping is the seam's invariant on every surface.
         let robot = try RobotJSON.encode(
-            ["head": "a/b\u{2028}"], options: .auditVerifyLegacy)
+            ["head": "a/b\u{2028}"], options: .auditVerify)
         #expect(robot.contains("a\\/b"))
-        #expect(robot.unicodeScalars.contains { $0.value == 0x2028 })
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(robot.contains("\\u2028"))
         #expect(robot.hasSuffix("\n"))
     }
 

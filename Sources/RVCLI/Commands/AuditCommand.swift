@@ -68,7 +68,7 @@ enum AuditVerifyRun {
     }
 
     static func json(_ report: AuditChainReport) throws -> String {
-        try RobotJSON.encode(report, options: .auditVerifyLegacy)
+        try RobotJSON.encode(report, options: .auditVerify)
     }
 
     static func text(_ report: AuditChainReport, path: String) -> String {

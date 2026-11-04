@@ -12,44 +12,44 @@ import RVDomain
 /// placeholder bytes on a zero exit.
 enum RobotJSON {
     /// Per-surface layout choices. Presets pin each existing surface's
-    /// bytes; only the surfaces REQ-T7 names change (they gain the
-    /// escaping the preset already carried everywhere else).
+    /// layout bytes; scalar escaping is not a choice here — the seam
+    /// escapes on every surface (spec §9), so no preset can opt out.
     struct Options: Sendable {
-        var pretty: Bool
-        var iso8601Dates: Bool
+        let pretty: Bool
+        let iso8601Dates: Bool
         /// `true` keeps `JSONEncoder`'s `\/` slash spelling. Only the
         /// audit-verify surface still spells slashes that way.
-        var escapesSlashes: Bool
-        /// `false` skips `DisplayedText.escapeJSONScalars`. Only the
-        /// audit-verify surface keeps its pre-module bytes this way;
-        /// it is not one of REQ-T7's named gaining surfaces.
-        var escapesScalars: Bool
-        var trailingNewline: Bool
+        let escapesSlashes: Bool
+        let trailingNewline: Bool
 
-        /// Sorted keys, compact, unescaped slashes, escaped scalars,
-        /// encoder-default dates, no trailing newline (callers add it).
+        /// Sorted keys, compact, unescaped slashes, encoder-default
+        /// dates, no trailing newline (callers add it).
         static let compact = Options(
             pretty: false, iso8601Dates: false, escapesSlashes: false,
-            escapesScalars: true, trailingNewline: false)
+            trailingNewline: false)
 
         /// Compact with ISO-8601 dates (egress, audit, blocks). Blocks
         /// gains unescaped slashes here — the REQ-T7 named divergence.
         static let compactISO8601 = Options(
             pretty: false, iso8601Dates: true, escapesSlashes: false,
-            escapesScalars: true, trailingNewline: false)
+            trailingNewline: false)
 
         /// Pretty-printed with a trailing newline (secrets, managed,
         /// mcp, report). `secrets describe` gains scalar escaping via
         /// this preset — the REQ-T7 named divergence.
         static let pretty = Options(
             pretty: true, iso8601Dates: false, escapesSlashes: false,
-            escapesScalars: true, trailingNewline: true)
+            trailingNewline: true)
 
-        /// Audit-verify's existing bytes, preserved: pretty, escaped
-        /// slashes, no scalar escaping, trailing newline.
-        static let auditVerifyLegacy = Options(
+        /// Audit-verify's layout, preserved: pretty, `\/` slash
+        /// spelling, trailing newline. Slashes stay escaped only here
+        /// because REQ-T7 names Blocks as the slash divergence; scalar
+        /// escaping applies as on every surface, which no reachable
+        /// `AuditChainReport` byte can observe (its `head` is SHA-256
+        /// hex and its break reasons are internal sentences).
+        static let auditVerify = Options(
             pretty: true, iso8601Dates: false, escapesSlashes: true,
-            escapesScalars: false, trailingNewline: true)
+            trailingNewline: true)
     }
 
     /// Encodes one robot document. `JSONEncoder` already writes ESC
@@ -89,6 +89,6 @@ enum RobotJSON {
             throw RobotRenderError.encodingFailed(String(describing: error))
         }
         let text = String(decoding: data, as: UTF8.self)
-        return options.escapesScalars ? DisplayedText.escapeJSONScalars(text) : text
+        return DisplayedText.escapeJSONScalars(text)
     }
 }
