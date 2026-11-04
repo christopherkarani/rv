@@ -138,7 +138,6 @@ public actor ServiceRuntime {
             pending: self.pendingApprovals,
             allowOnce: self.allowOnce,
             grants: self.grants,
-            home: resolvedHome,
             compileSet: compileSet,
             clock: clock
         )
@@ -360,7 +359,7 @@ public actor ServiceRuntime {
         case .pendingResolve(let params):
             switch await approvals.pendingResolveResult(
                 params,
-                peek: compileSet.livePeek(home: configHome, store: nil, grants: grants)
+                peek: compileSet.livePeek(store: nil, grants: grants)
             ) {
             case .success(let reply): result = .pendingResolve(reply)
             case .failure(let error): result = .error(error)

@@ -48,7 +48,6 @@ actor HookReviewCeremonyService {
     private let pending: (any PendingApprovalCoordinating)?
     private let allowOnce: AllowOnceStore
     private let grants: EphemeralAllowOnceTable
-    private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
     /// The daemon's live compile-set module: peeks request its ready
     /// door per call, so a `setPackEnabled` rebuild after init is
@@ -60,14 +59,12 @@ actor HookReviewCeremonyService {
         pending: (any PendingApprovalCoordinating)?,
         allowOnce: AllowOnceStore,
         grants: EphemeralAllowOnceTable,
-        home: HomeDirectory?,
         compileSet: LiveCompileSet,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.pending = pending
         self.allowOnce = allowOnce
         self.grants = grants
-        self.home = home
         self.clock = clock
         self.compileSet = compileSet
     }
@@ -295,7 +292,7 @@ actor HookReviewCeremonyService {
     /// Allow-once peek at the compile-set seam: door freshness resolves
     /// inside the module per peek, never a per-peek world assembly here.
     private func peek() -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
-        compileSet.livePeek(home: home, store: allowOnce, grants: grants)
+        compileSet.livePeek(store: allowOnce, grants: grants)
     }
 
     private func prune() {

@@ -511,7 +511,7 @@ struct HookReviewCeremonyTests {
 
     @Test func runtimeCeremonyPeekSeesPackEnabledAfterInit() async throws {
         // AC-001 through ServiceRuntime: a pack enabled after init is
-        // visible to the hook ceremony peek via the runtime's live gated.
+        // visible to the hook ceremony peek via the compile-set module.
         // The probe rule exists only in the runtime's snapshots, so a
         // peek that re-assembled bundled packs would allow and plant nothing.
         let sqlite = PackID(rawValue: "database.sqlite")
@@ -610,7 +610,6 @@ private final class HookCeremonyEnv {
             pending: pending,
             allowOnce: grants,
             grants: EphemeralAllowOnceTable(),
-            home: home,
             compileSet: compileSet,
             clock: clock
         )

@@ -31,8 +31,10 @@ import RVPolicy
 /// State sits behind one lock internal to this module: the hook ceremony
 /// is built in `ServiceRuntime.init` before `self` can be captured, so
 /// callers share this reference and read the same live set at peek time.
-/// Rebuild work (catalog read, session compile) runs under that lock;
-/// a caller that would block on it needs the rebuilt door anyway.
+/// Rebuild work (catalog read, session compile) runs under that lock, so
+/// a concurrent covered read also waits out an in-flight rebuild; the
+/// compile is bounded, and publishing only under the lock is what keeps
+/// a slower heal from overwriting a fresher door.
 package final class LiveCompileSet: Sendable {
     /// Readiness of the door compiled at init. Fixed for the daemon's
     /// lifetime handshake, exactly as the runtime has always reported it;
@@ -122,21 +124,21 @@ package final class LiveCompileSet: Sendable {
     }
 
     /// Frozen-clock allow-once peek with freshness resolved per call:
-    /// the wanted set is the config walk for `home` — the same walk the
-    /// peeked request carries — and the door is healed to cover it
-    /// before the peek runs. `store` nil keeps the world's default
-    /// store for `home` (allowlist directory only; grants are authority).
+    /// the wanted set is the config walk for this module's home — the
+    /// same walk the peeked request carries — and the door is healed to
+    /// cover it before the peek runs. `store` nil keeps the world's
+    /// default store for that home (allowlist directory only; grants
+    /// are authority).
     package func livePeek(
-        home: HomeDirectory?,
         store: AllowOnceStore?,
         grants: EphemeralAllowOnceTable
     ) -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
         { command, cwd, now in
             await LiveEvaluateWorld(
-                home: home,
+                home: self.home,
                 store: store,
                 grants: grants,
-                gated: self.readyDoor(wanted: EvaluationWorld.walkedPackIDs(home: home)),
+                gated: self.readyDoor(wanted: EvaluationWorld.walkedPackIDs(home: self.home)),
                 clock: { now }
             ).peek(command: command, cwd: cwd)
         }
@@ -144,8 +146,9 @@ package final class LiveCompileSet: Sendable {
 
     /// The single pack-enablement mutation entry: writes config through
     /// the facade, reloads the catalog, rebuilds at once, and clears the
-    /// throttle slot. A missing home throws `PacksCommandError` only via
-    /// the facade; callers gate on home before calling.
+    /// throttle slot. A module with no home throws
+    /// `LiveCompileSetError.missingHome` before touching the facade;
+    /// facade failures throw `PacksCommandError`.
     package func setPackEnabled(_ id: PackID, enabled: Bool) throws {
         guard let home else { throw LiveCompileSetError.missingHome }
         try state.withLock { state in

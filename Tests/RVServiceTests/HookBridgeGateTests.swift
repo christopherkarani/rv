@@ -150,7 +150,6 @@ private final class HookBridgeEnv {
             pending: pending,
             allowOnce: AllowOnceStore(baseDirectory: allowOnceDirectory),
             grants: EphemeralAllowOnceTable(),
-            home: home,
             compileSet: LiveCompileSet(snapshots: nil, catalog: nil, home: home),
             clock: { now }
         )

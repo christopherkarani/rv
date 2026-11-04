@@ -155,7 +155,6 @@ struct LiveCompileSetTests {
             uptimeNanoseconds: { uptime.now }
         )
         let peek = set.livePeek(
-            home: home,
             store: AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory()),
             grants: EphemeralAllowOnceTable()
         )

@@ -131,7 +131,7 @@ struct Step8BAdversarialTests {
         // One shared memory table: the ceremony plants, the world spends.
         let memory = EphemeralAllowOnceTable()
         let ceremonies = HookReviewCeremonyService(
-            pending: pending, allowOnce: grants, grants: memory, home: home,
+            pending: pending, allowOnce: grants, grants: memory,
             compileSet: LiveCompileSet(snapshots: nil, catalog: nil, home: home),
             clock: { self.now })
         let cwd = wd("/tmp/ws")
@@ -241,7 +241,7 @@ struct Step8BAdversarialTests {
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         let wall = WallBox(now)
         let ceremonies = HookReviewCeremonyService(
-            pending: pending, allowOnce: grants, grants: EphemeralAllowOnceTable(), home: home,
+            pending: pending, allowOnce: grants, grants: EphemeralAllowOnceTable(),
             compileSet: LiveCompileSet(snapshots: nil, catalog: nil, home: home),
             clock: { wall.now })
         let cwd = wd("/tmp/ws")
