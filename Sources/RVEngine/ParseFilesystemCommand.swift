@@ -56,7 +56,7 @@ func parseFilesystemCommand(_ argv: Argv) -> ParsedFilesystemCommand? {
         return parseUnzip(argv)
     case "split":
         return parseSplit(argv)
-    case "sed":
+    case "sed", "gsed":
         return parseSed(argv)
     case "sqlite3":
         return parseSqlite3(argv)

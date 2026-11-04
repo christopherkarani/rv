@@ -181,6 +181,64 @@ struct RuntimeAdmissionIsolationTests {
         #expect(diagnostics.all.isEmpty == false)
     }
 
+    @Test func admissionEventOnDiskKeysArePinnedAndSymlinkRefused() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-admission-keys-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let event = RuntimeAdmissionEvent(
+            session: "s-1", requestID: "r-1", fingerprint: "fp", authorization: .allowed,
+            executionAttempted: true, result: "exit:0"
+        )
+        let url = directory.appendingPathComponent("runtime-admission.jsonl")
+        #expect(appendAdmissionEvent(event, to: url, diagnose: { _ in }))
+        let line = try #require(
+            String(contentsOf: url, encoding: .utf8).split(separator: "\n").first
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+        )
+        #expect(Set(object.keys) == [
+            "authorization", "executionAttempted", "fingerprint", "requestID", "result", "session",
+        ])
+        #expect(object["authorization"] as? String == "allowed")
+        #expect(object["executionAttempted"] as? Bool == true)
+        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        #expect(mode == 0o600)
+
+        let target = directory.appendingPathComponent("target.txt")
+        try Data("untouched".utf8).write(to: target)
+        let link = directory.appendingPathComponent("link.jsonl")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let diagnostics = AdmissionDiagnosticCollector()
+        #expect(appendAdmissionEvent(event, to: link, diagnose: diagnostics.record) == false)
+        #expect(diagnostics.all.isEmpty == false)
+        #expect(try String(contentsOf: target, encoding: .utf8) == "untouched")
+    }
+
+    @Test func admissionLockFailureReportsCapturedErrno() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-admission-lock-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let event = RuntimeAdmissionEvent(
+            session: "s-1", requestID: nil, fingerprint: nil, authorization: .allowed,
+            executionAttempted: true, result: "exit:0"
+        )
+        let url = directory.appendingPathComponent("runtime-admission.jsonl")
+        let target = directory.appendingPathComponent("target.txt")
+        try Data("untouched".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: url.appendingPathExtension("lock"), withDestinationURL: target
+        )
+        let diagnostics = AdmissionDiagnosticCollector()
+        #expect(appendAdmissionEvent(event, to: url, diagnose: diagnostics.record) == false)
+        let message = try #require(diagnostics.all.first)
+        #expect(message.contains("lock failed"))
+        #expect(message.contains("errno=\(ELOOP)"))
+        #expect(FileManager.default.fileExists(atPath: url.path) == false)
+    }
+
     @Test func seatbeltProfileGainsNoNetworkAllow() throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-profile"))
         let plan = try compileIsolationPlan(

@@ -3,7 +3,8 @@ import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.cursor/hooks.json`.
 /// Occupancy of the setup slot is the exclusive `rv-guard.py`; this merge only
-/// registers that adapter under official `beforeShellExecution` with
+/// registers that adapter under official `beforeShellExecution`,
+/// `preToolUse` and `beforeReadFile` with
 /// `failClosed: true` and strips the fingerprint.
 ///
 /// Round-trip, strip/insert/uninstall delegate to `HostHooksMergeEngine` via
@@ -14,6 +15,7 @@ enum CursorHooksMerge {
     static let hooksRootKey = "hooks"
     static let beforeShellKey = "beforeShellExecution"
     static let preToolUseKey = "preToolUse"
+    static let beforeReadFileKey = "beforeReadFile"
     static let fingerprint = "rv-guard.py"
     static let timeout = 5
     static let schemaVersion = 1
@@ -21,7 +23,7 @@ enum CursorHooksMerge {
     static let wiringDescriptor = HostWiringDescriptor(
         layout: .flat(
             hooksRootKey: hooksRootKey,
-            listKeys: [beforeShellKey, preToolUseKey],
+            listKeys: [beforeShellKey, preToolUseKey, beforeReadFileKey],
             versionKey: versionKey,
             schemaVersion: schemaVersion
         ),
