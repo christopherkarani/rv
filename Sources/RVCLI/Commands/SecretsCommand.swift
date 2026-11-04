@@ -646,9 +646,16 @@ enum SecretsRun {
     }
 
     /// Names where the value comes from and where it goes, never the value.
+    /// A schema-supplied Vault server is named, since rv sends a Vault token there.
     static func importLine(_ secret: SecretDefinition) -> String {
         "import \(secret.name): provider \(secret.source.kind), delivery \(secret.delivery.summary)"
             + (secret.type.map { ", type \($0)" } ?? "")
+            + (vaultServer(secret.source).map { ", Vault server \($0)" } ?? "")
+    }
+
+    static func vaultServer(_ source: SecretSource) -> String? {
+        guard case .vault(_, _, let address?) = source, let host = address.host else { return nil }
+        return DisplayedText.field(host + (address.port.map { ":\($0)" } ?? ""))
     }
 
     /// Writes the fresh secrets of a planned import, after org policy allows each.

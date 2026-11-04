@@ -13,6 +13,14 @@ public enum Normalize {
         matchingView(of: command.rawValue)
     }
 
+    /// The matching view with the operands of search and data-reading
+    /// commands left visible, for the secret-path guard alone: a quoted
+    /// `grep "k" ".env"` operand is masked out of the matching view.
+    /// Never a grant key; it can carry pattern text the matching view hides.
+    public static func secretScanView(of command: ShellCommand) -> MatchingView {
+        ShellPipeline.secretScanView(of: command.rawValue)
+    }
+
     /// Exact lexemes masking replaced while producing the matching view.
     /// M-07: mint and spend digest these (never store or transmit them).
     public static func maskedSegments(of command: String) -> [String] {
@@ -72,7 +80,14 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
 /// different hidden payloads do not share authority. Every site that
 /// overwrites a lexeme with a mask MUST append the pre-mask lexeme here;
 /// ANSI-C surfacing is revealing, not masking, and records nothing.
-func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: String, masked: [String]) {
+///
+/// `revealSearchOperands` keeps the operands of search and data-reading
+/// commands (`grep "x" ".env"`, `jq . .env`) visible. Only the secret-path
+/// guard reads that view: masking hides pattern text from the packs, but a
+/// masked file operand is a secret read the guard would never see.
+func applyRoleAwareQuotesDetailed(
+    tokens: [ShellPipeline.Token], revealSearchOperands: Bool = false
+) -> (view: String, masked: [String]) {
     var tokens = tokens
     guard !tokens.isEmpty else { return ("", []) }
     var masked: [String] = []
@@ -261,7 +276,17 @@ func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: Strin
             continue
         }
 
+        let revealed = revealSearchOperands && revealsFileOperands(commandBase)
+        // A revealed quoted word stays one word: `grep "load .env" docs` must
+        // not read as a `.env` operand, and `grep "" .env` keeps its pattern.
+        if revealed, token.wasQuoted, token.containsInlineCode == false, token.isRedirectStructural == false {
+            tokens[index].lexeme = decoded.isEmpty
+                ? "\"\""
+                : String(decoded.map { $0.isWhitespace || ";|&<>()\"'\\".contains($0) ? "_" : $0 })
+        }
+
         if unquotedDataMaskSafe,
+           revealed == false,
            isAllArgsData(commandBase),
            token.containsInlineCode == false,
            token.isRedirectStructural == false
@@ -274,6 +299,7 @@ func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: Strin
         }
 
         if token.wasQuoted,
+           revealed == false,
            token.isRedirectStructural == false,
            shouldMaskQuotedData(
                command: commandBase,

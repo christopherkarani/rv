@@ -802,7 +802,13 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
             guard value.contains("\r") == false, value.contains("\n") == false else { continue }
             text += "\(header.name): \(value)\r\n"
         }
-        if framed { text += "Transfer-Encoding: chunked\r\n" }
+        if framed {
+            text += "Transfer-Encoding: chunked\r\n"
+        } else if status >= 200, status != 204, GatewayHeaders.isIdentityEncoded(headers),
+            let length = GatewayHeaders.bodilessContentLength(headers)
+        {
+            text += "Content-Length: \(length)\r\n"
+        }
         text += "Connection: close\r\n\r\n"
         if watching { held = [] }
         closed = write(Array(text.utf8)) == false

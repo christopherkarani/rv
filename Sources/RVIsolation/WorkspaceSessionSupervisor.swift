@@ -1536,6 +1536,24 @@ final class WorkspaceSessionSupervisor: Sendable {
         let agentName = stagingAgent?.rawValue
         var keychain: [(name: String, value: String)]
         if let resources = request.resources {
+            // Organization policy governs these like secrets.json definitions:
+            // checked before any read, so a refused launch prompts for nothing.
+            let staged = resources.profile.keychain.filter { item in
+                guard let filter = item.agents, filter.isEmpty == false else { return true }
+                return agentName.map { filter.contains($0) } ?? false
+            }
+            var refusal: SecretLeaseError?
+            if staged.isEmpty == false {
+                if let secretBroker {
+                    refusal = secretBroker.profileKeychainRefusal(staged)
+                } else {
+                    refusal = SecretLaunchBroker.profileKeychainRefusal(
+                        staged, managed: ManagedPolicyLocation.installed.load())
+                }
+            }
+            if let refusal {
+                return .failure(.apply(.resourceStagingFailed(refusal.message)))
+            }
             switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
             case .success(let entries):
                 keychain = entries

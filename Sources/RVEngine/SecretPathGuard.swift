@@ -71,19 +71,45 @@ enum SecretPathGuard {
         if treatOverflowAsDenial, scan.overflowed {
             return overflowHit(searchText: searchText)
         }
-        for candidate in scan.candidates {
-            // The resolved spelling is authoritative: a symlinked operand
-            // IS its target, so the typed spelling participates only when
-            // no distinct target exists. An exemption on one spelling never
-            // vouches for the other, so scanning continues until a
-            // non-exempt hit breaks out.
-            let spelling = resolved(candidate, resolution: resolution) ?? candidate
-            if let rule = catalog.firstMatch(of: spelling),
-               !isExempt(spelling, rule, exempts: exempts) {
-                return hit(spelling, rule: rule, searchText: searchText)
+        for operand in scan.candidates {
+            for candidate in spellings(of: operand, catalog: catalog) {
+                // The resolved spelling is authoritative: a symlinked operand
+                // IS its target, so the typed spelling participates only when
+                // no distinct target exists. An exemption on one spelling never
+                // vouches for the other, so scanning continues until a
+                // non-exempt hit breaks out.
+                let spelling = resolved(candidate, resolution: resolution) ?? candidate
+                if let rule = catalog.firstMatch(of: spelling),
+                   !isExempt(spelling, rule, exempts: exempts) {
+                    return hit(spelling, rule: rule, searchText: searchText)
+                }
             }
         }
         return nil
+    }
+
+    /// The spellings one operand word can open, typed spelling first: the
+    /// shell drops backslash escapes (`\.env`), an input redirect or curl's
+    /// `@` names a file (`<.env`, `-d@.env`), and a glob or brace word
+    /// (`.env*`, `{.env,x}`, `~/.ss*/id_*`) opens whatever it matches, so a
+    /// catalog name it can select stands in for it.
+    static func spellings(of operand: String, catalog: SecretPathCatalog) -> [String] {
+        var out = [operand]
+        func add(_ spelling: String) {
+            if spelling.isEmpty == false, out.contains(spelling) == false { out.append(spelling) }
+        }
+        var plain = unescapeBackslashPairs(operand)
+        if let index = plain.firstIndex(where: { $0.isNumber == false }), plain[index] == "<",
+            plain[plain.index(after: index)...].first.map({ $0 != "<" && $0 != "(" }) ?? false
+        {
+            plain = String(plain[plain.index(after: index)...])
+        }
+        while plain.hasPrefix("@") { plain.removeFirst() }
+        add(plain)
+        if plain.contains(where: { "*?[{".contains($0) }), let selected = SecretPathGlob.selects(plain, catalog: catalog) {
+            add(selected)
+        }
+        return out
     }
 
     /// Deny-by-default match for unverifiable input. `matchedText` stays nil
@@ -146,6 +172,11 @@ enum SecretPathGuard {
         // return before the args array is materialized.
         let tokens = ShellPipeline.tokenize(haystack)
         guard let head = tokens.first else { return .empty }
+        // `$(<.env)` and `<.env cat`: an input redirect in head position reads
+        // its file whatever command follows.
+        if head.lexeme.hasPrefix("<") {
+            return otherCandidates(tokens.map(\.lexeme))
+        }
         let kind = headKind(basename(head.lexeme))
         // Deferred so only the consuming arm pays for materialization.
         func args() -> [String] { tokens.dropFirst().map(\.lexeme) }
@@ -189,7 +220,9 @@ private func headKind(_ argv0: String) -> HeadKind {
     switch argv0.lowercased() {
     case "echo", "printf":
         return .nonPath
-    case "grep", "rg":
+    // Search tools and pattern-first data readers: the first positional is
+    // the pattern or program, the rest are files.
+    case "grep", "rg", "egrep", "fgrep", "ripgrep", "ag", "ack", "jq", "awk", "gawk", "mawk", "nawk":
         return .grep
     case "find":
         return .find
@@ -203,6 +236,9 @@ private func headKind(_ argv0: String) -> HeadKind {
 private enum OperandFlag {
     case regexp(attached: String?)
     case file(attached: String?)
+    /// A file-selecting glob (`rg -g .env`, `grep --include .env`): its value
+    /// names files the search reads, and the pattern is still positional.
+    case glob(attached: String?)
     case files
     case equalsValue(String)
     case ignore
@@ -234,6 +270,8 @@ private func operandFlag(for token: FlagToken) -> OperandFlag? {
             // Attached values are ignored here, as before: `--files=x` was
             // `.files`, never `.equalsValue`.
             return .files
+        case "glob", "iglob", "include":
+            return .glob(attached: attached)
         default:
             if let attached {
                 return .equalsValue(attached)
@@ -245,18 +283,32 @@ private func operandFlag(for token: FlagToken) -> OperandFlag? {
         // over `e` when both cluster together.
         var sawFile = false
         var sawRegexp = false
+        var sawGlob = false
+        // getopt reads the rest of a cluster after a value-taking letter as
+        // its value: `-g.env`, `-f.env`. A run of plain letters keeps the
+        // per-letter reading below.
+        if letters.count > 1, let first = letters.first, first == "g" || first == "f",
+            letters.dropFirst().contains(where: { $0.isASCII == false || $0.isLetter == false })
+        {
+            let attached = String(letters.dropFirst())
+            return first == "g" ? .glob(attached: attached) : .file(attached: attached)
+        }
         for letter in letters {
             guard letter.isASCII, letter.isLetter else {
                 return .ignore
             }
             if letter == "f" { sawFile = true }
             if letter == "e" { sawRegexp = true }
+            if letter == "g" { sawGlob = true }
         }
         if sawFile {
             return .file(attached: nil)
         }
         if sawRegexp {
             return .regexp(attached: nil)
+        }
+        if sawGlob {
+            return .glob(attached: nil)
         }
         return .ignore
     case .shortEquals(_, let value):
@@ -268,7 +320,13 @@ private func operandCandidate(_ decoded: String) -> String? {
     if decoded == "--" { return nil }
     if decoded.hasPrefix("-") {
         guard let eq = decoded.firstIndex(of: "="), eq > decoded.startIndex else {
-            return nil
+            // `-T.env`, `-d@.env`: a short option's attached value. A plain
+            // flag cluster (`-la`) yields letters no catalog rule names.
+            let letter = decoded.dropFirst().first
+            guard decoded.hasPrefix("--") == false, decoded.count > 2,
+                let letter, letter.isASCII, letter.isLetter
+            else { return nil }
+            return String(decoded.dropFirst(2))
         }
         return String(decoded[decoded.index(after: eq)...])
     }
@@ -291,6 +349,7 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
     var skipFirstPositional = true
     var expectRegexp = false
     var expectFile = false
+    var expectGlob = false
     var afterDoubleDash = false
 
     func add(_ value: String) {
@@ -311,6 +370,11 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
         }
         if expectFile {
             expectFile = false
+            add(word)
+            continue
+        }
+        if expectGlob {
+            expectGlob = false
             add(word)
             continue
         }
@@ -345,6 +409,12 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
                 }
             case .files:
                 skipFirstPositional = false
+            case .glob(let attached):
+                if let attached {
+                    add(attached)
+                } else {
+                    expectGlob = true
+                }
             case .equalsValue(let value):
                 add(value)
             case .ignore:
@@ -372,6 +442,10 @@ private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
     var overflowed = false
     var beforePredicate = true
     var skipValue = false
+    var nameValue = false
+    var inExec = false
+    var execs = false
+    var names: [String] = []
 
     func add(_ value: String) {
         guard !value.isEmpty else { return }
@@ -386,6 +460,24 @@ private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
     for word in words {
         if skipValue {
             skipValue = false
+            if nameValue { names.append(word) }
+            nameValue = false
+            continue
+        }
+        // `-exec cat {} +` runs a command on what find selected: its words
+        // are operands like any other command's, up to `;` or `+`.
+        if inExec {
+            if word == ";" || word == "+" || word == "\\;" {
+                inExec = false
+            } else if word != "{}", let candidate = operandCandidate(word) {
+                add(candidate)
+            }
+            continue
+        }
+        if word == "-exec" || word == "-execdir" || word == "-ok" || word == "-okdir" {
+            beforePredicate = false
+            inExec = true
+            execs = true
             continue
         }
         // Classified lazily so the state machine keeps walking predicate
@@ -405,8 +497,13 @@ private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
             // rebuild `singleDashWord` performs per dash-led word.
             if word == "-name" || word == "-iname" || word == "-path" {
                 skipValue = true
+                nameValue = true
             }
         }
+    }
+    // A name pattern is not a path, until an `-exec` command reads what it selects.
+    if execs {
+        for name in names { add(name) }
     }
     return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
 }

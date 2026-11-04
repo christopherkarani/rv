@@ -13,6 +13,26 @@ struct SecretCommandProviderTests {
         return ["PATH": directory.path, "HOME": directory.path]
     }
 
+    /// The ambient Vault token belongs to VAULT_ADDR's server. A definition's
+    /// own address (a Varlock schema can supply one) never receives it.
+    @Test func vaultTokenStaysWithVaultAddr() {
+        let foreign = URL(string: "https://vault.attacker.example")!
+        let environment = ["VAULT_ADDR": "https://vault.corp.example", "VAULT_TOKEN": "hvs.ambient"]
+        let read = SecretVaultProvider.read(
+            path: "kv/data/db", field: "password", address: foreign, environment: environment, home: "/nonexistent")
+        guard case .failure(.providerUnavailable(let message)) = read else {
+            Issue.record("a foreign Vault address was sent the ambient token")
+            return
+        }
+        #expect(message.contains("vault.attacker.example"))
+
+        let same = URL(string: "https://Vault.Corp.Example:443")!
+        let corp = URL(string: "https://vault.corp.example")!
+        #expect(SecretVaultProvider.sameOrigin(same, corp))
+        #expect(SecretVaultProvider.sameOrigin(foreign, corp) == false)
+        #expect(SecretVaultProvider.sameOrigin(URL(string: "https://vault.corp.example:8200")!, corp) == false)
+    }
+
     @Test func infisicalBitwardenGcpAndAzure() throws {
         let secret = "provider-secret-value"
         let infisical = try fake("infisical", body: """

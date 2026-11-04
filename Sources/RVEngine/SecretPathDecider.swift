@@ -76,20 +76,49 @@ public struct SecretPathDecider: Sendable {
         )
     }
 
+    /// `fold`, plus a second scan of the command's secret-scan view when the
+    /// matching view masked operands a search or data-reading command reads
+    /// (`grep "k" ".env"`, `jq . .env`). The deny keeps the matching view and
+    /// never quotes the unmasked text.
+    public func fold(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        let folded = fold(result)
+        guard folded == result, escalatesToAliasPass(result) else { return folded }
+        // Command heads are never masked, so the view says whether a second
+        // derivation could reveal anything.
+        let words = result.matchingView.rawValue.split { " \t\n;|&()".contains($0) }
+        guard words.contains(where: { revealsFileOperands(String($0.split(separator: "/").last ?? $0)) }) else {
+            return folded
+        }
+        let revealed = Normalize.secretScanView(of: command)
+        guard revealed != result.matchingView, var matched = firstHit(in: revealed) else { return folded }
+        matched.searchText = result.matchingView.rawValue
+        return EvaluationResult(
+            outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+            matchingView: result.matchingView
+        )
+    }
+
     /// The catalog rule one file-tool path hits, with the spelling that
-    /// hit it (the resolved spelling when the adapter supplies a
-    /// distinct target). Nil means the path clears the catalog.
+    /// hit it. The resolved spelling (when the adapter supplies a distinct
+    /// target) is checked first, then the typed one: `.env` symlinked to
+    /// `config/dev.env` still holds the secret the name promises, and the
+    /// shell door already denies `cat .env` on its typed pass. An exemption
+    /// on one spelling never vouches for the other. Nil means both clear.
     public func filePathHit(_ path: String) -> (rule: SecretPathRule, spelling: String)? {
-        var spelling = path
+        var spellings = [path]
         if let resolution,
            let resolved = resolution.resolve(path),
            resolved != path, !resolved.isEmpty
         {
-            spelling = resolved
+            spellings.insert(resolved, at: 0)
         }
-        guard let rule = catalog.firstMatch(of: spelling) else { return nil }
-        if allowPaths.exempts(spelling, rule: rule, home: home) { return nil }
-        return (rule, spelling)
+        for spelling in spellings {
+            guard let rule = catalog.firstMatch(of: spelling),
+                  allowPaths.exempts(spelling, rule: rule, home: home) == false
+            else { continue }
+            return (rule, spelling)
+        }
+        return nil
     }
 
     /// Whether an outcome is an allow the alias pass may still tighten.

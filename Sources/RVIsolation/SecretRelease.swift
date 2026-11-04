@@ -192,6 +192,17 @@ public enum SecretOrganizationRules {
         }
     }
 
+    /// The rule a resource profile's `keychain` entry breaks, if any. Such an
+    /// entry reads a Keychain item and puts the real value in the cage's
+    /// environment without a secrets.json definition, so it answers to the
+    /// same source and environment-delivery rules as a keychain-sourced,
+    /// environment-delivered definition.
+    public static func profileKeychainRule(policy: ManagedPolicy?) -> SecretOrganizationRule? {
+        guard let policy else { return nil }
+        if policy.allowsSecretSource("keychain") == false { return .source(kind: "keychain") }
+        return policy.secrets.allowEnvironmentDelivery ? nil : .environmentDelivery
+    }
+
     /// The source rule alone: for callers that read a secret on the host and
     /// deliver nothing into a cage (scan, hook run).
     public static func sourceViolation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
