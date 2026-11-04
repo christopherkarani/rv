@@ -229,7 +229,7 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     public var fingerprint: String?
     public var authorization: RuntimeAdmissionAuthorization
     public var executionAttempted: Bool
-    public var result: String
+    public var result: RuntimeAdmissionResult
     /// Present for an HTTP attempt. The query string is not stored.
     public var httpMethod: String?
     public var httpDestination: String?
@@ -253,7 +253,7 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         fingerprint: String?,
         authorization: RuntimeAdmissionAuthorization,
         executionAttempted: Bool,
-        result: String,
+        result: RuntimeAdmissionResult,
         httpMethod: String? = nil,
         httpDestination: String? = nil,
         httpAddress: String? = nil,
@@ -280,30 +280,78 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     }
 }
 
+/// The one outcome of an admission attempt. The wire response, the event's
+/// authorization, and the shell's next step are all derived from it.
+public enum RuntimeAdmissionOutcome: Sendable, Equatable {
+    /// The gate allowed the action; the shell must perform it. No wire
+    /// response exists until it has run.
+    case execute(AllowedAction)
+    /// A final answer for the runtime.
+    case answer(RuntimeAdmissionResponse)
+    /// The host parked this ASK for a human decision: the answer arrives
+    /// later, asynchronously, so no wire response exists now. The carried
+    /// reason is the gate's pending reason the park superseded. Set only by
+    /// the host session layer, never by the gate.
+    case deferred(pending: ApprovalReason)
+
+    /// Authorization the event records at gate time.
+    var authorization: RuntimeAdmissionAuthorization {
+        switch self {
+        case .execute: .allowed
+        case .answer(let response): response.authorization
+        case .deferred: .pending
+        }
+    }
+}
+
 public struct RuntimeAdmissionDecision: Sendable, Equatable {
     public var binding: RuntimeChannelBinding?
-    public var response: RuntimeAdmissionResponse
+    public var outcome: RuntimeAdmissionOutcome
     public var event: RuntimeAdmissionEvent
-    /// Set only when the shell must perform the side effect.
-    public var execute: AllowedAction?
-    /// The host parked this ASK for a human decision: the answer arrives
-    /// later, asynchronously. Callers must NOT write `response` now — it is
-    /// the pre-park pending projection, already superseded. Set only by the
-    /// host session layer, never by the gate.
-    public var responseDeferred: Bool
 
     public init(
         binding: RuntimeChannelBinding?,
-        response: RuntimeAdmissionResponse,
-        event: RuntimeAdmissionEvent,
-        execute: AllowedAction? = nil,
-        responseDeferred: Bool = false
+        outcome: RuntimeAdmissionOutcome,
+        event: RuntimeAdmissionEvent
     ) {
         self.binding = binding
-        self.response = response
+        self.outcome = outcome
         self.event = event
-        self.execute = execute
-        self.responseDeferred = responseDeferred
+    }
+
+    /// Set only when the shell must perform the side effect.
+    public var execute: AllowedAction? {
+        if case .execute(let allowed) = outcome { return allowed }
+        return nil
+    }
+
+    /// The wire answer. Nil while the shell still owes an execution, and
+    /// for a parked ASK, whose answer is written later by its waiter.
+    public var response: RuntimeAdmissionResponse? {
+        switch outcome {
+        case .execute, .deferred: nil
+        case .answer(let response): response
+        }
+    }
+
+    public var responseDeferred: Bool {
+        if case .deferred = outcome { return true }
+        return false
+    }
+}
+
+extension RuntimeAdmissionResponse {
+    /// Authorization that evidence records for this answer.
+    public var authorization: RuntimeAdmissionAuthorization {
+        switch self {
+        case .executed, .http: .allowed
+        case .denied: .denied
+        case .pending: .pending
+        case .rejected: .rejected
+        case .evaluationFailed: .evaluationFailed
+        case .approvalUnavailable: .approvalUnavailable
+        case .executorFailed, .httpFailed: .executorFailed
+        }
     }
 }
 
@@ -378,8 +426,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: requestID,
-                    reason: .principalRequired,
-                    authorization: .rejected
+                    reason: .principalRequired
                 ),
                 agentContext: nil
             )
@@ -416,8 +463,7 @@ public enum RuntimeAdmissionGate {
                     reject(
                         binding: nil,
                         requestID: accepted.requestID.rawValue.uuidString,
-                        reason: .unknownSession,
-                        authorization: .rejected
+                        reason: .unknownSession
                     ),
                     agentContext: agentContext
                 )
@@ -445,8 +491,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: nil,
                     requestID: requestID,
-                    reason: .unknownSession,
-                    authorization: .rejected
+                    reason: .unknownSession
                 )
             )
         }
@@ -456,8 +501,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: requestID,
-                    reason: .inactiveSession,
-                    authorization: .rejected
+                    reason: .inactiveSession
                 )
             )
         }
@@ -468,8 +512,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: nil,
-                    reason: .malformed,
-                    authorization: .rejected
+                    reason: .malformed
                 )
             )
         case .success(let value):
@@ -481,8 +524,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: requestID,
-                    reason: .malformed,
-                    authorization: .rejected
+                    reason: .malformed
                 )
             )
         }
@@ -491,8 +533,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: requestID,
-                    reason: .invalidCapability,
-                    authorization: .rejected
+                    reason: .invalidCapability
                 )
             )
         }
@@ -501,8 +542,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: requestID,
-                    reason: .impersonation,
-                    authorization: .rejected
+                    reason: .impersonation
                 )
             )
         }
@@ -512,8 +552,7 @@ public enum RuntimeAdmissionGate {
                     reject(
                         binding: binding,
                         requestID: requestID,
-                        reason: .principalRequired,
-                        authorization: .rejected
+                        reason: .principalRequired
                     )
                 )
             }
@@ -522,8 +561,7 @@ public enum RuntimeAdmissionGate {
                     reject(
                         binding: binding,
                         requestID: requestID,
-                        reason: .inactiveSession,
-                        authorization: .rejected
+                        reason: .inactiveSession
                     )
                 )
             }
@@ -535,8 +573,7 @@ public enum RuntimeAdmissionGate {
                     reject(
                         binding: binding,
                         requestID: requestID,
-                        reason: .impersonation,
-                        authorization: .rejected
+                        reason: .impersonation
                     )
                 )
             }
@@ -546,8 +583,7 @@ public enum RuntimeAdmissionGate {
                 reject(
                     binding: binding,
                     requestID: requestID,
-                    reason: .replay,
-                    authorization: .rejected
+                    reason: .replay
                 )
             )
         }
@@ -572,9 +608,8 @@ public enum RuntimeAdmissionGate {
                 binding: binding,
                 requestID: requestID,
                 fingerprint: nil,
-                authorization: .evaluationFailed,
-                response: .evaluationFailed,
-                result: "evaluationFailed"
+                outcome: .answer(.evaluationFailed),
+                result: .evaluationFailed
             )
         case .success(let proposed):
             action = proposed
@@ -597,7 +632,6 @@ public enum RuntimeAdmissionGate {
                     binding: binding,
                     requestID: requestID,
                     reason: .replay,
-                    authorization: .rejected,
                     fingerprint: allowed.action.fingerprint.rawValue
                 )
             }
@@ -606,10 +640,8 @@ public enum RuntimeAdmissionGate {
                 binding: binding,
                 requestID: requestID,
                 fingerprint: allowed.action.fingerprint.rawValue,
-                authorization: .allowed,
-                response: .executed(exitStatus: -1),
-                result: "authorized",
-                execute: allowed,
+                outcome: .execute(allowed),
+                result: .authorized,
                 http: http
             )
         case .denied(let denied):
@@ -617,9 +649,8 @@ public enum RuntimeAdmissionGate {
                 binding: binding,
                 requestID: requestID,
                 fingerprint: action.fingerprint.rawValue,
-                authorization: .denied,
-                response: .denied(denied.deny),
-                result: denied.deny.ruleID.rawValue,
+                outcome: .answer(.denied(denied.deny)),
+                result: .denied(denied.deny.ruleID),
                 http: http
             )
         case .awaitingApproval(let pending):
@@ -627,9 +658,8 @@ public enum RuntimeAdmissionGate {
                 binding: binding,
                 requestID: requestID,
                 fingerprint: action.fingerprint.rawValue,
-                authorization: .pending,
-                response: .pending(pending.reason.ledgerReason),
-                result: pending.reason.ledgerReason.rawValue,
+                outcome: .answer(.pending(pending.reason.ledgerReason)),
+                result: .pending(pending.reason.ledgerReason),
                 http: http
             )
         case .approvalFailed:
@@ -637,9 +667,8 @@ public enum RuntimeAdmissionGate {
                 binding: binding,
                 requestID: requestID,
                 fingerprint: action.fingerprint.rawValue,
-                authorization: .approvalUnavailable,
-                response: .approvalUnavailable,
-                result: "approvalUnavailable",
+                outcome: .answer(.approvalUnavailable),
+                result: .approvalEnded(.unavailable),
                 http: http
             )
         }
@@ -681,16 +710,14 @@ public enum RuntimeAdmissionGate {
         binding: RuntimeChannelBinding?,
         requestID: String?,
         reason: RuntimeAdmissionRejection,
-        authorization: RuntimeAdmissionAuthorization,
         fingerprint: String? = nil
     ) -> RuntimeAdmissionDecision {
         make(
             binding: binding,
             requestID: requestID,
             fingerprint: fingerprint,
-            authorization: authorization,
-            response: .rejected(reason),
-            result: reason.rawValue
+            outcome: .answer(.rejected(reason)),
+            result: .rejected(reason)
         )
     }
 
@@ -698,20 +725,18 @@ public enum RuntimeAdmissionGate {
         binding: RuntimeChannelBinding?,
         requestID: String?,
         fingerprint: String?,
-        authorization: RuntimeAdmissionAuthorization,
-        response: RuntimeAdmissionResponse,
-        result: String,
-        execute: AllowedAction? = nil,
+        outcome: RuntimeAdmissionOutcome,
+        result: RuntimeAdmissionResult,
         http: HTTPAuditStamp? = nil
     ) -> RuntimeAdmissionDecision {
         RuntimeAdmissionDecision(
             binding: binding,
-            response: response,
+            outcome: outcome,
             event: RuntimeAdmissionEvent(
                 session: binding?.session.id.rawValue.uuidString,
                 requestID: requestID,
                 fingerprint: fingerprint,
-                authorization: authorization,
+                authorization: outcome.authorization,
                 executionAttempted: false,
                 result: result,
                 httpMethod: http?.method,
@@ -719,8 +744,7 @@ public enum RuntimeAdmissionGate {
                 httpAddress: http?.address,
                 httpQueryPresent: http?.queryPresent,
                 workspace: binding?.session.workspaceSessionID.rawValue.uuidString
-            ),
-            execute: execute
+            )
         )
     }
 }
