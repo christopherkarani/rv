@@ -16,10 +16,10 @@ import RVDomain
 /// riding them as a read.
 struct WriterRedirectFold {
     /// Verb argv with redirect syntax removed, ready for the verb scan.
-    var stripped: Argv
+    let stripped: Argv
     /// Output-redirect destinations in command order. A dangling
     /// operator anywhere zeroes the set, matching `parseRedirectOnly`.
-    var redirectDests: [String]
+    let redirectDests: [String]
 
     init(_ argv: Argv) {
         stripped = Argv(

@@ -116,6 +116,7 @@ struct ParseFilesystemRedirectFoldTests {
         FoldCase(tokens: ["shred", "--bogus", "f", ">", "/out"], operation: "overwrite", paths: ["/out"]),
         FoldCase(tokens: ["touch", "-z", "f", ">", "/out"], operation: "overwrite", paths: ["/out"]),
         FoldCase(tokens: ["mkdir", "-z", "d", ">", "/out"], operation: "overwrite", paths: ["/out"]),
+        FoldCase(tokens: ["ln", "-z", "a", "b", ">", "/out"], operation: "overwrite", paths: ["/out"]),
         FoldCase(tokens: ["gzip", "-z", "f", ">", "/out"], operation: "overwrite", paths: ["/out"]),
         FoldCase(tokens: ["cat", "-q", "src", ">", "/out"], operation: "overwrite", paths: ["/out"]),
     ])
@@ -149,6 +150,20 @@ struct ParseFilesystemRedirectFoldTests {
             tokens: ["install", "--help", "-D", "/tmp/d", ">", "/out"],
             operation: "overwrite",
             paths: ["/out"]
+        ))
+        // Named strip-before-scan divergences (PR): one-operand `mv`
+        // errors in the shell, so only the redirect claim remains; a
+        // stripped operator is never a flag value (`curl -o` takes the
+        // next surviving word, as the shell would hand it over).
+        expectFoldParsed(FoldCase(
+            tokens: ["mv", "a", ">", "/out"],
+            operation: "overwrite",
+            paths: ["/out"]
+        ))
+        expectFoldParsed(FoldCase(
+            tokens: ["curl", "-o", ">", "/out", "http://h"],
+            operation: "overwrite",
+            paths: ["http://h", "/out"]
         ))
         // wget's output scan is help-blind by design: `-O` still claims
         // beside `--help` (bespoke grammar, REQ-T2 tar/curl clause kin).
