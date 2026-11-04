@@ -46,114 +46,23 @@ public struct ClaudeHostCodec: HostCodec {
         return .foreign
     }
 
-    /// Defaults must live here so one-argument `encodeDeny(reason:)` does not
-    /// bind the protocol-extension leftover `decision: deny`.
-    public func encodeDeny(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
-        HookWire(
-            stdout: claudeIndeterminateDenyJSON(reason: reason),
+    /// Rich JSON (nested `permissionDecision` plus match fields) only
+    /// when the presentation carries a matched rule; plain deny JSON
+    /// otherwise (REQ-T4).
+    public func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
+        if let matched = presentation.matched {
+            return HookWire(
+                stdout: claudeRichDenyJSON(
+                    hostDenyText: presentation.reason,
+                    match: matched
+                ),
+                exitCode: host.denyExitCode
+            )
+        }
+        return HookWire(
+            stdout: claudeIndeterminateDenyJSON(reason: presentation.reason),
             exitCode: host.denyExitCode
         )
-    }
-
-    public func encodeEvaluatedDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil
-    ) -> HookWire {
-        switch result.decision {
-        case .allow, .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny:
-            return encodeRichDeny(from: result, command: command, unlockCode: unlockCode)
-        }
-    }
-
-    /// Ask-denial keeps the rich shape (nested `permissionDecision` plus
-    /// match fields). Guidance joins after the deny line so truncation
-    /// cannot drop it. When the pending row failed to record, the guidance
-    /// says so instead of promising RV approval (M-25).
-    public func encodeEvaluatedAskDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil,
-        askRecorded: Bool = true
-    ) -> HookWire {
-        switch result.decision {
-        case .allow, .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            let hostDenyText =
-                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
-            guard case .deny(_, let matched?) = result.outcome else {
-                return encodeDeny(
-                    reason: hostDenyText,
-                    rule: deny.ruleID,
-                    next: unlockHookVoiceNext(unlockCode)
-                )
-            }
-            return HookWire(
-                stdout: claudeRichDenyJSON(
-                    hostDenyText: hostDenyText,
-                    match: matched
-                ),
-                exitCode: host.denyExitCode
-            )
-        }
-    }
-
-    public func encodeFileDeny(from result: EvaluationResult) -> HookWire {
-        switch result.decision {
-        case .allow:
-            return encodeAllow()
-        case .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            let reason = hostFileDenyLine(reason: deny.reason)
-            guard case .deny(_, let matched?) = result.outcome else {
-                return encodeDeny(reason: reason, rule: deny.ruleID, next: .none)
-            }
-            return HookWire(
-                stdout: claudeRichDenyJSON(hostDenyText: reason, match: matched),
-                exitCode: host.denyExitCode
-            )
-        }
-    }
-
-    public func encodeRichDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil
-    ) -> HookWire {
-        switch result.decision {
-        case .allow:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            let hostDenyText = hostDenyLine(
-                command: command,
-                reason: deny.reason,
-                unlock: unlockCode
-            )
-            guard case .deny(_, let matched?) = result.outcome else {
-                return encodeDeny(
-                    reason: hostDenyText,
-                    rule: deny.ruleID,
-                    next: unlockHookVoiceNext(unlockCode)
-                )
-            }
-            return HookWire(
-                stdout: claudeRichDenyJSON(
-                    hostDenyText: hostDenyText,
-                    match: matched
-                ),
-                exitCode: host.denyExitCode
-            )
-        }
     }
 }
 

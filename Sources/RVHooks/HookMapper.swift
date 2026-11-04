@@ -68,31 +68,91 @@ private func encodeFirstCall(
     case .allow:
         return codec.encodeAllow()
     case .ask:
-        return codec.encodeEvaluatedAskDeny(
-            from: result,
-            command: command,
-            unlockCode: unlockCode,
-            askRecorded: askRecorded
+        return codec.encodeDeny(
+            askDenyPresentation(
+                from: result,
+                command: command,
+                unlockCode: unlockCode,
+                askRecorded: askRecorded
+            )
         )
     case .deny:
-        return encodeLiveDeny(
-            from: result,
-            command: command,
-            using: codec,
-            unlockCode: unlockCode
+        return codec.encodeDeny(
+            denyPresentation(from: result, command: command, unlockCode: unlockCode)
         )
     }
 }
 
-private func encodeLiveDeny(
+/// Composes the live evaluated deny. An evaluated allow or indeterminate
+/// reaching deny dispatch is an incomplete evaluation, so it renders the
+/// incomplete sentence, never allow (REQ-T4).
+func denyPresentation(
     from result: EvaluationResult,
     command: ShellCommand,
-    using codec: any HostCodec,
     unlockCode: AllowOnceUnlockMint?
-) -> HookWire {
-    codec.encodeEvaluatedDeny(
-        from: result,
-        command: command,
-        unlockCode: unlockCode
-    )
+) -> HookDenyPresentation {
+    switch result.decision {
+    case .allow, .indeterminate:
+        return HookDenyPresentation(reason: incompleteEvalSentence)
+    case .deny(let deny):
+        return HookDenyPresentation(
+            reason: hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
+            rule: deny.ruleID,
+            next: unlockHookVoiceNext(unlockCode),
+            matched: denyMatch(from: result)
+        )
+    }
+}
+
+/// Composes the ask-denial: same deny content plus the approval-pending
+/// guidance. The policy verdict stays ASK; only the wire renders deny
+/// because no host can pause for a human. The TTY unlock line still
+/// applies, so a minted code and the RVOperatorUI row are offered
+/// together. The guidance joins AFTER `hostDenyLine`: annotating the
+/// reason would lose it to the two-sentence truncation on multi-sentence
+/// reasons. When the pending row failed to record, the guidance and the
+/// ask agent text say so instead of promising an approval that cannot
+/// exist (M-25).
+func askDenyPresentation(
+    from result: EvaluationResult,
+    command: ShellCommand,
+    unlockCode: AllowOnceUnlockMint?,
+    askRecorded: Bool
+) -> HookDenyPresentation {
+    switch result.decision {
+    case .allow, .indeterminate:
+        return HookDenyPresentation(reason: incompleteEvalSentence)
+    case .deny(let deny):
+        let line =
+            "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
+        return HookDenyPresentation(
+            reason: line,
+            rule: deny.ruleID,
+            next: unlockHookVoiceNext(unlockCode),
+            matched: denyMatch(from: result),
+            agentText: cursorAgentAskMessage(recorded: askRecorded)
+        )
+    }
+}
+
+/// Composes the file-tool deny, or `nil` when the file result allows —
+/// file allow stays allow, unlike evaluated allow (REQ-T4).
+func fileDenyPresentation(from result: EvaluationResult) -> HookDenyPresentation? {
+    switch result.decision {
+    case .allow:
+        return nil
+    case .indeterminate:
+        return HookDenyPresentation(reason: incompleteEvalSentence)
+    case .deny(let deny):
+        return HookDenyPresentation(
+            reason: hostFileDenyLine(reason: deny.reason),
+            rule: deny.ruleID,
+            matched: denyMatch(from: result)
+        )
+    }
+}
+
+private func denyMatch(from result: EvaluationResult) -> RuleMatch? {
+    guard case .deny(_, let matched) = result.outcome else { return nil }
+    return matched
 }

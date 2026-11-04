@@ -67,44 +67,17 @@ public struct CursorHostCodec: HostCodec {
 
     /// Official Cursor honor path: `permission: deny` + messages + exit 0.
     /// Claude permission deny and Codex `decision: block` are not this wire.
-    /// Defaults must live here so one-argument `encodeDeny(reason:)` does not
-    /// bind the protocol-extension leftover `decision: deny`.
-    public func encodeDeny(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
+    /// The presentation's reason renders as `user_message`; its agent text
+    /// renders as `agent_message` (stop line on deny, ask-retry line on
+    /// ask-denial).
+    public func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
         HookWire(
-            stdout: hookPermissionDenyJSON(reason: reason),
+            stdout: hookPermissionDenyJSON(
+                userMessage: presentation.reason,
+                agentMessage: presentation.agentText
+            ),
             exitCode: host.denyExitCode
         )
-    }
-
-    /// Ask-denial: the agent retries after human approval, so the
-    /// `agent_message` differs from the deny stop line. When the pending row
-    /// failed to record, both messages say so instead (M-25).
-    public func encodeEvaluatedAskDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil,
-        askRecorded: Bool = true
-    ) -> HookWire {
-        switch result.decision {
-        case .allow, .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            let userMessage = [
-                hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
-                askPendingLine(recorded: askRecorded),
-            ].joined(separator: " ")
-            return HookWire(
-                stdout: hookPermissionDenyJSON(
-                    userMessage: userMessage,
-                    agentMessage: cursorAgentAskMessage(recorded: askRecorded)
-                ),
-                exitCode: host.denyExitCode
-            )
-        }
     }
 }
 
