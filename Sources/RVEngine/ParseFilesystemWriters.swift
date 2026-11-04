@@ -1605,8 +1605,8 @@ private let sedBareLongs: Set<String> = [
 /// attached suffix only, never the next word), which keeps the destination
 /// sound on both GNU and BSD readings. Files are the operands after the
 /// script position (the first operand, unless `-e`/`-f` gave the script).
-/// Residuals: `w /tmp/x` inside the script writes without `-i`, and the GNU
-/// `e` command executes — both are script-language dataflow, unmodeled.
+/// Script `w` targets are claimed too (`sedScriptEffects`). Residual: the GNU
+/// `e` command executes; the unwrap peel limits it (`.sed`), not this parse.
 func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
         argv.args,
@@ -1614,7 +1614,7 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
         valueLongs: sedValueLongs,
         bareShorts: sedBareShorts,
         bareLongs: sedBareLongs,
-        conflictedShorts: ["i"]
+        conflictedShorts: ["i", "I"]
     )
     var dests: [String] = []
     // The main scan drops bare `=`-longs, so `--in-place=.bak` also needs
@@ -1633,6 +1633,7 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     }
     if scan.failed == false, scan.sawHelp == false,
         scan.bareShortHits.contains("i") || scan.flagValues["i"] != nil
+            || scan.bareShortHits.contains("I") || scan.flagValues["I"] != nil
             || scan.bareLongHits.contains("in-place") || inPlaceLong
     {
         let scriptGiven = scan.flagValues["e"] != nil || scan.flagValues["f"] != nil
@@ -1643,7 +1644,22 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
         dests += files
         dests += scan.candidates
     }
+    if scan.failed == false, scan.sawHelp == false {
+        dests += sedScriptWriteTargets(scan)
+    }
     return writerParsed(operation: .overwrite, paths: dests)
+}
+
+/// Files the sed script itself writes (`w`/`W` commands, `s///w` flag),
+/// with or without `-i`. Scripts come from `-e`/`--expression`, else the
+/// first non-empty operand; a `-f` script file is unreadable and ignored.
+private func sedScriptWriteTargets(_ scan: WriterScan) -> [String] {
+    var scripts = (scan.flagValues["e"] ?? []) + (scan.flagValues["expression"] ?? [])
+    let fromFile = scan.flagValues["f"] != nil || scan.flagValues["file"] != nil
+    if scripts.isEmpty, fromFile == false, let first = scan.operands.first(where: { $0.isEmpty == false }) {
+        scripts.append(first)
+    }
+    return scripts.flatMap { sedScriptEffects($0).writeTargets }
 }
 
 func parseSed(_ args: [String]) -> ParsedFilesystemCommand? {

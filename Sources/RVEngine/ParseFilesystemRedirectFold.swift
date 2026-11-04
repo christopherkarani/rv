@@ -83,3 +83,11 @@ func stripWriterRedirectWords(_ args: [String]) -> [String] {
     }
     return clean
 }
+
+/// Output-redirect destinations united with writer destinations.
+/// For raw-argv parsers outside the dispatcher fold (in-place
+/// editors reached through the unwrap peel); dispatcher verbs get
+/// the union from `WriterRedirectFold` instead.
+func writerRedirectDests(_ argv: Argv) -> [String] {
+    parseRedirectOnly(argv)?.paths ?? []
+}

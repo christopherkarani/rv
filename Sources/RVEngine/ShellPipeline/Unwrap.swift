@@ -115,7 +115,8 @@ extension ShellPipeline {
         workingDirectory: WorkingDirectory?,
         budget: UnwrapBudget,
         depth: Int,
-        layers: [WrapperKind]
+        layers: [WrapperKind],
+        splitChains: Bool = true
     ) -> UnwrapOutcome {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -150,6 +151,17 @@ extension ShellPipeline {
                 depth: depth,
                 layers: layers
             )
+        }
+        if splitChains,
+            let chained = unwrapChain(
+                trimmed,
+                workingDirectory: workingDirectory,
+                budget: budget,
+                depth: depth,
+                layers: layers
+            )
+        {
+            return chained
         }
         let tokens = ShellPipeline.tokenize(trimmed)
         let argv = Argv(tokens: tokens)
@@ -282,6 +294,9 @@ extension ShellPipeline {
                 workingDirectory: workingDirectory
             )
         }
+        if let peel = peelUtility(head, tokens: tokens, workingDirectory: workingDirectory) {
+            return peel
+        }
         return .notWrapper
     }
 }
@@ -345,7 +360,10 @@ private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: Working
                 index += 2
                 continue
             }
-            if sudoShortArgFlags.contains(token) {
+            if shortClusterConsumesValue(token, valueLetters: ["D"]) {
+                return .limited(.sudo)
+            }
+            if shortClusterConsumesValue(token, valueLetters: sudoShortArgLetters) {
                 guard index + 1 < tokens.count else { return .limited(.sudo) }
                 index += 2
                 continue
@@ -360,7 +378,7 @@ private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: Working
     return .next(renderCommand(rest), .sudo, cwd)
 }
 
-private let sudoShortArgFlags: Set<String> = ["-u", "-g", "-h", "-p", "-C", "-U", "-T"]
+private let sudoShortArgLetters: Set<Character> = ["u", "g", "h", "p", "C", "U", "T", "r", "t"]
 private let sudoLongArgFlags: Set<String> = [
     "--user", "--group", "--host", "--prompt", "--close-from", "--chdir",
     "--other-user", "--command-timeout",
@@ -522,6 +540,10 @@ private func peelInterpreter(
             )
         }
         if kind == .ruby, token.hasPrefix("-e"), token.count > 2 {
+            // Same gate as a separate `-e` payload: expanding text is unknown.
+            if tokens[index].wasQuoted == false || token.contains("$") || token.contains("`") {
+                return .limited(kind)
+            }
             return interpreterPeel(
                 extract(String(token.dropFirst(2))),
                 kind: kind,
@@ -582,35 +604,73 @@ private enum InterpreterExtract: Sendable, Equatable {
     case limited
 }
 
+/// `code` with the first call matching `pattern` removed (name through its
+/// balanced closing paren, or a backtick span). Nil when the call cannot be
+/// delimited, so the caller fails closed.
+private func removingFirstCall(_ code: String, pattern: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+        let match = regex.firstMatch(in: code, range: NSRange(code.startIndex..., in: code)),
+        let range = Range(match.range, in: code)
+    else { return nil }
+    if code[range].hasPrefix("`") {
+        return code.replacingCharacters(in: range, with: " ")
+    }
+    var depth = 1
+    var quote: Character?
+    var index = range.upperBound
+    while index < code.endIndex {
+        let char = code[index]
+        if let open = quote {
+            if char == "\\" {
+                index = code.index(after: index)
+                if index == code.endIndex { return nil }
+            } else if char == open {
+                quote = nil
+            }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "(" {
+            depth += 1
+        } else if char == ")" {
+            depth -= 1
+            if depth == 0 {
+                return code.replacingCharacters(in: range.lowerBound...index, with: " ")
+            }
+        }
+        index = code.index(after: index)
+    }
+    return nil
+}
+
+/// The extracted command when nothing else in `code` can spawn or write:
+/// the first call is removed and the remainder runs the same checks, so a
+/// second call (`os.system('ls'); os.execvp(...)`) limits instead of hiding.
+private func extractedUnlessRemainder(
+    _ command: String, code: String, pattern: String,
+    remainderIsRisky: (String) -> Bool
+) -> InterpreterExtract {
+    guard let rest = removingFirstCall(code, pattern: pattern), remainderIsRisky(rest) == false else {
+        return .limited
+    }
+    return .command(command)
+}
+
 private func extractPython(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = pythonShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:__import__\s*\(\s*['"]\w+['"]\s*\)|\b\w+)\s*\.\s*)?\b(?:system|popen|remove|unlink|rmtree|run|call|Popen|check_call|check_output)\s*\("#
+        ) { pythonCodeCanSpawn($0) || pythonFileWrites($0).paths.isEmpty == false || pythonFileWrites($0).opaque }
     }
-    if looksLikePythonSpawn(folded) {
+    if pythonCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = pythonFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
-
-private func looksLikePythonSpawn(_ code: String) -> Bool {
-    pythonSpawnMarkers.contains { code.contains($0) }
-}
-
-private let pythonSpawnMarkers: [String] = [
-    "os.system(", "os.system (",
-    "os.popen(", "os.popen (",
-    "subprocess.run(", "subprocess.run (",
-    "subprocess.call(", "subprocess.call (",
-    "subprocess.Popen(", "subprocess.Popen (",
-    "subprocess.check_call(", "subprocess.check_call (",
-    "subprocess.check_output(", "subprocess.check_output (",
-    "shutil.rmtree(", "shutil.rmtree (",
-    "os.remove(", "os.remove (",
-    "os.unlink(", "os.unlink (",
-    "__import__('os').system(", #"__import__("os").system("#,
-]
 
 private func pythonShellCommand(_ code: String) -> String? {
     if let command = callStringArgument(code, names: ["os.system", "os.popen"]) {
@@ -656,26 +716,18 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = nodeShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:require\s*\(\s*['"][\w:/]+['"]\s*\)|[\w$]+)\s*\.\s*)?\b(?:exec|execSync|unlinkSync|rmdirSync|rmSync|rm|unlink|rmdir)\s*\("#
+        ) { nodeCodeCanSpawn($0) || nodeFileWrites($0).paths.isEmpty == false || nodeFileWrites($0).opaque }
     }
-    if looksLikeNodeSpawn(folded) {
+    if nodeCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = nodeFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
-
-private func looksLikeNodeSpawn(_ code: String) -> Bool {
-    nodeSpawnMarkers.contains { code.contains($0) }
-}
-
-private let nodeSpawnMarkers: [String] = [
-    "child_process.exec",
-    "child_process.execSync",
-    "fs.unlinkSync(", "fs.unlinkSync (",
-    "fs.rmdirSync(", "fs.rmdirSync (",
-    "fs.rmSync(", "fs.rmSync (",
-    "fs.rm(", "fs.rm (",
-]
 
 private func nodeShellCommand(_ code: String) -> String? {
     let execNames = [
@@ -706,29 +758,18 @@ private func extractRuby(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = rubyShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:\b[A-Z]\w*\s*\.\s*)?\b(?:system|exec|delete|unlink|rm_rf|remove_entry_secure)\s*\(|`[^`]*`)"#
+        ) { rubyCodeCanSpawn($0) || rubyFileWrites($0).paths.isEmpty == false || rubyFileWrites($0).opaque }
     }
-    if looksLikeRubySpawn(folded) {
+    if rubyCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = rubyFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
-
-private func looksLikeRubySpawn(_ code: String) -> Bool {
-    if code.contains("`") || code.contains("%x") {
-        return true
-    }
-    return rubySpawnMarkers.contains { code.contains($0) }
-}
-
-private let rubySpawnMarkers: [String] = [
-    "system(", "system (",
-    "exec(", "exec (",
-    "File.delete(", "File.delete (",
-    "File.unlink(", "File.unlink (",
-    "FileUtils.rm_rf(", "FileUtils.rm_rf (",
-    "FileUtils.remove_entry_secure(", "FileUtils.remove_entry_secure (",
-]
 
 private func rubyShellCommand(_ code: String) -> String? {
     if let command = callStringArgument(code, names: ["system", "exec"]) {
@@ -867,7 +908,7 @@ private func quoteIfNeeded(_ value: String) -> String {
     return value
 }
 
-private func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
+func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
     tokens.map(renderToken).joined(separator: " ")
 }
 
