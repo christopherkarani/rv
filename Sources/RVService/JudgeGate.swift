@@ -238,10 +238,8 @@ public enum JudgeRuntime {
             if fm.fileExists(atPath: configURL.path) {
                 if let data = try? Data(contentsOf: configURL),
                    let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    let labels = (cfg["logit_order"] as? [String]) ?? (cfg["labels"] as? [String])
-                    if let labels, Set(labels) != ["allow", "review", "block"] {
-                        problems.append("config labels are not allow/review/block")
-                    }
+                    do { _ = try LayaVerdict.Action.configLabels(cfg) }
+                    catch { problems.append("config labels are not allow/review/block") }
                 } else {
                     problems.append("config.json unparseable")
                 }
@@ -317,8 +315,7 @@ public enum JudgeRuntime {
         return JudgeContext(cwdInsideRepo: inside)
     }
 
-    /// String/bool seam over `judgeContext` for RVServiceTests, which has
-    /// no RVLaya dependency edge and must not name `JudgeContext`.
+    /// String seam over `judgeContext` for RVServiceTests.
     static func judgeContextLines(cwd: WorkingDirectory?) -> [String] {
         judgeContext(cwd: cwd).lines()
     }
@@ -506,16 +503,13 @@ public enum JudgeRuntime {
         context: JudgeContext,
         engine: JudgeEngine,
         bundle: URL,
-        wait: Duration? = loadWait,
-        questions: LayaQuestions = .guardQuestions
+        wait: Duration? = loadWait
     ) -> JudgeRun {
         #if canImport(CoreML)
-        // An invalid label set never reaches a load or a verdict: fail closed.
-        if case .laya = engine, (try? questions.actionLabels()) == nil { return .failed }
         do {
             switch engine {
             case .laya:
-                let judge = try slot.stockJudge(bundleDir: bundle, wait: wait, questions: questions)
+                let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
                 do { return .verdict(try judge.judge(command)) }
                 catch { return .failed }
             case .ft:
@@ -551,7 +545,7 @@ public enum JudgeRuntime {
         return (raise(result, verdict: nil, action: .review), note)
     }
 
-    /// RVServiceTests seam (no RVLaya edge): the warming outcome over `result`.
+    /// RVServiceTests seam: the warming outcome over `result`.
     static func warmingOutcomeSeam(over result: EvaluationResult) -> (EvaluationResult, String) {
         let raised = failClosed(.warming, over: result)
         return (raised.result, raised.note)
@@ -774,10 +768,9 @@ final class JudgeSlot: Sendable {
         return date?.timeIntervalSince1970 ?? 0
     }
 
-    /// The cache is keyed by bundle only; production always uses the guard questions.
-    func stockJudge(bundleDir: URL, wait: Duration?, questions: LayaQuestions = .guardQuestions) throws -> LayaCoreMLJudge {
+    func stockJudge(bundleDir: URL, wait: Duration?) throws -> LayaCoreMLJudge {
         try Self.unwrap(stock.value(key: bundleDir, stamp: Self.stamp(bundleDir), wait: wait) {
-            try LayaCoreMLJudge(bundleDir: bundleDir, questions: questions)
+            try LayaCoreMLJudge(bundleDir: bundleDir)
         })
     }
 

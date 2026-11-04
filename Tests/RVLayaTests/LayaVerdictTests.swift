@@ -68,6 +68,26 @@ struct LayaVerdictTests {
         #expect(throws: LayaError.self) { try questions.actionLabels() }
     }
 
+    @Test func configLabelsValidPermutationAndPrecedence() throws {
+        let order = try LayaVerdict.Action.configLabels(
+            ["logit_order": ["block", "review", "allow"], "labels": ["allow", "review", "block"]])
+        #expect(order == [.block, .review, .allow])
+        #expect(try LayaVerdict.Action.configLabels(["labels": ["review", "allow", "block"]]) == [.review, .allow, .block])
+        #expect(try LayaVerdict.Action.configLabels(["max_len": 64]) == nil)
+    }
+
+    @Test(arguments: [
+        #"{"logit_order":"allow,review,block"}"#,
+        #"{"logit_order":null}"#,
+        #"{"logit_order":["allow","review","block","block"]}"#,
+        #"{"labels":["allow","review"]}"#,
+        #"{"logit_order":["allow","bogus","block"],"labels":["allow","review","block"]}"#,
+    ])
+    func configLabelsInvalidThrows(json: String) throws {
+        let cfg = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(throws: LayaError.self) { try LayaVerdict.Action.configLabels(cfg) }
+    }
+
     #if canImport(CoreML)
     /// AC-004 end to end: the bundle's config labels are checked at load,
     /// before any model file is touched.

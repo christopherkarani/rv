@@ -310,7 +310,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
 /// Linux seam: symmetric with the FineTunedJudge stub. The gate treats
 /// this as unavailable (packs-only); it never invents an allow.
 public struct LayaCoreMLJudge: Sendable {
-    public init(bundleDir: URL) throws {
+    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 

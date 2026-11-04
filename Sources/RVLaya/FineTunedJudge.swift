@@ -107,13 +107,7 @@ public final class FineTunedJudge: @unchecked Sendable {
                   let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw LayaError.badBundle("config.json unreadable in \(bundleDir.path)")
             }
-            for key in ["logit_order", "labels"] where cfg[key] != nil {
-                guard let l = cfg[key] as? [String] else {
-                    throw LayaError.badBundle("\(key) in config.json is not a string array")
-                }
-                labels = l
-                break
-            }
+            if let l = try LayaVerdict.Action.configLabels(cfg) { labels = l.map(\.rawValue) }
             if let m = (cfg["max_len"] as? NSNumber)?.intValue { maxLen = m }
             if let ls = cfg["lengths"] as? [NSNumber] {
                 let parsed = ls.map(\.intValue).filter { $0 > 0 }.sorted()
