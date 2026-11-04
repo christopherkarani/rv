@@ -18,7 +18,7 @@ enum ClaudeSettingsMerge {
     static let fingerprintLegacy = "hook --host claude"
     static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
-    static let fileMatchers = ["Read", "Edit", "Write"]
+    static let fileMatchers = ["Read", "Edit", "Write", "Grep", "Glob", "NotebookEdit", "MultiEdit"]
     static var matchers: [String] { [matcher] + fileMatchers }
     static let hookType = "command"
     /// Claude waits this long for the wrapper, including the human confirm dialog.

@@ -41,6 +41,7 @@ public enum WorkspaceControlRequestPayload: Sendable, Equatable {
         public var executable: String?
         public var arguments: [String]?
         public var resourceProfileID: String?
+        public var microvm: MicroVMLaunchOptions?
         public var hook: String?
         public var io: String?
         public var rows: Int?
@@ -50,6 +51,7 @@ public enum WorkspaceControlRequestPayload: Sendable, Equatable {
             executable: String? = nil,
             arguments: [String]? = nil,
             resourceProfileID: String? = nil,
+            microvm: MicroVMLaunchOptions? = nil,
             hook: String? = nil,
             io: String? = nil,
             rows: Int? = nil,
@@ -58,6 +60,7 @@ public enum WorkspaceControlRequestPayload: Sendable, Equatable {
             self.executable = executable
             self.arguments = arguments
             self.resourceProfileID = resourceProfileID
+            self.microvm = microvm
             self.hook = hook
             self.io = io
             self.rows = rows

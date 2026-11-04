@@ -30,7 +30,18 @@ def main():
         _emit_deny({"action": "block", "reason": "rv failed"})
 
 
-_FILE_TOOLS = ("Read", "Edit", "Write", "read_file", "edit_file", "write_file")
+_FILE_TOOLS = (
+    "Read",
+    "Edit",
+    "Write",
+    "read_file",
+    "edit_file",
+    "write_file",
+    "Grep",
+    "Glob",
+    "NotebookEdit",
+    "MultiEdit",
+)
 
 
 def _guard(raw):
