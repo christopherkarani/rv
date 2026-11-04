@@ -580,8 +580,10 @@ enum WorkspaceLaunchCanonical {
     }
 }
 
-/// Display discriminator for `WorkspaceLaunchIntentSummary`.
-public enum WorkspaceLaunchKind: String, Hashable, Sendable, Equatable {
+/// Display discriminator for `WorkspaceLaunchIntentSummary`, and the closed
+/// launch-proposal vocabulary on the operator wire. Raw values are the wire
+/// strings; unknown strings fail decode.
+public enum WorkspaceLaunchKind: String, Hashable, Sendable, Equatable, Codable, CaseIterable {
     case named
     case custom
 }
