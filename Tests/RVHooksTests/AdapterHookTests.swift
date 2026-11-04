@@ -446,7 +446,7 @@ func cursorWrapper_preToolUseFileToolMissingRvDenies(_ tool: String) async throw
     #expect(result.exitCode == 0)
 }
 
-@Test(arguments: ["Grep", "Glob"])
+@Test(arguments: ["Glob", "Task"])
 func cursorWrapper_preToolUseForeignMissingRvAllows(_ tool: String) async throws {
     let result = try await runCursorWrapper(
         event: [
@@ -461,6 +461,40 @@ func cursorWrapper_preToolUseForeignMissingRvAllows(_ tool: String) async throws
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["permission"] as? String == "allow")
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_preToolUseGrepMissingRvDenies() async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "preToolUse",
+            "tool_name": "Grep",
+            "tool_input": ["path": "/tmp/ws/.env"],
+            "cwd": "/tmp/ws",
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == "rv missing")
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_beforeReadFileMissingRvDenies() async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeReadFile",
+            "file_path": "/tmp/ws/.env",
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == "rv missing")
     #expect(result.exitCode == 0)
 }
 
@@ -688,6 +722,41 @@ func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
     #expect(result.messageCount == 0)
     #expect(result.rendererType == "rv-decision")
     #expect(result.rendererProbe == .missing)
+}
+
+@Test(arguments: [
+    #"{"toolName":"bash","input":{}}"#,
+    #"{"toolName":"bash","input":{"command":""}}"#,
+    #"{"toolName":"bash","input":{"command":42}}"#,
+    #"{"toolName":"bash"}"#,
+])
+func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
+    let event = try #require(
+        JSONSerialization.jsonObject(with: Data(eventJSON.utf8)) as? [String: Any]
+    )
+    let result = try await runPiAdapter(event: event, stub: .stdout("", exit: 0))
+    #expect(result.block == true)
+    #expect(result.reason?.isEmpty == false)
+    #expect(result.spawnCount == 0)
+}
+
+@Test func piAdapter_nonBashToolStillPasses() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "read", "input": ["path": "README.md"]],
+        stub: .stdout("", exit: 0)
+    )
+    #expect(result.block == nil)
+    #expect(result.spawnCount == 0)
+}
+
+@Test func piAdapter_missingRvBinaryFailsClosed() async throws {
+    // The spawn of rv throws (ENOENT); the handler must block, not pass.
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git status"]],
+        stub: .missing
+    )
+    #expect(result.block == true)
+    #expect(result.reason?.isEmpty == false)
 }
 
 @Test func piAdapter_legacyAskBlocksWithoutConfirmOrSpend() async throws {

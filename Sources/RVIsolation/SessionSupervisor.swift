@@ -134,6 +134,8 @@ final class LiveSeatbeltChild: Sendable {
     private let retainedDescriptors: [Int32]
     let pty: RuntimeTerminal?
     let resources: RuntimeResourceManifest?
+    /// Workspace whose micro-VM control placeholders this run holds.
+    let placeholderWorkspace: String?
     private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
 
     private struct HandshakeIO: Sendable {
@@ -170,7 +172,8 @@ final class LiveSeatbeltChild: Sendable {
         parentDescriptors: [Int32],
         handshakeRead: Int32,
         terminal: RuntimeTerminal?,
-        resources: RuntimeResourceManifest?
+        resources: RuntimeResourceManifest?,
+        placeholderWorkspace: String? = nil
     ) {
         self.session = session
         self.capability = capability
@@ -180,6 +183,7 @@ final class LiveSeatbeltChild: Sendable {
         self.retainedDescriptors = parentDescriptors
         self.pty = terminal
         self.resources = resources
+        self.placeholderWorkspace = placeholderWorkspace
         self.handshakeRead = handshakeRead
     }
 
@@ -290,12 +294,13 @@ final class LiveSeatbeltChild: Sendable {
 func spawnSeatbeltProcess(
     _ request: IsolatedLaunchRequest,
     workspace: String,
-    profile: SeatbeltProfile,
+    profile: SeatbeltProfile?,
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
     egressProxyCredential: EgressProxyCredential? = nil,
+    secretGatewayPort: Int? = nil,
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
@@ -311,6 +316,7 @@ func spawnSeatbeltProcess(
         admission: admission,
         egressProxyPort: egressProxyPort,
         egressProxyCredential: egressProxyCredential,
+        secretGatewayPort: secretGatewayPort,
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
@@ -334,6 +340,7 @@ func spawnSeatbeltProcess(
         admission: admission,
         egressProxyPort: egressProxyPort,
         egressProxyCredential: egressProxyCredential,
+        secretGatewayPort: secretGatewayPort,
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
@@ -362,22 +369,36 @@ func terminalOpenFault(for fault: RuntimeSpawnFault?) -> TerminalOpenFault? {
 func spawnSeatbeltProcessBody(
     _ request: IsolatedLaunchRequest,
     workspace: String,
-    profile: SeatbeltProfile,
+    profile: SeatbeltProfile?,
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
     egressProxyCredential: EgressProxyCredential? = nil,
+    secretGatewayPort: Int? = nil,
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
     preparedEnvironment: [String]? = nil,
     cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
-    // Provenance rides the profile value, not a text scan (same gate as
-    // `superviseSeatbelt` above).
-    guard profile.isContainedCompilerOutput else {
-        return .failure(.seatbeltNotEstablished)
+    // Exactly one backend: a compiler-provenanced Seatbelt profile, or a
+    // micro-VM launch. Provenance rides the profile value, not a text scan
+    // (same gate as `superviseSeatbelt` above).
+    let microVM = request.microVMProfile
+    switch (profile, microVM) {
+    case (let profile?, nil):
+        guard profile.isContainedCompilerOutput else {
+            return .failure(.seatbeltNotEstablished)
+        }
+    case (nil, let microVM?):
+        // A prepared environment is a Seatbelt cage environment; a micro-VM
+        // launch builds its own.
+        guard microVM.workspacePath == workspace, preparedEnvironment == nil else {
+            return .failure(.backendMismatch)
+        }
+    default:
+        return .failure(.backendMismatch)
     }
     guard boundary.remainsEstablished() else {
         return .failure(.workspaceInodeBoundaryFailed)
@@ -506,100 +527,92 @@ func spawnSeatbeltProcessBody(
         return .failure(.workspaceInodeBoundaryFailed)
     }
 
-    // Missing claim helper fails closed. Do not spawn sandbox-exec directly:
-    // the parent cannot install the controlling terminal from outside the
-    // child's session, and a live unclaimed group is the boundary failure.
-    let handshakeScript = spawnHandshakeScript
     let spawnPath: String
-    var arguments: [String]
-    if let terminal {
-        guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
+    let arguments: [String]
+    let environment: [String]
+    let productive: ProductiveWorkspaceResolution?
+    // Placeholders for missing control paths are held from here until the
+    // watch sees the session dead (`watchSeatbeltProcess`).
+    var placeholdersHeld = false
+    defer { if placeholdersHeld { MicroVMControlPlaceholders.shared.release(workspace: workspace) } }
+    if let microVM {
+        // The guest sees only the shared workspace: no host staging, no
+        // agent homes, no host cage environment. Guest values ride
+        // rv-microvm's environment and are forwarded by name.
+        let guestKind = microVM.options.guest
+        guard let helper = MicroVMHelper.locate(workspace: workspace, guest: guestKind) else {
             return .failure(.lifetimeBoundaryFailed)
         }
-        // argv[1] is the slave. The helper reopens it after SETSID. The
-        // payload starts at argv[2], so sandbox-exec still sees its own path
-        // as argv[0].
-        spawnPath = claim
-        arguments = [claim, terminal.slavePath, IsolationBackends.sandboxExecPath]
-    } else {
-        spawnPath = IsolationBackends.sandboxExecPath
-        arguments = [IsolationBackends.sandboxExecPath]
-    }
-    arguments.append(contentsOf: [
-        "-p",
-        profile.source,
-        "/bin/sh",
-        "-c",
-        handshakeScript,
-        "rv-seatbelt",
-        nonce,
-        request.command.executable,
-    ])
-    arguments.append(contentsOf: request.command.arguments)
-    // Step 8 (F2): only the definition-derived staging tag selects
-    // credentials. `host` is routing/metadata and never falls back into
-    // selection — a nil tag stages unfiltered entries only.
-    let agentName = stagingAgent?.rawValue
-    if let resources = request.resources {
-        switch resources.stage(forAgent: agentName) {
-        case .success:
-            break
-        case .failure(let staging):
-            return .failure(.resourceStagingFailed(staging.detail))
+        let claim: (path: String, slave: String)?
+        if let terminal {
+            guard let path = resolvedPtyClaimPath(workspace: workspace) else {
+                return .failure(.lifetimeBoundaryFailed)
+            }
+            claim = (path, terminal.slavePath)
+        } else {
+            claim = nil
         }
-    } else if case .pseudoTerminal = request.io {
-        // Profile-less PTY shells point TMPDIR at the workspace-local cage
-        // dir. Best-effort like the pre-profile staging: the shell reports
-        // its own failure if the directory cannot be created.
-        try? FileManager.default.createDirectory(
-            atPath: "\(workspace)/\(ContainedCagePaths.tmpSubpath)",
-            withIntermediateDirectories: true
-        )
-    }
-    var resourceStageHandedOff = false
-    defer { if !resourceStageHandedOff { request.resources?.removeReportingFailure() } }
-    let agentBin = request.legacyAgentIntegration ? AgentBin.installedDirectory() : nil
-    let productive =
-        request.productive
-        ?? resolveProductiveWorkspace(
-            workspacePath: workspace,
-            agentBin: agentBin,
-            credentialDelivery: request.credentialDelivery
-        )
-    if request.legacyAgentIntegration, case .pseudoTerminal = request.io {
-        // Stage into the RV-managed home; the degraded workspace home
-        // keeps staging working when no managed home exists. Credential
-        // symlinks additionally require explicit opt-in on the request.
-        stageAgentHomes(
-            cageHome: productive.developerHome?.home ?? workspace,
-            credentialDelivery: request.credentialDelivery
-        )
-    }
-    // A retained prepared environment bypasses recomputation entirely:
-    // dispatch executes exactly what preparation froze, byte for byte —
-    // except the proxy binding, which never freezes: preparation mints
-    // no runtime, so it mints no proxy either, and the live per-runtime
-    // port (plus credential) is substituted at dispatch instead
-    // (`restampEgressProxyVariables`, GUD-2-6). Nil preserves the legacy
-    // behavior of resolving live at spawn.
-    let environment: [String]
-    if let frozen = preparedEnvironment {
-        environment = restampEgressProxyVariables(
-            frozen, port: egressProxyPort, credential: egressProxyCredential
-        )
-    } else {
-        environment = containedRuntimeEnvironment(
-            workspace: workspace,
-            io: request.io,
-            agentBin: agentBin,
+        let hostEnvironment = ProcessInfo.processInfo.environment
+        guard let home = hostEnvironment["HOME"], home.hasPrefix("/") else {
+            return .failure(.lifetimeBoundaryFailed)
+        }
+        let guest = microVMRuntimeEnvironment(
+            hostEnvironment: hostEnvironment,
             resources: request.resources,
             egressProxyPort: egressProxyPort,
             egressProxyCredential: egressProxyCredential,
-            keychain: keychain,
-            productive: productive,
-            credentialDelivery: request.credentialDelivery
+            keychain: keychain
         )
+        // A macOS guest enforces the control rules itself (Seatbelt in the
+        // guest), so missing control paths need no placeholders there.
+        if guestKind == .linux {
+            if case .failure(let error) = MicroVMControlPlaceholders.shared.acquire(workspace: workspace) {
+                return .failure(error)
+            }
+            placeholdersHeld = true
+        }
+        let relayPorts = [egressProxyPort, secretGatewayPort].compactMap { $0 }
+        let command = microVMSpawnCommand(
+            helper: helper,
+            claim: claim,
+            profile: microVM,
+            stateRoot: MicroVMHelper.stateRoot(home: home, guest: guestKind),
+            relayPorts: Array(Set(relayPorts)).sorted(),
+            forwardedNames: guest.forwardedNames,
+            nonce: nonce,
+            command: request.command
+        )
+        spawnPath = command.path
+        arguments = command.arguments
+        environment = microVMHelperEnvironment(guest.environment, profile: microVM)
+        productive = nil
+    } else if let profile {
+        let seatbelt = seatbeltSpawnSetup(
+            request,
+            workspace: workspace,
+            profile: profile,
+            terminal: terminal,
+            nonce: nonce,
+            egressProxyPort: egressProxyPort,
+            egressProxyCredential: egressProxyCredential,
+            stagingAgent: stagingAgent,
+            keychain: keychain,
+            preparedEnvironment: preparedEnvironment
+        )
+        switch seatbelt {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let setup):
+            spawnPath = setup.path
+            arguments = setup.arguments
+            environment = setup.environment
+            productive = setup.productive
+        }
+    } else {
+        return .failure(.backendMismatch)
     }
+    var resourceStageHandedOff = false
+    defer { if !resourceStageHandedOff { request.resources?.removeReportingFailure() } }
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -715,8 +728,8 @@ func spawnSeatbeltProcessBody(
                 workspace: request.plan.workspace ?? running.workspace,
                 repositoryRoot: request.plan.repositoryRoot
             ),
-            profileSource: profile.source,
-            profileIsContainedCompilerOutput: profile.isContainedCompilerOutput,
+            profileSource: profile?.source ?? "",
+            profileIsContainedCompilerOutput: profile?.isContainedCompilerOutput ?? false,
             workspacePath: workspace,
             sessionLeader: pid,
             egressProxyPort: egressProxyPort,
@@ -740,11 +753,134 @@ func spawnSeatbeltProcessBody(
         parentDescriptors: [ownedRead, parentRead, parentWrite],
         handshakeRead: ownedRead,
         terminal: terminal,
-        resources: request.resources
+        resources: request.resources,
+        placeholderWorkspace: placeholdersHeld ? workspace : nil
     )
     handedOff = true
     resourceStageHandedOff = true
+    placeholdersHeld = false
     return .success(child)
+}
+
+private struct SeatbeltSpawnSetup {
+    let path: String
+    let arguments: [String]
+    let environment: [String]
+    let productive: ProductiveWorkspaceResolution
+}
+
+/// Seatbelt argv, resource staging, agent homes and cage environment for
+/// one spawn. On failure nothing stays staged.
+private func seatbeltSpawnSetup(
+    _ request: IsolatedLaunchRequest,
+    workspace: String,
+    profile: SeatbeltProfile,
+    terminal: RuntimeTerminal?,
+    nonce: String,
+    egressProxyPort: Int?,
+    egressProxyCredential: EgressProxyCredential?,
+    stagingAgent: DefinitionStagingTag?,
+    keychain: [(name: String, value: String)],
+    preparedEnvironment: [String]?
+) -> Result<SeatbeltSpawnSetup, IsolationApplyError> {
+    // Missing claim helper fails closed. Do not spawn sandbox-exec directly:
+    // the parent cannot install the controlling terminal from outside the
+    // child's session, and a live unclaimed group is the boundary failure.
+    let handshakeScript = spawnHandshakeScript
+    let spawnPath: String
+    var arguments: [String]
+    if let terminal {
+        guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
+            return .failure(.lifetimeBoundaryFailed)
+        }
+        // argv[1] is the slave. The helper reopens it after SETSID. The
+        // payload starts at argv[2], so sandbox-exec still sees its own path
+        // as argv[0].
+        spawnPath = claim
+        arguments = [claim, terminal.slavePath, IsolationBackends.sandboxExecPath]
+    } else {
+        spawnPath = IsolationBackends.sandboxExecPath
+        arguments = [IsolationBackends.sandboxExecPath]
+    }
+    arguments.append(contentsOf: [
+        "-p",
+        profile.source,
+        "/bin/sh",
+        "-c",
+        handshakeScript,
+        "rv-seatbelt",
+        nonce,
+        request.command.executable,
+    ])
+    arguments.append(contentsOf: request.command.arguments)
+    // Step 8 (F2): only the definition-derived staging tag selects
+    // credentials. `host` is routing/metadata and never falls back into
+    // selection — a nil tag stages unfiltered entries only.
+    let agentName = stagingAgent?.rawValue
+    if let resources = request.resources {
+        switch resources.stage(forAgent: agentName) {
+        case .success:
+            break
+        case .failure(let staging):
+            return .failure(.resourceStagingFailed(staging.detail))
+        }
+    } else if case .pseudoTerminal = request.io {
+        // Profile-less PTY shells point TMPDIR at the workspace-local cage
+        // dir. Best-effort like the pre-profile staging: the shell reports
+        // its own failure if the directory cannot be created.
+        try? FileManager.default.createDirectory(
+            atPath: "\(workspace)/\(ContainedCagePaths.tmpSubpath)",
+            withIntermediateDirectories: true
+        )
+    }
+    let agentBin = request.legacyAgentIntegration ? AgentBin.installedDirectory() : nil
+    let productive =
+        request.productive
+        ?? resolveProductiveWorkspace(
+            workspacePath: workspace,
+            agentBin: agentBin,
+            credentialDelivery: request.credentialDelivery
+        )
+    if request.legacyAgentIntegration, case .pseudoTerminal = request.io {
+        // Stage into the RV-managed home; the degraded workspace home
+        // keeps staging working when no managed home exists. Credential
+        // symlinks additionally require explicit opt-in on the request.
+        stageAgentHomes(
+            cageHome: productive.developerHome?.home ?? workspace,
+            credentialDelivery: request.credentialDelivery
+        )
+    }
+    // A retained prepared environment bypasses recomputation entirely:
+    // dispatch executes exactly what preparation froze, byte for byte —
+    // except the proxy binding, which never freezes: preparation mints
+    // no runtime, so it mints no proxy either, and the live per-runtime
+    // port (plus credential) is substituted at dispatch instead
+    // (`restampEgressProxyVariables`, GUD-2-6). Nil preserves the legacy
+    // behavior of resolving live at spawn.
+    let environment: [String]
+    if let frozen = preparedEnvironment {
+        environment = restampEgressProxyVariables(
+            frozen, port: egressProxyPort, credential: egressProxyCredential
+        )
+    } else {
+        environment = containedRuntimeEnvironment(
+            workspace: workspace,
+            io: request.io,
+            agentBin: agentBin,
+            resources: request.resources,
+            egressProxyPort: egressProxyPort,
+            egressProxyCredential: egressProxyCredential,
+            keychain: keychain,
+            productive: productive,
+            credentialDelivery: request.credentialDelivery
+        )
+    }
+    return .success(SeatbeltSpawnSetup(
+        path: spawnPath,
+        arguments: arguments,
+        environment: environment,
+        productive: productive
+    ))
 }
 
 /// Workspace-local fallback for a PTY launch with no resource profile.
@@ -917,7 +1053,7 @@ func containedRuntimeEnvironment(
 /// credential stamps the port-only shape instead: open-mode proxies keep
 /// working unchanged, while credentialed proxies answer 407
 /// (`denied-credential`, fail closed) rather than admitting.
-private func egressProxyURL(port: Int, credential: EgressProxyCredential?) -> String {
+func egressProxyURL(port: Int, credential: EgressProxyCredential?) -> String {
     guard let raw = credential?.rawValue, isEmbeddableProxyCredential(raw) else {
         return "http://127.0.0.1:\(port)"
     }
@@ -1106,7 +1242,13 @@ func watchSeatbeltProcess(
         also: outcome.recordedPIDs.union([live.pid]),
         budget: sessionBudget
     )
-    if dead { live.resources?.removeReportingFailure() }
+    if dead {
+        live.resources?.removeReportingFailure()
+        // Released only once the VM is gone, and before any publish.
+        if let workspace = live.placeholderWorkspace {
+            MicroVMControlPlaceholders.shared.release(workspace: workspace)
+        }
+    }
     let mounted: MountedSeatbeltOutcome
     switch seatbeltWatchDisposition(cancelled: outcome.cancelled, leaderDead: dead) {
     case .cancelled:
@@ -1130,7 +1272,9 @@ func watchSeatbeltProcess(
             mounted = MountedSeatbeltOutcome(
                 result: .success(
                     IsolatedRunResult(
-                        established: .seatbelt(live.session),
+                        established: live.session.backend == .microvm
+                            ? .microvm(live.session)
+                            : .seatbelt(live.session),
                         exitStatus: status
                     )
                 ),
@@ -1530,31 +1674,38 @@ private func proveForegroundGroup(
 
 private let ptyClaimExecutableName = "rv-pty-claim"
 
-/// Layouts where `release.sh` and `swift build` publish `rv-pty-claim`.
+/// Layouts where `release.sh` and `swift build` publish a helper.
 /// The test runner's argv0 is the xctest inside `debug/`, not the host
-/// binary. The host publishes the helper beside itself in `release-stage`
+/// binary. The host publishes helpers beside itself in `release-stage`
 /// and in the release products directory.
-private let ptyClaimPublishSuffixes = [
-    "rv-pty-claim",
-    "release/rv-pty-claim",
-    "debug/rv-pty-claim",
-    "release-stage/rv-pty-claim",
-    ".build/release-stage/rv-pty-claim",
-    ".build/debug/rv-pty-claim",
-    ".build/release/rv-pty-claim",
-]
+private func helperPublishSuffixes(_ name: String) -> [String] {
+    [
+        name,
+        "release/\(name)",
+        "debug/\(name)",
+        "release-stage/\(name)",
+        ".build/release-stage/\(name)",
+        ".build/debug/\(name)",
+        ".build/release/\(name)",
+    ]
+}
 
 /// Locate `rv-pty-claim`. Never an env override, never a relative argv0,
 /// never a helper at or under the workspace. A missing helper fails the
 /// PTY launch. There is no direct `sandbox-exec` fallback.
 func resolvedPtyClaimPath(workspace: String) -> String? {
+    resolvedHelperPath(named: ptyClaimExecutableName, workspace: workspace)
+}
+
+/// Locate an rv helper executable by the `rv-pty-claim` rules above.
+func resolvedHelperPath(named name: String, workspace: String) -> String? {
     var seen = Set<String>()
     func consider(_ path: String) -> String? {
         guard seen.insert(path).inserted else { return nil }
-        return usablePtyClaimPath(path, workspacePath: workspace)
+        return usableHelperPath(path, named: name, workspacePath: workspace)
     }
     func considerDirectory(_ directory: URL) -> String? {
-        for suffix in ptyClaimPublishSuffixes {
+        for suffix in helperPublishSuffixes(name) {
             if let found = consider(directory.appendingPathComponent(suffix).path) {
                 return found
             }
@@ -1567,7 +1718,7 @@ func resolvedPtyClaimPath(workspace: String) -> String? {
             if let found = considerDirectory(directory) {
                 return found
             }
-            if let found = considerBuildTriples(directory, consider: consider) {
+            if let found = considerBuildTriples(directory, named: name, consider: consider) {
                 return found
             }
             let parent = directory.deletingLastPathComponent()
@@ -1604,6 +1755,7 @@ func resolvedPtyClaimPath(workspace: String) -> String? {
 /// fixed name, so it is not in the suffix list.
 private func considerBuildTriples(
     _ directory: URL,
+    named name: String,
     consider: (String) -> String?
 ) -> String? {
     let build: URL
@@ -1629,14 +1781,14 @@ private func considerBuildTriples(
         for config in ["debug", "release", "Debug", "Release"] {
             if let found = consider(
                 child.appendingPathComponent(config, isDirectory: true)
-                    .appendingPathComponent(ptyClaimExecutableName).path
+                    .appendingPathComponent(name).path
             ) {
                 return found
             }
             if let found = consider(
                 child.appendingPathComponent("Products", isDirectory: true)
                     .appendingPathComponent(config, isDirectory: true)
-                    .appendingPathComponent(ptyClaimExecutableName).path
+                    .appendingPathComponent(name).path
             ) {
                 return found
             }
@@ -1673,13 +1825,17 @@ private func sessionLeaderIsForeground(_ pid: pid_t, slavePath: String) -> Bool 
 }
 
 func usablePtyClaimPath(_ path: String, workspacePath: String) -> String? {
+    usableHelperPath(path, named: ptyClaimExecutableName, workspacePath: workspacePath)
+}
+
+func usableHelperPath(_ path: String, named name: String, workspacePath: String) -> String? {
     guard IsolatedCommand.isAbsoluteExecutable(path) else { return nil }
-    guard URL(fileURLWithPath: path).lastPathComponent == ptyClaimExecutableName else { return nil }
+    guard URL(fileURLWithPath: path).lastPathComponent == name else { return nil }
     guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
     guard let resolved = posixRealpath(path) else { return nil }
     guard IsolatedCommand.isAbsoluteExecutable(resolved),
         isFilesystemRoot(resolved) == false,
-        URL(fileURLWithPath: resolved).lastPathComponent == ptyClaimExecutableName
+        URL(fileURLWithPath: resolved).lastPathComponent == name
     else {
         return nil
     }

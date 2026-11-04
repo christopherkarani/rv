@@ -100,6 +100,8 @@ enum WorkspaceControlFeature {
     static let resizeLeaseAuthority = "resizeLeaseAuthority"
     static let runtimeResourceProfilesV1 = "runtimeResourceProfilesV1"
     static let terminalReplayBatchesV1 = "terminalReplayBatchesV1"
+    /// `launchRuntime` accepts `microvm`: run the command in a Linux micro-VM.
+    static let microVMLaunchV1 = "microVMLaunchV1"
     /// A subscriber opts in by naming this feature in its subscribe request.
     /// The host sends `terminalWindow` only to opted-in subscribers, so an
     /// older client (whose reader fails closed on unknown ops) never sees it.
@@ -169,6 +171,7 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     var resourceProfileID: String?
     var agentDefinitionID: String?
     var customDefinitionDigest: String?
+    var microvm: MicroVMLaunchOptions?
     var runtime: UUID?
     var hook: String?
     var ok: Bool?
@@ -258,7 +261,7 @@ func workspaceLaunchIO(
 enum WorkspaceControlCodec {
     private static let rootKeys: Set<String> = [
         "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
-        "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
+        "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "microvm", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
         "attached", "running", "io", "rows", "cols", "sequence", "batch",
         "truncated", "replayLength", "bytes", "exit",
         "terminal", "input", "created", "features",
@@ -464,6 +467,7 @@ private struct Envelope: Codable {
     var resourceProfileID: String?
     var agentDefinitionID: String?
     var customDefinitionDigest: String?
+    var microvm: MicroVMLaunchOptions?
     var runtime: UUID?
     var hook: String?
     var ok: Bool?
@@ -583,6 +587,7 @@ private struct Envelope: Codable {
         case resourceProfileID
         case agentDefinitionID
         case customDefinitionDigest
+        case microvm
         case runtime
         case hook
         case ok
@@ -614,7 +619,7 @@ private struct Envelope: Codable {
         let keys = try KeyScan(from: decoder)
         guard keys.keys.isSubset(of: [
             "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
-            "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
+            "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "microvm", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
             "attached", "running", "io", "rows", "cols", "sequence", "batch",
             "truncated", "replayLength", "bytes", "exit",
             "terminal", "input", "created", "features",
@@ -633,6 +638,7 @@ private struct Envelope: Codable {
         resourceProfileID = try container.decodeIfPresent(String.self, forKey: .resourceProfileID)
         agentDefinitionID = try container.decodeIfPresent(String.self, forKey: .agentDefinitionID)
         customDefinitionDigest = try container.decodeIfPresent(String.self, forKey: .customDefinitionDigest)
+        microvm = try container.decodeIfPresent(MicroVMLaunchOptions.self, forKey: .microvm)
         runtime = try container.decodeIfPresent(UUID.self, forKey: .runtime)
         hook = try container.decodeIfPresent(String.self, forKey: .hook)
         ok = try container.decodeIfPresent(Bool.self, forKey: .ok)
@@ -671,6 +677,7 @@ private struct Envelope: Codable {
         try container.encodeIfPresent(resourceProfileID, forKey: .resourceProfileID)
         try container.encodeIfPresent(agentDefinitionID, forKey: .agentDefinitionID)
         try container.encodeIfPresent(customDefinitionDigest, forKey: .customDefinitionDigest)
+        try container.encodeIfPresent(microvm, forKey: .microvm)
         try container.encodeIfPresent(runtime, forKey: .runtime)
         try container.encodeIfPresent(hook, forKey: .hook)
         try container.encodeIfPresent(ok, forKey: .ok)
@@ -708,6 +715,7 @@ private struct Envelope: Codable {
         resourceProfileID = message.resourceProfileID
         agentDefinitionID = message.agentDefinitionID
         customDefinitionDigest = message.customDefinitionDigest
+        microvm = message.microvm
         runtime = message.runtime
         hook = message.hook
         ok = message.ok
@@ -756,6 +764,7 @@ private struct Envelope: Codable {
             resourceProfileID: resourceProfileID,
             agentDefinitionID: agentDefinitionID,
             customDefinitionDigest: customDefinitionDigest,
+            microvm: microvm,
             runtime: runtime,
             hook: hook,
             ok: ok,
@@ -871,6 +880,7 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
         resourceProfileID: String? = nil,
         agentDefinitionID: String? = nil,
         customDefinitionDigest: String? = nil,
+        microvm: MicroVMLaunchOptions? = nil,
         runtime: UUID? = nil,
         hook: String? = nil,
         ok: Bool? = nil,
@@ -907,6 +917,7 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
             resourceProfileID: resourceProfileID,
             agentDefinitionID: agentDefinitionID,
             customDefinitionDigest: customDefinitionDigest,
+            microvm: microvm,
             runtime: runtime,
             hook: hook,
             ok: ok,
@@ -1032,6 +1043,10 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
     public var customDefinitionDigest: String? {
         get { message.customDefinitionDigest }
         set { message.customDefinitionDigest = newValue }
+    }
+    public var microvm: MicroVMLaunchOptions? {
+        get { message.microvm }
+        set { message.microvm = newValue }
     }
     public var resourceProfileID: String? {
         get { message.resourceProfileID }
@@ -1159,6 +1174,7 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
         resourceProfileID: String? = nil,
         agentDefinitionID: String? = nil,
         customDefinitionDigest: String? = nil,
+        microvm: MicroVMLaunchOptions? = nil,
         runtime: UUID? = nil,
         hook: String? = nil,
         ok: Bool? = nil,
@@ -1195,6 +1211,7 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
             resourceProfileID: resourceProfileID,
             agentDefinitionID: agentDefinitionID,
             customDefinitionDigest: customDefinitionDigest,
+            microvm: microvm,
             runtime: runtime,
             hook: hook,
             ok: ok,
@@ -1356,6 +1373,10 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
     public var customDefinitionDigest: String? {
         get { message.customDefinitionDigest }
         set { message.customDefinitionDigest = newValue }
+    }
+    public var microvm: MicroVMLaunchOptions? {
+        get { message.microvm }
+        set { message.microvm = newValue }
     }
     public var resourceProfileID: String? {
         get { message.resourceProfileID }

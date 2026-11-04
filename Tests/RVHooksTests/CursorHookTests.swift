@@ -130,11 +130,73 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     #expect(file.path.rawValue == "/tmp/rv-oracle/.ssh/id_ed25519")
 }
 
-@Test func cursorDecode_preToolUseGrepIsForeign() {
-    let stdin = """
-    {"hook_event_name":"preToolUse","tool_name":"Grep","tool_input":{"path":"/tmp/ws/.env"}}
-    """
-    #expect(codec.decode(stdin) == .foreign)
+private func cursorDecodedFile(_ stdin: String) -> FileToolAction? {
+    guard case .request(let request) = codec.decode(stdin),
+          case .file(_, let action, _, _) = request
+    else { return nil }
+    return action
+}
+
+private func cursorPre(_ tool: String, _ input: String) -> String {
+    #"{"hook_event_name":"preToolUse","tool_name":"\#(tool)","tool_input":\#(input)}"#
+}
+
+@Test(arguments: [
+    (#"{"pattern":"x","path":"/tmp/ws/.env"}"#, "/tmp/ws/.env"),
+    (#"{"pattern":"x","path":"/p","glob":".env*"}"#, "/p/.env"),
+    (#"{"pattern":"x","glob":"**/.env.*"}"#, "**/.env.*"),
+    (#"{"pattern":"x","path":"/p","glob":"*.{js,npmrc}"}"#, "/p/.npmrc"),
+])
+func cursorDecode_grepSecretTargetsAreReadAction(input: String, path: String) {
+    let action = cursorDecodedFile(cursorPre("Grep", input))
+    #expect(action?.kind == .read)
+    #expect(action?.path.rawValue == path)
+}
+
+@Test func cursorDecode_grepBenignExplicitPathIsRead() {
+    let action = cursorDecodedFile(cursorPre("Grep", #"{"pattern":"x","path":"/p/src"}"#))
+    #expect(action?.kind == .read)
+    #expect(action?.path.rawValue == "/p/src")
+}
+
+@Test(arguments: [
+    #"{"pattern":"TODO"}"#,
+    #"{"pattern":"TODO","glob":"*.swift"}"#,
+])
+func cursorDecode_grepCwdWideBenignIsForeign(input: String) {
+    #expect(codec.decode(cursorPre("Grep", input)) == .foreign)
+}
+
+@Test func cursorDecode_grepBraceOverflowFailsClosed() {
+    let glob = "{a,b,c,d}{a,b,c,d}{a,b,c,d}{a,b,c,d}.txt"
+    let action = cursorDecodedFile(cursorPre("Grep", #"{"pattern":"x","glob":"\#(glob)"}"#))
+    #expect(action?.kind == .read)
+    if let action {
+        #expect(SecretPathCatalog.dayOne.firstMatch(of: action.path.rawValue) != nil)
+    }
+}
+
+@Test func cursorDecode_beforeReadFileSecretIsReadAction() {
+    let stdin = #"{"hook_event_name":"beforeReadFile","file_path":"/Users/me/.ssh/id_rsa","content":"x","attachments":[]}"#
+    let action = cursorDecodedFile(stdin)
+    #expect(action?.kind == .read)
+    #expect(action?.path.rawValue == "/Users/me/.ssh/id_rsa")
+}
+
+@Test func cursorDecode_beforeReadFileBenignIsReadAction() {
+    let action = cursorDecodedFile(#"{"hook_event_name":"beforeReadFile","file_path":"/p/README.md"}"#)
+    #expect(action?.kind == .read)
+    #expect(action?.path.rawValue == "/p/README.md")
+}
+
+@Test func cursorDecode_beforeReadFileWithoutPathFailsClosed() {
+    let action = cursorDecodedFile(#"{"hook_event_name":"beforeReadFile"}"#)
+    #expect(action?.path.isEmpty == true)
+}
+
+@Test func cursorDecode_unrelatedToolsStayForeign() {
+    #expect(codec.decode(cursorPre("Task", #"{"prompt":"x"}"#)) == .foreign)
+    #expect(codec.decode(#"{"hook_event_name":"afterFileEdit","file_path":"/p/.env"}"#) == .foreign)
 }
 
 @Test func cursorDecode_preToolUseReadWithoutPathIsFileToolNotForeign() {
