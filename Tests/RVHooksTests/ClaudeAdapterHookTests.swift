@@ -231,7 +231,23 @@ struct ClaudeAdapterHookTests {
         #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     }
 
-    @Test(arguments: ["Grep", "Glob"])
+    @Test(arguments: ["Grep", "Glob", "NotebookEdit", "MultiEdit"])
+    func searchAndEditToolsMissingRv_block(_ tool: String) async throws {
+        let result = try await runClaudeWrapper(
+            event: [
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool,
+                "cwd": "/tmp/ws",
+                "tool_input": ["path": "/tmp/ws/.env"],
+            ],
+            stub: .missing,
+            confirm: "yes"
+        )
+        #expect(result.stdout.contains("\"permissionDecision\":\"deny\""))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test(arguments: ["TodoWrite", "WebFetch"])
     func foreignToolMissingRv_allows(_ tool: String) async throws {
         let result = try await runClaudeWrapper(
             event: [

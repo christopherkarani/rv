@@ -63,8 +63,8 @@ struct CustodianRequestHandlerTests {
 
             for request in [
                 MCPCustodianRequest.status,
-                .mac(purpose: "grant", fields: ["a"], createIfMissing: true),
-                .verify(candidate: "00", purpose: "grant", fields: ["a"]),
+                .mac(purpose: .grant, fields: ["a"], createIfMissing: true),
+                .verify(candidate: "00", purpose: .grant, fields: ["a"]),
             ] {
                 let reply = handler.handleIncoming(
                     try Self.requestData(request), peerRole: role, handshakeOK: true, discoveryOnly: false)
@@ -106,7 +106,7 @@ struct CustodianRequestHandlerTests {
         #expect(try Self.response(statusReply) == .status(.notEnrolled))
 
         let macReply = handler.handleIncoming(
-            try Self.requestData(.mac(purpose: "grant", fields: ["a", "b"], createIfMissing: true)),
+            try Self.requestData(.mac(purpose: .grant, fields: ["a", "b"], createIfMissing: true)),
             peerRole: .cli, handshakeOK: true, discoveryOnly: false)
         guard case .mac(let value) = try Self.response(macReply), let mac = value else {
             Issue.record("expected a MAC, got \(try Self.response(macReply))")
@@ -115,12 +115,12 @@ struct CustodianRequestHandlerTests {
         #expect(mac.count == 64)
 
         let verifyReply = handler.handleIncoming(
-            try Self.requestData(.verify(candidate: mac, purpose: "grant", fields: ["a", "b"])),
+            try Self.requestData(.verify(candidate: mac, purpose: .grant, fields: ["a", "b"])),
             peerRole: .cli, handshakeOK: true, discoveryOnly: false)
         #expect(try Self.response(verifyReply) == .verify(true))
 
         let forgedReply = handler.handleIncoming(
-            try Self.requestData(.verify(candidate: String(repeating: "0", count: 64), purpose: "grant", fields: ["a", "b"])),
+            try Self.requestData(.verify(candidate: String(repeating: "0", count: 64), purpose: .grant, fields: ["a", "b"])),
             peerRole: .cli, handshakeOK: true, discoveryOnly: false)
         #expect(try Self.response(forgedReply) == .verify(false))
     }
@@ -131,7 +131,7 @@ struct CustodianRequestHandlerTests {
         let handler = Self.handler(directory: directory)
 
         let enrollment = handler.handleIncoming(
-            try Self.requestData(.mac(purpose: "enrollment", fields: ["check"], createIfMissing: true)),
+            Data(#"{"mac":{"createIfMissing":true,"fields":["check"],"purpose":"enrollment"}}"#.utf8),
             peerRole: .cli, handshakeOK: true, discoveryOnly: false)
         #expect(try Self.response(enrollment) == .error(.badRequest))
 

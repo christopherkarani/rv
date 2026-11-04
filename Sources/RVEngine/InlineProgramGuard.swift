@@ -139,7 +139,8 @@ private func substituteFlagRun(_ chars: [Character], endingAt index: Int) -> Boo
     return cursor >= 0 && chars[cursor] == "/"
 }
 
-func scriptIsRisky(_ text: String, kind: ProgramKind, secrets: SecretPathCatalog) -> Bool {
+func scriptIsRisky(_ source: String, kind: ProgramKind, secrets: SecretPathCatalog) -> Bool {
+    let text = removingBenignEval(source, arithmeticLiterals: kind == .plain, blockEval: kind == .shellQuoting)
     if identifierWords(text).contains(where: { riskyIdentifiers.contains($0) }) { return true }
     if riskySubstrings.contains(where: { text.contains($0) }) { return true }
     switch kind {

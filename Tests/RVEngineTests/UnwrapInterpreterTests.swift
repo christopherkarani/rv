@@ -94,7 +94,7 @@ struct UnwrapInterpreterTests {
 
     @Test func pythonDataOnlyAndLimited() {
         expectNotWrapper(#"python -c "import os""#)
-        expectNotWrapper(#"python -c "from os import path""#)
+        expectLimited(#"python -c "from os import path""#, .python)
         expectNotWrapper(#"python -c "print (1)""#)
         expectNotWrapper(#"python -c "pprint(1)""#)
         expectNotWrapper(#"python -c "; print('ok')""#)

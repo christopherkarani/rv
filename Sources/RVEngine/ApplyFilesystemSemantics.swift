@@ -61,8 +61,8 @@ public func applyFilesystemSemantics(
     // parsed filesystem segment; the first deny wins, so a benign prefix
     // cannot hide a risky later segment. The attached analysis stays the
     // whole-command analysis.
-    let view = chainView
-    if splitSegments(view).count > 1 {
+    let view = chainSegmentView(of: command)
+    if splitSegments(chainView).count > 1 {
         if let action = analysis.filesystemAction,
             let denied = filesystemSegmentResult(
                 action: action,
