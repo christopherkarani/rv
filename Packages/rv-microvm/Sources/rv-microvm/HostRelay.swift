@@ -53,6 +53,7 @@ final class HostRelay: Sendable {
             if ready <= 0 { continue }
             let client = accept(listener, nil, nil)
             if client < 0 { continue }
+            SocketBridge.suppressSigpipe(client)
             // Over budget: refuse this connection; the guest sees a reset.
             guard budget.tryAcquire() else {
                 close(client)
@@ -70,7 +71,7 @@ final class HostRelay: Sendable {
             close(client)
             return
         }
-        SocketBridge.run(client, upstream)
+        SocketBridge.bridge(client: client, upstream: upstream)
     }
 
     private static func bindListener(path: String) -> Result<Int32, RelayError> {

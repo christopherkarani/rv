@@ -178,7 +178,7 @@ func bridgeToLoopback(_ connection: VZVirtioSocketConnection, port: Int, budget:
         close(guest)
         return
     }
-    SocketBridge.run(guest, upstream)
+    SocketBridge.bridge(client: guest, upstream: upstream)
 }
 
 /// clonefile(2): copy-on-write, so a run costs only what the guest writes.

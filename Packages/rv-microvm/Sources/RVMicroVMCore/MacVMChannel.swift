@@ -12,6 +12,8 @@ public final class MacVMChannel: Sendable {
 
     public init(descriptor: Int32) {
         self.descriptor = descriptor
+        // A vanished peer must surface as EPIPE from `send`, not SIGPIPE.
+        SocketBridge.suppressSigpipe(descriptor)
     }
 
     /// False once the peer is gone.
@@ -52,33 +54,6 @@ public func writeAll(_ descriptor: Int32, _ data: Data) -> Bool {
             offset += written
         }
         return true
-    }
-}
-
-/// Copies two connected sockets into each other until both directions end,
-/// then closes both. EOF in one direction half-closes the peer.
-public enum SocketBridge {
-    public static func run(_ first: Int32, _ second: Int32) {
-        let done = DispatchSemaphore(value: 0)
-        Thread.detachNewThread {
-            copy(from: first, to: second)
-            done.signal()
-        }
-        copy(from: second, to: first)
-        done.wait()
-        close(first)
-        close(second)
-    }
-
-    private static func copy(from source: Int32, to destination: Int32) {
-        var buffer = [UInt8](repeating: 0, count: 65_536)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
-            if count < 0, errno == EINTR { continue }
-            if count <= 0 { break }
-            if !writeAll(destination, Data(buffer[0..<count])) { break }
-        }
-        _ = shutdown(destination, SHUT_WR)
     }
 }
 

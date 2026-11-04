@@ -149,7 +149,7 @@ public enum MicroVMHelper {
 /// the VM is the boundary. LaunchServices is denied because it starts an
 /// opened app outside the caller's sandbox, where it could write them.
 func macOSGuestSandboxProfile(workspacePath: String) -> String {
-    "(version 1)\n(allow default)\n(deny lsopen)\n" + workspaceControlDenies(workspacePath: workspacePath)
+    "(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n" + workspaceControlDenies(workspacePath: workspacePath)
 }
 
 /// envp of the helper: a macOS guest also gets its sandbox profile, by

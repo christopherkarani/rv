@@ -108,7 +108,10 @@ public enum MacVMRuns {
         let descriptor = open(runs.appendingPathComponent(guardName).path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { return .failure(.io("cannot open the lock in \(runs.path)")) }
         defer { close(descriptor) }
-        while flock(descriptor, LOCK_EX) != 0, errno == EINTR {}
+        while flock(descriptor, LOCK_EX) != 0 {
+            if errno == EINTR { continue }
+            return .failure(.io("cannot lock \(runs.path): \(String(cString: strerror(errno)))"))
+        }
         return body()
     }
 }

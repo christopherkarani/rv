@@ -105,5 +105,6 @@ final class CapturedOutput: Writer, Sendable {
 
 /// One line to stderr, prefixed so it is distinguishable from guest output.
 func report(_ message: String) {
-    FileHandle.standardError.write(Data("rv-microvm: \(message)\n".utf8))
+    // `write(contentsOf:)` throws on EPIPE; the legacy `write(_:)` raises an uncatchable NSException.
+    try? FileHandle.standardError.write(contentsOf: Data("rv-microvm: \(message)\n".utf8))
 }

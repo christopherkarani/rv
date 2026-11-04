@@ -12,7 +12,7 @@ Everything around the spawn stays the same: session record, private workspace vo
 - The guest has no network interface. rv's loopback services (egress proxy, secret gateway) reach the guest as relays: host TCP ↔ host unix socket (`rv-microvm`) ↔ vsock (Containerization) ↔ guest unix socket ↔ guest `127.0.0.1:<same port>` (`rv-guest-relay`, a static Linux binary built with zig).
 - The workspace volume is shared into the guest over virtiofs at the same absolute path.
 - SIGKILL of `rv-microvm` stops the VM (verified: the VZ XPC process exits with its client), so the process-group kill model is unchanged.
-- Asset pins: Kata 3.32.0 kernel (`sha256:8736c054…`, same pin as apple/container 1.6.1), `ghcr.io/apple/containerization/vminit:0.54.0`.
+- Asset pins: Kata 3.32.0 kernel (`sha256:8736c054…`, same pin as apple/container 1.6.1), `ghcr.io/apple/containerization/vminit@sha256:ab76bf71…` (0.54.0, pinned by digest).
 
 ## Checklist
 

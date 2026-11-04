@@ -43,7 +43,10 @@ public enum SessionVerb {
         case .success(let spawned): pid = spawned
         }
         var status: Int32 = 0
-        while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+        var reaped = waitpid(pid, &status, 0)
+        while reaped < 0, errno == EINTR { reaped = waitpid(pid, &status, 0) }
+        // ECHILD or any other failure leaves `status` meaningless: not success.
+        if reaped < 0 { status = CommandGroup.unknownStatus }
         stopGroup()
         if isGuestUser { sweepUser() }
         exit(GuestChild.shellStatus(status))

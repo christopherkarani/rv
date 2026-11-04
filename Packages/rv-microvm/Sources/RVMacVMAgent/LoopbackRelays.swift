@@ -57,7 +57,7 @@ final class LoopbackRelays: Sendable {
             Thread.detachNewThread { [budget] in
                 if let upstream = connect(port) {
                     _ = fcntl(upstream, F_SETFD, FD_CLOEXEC)
-                    SocketBridge.run(client, upstream)
+                    SocketBridge.bridge(client: client, upstream: upstream)
                 } else {
                     close(client)
                 }

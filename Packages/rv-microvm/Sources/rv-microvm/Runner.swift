@@ -5,6 +5,7 @@ import ContainerizationOS
 import Darwin
 import Foundation
 import RVMicroVMCore
+import Synchronization
 
 /// One guest command in one fresh micro-VM.
 ///
@@ -23,6 +24,8 @@ struct MicroVMRunner {
     private static let readyTimeout: Duration = .seconds(20)
 
     func run() async -> Int32 {
+        // Belt and braces with SO_NOSIGPIPE: a dropped relay peer must never kill the VM.
+        signal(SIGPIPE, SIG_IGN)
         var cleanup = Cleanup()
         let status: Int32
         do {
@@ -40,6 +43,16 @@ struct MicroVMRunner {
 
     private func launch(_ cleanup: inout Cleanup) async throws -> Int32 {
         let layout = options.layout
+        // Installed before anything boots: a termination signal during VM
+        // startup must stop the container and run Cleanup, not kill us with
+        // the VM still up.
+        let interrupt = InterruptState()
+        let signals = AsyncSignalHandler.create(notify: [SIGTERM, SIGHUP, SIGINT, SIGWINCH])
+        let stream = signals.signals
+        let forwarder = Task {
+            for await signal in stream { await interrupt.handle(signal) }
+        }
+        defer { forwarder.cancel() }
         let problems = await AssetStatus(layout: layout).problems(image: nil)
         guard problems.isEmpty else {
             throw SetupError("\(problems.joined(separator: "; ")); run `rv-microvm prepare --image \(options.image)`")
@@ -92,6 +105,7 @@ struct MicroVMRunner {
             root: layout.store
         )
         let ready = ReadyLatch()
+        interrupt.attach(ready: ready)
         let relayErrors = CapturedOutput()
         let container = try await manager.create(
             id,
@@ -143,11 +157,14 @@ struct MicroVMRunner {
         }
         try await container.create()
         cleanup.addAsync { try? await container.stop() }
+        try interrupt.check()
         try await container.start()
+        try interrupt.check()
         guard await waitReady(ready) else {
             let detail = relayErrors.text.trimmingCharacters(in: .whitespacesAndNewlines)
             throw SetupError("guest relay did not start\(detail.isEmpty ? "" : ": \(detail)")")
         }
+        try interrupt.check()
 
         let imageConfig = try await image.config(for: guestPlatform).config
         let terminal = isatty(STDIN_FILENO) == 1 ? try Terminal(descriptor: STDIN_FILENO) : nil
@@ -173,6 +190,7 @@ struct MicroVMRunner {
         // Establish before the guest command runs, like the Seatbelt
         // launcher writing its nonce before exec: a failed handshake must
         // never follow agent activity.
+        try interrupt.check()
         try writeHandshake()
         do {
             try await guest.start()
@@ -186,17 +204,7 @@ struct MicroVMRunner {
             if let size = try? terminal.size { try? await guest.resize(to: size) }
         }
 
-        let signals = AsyncSignalHandler.create(notify: [SIGTERM, SIGHUP, SIGINT, SIGWINCH])
-        let forwarder = Task {
-            for await signal in signals.signals {
-                if signal == SIGWINCH {
-                    if let terminal, let size = try? terminal.size { try? await guest.resize(to: size) }
-                } else {
-                    try? await guest.kill(Signal(rawValue: signal))
-                }
-            }
-        }
-        defer { forwarder.cancel() }
+        await interrupt.attach(guest: guest, terminal: terminal)
         let exit = try await guest.wait()
         return MicroVMExit.status(fromGuest: exit.exitCode)
     }
@@ -232,8 +240,11 @@ struct MicroVMRunner {
     /// Short private directory for the host relay sockets. The state root is
     /// usually too deep for AF_UNIX's 104-byte path limit.
     private func makePrivateDirectory() throws -> String {
-        var template = Array("/tmp/rvmvm.XXXXXX".utf8CString)
-        guard let created = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }) else {
+        RelayDirectories.sweep(in: RelayDirectories.parent, isAlive: { kill($0, 0) == 0 || errno != ESRCH })
+        var template = Array(RelayDirectories.template(pid: getpid()).utf8CString)
+        guard let created = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }),
+            String(cString: created).hasPrefix("/")
+        else {
             throw SetupError("cannot create relay directory: \(String(cString: strerror(errno)))")
         }
         return String(cString: created)
@@ -260,6 +271,58 @@ private func makeRaw(_ descriptor: Int32) {
     guard tcgetattr(descriptor, &attributes) == 0 else { return }
     cfmakeraw(&attributes)
     _ = tcsetattr(descriptor, TCSANOW, &attributes)
+}
+
+/// Signal routing across the launch: before the guest command exists a
+/// terminating signal is only recorded (and turned into a launch failure at
+/// the next checkpoint); afterwards it is forwarded to the guest.
+final class InterruptState: Sendable {
+    private struct State {
+        var interrupted: Int32?
+        var guest: LinuxProcess?
+        var terminal: Terminal?
+        var ready: ReadyLatch?
+    }
+
+    private let state = Mutex<State>(State())
+
+    func check() throws {
+        if let signal = state.withLock({ $0.interrupted }) {
+            throw SetupError("interrupted by signal \(signal) before the guest command started")
+        }
+    }
+
+    /// Lets an early signal abort the ready wait instead of sitting out its timeout.
+    func attach(ready: ReadyLatch) {
+        let pending = state.withLock { state -> Bool in
+            state.ready = ready
+            return state.interrupted != nil
+        }
+        if pending { ready.fail() }
+    }
+
+    func attach(guest: LinuxProcess, terminal: Terminal?) async {
+        let pending = state.withLock { state -> Int32? in
+            state.guest = guest
+            state.terminal = terminal
+            return state.interrupted
+        }
+        if let pending { try? await guest.kill(Signal(rawValue: pending)) }
+    }
+
+    func handle(_ signal: Int32) async {
+        let (guest, terminal, ready) = state.withLock { state -> (LinuxProcess?, Terminal?, ReadyLatch?) in
+            if signal != SIGWINCH, state.guest == nil { state.interrupted = signal }
+            return (state.guest, state.terminal, state.guest == nil && signal != SIGWINCH ? state.ready : nil)
+        }
+        ready?.fail()
+        guard let guest else { return }
+        if signal == SIGWINCH {
+            if let terminal, let size = try? terminal.size { try? await guest.resize(to: size) }
+        } else {
+            try? await guest.kill(Signal(rawValue: signal))
+        }
+    }
 }
 
 struct SetupError: Error, CustomStringConvertible {

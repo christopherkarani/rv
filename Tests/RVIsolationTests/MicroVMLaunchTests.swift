@@ -289,6 +289,34 @@ struct MicroVMControlPlaceholderTests {
         #expect(exists(ws, ".git/objects") && exists(ws, ".config/nvim"))
     }
 
+    @Test("two acquires on a plain folder leave .git empty with no children")
+    func secondAcquireKeepsEmptyGitEmpty() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".git") && exists(ws, ".config"))
+        #expect(exists(ws, ".git/hooks") == false && exists(ws, ".git/config") == false && exists(ws, ".config/rv") == false)
+    }
+
+    @Test("a later run re-creates control children under a placeholder .git another runtime filled")
+    func secondAcquireReensuresChildren() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".git/hooks") == false)
+        // A Seatbelt run (or the host) writes into the placeholder while run A holds it.
+        try "ref: refs/heads/main\n".write(to: ws.appendingPathComponent(".git/HEAD"), atomically: true, encoding: .utf8)
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".git/hooks") && exists(ws, ".git/config"), "run B must get children to pin")
+        registry.release(workspace: ws.path)
+        registry.release(workspace: ws.path)
+        #expect(exists(ws, ".git/hooks") == false && exists(ws, ".git/config") == false)
+        #expect(exists(ws, ".git/HEAD"))
+    }
+
     @Test("a placeholder that gained content is left in place")
     func nonEmptyStays() throws {
         let ws = try makeWorkspace()
@@ -355,18 +383,66 @@ struct MacOSGuestLaunchTests {
     @Test("the guest sandbox profile is the host cage's workspace control rules")
     func guestProfile() {
         let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
-        // LaunchServices would start an opened app outside the sandbox.
-        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n"))
+        // LaunchServices would start an opened app outside the sandbox, and an
+        // Apple event can make a running app (System Events) run a shell command there.
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n"))
         #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
     }
 
     #if os(macOS)
+    /// Runs a command, optionally under the guest profile, and kills it after
+    /// `timeout` seconds (a consent prompt must not hang CI). Stderr goes to a
+    /// file so no read can block.
+    private func launchProbe(
+        _ arguments: [String], profile: String?, errorFile: URL, timeout: TimeInterval = 15
+    ) throws -> (status: Int32, error: String, timedOut: Bool) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: profile == nil ? arguments[0] : "/usr/bin/sandbox-exec")
+        process.arguments = profile.map { ["-p", $0] + arguments } ?? Array(arguments.dropFirst())
+        process.standardOutput = FileHandle.nullDevice
+        FileManager.default.createFile(atPath: errorFile.path, contents: nil)
+        let errors = try FileHandle(forWritingTo: errorFile)
+        defer { try? errors.close() }
+        process.standardError = errors
+        try process.run()
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        let timedOut = process.isRunning
+        if timedOut {
+            process.terminate()
+            Thread.sleep(forTimeInterval: 0.5)
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+        process.waitUntilExit()
+        let error = (try? String(contentsOf: errorFile, encoding: .utf8)) ?? ""
+        return (process.terminationStatus, error, timedOut)
+    }
+
+    /// Setuid binaries fail on their own too (no crontab, no password), so
+    /// only sandbox-exec's own refusal proves the exec was blocked.
+    @Test("the guest profile refuses to exec setuid binaries")
+    func guestProfileRefusesSetuid() throws {
+        let scratch = try #require(posixRealpath(NSTemporaryDirectory()))
+        let directory = URL(fileURLWithPath: scratch).appendingPathComponent("rv-guest-setuid-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = macOSGuestSandboxProfile(workspacePath: directory.path)
+        let errors = directory.appendingPathComponent("err")
+        #expect(try launchProbe(["/usr/bin/true"], profile: profile, errorFile: errors).status == 0)
+        for setuid in [["/usr/bin/crontab", "-l"], ["/usr/bin/sudo", "-n", "/usr/bin/true"]] {
+            let result = try launchProbe(setuid, profile: profile, errorFile: errors)
+            #expect(result.status == 71 && result.error.contains("Operation not permitted"), "\(setuid): \(result)")
+        }
+    }
+
     /// The guest profile allows everything but the control paths, so it
     /// must not leave a way to start a process outside the sandbox: such a
-    /// process could write `.git/hooks`. Each launchd and LaunchServices
-    /// route runs once unsandboxed, where it must write its marker (else the
-    /// probe proves nothing), and once under the profile, where it must not.
-    /// Setuid binaries must meet sandbox-exec's own refusal.
+    /// process could write `.git/hooks`. Each launchd, LaunchServices and
+    /// Apple event route runs once unsandboxed as a control, and only if
+    /// that control writes its marker (within ~10 s) does the probe mean
+    /// anything: then the route runs under the profile, where it must not.
+    /// A route whose control fails here (no GUI login session, no
+    /// Automation consent) is skipped with a visible warning, not a failure.
     @Test("nothing under the guest profile can start an unsandboxed process")
     func guestProfileHasNoEscape() throws {
         let scratch = try #require(posixRealpath(NSTemporaryDirectory()))
@@ -387,18 +463,6 @@ struct MacOSGuestLaunchTests {
                     if (try? cleanup.run()) != nil { cleanup.waitUntilExit() }
                 }
             }
-        }
-        func launch(_ arguments: [String], sandboxed: Bool) throws -> (status: Int32, error: String) {
-            let process = Process()
-            let errors = Pipe()
-            process.executableURL = URL(fileURLWithPath: sandboxed ? "/usr/bin/sandbox-exec" : arguments[0])
-            process.arguments = sandboxed ? ["-p", profile] + arguments : Array(arguments.dropFirst())
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = errors
-            try process.run()
-            let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            process.waitUntilExit()
-            return (process.terminationStatus, error)
         }
         /// The routes, each writing its own marker if its process runs.
         func routes(_ tag: String) throws -> [(name: String, arguments: [String], marker: URL)] {
@@ -425,28 +489,36 @@ struct MacOSGuestLaunchTests {
                 ("launchctl bootstrap", ["/bin/launchctl", "bootstrap", domain, plist.path], marker("bootstrap")),
                 ("launchctl submit", ["/bin/launchctl", "submit", "-l", submitted, "--", "/usr/bin/touch", marker("submit").path], marker("submit")),
                 ("open", ["/usr/bin/open", "-g", "-j", app.path], marker("open")),
+                (
+                    "osascript",
+                    ["/usr/bin/osascript", "-e", "tell application \"System Events\" to do shell script \"/usr/bin/touch '\(marker("osascript").path)'\""],
+                    marker("osascript")
+                ),
             ]
         }
-        #expect(try launch(["/usr/bin/true"], sandboxed: true).status == 0)
+        func appears(_ marker: URL, within seconds: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
+            repeat {
+                if FileManager.default.fileExists(atPath: marker.path) { return true }
+                Thread.sleep(forTimeInterval: 0.1)
+            } while Date() < deadline
+            return FileManager.default.fileExists(atPath: marker.path)
+        }
+        let errors = directory.appendingPathComponent("err")
         let controls = try routes("control")
         let probes = try routes("sandboxed")
-        for route in controls { _ = try launch(route.arguments, sandboxed: false) }
-        for route in probes { _ = try launch(route.arguments, sandboxed: true) }
-        // Setuid binaries fail on their own too (no crontab, no password),
-        // so only sandbox-exec's own refusal proves the exec was blocked.
-        for setuid in [["/usr/bin/crontab", "-l"], ["/usr/bin/sudo", "-n", "/usr/bin/true"]] {
-            let result = try launch(setuid, sandboxed: true)
-            #expect(result.status == 71 && result.error.contains("Operation not permitted"), "\(setuid): \(result)")
-        }
-        Thread.sleep(forTimeInterval: 2)
-        for route in controls {
-            try #require(
-                FileManager.default.fileExists(atPath: route.marker.path),
-                "unsandboxed \(route.name) started nothing here, so its sandboxed probe would prove nothing"
-            )
-        }
-        for route in probes {
-            #expect(!FileManager.default.fileExists(atPath: route.marker.path), "\(route.name) escaped the sandbox")
+        for (control, probe) in zip(controls, probes) {
+            _ = try launchProbe(control.arguments, profile: nil, errorFile: errors)
+            guard appears(control.marker, within: 10) else {
+                Issue.record(
+                    "skipped \(control.name): unsandboxed it started nothing here (no GUI login session or consent?), so its probe would prove nothing",
+                    severity: .warning
+                )
+                continue
+            }
+            _ = try launchProbe(probe.arguments, profile: profile, errorFile: errors)
+            // A negative result needs a fixed wait; the control's own latency is unknown, so allow 3 s.
+            #expect(!appears(probe.marker, within: 3), "\(probe.name) escaped the sandbox")
         }
     }
     #endif
