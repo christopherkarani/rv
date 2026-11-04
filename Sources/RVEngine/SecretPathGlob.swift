@@ -113,7 +113,7 @@ enum SecretPathGlob {
     private static func component(_ pattern: String, selects name: String, _ matching: Matching) -> Bool {
         if pattern == name { return true }
         if matching == .findNameFolded, pattern.lowercased() == name.lowercased() { return true }
-        guard pattern.contains(where: { "*?[".contains($0) }),
+        guard pattern.contains(where: { "*?[\\".contains($0) }),
             pattern.contains(where: { $0 != "*" && $0 != "?" })
         else { return false }
         return fnmatch(pattern, name, matching.flags) == 0

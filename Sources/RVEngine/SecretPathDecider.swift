@@ -83,6 +83,14 @@ public struct SecretPathDecider: Sendable {
     public func fold(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
         let folded = fold(result)
         guard folded == result, escalatesToAliasPass(result) else { return folded }
+        // A pager set in the environment runs a command the view dropped.
+        if var matched = pagerAssignmentHit(in: command) {
+            matched.searchText = result.matchingView.rawValue
+            return EvaluationResult(
+                outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+                matchingView: result.matchingView
+            )
+        }
         // Command heads are never masked, so the view says whether a second
         // derivation could reveal anything.
         let words = result.matchingView.rawValue.split { " \t\n;|&()".contains($0) }
@@ -96,6 +104,25 @@ public struct SecretPathDecider: Sendable {
             outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
             matchingView: result.matchingView
         )
+    }
+
+    /// `MANPAGER='cat ~/.ssh/id_rsa' man ls`, `env PAGER=… man`, `git -c
+    /// core.pager=…`, `LESSOPEN='|cat …'`: the matching view drops the
+    /// assignment, but the pager runs as a command. A bare command name reads
+    /// nothing; any other value is scanned as a command line.
+    func pagerAssignmentHit(in command: ShellCommand) -> RuleMatch? {
+        for token in ShellPipeline.tokenize(command.rawValue) {
+            guard let equals = token.lexeme.firstIndex(of: "="), equals > token.lexeme.startIndex else { continue }
+            let name = token.lexeme[..<equals]
+            guard name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }) else { continue }
+            let lowered = name.lowercased()
+            guard lowered.hasSuffix("pager") || lowered == "lessopen" || lowered == "lessclose" else { continue }
+            var value = String(token.lexeme[token.lexeme.index(after: equals)...])
+            while let first = value.first, first == "|" || first == "-" || first.isWhitespace { value.removeFirst() }
+            guard value.isEmpty == false, SecretPathGuard.isPlainCommandName(value) == false else { continue }
+            if let hit = firstHit(in: MatchingView(value)) { return hit }
+        }
+        return nil
     }
 
     /// The catalog rule one file-tool path hits, with the spelling that

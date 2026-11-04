@@ -14,6 +14,13 @@ enum SecretPathGuard {
     static let unmodelledPatternName = "unmodelled-operand"
     static let unmodelledDenialReason = "Command operands cannot be analyzed for secret paths; refusing."
 
+    /// A bare command name (`less`, `cat`): run as a pager it reads nothing a
+    /// secret path names.
+    static func isPlainCommandName(_ value: String) -> Bool {
+        value.isEmpty == false
+            && value.allSatisfy { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" || $0 == "+" }
+    }
+
     static func firstHit(
         in matchingView: MatchingView,
         catalog: SecretPathCatalog,
@@ -313,7 +320,7 @@ private enum OperandFlag {
     case file(attached: String?)
     /// A file-selecting glob (`rg -g .env`, `grep --include .env`): its value
     /// names files the search reads, and the pattern is still positional.
-    case glob(attached: String?)
+    case glob(attached: String?, fold: Bool = false)
     case files
     case equalsValue(String)
     case ignore
@@ -345,8 +352,10 @@ private func operandFlag(for token: FlagToken) -> OperandFlag? {
             // Attached values are ignored here, as before: `--files=x` was
             // `.files`, never `.equalsValue`.
             return .files
-        case "glob", "iglob", "include":
+        case "glob", "include":
             return .glob(attached: attached)
+        case "iglob":
+            return .glob(attached: attached, fold: true)
         default:
             if let attached {
                 // `--exclude=!x` negates like a negated glob: nothing is read.
@@ -474,6 +483,7 @@ private func grepCandidates(_ words: [String], head: String) -> SecretPathGuard.
     var expectRegexp = false
     var expectFile = false
     var expectGlob = false
+    var globFolds = false
     var afterDoubleDash = false
     var skipValues = 0
     var fileAfterSkip = false
@@ -499,7 +509,11 @@ private func grepCandidates(_ words: [String], head: String) -> SecretPathGuard.
         if expectGlob {
             expectGlob = false
             // `!` negates a glob: an exclusion names files the search skips.
-            if word.hasPrefix("!") == false { scan.add(word, expands: true) }
+            // A search glob matches names with no dotfile rule (`-g '*env'`
+            // reads `.env`).
+            if word.hasPrefix("!") == false {
+                scan.add(word, expands: true, matching: globFolds ? .findNameFolded : .findName)
+            }
             continue
         }
         if afterDoubleDash {
@@ -546,11 +560,14 @@ private func grepCandidates(_ words: [String], head: String) -> SecretPathGuard.
                 }
             case .files:
                 skipFirstPositional = false
-            case .glob(let attached):
+            case .glob(let attached, let fold):
                 if let attached {
-                    if attached.hasPrefix("!") == false { scan.add(attached, expands: true) }
+                    if attached.hasPrefix("!") == false {
+                        scan.add(attached, expands: true, matching: fold ? .findNameFolded : .findName)
+                    }
                 } else {
                     expectGlob = true
+                    globFolds = fold
                 }
             case .equalsValue(let value):
                 scan.add(value, expands: false)
@@ -585,6 +602,10 @@ private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretP
     var names: [(pattern: String, matching: SecretPathGlob.Matching)] = []
     var pendingMatching = SecretPathGlob.Matching.findName
     var sawRegex = false
+    // Global options (`-L`, `-H`, `-D debug`, `-f path`) may precede the
+    // paths; they are not the start of the predicates.
+    var leadingOptions = true
+    var pathValue = false
 
     func runExec(_ argv: [String]) {
         let inner = SecretPathGuard.argvCandidates(argv.filter { $0 != "{}" }, includeMetadata: includeMetadata)
@@ -619,6 +640,11 @@ private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretP
             execs = true
             continue
         }
+        if pathValue {
+            pathValue = false
+            if let candidate = operandCandidate(word) { scan.add(candidate, expands: candidate == word) }
+            continue
+        }
         if skipValue {
             skipValue = false
             if nameValue { names.append((word, pendingMatching)) }
@@ -628,10 +654,26 @@ private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretP
         // Classified lazily so the state machine keeps walking predicate
         // starts and value skips even after the cap: those call sites do not
         // add candidates and must not mask a real dropped operand.
+        if leadingOptions, beforePredicate, word.hasPrefix("-"), word.hasPrefix("--") == false {
+            if word == "-D" {
+                skipValue = true
+                continue
+            }
+            if word == "-f" {
+                pathValue = true
+                continue
+            }
+            if ["-H", "-L", "-P", "-E", "-s", "-x", "-d", "-X"].contains(word)
+                || (word.hasPrefix("-O") && word.dropFirst(2).allSatisfy(\.isNumber))
+            {
+                continue
+            }
+        }
         switch FlagToken.classify(word) {
         case .positional("("), .positional("!"), .positional(";"):
             beforePredicate = false
         case .positional(let operand):
+            leadingOptions = false
             if beforePredicate, let candidate = operandCandidate(operand) {
                 scan.add(candidate, expands: candidate == operand)
             }
@@ -688,10 +730,7 @@ private func manCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
         scan.expands = kept.map(\.1.0)
         scan.matching = kept.map(\.1.1)
     }
-    func isPlainCommandName(_ value: String) -> Bool {
-        value.isEmpty == false
-            && value.allSatisfy { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" || $0 == "+" }
-    }
+    func isPlainCommandName(_ value: String) -> Bool { SecretPathGuard.isPlainCommandName(value) }
     var commandPending = false
     for word in words {
         if commandPending {

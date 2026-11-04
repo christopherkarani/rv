@@ -280,9 +280,16 @@ func applyRoleAwareQuotesDetailed(
         // A revealed quoted word stays one word: `grep "load .env" docs` must
         // not read as a `.env` operand, and `grep "" .env` keeps its pattern.
         if revealed, token.wasQuoted, token.containsInlineCode == false, token.isRedirectStructural == false {
+            // A backslash inside the word is kept: `find -name '\.env'` and
+            // `.en\v` mean `.env` once the guard unescapes them. A trailing one
+            // would escape the following separator and merge words: flatten it.
+            let keepsBackslash = decoded.hasSuffix("\\") == false
             tokens[index].lexeme = decoded.isEmpty
                 ? "\"\""
-                : String(decoded.map { $0.isWhitespace || ";|&<>()\"'\\".contains($0) ? "_" : $0 })
+                : String(decoded.map {
+                    ($0 == "\\" && keepsBackslash) ? $0
+                        : ($0.isWhitespace || ";|&<>()\"'\\".contains($0) ? "_" : $0)
+                })
         }
 
         if unquotedDataMaskSafe,
