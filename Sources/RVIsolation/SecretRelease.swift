@@ -116,7 +116,12 @@ public struct SecretRelease: Sendable {
         if let rule = SecretOrganizationRules.rule(definition, policy: policy, target: target) {
             return .organizationPolicy(rule)
         }
-        if target != .cage, definition.gatewayOnly { return .gatewayOnly }
+        // A gateway-only source in a cage must still be paired with the delivery that
+        // parses it; otherwise its raw answer (a credential set, a token response) would
+        // be released as text.
+        if definition.gatewayOnly,
+            target != .cage || SecretDefinitionError.pairing(definition.name, definition.source, definition.delivery) != nil
+        { return .gatewayOnly }
         if let expires = definition.expires, now() >= expires { return .expired(at: expires) }
         return nil
     }
