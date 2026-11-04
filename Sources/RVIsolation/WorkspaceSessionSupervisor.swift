@@ -1334,11 +1334,11 @@ final class WorkspaceSessionSupervisor: Sendable {
             )
         case .success(let child):
             let mounted = watchSeatbeltProcess(child.live, stop: child.stop)
-            child.live.markWatchFinished()
             // Unregistered by design: stop the runtime's own proxy here,
             // since noteRuntimeEnded only reaches registered children.
             child.egressProxy.stop()
             noteRuntimeEnded(child.live.session)
+            child.live.markWatchFinished()
             return mounted
         }
     }

@@ -245,8 +245,8 @@ final class LiveSeatbeltChild: Sendable {
     /// runs, the frame parks for its drain; after the watch finishes,
     /// admission runs here on the caller's thread. The module decides
     /// under its one lock, so callers never read the flag and guess.
-    /// Returns nil if a frame is already waiting or the watch does not
-    /// answer. Sensitive mediation needs its own door.
+    /// While the watch runs, returns nil if a frame is already waiting
+    /// or the watch does not answer. Sensitive mediation needs its own door.
     func submitLegacy(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
         let reply = AdmissionReply()
         enum Route {
