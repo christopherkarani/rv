@@ -6,17 +6,59 @@ import RVPolicy
 
 /// `rv managed`: inspect, prepare, and sign the organization policy bundle.
 enum ManagedRun {
-    struct Status: Encodable, Equatable {
-        var state: String
-        var directory: String
-        var reason: String?
-        var organization: String?
-        var serial: Int?
-        var sha256: String?
-        var signed: Bool?
-        var signingKey: Int?
-        var highestSerial: Int?
-        var restrictions: [String]?
+    /// The managed policy as `rv managed` and `rv report` present it. Closed, so
+    /// every consumer must handle each state; the robot JSON stays the flat shape
+    /// fleet tooling already parses.
+    enum Status: Encodable, Equatable {
+        case none(directory: String)
+        case invalid(directory: String, reason: String)
+        case active(Active)
+
+        struct Active: Equatable {
+            var directory: String
+            var organization: String?
+            var serial: Int?
+            var sha256: String
+            var signed: Bool
+            var signingKey: Int?
+            var highestSerial: Int?
+            var restrictions: [String]
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case state, directory, reason, organization, serial, sha256, signed, signingKey, highestSerial, restrictions
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case .none(let directory):
+                try container.encode("none", forKey: .state)
+                try container.encode(directory, forKey: .directory)
+            case .invalid(let directory, let reason):
+                try container.encode("invalid", forKey: .state)
+                try container.encode(directory, forKey: .directory)
+                try container.encode(reason, forKey: .reason)
+            case .active(let active):
+                try container.encode("active", forKey: .state)
+                try container.encode(active.directory, forKey: .directory)
+                try container.encodeIfPresent(active.organization, forKey: .organization)
+                try container.encodeIfPresent(active.serial, forKey: .serial)
+                try container.encode(active.sha256, forKey: .sha256)
+                try container.encode(active.signed, forKey: .signed)
+                try container.encodeIfPresent(active.signingKey, forKey: .signingKey)
+                try container.encodeIfPresent(active.highestSerial, forKey: .highestSerial)
+                try container.encode(active.restrictions, forKey: .restrictions)
+            }
+        }
+
+        /// A present-but-untrustworthy policy: not compliant, `rv managed status` exits 1.
+        var isInvalid: Bool {
+            switch self {
+            case .invalid: true
+            case .none, .active: false
+            }
+        }
     }
 
     /// The installed policy after the anti-rollback check against the user's serial record.
@@ -27,39 +69,39 @@ enum ManagedRun {
     static func status(_ state: ManagedPolicyState, directory: String) -> Status {
         switch state {
         case .none:
-            return Status(state: "none", directory: directory)
+            return .none(directory: directory)
         case .invalid(let reason):
-            return Status(state: "invalid", directory: directory, reason: reason)
+            return .invalid(directory: directory, reason: reason)
         case .active(let bundle):
-            return Status(
-                state: "active", directory: bundle.directory, organization: bundle.policy.organization,
+            return .active(Status.Active(
+                directory: bundle.directory, organization: bundle.policy.organization,
                 serial: bundle.policy.serial, sha256: bundle.sha256, signed: bundle.isSigned,
                 signingKey: bundle.signingKey, highestSerial: bundle.highestSerial,
-                restrictions: restrictions(bundle.policy))
+                restrictions: restrictions(bundle.policy)))
         }
     }
 
     static func statusText(_ status: Status) -> String {
-        switch status.state {
-        case "none":
-            return "no organization policy installed (\(status.directory))\n"
-        case "invalid":
-            return "organization policy INVALID: \(status.reason ?? "unknown")\n"
-                + "MCP and secret staging are disabled until it is fixed (\(status.directory))\n"
-        default:
-            let signature = switch (status.signed, status.signingKey) {
+        switch status {
+        case .none(let directory):
+            return "no organization policy installed (\(directory))\n"
+        case .invalid(let directory, let reason):
+            return "organization policy INVALID: \(reason)\n"
+                + "MCP and secret staging are disabled until it is fixed (\(directory))\n"
+        case .active(let active):
+            let signature = switch (active.signed, active.signingKey) {
             case (true, let key?): "signed by key \(key) in \(ManagedPolicyLocation.publicKeyFile)"
             case (true, nil): "signed (\(ManagedPolicyLocation.publicKeyFile) pinned)"
-            default: "unsigned"
+            case (false, _): "unsigned"
             }
             var lines = [
-                "organization policy active: \(DisplayedText.field(status.organization ?? "unnamed"))"
-                    + (status.serial.map { " serial \($0)" } ?? ""),
-                "  \(signature) sha256 \(status.sha256 ?? "")",
+                "organization policy active: \(DisplayedText.field(active.organization ?? "unnamed"))"
+                    + (active.serial.map { " serial \($0)" } ?? ""),
+                "  \(signature) sha256 \(active.sha256)",
             ]
-            if let highest = status.highestSerial { lines.append("  anti-rollback: highest serial accepted here is \(highest)") }
-            let rules = status.restrictions ?? []
-            lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + DisplayedText.field($0) }
+            if let highest = active.highestSerial { lines.append("  anti-rollback: highest serial accepted here is \(highest)") }
+            lines += active.restrictions.isEmpty
+                ? ["  no restrictions"] : active.restrictions.map { "  " + DisplayedText.field($0) }
             return lines.joined(separator: "\n") + "\n"
         }
     }
@@ -174,7 +216,10 @@ struct ManagedStatus: AsyncParsableCommand {
         } else {
             ctx.writeStdout(ManagedRun.statusText(status))
         }
-        if status.state == "invalid" { throw ExitCode(1) }
+        switch status {
+        case .invalid: throw ExitCode(1)
+        case .none, .active: break
+        }
     }
 }
 

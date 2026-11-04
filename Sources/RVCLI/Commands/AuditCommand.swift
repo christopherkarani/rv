@@ -72,12 +72,12 @@ enum AuditVerifyRun {
     }
 
     static func text(_ report: AuditChainReport, path: String) -> String {
-        guard report.lines > 0 else { return "no audit lines yet (\(path))\n" }
+        guard report.lines > 0 else { return "no audit lines yet (\(DisplayedText.field(path)))\n" }
         if let broken = report.firstBreak {
             let scope = broken.line == 1
                 ? "  the file was changed at its start"
                 : "  lines 1-\(broken.line - 1) are intact; line \(broken.line) or the one before it was edited, removed, inserted, or reordered"
-            return "audit chain BROKEN at line \(broken.line) of \(path): \(broken.reason)\n\(scope)\n"
+            return "audit chain BROKEN at line \(broken.line) of \(DisplayedText.field(path)): \(DisplayedText.field(broken.reason))\n\(scope)\n"
         }
         var text = "audit chain intact: \(report.lines) lines, head \(report.head)\n"
         if report.unchained > 0 {

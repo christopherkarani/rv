@@ -90,7 +90,7 @@ struct GatedEffectTests {
 
     @Test("enforce, judge unavailable: a risky inline program is floored; its judge log keeps the live allow")
     func packsOnlyFloorKeepsUnflooredLog() async throws {
-        let inline = ShellCommand(rawValue: #"perl -e 'system("rm -rf ~")'"#)
+        let inline = ShellCommand(rawValue: #"python3 -c 'print(shred)'"#)
         let door = GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: .unavailable("x")))
         let apply = await Self.decide(.apply, inline, mode: .enforce, door: door, bundle: Self.fakeBundle)
         #expect(apply.result.decision == .indeterminate(.inlineProgramNeedsJudge))

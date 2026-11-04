@@ -100,7 +100,7 @@ enum ReportRun {
 
         /// Healthy enough for a fleet dashboard to show green.
         var compliant: Bool {
-            managed.state != "invalid" && mcp.ok && secrets.error == nil
+            managed.isInvalid == false && mcp.ok && secrets.error == nil
                 && secrets.items.allSatisfy { $0.policyViolation == nil }
                 && audit.chainIntact != false
         }

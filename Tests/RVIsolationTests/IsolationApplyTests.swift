@@ -772,6 +772,8 @@ struct IsolationApplyTests {
                 break
             case .landlock:
                 break
+            case .microvm:
+                Issue.record("must not establish a micro-VM")
             }
         }
     }
@@ -1080,6 +1082,8 @@ struct IsolationApplyTests {
             Issue.record("Darwin platform() must be family seatbelt")
         case .landlock:
             Issue.record("Darwin platform() must be family seatbelt, not landlock")
+        case .microvm:
+            Issue.record("must not establish a micro-VM")
         }
         #elseif os(Linux)
         switch backend.family {
@@ -1089,6 +1093,8 @@ struct IsolationApplyTests {
             Issue.record("Linux platform() must be family landlock")
         case .seatbelt:
             Issue.record("Linux platform() must be family landlock, not seatbelt")
+        case .microvm:
+            Issue.record("Linux platform() must be family landlock, not microvm")
         }
         #else
         switch backend.family {
@@ -1098,6 +1104,8 @@ struct IsolationApplyTests {
             Issue.record("unknown platform() must be family none")
         case .landlock:
             Issue.record("unknown platform() must be family none, not landlock")
+        case .microvm:
+            Issue.record("unknown platform() must be family none, not microvm")
         }
         let workspace = try requireWorkspace("/workspace")
         let plan = try requirePlan(
@@ -1169,6 +1177,8 @@ struct IsolationApplyTests {
                     break
                 case .observed, .mediated:
                     Issue.record("contained \(label) must establish seatbelt")
+                case .microvm:
+                    Issue.record("must not establish a micro-VM")
                 }
             case .failure(let error):
                 Issue.record("contained \(label) must run, got \(error)")
@@ -1399,6 +1409,9 @@ private func probeLine(
         case .seatbelt:
             established = "seatbelt"
             family = "seatbelt"
+        case .microvm:
+            established = "microvm"
+            family = "microvm"
         }
         return
             "requested=\(requestedLabel) established=\(established) family=\(family) exit=\(run.exitStatus) error=none"

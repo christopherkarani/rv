@@ -13,6 +13,15 @@ public enum WrapperKind: String, Sendable, Equatable, Codable {
     case nice
     case mise
     case ssh
+    case doas
+    case nohup
+    case find
+    case xargs
+    case perl
+    case php
+    case lua
+    case awk
+    case sed
 }
 
 /// Closed analyzer family. Wrapper layers wrap an inner Git / filesystem hit,

@@ -249,6 +249,10 @@ enum ApprovalKeyMAC {
 /// enrollment is deleted and not returned, and an OR policy (`pkofn`) is
 /// not user presence.
 enum ApprovalKeychain {
+    /// Custodian-internal MAC domain for the post-enrollment key check. It is
+    /// deliberately not an `MCPMACPurpose`, so it can never arrive over the wire.
+    static let enrollmentCheckPurpose = "enrollment"
+
     /// This process's keychain access group: its own code-signing team
     /// prefix plus the custodian suffix. Only a build signed into the
     /// custodian app (provisioned for that group) can address the item;
@@ -418,7 +422,7 @@ enum ApprovalKeychain {
         }
         guard let signer = read(configDirectory: configDirectory),
             let expected = MCPSigner(key: raw),
-            signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"])
+            signer.mac(enrollmentCheckPurpose, ["check"]) == expected.mac(enrollmentCheckPurpose, ["check"])
         else {
             deleteProtectedItem()
             deleteProtectedItem(account: MCPApprovalKeyIdentity.anchorAccount)
