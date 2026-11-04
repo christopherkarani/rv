@@ -1031,6 +1031,8 @@ public enum CursorEventName: Sendable, Equatable, Hashable, Codable {
     case beforeShellExecution
     /// `preToolUse`: strict + loose tool-dispatch event.
     case preToolUse
+    /// `beforeReadFile`: strict-only blocking read event (`file_path`).
+    case beforeReadFile
     /// `PreToolUse`: loose-only spelling (capitalized variant).
     case preToolUseCapitalized
     /// Unknown spelling, carried verbatim. Never matches.
@@ -1042,6 +1044,8 @@ public enum CursorEventName: Sendable, Equatable, Hashable, Codable {
             self = .beforeShellExecution
         case "preToolUse":
             self = .preToolUse
+        case "beforeReadFile":
+            self = .beforeReadFile
         case "PreToolUse":
             self = .preToolUseCapitalized
         default:
@@ -1060,6 +1064,8 @@ public enum CursorEventName: Sendable, Equatable, Hashable, Codable {
             "beforeShellExecution"
         case .preToolUse:
             "preToolUse"
+        case .beforeReadFile:
+            "beforeReadFile"
         case .preToolUseCapitalized:
             "PreToolUse"
         case .other(let raw):
@@ -1069,7 +1075,7 @@ public enum CursorEventName: Sendable, Equatable, Hashable, Codable {
 
     public var strictMatch: Bool {
         switch self {
-        case .beforeShellExecution, .preToolUse:
+        case .beforeShellExecution, .preToolUse, .beforeReadFile:
             true
         case .preToolUseCapitalized, .other:
             false
@@ -1080,7 +1086,7 @@ public enum CursorEventName: Sendable, Equatable, Hashable, Codable {
         switch self {
         case .beforeShellExecution, .preToolUse, .preToolUseCapitalized:
             true
-        case .other:
+        case .beforeReadFile, .other:
             false
         }
     }

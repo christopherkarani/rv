@@ -643,8 +643,8 @@ final class RuntimeAdmissionSession: Sendable {
             frame: frame, decision: decision, agentContext: agentContext, binding: binding) {
             // The pending event is recorded exactly as the legacy path
             // records it; the waiter's eventual answer records a second,
-            // outcome event. Callers must not write the superseded
-            // pending projection: `responseDeferred` says so.
+            // outcome event. The deferred decision carries no wire
+            // response: `responseDeferred` says so.
             configuration.evidence.record(parked.event)
             return parked
         }
@@ -667,9 +667,8 @@ final class RuntimeAdmissionSession: Sendable {
         configuration.evidence.record(event)
         return RuntimeAdmissionDecision(
             binding: binding,
-            response: response,
-            event: event,
-            execute: nil
+            outcome: .answer(response),
+            event: event
         )
     }
 
@@ -686,7 +685,7 @@ final class RuntimeAdmissionSession: Sendable {
     ) -> RuntimeAdmissionDecision? {
         guard let backend = configuration.askBackend,
             decision.execute == nil,
-            case .pending(let ledgerReason) = decision.response,
+            case .answer(.pending(let ledgerReason)) = decision.outcome,
             ledgerReason != .hostAsk,
             case .success(let accepted) = frame,
             // Consume this request's capture exactly once, before any other
@@ -748,7 +747,7 @@ final class RuntimeAdmissionSession: Sendable {
         }
         state.withLock { $0.parked[requestID]?.waiter = waiter }
         var deferred = decision
-        deferred.responseDeferred = true
+        deferred.outcome = .deferred(pending: ledgerReason)
         return deferred
     }
 
@@ -805,13 +804,13 @@ final class RuntimeAdmissionSession: Sendable {
                 }
                 guard let live, live.isUsable else {
                     backend.cancelApproval(park.approval)
-                    failParked(requestID: requestID, park: park, cause: "principalRevoked")
+                    failParked(requestID: requestID, park: park, cause: .principalRevoked)
                     return
                 }
             }
             if Date() >= deadline {
                 backend.cancelApproval(park.approval)
-                failParked(requestID: requestID, park: park, cause: "approvalTimeout")
+                failParked(requestID: requestID, park: park, cause: .timeout)
                 return
             }
             // Transport blip: sleep and retry. The deadline bounds the wait;
@@ -834,34 +833,34 @@ final class RuntimeAdmissionSession: Sendable {
                 ) {
                     await resumeParked(requestID: requestID)
                 } else {
-                    failParked(requestID: requestID, park: park, cause: "approvalUnavailable")
+                    failParked(requestID: requestID, park: park, cause: .unavailable)
                 }
                 return
             case .consumed:
                 // Already spent without this waiter consuming (service-side
                 // race or duplicate waiter, impossible by construction):
                 // never execute here.
-                failParked(requestID: requestID, park: park, cause: "approvalReplay")
+                failParked(requestID: requestID, park: park, cause: .replay)
                 return
             case .denied:
                 denyParked(requestID: requestID, park: park)
                 return
             case .cancelled:
-                failParked(requestID: requestID, park: park, cause: "approvalCancelled")
+                failParked(requestID: requestID, park: park, cause: .cancelled)
                 return
             case .expired:
-                failParked(requestID: requestID, park: park, cause: "approvalExpired")
+                failParked(requestID: requestID, park: park, cause: .expired)
                 return
             case .invalidated:
-                failParked(requestID: requestID, park: park, cause: "approvalInvalidated")
+                failParked(requestID: requestID, park: park, cause: .invalidated)
                 return
             case .failed:
-                failParked(requestID: requestID, park: park, cause: "approvalFailed")
+                failParked(requestID: requestID, park: park, cause: .failed)
                 return
             case .unknown:
                 // The ceremony forgot the terminal approval: fail closed
                 // without executing.
-                failParked(requestID: requestID, park: park, cause: "approvalUnknown")
+                failParked(requestID: requestID, park: park, cause: .unknown)
                 return
             }
         }
@@ -907,12 +906,12 @@ final class RuntimeAdmissionSession: Sendable {
                 fingerprint: nil,
                 authorization: .approvalUnavailable,
                 executionAttempted: false,
-                result: "resumedButChannelGone"))
+                result: .approvalEnded(.channelGone)))
             return
         case .replay(let park, let binding):
             var event = baseEvent(
                 binding: binding, park: park,
-                authorization: .rejected, result: RuntimeAdmissionRejection.replay.rawValue)
+                authorization: .rejected, result: .rejected(.replay))
             stamp(&event, agent: park.approval.subject.agent, binding: binding)
             configuration.evidence.record(event)
             enqueueCompletion(ParkedCompletion(
@@ -938,7 +937,7 @@ final class RuntimeAdmissionSession: Sendable {
                     // answer. Evidence plus queued refusal, never execution.
                     var event = baseEvent(
                         binding: plan.binding, park: plan.park,
-                        authorization: .approvalUnavailable, result: "principalRevoked")
+                        authorization: .approvalUnavailable, result: .approvalEnded(.principalRevoked))
                     stamp(&event, agent: plan.park.approval.subject.agent, binding: plan.binding)
                     configuration.evidence.record(event)
                     enqueueCompletion(ParkedCompletion(
@@ -954,7 +953,7 @@ final class RuntimeAdmissionSession: Sendable {
                 // already removed the park, so complete here directly.
                 var event = baseEvent(
                     binding: plan.binding, park: plan.park,
-                    authorization: .approvalUnavailable, result: "approvalUnavailable")
+                    authorization: .approvalUnavailable, result: .approvalEnded(.unavailable))
                 stamp(&event, agent: plan.park.approval.subject.agent, binding: plan.binding)
                 configuration.evidence.record(event)
                 enqueueCompletion(ParkedCompletion(
@@ -965,7 +964,7 @@ final class RuntimeAdmissionSession: Sendable {
             // path.
             var brokerBase = baseEvent(
                 binding: plan.binding, park: plan.park,
-                authorization: .allowed, result: "authorized")
+                authorization: .allowed, result: .authorized)
             stamp(&brokerBase, agent: plan.park.approval.subject.agent, binding: plan.binding)
             let consult = consultCredentialBroker(for: allowed, base: brokerBase)
             if let brokerEvent = consult.event {
@@ -974,7 +973,7 @@ final class RuntimeAdmissionSession: Sendable {
             let performed = perform(allowed, credential: consult.injection)
             var event = baseEvent(
                 binding: plan.binding, park: plan.park,
-                authorization: .allowed, result: "authorized")
+                authorization: .allowed, result: .authorized)
             let response = admissionResponse(performed, event: &event)
             stamp(&event, agent: plan.park.approval.subject.agent, binding: plan.binding)
             configuration.evidence.record(event)
@@ -991,7 +990,7 @@ final class RuntimeAdmissionSession: Sendable {
         guard removed else { return }
         var event = baseEvent(
             binding: state.withLock({ $0.binding }), park: park,
-            authorization: .denied, result: park.pending.deny.ruleID.rawValue)
+            authorization: .denied, result: .denied(park.pending.deny.ruleID))
         stamp(&event, agent: park.approval.subject.agent, binding: state.withLock({ $0.binding }))
         configuration.evidence.record(event)
         enqueueCompletion(ParkedCompletion(
@@ -1003,7 +1002,7 @@ final class RuntimeAdmissionSession: Sendable {
     private func failParked(
         requestID: RuntimeActionRequestID,
         park: ParkedApproval,
-        cause: String,
+        cause: RuntimeAdmissionApprovalCause,
         binding: RuntimeChannelBinding? = nil
     ) {
         let removed: Bool = state.withLock { channel in
@@ -1013,7 +1012,7 @@ final class RuntimeAdmissionSession: Sendable {
         let liveBinding = binding ?? state.withLock({ $0.binding })
         var event = baseEvent(
             binding: liveBinding, park: park,
-            authorization: .approvalUnavailable, result: cause)
+            authorization: .approvalUnavailable, result: .approvalEnded(cause))
         stamp(&event, agent: park.approval.subject.agent, binding: liveBinding)
         configuration.evidence.record(event)
         enqueueCompletion(ParkedCompletion(response: .approvalUnavailable, event: event))
@@ -1024,7 +1023,7 @@ final class RuntimeAdmissionSession: Sendable {
         binding: RuntimeChannelBinding?,
         park: ParkedApproval,
         authorization: RuntimeAdmissionAuthorization,
-        result: String
+        result: RuntimeAdmissionResult
     ) -> RuntimeAdmissionEvent {
         let http = httpAudit(of: park.pending.action)
         return RuntimeAdmissionEvent(
@@ -1109,9 +1108,8 @@ final class RuntimeAdmissionSession: Sendable {
             guard let next else { return }
             writeResponse(RuntimeAdmissionDecision(
                 binding: state.withLock({ $0.binding }),
-                response: next.response,
-                event: next.event,
-                execute: nil))
+                outcome: .answer(next.response),
+                event: next.event))
         }
     }
 
@@ -1212,8 +1210,11 @@ final class RuntimeAdmissionSession: Sendable {
     private func writeResponse(_ decision: RuntimeAdmissionDecision) {
         let fd = state.withLock { $0.responseWrite }
         guard fd >= 0 else { return }
-        guard case .success(let frame) = RuntimeAdmissionCodec.encodeResponse(
-            decision.response,
+        // A decision with no response (still owing execution, or parked)
+        // never reaches the wire.
+        guard let response = decision.response,
+            case .success(let frame) = RuntimeAdmissionCodec.encodeResponse(
+            response,
             requestID: decision.event.requestID
         ) else {
             return
@@ -1242,25 +1243,25 @@ final class RuntimeAdmissionSession: Sendable {
         else {
             return (nil, nil)
         }
-        let outcome: (RuntimeAdmissionAuthorization, String)
+        let outcome: (RuntimeAdmissionAuthorization, RuntimeAdmissionResult)
         let injection: BrokeredCredentialInjection?
         switch broker.resolve(host: http.destination.host) {
         case .granted(let granted):
             if let deliver = configuration.credentialDelivery {
                 deliver(granted)
-                outcome = (.allowed, "credentialGranted:\(granted.credentialName)")
+                outcome = (.allowed, .credentialGranted(granted.credentialName))
                 injection = granted
             } else if configuration.http.deliversCredentialAsArgument {
                 // Wired by construction: the transport receives the
                 // injection as an argument, so no hook is needed.
-                outcome = (.allowed, "credentialGranted:\(granted.credentialName)")
+                outcome = (.allowed, .credentialGranted(granted.credentialName))
                 injection = granted
             } else {
-                outcome = (.executorFailed, "credentialUnwired:\(granted.credentialName)")
+                outcome = (.executorFailed, .credentialUnwired(granted.credentialName))
                 injection = nil
             }
         case .withheld(let reason):
-            outcome = (.denied, "credentialWithheld:\(reason.rawValue)")
+            outcome = (.denied, .credentialWithheld(reason.rawValue))
             injection = nil
         }
         return (
@@ -1356,14 +1357,14 @@ final class RuntimeAdmissionSession: Sendable {
     ) -> RuntimeAdmissionDecision {
         RuntimeAdmissionDecision(
             binding: binding,
-            response: .rejected(.inactiveSession),
+            outcome: .answer(.rejected(.inactiveSession)),
             event: RuntimeAdmissionEvent(
                 session: event.session,
                 requestID: event.requestID,
                 fingerprint: event.fingerprint,
                 authorization: .rejected,
                 executionAttempted: false,
-                result: RuntimeAdmissionRejection.inactiveSession.rawValue,
+                result: .rejected(.inactiveSession),
                 workspace: event.workspace,
                 agentInstance: event.agentInstance,
                 agentDefinition: event.agentDefinition
@@ -1381,42 +1382,40 @@ private func admissionResponse(
     _ performed: AdmissionPerformResult,
     event: inout RuntimeAdmissionEvent
 ) -> RuntimeAdmissionResponse {
+    let response: RuntimeAdmissionResponse
     switch performed {
     case .shell(.success(let status)):
-        event.authorization = .allowed
         event.executionAttempted = true
-        event.result = "exit:\(status)"
-        return .executed(exitStatus: status)
+        event.result = .exit(status)
+        response = .executed(exitStatus: status)
     case .shell(.failure(let error)):
-        event.authorization = .executorFailed
         event.executionAttempted = true
-        event.result = error.rawValue
-        return .executorFailed(error)
+        event.result = .executorFailed(error)
+        response = .executorFailed(error)
     case .http(.success(let receipt)):
-        event.authorization = .allowed
         event.executionAttempted = true
-        event.result = "http:\(receipt.status)"
+        event.result = .http(receipt.status)
         event.httpStatus = receipt.status
-        return .http(receipt)
+        response = .http(receipt)
     case .http(.failure(.notOpened(let reason))):
-        event.authorization = .executorFailed
         event.executionAttempted = false
-        event.result = reason.rawValue
+        event.result = .httpNotOpened(reason)
         switch reason {
         case .cancelled:
-            return .executorFailed(.cancelled)
+            response = .executorFailed(.cancelled)
         case .unavailable, .forbiddenDestination:
-            return .executorFailed(.unavailable)
+            response = .executorFailed(.unavailable)
         }
     case .http(.failure(.opened(let failure))):
-        event.authorization = .executorFailed
         event.executionAttempted = true
-        event.result = httpFailureName(failure)
+        event.result = .httpFailed(RuntimeAdmissionHTTPFailureKind(failure))
         if case .redirect(let status, _) = failure {
             event.httpStatus = status
         }
-        return .httpFailed(failure)
+        response = .httpFailed(failure)
     }
+    event.authorization = response.authorization
+    return response
 }
 
 /// Polled by name lookup while `getaddrinfo` runs on another thread.
@@ -1477,23 +1476,3 @@ private func monotonicMilliseconds() -> Int64 {
     return Int64(time.tv_sec) * 1_000 + Int64(time.tv_nsec) / 1_000_000
 }
 
-private func httpFailureName(_ failure: HTTPOpenFailure) -> String {
-    switch failure {
-    case .redirect:
-        return "redirect"
-    case .responseTooLarge:
-        return "responseTooLarge"
-    case .timedOut:
-        return "timedOut"
-    case .cancelled:
-        return "cancelled"
-    case .transport:
-        return "transport"
-    case .malformedResponse:
-        return "malformedResponse"
-    case .unsupportedTransfer:
-        return "unsupportedTransfer"
-    case .tooManyHeaders:
-        return "tooManyHeaders"
-    }
-}
