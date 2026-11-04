@@ -732,7 +732,7 @@ actor ActionApprovalCeremonyService {
             let effects = shell.effects.kinds.map(effectLabel).joined(separator: ", ")
             let kind = effects.isEmpty ? "shell" : "shell: \(effects)"
             let target = shell.scope.workingDirectory?.rawValue ?? "."
-            let command = shell.supportingCommand?.rawValue ?? shell.fingerprint.rawValue
+            let command = shell.supportingCommand?.rawValue ?? shell.fingerprintText
             return (kind, target, command)
         case .file(let file):
             let kind = "file \(file.file.kind.ledgerName.lowercased())"

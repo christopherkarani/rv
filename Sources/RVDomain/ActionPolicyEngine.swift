@@ -233,13 +233,6 @@ public enum ActionPolicyEngine: Sendable {
         }
     }
 
-    public static func evaluate(
-        _ request: ReviewRequest,
-        policy: EffectiveActionPolicy = .empty
-    ) -> ActionPolicyVerdict {
-        evaluate(action: request.action, context: request.context, policy: policy)
-    }
-
     /// Structural bind: reviewer output is applied only through `ReviewBind`.
     public static func bind(
         action: ProposedAction,
