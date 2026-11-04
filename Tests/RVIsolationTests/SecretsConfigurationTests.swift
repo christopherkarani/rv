@@ -36,7 +36,7 @@ struct SecretsConfigurationTests {
 
     @Test func everySourceKindEncodesToPinnedBytesAndRoundTrips() throws {
         let configuration = try decode(Self.everySourceJSON).get()
-        #expect(configuration.secrets.map { "\($0.source.kind)" } == [
+        #expect(configuration.secrets.map(\.source.kind.rawValue) == [
             "keychain", "hostEnvironment", "onePassword", "vault", "awsSecretsManager", "infisical", "bitwarden",
             "gcp", "azure", "awsProfile", "oauth",
         ])

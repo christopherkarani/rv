@@ -647,7 +647,7 @@ enum SecretsRun {
 
     /// Names where the value comes from and where it goes, never the value.
     static func importLine(_ secret: SecretDefinition) -> String {
-        "import \(secret.name): provider \(secret.source.kind), delivery \(secret.delivery.summary)"
+        "import \(secret.name): provider \(secret.source.kind.rawValue), delivery \(secret.delivery.summary)"
             + (secret.type.map { ", type \($0)" } ?? "")
     }
 

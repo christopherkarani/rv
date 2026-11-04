@@ -111,7 +111,7 @@ struct SecretReleaseTests {
         let keychainOnly = try Self.policy(#"{"version":1,"secrets":{"allowedSources":["keychain"]}}"#)
         for target in [SecretTarget.cage, .stdioServer, .header] {
             #expect(Self.reason(Self.release([Self.environment("A")], to: target, provider: provider, managed: keychainOnly))
-                == .organizationPolicy(.source(kind: "hostEnvironment")))
+                == .organizationPolicy(.source(kind: .hostEnvironment)))
         }
     }
 
