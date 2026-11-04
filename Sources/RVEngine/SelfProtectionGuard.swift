@@ -35,13 +35,17 @@ private func isUnmodelledWord(_ word: String) -> Bool {
     word.contains(where: { "$`*?[{".contains($0) })
 }
 
+private let maxVerbCandidates = 256
+
 private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bool {
     guard let program = rawArgv.first, headMayBeRV || rvProgramNames.contains(program) else { return false }
-    let args = rawArgv.dropFirst().map(foldedWord)
+    let args = strippingRedirects(Array(rawArgv.dropFirst())).map(foldedWord)
     guard let firstWord = args.firstIndex(where: { $0.hasPrefix("-") == false }) else { return false }
     // An option before the verb may take a value (`rv --config x uninstall`),
     // so any later word could be the verb.
     let verbIndexes = firstWord == 0 ? [firstWord] : args.indices.filter { args[$0].hasPrefix("-") == false }
+    // Each candidate scans the tail: past a bound, fail closed instead of going quadratic.
+    if verbIndexes.count > maxVerbCandidates { return true }
     return verbIndexes.contains { isWeakeningVerb(args, at: $0) }
 }
 
@@ -60,11 +64,13 @@ private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
     return subIndexes.contains { index in
         let sub = rest[index]
         let third = rest[(index + 1)...].first { $0.hasPrefix("-") == false }
-        return isWeakeningSub(verb: verb, sub: sub, third: third, flags: flags)
+        return isWeakeningSub(verb: verb, sub: sub, third: third, flags: flags, tail: rest[(index + 1)...])
     }
 }
 
-private func isWeakeningSub(verb: String, sub: String, third: String?, flags: Set<String>) -> Bool {
+private func isWeakeningSub(
+    verb: String, sub: String, third: String?, flags: Set<String>, tail: ArraySlice<String>
+) -> Bool {
     if isUnmodelledWord(sub) { return true }
     switch verb {
     case "packs":
@@ -76,7 +82,8 @@ private func isWeakeningSub(verb: String, sub: String, third: String?, flags: Se
     case "allow-once":
         return sub == "redeem" || sub == "mint" || isUnlockCode(sub)
     case "policy":
-        return sub == "apply" || (sub == "draft" && flags.contains("--save"))
+        // `draft --save` writes the layer; a variable or glob may carry it.
+        return sub == "apply" || (sub == "draft" && (flags.contains("--save") || tail.contains(where: isUnmodelledWord)))
     case "egress", "mcp":
         return sub == "approve" || (verb == "mcp" && sub == "trust")
     case "secrets":

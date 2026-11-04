@@ -35,19 +35,65 @@ func launchedCommandHeads(_ raw: String) -> [LaunchedCommand] {
 }
 
 private let maxLaunchDepth = 8
+private let maxDynamicOperands = 512
+private let maxBraceExpansions = 64
+private let maxShellOperands = 64
 
 private func launchedCommandHeads(_ raw: String, depth: Int) -> [LaunchedCommand] {
     guard depth < maxLaunchDepth else { return [.truncatedMarker] }
-    // `\<newline>` is a line continuation: the shell joins the words.
-    let joined = raw.replacingOccurrences(of: "\\\r\n", with: "").replacingOccurrences(of: "\\\n", with: "")
+    // `\<newline>` joins words only when the backslash is not itself escaped
+    // or quoted, and the splitter is not quote-aware: judge the raw text and
+    // the continuation-joined text, so a real separator (`echo \\<LF>rv x`)
+    // and a real continuation (`rv \<LF>uninstall`) are both seen.
+    let joined = raw.replacingOccurrences(of: "\\\n", with: "")
+    var commands = segmentCommands(raw, depth: depth)
+    if joined != raw {
+        commands.append(contentsOf: segmentCommands(joined, depth: depth))
+    }
+    return commands
+}
+
+private func segmentCommands(_ text: String, depth: Int) -> [LaunchedCommand] {
     var commands: [LaunchedCommand] = []
-    for segment in splitSegments(joined) {
+    for segment in splitSegments(text) {
         let words = ShellPipeline.tokenize(segment)
             .filter { $0.isNewline == false }
             .map(\.lexeme)
         commands.append(contentsOf: resolve(words, depth: depth, expand: true))
     }
+    commands.append(contentsOf: braceHeadCommands(text, depth: depth))
     return commands
+}
+
+private let commandSeparators: Set<String> = [";", "&&", "||", "|", "&", "(", ")", "{", "}", "!", "then", "do", "else", "elif", "time"]
+
+/// `splitSegments` peels `{a,b}` as a group (`{rv,uninstall}` -> `rv,uninstall`),
+/// losing the expansion. Re-scan the tokens: a word that starts a command and
+/// carries a comma group is resolved with the rest of its command.
+private func braceHeadCommands(_ text: String, depth: Int) -> [LaunchedCommand] {
+    guard text.contains("{"), text.contains(",") else { return [] }
+    let tokens = ShellPipeline.tokenize(text)
+    var out: [LaunchedCommand] = []
+    var atStart = true
+    var current: [String] = []
+    func flush() {
+        if current.isEmpty == false {
+            out.append(contentsOf: resolve(current, depth: depth + 1, expand: true))
+        }
+        current = []
+    }
+    for token in tokens {
+        if token.isNewline || (token.wasQuoted == false && commandSeparators.contains(token.lexeme)) {
+            flush()
+            atStart = true
+            continue
+        }
+        if atStart, token.lexeme.contains("{"), token.lexeme.contains(",") { current = [] ; atStart = false; current.append(token.lexeme); continue }
+        if current.isEmpty == false { current.append(token.lexeme) }
+        atStart = false
+    }
+    flush()
+    return out
 }
 
 private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCommand] {
@@ -99,6 +145,14 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
             index += 1
             continue
         }
+        if word.contains("{"), word.contains(",") {
+            // `{rv,uninstall}` expands to several words; judge them as the argv.
+            if let expanded = braceExpanded(word) {
+                if expanded != [word] { out.append(contentsOf: resolve(expanded + Array(words[(index + 1)...]), depth: depth + 1, expand: expand)) }
+            } else {
+                out.append(.truncatedMarker)
+            }
+        }
         if isDynamicHead(word) {
             out.append(contentsOf: dynamicCandidates(Array(words[index...]), depth: depth, expand: expand))
         }
@@ -123,7 +177,8 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
     {
         // Valued shell options (`-O extglob`, `-o pipefail`) precede the real
         // command string, so every non-option operand is parsed as one.
-        for payload in payloads {
+        if payloads.count > maxShellOperands { out.append(.truncatedMarker) }
+        for payload in payloads.prefix(maxShellOperands) {
             for variant in payloadVariants(payload) {
                 out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1))
             }
@@ -147,6 +202,9 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
 /// command (it may be a launcher) and any spaced operand a command line.
 private func dynamicCandidates(_ slice: [String], depth: Int, expand: Bool) -> [LaunchedCommand] {
     guard let head = slice.first else { return [] }
+    // Operand suffixes are materialised per start: bound the work and fail
+    // closed on absurd operand counts rather than going quadratic.
+    guard slice.count <= maxDynamicOperands else { return [.truncatedMarker] }
     let rest = Array(slice.dropFirst())
     var out = [LaunchedCommand(head: head, argv: [commandName(head)] + rest, headIsDynamic: true, speculative: true)]
     for word in rest where word.contains(where: \.isWhitespace) {
@@ -209,7 +267,7 @@ private func collapsingSubstitutions(_ word: String) -> String {
 
 /// Leading redirect words to skip: `2>&1`, `</dev/null`, `>f` are one word;
 /// a bare operator (`<`, `>>`, `2>`) is followed by its target.
-private func redirectWordCount(_ word: String) -> Int {
+func redirectWordCount(_ word: String) -> Int {
     let chars = Array(word)
     var i = 0
     while i < chars.count, chars[i].isASCII, chars[i].isNumber { i += 1 }
@@ -260,13 +318,13 @@ private func launcherOption(_ launcher: String, _ word: String, next: String?) -
     let chars = Array(word.dropFirst())
     let valued = shortValuedOptions[launcher] ?? []
     for (offset, char) in chars.enumerated() {
-        let remainder = String(chars[(offset + 1)...])
+        // The remainder is only built where it is used: clusters can be huge.
         if launcher == "env", char == "S" {
-            if remainder.isEmpty == false { return .split(payload: remainder, consumed: 1) }
+            if offset + 1 < chars.count { return .split(payload: String(chars[(offset + 1)...]), consumed: 1) }
             return .split(payload: next ?? "", consumed: nextCount)
         }
         if valued.contains(char) {
-            return .consume(remainder.isEmpty ? nextCount : 1)
+            return .consume(offset + 1 < chars.count ? 1 : nextCount)
         }
     }
     return .consume(1)
@@ -370,4 +428,66 @@ private func isAssignmentWord(_ word: String) -> Bool {
     let name = word[..<equals]
     guard let first = name.first, assignmentNameStart.contains(first) else { return false }
     return name.allSatisfy { assignmentNameChars.contains($0) }
+}
+
+/// Bounded bash-style brace expansion (`pre{a,b}post`, nested). Nil when the
+/// word has no expandable group worth modelling or the expansion exceeds the
+/// bound, so the caller fails closed.
+func braceExpanded(_ word: String) -> [String]? {
+    var results = [word]
+    var rounds = 0
+    while let target = results.firstIndex(where: { expandableGroup($0) != nil }) {
+        rounds += 1
+        guard rounds <= maxBraceExpansions, let group = expandableGroup(results[target]) else { return nil }
+        let text = Array(results[target])
+        let prefix = String(text[..<group.open])
+        let suffix = String(text[(group.close + 1)...])
+        results.remove(at: target)
+        results.insert(contentsOf: group.alternatives.map { prefix + $0 + suffix }, at: target)
+        if results.count > maxBraceExpansions { return nil }
+    }
+    return results
+}
+
+private func expandableGroup(_ word: String) -> (open: Int, close: Int, alternatives: [String])? {
+    let chars = Array(word)
+    var i = 0
+    while i < chars.count {
+        defer { i += 1 }
+        guard chars[i] == "{", i == 0 || chars[i - 1] != "$" else { continue }
+        var depth = 1
+        var j = i + 1
+        var commas: [Int] = []
+        while j < chars.count, depth > 0 {
+            if chars[j] == "{" { depth += 1 }
+            else if chars[j] == "}" { depth -= 1 }
+            else if chars[j] == ",", depth == 1 { commas.append(j) }
+            j += 1
+        }
+        guard depth == 0, commas.isEmpty == false else { continue }
+        var alternatives: [String] = []
+        var start = i + 1
+        for comma in commas + [j - 1] {
+            alternatives.append(String(chars[start..<comma]))
+            start = comma + 1
+        }
+        return (i, j - 1, alternatives)
+    }
+    return nil
+}
+
+/// `words` without redirect operators and their targets.
+func strippingRedirects(_ words: [String]) -> [String] {
+    var out: [String] = []
+    var index = 0
+    while index < words.count {
+        let skip = redirectWordCount(words[index])
+        if skip > 0 {
+            index += skip
+        } else {
+            out.append(words[index])
+            index += 1
+        }
+    }
+    return out
 }

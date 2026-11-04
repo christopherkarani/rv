@@ -166,6 +166,26 @@ struct SelfProtectionCaseTests {
         "$HOME/bin/rv uninstall",
         "bash -c -o pipefail 'rv uninstall'",
         "bash -c -O extglob 'rv uninstall'",
+        // Round 3: real newline separators, policy draft vars, mid-argv redirects, brace heads.
+        "echo \\\\\nrv uninstall",
+        "true \\\\\nrv uninstall",
+        "bash -c 'echo \\\\\nrv uninstall'",
+        "if true; then echo a \\\\\nrv uninstall; fi",
+        "echo hi\\\\\n rv uninstall",
+        "echo hi \\\\\nrv uninstall",
+        "echo \\\r\nrv uninstall",
+        "S=--save; rv policy draft --english \"allow rm\" $S",
+        "rv policy draft $S",
+        "rv policy draft --english x --repo $S",
+        "rv 2>&1 packs disable core.git",
+        "rv </dev/null uninstall",
+        "rv >>log uninstall",
+        "rv >&2 uninstall",
+        "rv secrets hook 2>&1 uninstall",
+        "rv < /dev/null uninstall",
+        "{rv,uninstall}",
+        "{rv,packs,disable,core.git}",
+        "{rv,uninstall,}",
     ]
 
     @Test("case-folded and escaped rv invocations still hit the self-protection floor", arguments: weakening)
@@ -178,8 +198,26 @@ struct SelfProtectionCaseTests {
     func harmlessStaysAllowed() throws {
         for command in ["RV packs list", "Rv-Cli doctor", "BASH -c 'RV safety strict'",
             "rvm use 3.3", "./server --port 80", "cargo run --bin rvx", "grep -i rv notes.txt", "echo rv uninstall", "rv --version", "rv status",
+            "rv policy draft --english x", "rv packs list 2>&1", "echo {a,b}", "ls {src,Tests}", "echo hi \\\nthere",
             "rv packs list $X", "$HOME/bin/tool \"$1\"", "eval \"$(direnv hook bash)\"", "bash -lc 'make test'", "env -i PATH=/usr/bin make", "</dev/null swift test", "rv mcp check \"$s\"", "rv policy show $X"] {
             #expect(try runEngine(command).decision == .allow, "\(command)")
         }
+    }
+
+    @Test("huge option clusters and operand lists evaluate in bounded time")
+    func hugeInputsAreFast() {
+        let cluster = String(repeating: "i", count: 64_000)
+        let digits = String(repeating: "1", count: 64_000)
+        let dynamic = (0..<4_000).map { "$a\($0)" }.joined(separator: " ")
+        let literal = (0..<8_000).map { _ in "packs" }.joined(separator: " ")
+        let commands = [
+            "env -\(cluster) ls", "sudo -\(String(repeating: "n", count: 64_000)) ls", "nice -\(digits) ls",
+            dynamic, "rv --x \(literal)",
+        ]
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for command in commands { _ = SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) }
+        }
+        #expect(elapsed < .seconds(5), "took \(elapsed)")
     }
 }
