@@ -202,8 +202,28 @@ public enum WorkspaceControlRequestPayload: Sendable, Equatable {
     }
 
     public var rawOperation: String {
-        if case .unknown(let raw) = self { return raw }
-        return operation!.rawValue
+        switch self {
+        case .hello: WorkspaceControlOp.hello.rawValue
+        case .capabilities: WorkspaceControlOp.capabilities.rawValue
+        case .ping: WorkspaceControlOp.ping.rawValue
+        case .describeWorkspace: WorkspaceControlOp.describeWorkspace.rawValue
+        case .listRuntimes: WorkspaceControlOp.listRuntimes.rawValue
+        case .launchRuntime: WorkspaceControlOp.launchRuntime.rawValue
+        case .launchAgentRuntime: WorkspaceControlOp.launchAgentRuntime.rawValue
+        case .launchCustomRuntime: WorkspaceControlOp.launchCustomRuntime.rawValue
+        case .ensureTerminalRuntime: WorkspaceControlOp.ensureTerminalRuntime.rawValue
+        case .cancelRuntime: WorkspaceControlOp.cancelRuntime.rawValue
+        case .closeWorkspace: WorkspaceControlOp.closeWorkspace.rawValue
+        case .detach: WorkspaceControlOp.detach.rawValue
+        case .subscribeTerminal: WorkspaceControlOp.subscribeTerminal.rawValue
+        case .unsubscribeTerminal: WorkspaceControlOp.unsubscribeTerminal.rawValue
+        case .terminalInput: WorkspaceControlOp.terminalInput.rawValue
+        case .acquireTerminalInput: WorkspaceControlOp.acquireTerminalInput.rawValue
+        case .releaseTerminalInput: WorkspaceControlOp.releaseTerminalInput.rawValue
+        case .resizeTerminal: WorkspaceControlOp.resizeTerminal.rawValue
+        case .unsupported(let op): op.rawValue
+        case .unknown(let raw): raw
+        }
     }
 }
 
@@ -536,8 +556,36 @@ public enum WorkspaceControlResponsePayload: Sendable, Equatable {
     }
 
     public var rawOperation: String {
-        if case .unknown(let raw) = self { return raw }
-        return operation!.rawValue
+        switch self {
+        case .hello: WorkspaceControlOp.hello.rawValue
+        case .capabilities: WorkspaceControlOp.capabilities.rawValue
+        case .ping: WorkspaceControlOp.ping.rawValue
+        case .describeWorkspace: WorkspaceControlOp.describeWorkspace.rawValue
+        case .listRuntimes: WorkspaceControlOp.listRuntimes.rawValue
+        case .launchRuntime: WorkspaceControlOp.launchRuntime.rawValue
+        case .launchAgentRuntime: WorkspaceControlOp.launchAgentRuntime.rawValue
+        case .launchCustomRuntime: WorkspaceControlOp.launchCustomRuntime.rawValue
+        case .ensureTerminalRuntime: WorkspaceControlOp.ensureTerminalRuntime.rawValue
+        case .cancelRuntime: WorkspaceControlOp.cancelRuntime.rawValue
+        case .closeWorkspace: WorkspaceControlOp.closeWorkspace.rawValue
+        case .detach: WorkspaceControlOp.detach.rawValue
+        case .workspaceClosed: WorkspaceControlOp.workspaceClosed.rawValue
+        case .subscribeTerminal: WorkspaceControlOp.subscribeTerminal.rawValue
+        case .unsubscribeTerminal: WorkspaceControlOp.unsubscribeTerminal.rawValue
+        case .terminalInput: WorkspaceControlOp.terminalInput.rawValue
+        case .acquireTerminalInput: WorkspaceControlOp.acquireTerminalInput.rawValue
+        case .releaseTerminalInput: WorkspaceControlOp.releaseTerminalInput.rawValue
+        case .resizeTerminal: WorkspaceControlOp.resizeTerminal.rawValue
+        case .terminalReplayBegin: WorkspaceControlOp.terminalReplayBegin.rawValue
+        case .terminalReplay: WorkspaceControlOp.terminalReplay.rawValue
+        case .terminalReplayEnd: WorkspaceControlOp.terminalReplayEnd.rawValue
+        case .terminalOutput: WorkspaceControlOp.terminalOutput.rawValue
+        case .terminalInputOwner: WorkspaceControlOp.terminalInputOwner.rawValue
+        case .terminalWindow: WorkspaceControlOp.terminalWindow.rawValue
+        case .runtimeExited: WorkspaceControlOp.runtimeExited.rawValue
+        case .terminalOverflow: WorkspaceControlOp.terminalOverflow.rawValue
+        case .unknown(let raw): raw
+        }
     }
 
     /// The runtime this payload addresses, when its op names one.
