@@ -119,7 +119,7 @@ enum EgressReviewRun {
             lines = ["ID  HOST:PORT  STATE  EXPIRES"]
             for view in views {
                 lines.append(
-                    "\(view.id)  \(view.host):\(view.port)  \(view.state)  \(view.expiresAt)"
+                    "\(DisplayedText.field(view.id))  \(DisplayedText.field(view.host)):\(view.port)  \(view.state)  \(view.expiresAt)"
                 )
             }
         }
@@ -144,7 +144,7 @@ enum EgressReviewRun {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(views)
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 
     struct ShowSnapshot: Sendable, Equatable, Codable {
@@ -173,7 +173,7 @@ enum EgressReviewRun {
                 proposal: view, rejectionReason: rejectionReason,
                 loaded: loadedView(for: view, loaded: loaded))
         )
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 
     static func prettyShow(
@@ -181,10 +181,10 @@ enum EgressReviewRun {
         loaded: EgressLoadedSnapshot? = nil
     ) -> String {
         var text =
-            "proposal \(view.id)\n  egress \(view.host):\(view.port)\n  state \(view.state)\n"
-            + "  reason \(view.reason)\n  created \(view.createdAt)\n  expires \(view.expiresAt)\n"
+            "proposal \(DisplayedText.field(view.id))\n  egress \(DisplayedText.field(view.host)):\(view.port)\n  state \(view.state)\n"
+            + "  reason \(DisplayedText.field(view.reason))\n  created \(view.createdAt)\n  expires \(view.expiresAt)\n"
         if let rejectionReason {
-            text += "  rejection-reason \(rejectionReason)\n"
+            text += "  rejection-reason \(DisplayedText.field(rejectionReason))\n"
         }
         text += "  \(loadedLine(for: view, loaded: loaded))\n"
         return text
@@ -255,7 +255,7 @@ enum EgressReviewRun {
         if views.isEmpty {
             return "No recorded egress denials.\n"
         }
-        return views.map { "\($0.host):\($0.port)  \($0.reason)  \($0.recordedAt)" }
+        return views.map { "\(DisplayedText.field($0.host)):\($0.port)  \(DisplayedText.field($0.reason))  \($0.recordedAt)" }
             .joined(separator: "\n") + "\n"
     }
 
@@ -264,7 +264,7 @@ enum EgressReviewRun {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(views)
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 
     /// Device-owner prompt naming the exact grant. The host plus port
@@ -550,7 +550,7 @@ struct EgressApprove: AsyncParsableCommand {
                 now: Date()
             )
             ctx.writeStdout(
-                "approved \(view.host):\(view.port) (live within seconds; no restart)\n"
+                "approved \(DisplayedText.field(view.host)):\(view.port) (live within seconds; no restart)\n"
             )
         } catch AllowOnceError.ttyRequired {
             try ctx.fail(
@@ -619,7 +619,7 @@ struct EgressDeny: AsyncParsableCommand {
                 store: EgressReviewRun.store(home: try ctx.requireHome()),
                 now: Date()
             )
-            ctx.writeStdout("denied \(view.host):\(view.port)\n")
+            ctx.writeStdout("denied \(DisplayedText.field(view.host)):\(view.port)\n")
         } catch AllowOnceError.ttyRequired {
             try ctx.fail(
                 "rv egress deny: requires an interactive TTY (stdin and stdout)\n",
