@@ -80,7 +80,7 @@ public enum SecretFreeEndpoint {
     /// and `getaddrinfo` resolve to 127.0.0.1, so a literal list both
     /// misses real loopback and admits lookalikes. Non-canonical IP
     /// spellings are refused outright by `problemKind`.
-    public static func isLoopback(_ host: String) -> Bool {
+    static func isLoopback(_ host: String) -> Bool {
         let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
         if bare == "localhost" { return true }
         var v4 = in_addr()
@@ -103,7 +103,7 @@ public enum SecretFreeEndpoint {
     /// way while a browser's WHATWG parser or `inet_aton` reads it as
     /// another address: short forms, one-integer and hex forms, leading
     /// zeros, trailing dots, and IPv6 zone IDs.
-    public static func nonCanonicalIPSpelling(_ host: String) -> Bool {
+    static func nonCanonicalIPSpelling(_ host: String) -> Bool {
         let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
         if bare.contains("@") { return false }
         // Zone IDs, named or numeric (`fe80::1%eth0`): only IPv6 literals
