@@ -10,7 +10,7 @@ import FoundationNetworking
 #endif
 
 /// A resolved secret. Never prints its contents.
-public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
+public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public static let maximumBytes = 16 * 1024
 
     let bytes: [UInt8]
@@ -35,6 +35,8 @@ public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomD
 
     public var description: String { "<redacted>" }
     public var debugDescription: String { "<redacted>" }
+    /// `dump` and a failed `#expect` render a value from its `Mirror`, not its description.
+    public var customMirror: Mirror { Mirror(self, children: []) }
 }
 
 public enum SecretResolutionError: Error, Sendable, Equatable {

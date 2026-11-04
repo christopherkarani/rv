@@ -211,7 +211,7 @@ private extension Result where Failure == RuntimeAdmissionDecodeError {
     }
 }
 
-private struct AdmissionFixture {
+struct AdmissionFixture {
     let workspace: WorkingDirectory
     let session: RuntimeSession
     let capability: RuntimeCapability
