@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import RVIsolation
 
-/// Pins the wire/audit spelling of every gateway refusal. Audit detail, OCSF
+/// Pins the audit/OCSF spelling of every gateway refusal. Audit detail, OCSF
 /// finding types and SIEM rules key on these strings.
 @Suite("GatewayRefusalCodes")
 struct SecretGatewayRefusalCodeTests {
