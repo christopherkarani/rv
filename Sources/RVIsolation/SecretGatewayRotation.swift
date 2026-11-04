@@ -171,7 +171,7 @@ extension SecretGateway {
         let at = now()
         lock.lock()
         defer { lock.unlock() }
-        guard let entry = entries[token], entry.signing != nil, entry.refresh != nil, let expires = entry.expires,
+        guard let entry = entries[token], entry.isSigning, entry.refresh != nil, let expires = entry.expires,
             at >= expires, let state = entry.rotation
         else { return false }
         let last = max(state.resolvedAt, state.failedAt ?? state.resolvedAt)

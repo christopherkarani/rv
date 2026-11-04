@@ -551,6 +551,152 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
     #expect(diagnostics.all.isEmpty == false)
 }
 
+@Test func egressDenialConcurrentWritersLoseNoLines() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-ac006-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    await withTaskGroup(of: Void.self) { group in
+        for writer in 0..<2 {
+            group.addTask {
+                DispatchQueue.global().sync {
+                    for index in 0..<500 {
+                        let denial = EgressProxyDenial(
+                            host: "w\(writer)-\(index).example", port: 443, reason: .deniedPolicy,
+                            recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                        )
+                        EgressProxy.writeDenial(denial, to: url, diagnose: { _ in })
+                    }
+                }
+            }
+        }
+    }
+    let lines = try String(contentsOf: url, encoding: .utf8)
+        .split(separator: "\n", omittingEmptySubsequences: true)
+    #expect(lines.count == 1000)
+    for line in lines {
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: String]
+        )
+        #expect(Set(object.keys) == ["host", "port", "reason", "recordedAt"])
+    }
+}
+
+/// AC-006 across processes. The in-process mutex serializes the threaded test
+/// above, so only a second process exercises the sidecar `flock`. The peer
+/// writes each line in two halves while holding the sidecar lock, and signals
+/// readiness only once it is mid-way through its first line and holding that
+/// lock for 200ms. The in-process writer therefore starts while exclusion is
+/// provably held: an unexcluded append lands between the halves and corrupts
+/// that line. Nothing here depends on how the two writers interleave
+/// afterwards (flock is not fair), so a correct implementation always passes.
+@Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/perl")))
+func egressDenialCrossProcessWritersLoseNoLines() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-ac006x-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    let script = """
+        use Fcntl qw(:flock);
+        my $f = $ARGV[0];
+        open(my $l, '>>', "$f.lock") or die;
+        open(my $o, '>>', $f) or die;
+        $| = 1;
+        for my $i (0..499) {
+            flock($l, LOCK_EX) or die;
+            syswrite($o, '{"host":"p-' . $i . '.example","port":"443",');
+            if ($i == 0) { print "ready\\n"; select(undef, undef, undef, 0.2); }
+            else { select(undef, undef, undef, 0.0005); }
+            syswrite($o, '"reason":"denied-policy","recordedAt":"1700000000.0"}' . "\\n");
+            flock($l, LOCK_UN);
+        }
+        """
+    let peer = Process()
+    peer.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+    peer.arguments = ["-e", script, url.path]
+    let ready = Pipe()
+    peer.standardOutput = ready
+    try peer.run()
+    _ = ready.fileHandleForReading.readData(ofLength: 6)
+    for index in 0..<500 {
+        let denial = EgressProxyDenial(
+            host: "s-\(index).example", port: 443, reason: .deniedPolicy,
+            recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        #expect(EgressProxy.writeDenial(denial, to: url, diagnose: { _ in }))
+    }
+    peer.waitUntilExit()
+    #expect(peer.terminationStatus == 0)
+    let lines = try String(contentsOf: url, encoding: .utf8)
+        .split(separator: "\n", omittingEmptySubsequences: true)
+    #expect(lines.count == 1000)
+    var hosts: [String] = []
+    for line in lines {
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: String]
+        )
+        #expect(Set(object.keys) == ["host", "port", "reason", "recordedAt"])
+        hosts.append(object["host"] ?? "")
+    }
+    // The peer held the lock mid-line before the first append began, so its
+    // first line is whole and first. Every line of both writers is present.
+    #expect(hosts.first == "p-0.example")
+    #expect(hosts.filter { $0.hasPrefix("p-") }.count == 500)
+    #expect(hosts.filter { $0.hasPrefix("s-") }.count == 500)
+}
+
+@Test func egressDenialFileIsOwnerOnlyAndSymlinkRefused() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-mode-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let denial = EgressProxyDenial(
+        host: "mode.example", port: 443, reason: .deniedPolicy,
+        recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let url = directory.appendingPathComponent("nested/egress-denials.jsonl")
+    #expect(EgressProxy.writeDenial(denial, to: url, diagnose: { _ in }))
+    let fileMode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+    let dirMode = try FileManager.default.attributesOfItem(
+        atPath: url.deletingLastPathComponent().path)[.posixPermissions] as? Int
+    #expect(fileMode == 0o600)
+    #expect(dirMode == 0o700)
+
+    let target = directory.appendingPathComponent("target.txt")
+    try Data("untouched".utf8).write(to: target)
+    let link = directory.appendingPathComponent("link/egress-denials.jsonl")
+    try FileManager.default.createDirectory(
+        at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+    let diagnostics = AuditDiagnosticCollector()
+    #expect(EgressProxy.writeDenial(denial, to: link, diagnose: diagnostics.record) == false)
+    #expect(diagnostics.all.isEmpty == false)
+    #expect(try String(contentsOf: target, encoding: .utf8) == "untouched")
+}
+
+@Test func egressDenialLockFailureReportsCapturedErrno() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-lockerr-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let denial = EgressProxyDenial(
+        host: "lock.example", port: 443, reason: .deniedPolicy,
+        recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    let target = directory.appendingPathComponent("target.txt")
+    try Data("untouched".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(
+        at: url.appendingPathExtension("lock"), withDestinationURL: target
+    )
+    let diagnostics = AuditDiagnosticCollector()
+    #expect(EgressProxy.writeDenial(denial, to: url, diagnose: diagnostics.record) == false)
+    let message = try #require(diagnostics.all.first)
+    #expect(message.contains("lock failed"))
+    #expect(message.contains("errno=\(ELOOP)"))
+    #expect(FileManager.default.fileExists(atPath: url.path) == false)
+}
+
 @Test func egressDenialReasonsPinLogSpellings() {
     // `egress-denials.jsonl` readers (including out-of-repo ones) match on
     // these spellings, so adding a reason is a log-format change. The full

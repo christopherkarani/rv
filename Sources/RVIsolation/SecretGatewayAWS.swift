@@ -109,7 +109,7 @@ extension SecretGateway.Entry {
     /// AWS entry each generation's key id, secret, and session token.
     var scrubbed: [SecretValue] {
         let generations = [value] + previous
-        guard signing != nil else { return generations }
+        guard isSigning else { return generations }
         return generations.flatMap { AWSCredentialSet($0)?.values ?? [$0] }
     }
 }
@@ -135,7 +135,7 @@ extension SecretGateway {
         guard let live = entry(token) else { return .failure(.unknownPlaceholder) }
         presented.append(live)
         guard live.secret == route.secret else { return .failure(.foreignPlaceholder) }
-        guard live.signing != nil else { return .failure(.awsKeyMismatch) }
+        guard live.isSigning else { return .failure(.awsKeyMismatch) }
         let used = Self.live(live, token: token)
         if let refusal = GatewayAccess.refusal(live.rules, method: head.method, route: route, basePath: used.basePath) {
             return .failure(refusal)
@@ -146,7 +146,7 @@ extension SecretGateway {
             return .failure(.awsSignedStreaming)
         }
         if let mode = head.header("X-Amz-Content-Sha256"), Self.unsignedPayloadModes.contains(mode),
-            live.signing?.isS3 != true
+            live.signingBinding?.isS3 != true
         {
             return .failure(.awsUnsignedPayload)
         }
@@ -166,7 +166,7 @@ extension SecretGateway {
     static func live(_ entry: Entry, token: String) -> GatewaySubstitution.Live {
         GatewaySubstitution.Live(
             token: token, secret: entry.secret, prefix: entry.prefix, value: entry.value,
-            surfaces: entry.signing == nil ? entry.surfaces : [], rules: entry.rules,
+            surfaces: entry.surfaces, rules: entry.rules,
             basePath: URLComponents(url: entry.upstream, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "")
     }
 

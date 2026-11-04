@@ -48,7 +48,7 @@ struct ParseGitWorktreeTests {
         #expect(parseCheckout(["--branch="]) == nil)
         #expect(parseCheckout(["--orphan=x"]) == nil)
         #expect(parseCheckout(["main"]) == nil)
-        #expect(parseCheckout(["-f", "a", "b"]) == nil)
+        #expect(parseCheckout(["-f", "a", "b"]) == .discardWorktree(pathspecs: ["b"], source: "a"))
         #expect(parseCheckout([]) == nil)
     }
 
