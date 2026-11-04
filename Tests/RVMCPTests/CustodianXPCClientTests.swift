@@ -13,20 +13,20 @@ struct CustodianXPCClientTests {
             custodianExecutablePath: "/nonexistent/RVApprovals.app/Contents/MacOS/rv-mcp-custodian",
             helloTimeout: 2, requestTimeout: 2)
         #expect(client.send(.status) == nil)
-        #expect(client.send(.mac(purpose: "grant", fields: ["a"], createIfMissing: true)) == nil)
+        #expect(client.send(.mac(purpose: .grant, fields: ["a"], createIfMissing: true)) == nil)
 
         let signing = MCPApprovalSigning.custodian(transport: client.transport)
         #expect(signing.status() == .unavailable)
-        #expect(signing.mac("grant", ["a"], true) == nil)
-        #expect(signing.verify("00", "grant", ["a"]) == nil)
+        #expect(signing.mac(.grant, ["a"], true) == nil)
+        #expect(signing.verify("00", .grant, ["a"]) == .noKey)
     }
 
     @Test func timeoutsAreBoundedPerOperation() {
         #expect(MCPCustodianXPCClient.timeout(for: .status, hello: 5, request: 120) == 5)
         #expect(MCPCustodianXPCClient.timeout(
-            for: .mac(purpose: "grant", fields: [], createIfMissing: true), hello: 5, request: 120) == 120)
+            for: .mac(purpose: .grant, fields: [], createIfMissing: true), hello: 5, request: 120) == 120)
         #expect(MCPCustodianXPCClient.timeout(
-            for: .verify(candidate: nil, purpose: "grant", fields: []), hello: 5, request: 120) == 120)
+            for: .verify(candidate: nil, purpose: .grant, fields: []), hello: 5, request: 120) == 120)
         #expect(MCPCustodianXPCClient.defaultHelloTimeout == 5)
         #expect(MCPCustodianXPCClient.defaultRequestTimeout == 120)
     }

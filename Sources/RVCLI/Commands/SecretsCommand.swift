@@ -580,6 +580,12 @@ enum SecretsRun {
             warnings: configuration.secrets.compactMap { expiryWarning($0, now: now) })
     }
 
+    /// `rv secrets describe` stdout. Robot mode goes through `robotJSON`
+    /// (SEC-002): descriptions and types come from `secrets.json`.
+    static func describeOutput(_ report: DescribeReport, robot: Bool) -> String {
+        robot ? robotJSON(report) : describeText(report)
+    }
+
     static func describeText(_ report: DescribeReport) -> String {
         guard report.secrets.isEmpty == false else { return "No secrets configured.\n" }
         let rows = report.secrets.map { row in
@@ -1048,8 +1054,7 @@ struct SecretsDescribe: AsyncParsableCommand {
         switch SecretsRun.configuration(environment) {
         case .failure(let failure): try ctx.fail("rv secrets describe: \(failure.message)\n")
         case .success(let configuration):
-            let report = SecretsRun.describe(configuration)
-            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.describeText(report))
+            ctx.writeStdout(SecretsRun.describeOutput(SecretsRun.describe(configuration), robot: ctx.explicitRobot))
         }
     }
 }

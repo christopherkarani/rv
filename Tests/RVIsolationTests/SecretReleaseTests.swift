@@ -124,6 +124,35 @@ struct SecretReleaseTests {
         #expect(provider.reads.withLock { $0 } == 0)
     }
 
+    @Test func aGatewayOnlySourceIsNeverReleasedAsTextWhateverItsDelivery() {
+        let awsJSON = #"{"AccessKeyId":"AKIAREAL","SecretAccessKey":"realSecretKey"}"#
+        let oauthJSON = #"{"access_token":"at-REAL-oauth","expires_in":3600}"#
+        let wrong: [SecretDelivery] = [.environment, Self.gateway("G").delivery]
+        let cases: [(String, SecretSource, String, [SecretDelivery])] = [
+            ("awsProfile", Self.aws.source, awsJSON, wrong),
+            ("oauth", Self.oauth.source, oauthJSON, [.environment]),
+        ]
+        for (kind, source, json, deliveries) in cases {
+            for delivery in deliveries {
+                let provider = Provider(text: json)
+                let definition = SecretDefinition(name: "S", source: source, delivery: delivery)
+                let result = Self.release([definition], to: .cage, provider: provider)
+                #expect(Self.reason(result) == .gatewayOnly, "\(kind) was released under \(delivery.kind) delivery")
+                #expect(provider.reads.withLock { $0 } == 0)
+            }
+        }
+    }
+
+    @Test func aSecretValueNeverReflectsItsBytes() {
+        let value = SecretValue("plain-REAL-value")!
+        var dumped = ""
+        dump(value, to: &dumped)
+        #expect(dumped.contains("plain-REAL-value") == false)
+        #expect(dumped.contains("bytes") == false)
+        #expect(Mirror(reflecting: value).children.isEmpty)
+        #expect(Mirror(reflecting: [value]).children.allSatisfy { Mirror(reflecting: $0.value).children.isEmpty })
+    }
+
     @Test func anOAuthAnswerReleasesItsAccessTokenUntilTheEarlierExpiry() throws {
         let soon = Self.start.addingTimeInterval(600)
         let answer = #"{"access_token":"tok-1","expires_at":\#(Int(soon.timeIntervalSince1970))}"#
