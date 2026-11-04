@@ -1,10 +1,10 @@
 import Foundation
 import RVDomain
 
-// Launch-family parse layer (T5/C04 pilot): typed payloads above the
-// WorkspaceControlMessage envelope. The envelope stays the wire format;
-// this layer adds no bytes. Each payload is constructible only valid,
-// and every refusal code matches the legacy per-op guards exactly.
+// Launch-family validation layer: parses the codec's per-op payloads
+// into validated launch values. Each payload is constructible only
+// valid, and every refusal code matches the legacy per-op guards
+// exactly.
 
 /// Validated `launchRuntime` fields: an absolute command, resolved IO, an
 /// optional hook participant, and the resolved resource profile (nil selects
@@ -19,17 +19,17 @@ struct LaunchRuntimePayload: Sendable, Equatable {
     /// command, IO. The profile lookup precedes hook/command/IO selection,
     /// so a doubly-faulty message reports resourceProfileUnavailable.
     static func parse(
-        _ request: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.Launch,
         resourcePolicy: RuntimeResourcePolicy,
         project: String
     ) -> Result<LaunchRuntimePayload, WorkspaceControlCode> {
-        guard let executable = request.executable, executable.hasPrefix("/") else {
+        guard let executable = fields.executable, executable.hasPrefix("/") else {
             return .failure(.invalidRequest)
         }
         // Explicit selection only: a missing ID always means the base fence.
         // The policy's defaultProfile is a UI hint the host never consults.
         let resourceProfile: RuntimeResourceProfile?
-        if let id = request.resourceProfileID {
+        if let id = fields.resourceProfileID {
             guard let selected = resourcePolicy.profile(id: id, project: project) else {
                 return .failure(.resourceProfileUnavailable)
             }
@@ -38,7 +38,7 @@ struct LaunchRuntimePayload: Sendable, Equatable {
             resourceProfile = nil
         }
         let hook: HookHost?
-        switch legacyLaunchHookSelection(request.hook) {
+        switch legacyLaunchHookSelection(fields.hook) {
         case .failure(let code):
             return .failure(code)
         case .success(let selected):
@@ -46,11 +46,11 @@ struct LaunchRuntimePayload: Sendable, Equatable {
         }
         guard let command = IsolatedCommand(
             executable: executable,
-            arguments: request.arguments ?? []
+            arguments: fields.arguments ?? []
         ) else {
             return .failure(.invalidRequest)
         }
-        switch workspaceLaunchIO(io: request.io, rows: request.rows, columns: request.columns) {
+        switch workspaceLaunchIO(io: fields.io, rows: fields.rows, columns: fields.columns) {
         case .failure(let code):
             return .failure(code)
         case .success(let io):
@@ -76,24 +76,24 @@ struct EnsureTerminalRuntimePayload: Sendable, Equatable {
     /// Structural parse only (no policy lookup). Mirrors the legacy single
     /// guard: absolute command, well-formed hook, terminal IO.
     static func parse(
-        _ request: WorkspaceControlRequest
+        _ fields: WorkspaceControlRequestPayload.Launch
     ) -> Result<EnsureTerminalRuntimePayload, WorkspaceControlCode> {
-        guard let executable = request.executable, executable.hasPrefix("/"),
+        guard let executable = fields.executable, executable.hasPrefix("/"),
             let command = IsolatedCommand(
                 executable: executable,
-                arguments: request.arguments ?? []
+                arguments: fields.arguments ?? []
             )
         else {
             return .failure(.invalidRequest)
         }
         let hook: HookHost?
-        switch legacyLaunchHookSelection(request.hook) {
+        switch legacyLaunchHookSelection(fields.hook) {
         case .failure(let code):
             return .failure(code)
         case .success(let selected):
             hook = selected
         }
-        switch workspaceLaunchIO(io: request.io, rows: request.rows, columns: request.columns) {
+        switch workspaceLaunchIO(io: fields.io, rows: fields.rows, columns: fields.columns) {
         case .success(let io):
             guard case .pseudoTerminal = io else {
                 return .failure(.invalidRequest)
@@ -102,7 +102,7 @@ struct EnsureTerminalRuntimePayload: Sendable, Equatable {
                 command: command,
                 io: io,
                 hook: hook,
-                resourceProfileID: request.resourceProfileID
+                resourceProfileID: fields.resourceProfileID
             ))
         case .failure(let code):
             return .failure(code)
@@ -115,120 +115,12 @@ struct CancelRuntimePayload: Sendable, Equatable {
     var runtime: UUID
 
     static func parse(
-        _ request: WorkspaceControlRequest
+        _ fields: WorkspaceControlRequestPayload.RuntimeRef
     ) -> Result<CancelRuntimePayload, WorkspaceControlCode> {
-        guard let runtime = request.runtime else {
+        guard let runtime = fields.runtime else {
             return .failure(.invalidRequest)
         }
         return .success(CancelRuntimePayload(runtime: runtime))
-    }
-}
-
-/// `launchAgentRuntime` fields. The prepare→permit→redeem door consumes no
-/// fields, so construction is infallible: any validation here would turn
-/// today's requiresOperatorPermit into invalidRequest. Carries the op's
-/// contract for the future direct-launch path.
-struct LaunchAgentRuntimePayload: Sendable, Equatable {
-    var agentDefinitionID: String?
-    var arguments: [String]
-    var io: String?
-    var rows: Int?
-    var columns: Int?
-
-    init(_ request: WorkspaceControlRequest) {
-        agentDefinitionID = request.agentDefinitionID
-        arguments = request.arguments ?? []
-        io = request.io
-        rows = request.rows
-        columns = request.columns
-    }
-}
-
-/// `launchCustomRuntime` fields. Infallible like the agent door: the deny
-/// consumes no fields and any validation would change the refusal code.
-struct LaunchCustomRuntimePayload: Sendable, Equatable {
-    var executable: String?
-    var arguments: [String]
-    var customDefinitionDigest: String?
-    var io: String?
-    var rows: Int?
-    var columns: Int?
-
-    init(_ request: WorkspaceControlRequest) {
-        executable = request.executable
-        arguments = request.arguments ?? []
-        customDefinitionDigest = request.customDefinitionDigest
-        io = request.io
-        rows = request.rows
-        columns = request.columns
-    }
-}
-
-/// Typed launch-family request. The server dispatches on these cases;
-/// unmigrated ops keep the bag path untouched.
-enum WorkspaceControlLaunchRequest: Sendable, Equatable {
-    case launchRuntime(LaunchRuntimePayload)
-    case launchAgentRuntime(LaunchAgentRuntimePayload)
-    case launchCustomRuntime(LaunchCustomRuntimePayload)
-    case ensureTerminalRuntime(EnsureTerminalRuntimePayload)
-    case cancelRuntime(CancelRuntimePayload)
-
-    /// Supervisor-held context the launch parse consults. Only the
-    /// launchRuntime arm uses it; the other arms parse structurally.
-    struct Context: Sendable {
-        var resourcePolicy: RuntimeResourcePolicy
-        var project: String
-    }
-
-    /// Typed parse for the launch family. Nil when `request` names an
-    /// unmigrated op. The switch is exhaustive so a future op must choose
-    /// the typed path or the bag path deliberately.
-    static func parse(
-        _ request: WorkspaceControlRequest,
-        context: Context
-    ) -> Result<WorkspaceControlLaunchRequest, WorkspaceControlCode>? {
-        switch request.operation {
-        case .launchRuntime:
-            return LaunchRuntimePayload.parse(
-                request,
-                resourcePolicy: context.resourcePolicy,
-                project: context.project
-            ).map(WorkspaceControlLaunchRequest.launchRuntime)
-        case .launchAgentRuntime:
-            return .success(.launchAgentRuntime(LaunchAgentRuntimePayload(request)))
-        case .launchCustomRuntime:
-            return .success(.launchCustomRuntime(LaunchCustomRuntimePayload(request)))
-        case .ensureTerminalRuntime:
-            return EnsureTerminalRuntimePayload.parse(request)
-                .map(WorkspaceControlLaunchRequest.ensureTerminalRuntime)
-        case .cancelRuntime:
-            return CancelRuntimePayload.parse(request)
-                .map(WorkspaceControlLaunchRequest.cancelRuntime)
-        case .none,
-            .hello,
-            .capabilities,
-            .ping,
-            .describeWorkspace,
-            .listRuntimes,
-            .closeWorkspace,
-            .detach,
-            .workspaceClosed,
-            .subscribeTerminal,
-            .unsubscribeTerminal,
-            .terminalInput,
-            .acquireTerminalInput,
-            .releaseTerminalInput,
-            .resizeTerminal,
-            .terminalReplayBegin,
-            .terminalReplay,
-            .terminalReplayEnd,
-            .terminalOutput,
-            .terminalInputOwner,
-            .terminalWindow,
-            .runtimeExited,
-            .terminalOverflow:
-            return nil
-        }
     }
 }
 

@@ -9,19 +9,20 @@ import Testing
 
 @Test func workspaceControlRejectsUnknownVersionAndFields() {
     let close = Data(#"{"v":2,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"closeWorkspace"}"#.utf8)
-    #expect(WorkspaceControlCodec.decode(close) == .incompatible)
+    #expect(WorkspaceControlCodec.decodeRequest(close) == .incompatible)
     let extra = Data(
         #"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"cancelRuntime","pid":1}"#.utf8
     )
-    #expect(WorkspaceControlCodec.decode(extra) == .invalid)
+    #expect(WorkspaceControlCodec.decodeRequest(extra) == .invalid)
     let unknown = Data(
         #"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"killProcess"}"#.utf8
     )
-    guard case .message(let message) = WorkspaceControlCodec.decode(unknown) else {
+    guard case .frame(let frame) = WorkspaceControlCodec.decodeRequest(unknown) else {
         Issue.record("unknown operation must still decode so the host can refuse it")
         return
     }
-    #expect(WorkspaceControlOp(rawValue: message.op) == nil)
+    #expect(frame.operation == nil)
+    #expect(frame.rawOperation == "killProcess")
     let long = String(repeating: "a", count: 2_048)
     let acceptedArgument = Data(
         """
@@ -29,7 +30,7 @@ import Testing
         """.utf8
     )
     #expect(acceptedArgument.count <= WorkspaceControlLimits.maxBodyBytes)
-    guard case .message = WorkspaceControlCodec.decode(acceptedArgument) else {
+    guard case .frame = WorkspaceControlCodec.decodeRequest(acceptedArgument) else {
         Issue.record("a long argument within the per-argument bound should decode")
         return
     }
@@ -40,7 +41,7 @@ import Testing
         """.utf8
     )
     #expect(oversizedCommand.count <= WorkspaceControlLimits.maxBodyBytes)
-    #expect(WorkspaceControlCodec.decode(oversizedCommand) == .invalid)
+    #expect(WorkspaceControlCodec.decodeRequest(oversizedCommand) == .invalid)
     var header = UInt32(WorkspaceControlLimits.maxBodyBytes + 1).bigEndian
     let declared = Data(bytes: &header, count: 4)
     #expect(WorkspaceControlCodec.headerCount(declared).isFailure)
@@ -131,14 +132,11 @@ struct WorkspaceHostTests {
         #expect(waitFor(opened.tree.workspaceURL.appendingPathComponent("from-b.txt")))
         let both = try first.listRuntimes().get().map(\.runtime)
         #expect(Set(both) == Set([runtimeA.runtime, runtimeB.runtime]))
-        let response = try #require(WorkspaceControlCodec.encode(
-            WorkspaceControlMessage(
-                version: 1,
+        let response = try #require(WorkspaceControlCodec.encodeResponse(
+            WorkspaceControlResponseFrame(
                 id: UUID(),
-                op: "launchRuntime",
-                runtime: runtimeA.runtime,
                 ok: true,
-                running: true
+                payload: .launchRuntime(.init(runtime: runtimeA.runtime, running: true))
             )
         ))
         let json = try #require(String(data: response, encoding: .utf8))
@@ -203,13 +201,12 @@ struct WorkspaceHostTests {
         #expect(opened.supervisor.runtimeFacts().isEmpty)
         let fresh = try WorkspaceClient.connect(opened.server.endpoint).get()
         defer { _ = fresh.detach() }
-        let attack = WorkspaceControlMessage(
-            version: 1,
+        let attack = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: "closeWorkspace"
+            payload: .closeWorkspace
         )
         // Rewrite the version after a legal encode so the host sees a close under v=9.
-        let encoded = try #require(WorkspaceControlCodec.encode(attack))
+        let encoded = try #require(WorkspaceControlCodec.encodeRequest(attack))
         let text = try #require(String(data: encoded, encoding: .utf8))
             .replacingOccurrences(of: "\"v\":1", with: "\"v\":9")
         let body = Data(text.utf8)
@@ -220,7 +217,7 @@ struct WorkspaceHostTests {
         defer { close(raw) }
         #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: body))
         let reply = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-        guard case .message(let refused) = WorkspaceControlCodec.decode(reply) else {
+        guard case .frame(let refused) = WorkspaceControlCodec.decodeResponse(reply) else {
             Issue.record("unknown version must receive a protocol error")
             return
         }
@@ -587,13 +584,13 @@ struct WorkspaceHostTests {
     }
 
     @Test func negotiatedFeaturesTreatInvalidRequestAsLegacy() {
-        let legacyInvalid: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.invalidRequest)
+        let legacyInvalid: Result<WorkspaceControlResponseFrame, WorkspaceClientFailure> = .failure(.invalidRequest)
         guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: legacyInvalid) else {
             Issue.record("invalidRequest must map to an empty feature list")
             return
         }
         #expect(empty.isEmpty)
-        let legacyTimeout: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.timedOut)
+        let legacyTimeout: Result<WorkspaceControlResponseFrame, WorkspaceClientFailure> = .failure(.timedOut)
         #expect(WorkspaceClient.negotiatedFeatures(from: legacyTimeout).isFailure)
     }
 
@@ -646,17 +643,15 @@ struct WorkspaceHostTests {
     }
 
     @Test func negotiatedFeaturesMapCapabilitiesReplyToFeatures() {
-        let reply = WorkspaceControlMessage(
-            version: 1,
+        let reply = WorkspaceControlResponseFrame(
             id: UUID(),
-            op: WorkspaceControlOp.capabilities.rawValue,
             ok: true,
-            features: [
+            payload: .capabilities(.init(features: [
                 WorkspaceControlFeature.ensureTerminalRuntime,
                 WorkspaceControlFeature.resizeLeaseAuthority,
                 WorkspaceControlFeature.runtimeResourceProfilesV1,
                 WorkspaceControlFeature.terminalReplayBatchesV1,
-            ]
+            ]))
         )
         guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
             Issue.record("capabilities reply must map to its features")
@@ -668,12 +663,10 @@ struct WorkspaceHostTests {
             WorkspaceControlFeature.runtimeResourceProfilesV1,
             WorkspaceControlFeature.terminalReplayBatchesV1,
         ])
-        let wrongOp = WorkspaceControlMessage(
-            version: 1,
+        let wrongOp = WorkspaceControlResponseFrame(
             id: UUID(),
-            op: WorkspaceControlOp.ping.rawValue,
             ok: true,
-            features: []
+            payload: .ping(.init())
         )
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
     }
@@ -806,32 +799,27 @@ struct WorkspaceHostTests {
 
 
     @Test func negotiatedFeaturesAcceptsOnlyTypedCapabilitiesReplies() {
-        let reply = WorkspaceControlResponse(
-            operation: .capabilities,
+        let reply = WorkspaceControlResponseFrame(
             id: UUID(),
             ok: true,
-            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+            payload: .capabilities(.init(features: [WorkspaceControlFeature.ensureTerminalRuntime]))
         )
         guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
             Issue.record("typed capabilities reply must map to its features")
             return
         }
         #expect(features == [WorkspaceControlFeature.ensureTerminalRuntime])
-        let failed = WorkspaceControlResponse(
-            operation: .capabilities,
+        let failed = WorkspaceControlResponseFrame(
             id: UUID(),
             ok: false,
-            error: WorkspaceControlCode.invalidRequest.rawValue
+            error: WorkspaceControlCode.invalidRequest.rawValue,
+            payload: .capabilities(.init())
         )
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(failed)).isFailure)
-        let unknownOp = WorkspaceControlResponse(
-            WorkspaceControlMessage(
-                version: 1,
-                id: UUID(),
-                op: "killProcess",
-                ok: true,
-                features: [WorkspaceControlFeature.ensureTerminalRuntime]
-            )
+        let unknownOp = WorkspaceControlResponseFrame(
+            id: UUID(),
+            ok: true,
+            payload: .unknown(rawOperation: "killProcess")
         )
         #expect(unknownOp.operation == nil)
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(unknownOp)).isFailure)
@@ -845,17 +833,15 @@ struct WorkspaceHostTests {
             timeout: 2
         ).get()
         defer { close(fd) }
-        let hello = try #require(WorkspaceControlCodec.encode(
-            WorkspaceControlMessage(
-                version: 1,
+        let hello = try #require(WorkspaceControlCodec.encodeRequest(
+            WorkspaceControlRequestFrame(
                 id: UUID(),
-                op: WorkspaceControlOp.hello.rawValue,
-                token: opened.server.endpoint.ownerToken
+                payload: .hello(.init(token: opened.server.endpoint.ownerToken))
             )
         ))
         #expect(WorkspaceControlSocket.writeFrame(fd: fd, body: hello))
         let greeting = try WorkspaceControlSocket.readFrame(fd: fd, timeout: 2).get()
-        guard case .message(let welcomed) = WorkspaceControlCodec.decode(greeting),
+        guard case .frame(let welcomed) = WorkspaceControlCodec.decodeResponse(greeting),
             welcomed.ok == true
         else {
             Issue.record("raw hello must succeed before the unknown-op probe")
@@ -865,7 +851,7 @@ struct WorkspaceHostTests {
         let probe = Data("{\"v\":1,\"id\":\"\(probeID.uuidString)\",\"op\":\"killProcess\"}".utf8)
         #expect(WorkspaceControlSocket.writeFrame(fd: fd, body: probe))
         let raw = try WorkspaceControlSocket.readFrame(fd: fd, timeout: 2).get()
-        guard case .response(let reply) = WorkspaceControlResponse.decode(raw) else {
+        guard case .frame(let reply) = WorkspaceControlCodec.decodeResponse(raw) else {
             Issue.record("unknown op must receive a typed failure echo")
             return
         }
@@ -1009,27 +995,33 @@ struct WorkspaceHostTests {
         defer { server.stop(); _ = supervisor.close() }
         // A malformed wire tag is refused before spawn, without sockets.
         let factsBefore = supervisor.runtimeFacts().count
-        let refused = server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
-            executable: "/bin/sh",
-            arguments: ["-c", "/bin/sleep 30"],
-            resourceProfileID: "step8",
-            hook: "not a tag!"
+        let refused = server.launch(WorkspaceControlRequestFrame(
+            payload: .launchRuntime(.init(
+                executable: "/bin/sh",
+                arguments: ["-c", "/bin/sleep 30"],
+                resourceProfileID: "step8",
+                hook: "not a tag!"
+            ))
         ))
         #expect(refused.ok != true)
         #expect(refused.error == WorkspaceControlCode.invalidRequest.rawValue)
         #expect(supervisor.runtimeFacts().count == factsBefore)
         let probe = "if cat \"$HOME/.config/filtered.auth\" >/dev/null 2>&1; then echo leak > leak.txt; fi; "
             + "cat \"$HOME/.config/shared.auth\" > proved-shared.txt; printf launched > launched.txt"
-        let reply = server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
-            executable: "/bin/sh",
-            arguments: ["-c", probe],
-            resourceProfileID: "step8",
-            hook: "agent-A"
+        let reply = server.launch(WorkspaceControlRequestFrame(
+            payload: .launchRuntime(.init(
+                executable: "/bin/sh",
+                arguments: ["-c", probe],
+                resourceProfileID: "step8",
+                hook: "agent-A"
+            ))
         ))
         #expect(reply.ok == true)
-        #expect(reply.hook == nil)
+        guard case .launchRuntime(let launched) = reply.payload else {
+            Issue.record("launch reply must carry the launch payload")
+            return
+        }
+        #expect(launched.hook == nil)
         #expect(waitFor(tree.workspaceURL.appendingPathComponent("launched.txt")))
         #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak.txt").path)
             == false)
@@ -1040,15 +1032,20 @@ struct WorkspaceHostTests {
         })
         let probeB = "if cat \"$HOME/.config/filtered.auth\" >/dev/null 2>&1; then echo leak > leak-b.txt; fi; "
             + "cat \"$HOME/.config/shared.auth\" > proved-shared-b.txt; printf launched > launched-b.txt"
-        let replyB = server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
-            executable: "/bin/sh",
-            arguments: ["-c", probeB],
-            resourceProfileID: "step8",
-            hook: "codex"
+        let replyB = server.launch(WorkspaceControlRequestFrame(
+            payload: .launchRuntime(.init(
+                executable: "/bin/sh",
+                arguments: ["-c", probeB],
+                resourceProfileID: "step8",
+                hook: "codex"
+            ))
         ))
         #expect(replyB.ok == true)
-        #expect(replyB.hook == HookHost.codex.rawValue)
+        guard case .launchRuntime(let launchedB) = replyB.payload else {
+            Issue.record("launch reply must carry the launch payload")
+            return
+        }
+        #expect(launchedB.hook == HookHost.codex.rawValue)
         #expect(waitFor(tree.workspaceURL.appendingPathComponent("launched-b.txt")))
         #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-b.txt").path)
             == false)
@@ -1085,30 +1082,28 @@ struct WorkspaceHostTests {
         let factsBefore = opened.supervisor.runtimeFacts().count
         let raw = try WorkspaceControlSocket.connect(path: opened.server.endpoint.socketPath, timeout: 2).get()
         defer { close(raw) }
-        let hello = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
+        let hello = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: WorkspaceControlOp.hello.rawValue,
-            token: opened.server.endpoint.ownerToken
+            payload: .hello(.init(token: opened.server.endpoint.ownerToken))
         )
-        let helloBody = try #require(WorkspaceControlCodec.encode(hello))
+        let helloBody = try #require(WorkspaceControlCodec.encodeRequest(hello))
         #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: helloBody))
         _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-        let launch = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
+        let launch = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: WorkspaceControlOp.launchRuntime.rawValue,
-            executable: "/bin/sh",
-            arguments: ["-c", "/bin/sleep 30"],
-            hook: "not a tag!",
-            io: "terminal",
-            rows: 24,
-            columns: 80
+            payload: .launchRuntime(.init(
+                executable: "/bin/sh",
+                arguments: ["-c", "/bin/sleep 30"],
+                hook: "not a tag!",
+                io: "terminal",
+                rows: 24,
+                columns: 80
+            ))
         )
-        let launchBody = try #require(WorkspaceControlCodec.encode(launch))
+        let launchBody = try #require(WorkspaceControlCodec.encodeRequest(launch))
         #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: launchBody))
         let reply = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 10).get()
-        guard case .message(let refused) = WorkspaceControlCodec.decode(reply) else {
+        guard case .frame(let refused) = WorkspaceControlCodec.decodeResponse(reply) else {
             Issue.record("malformed-hook launch response did not decode")
             return
         }

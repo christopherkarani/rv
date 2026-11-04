@@ -1132,16 +1132,16 @@ struct HostRedemptionTests {
         defer { server.stop() }
         let definition = redeemDefinition(projects: [tree.workspaceURL.path])
         let requests = [
-            WorkspaceControlRequest(
-                operation: .launchAgentRuntime,
+            WorkspaceControlRequestFrame(
                 id: UUID(),
-                agentDefinitionID: definition.id.rawValue
+                payload: .launchAgentRuntime(.init(agentDefinitionID: definition.id.rawValue))
             ),
-            WorkspaceControlRequest(
-                operation: .launchCustomRuntime,
+            WorkspaceControlRequestFrame(
                 id: UUID(),
-                executable: "/bin/sleep",
-                customDefinitionDigest: String(repeating: "a", count: 64)
+                payload: .launchCustomRuntime(.init(
+                    executable: "/bin/sleep",
+                    customDefinitionDigest: String(repeating: "a", count: 64)
+                ))
             ),
         ]
         for request in requests {
