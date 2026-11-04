@@ -39,7 +39,10 @@ func matches(_ code: String, pattern: String) -> Bool {
 private let pythonDangerousWords: [String] = [
     "subprocess", "pty", "importlib", "ctypes", "__import__", "builtins", "__builtins__",
     "__subclasses__", "__globals__", "runpy", "popen", "posix", "unlink", "rmdir", "rmtree",
-    "write_text", "write_bytes", "rename", "chmod", "chown", "symlink_to",
+    "write_text", "write_bytes", "rename", "chmod", "chown", "symlink_to", "touch",
+    "O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC",
+    // A changed cwd breaks the repo-relative resolution of literal write paths.
+    "chdir", "fchdir", "chroot",
 ]
 
 /// Modules whose attributes spawn processes or delete/move files.
@@ -64,12 +67,8 @@ private func isDangerousModuleAttribute(module: String, attribute: String) -> Bo
 /// them indirectly (aliased imports, `getattr`, `exec`). Plain data code,
 /// including `os.getcwd()` and `re.compile(...)`, is not flagged.
 func pythonCodeCanSpawn(_ code: String) -> Bool {
-    // `eval("1+1")` over a pure arithmetic literal cannot run anything.
-    let program = code.replacingOccurrences(
-        of: #"eval\(\s*(["'])[0-9+\-*/%().\s]*\1\s*\)"#,
-        with: "0",
-        options: .regularExpression
-    )
+    let program = removingBenignEval(code, arithmeticLiterals: true, blockEval: false)
+    if pythonFileWrites(program).opaque { return true }
     if containsAnyWord(program, pythonDangerousWords) { return true }
     if matches(program, pattern: #"(?<![.\w])(exec|eval|compile|getattr)\s*\("#) { return true }
     if matches(program, pattern: #"\bsys\s*\.\s*modules\b"#) { return true }
@@ -112,23 +111,22 @@ func nodeCodeCanSpawn(_ code: String) -> Bool {
     code.contains("child_process") || code.contains("process.binding")
         || matches(
             code,
-            pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|writeFile|writeFileSync|rename|renameSync)\b"#
+            pattern: #"\b(fs|promises)\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync)\b"#
         )
-        || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork"])
+        || containsAnyWord(code, ["execSync", "spawnSync", "execFile", "execFileSync", "spawn", "fork", "chdir", "chroot"])
+        || nodeFileWrites(code).opaque
         || nodeReachesFileSystem(code)
         || matches(code, pattern: #"\b(require|import)\s*\(\s*[^'"\s)]"#)
 }
 
-/// The `fs` module under any alias or destructuring (`const f = require("fs")`,
-/// `import {rmSync} from "node:fs"`), or a bare call of a deleting/moving
-/// function. Mirrors python, where a bare `os` mention is already limited.
+/// A bare call of a deleting or moving `fs` function, however `fs` was
+/// obtained (`const f = require("fs"); f.rmSync(...)`, `const {rmSync} =
+/// require("fs"); rmSync(...)`). Writes are scanned separately
+/// (`nodeFileWrites`) so a literal in-repo path can still pass.
 private func nodeReachesFileSystem(_ code: String) -> Bool {
-    matches(code, pattern: #"\b(require|import)\b[^;]*['"`](node:)?fs(/promises)?['"`]"#)
-        || matches(code, pattern: #"\bfrom\s*['"`](node:)?fs(/promises)?['"`]"#)
-        || containsAnyWord(code, [
-            "rm", "rmSync", "unlink", "unlinkSync", "rmdir", "rmdirSync", "rename", "renameSync",
-            "writeFile", "writeFileSync",
-        ])
+    containsAnyWord(code, [
+        "rm", "rmSync", "unlink", "unlinkSync", "rmdir", "rmdirSync", "rename", "renameSync",
+    ])
 }
 
 // MARK: ruby
@@ -136,6 +134,7 @@ private func nodeReachesFileSystem(_ code: String) -> Bool {
 private let rubyDangerousWords: [String] = [
     "system", "exec", "spawn", "fork", "eval", "instance_eval", "class_eval", "module_eval",
     "send", "public_send", "__send__", "const_get", "syscall", "Kernel", "FileUtils", "Open3", "PTY",
+    "chdir", "chroot", "fchdir",
 ]
 
 /// Ruby programs that can run a process, delete or rewrite files, or reach
@@ -152,21 +151,48 @@ func rubyCodeCanSpawn(_ code: String) -> Bool {
         // Kernel#open and IO class readers run a command for a leading `|`;
         // only a literal path that does not start with one is safe.
         #"\bIO\.(read|readlines|foreach|binread)\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
-        #"(?<![.\w])open\b(?>\s*(?:\(\s*)?)(?!["'][^|"'])"#,
     ]
-    return patterns.contains { matches(code, pattern: $0) }
+    return patterns.contains { matches(code, pattern: $0) } || rubyOpenIsUnsafe(code)
+        || rubyFileWrites(code).opaque
+}
+
+/// A bare `open` (Kernel#open runs a command for a leading `|`) unless a
+/// literal path that does not start with `|` follows. Candidates are found
+/// with string contents and comments blanked, so prose such as "Could not
+/// open file" does not count; the literal check reads the original text.
+private func rubyOpenIsUnsafe(_ code: String) -> Bool {
+    let masked = maskingLiteralsAndComments(code, language: .ruby)
+    guard let regex = try? NSRegularExpression(pattern: #"(?<![.\w])open\b(?>\s*(?:\(\s*)?)"#) else { return true }
+    let units = Array(code.utf16)
+    for match in regex.matches(in: masked, range: NSRange(masked.startIndex..., in: masked)) {
+        let end = match.range.location + match.range.length
+        guard end + 1 < units.count else { return true }
+        let quote = units[end]
+        let next = units[end + 1]
+        let isQuote = quote == 0x22 || quote == 0x27
+        if isQuote == false || next == 0x7C || next == quote { return true }
+    }
+    return false
 }
 
 // MARK: perl
 
 func perlCodeCanSpawn(_ code: String) -> Bool {
     // `eval { ... }` is a trapping block, not string evaluation.
-    let program = code.replacingOccurrences(of: #"\beval\s*\{"#, with: "{", options: .regularExpression)
+    let program = removingBenignEval(code, arithmeticLiterals: false, blockEval: true)
     return program.contains("`")
         || containsAnyWord(program, [
             "system", "exec", "qx", "unlink", "rmtree", "remove_tree", "rmdir", "rename", "fork", "eval",
+            "sysopen", "chdir", "chroot",
         ])
+        || matches(program, pattern: #"\b(IO::File|File::Copy|File::Path|File::Find)\b"#)
+        // A variable open mode or 2-arg path may carry `>`.
+        || matches(program, pattern: #"\bopen\s*\(?\s*[\w$*]+\s*,\s*\$"#)
         || matches(program, pattern: #"\bopen\s*\(?[^;]*\|"#)
+        // Write/append/update opens (`open(F, ">", p)`, `open F, ">p"`) and
+        // the in-place variable `$^I`.
+        || matches(program, pattern: #"\bopen\b[^;]*["']\s*(\+<|\+>|>)"#)
+        || matches(program, pattern: #"\$\^I"#)
 }
 
 // MARK: php

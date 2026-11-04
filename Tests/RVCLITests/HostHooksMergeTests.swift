@@ -119,6 +119,13 @@ private let codexFreshBytes = """
 private let cursorFreshBytes = """
 {
   "hooks": {
+    "beforeReadFile": [
+      {
+        "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
+        "failClosed": true,
+        "timeout": 5
+      }
+    ],
     "beforeShellExecution": [
       {
         "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
@@ -327,6 +334,7 @@ private func syntheticContext() -> HookCommandContext {
     #expect(cursorLocated.allSatisfy { $0.matcher == nil })
     #expect(Set(cursorLocated.map { $0.listKey }) == [
         CursorHooksMerge.beforeShellKey,
+        CursorHooksMerge.beforeReadFileKey,
         CursorHooksMerge.preToolUseKey,
     ])
 }
