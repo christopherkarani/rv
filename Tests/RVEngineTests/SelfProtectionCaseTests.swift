@@ -83,6 +83,27 @@ struct SelfProtectionCaseTests {
         "\\env rv uninstall",
         "\\exec rv uninstall",
         "\\timeout 5 rv uninstall",
+        // Escaped verbs, ANSI-C quoting, dynamic/glob heads, launcher payloads.
+        "rv un\\install",
+        "rv packs dis\\able core.git",
+        "rv allow-once re\\deem 123456",
+        "rv policy app\\ly",
+        "$'rv' uninstall",
+        "rv $'uninstall'",
+        "$'\\x72v' packs disable core.git",
+        "$RV uninstall",
+        "${RV} uninstall",
+        "$(which rv) uninstall",
+        "`command -v rv` packs disable core.git",
+        "/usr/local/bin/r? uninstall",
+        "r[v] uninstall",
+        "env -S 'rv uninstall'",
+        "env --split-string='rv uninstall'",
+        "bash -c -- 'rv uninstall'",
+        "bash -c -e 'rv uninstall'",
+        "csh -c 'rv uninstall'",
+        "tcsh -c 'rv uninstall'",
+        "eval 'rv uninstall'",
     ]
 
     @Test("case-folded and escaped rv invocations still hit the self-protection floor", arguments: weakening)
@@ -93,7 +114,8 @@ struct SelfProtectionCaseTests {
 
     @Test("case-folded harmless rv invocations stay allowed")
     func harmlessStaysAllowed() throws {
-        for command in ["RV packs list", "Rv-Cli doctor", "BASH -c 'RV safety strict'"] {
+        for command in ["RV packs list", "Rv-Cli doctor", "BASH -c 'RV safety strict'",
+            "rvm use 3.3", "./server --port 80", "cargo run --bin rvx", "grep -i rv notes.txt", "echo rv uninstall", "RV packs list", "rv --version", "rv status"] {
             #expect(try runEngine(command).decision == .allow, "\(command)")
         }
     }

@@ -10,29 +10,46 @@ import RVDomain
 /// `commandName`, and `sh`/`bash`/`zsh -c` payloads recurse. Shared by the
 /// inline-program and self-protection floors; never evaluates policy.
 func launchedCommands(_ raw: String) -> [[String]] {
-    launchedCommands(raw, depth: 0)
+    launchedCommandHeads(raw).map(\.argv)
+}
+
+/// A launched command with the head word as written (before `commandName`),
+/// so callers can tell a dynamic or glob head (`$RV`, `r?`) from a literal.
+struct LaunchedCommand {
+    let head: String
+    let argv: [String]
+}
+
+func launchedCommandHeads(_ raw: String) -> [LaunchedCommand] {
+    launchedCommandHeads(raw, depth: 0)
 }
 
 private let maxLaunchDepth = 8
 
-private func launchedCommands(_ raw: String, depth: Int) -> [[String]] {
+private func launchedCommandHeads(_ raw: String, depth: Int) -> [LaunchedCommand] {
     guard depth < maxLaunchDepth else { return [] }
-    var commands: [[String]] = []
+    var commands: [LaunchedCommand] = []
     for segment in splitSegments(raw) {
         let words = ShellPipeline.tokenize(segment)
             .filter { $0.isNewline == false }
             .map(\.lexeme)
-        let argv = dropLaunchers(words)
+        let (argv, payloads) = dropLaunchers(words)
+        for payload in payloads {
+            commands.append(contentsOf: launchedCommandHeads(payload, depth: depth + 1))
+        }
         guard let head = argv.first else { continue }
         let program = commandName(head)
         if shellNames.contains(program),
            let flag = argv.dropFirst().firstIndex(where: isShellCommandFlag),
-           flag + 1 < argv.count
+           let payload = argv.dropFirst(flag + 1).first(where: { $0.hasPrefix("-") == false })
         {
-            commands.append(contentsOf: launchedCommands(argv[flag + 1], depth: depth + 1))
+            commands.append(contentsOf: launchedCommandHeads(payload, depth: depth + 1))
             continue
         }
-        commands.append([program] + argv.dropFirst())
+        if program == "eval" {
+            commands.append(contentsOf: launchedCommandHeads(argv.dropFirst().joined(separator: " "), depth: depth + 1))
+        }
+        commands.append(LaunchedCommand(head: head, argv: [program] + argv.dropFirst()))
     }
     return commands
 }
@@ -40,11 +57,11 @@ private func launchedCommands(_ raw: String, depth: Int) -> [[String]] {
 /// A command word as a case-insensitive filesystem resolves it: basename,
 /// backslash-unescaped, then Unicode case-folded the way APFS folds
 /// (`BASH`, `r\v`, `baſh`, `ﬁsh`). `lowercased()` alone misses `ſ`/`ﬁ`.
-private func commandName(_ word: String) -> String {
+func commandName(_ word: String) -> String {
     unescapeBackslashPairs(basename(word)).folding(options: .caseInsensitive, locale: nil)
 }
 
-private let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish"]
+private let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"]
 
 private func isShellCommandFlag(_ word: String) -> Bool {
     word.hasPrefix("-") && word.hasPrefix("--") == false && word.hasSuffix("c")
@@ -63,14 +80,33 @@ private let valuedLauncherFlags: [String: Set<String>] = [
     "exec": ["-a"],
 ]
 
-private func dropLaunchers(_ words: [String]) -> [String] {
+/// Remaining argv plus `env -S` split-string payloads, which are command lines.
+private func dropLaunchers(_ words: [String]) -> (argv: [String], payloads: [String]) {
     var index = 0
     var launcher: String?
+    var payloads: [String] = []
     while index < words.count {
         let word = words[index]
         if isAssignmentWord(word) {
             index += 1
             continue
+        }
+        if launcher == "env", word.hasPrefix("-") {
+            if word == "-S" || word == "--split-string" {
+                if index + 1 < words.count { payloads.append(words[index + 1]) }
+                index += 2
+                continue
+            }
+            if word.hasPrefix("--split-string=") {
+                payloads.append(String(word.dropFirst("--split-string=".count)))
+                index += 1
+                continue
+            }
+            if word.hasPrefix("-S"), word.hasPrefix("--") == false {
+                payloads.append(String(word.dropFirst(2)))
+                index += 1
+                continue
+            }
         }
         if let current = launcher, word.hasPrefix("-") {
             index += valuedLauncherFlags[current]?.contains(word) == true ? 2 : 1
@@ -90,7 +126,7 @@ private func dropLaunchers(_ words: [String]) -> [String] {
         }
         break
     }
-    return Array(words[min(index, words.count)...])
+    return (Array(words[min(index, words.count)...]), payloads)
 }
 
 private func isAssignmentWord(_ word: String) -> Bool {
