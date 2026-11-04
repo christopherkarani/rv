@@ -175,7 +175,9 @@ private func rawWordCarriesUnquotedRedirectOut(_ raw: Substring) -> Bool {
             index += 1
             continue
         }
-        if current == ">" { return true }
+        // An unquoted separator glued to a quoted run (`"x";`) is shell
+        // structure, not data: masking the whole word would blank it.
+        if ">;|&()<".contains(current) { return true }
         index += 1
     }
     return false

@@ -13,44 +13,41 @@ struct CustodianClientTests {
         let signing = MCPApprovalSigning.custodian(transport: { _ in nil })
         #expect(signing.honorsGrants)
         #expect(signing.status() == .unavailable)
-        #expect(signing.mac("grant", ["a"], true) == nil)
-        #expect(signing.verify("00", "grant", ["a"]) == nil)
+        #expect(signing.mac(.grant, ["a"], true) == nil)
+        #expect(signing.verify("00", .grant, ["a"]) == .noKey)
     }
 
     @Test func custodianErrorsFailClosed() {
         let signing = MCPApprovalSigning.custodian(transport: { _ in .error(.unauthorized) })
         #expect(signing.status() == .unavailable)
-        #expect(signing.mac("grant", ["a"], true) == nil)
-        #expect(signing.verify("00", "grant", ["a"]) == nil)
+        #expect(signing.mac(.grant, ["a"], true) == nil)
+        #expect(signing.verify("00", .grant, ["a"]) == .noKey)
     }
 
     @Test func mismatchedResponsesFailClosed() {
         let signing = MCPApprovalSigning.custodian(transport: { _ in .status(.enrolled) })
-        #expect(signing.mac("grant", ["a"], true) == nil)
-        #expect(signing.verify("00", "grant", ["a"]) == nil)
+        #expect(signing.mac(.grant, ["a"], true) == nil)
+        #expect(signing.verify("00", .grant, ["a"]) == .noKey)
     }
 
     @Test func verifyTriStatePassesThrough() {
         let unknown = MCPApprovalSigning.custodian(transport: { _ in .verify(nil) })
-        #expect(unknown.verify("00", "grant", ["a"]) == nil)
+        #expect(unknown.verify("00", .grant, ["a"]) == .noKey)
         let forged = MCPApprovalSigning.custodian(transport: { _ in .verify(false) })
-        #expect(forged.verify("00", "grant", ["a"]) == false)
+        #expect(forged.verify("00", .grant, ["a"]) == .forged)
         let valid = MCPApprovalSigning.custodian(transport: { _ in .verify(true) })
-        #expect(valid.verify("00", "grant", ["a"]) == true)
+        #expect(valid.verify("00", .grant, ["a"]) == .valid)
     }
 
-    @Test func disallowedPurposesAndOversizedRequestsNeverReachTheCustodian() {
+    @Test func oversizedRequestsNeverReachTheCustodian() {
         let calls = Mutex(0)
         let signing = MCPApprovalSigning.custodian(transport: { _ in
             calls.withLock { $0 += 1 }
             return .mac("should-not-happen")
         })
-        #expect(signing.mac("enrollment", ["check"], true) == nil)
-        #expect(signing.mac("bogus", ["check"], true) == nil)
-        #expect(signing.verify("00", "enrollment", ["check"]) == nil)
-        #expect(signing.mac("grant", (0..<17).map { "f\($0)" }, true) == nil)
-        #expect(signing.mac("grant", [String(repeating: "x", count: 65 * 1024)], true) == nil)
-        #expect(signing.verify(String(repeating: "x", count: 129), "grant", ["a"]) == nil)
+        #expect(signing.mac(.grant, (0..<17).map { "f\($0)" }, true) == nil)
+        #expect(signing.mac(.grant, [String(repeating: "x", count: 65 * 1024)], true) == nil)
+        #expect(signing.verify(String(repeating: "x", count: 129), .grant, ["a"]) == .noKey)
         #expect(calls.withLock { $0 } == 0)
     }
 
@@ -74,9 +71,7 @@ struct CustodianClientTests {
 
     @Test func custodianServiceRejectsBadRequests() {
         let service = MCPCustodianKeyService(signing: .unavailable)
-        #expect(service.handle(.mac(purpose: "enrollment", fields: ["check"], createIfMissing: true)) == .error(.badRequest))
-        #expect(service.handle(.verify(candidate: "00", purpose: "bogus", fields: [])) == .error(.badRequest))
-        #expect(service.handle(.mac(purpose: "grant", fields: (0..<17).map { "f\($0)" }, createIfMissing: true)) == .error(.badRequest))
+        #expect(service.handle(.mac(purpose: .grant, fields: (0..<17).map { "f\($0)" }, createIfMissing: true)) == .error(.badRequest))
     }
 
     @Test func roundTripThroughInProcessCustodianNeverCreatesOnVerify() throws {
@@ -87,16 +82,16 @@ struct CustodianClientTests {
         let keyURL = directory.appendingPathComponent(MCPApprovalKeyIdentity.fileName)
 
         #expect(signing.status() == .notEnrolled)
-        #expect(signing.verify("00", "grant", ["a"]) == nil)
-        #expect(signing.mac("grant", ["a"], false) == nil)
+        #expect(signing.verify("00", .grant, ["a"]) == .noKey)
+        #expect(signing.mac(.grant, ["a"], false) == nil)
         #expect(FileManager.default.fileExists(atPath: keyURL.path) == false)
 
-        let mac = try #require(signing.mac("grant", ["a"], true))
+        let mac = try #require(signing.mac(.grant, ["a"], true))
         #expect(signing.status() == .enrolled)
-        #expect(signing.verify(mac, "grant", ["a"]) == true)
-        #expect(signing.verify(mac, "grant", ["b"]) == false)
-        #expect(signing.verify(String(mac.dropLast()), "grant", ["a"]) == false)
-        #expect(signing.verify(nil, "grant", ["a"]) == false)
+        #expect(signing.verify(mac, .grant, ["a"]) == .valid)
+        #expect(signing.verify(mac, .grant, ["b"]) == .forged)
+        #expect(signing.verify(String(mac.dropLast()), .grant, ["a"]) == .forged)
+        #expect(signing.verify(nil, .grant, ["a"]) == .forged)
     }
 
     @Test func wirePayloadsCarryNoKeyMaterial() throws {
@@ -104,7 +99,7 @@ struct CustodianClientTests {
         let backend = MCPApprovalSigning.inProcess(
             load: { MCPSigner(key: key) }, loadOrCreate: { MCPSigner(key: key) })
         let service = MCPCustodianKeyService(signing: backend)
-        let request = MCPCustodianRequest.mac(purpose: "grant", fields: ["a"], createIfMissing: true)
+        let request = MCPCustodianRequest.mac(purpose: .grant, fields: ["a"], createIfMissing: true)
         let response = service.handle(request)
         let encoder = JSONEncoder()
         let keyHex = key.map { String(format: "%02x", $0) }.joined()

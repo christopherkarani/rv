@@ -30,6 +30,35 @@ public struct CursorHostCodec: HostCodec {
         switch classify(envelope) {
         case .foreign:
             return .foreign
+        case .readFileEvent:
+            guard let file = FileToolAction.make(toolName: "Read", filePath: envelope.filePath) else {
+                return .malformed(.unreadable)
+            }
+            return HookRequest.decoded(
+                host: .cursor,
+                command: nil,
+                cwd: cwd,
+                session: session,
+                file: file
+            )
+        case .search:
+            // Nil means a cwd-wide benign search: nothing to gate.
+            guard let file = ClaudeSearchTarget.action(
+                toolName: "Grep",
+                input: ClaudeSearchInput(
+                    path: envelope.toolInput?.path,
+                    glob: envelope.toolInput?.glob
+                )
+            ) else {
+                return .foreign
+            }
+            return HookRequest.decoded(
+                host: .cursor,
+                command: nil,
+                cwd: cwd,
+                session: session,
+                file: file
+            )
         case .file:
             guard let file = FileToolAction.make(
                 toolName: envelope.toolName,
@@ -84,6 +113,8 @@ public struct CursorHostCodec: HostCodec {
 private enum CursorEventClass {
     case shell
     case file
+    case readFileEvent
+    case search
     case foreign
 }
 
@@ -95,8 +126,14 @@ private func classify(_ envelope: CursorEnvelope) -> CursorEventClass {
     if event == .beforeShellExecution {
         return .shell
     }
+    if event == .beforeReadFile {
+        return .readFileEvent
+    }
     guard event == .preToolUse else {
         return .foreign
+    }
+    if envelope.toolName == "Grep" {
+        return .search
     }
     switch CursorToolName(wireValue: envelope.toolName ?? "").strictMatch {
     case .shell:
@@ -125,6 +162,7 @@ private struct CursorEnvelope: Decodable {
     var generationId: String?
     var toolName: String?
     var toolInput: CursorToolInput?
+    var filePath: String?
     var workspaceRoots: [String]?
 
     enum CodingKeys: String, CodingKey {
@@ -136,6 +174,7 @@ private struct CursorEnvelope: Decodable {
         case generationId = "generation_id"
         case toolName = "tool_name"
         case toolInput = "tool_input"
+        case filePath = "file_path"
         case workspaceRoots = "workspace_roots"
     }
 }
@@ -147,6 +186,7 @@ private struct CursorToolInput: Decodable {
     var path: String?
     var targetFile: String?
     var target: String?
+    var glob: String?
 
     enum CodingKeys: String, CodingKey {
         case command
@@ -155,5 +195,6 @@ private struct CursorToolInput: Decodable {
         case path
         case targetFile = "target_file"
         case target
+        case glob
     }
 }

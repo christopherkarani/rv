@@ -11,8 +11,10 @@ usage() {
 Usage: Scripts/release-assets.sh <stage-dir> <out-dir> <target>
 
   <target> is darwin-arm64, linux-aarch64, or linux-x86_64.
-  Copies rv, rv-cli, rvd, rv-workspace-host (plus rv-pty-claim and
-  rv-isolation-exec when staged) to <out-dir>/<name>-<target>, copies
+  Copies rv, rv-cli, rvd, rv-workspace-host (plus rv-pty-claim,
+  rv-isolation-exec, rv-microvm, rv-guest-relay, rv-macvm and
+  rv-macvm-agent when staged) to
+  <out-dir>/<name>-<target>, copies
   libswiftCompatibilitySpan.dylib under its plain name when staged, tars
   the staged *_RVPacks bundle/resources directory as
   rv_RVPacks-<target>.tar.gz, and (Linux targets only) tars the staged
@@ -54,7 +56,7 @@ for name in rv rv-cli rvd rv-workspace-host; do
   chmod 755 "$OUT/$name-$TARGET"
 done
 
-for name in rv-pty-claim rv-isolation-exec; do
+for name in rv-pty-claim rv-isolation-exec rv-microvm rv-guest-relay rv-macvm rv-macvm-agent; do
   if [[ -x "$STAGE/$name" ]]; then
     cp "$STAGE/$name" "$OUT/$name-$TARGET"
     chmod 755 "$OUT/$name-$TARGET"

@@ -43,6 +43,18 @@ public struct ClaudeHostCodec: HostCodec {
                 file: file
             )
         }
+        if let search = ClaudeSearchTarget.action(
+            toolName: envelope.toolName,
+            input: envelope.toolInput?.searchInput ?? ClaudeSearchInput()
+        ) {
+            return HookRequest.decoded(
+                host: .claude,
+                command: nil,
+                cwd: cwd,
+                session: session,
+                file: search
+            )
+        }
         return .foreign
     }
 
@@ -88,8 +100,24 @@ private struct ClaudeToolInput: Decodable {
     var path: String?
     var targetFile: String?
     var target: String?
+    var notebookPath: String?
+    var pattern: String?
+    var glob: String?
+
+    var searchInput: ClaudeSearchInput {
+        ClaudeSearchInput(
+            path: path,
+            pattern: pattern,
+            glob: glob,
+            notebookPath: notebookPath,
+            filePath: filePath
+        )
+    }
 
     enum CodingKeys: String, CodingKey {
+        case notebookPath = "notebook_path"
+        case pattern
+        case glob
         case command
         case filePath = "file_path"
         case path

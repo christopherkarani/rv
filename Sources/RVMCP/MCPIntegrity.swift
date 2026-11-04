@@ -35,7 +35,7 @@ public enum MCPIntegrityStatus: Sendable, Equatable {
 /// like rv wrote it.
 public enum MCPIntegrity {
     public static let fileName = "mcp-integrity.json"
-    static let purpose = "mcp.json"
+    static let purpose = MCPMACPurpose.mcpJSON
 
     static func url(_ configDirectory: URL) -> URL {
         configDirectory.appendingPathComponent(fileName, isDirectory: false)
@@ -62,9 +62,9 @@ public enum MCPIntegrity {
             let mac = (try? JSONValue.parse(stored))?["mcpJSON"]?.stringValue
         else { return .untrusted("no rv signature") }
         switch signing.verify(mac, purpose, [digest(data)]) {
-        case .some(true): return .trusted
-        case .some(false): return .untrusted("contents differ from rv's signature")
-        case .none: return .untrusted("rv has no approvals key to check it with")
+        case .valid: return .trusted
+        case .forged: return .untrusted("contents differ from rv's signature")
+        case .noKey: return .untrusted("rv has no approvals key to check it with")
         }
     }
 
