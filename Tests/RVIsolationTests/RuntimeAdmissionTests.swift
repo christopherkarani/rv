@@ -188,7 +188,7 @@ struct RuntimeAdmissionIsolationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let event = RuntimeAdmissionEvent(
             session: "s-1", requestID: "r-1", fingerprint: "fp", authorization: .allowed,
-            executionAttempted: true, result: "exit:0"
+            executionAttempted: true, result: .exit(0)
         )
         let url = directory.appendingPathComponent("runtime-admission.jsonl")
         #expect(appendAdmissionEvent(event, to: url, diagnose: { _ in }))
@@ -223,7 +223,7 @@ struct RuntimeAdmissionIsolationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let event = RuntimeAdmissionEvent(
             session: "s-1", requestID: nil, fingerprint: nil, authorization: .allowed,
-            executionAttempted: true, result: "exit:0"
+            executionAttempted: true, result: .exit(0)
         )
         let url = directory.appendingPathComponent("runtime-admission.jsonl")
         let target = directory.appendingPathComponent("target.txt")
