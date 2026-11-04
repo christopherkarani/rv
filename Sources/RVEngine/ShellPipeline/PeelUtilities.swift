@@ -19,7 +19,7 @@ func peelUtility(
     case "xargs":
         return peelXargs(tokens, workingDirectory: workingDirectory)
     default:
-        return peelScriptInterpreter(head, tokens: tokens)
+        return peelScriptInterpreter(head, tokens: tokens, workingDirectory: workingDirectory)
     }
 }
 
@@ -246,6 +246,7 @@ private func xargsInnerIsMutating(_ original: [String], replace: String?, depth:
     let tail = words[(headIndex + 1)...]
     if xargsMutatingVerbs.contains(head) { return true }
     if head == "sed" { return tail.contains(where: isSedInPlaceFlag) }
+    if head == "perl" { return perlSwitchScan(Array(tail)).inPlace }
     if head == "git" {
         return tail.contains { xargsMutatingGit.contains($0.lowercased()) }
     }
@@ -299,7 +300,7 @@ private func xargsPeeledWords(_ words: [String]) -> (words: [String], limited: B
 /// files in place; otherwise it filters its input.
 private func isSedInPlaceFlag(_ word: String) -> Bool {
     if word.hasPrefix("--") { return "--in-place".hasPrefix(word.prefix { $0 != "=" }) && word.count >= 4 }
-    return word.hasPrefix("-") && word.dropFirst().contains("i")
+    return word.hasPrefix("-") && (word.dropFirst().contains("i") || word.dropFirst().contains("I"))
 }
 
 private func isXargsEffectiveHead(_ word: String) -> Bool {
@@ -311,10 +312,16 @@ private func isXargsEffectiveHead(_ word: String) -> Bool {
 
 // MARK: - perl / php / lua / awk
 
-private func peelScriptInterpreter(_ head: String, tokens: [ShellPipeline.Token]) -> Peel? {
+private func peelScriptInterpreter(
+    _ head: String,
+    tokens: [ShellPipeline.Token],
+    workingDirectory: WorkingDirectory?
+) -> Peel? {
     let words = tokens.map(\.lexeme)
     if head == "perl" || head.hasPrefix("perl5") {
-        return perlPrograms(words).contains(where: perlCodeCanSpawn) ? .limited(.perl) : nil
+        if perlPrograms(words).contains(where: perlCodeCanSpawn) { return .limited(.perl) }
+        let edited = parsePerl(Argv(program: head, args: Array(words.dropFirst())))?.paths ?? []
+        return writeProxy(edited, .perl, workingDirectory)
     }
     if head == "php" || head.hasPrefix("php7") || head.hasPrefix("php8") {
         return flagValues(words, flags: ["-r"]).contains(where: phpCodeCanSpawn) ? .limited(.php) : nil
@@ -322,11 +329,90 @@ private func peelScriptInterpreter(_ head: String, tokens: [ShellPipeline.Token]
     if head == "lua" || head.hasPrefix("lua5") || head == "luajit" {
         return flagValues(words, flags: ["-e"]).contains(where: luaCodeCanSpawn) ? .limited(.lua) : nil
     }
+    if head == "sed" || head == "gsed" {
+        let args = Array(words.dropFirst())
+        if sedScriptFileIsUnreadable(args) { return .limited(.sed) }
+        let effects = sedScriptTexts(args).map(sedScriptEffects)
+        if effects.contains(where: { $0.executes || $0.unparseable }) { return .limited(.sed) }
+        return writeProxy(sedScriptWrites(args), .sed, workingDirectory)
+    }
     if ["awk", "gawk", "mawk", "nawk"].contains(head) {
         let sources = awkSources(words)
-        return sources.readsStdin || sources.programs.contains(where: awkCodeCanSpawn) ? .limited(.awk) : nil
+        if sources.readsStdin || sources.programs.contains(where: awkCodeCanSpawn) { return .limited(.awk) }
+        guard awkRequestsInPlace(words) else { return nil }
+        let files = awkFileOperands(words)
+        return files.isEmpty ? .limited(.awk) : writeProxy(files, .awk, workingDirectory)
     }
     return nil
+}
+
+/// gawk `-i inplace[.awk]` / `--include=inplace` (also abbreviated) or an
+/// `@include "inplace"` in the program rewrites its file operands.
+private func awkRequestsInPlace(_ words: [String]) -> Bool {
+    for (index, word) in words.enumerated().dropFirst() {
+        if word.hasPrefix("-iinplace") { return true }
+        if word.hasPrefix("--inc"), let equals = word.firstIndex(of: "="),
+            "--include".hasPrefix(word[..<equals]), word[word.index(after: equals)...].hasPrefix("inplace")
+        {
+            return true
+        }
+        if word == "-i" || (word.hasPrefix("--inc") && "--include".hasPrefix(word)),
+            index + 1 < words.count, words[index + 1].hasPrefix("inplace")
+        {
+            return true
+        }
+        if word.contains("@include"), word.contains("inplace") { return true }
+    }
+    return false
+}
+
+/// The file operands of an awk invocation: words after the options and the
+/// program (unless `-f`/`--file`/`--source` gave it), less `var=value`.
+private func awkFileOperands(_ words: [String]) -> [String] {
+    let valueFlags: Set<String> = ["-F", "-v", "-f", "-i", "-e", "-E", "-l", "--file", "--include", "--source",
+                                   "--field-separator", "--assign", "--load"]
+    var operands: [String] = []
+    var programGiven = false
+    var index = 1
+    while index < words.count {
+        let word = words[index]
+        index += 1
+        if word == "--" {
+            operands += words[index...]
+            break
+        }
+        if word.hasPrefix("-"), word.count > 1 {
+            if ["-f", "--file", "-e", "--source", "-E", "--exec"].contains(word) || word.hasPrefix("--file=")
+                || word.hasPrefix("--source=") || (word.hasPrefix("-f") && word.count > 2)
+            {
+                programGiven = true
+            }
+            if valueFlags.contains(word) { index += 1 }
+            continue
+        }
+        operands.append(word)
+    }
+    if programGiven == false, operands.isEmpty == false { operands.removeFirst() }
+    return operands.filter { $0.contains("=") == false || $0.hasPrefix("/") || $0.hasPrefix(".") }
+}
+
+/// Files a sed invocation writes because of its script (`w`, `s///w`) plus
+/// the `-i` operands; empty when the script writes nothing, so plain
+/// `sed -i` keeps its view-based parse.
+private func sedScriptWrites(_ args: [String]) -> [String] {
+    let scripted = sedScriptTexts(args).flatMap { sedScriptEffects($0).writeTargets }
+    guard scripted.isEmpty == false else { return [] }
+    var paths = parseSed(args)?.paths ?? []
+    for target in scripted where paths.contains(target) == false { paths.append(target) }
+    return paths
+}
+
+/// Peels a program whose view-masked script hides its file writes into the
+/// equivalent `tee -- <paths>`, which the filesystem analysis already
+/// classifies (outside the repo denies, inside allows). Nil for no paths.
+private func writeProxy(_ paths: [String], _ kind: WrapperKind, _ workingDirectory: WorkingDirectory?) -> Peel? {
+    guard paths.isEmpty == false else { return nil }
+    return .next(writeProxyCommand(paths), kind, workingDirectory)
 }
 
 private func flagValues(_ words: [String], flags: Set<String>) -> [String] {
@@ -344,7 +430,7 @@ private func perlPrograms(_ words: [String]) -> [String] {
         let word = words[index]
         guard word.hasPrefix("-"), word.hasPrefix("--") == false, word.count >= 2 else { continue }
         let isProgramFlag = word.last == "e" || word.last == "E"
-        let letters = word.dropFirst().allSatisfy { $0.isLetter }
+        let letters = word.dropFirst().allSatisfy { $0.isLetter || $0.isNumber }
         if isProgramFlag, letters, index + 1 < words.count {
             values.append(words[index + 1])
         }
@@ -365,7 +451,8 @@ private func awkSources(_ words: [String]) -> AwkSources {
     var index = 1
     func note(file: String) {
         hasSource = true
-        if file == "-" || file.hasPrefix("/dev/") || file.hasPrefix("/proc/") { sources.readsStdin = true }
+        let dynamic = file.hasPrefix("<(") || file.contains("$(") || file.contains("`")
+        if file == "-" || file.hasPrefix("/dev/") || file.hasPrefix("/proc/") || dynamic { sources.readsStdin = true }
     }
     while index < words.count {
         let word = words[index]

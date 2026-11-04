@@ -1151,11 +1151,12 @@ final class WorkspaceSessionSupervisor: Sendable {
     func launchLegacy(
         host: HookHost?, command: IsolatedCommand,
         plan: ContainedPlan, io: IsolatedIO, resourceProfile: RuntimeResourceProfile? = nil,
+        microVM: MicroVMLaunchOptions? = nil,
         admission: RuntimeAdmissionConfiguration, sessionStore: RuntimeSessionStore,
         runningLimit: Int? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         launch(host: host, stagingAgent: nil, command: command, plan: plan,
-               io: io, resourceProfile: resourceProfile, admission: admission,
+               io: io, resourceProfile: resourceProfile, microVM: microVM, admission: admission,
                sessionStore: sessionStore, runningLimit: runningLimit, agentDefinition: nil)
     }
 
@@ -1195,6 +1196,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         plan: ContainedPlan,
         io: IsolatedIO,
         resourceProfile: RuntimeResourceProfile? = nil,
+        microVM: MicroVMLaunchOptions? = nil,
         admission: RuntimeAdmissionConfiguration,
         sessionStore: RuntimeSessionStore,
         runningLimit: Int? = nil,
@@ -1203,10 +1205,23 @@ final class WorkspaceSessionSupervisor: Sendable {
         agentDefinition: AgentDefinition? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
-        switch prepareSeatbelt(
-            plan.isolationPlan(), command, resourceProfile: resourceProfile,
-            legacyAgentIntegration: agentDefinition == nil
-        ) {
+        let prepared: Result<IsolatedLaunchRequest, IsolationApplyError>
+        if let microVM {
+            // Identity launches mint agent instances whose admission channel
+            // the guest cannot reach; only the legacy entry selects a VM.
+            guard agentDefinition == nil else {
+                return .failure(.apply(.backendMismatch))
+            }
+            prepared = prepareMicroVM(
+                plan.isolationPlan(), command, options: microVM, resourceProfile: resourceProfile
+            )
+        } else {
+            prepared = prepareSeatbelt(
+                plan.isolationPlan(), command, resourceProfile: resourceProfile,
+                legacyAgentIntegration: agentDefinition == nil
+            )
+        }
+        switch prepared {
         case .failure(let error):
             return .failure(.apply(error))
         case .success(let prepared):
@@ -1521,7 +1536,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         executableVerification: ExecutableCommitVerification? = nil,
         now: Date = Date()
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
-        guard let profile = request.seatbeltProfile,
+        let profile = request.seatbeltProfile
+        let backend: RuntimeIsolationBackend = request.microVMProfile == nil ? .seatbelt : .microvm
+        guard profile != nil || request.microVMProfile != nil,
             let workspace = request.containedWorkspacePath
         else {
             return .failure(.apply(.containedGuaranteesUnsupported))
@@ -1627,7 +1644,7 @@ final class WorkspaceSessionSupervisor: Sendable {
                 workspaceSessionID: id,
                 host: host,
                 workspace: original,
-                backend: .seatbelt,
+                backend: backend,
                 startedAt: Date(),
                 child: nil
             )
@@ -1676,6 +1693,9 @@ final class WorkspaceSessionSupervisor: Sendable {
                 // credentialed proxy 407s every request; a nil port still
                 // omits proxy variables entirely (fail closed).
                 egressProxyCredential: runtimeEgress.credential,
+                // A micro-VM guest reaches gateway placeholders only through
+                // a relayed port; without placeholders nothing is relayed.
+                secretGatewayPort: lease.placeholders.isEmpty ? nil : secretBroker?.gatewayPort,
                 host: host,
                 stagingAgent: stagingAgent,
                 keychain: keychain,

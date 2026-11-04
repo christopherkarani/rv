@@ -540,6 +540,10 @@ private func peelInterpreter(
             )
         }
         if kind == .ruby, token.hasPrefix("-e"), token.count > 2 {
+            // Same gate as a separate `-e` payload: expanding text is unknown.
+            if tokens[index].wasQuoted == false || token.contains("$") || token.contains("`") {
+                return .limited(kind)
+            }
             return interpreterPeel(
                 extract(String(token.dropFirst(2))),
                 kind: kind,
@@ -600,16 +604,72 @@ private enum InterpreterExtract: Sendable, Equatable {
     case limited
 }
 
+/// `code` with the first call matching `pattern` removed (name through its
+/// balanced closing paren, or a backtick span). Nil when the call cannot be
+/// delimited, so the caller fails closed.
+private func removingFirstCall(_ code: String, pattern: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+        let match = regex.firstMatch(in: code, range: NSRange(code.startIndex..., in: code)),
+        let range = Range(match.range, in: code)
+    else { return nil }
+    if code[range].hasPrefix("`") {
+        return code.replacingCharacters(in: range, with: " ")
+    }
+    var depth = 1
+    var quote: Character?
+    var index = range.upperBound
+    while index < code.endIndex {
+        let char = code[index]
+        if let open = quote {
+            if char == "\\" {
+                index = code.index(after: index)
+                if index == code.endIndex { return nil }
+            } else if char == open {
+                quote = nil
+            }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "(" {
+            depth += 1
+        } else if char == ")" {
+            depth -= 1
+            if depth == 0 {
+                return code.replacingCharacters(in: range.lowerBound...index, with: " ")
+            }
+        }
+        index = code.index(after: index)
+    }
+    return nil
+}
+
+/// The extracted command when nothing else in `code` can spawn or write:
+/// the first call is removed and the remainder runs the same checks, so a
+/// second call (`os.system('ls'); os.execvp(...)`) limits instead of hiding.
+private func extractedUnlessRemainder(
+    _ command: String, code: String, pattern: String,
+    remainderIsRisky: (String) -> Bool
+) -> InterpreterExtract {
+    guard let rest = removingFirstCall(code, pattern: pattern), remainderIsRisky(rest) == false else {
+        return .limited
+    }
+    return .command(command)
+}
+
 private func extractPython(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = pythonShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:__import__\s*\(\s*['"]\w+['"]\s*\)|\b\w+)\s*\.\s*)?\b(?:system|popen|remove|unlink|rmtree|run|call|Popen|check_call|check_output)\s*\("#
+        ) { pythonCodeCanSpawn($0) || pythonFileWrites($0).paths.isEmpty == false || pythonFileWrites($0).opaque }
     }
     if pythonCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = pythonFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
 
 private func pythonShellCommand(_ code: String) -> String? {
@@ -656,12 +716,17 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = nodeShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:require\s*\(\s*['"][\w:/]+['"]\s*\)|[\w$]+)\s*\.\s*)?\b(?:exec|execSync|unlinkSync|rmdirSync|rmSync|rm|unlink|rmdir)\s*\("#
+        ) { nodeCodeCanSpawn($0) || nodeFileWrites($0).paths.isEmpty == false || nodeFileWrites($0).opaque }
     }
     if nodeCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = nodeFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
 
 private func nodeShellCommand(_ code: String) -> String? {
@@ -693,12 +758,17 @@ private func extractRuby(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
     if folded.isEmpty { return .limited }
     if let command = rubyShellCommand(folded) {
-        return .command(command)
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:\b[A-Z]\w*\s*\.\s*)?\b(?:system|exec|delete|unlink|rm_rf|remove_entry_secure)\s*\(|`[^`]*`)"#
+        ) { rubyCodeCanSpawn($0) || rubyFileWrites($0).paths.isEmpty == false || rubyFileWrites($0).opaque }
     }
     if rubyCodeCanSpawn(folded) {
         return .limited
     }
-    return .dataOnly
+    let paths = rubyFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
 }
 
 private func rubyShellCommand(_ code: String) -> String? {

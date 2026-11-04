@@ -89,3 +89,42 @@ import Testing
         _ = try CursorHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/x")
     }
 }
+
+@Test func cursorHooksMerge_registersBeforeReadFile() throws {
+    let adapter = "/tmp/home/.cursor/hooks/rv-guard.py"
+    let merged = try CursorHooksMerge.merge(existingData: nil, adapterPath: adapter)
+    let root = try #require(JSONSerialization.jsonObject(with: merged.data) as? [String: Any])
+    let hooksRoot = try #require(root["hooks"] as? [String: Any])
+    let reads = try #require(hooksRoot["beforeReadFile"] as? [[String: Any]])
+    #expect(reads.count == 1)
+    #expect(reads[0]["command"] as? String == "python3 \(adapter)")
+    #expect(reads[0]["failClosed"] as? Bool == true)
+    #expect(reads[0]["matcher"] == nil)
+}
+
+@Test func cursorHooksMerge_migratesOldInstallToBeforeReadFileIdempotently() throws {
+    let adapter = "/tmp/home/.cursor/hooks/rv-guard.py"
+    let old = """
+    {
+      "version": 1,
+      "hooks": {
+        "beforeShellExecution": [
+          { "command": "python3 \(adapter)", "failClosed": true, "timeout": 5 }
+        ],
+        "preToolUse": [
+          { "command": "python3 \(adapter)", "failClosed": true, "timeout": 5 }
+        ]
+      }
+    }
+    """
+    let first = try CursorHooksMerge.merge(existingData: Data(old.utf8), adapterPath: adapter)
+    #expect(first.wrote)
+    let root = try #require(JSONSerialization.jsonObject(with: first.data) as? [String: Any])
+    let hooksRoot = try #require(root["hooks"] as? [String: Any])
+    #expect((hooksRoot["beforeReadFile"] as? [[String: Any]])?.count == 1)
+    #expect((hooksRoot["beforeShellExecution"] as? [[String: Any]])?.count == 1)
+    #expect((hooksRoot["preToolUse"] as? [[String: Any]])?.count == 1)
+    let second = try CursorHooksMerge.merge(existingData: first.data, adapterPath: adapter)
+    #expect(second.wrote == false)
+    #expect(second.data == first.data)
+}

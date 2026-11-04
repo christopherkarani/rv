@@ -59,8 +59,9 @@ public struct CustodianRequestHandler: Sendable {
                 handshakeAccepted: handshakeOK,
                 includeEndpoint: false)
         }
-        // The service re-validates wire bounds and the purpose allowlist,
-        // so a purpose like `enrollment` is a bad request, never a MAC.
+        // A purpose outside `MCPMACPurpose` (such as `enrollment`) fails
+        // the decode above, so it is a bad request, never a MAC. The
+        // service re-validates the wire bounds.
         return CustodianIncomingReply(
             frame: encode(service.handle(request)),
             handshakeAccepted: handshakeOK,

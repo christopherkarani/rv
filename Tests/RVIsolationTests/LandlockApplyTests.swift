@@ -730,6 +730,8 @@ struct IsolationApplyLandlockTests {
                 Issue.record("Darwin apply(contained) must not establish observed")
             case .mediated:
                 Issue.record("Darwin apply(contained) must not establish mediated")
+            case .microvm:
+                Issue.record("must not establish a micro-VM")
             }
         case .failure(let error):
             recordUnexpectedApplyError(error, expected: "Darwin apply(contained) seatbelt establish")
