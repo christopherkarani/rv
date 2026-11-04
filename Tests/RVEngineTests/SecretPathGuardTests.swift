@@ -134,6 +134,11 @@ struct SecretPathGuardTests {
         .init(command: "grep -r --include .env KEY .", ruleID: "core.secrets:env"),
         .init(command: "find . -name .env -exec cat {} +", ruleID: "core.secrets:env"),
         .init(command: "find . -type f -exec cat .env \\;", ruleID: "core.secrets:env"),
+        .init(command: "find . -name '*.txt' -exec cat ~/.ssh/id_rsa \\;", ruleID: "core.secrets:id-rsa"),
+        .init(command: "find . -name '.env*' -exec cat {} +", ruleID: "core.secrets:env"),
+        .init(command: "jq --rawfile v .env -n '$v'", ruleID: "core.secrets:env"),
+        // Too many brace alternatives to list fails closed.
+        .init(command: "cat {,}{,}{,}{,}{,}{,}{,}{,}{,}{,}{.env,x}", ruleID: "core.secrets:env"),
     ]
 
     static let allowRows: [AllowRow] = [
@@ -168,6 +173,17 @@ struct SecretPathGuardTests {
         .init(command: "ls src/{a,b}"),
         .init(command: "grep -r --include=*.ts TODO src"),
         .init(command: "find . -name '*.swift' -exec wc -l {} +"),
+        // A value option's value is neither the pattern nor a file.
+        .init(command: "rg -n -t swift \"credentials\" Sources"),
+        .init(command: "grep -C 2 \"id_rsa\" docs/setup.md"),
+        .init(command: "grep -m 1 \".env\" README.md"),
+        .init(command: "grep -rn --exclude-dir node_modules \"credentials\" ."),
+        .init(command: "jq --arg k v '.env' package.json"),
+        // Option values are not shell-expanded, and an -exec grep's pattern is not a file.
+        .init(command: "rsync -a --exclude='.*' src/ dst/"),
+        .init(command: "tar --exclude='.git*' -czf out.tgz src"),
+        .init(command: "find . -type f -exec grep -l credentials {} +"),
+        .init(command: "man 5 credentials"),
     ]
 
     @Test(arguments: denyRows)

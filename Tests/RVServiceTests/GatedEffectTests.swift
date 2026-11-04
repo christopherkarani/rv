@@ -90,7 +90,11 @@ struct GatedEffectTests {
 
     @Test("enforce, judge unavailable: a risky inline program is floored; its judge log keeps the live allow")
     func packsOnlyFloorKeepsUnflooredLog() async throws {
-        let inline = ShellCommand(rawValue: #"perl -e 'system("rm -rf ~")'"#)
+        // Allowed at the door (the unwrap peel finds no spawn or write in it) but
+        // carrying a filesystem-delete identifier, so `InlineProgramGuard.requiresJudge`
+        // flags it. A spawning payload (`perl -e 'system(...)'`) is unwrap-limited
+        // and denied outright since #488; this mirrors JudgePortPacksOnlyFloorTests.
+        let inline = ShellCommand(rawValue: #"python3 -c 'print(shred)'"#)
         let door = GatedEvaluate(EvaluateSession(), judge: EffectFixedJudge(run: .unavailable("x")))
         let apply = await Self.decide(.apply, inline, mode: .enforce, door: door, bundle: Self.fakeBundle)
         #expect(apply.result.decision == .indeterminate(.inlineProgramNeedsJudge))

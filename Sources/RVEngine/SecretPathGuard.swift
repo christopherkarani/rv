@@ -71,8 +71,9 @@ enum SecretPathGuard {
         if treatOverflowAsDenial, scan.overflowed {
             return overflowHit(searchText: searchText)
         }
-        for operand in scan.candidates {
-            for candidate in spellings(of: operand, catalog: catalog) {
+        for (index, operand) in scan.candidates.enumerated() {
+            let expands = index < scan.expands.count ? scan.expands[index] : true
+            for candidate in spellings(of: operand, catalog: catalog, expands: expands) {
                 // The resolved spelling is authoritative: a symlinked operand
                 // IS its target, so the typed spelling participates only when
                 // no distinct target exists. An exemption on one spelling never
@@ -92,8 +93,9 @@ enum SecretPathGuard {
     /// shell drops backslash escapes (`\.env`), an input redirect or curl's
     /// `@` names a file (`<.env`, `-d@.env`), and a glob or brace word
     /// (`.env*`, `{.env,x}`, `~/.ss*/id_*`) opens whatever it matches, so a
-    /// catalog name it can select stands in for it.
-    static func spellings(of operand: String, catalog: SecretPathCatalog) -> [String] {
+    /// catalog name it can select stands in for it. `expands` is false for an
+    /// option value (`--exclude='.*'`), which the shell never globs.
+    static func spellings(of operand: String, catalog: SecretPathCatalog, expands: Bool = true) -> [String] {
         var out = [operand]
         func add(_ spelling: String) {
             if spelling.isEmpty == false, out.contains(spelling) == false { out.append(spelling) }
@@ -106,8 +108,8 @@ enum SecretPathGuard {
         }
         while plain.hasPrefix("@") { plain.removeFirst() }
         add(plain)
-        if plain.contains(where: { "*?[{".contains($0) }), let selected = SecretPathGlob.selects(plain, catalog: catalog) {
-            add(selected)
+        if expands, plain.contains(where: { "*?[{".contains($0) }) {
+            for selected in SecretPathGlob.selections(plain, catalog: catalog) { add(selected) }
         }
         return out
     }
@@ -171,22 +173,30 @@ enum SecretPathGuard {
         // Routing happens first so `.nonPath` and metadata-excluded inputs
         // return before the args array is materialized.
         let tokens = ShellPipeline.tokenize(haystack)
-        guard let head = tokens.first else { return .empty }
+        guard tokens.isEmpty == false else { return .empty }
+        return argvCandidates(tokens.map(\.lexeme), includeMetadata: includeMetadata)
+    }
+
+    /// Candidates of one argv, routed on its head word. `find -exec` routes
+    /// its inner command through here too.
+    fileprivate static func argvCandidates(_ argv: [String], includeMetadata: Bool) -> OperandScan {
+        guard let head = argv.first else { return .empty }
         // `$(<.env)` and `<.env cat`: an input redirect in head position reads
         // its file whatever command follows.
-        if head.lexeme.hasPrefix("<") {
-            return otherCandidates(tokens.map(\.lexeme))
+        if head.hasPrefix("<") {
+            return otherCandidates(argv)
         }
-        let kind = headKind(basename(head.lexeme))
+        let name = basename(head)
+        let kind = headKind(name)
         // Deferred so only the consuming arm pays for materialization.
-        func args() -> [String] { tokens.dropFirst().map(\.lexeme) }
+        func args() -> [String] { Array(argv.dropFirst()) }
         switch kind {
         case .nonPath:
             return .empty
         case .grep:
-            return grepCandidates(args())
+            return grepCandidates(args(), head: name.lowercased())
         case .find:
-            return findCandidates(args())
+            return findCandidates(args(), includeMetadata: includeMetadata)
         case .metadata:
             guard includeMetadata else { return .empty }
             return otherCandidates(args())
@@ -203,8 +213,22 @@ enum SecretPathGuard {
     fileprivate struct OperandScan: Sendable {
         var candidates: [String]
         var overflowed: Bool
+        /// Per candidate: whether the shell expands it as a word, so a glob
+        /// in it opens what it matches. Option values are never expanded.
+        var expands: [Bool] = []
 
         static let empty = OperandScan(candidates: [], overflowed: false)
+
+        /// Adds one candidate, or records the overflow the caller fails closed on.
+        mutating func add(_ value: String, expands: Bool) {
+            guard value.isEmpty == false else { return }
+            guard candidates.count < SecretPathGuard.candidateCap else {
+                overflowed = true
+                return
+            }
+            candidates.append(value)
+            self.expands.append(expands)
+        }
     }
 }
 
@@ -336,46 +360,92 @@ private func operandCandidate(_ decoded: String) -> String? {
     return decoded
 }
 
+/// Options that take the next word as their value, per grep-family head.
+/// The value is neither the pattern nor a file: `grep -C 2 "id_rsa" docs`
+/// searches `docs` for `id_rsa`. `two` options take two words; `fileTwo`
+/// options read a file named by their second word (`jq --rawfile v .env`).
+private struct ValueOptions {
+    var one: Set<String> = []
+    var two: Set<String> = []
+    var fileTwo: Set<String> = []
+}
+
+private func valueOptions(for head: String) -> ValueOptions {
+    switch head {
+    case "grep", "egrep", "fgrep":
+        return ValueOptions(one: [
+            "-A", "-B", "-C", "-m", "-d", "-D", "--context", "--after-context", "--before-context",
+            "--max-count", "--exclude", "--exclude-dir", "--exclude-from", "--binary-files", "--label",
+            "--devices", "--directories", "--group-separator",
+        ])
+    case "rg", "ripgrep":
+        return ValueOptions(one: [
+            "-A", "-B", "-C", "-m", "-t", "-T", "-M", "-j", "-E", "-d", "--type", "--type-not", "--type-add",
+            "--type-clear", "--context", "--after-context", "--before-context", "--max-count", "--max-columns",
+            "--max-depth", "--max-filesize", "--threads", "--sort", "--sortr", "--encoding", "--pre", "--pre-glob",
+            "--colors", "--color", "--engine", "--replace", "--context-separator", "--field-match-separator",
+            "--path-separator", "--ignore-file", "--dfa-size-limit", "--regex-size-limit",
+        ])
+    case "ag":
+        return ValueOptions(one: [
+            "-A", "-B", "-C", "-m", "-G", "-g", "--after", "--before", "--context", "--max-count", "--depth",
+            "--ignore", "--ignore-dir", "--file-search-regex", "--pager", "--path-to-ignore",
+        ])
+    case "ack":
+        return ValueOptions(one: [
+            "-A", "-B", "-C", "-m", "--after-context", "--before-context", "--context", "--max-count", "--type",
+            "--ignore-dir", "--ignore-file", "--output", "--pager",
+        ])
+    case "jq":
+        return ValueOptions(
+            one: ["--indent"], two: ["--arg", "--argjson"], fileTwo: ["--slurpfile", "--rawfile"])
+    case "awk", "gawk", "mawk", "nawk":
+        return ValueOptions(one: ["-v", "-F", "--assign", "--field-separator"])
+    default:
+        return ValueOptions()
+    }
+}
+
 /// Grep-family candidate extraction over grammar-classified argv words.
 ///
 /// The state machine mirrors the legacy loop: a pending `-e`/`-f` value
 /// consumes the next word verbatim (even `"--"` or dash-led words), `--`
 /// flips to positional mode, `-e`/`-f`/`--files` mark the pattern as given,
 /// and otherwise the first positional is the pattern. Newline words classify
-/// as `.positional` and count as positionals, as before.
-private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
-    var collected: [String] = []
-    var overflowed = false
+/// as `.positional` and count as positionals, as before. A head's
+/// value-taking options (`valueOptions`) skip their value.
+private func grepCandidates(_ words: [String], head: String) -> SecretPathGuard.OperandScan {
+    var scan = SecretPathGuard.OperandScan(candidates: [], overflowed: false)
+    let options = valueOptions(for: head)
     var skipFirstPositional = true
     var expectRegexp = false
     var expectFile = false
     var expectGlob = false
     var afterDoubleDash = false
-
-    func add(_ value: String) {
-        guard !value.isEmpty else { return }
-        if collected.count >= SecretPathGuard.candidateCap {
-            // A real candidate dropped for the scan cap: the guard cannot
-            // vouch for this command. The caller fails closed on this flag.
-            overflowed = true
-            return
-        }
-        collected.append(value)
-    }
+    var skipValues = 0
+    var fileAfterSkip = false
 
     for word in words {
+        if skipValues > 0 {
+            skipValues -= 1
+            if skipValues == 0, fileAfterSkip {
+                fileAfterSkip = false
+                expectFile = true
+            }
+            continue
+        }
         if expectRegexp {
             expectRegexp = false
             continue
         }
         if expectFile {
             expectFile = false
-            add(word)
+            scan.add(word, expands: true)
             continue
         }
         if expectGlob {
             expectGlob = false
-            add(word)
+            scan.add(word, expands: true)
             continue
         }
         if afterDoubleDash {
@@ -383,7 +453,20 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
                 skipFirstPositional = false
                 continue
             }
-            add(word)
+            scan.add(word, expands: true)
+            continue
+        }
+        if options.one.contains(word) {
+            skipValues = 1
+            continue
+        }
+        if options.two.contains(word) {
+            skipValues = 2
+            continue
+        }
+        if options.fileTwo.contains(word) {
+            skipValues = 1
+            fileAfterSkip = true
             continue
         }
         // Classified lazily so the token work stops at the loop boundary
@@ -403,7 +486,7 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
             case .file(let attached):
                 skipFirstPositional = false
                 if let attached {
-                    add(attached)
+                    scan.add(attached, expands: true)
                 } else {
                     expectFile = true
                 }
@@ -411,12 +494,12 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
                 skipFirstPositional = false
             case .glob(let attached):
                 if let attached {
-                    add(attached)
+                    scan.add(attached, expands: true)
                 } else {
                     expectGlob = true
                 }
             case .equalsValue(let value):
-                add(value)
+                scan.add(value, expands: false)
             case .ignore:
                 break
             }
@@ -426,9 +509,9 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
             skipFirstPositional = false
             continue
         }
-        add(word)
+        scan.add(word, expands: true)
     }
-    return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
+    return scan
 }
 
 /// Find candidate extraction: path operands before the first predicate word.
@@ -436,48 +519,50 @@ private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
 /// A word starts the predicate section exactly when the legacy test held:
 /// every dash-led word (all non-`.positional` grammar cases) plus the bare
 /// `(`, `!`, and `;` operands. The `-name`/`-iname`/`-path` literals skip
-/// their value, since patterns are not paths.
-private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
-    var collected: [String] = []
-    var overflowed = false
+/// their value, since patterns are not paths, until an `-exec` command reads
+/// what they select. The `-exec` command itself scans like any command.
+private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretPathGuard.OperandScan {
+    var scan = SecretPathGuard.OperandScan(candidates: [], overflowed: false)
     var beforePredicate = true
     var skipValue = false
     var nameValue = false
-    var inExec = false
+    var exec: [String]?
     var execs = false
     var names: [String] = []
 
-    func add(_ value: String) {
-        guard !value.isEmpty else { return }
-        if collected.count >= SecretPathGuard.candidateCap {
-            // A real path operand dropped for the scan cap: fail closed.
-            overflowed = true
-            return
+    func runExec(_ argv: [String]) {
+        let inner = SecretPathGuard.argvCandidates(argv.filter { $0 != "{}" }, includeMetadata: includeMetadata)
+        if inner.overflowed { scan.overflowed = true }
+        for (index, candidate) in inner.candidates.enumerated() {
+            scan.add(candidate, expands: index < inner.expands.count ? inner.expands[index] : true)
         }
-        collected.append(value)
     }
 
     for word in words {
+        // `-exec cat {} +` runs a command on what find selected, up to `;` or `+`.
+        if let current = exec {
+            if word == ";" || word == "+" || word == "\\;" {
+                runExec(current)
+                exec = nil
+            } else {
+                exec = current + [word]
+            }
+            continue
+        }
+        // Checked before a pending value: the matching view masks a quoted
+        // `-name` value away, leaving `-exec` in its place.
+        if word == "-exec" || word == "-execdir" || word == "-ok" || word == "-okdir" {
+            beforePredicate = false
+            skipValue = false
+            nameValue = false
+            exec = []
+            execs = true
+            continue
+        }
         if skipValue {
             skipValue = false
             if nameValue { names.append(word) }
             nameValue = false
-            continue
-        }
-        // `-exec cat {} +` runs a command on what find selected: its words
-        // are operands like any other command's, up to `;` or `+`.
-        if inExec {
-            if word == ";" || word == "+" || word == "\\;" {
-                inExec = false
-            } else if word != "{}", let candidate = operandCandidate(word) {
-                add(candidate)
-            }
-            continue
-        }
-        if word == "-exec" || word == "-execdir" || word == "-ok" || word == "-okdir" {
-            beforePredicate = false
-            inExec = true
-            execs = true
             continue
         }
         // Classified lazily so the state machine keeps walking predicate
@@ -488,7 +573,7 @@ private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
             beforePredicate = false
         case .positional(let operand):
             if beforePredicate, let candidate = operandCandidate(operand) {
-                add(candidate)
+                scan.add(candidate, expands: candidate == operand)
             }
         case .terminator, .loneDash, .long, .shorts, .shortEquals, .dangling:
             beforePredicate = false
@@ -501,27 +586,23 @@ private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
             }
         }
     }
-    // A name pattern is not a path, until an `-exec` command reads what it selects.
+    // An unterminated `-exec` is still a command find would refuse; scan it anyway.
+    if let current = exec, current.isEmpty == false { runExec(current) }
     if execs {
-        for name in names { add(name) }
+        for name in names { scan.add(name, expands: true) }
     }
-    return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
+    return scan
 }
 
-/// Default candidate extraction: every non-flag operand word verbatim.
+/// Default candidate extraction: every non-flag operand word verbatim. A
+/// value taken from `--opt=value` or `-Xvalue` is not shell-expanded.
 private func otherCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
-    var collected: [String] = []
-    var overflowed = false
+    var scan = SecretPathGuard.OperandScan(candidates: [], overflowed: false)
     for word in words {
         guard let candidate = operandCandidate(word), !candidate.isEmpty else {
             continue
         }
-        if collected.count >= SecretPathGuard.candidateCap {
-            // A real operand dropped for the scan cap: fail closed.
-            overflowed = true
-        } else {
-            collected.append(candidate)
-        }
+        scan.add(candidate, expands: candidate == word)
     }
-    return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
+    return scan
 }

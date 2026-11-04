@@ -14,17 +14,27 @@ import RVDomain
 /// `?` selects nothing here, so `cat *` and `rm -rf build/*` stay quiet;
 /// a directory rule that is spelled literally (`~/.ssh/*`) already matches.
 enum SecretPathGlob {
-    static let expansionLimit = 64
+    /// Brace alternatives worth listing. Past it the word fails closed.
+    static let expansionLimit = 1_024
+    /// Spellings worth reporting for one word.
+    static let selectionLimit = 16
 
     /// `fnmatch`'s `FNM_PERIOD`: 0x04 on both Darwin and glibc.
     private static let leadingPeriod: Int32 = 0x04
 
-    /// A catalog spelling `word` can select, or nil.
-    static func selects(_ word: String, catalog: SecretPathCatalog) -> String? {
-        // Too many alternatives to list: each brace group can be anything.
-        let globs = expandBraces(word, limit: expansionLimit) ?? [bracesAsStars(word)]
+    /// Every catalog spelling `word` can select (up to `selectionLimit`), so
+    /// an exemption on one (`.env`) never vouches for another (`.env.local`).
+    static func selections(_ word: String, catalog: SecretPathCatalog) -> [String] {
+        // Too many alternatives to prove none selects a secret: fail closed.
+        guard let globs = expandBraces(word, limit: expansionLimit) else {
+            return representative(catalog).map { [$0] } ?? []
+        }
+        var found: [String] = []
+        func add(_ path: String) {
+            if found.count < selectionLimit, found.contains(path) == false { found.append(path) }
+        }
         for glob in globs {
-            if catalog.firstMatch(of: glob) != nil { return glob }
+            if catalog.firstMatch(of: glob) != nil { add(glob) }
             let absolute = glob.hasPrefix("/")
             let parts = glob.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
             guard parts.isEmpty == false else { continue }
@@ -41,8 +51,23 @@ enum SecretPathGlob {
                 }
                 guard let spelled else { continue }
                 let path = (absolute ? "/" : "") + spelled.joined(separator: "/")
-                if catalog.firstMatch(of: path) != nil { return path }
+                if catalog.firstMatch(of: path) != nil { add(path) }
             }
+            if found.count >= selectionLimit { break }
+        }
+        return found
+    }
+
+    /// One concrete spelling of the catalog's first rule.
+    private static func representative(_ catalog: SecretPathCatalog) -> String? {
+        for rule in catalog.rules {
+            let path: String
+            switch rule.kind {
+            case .basename(let name): path = name
+            case .envVariant: path = ".env.local"
+            case .homeSuffix(let parts), .hostAuth(let parts): path = "~/" + parts.joined(separator: "/")
+            }
+            if catalog.firstMatch(of: path) != nil { return path }
         }
         return nil
     }
@@ -66,23 +91,6 @@ enum SecretPathGlob {
             pattern.contains(where: { $0 != "*" && $0 != "?" })
         else { return false }
         return fnmatch(pattern, name, leadingPeriod) == 0
-    }
-
-    /// Outermost `{...}` groups as `*`.
-    private static func bracesAsStars(_ word: String) -> String {
-        var out = ""
-        var depth = 0
-        for char in word {
-            if char == "{" {
-                if depth == 0 { out.append("*") }
-                depth += 1
-            } else if char == "}", depth > 0 {
-                depth -= 1
-            } else if depth == 0 {
-                out.append(char)
-            }
-        }
-        return out
     }
 
     /// Expands `{a,b}` groups (nested allowed) into plain globs; nil when the

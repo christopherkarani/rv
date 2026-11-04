@@ -8,11 +8,16 @@ func isAllArgsData(_ command: String?) -> Bool {
     }
 }
 
-/// Commands whose masked arguments can name a file they read: search tools
-/// and data readers. `echo`/`printf` print their arguments and read nothing.
+/// Commands whose masked arguments can name a file they read: search tools,
+/// the data readers jq and awk, and `find`, whose masked `-name` value an
+/// `-exec` command reads. `echo`, `printf`, and the manual readers read no
+/// file their arguments name.
 func revealsFileOperands(_ command: String?) -> Bool {
-    guard let command, command != "echo", command != "printf" else { return false }
-    return isSearchCommand(command) || isAllArgsData(command)
+    guard let command else { return false }
+    switch command {
+    case "jq", "awk", "find": return true
+    default: return isSearchCommand(command)
+    }
 }
 
 func isSearchCommand(_ command: String?) -> Bool {
