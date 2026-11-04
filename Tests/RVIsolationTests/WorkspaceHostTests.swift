@@ -690,6 +690,11 @@ struct WorkspaceHostTests {
             resourceProfileID: "alpha"
         )
         #expect(gated.isFailure(.incompatibleProtocol))
+        // A micro-VM launch must never fall back to Seatbelt on an old host.
+        let vm = client.launchRuntime(
+            executable: "/bin/sh", microVM: MicroVMLaunchOptions(image: "alpine")
+        )
+        #expect(vm.isFailure(.incompatibleProtocol))
         // Unprofiled launches still work against the old host.
         let plain = try client.launchRuntime(
             executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"]
