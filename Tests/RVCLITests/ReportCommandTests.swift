@@ -12,9 +12,7 @@ struct ReportCommandTests {
             generatedAt: "2026-01-01T00:00:00Z",
             rv: .init(version: "0.0.0", platform: "linux"),
             host: .init(name: "build", user: raw, uid: 1),
-            managed: .init(
-                state: "none", directory: "/tmp/managed", reason: nil, organization: nil,
-                serial: nil, sha256: nil, signed: nil, restrictions: nil),
+            managed: .none(directory: "/tmp/managed"),
             config: [],
             mcp: .init(ok: true, error: nil, servers: 0, counts: [:], failing: [], plaintextCredentials: 0),
             secrets: .init(error: nil, items: []),
@@ -49,9 +47,7 @@ struct ReportCommandTests {
             generatedAt: "2026-01-01T00:00:00Z",
             rv: .init(version: "0.0.0", platform: "linux"),
             host: .init(name: "build", user: "me", uid: 1),
-            managed: .init(
-                state: "none", directory: "/tmp/managed", reason: nil, organization: nil,
-                serial: nil, sha256: nil, signed: nil, restrictions: nil),
+            managed: .none(directory: "/tmp/managed"),
             config: [],
             mcp: .init(
                 ok: false, error: nil, servers: 1, counts: ["unreviewed": 1],
@@ -89,9 +85,7 @@ struct ReportCommandTests {
                 generatedAt: "2026-01-01T00:00:00Z",
                 rv: .init(version: "0.0.0", platform: "linux"),
                 host: .init(name: "build", user: "me", uid: 1),
-                managed: .init(
-                    state: "none", directory: "/tmp/managed", reason: nil, organization: nil,
-                    serial: nil, sha256: nil, signed: nil, restrictions: nil),
+                managed: .none(directory: "/tmp/managed"),
                 config: [],
                 mcp: .init(ok: false, error: error, servers: 0, counts: counts, failing: [], plaintextCredentials: 0),
                 secrets: .init(error: nil, items: []),

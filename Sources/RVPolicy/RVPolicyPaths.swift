@@ -96,6 +96,10 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("egress-denials.jsonl", isDirectory: false)
     }
 
+    public static func egressDenialsLockFile(inConfigDir configDir: URL) -> URL {
+        egressDenialsFile(inConfigDir: configDir).appendingPathExtension("lock")
+    }
+
     public static func pendingRejectionReasonsFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent(
             "pending-rejection-reasons.jsonl", isDirectory: false)
@@ -171,6 +175,7 @@ public enum RVPolicyPaths: Sendable {
             pendingApprovalsLockFile(inConfigDir: configDir),
             egressLoadedSnapshotFile(inConfigDir: configDir),
             egressDenialsFile(inConfigDir: configDir),
+            egressDenialsLockFile(inConfigDir: configDir),
             pendingRejectionReasonsFile(inConfigDir: configDir),
             pendingRejectionReasonsLockFile(inConfigDir: configDir),
             exemptionDropsFile(inConfigDir: configDir),
