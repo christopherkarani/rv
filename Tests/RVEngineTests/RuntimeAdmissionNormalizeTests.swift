@@ -47,6 +47,18 @@ struct RuntimeAdmissionNormalizeTests {
         #expect(pending.reason == .reviewAsk)
     }
 
+    /// REQ-006 golden: plain components keep the historical spelling.
+    @Test func shellFingerprintGoldenIsUnchangedForPlainComponents() throws {
+        let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-norm"))
+        let subject = admissionSubject(workspace)
+        let proposal = try normalizeRuntimeAdmission(
+            subject: subject,
+            action: .shell(ShellCommand(rawValue: "echo hello"))
+        ).get()
+        let session = subject.session.id.rawValue.uuidString
+        #expect(proposal.fingerprint.rawValue == "runtime:\(session):/tmp/rv-admission-norm:echo hello")
+    }
+
     @Test func localhostLookupIsNotAPublicAddress() throws {
         let answers = try resolveHTTPHost("localhost").get()
         #expect(answers.isEmpty == false)
