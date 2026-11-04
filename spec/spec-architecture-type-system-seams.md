@@ -72,8 +72,13 @@ conformers, no ABI stability). Base for independent tickets: `origin/main` at `3
   exhaustively, with no `default:`. Every listed fail-open scenario SHALL become a compile
   error or a fail-closed path.
 - **REQ-006 (C4)**: Every `ActionFingerprint` producer SHALL build its raw value through one
-  injective encoder. Components containing none of `\`, `,`, `:` SHALL encode byte-identically
-  to today. Components containing them SHALL be escaped (`\\`, `\,`, `\:`).
+  injective encoder. Components containing none of `\`, `,`, `:` (and non-empty lists) SHALL
+  encode byte-identically to today. Components containing them SHALL be escaped (`\\`, `\,`,
+  `\:`), and an empty list encodes as `\[]`. This changes persisted fingerprint text for every
+  runtime HTTP fingerprint (the resource contains `://` and `:443`) and for any command, path or
+  refspec containing those characters. Pending ask rows created before the upgrade stop matching
+  and are re-asked (fails closed). Grants are unaffected: allow-once and host-door grants key on
+  `matchingView`, not fingerprint text. The release SHALL carry a release note stating this.
 - **REQ-007 (C4)**: The reviewer-facing sanitized projection (`ReviewSanitizer`) SHALL have a
   type distinct from the raw action/fingerprint, so hard policy cannot be evaluated on a
   redacted action by accident.
@@ -151,9 +156,9 @@ handler, and `ApprovalKeychain.swift:421` keeps `enrollment` internal).
 |---|---|---|
 | T3a | `RVCLI/Commands/ManagedCommand.swift:9-50` `Status.state: String` + 8 optionals, `default:` → active; `ReportCommand.swift:103` `!= "invalid"` | `enum Status { none(directory), invalid(directory, reason), active(ActiveStatus) }`, custom `encode` with today's flat keys |
 | T3b | `RVLaya/LayaJudge.swift:9-31,67-71,253,264`, `FineTunedJudge.swift:116,193-199`: `choice: String`, `probabilities: [String: Double]` | `choice: LayaVerdict.Action`, `probabilities: [Action: Double]` (`CodingKeyRepresentable`), labels parsed to `Action` at bundle load, unknown label → bundle error; consumers `rv-judge/main.swift:94,103`, `RVService/JudgeGate.swift:576,635` |
-| T3c | `SecretSource.kind` (`RVIsolation/SecretsConfiguration.swift:35-49`), `RVPolicy/ManagedPolicy.swift:72-75` list, `allowsSecretSource(_: String)` at `SecretLaunchBroker.swift:458`, `RVMCP/MCPGatewayRuntime.swift:156`; VarlockSchema parallel lists `:254-256,270,381-389` | `public enum SecretSourceKind: String, CaseIterable, Codable` in RVPolicy; `allowedSources: Set<SecretSourceKind>?`; `kind` exhaustive; Varlock provider enum |
+| T3c | `SecretSource.kind` (`RVIsolation/SecretsConfiguration.swift:35-49`), `RVPolicy/ManagedPolicy.swift:72-75` list, `allowsSecretSource(_: String)` at `SecretLaunchBroker.swift:458`, `RVMCP/MCPGatewayRuntime.swift:156`; VarlockSchema parallel lists `:254-256,270,381-389` | `public enum SecretSourceKind: String, CaseIterable, Codable` in RVPolicy; `allowedSources: [SecretSourceKind]?` (ordered array, not a Set: a Set would reorder robot output, CON-001); `kind` exhaustive; Varlock provider enum |
 | T3d | `RVIsolation/SecretGatewayProtocol.swift:254` `code = "\(self)"`; `SecretUseRecord.refusal: String?` (`SecretGateway.swift:46-50`); `misuseEvent` nil path `SecretLaunchBroker.swift:422` | explicit `code` per case (raw-value enum or exhaustive switch returning literals), record stores the typed refusal, audit/OCSF bytes unchanged |
-| T3e | `"named"/"custom"` in `RVIPC/IPCOperatorLaunch.swift:20-21`, `WorkspaceOperatorWire.swift:292-293,322-323`; switches in `RVIsolation/WorkspaceHostPrepareHandler.swift:33-44`, `RVService/WorkspaceOperatorCeremony.swift:474-479,624,735,860`, `RVCLI/OperatorCommand.swift:35,82,85`; `RuntimeAskReason` hand encode `WorkspaceHostBridgeClient.swift:162-165`, `ActionApprovalCeremony.swift:715-716`, decode `:622-627`; refusal codes `refuse("invalidRequest")` etc., `knownRedeemOutcomes` `WorkspaceOperatorCeremony.swift:523` | `WorkspaceLaunchKind`, `RuntimeAskReason: Codable`, `HostPrepareRefusal`, `HostRedeemOutcome` String-raw enums in RVIPC |
+| T3e | `"named"/"custom"` in `RVIPC/IPCOperatorLaunch.swift:20-21`, `WorkspaceOperatorWire.swift:292-293,322-323`; switches in `RVIsolation/WorkspaceHostPrepareHandler.swift:33-44`, `RVService/WorkspaceOperatorCeremony.swift:474-479,624,735,860`, `RVCLI/Commands/OperatorCommand.swift:35,82,85`; `RuntimeAskReason` hand encode `RVService/WorkspaceHostBridgeClient.swift:162-165`, `ActionApprovalCeremony.swift:715-716`, decode `:622-627`; refusal codes `refuse("invalidRequest")` etc., `knownRedeemOutcomes` `WorkspaceOperatorCeremony.swift:523` | `WorkspaceLaunchKind`, `RuntimeAskReason: Codable`, `HostPrepareRefusal`, `HostRedeemOutcome` String-raw enums in RVIPC |
 
 ### 4d. C4 — fingerprints (T4a, T4b)
 
@@ -267,7 +272,7 @@ Dependent tickets branch from their blocker's branch, and their PRs are stacked 
 
 ### T3e — Typed operator launch / ask / host refusal vocabularies (C3)
 - depends-on: none
-- exclusive-writes: `Sources/RVIPC/IPCOperatorLaunch.swift`, `Sources/RVIPC/WorkspaceOperatorWire.swift`, `Sources/RVIsolation/WorkspaceHostPrepareHandler.swift`, `Sources/RVIsolation/WorkspaceHostBridgeClient.swift`, `Sources/RVService/WorkspaceOperatorCeremony.swift`, `Sources/RVService/ActionApprovalCeremony.swift` (ask-reason coding only), `Sources/RVCLI/OperatorCommand.swift` (or its actual path), matching tests
+- exclusive-writes: `Sources/RVIPC/IPCOperatorLaunch.swift`, `Sources/RVIPC/WorkspaceOperatorWire.swift`, `Sources/RVIsolation/WorkspaceHostPrepareHandler.swift`, `Sources/RVService/WorkspaceHostBridgeClient.swift`, `Sources/RVService/WorkspaceOperatorCeremony.swift`, `Sources/RVService/ActionApprovalCeremony.swift` (ask-reason coding only), `Sources/RVCLI/Commands/OperatorCommand.swift`, matching tests
 - acceptance: REQ-005. XPC DTO bytes unchanged and pinned. No `default:` remains over these values.
 - review-hint: ≥1500 likely
 
@@ -295,16 +300,12 @@ Dependent tickets branch from their blocker's branch, and their PRs are stacked 
 - acceptance: REQ-008, AC-006
 - review-hint: ≥1500 likely
 
-### In-flight overlap (checked 2026-11-03 against open PRs)
+### In-flight overlap (rechecked 2026-11-04)
 
-- **#488** (`fix/critical-review-findings`) changes the visibility of `plainLaunchers` in
-  `Sources/RVEngine/LaunchedCommands.swift`. B3 must not reorder or rename that declaration,
-  and should keep its diff in that file small to avoid conflicts. #488 does not address case
-  folding.
-- **#478 / #479** (`arch/3c06b2c4/T6`, `T7`) restructure `Sources/RVService/JudgeGate.swift`.
-  T3b must keep its JudgeGate diff to the verdict-consumption lines and mention the overlap in
-  the PR body.
-- No other open PR touches a ticket's exclusive-writes.
+- #478, #479 and #488 are merged. B3 and T3b no longer need to coordinate with them, but
+  should still keep diffs in `LaunchedCommands.swift` and `JudgeGate.swift` minimal.
+- Exclusive-writes are not guaranteed disjoint across tickets: T3c touched files also listed
+  under T3a and B1. Re-diff against open PRs and sibling `arch/*` branches before starting.
 
 ## 6. Test Automation Strategy
 
@@ -315,7 +316,8 @@ Dependent tickets branch from their blocker's branch, and their PRs are stacked 
   `--filter` for RVIsolationTests, which is large. Then `Scripts/preflight.sh --quiet`.
 - CI: `.github/workflows/pr.yml` runs an unfiltered Linux `swift test` plus macOS jobs. Known
   flakes: "macos hook grade" (HookDeadline) and "macos isolation (A-E)"
-  `ExecutorLifecycleRegressionTests`. Rerun them, don't debug them.
+  `ExecutorLifecycleRegressionTests`. The macOS N-Z job also fails environmentally on
+  `proxiedPublicHTTPSStillSucceeds` (curl exit 60). Rerun them, don't debug them.
 - No coverage tooling exists. Each ticket adds tests for its new invariant.
 
 ## 7. Rationale & Context
@@ -325,8 +327,9 @@ disclosure, C2's is MAC domain confusion, and C3's is fail-open on a new case. C
 approval-identity collision, and C5's is answering an agent with a fake exit status. Enums and
 newtypes were chosen over generics or phantom types because heterogeneity is not real at any
 of these sites and the state is runtime-selected. The CON-001 byte constraint keeps these as
-refactors, not migrations. The one exception (REQ-006) only changes fingerprints that were
-ambiguous before.
+refactors, not migrations. The one exception (REQ-006) changes fingerprint text for every runtime HTTP
+fingerprint and for any component containing `\`, `,` or `:`, plus empty lists. Pending asks
+re-ask once after upgrade (fail closed); grants key on `matchingView` and are unaffected.
 
 ## 8. Dependencies & External Integrations
 
