@@ -583,8 +583,9 @@ enum GatewayHeaders {
     }
 
     /// The single digits-only `Content-Length` of a response the gateway
-    /// relays without a body (HEAD, 304). It describes the body a GET would
-    /// return, which no scrubbing here changes; SDKs size downloads from it.
+    /// relays without a body (HEAD, 304). It frames nothing the gateway sends;
+    /// SDKs size downloads from it. A GET through the gateway is chunked, so a
+    /// scrubbed body of a different length never contradicts it on the wire.
     static func bodilessContentLength(_ headers: [(name: String, value: String)]) -> String? {
         let values = Set(headers.filter { $0.name.lowercased() == "content-length" }
             .map { $0.value.trimmingCharacters(in: .whitespaces) })

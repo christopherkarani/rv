@@ -369,12 +369,13 @@ enum SecretVaultProvider {
         }
         // The ambient token was issued by VAULT_ADDR's server. A definition's
         // own address (which a Varlock schema can supply) must not carry it
-        // to another server.
-        if let address, let ambient = environment["VAULT_ADDR"], ambient.isEmpty == false,
-            vaultAddress(ambient).map({ sameOrigin($0, address) }) != true
+        // to another server, nor anywhere when VAULT_ADDR is unset: then
+        // nothing says which server `~/.vault-token` belongs to.
+        if let address,
+            environment["VAULT_ADDR"].flatMap(vaultAddress).map({ sameOrigin($0, address) }) != true
         {
             return .failure(.providerUnavailable(
-                "Vault address \(address.host ?? "") is not VAULT_ADDR; rv will not send your Vault token to another server"))
+                "Vault address \(address.host ?? "") is not VAULT_ADDR; set VAULT_ADDR to it to send your Vault token there"))
         }
         let token = environment["VAULT_TOKEN"]
             ?? (try? String(contentsOfFile: (home as NSString).appendingPathComponent(".vault-token"), encoding: .utf8))
