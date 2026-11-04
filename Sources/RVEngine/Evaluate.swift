@@ -32,7 +32,8 @@ public func evaluate<E: PatternEngine>(
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
         return floorSelfProtection(request.command, secretPaths.fold(
-            EvaluationResult(outcome: .quickRejected, matchingView: matchingView)
+            EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
+            command: request.command
         ))
     }
 
@@ -68,10 +69,11 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return floorSelfProtection(request.command, secretPaths.fold(viewed))
+        return floorSelfProtection(request.command, secretPaths.fold(viewed, command: request.command))
     }
     return floorSelfProtection(request.command, secretPaths.fold(
-        EvaluationResult(outcome: .plain, matchingView: matchingView)
+        EvaluationResult(outcome: .plain, matchingView: matchingView),
+        command: request.command
     ))
 }
 

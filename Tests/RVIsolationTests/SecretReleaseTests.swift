@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVPolicy
 import Synchronization
 import Testing
@@ -115,6 +116,28 @@ struct SecretReleaseTests {
         }
     }
 
+    /// A resource profile's `keychain` entry puts a real value in the cage's
+    /// environment, so it answers to the same organization rules.
+    @Test func profileKeychainEntriesAnswerToOrganizationPolicy() throws {
+        let entry = RuntimeResourceProfile.KeychainEntry(service: "s", account: "a", env: "OPENAI_API_KEY")
+        let noEnvironment = try Self.policy(#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#)
+        let vaultOnly = try Self.policy(#"{"version":1,"secrets":{"allowedSources":["vault"]}}"#)
+        let open = try Self.policy(#"{"version":1,"secrets":{"allowedSources":["keychain"]}}"#)
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: noEnvironment.policy) == .environmentDelivery)
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: vaultOnly.policy) == .source(kind: .keychain))
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: open.policy) == nil)
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: nil) == nil)
+
+        func refusal(_ managed: ManagedPolicyState) -> SecretLeaseError? {
+            SecretLaunchBroker.profileKeychainRefusal([entry], managed: managed)
+        }
+        #expect(refusal(noEnvironment) == .organizationPolicy(
+            SecretOrganizationRule.environmentDelivery.message(secret: "resource profile keychain entry $OPENAI_API_KEY")))
+        #expect(refusal(.invalid("x")) == .organizationPolicy("invalid, so keychain entries are not staged: x"))
+        #expect(refusal(.none) == nil)
+        #expect(SecretLaunchBroker.profileKeychainRefusal([], managed: .invalid("x")) == nil)
+    }
+
     @Test func gatewayOnlyValuesNeverLeaveForAServerOrHeader() {
         let provider = Provider(text: "v")
         for definition in [Self.oauth, Self.aws] {
@@ -122,6 +145,35 @@ struct SecretReleaseTests {
             #expect(Self.reason(Self.release([definition], to: .header, provider: provider)) == .gatewayOnly)
         }
         #expect(provider.reads.withLock { $0 } == 0)
+    }
+
+    @Test func aGatewayOnlySourceIsNeverReleasedAsTextWhateverItsDelivery() {
+        let awsJSON = #"{"AccessKeyId":"AKIAREAL","SecretAccessKey":"realSecretKey"}"#
+        let oauthJSON = #"{"access_token":"at-REAL-oauth","expires_in":3600}"#
+        let wrong: [SecretDelivery] = [.environment, Self.gateway("G").delivery]
+        let cases: [(String, SecretSource, String, [SecretDelivery])] = [
+            ("awsProfile", Self.aws.source, awsJSON, wrong),
+            ("oauth", Self.oauth.source, oauthJSON, [.environment]),
+        ]
+        for (kind, source, json, deliveries) in cases {
+            for delivery in deliveries {
+                let provider = Provider(text: json)
+                let definition = SecretDefinition(name: "S", source: source, delivery: delivery)
+                let result = Self.release([definition], to: .cage, provider: provider)
+                #expect(Self.reason(result) == .gatewayOnly, "\(kind) was released under \(delivery.kind) delivery")
+                #expect(provider.reads.withLock { $0 } == 0)
+            }
+        }
+    }
+
+    @Test func aSecretValueNeverReflectsItsBytes() {
+        let value = SecretValue("plain-REAL-value")!
+        var dumped = ""
+        dump(value, to: &dumped)
+        #expect(dumped.contains("plain-REAL-value") == false)
+        #expect(dumped.contains("bytes") == false)
+        #expect(Mirror(reflecting: value).children.isEmpty)
+        #expect(Mirror(reflecting: [value]).children.allSatisfy { Mirror(reflecting: $0.value).children.isEmpty })
     }
 
     @Test func anOAuthAnswerReleasesItsAccessTokenUntilTheEarlierExpiry() throws {

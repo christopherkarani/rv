@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVHistory
 import RVPolicy
 
@@ -210,6 +211,25 @@ final class SecretLaunchBroker: @unchecked Sendable {
         }
         for event in staged { _ = AuditLog.append(event, configDirectory: configDirectory) }
         return .success(SecretLease(placeholders: placeholders, environment: environment))
+    }
+
+    /// Organization rules for a resource profile's `keychain` entries, checked
+    /// before any is read so a refused launch prompts for nothing.
+    func profileKeychainRefusal(_ entries: [RuntimeResourceProfile.KeychainEntry]) -> SecretLeaseError? {
+        guard entries.isEmpty == false else { return nil }
+        return Self.profileKeychainRefusal(entries, managed: managed())
+    }
+
+    /// An invalid policy refuses every entry, like it refuses every secret.
+    static func profileKeychainRefusal(
+        _ entries: [RuntimeResourceProfile.KeychainEntry], managed: ManagedPolicyState
+    ) -> SecretLeaseError? {
+        guard let first = entries.first else { return nil }
+        if let reason = managed.invalidReason {
+            return .organizationPolicy("invalid, so keychain entries are not staged: \(reason)")
+        }
+        guard let rule = SecretOrganizationRules.profileKeychainRule(policy: managed.policy) else { return nil }
+        return .organizationPolicy(rule.message(secret: "resource profile keychain entry $\(first.env)"))
     }
 
     func bind(_ lease: SecretLease, runtime: String) {

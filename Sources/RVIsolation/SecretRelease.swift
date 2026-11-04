@@ -116,7 +116,12 @@ public struct SecretRelease: Sendable {
         if let rule = SecretOrganizationRules.rule(definition, policy: policy, target: target) {
             return .organizationPolicy(rule)
         }
-        if target != .cage, definition.gatewayOnly { return .gatewayOnly }
+        // A gateway-only source in a cage must still be paired with the delivery that
+        // parses it; otherwise its raw answer (a credential set, a token response) would
+        // be released as text.
+        if definition.gatewayOnly,
+            target != .cage || SecretDefinitionError.pairing(definition.name, definition.source, definition.delivery) != nil
+        { return .gatewayOnly }
         if let expires = definition.expires, now() >= expires { return .expired(at: expires) }
         return nil
     }
@@ -190,6 +195,17 @@ public enum SecretOrganizationRules {
         case .stdioServer: return .environmentDelivery
         case .header: return nil
         }
+    }
+
+    /// The rule a resource profile's `keychain` entry breaks, if any. Such an
+    /// entry reads a Keychain item and puts the real value in the cage's
+    /// environment without a secrets.json definition, so it answers to the
+    /// same source and environment-delivery rules as a keychain-sourced,
+    /// environment-delivered definition.
+    public static func profileKeychainRule(policy: ManagedPolicy?) -> SecretOrganizationRule? {
+        guard let policy else { return nil }
+        if policy.allowsSecretSource(.keychain) == false { return .source(kind: .keychain) }
+        return policy.secrets.allowEnvironmentDelivery ? nil : .environmentDelivery
     }
 
     /// The source rule alone: for callers that read a secret on the host and
