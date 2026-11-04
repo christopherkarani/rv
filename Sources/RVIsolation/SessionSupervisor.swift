@@ -159,7 +159,13 @@ final class LiveSeatbeltChild: Sendable {
         var frame: RuntimeActionFrame
         var reply: AdmissionReply
     }
-    private let pending = Mutex<PendingFrame?>(nil)
+    /// Legacy routing state: the pending slot and the watch-finished flag
+    /// under one lock, so the seam decides pending-vs-direct atomically.
+    private struct LegacyRouting: Sendable {
+        var pending: PendingFrame?
+        var watchFinished = false
+    }
+    private let legacyRouting = Mutex(LegacyRouting())
 
     init(
         session: RuntimeSession,
@@ -233,33 +239,72 @@ final class LiveSeatbeltChild: Sendable {
         terminal.withLock { $0 }
     }
 
-    /// Ask the watch thread to run one frame. Returns nil if a frame is
-    /// already waiting or the watch does not answer. Frame routing into
-    /// the session's legacy door; sensitive mediation needs its own door.
+    var isWatchFinished: Bool { legacyRouting.withLock { $0.watchFinished } }
+
+    /// Route one frame into the session's legacy door. While the watch
+    /// runs, the frame parks for its drain; after the watch finishes,
+    /// admission runs here on the caller's thread. The module decides
+    /// under its one lock, so callers never read the flag and guess.
+    /// Returns nil if a frame is already waiting or the watch does not
+    /// answer. Sensitive mediation needs its own door.
     func submitLegacy(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
         let reply = AdmissionReply()
-        let posted = pending.withLock { current -> Bool in
-            guard current == nil else { return false }
-            current = PendingFrame(frame: frame, reply: reply)
-            return true
+        enum Route {
+            case direct
+            case busy
+            case posted
         }
-        guard posted else { return nil }
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if let decision = reply.current() { return decision }
-            usleep(5_000)
+        let route = legacyRouting.withLock { routing -> Route in
+            if routing.watchFinished { return .direct }
+            guard routing.pending == nil else { return .busy }
+            routing.pending = PendingFrame(frame: frame, reply: reply)
+            return .posted
         }
-        return nil
+        switch route {
+        case .direct:
+            return admission.submitLegacy(.success(frame))
+        case .busy:
+            return nil
+        case .posted:
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                if let decision = reply.current() { return decision }
+                // The watch finished while this frame was parked: no
+                // drain is coming, so claim the slot back under the lock
+                // and run direct on this thread. If a drain already took
+                // the frame, the reply is on its way and waiting stands.
+                let stranded = legacyRouting.withLock { routing -> Bool in
+                    guard routing.watchFinished, routing.pending?.reply === reply else {
+                        return false
+                    }
+                    routing.pending = nil
+                    return true
+                }
+                if stranded {
+                    return admission.submitLegacy(.success(frame))
+                }
+                usleep(5_000)
+            }
+            return nil
+        }
     }
 
     /// Called only from the watch thread.
     func drainPending() {
-        let job = pending.withLock { current -> PendingFrame? in
-            defer { current = nil }
-            return current
+        let job = legacyRouting.withLock { routing -> PendingFrame? in
+            defer { routing.pending = nil }
+            return routing.pending
         }
         guard let job else { return }
         job.reply.store(admission.submitLegacy(.success(job.frame)))
+    }
+
+    /// Set by the watch path after its last drain. A frame parked in
+    /// that instant is claimed back by its waiting caller, which runs
+    /// it direct; every later submit takes the direct route instead of
+    /// parking into a drain that will never come.
+    func markWatchFinished() {
+        legacyRouting.withLock { $0.watchFinished = true }
     }
 
     deinit {

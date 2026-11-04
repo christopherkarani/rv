@@ -1334,6 +1334,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             )
         case .success(let child):
             let mounted = watchSeatbeltProcess(child.live, stop: child.stop)
+            child.live.markWatchFinished()
             // Unregistered by design: stop the runtime's own proxy here,
             // since noteRuntimeEnded only reaches registered children.
             child.egressProxy.stop()
@@ -1413,9 +1414,6 @@ final class WorkspaceSessionSupervisor: Sendable {
     ) -> RuntimeAdmissionDecision? {
         let child = state.withLock { $0.children[runtime] }
         guard let child else { return nil }
-        if child.watchFinished {
-            return child.live.admission.submitLegacy(.success(frame))
-        }
         return child.live.submitLegacy(frame)
     }
 
@@ -2279,7 +2277,6 @@ private final class WorkspaceChild: Sendable {
     /// Start time captured before the group is recorded. Absent when the
     /// kernel identity could not be proved, in which case nothing is signalled.
     private let provenGroupBox = Mutex<ProcessGroupFact?>(nil)
-    private let finished = Mutex(false)
 
     /// Set once on the launch path, read when retiring an unrecorded child.
     var provenGroup: ProcessGroupFact? {
@@ -2298,15 +2295,11 @@ private final class WorkspaceChild: Sendable {
     }
 
     var watchFinished: Bool {
-        finished.withLock { $0 }
+        live.isWatchFinished
     }
 
     var isProcessGone: Bool {
         processGroupIsEmpty(live.pid) && processIsGone(live.pid)
-    }
-
-    func markFinished() {
-        finished.withLock { $0 = true }
     }
 
     func start(
@@ -2327,7 +2320,7 @@ private final class WorkspaceChild: Sendable {
             }
             _ = watchSeatbeltProcess(child.live, stop: child.stop, onDeathObserved: deathObserved)
             ended()
-            child.markFinished()
+            child.live.markWatchFinished()
             settled()
         }
         thread.name = "rv-runtime-\(child.live.session.id.rawValue.uuidString)"
