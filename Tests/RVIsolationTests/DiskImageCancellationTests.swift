@@ -243,6 +243,12 @@ struct DiskImageCancellationTests {
         let clock = DiskImageCancelClock()
         clock.armIfWorkCancelled()
         #expect(clock.deadline == nil)
+        #expect(
+            CooperativeLaunchStop.effectiveDeadline(local: clock, fallback: fallback) == fallback
+        )
+        #expect(
+            CooperativeLaunchStop.effectiveDeadline(local: nil, fallback: fallback) == fallback
+        )
         clock.armWithSpentSinceCancel()
         let end = try #require(clock.deadline)
         let effective = try #require(
@@ -262,6 +268,28 @@ struct DiskImageCancellationTests {
         #expect(
             CooperativeLaunchStop.boundedWaitSinceCancel(cap: DiskImageCancelBudget.leaderReap)
                 == DiskImageCancelBudget.leaderReap
+        )
+    }
+
+    /// With an unarmed local clock, the shared clock armed at cancel
+    /// governs before the caller's fallback.
+    @Test func cancelClockEffectiveDeadlinePrefersSharedClockOverFallback() throws {
+        let fallback = Date(timeIntervalSince1970: 0)
+        let flag = CooperativeLaunchStop.Flag()
+        CooperativeLaunchStop.install(flag)
+        defer { CooperativeLaunchStop.uninstall() }
+        flag.cancel()
+        let effective = try #require(
+            CooperativeLaunchStop.effectiveDeadline(
+                local: DiskImageCancelClock(),
+                fallback: fallback
+            )
+        )
+        #expect(effective != fallback)
+        #expect(effective.timeIntervalSinceNow > 0)
+        #expect(
+            effective.timeIntervalSinceNow
+                <= DiskImageCancelBudget.cancelledSequenceBudget + 0.05
         )
     }
 
