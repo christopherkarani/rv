@@ -9,6 +9,11 @@ enum SecretPathGuard {
     static let overflowPatternName = "operand-overflow"
     static let overflowDenialReason = "Too many path operands to analyze; refusing without a secret-path scan."
 
+    /// Synthetic ruleID for commands whose operands cannot be modelled
+    /// exactly (`find -regex … -exec`, a `man` pager command): over-deny.
+    static let unmodelledPatternName = "unmodelled-operand"
+    static let unmodelledDenialReason = "Command operands cannot be analyzed for secret paths; refusing."
+
     static func firstHit(
         in matchingView: MatchingView,
         catalog: SecretPathCatalog,
@@ -68,12 +73,17 @@ enum SecretPathGuard {
         exempts: SecretPathExemption? = nil
     ) -> RuleMatch? {
         let scan = candidates(in: haystack, includeMetadata: includeMetadata)
+        if scan.unmodelled {
+            return overflowHit(
+                searchText: searchText, pattern: unmodelledPatternName, reason: unmodelledDenialReason)
+        }
         if treatOverflowAsDenial, scan.overflowed {
             return overflowHit(searchText: searchText)
         }
         for (index, operand) in scan.candidates.enumerated() {
             let expands = index < scan.expands.count ? scan.expands[index] : true
-            for candidate in spellings(of: operand, catalog: catalog, expands: expands) {
+            let matching = index < scan.matching.count ? scan.matching[index] : .shell
+            for candidate in spellings(of: operand, catalog: catalog, expands: expands, matching: matching) {
                 // The resolved spelling is authoritative: a symlinked operand
                 // IS its target, so the typed spelling participates only when
                 // no distinct target exists. An exemption on one spelling never
@@ -95,7 +105,12 @@ enum SecretPathGuard {
     /// (`.env*`, `{.env,x}`, `~/.ss*/id_*`) opens whatever it matches, so a
     /// catalog name it can select stands in for it. `expands` is false for an
     /// option value (`--exclude='.*'`), which the shell never globs.
-    static func spellings(of operand: String, catalog: SecretPathCatalog, expands: Bool = true) -> [String] {
+    static func spellings(
+        of operand: String,
+        catalog: SecretPathCatalog,
+        expands: Bool = true,
+        matching: SecretPathGlob.Matching = .shell
+    ) -> [String] {
         var out = [operand]
         func add(_ spelling: String) {
             if spelling.isEmpty == false, out.contains(spelling) == false { out.append(spelling) }
@@ -108,20 +123,44 @@ enum SecretPathGuard {
         }
         while plain.hasPrefix("@") { plain.removeFirst() }
         add(plain)
-        if expands, plain.contains(where: { "*?[{".contains($0) }) {
-            for selected in SecretPathGlob.selections(plain, catalog: catalog) { add(selected) }
+        // `curl -F f=@.env`, `f=<.env`, httpie `f@.env`: the file follows an
+        // `@` or `=<` inside the word, and runs to a `;` (curl's field
+        // options) or a `,` (curl's file list).
+        var wordForms = [plain]
+        for marker in ["@", "=<"] {
+            guard let range = plain.range(of: marker) else { continue }
+            var tail = String(plain[range.upperBound...])
+            while tail.hasPrefix("@") || tail.hasPrefix("<") { tail.removeFirst() }
+            wordForms.append(tail)
+        }
+        for form in wordForms {
+            wordForms.append(contentsOf: form.split(whereSeparator: { ";,".contains($0) }).map(String.init))
+        }
+        for form in wordForms.dropFirst() { add(form) }
+        if matching != .shell {
+            // A find pattern is matched against names, never brace-expanded.
+            for selected in SecretPathGlob.selections(plain, catalog: catalog, matching: matching) { add(selected) }
+            if matching == .findNameFolded { add(plain.lowercased()) }
+        } else if expands {
+            for form in wordForms where form.contains(where: { "*?[{".contains($0) }) {
+                for selected in SecretPathGlob.selections(form, catalog: catalog) { add(selected) }
+            }
         }
         return out
     }
 
     /// Deny-by-default match for unverifiable input. `matchedText` stays nil
     /// so exemption lookup can never suppress it.
-    private static func overflowHit(searchText: String) -> RuleMatch {
-        let ruleID = RuleID(pack: .coreSecrets, pattern: overflowPatternName)
+    private static func overflowHit(
+        searchText: String,
+        pattern: String = overflowPatternName,
+        reason: String = overflowDenialReason
+    ) -> RuleMatch {
+        let ruleID = RuleID(pack: .coreSecrets, pattern: pattern)
         return RuleMatch(
             ruleID: ruleID,
             severity: .high,
-            reason: overflowDenialReason,
+            reason: reason,
             regex: nil,
             matchedText: nil,
             searchText: searchText
@@ -200,6 +239,8 @@ enum SecretPathGuard {
         case .metadata:
             guard includeMetadata else { return .empty }
             return otherCandidates(args())
+        case .man:
+            return manCandidates(args())
         case .other:
             return otherCandidates(args())
         }
@@ -216,11 +257,17 @@ enum SecretPathGuard {
         /// Per candidate: whether the shell expands it as a word, so a glob
         /// in it opens what it matches. Option values are never expanded.
         var expands: [Bool] = []
+        /// Per candidate: how a glob in it selects names. Shell by default;
+        /// a `find` name or path pattern has no dotfile rule.
+        var matching: [SecretPathGlob.Matching] = []
+        /// Set when the operands cannot be modelled exactly (a regex predicate
+        /// next to `-exec`, a `man` pager command): the scan denies.
+        var unmodelled = false
 
         static let empty = OperandScan(candidates: [], overflowed: false)
 
         /// Adds one candidate, or records the overflow the caller fails closed on.
-        mutating func add(_ value: String, expands: Bool) {
+        mutating func add(_ value: String, expands: Bool, matching: SecretPathGlob.Matching = .shell) {
             guard value.isEmpty == false else { return }
             guard candidates.count < SecretPathGuard.candidateCap else {
                 overflowed = true
@@ -228,6 +275,7 @@ enum SecretPathGuard {
             }
             candidates.append(value)
             self.expands.append(expands)
+            self.matching.append(matching)
         }
     }
 }
@@ -237,6 +285,7 @@ private enum HeadKind {
     case grep
     case find
     case metadata
+    case man
     case other
 }
 
@@ -252,6 +301,8 @@ private func headKind(_ argv0: String) -> HeadKind {
         return .find
     case "ls", "test", "stat":
         return .metadata
+    case "man":
+        return .man
     default:
         return .other
     }
@@ -298,6 +349,8 @@ private func operandFlag(for token: FlagToken) -> OperandFlag? {
             return .glob(attached: attached)
         default:
             if let attached {
+                // `--exclude=!x` negates like a negated glob: nothing is read.
+                if name == "exclude", attached.hasPrefix("!") { return .ignore }
                 return .equalsValue(attached)
             }
             return .ignore
@@ -445,7 +498,8 @@ private func grepCandidates(_ words: [String], head: String) -> SecretPathGuard.
         }
         if expectGlob {
             expectGlob = false
-            scan.add(word, expands: true)
+            // `!` negates a glob: an exclusion names files the search skips.
+            if word.hasPrefix("!") == false { scan.add(word, expands: true) }
             continue
         }
         if afterDoubleDash {
@@ -494,7 +548,7 @@ private func grepCandidates(_ words: [String], head: String) -> SecretPathGuard.
                 skipFirstPositional = false
             case .glob(let attached):
                 if let attached {
-                    scan.add(attached, expands: true)
+                    if attached.hasPrefix("!") == false { scan.add(attached, expands: true) }
                 } else {
                     expectGlob = true
                 }
@@ -528,13 +582,19 @@ private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretP
     var nameValue = false
     var exec: [String]?
     var execs = false
-    var names: [String] = []
+    var names: [(pattern: String, matching: SecretPathGlob.Matching)] = []
+    var pendingMatching = SecretPathGlob.Matching.findName
+    var sawRegex = false
 
     func runExec(_ argv: [String]) {
         let inner = SecretPathGuard.argvCandidates(argv.filter { $0 != "{}" }, includeMetadata: includeMetadata)
         if inner.overflowed { scan.overflowed = true }
+        if inner.unmodelled { scan.unmodelled = true }
         for (index, candidate) in inner.candidates.enumerated() {
-            scan.add(candidate, expands: index < inner.expands.count ? inner.expands[index] : true)
+            scan.add(
+                candidate,
+                expands: index < inner.expands.count ? inner.expands[index] : true,
+                matching: index < inner.matching.count ? inner.matching[index] : .shell)
         }
     }
 
@@ -561,7 +621,7 @@ private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretP
         }
         if skipValue {
             skipValue = false
-            if nameValue { names.append(word) }
+            if nameValue { names.append((word, pendingMatching)) }
             nameValue = false
             continue
         }
@@ -580,16 +640,81 @@ private func findCandidates(_ words: [String], includeMetadata: Bool) -> SecretP
             // Match the raw word: exactly the `-name`/`-iname`/`-path`
             // literals take a value, and this skips the String(letters)
             // rebuild `singleDashWord` performs per dash-led word.
-            if word == "-name" || word == "-iname" || word == "-path" {
+            switch word {
+            case "-name", "-path", "-wholename":
                 skipValue = true
                 nameValue = true
+                pendingMatching = .findName
+            case "-iname", "-ipath", "-iwholename":
+                skipValue = true
+                nameValue = true
+                pendingMatching = .findNameFolded
+            case "-regex", "-iregex":
+                // A regex cannot be matched against the catalog here.
+                skipValue = true
+                sawRegex = true
+            default:
+                break
             }
         }
     }
     // An unterminated `-exec` is still a command find would refuse; scan it anyway.
     if let current = exec, current.isEmpty == false { runExec(current) }
     if execs {
-        for name in names { scan.add(name, expands: true) }
+        for name in names { scan.add(name.pattern, expands: true, matching: name.matching) }
+        // What a regex selects cannot be modelled, so an `-exec` reading it fails closed.
+        if sawRegex { scan.unmodelled = true }
+    }
+    return scan
+}
+
+/// `man` reads the file named by `-l`, or by an operand holding a `/`; the
+/// operands scan as for any command. `-P`/`--pager` and `-H`/`--html` run a
+/// command: a plain command name reads nothing, anything else (a quoted
+/// `cat .env`, whose spaces the matching view has already flattened) cannot
+/// be analysed and fails closed.
+private func manCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
+    var scan = otherCandidates(words)
+    // Without `-l`, an operand is a page name unless it holds a `/`.
+    // An attached pager (`--pager='cat .env'`) arrives with its quotes dropped,
+    // so its arguments look like operands: keep every operand then.
+    let readsFiles = words.contains { word in
+        word == "--local-file" || word.hasPrefix("--pager=") || word.hasPrefix("--html=")
+            || (word.hasPrefix("-") && word.hasPrefix("--") == false && word.contains(where: { "lPH".contains($0) }))
+    }
+    if readsFiles == false {
+        let kept = zip(scan.candidates, zip(scan.expands, scan.matching)).filter { $0.0.contains("/") }
+        scan.candidates = kept.map(\.0)
+        scan.expands = kept.map(\.1.0)
+        scan.matching = kept.map(\.1.1)
+    }
+    func isPlainCommandName(_ value: String) -> Bool {
+        value.isEmpty == false
+            && value.allSatisfy { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" || $0 == "+" }
+    }
+    var commandPending = false
+    for word in words {
+        if commandPending {
+            commandPending = false
+            if isPlainCommandName(word) == false { scan.unmodelled = true }
+            continue
+        }
+        if word == "--" { break }
+        if word == "-P" || word == "--pager" || word == "-H" || word == "--html" {
+            commandPending = true
+        } else if word.hasPrefix("--") {
+            for option in ["--pager=", "--html="] where word.hasPrefix(option) {
+                if isPlainCommandName(String(word.dropFirst(option.count))) == false { scan.unmodelled = true }
+            }
+        } else if word.hasPrefix("-"), word.dropFirst().contains(where: { $0 == "P" || $0 == "H" }) {
+            // `-Pcat`: an attached value; a letter run (`-aP`) takes its value
+            // from the next word, which this reading does not follow.
+            let value = word.dropFirst(2)
+            if (word.hasPrefix("-P") || word.hasPrefix("-H")), isPlainCommandName(String(value)) {
+                continue
+            }
+            scan.unmodelled = true
+        }
     }
     return scan
 }

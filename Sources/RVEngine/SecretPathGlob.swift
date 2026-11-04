@@ -19,14 +19,35 @@ enum SecretPathGlob {
     /// Spellings worth reporting for one word.
     static let selectionLimit = 16
 
-    /// `fnmatch`'s `FNM_PERIOD`: 0x04 on both Darwin and glibc.
-    private static let leadingPeriod: Int32 = 0x04
+    /// How a pattern selects names: the shell's own rule, or `find`'s.
+    enum Matching: Sendable {
+        /// A leading `.` must be spelled (`FNM_PERIOD`).
+        case shell
+        /// `find -name`/`-path`: `*` selects dotfiles too.
+        case findName
+        /// `find -iname`/`-ipath`: as `findName`, case-insensitive.
+        case findNameFolded
+
+        /// `FNM_PERIOD` is 0x04 and `FNM_CASEFOLD` 0x10 on Darwin and glibc.
+        fileprivate var flags: Int32 {
+            switch self {
+            case .shell: return 0x04
+            case .findName: return 0
+            case .findNameFolded: return 0x10
+            }
+        }
+    }
 
     /// Every catalog spelling `word` can select (up to `selectionLimit`), so
     /// an exemption on one (`.env`) never vouches for another (`.env.local`).
-    static func selections(_ word: String, catalog: SecretPathCatalog) -> [String] {
+    static func selections(
+        _ word: String,
+        catalog: SecretPathCatalog,
+        matching: Matching = .shell
+    ) -> [String] {
         // Too many alternatives to prove none selects a secret: fail closed.
-        guard let globs = expandBraces(word, limit: expansionLimit) else {
+        // `find` patterns are fnmatch only; `{` is literal there.
+        guard let globs = matching == .shell ? expandBraces(word, limit: expansionLimit) : [word] else {
             return representative(catalog).map { [$0] } ?? []
         }
         var found: [String] = []
@@ -42,12 +63,12 @@ enum SecretPathGlob {
                 let spelled: [String]?
                 switch rule.kind {
                 case .basename(let name):
-                    spelled = component(parts[parts.count - 1], selects: name) ? Array(parts.dropLast()) + [name] : nil
+                    spelled = component(parts[parts.count - 1], selects: name, matching) ? Array(parts.dropLast()) + [name] : nil
                 case .envVariant:
-                    spelled = component(parts[parts.count - 1], selects: ".env.local")
+                    spelled = component(parts[parts.count - 1], selects: ".env.local", matching)
                         ? Array(parts.dropLast()) + [".env.local"] : nil
                 case .homeSuffix(let suffix), .hostAuth(let suffix):
-                    spelled = window(parts, selects: suffix)
+                    spelled = window(parts, selects: suffix, matching)
                 }
                 guard let spelled else { continue }
                 let path = (absolute ? "/" : "") + spelled.joined(separator: "/")
@@ -74,23 +95,28 @@ enum SecretPathGlob {
 
     /// `parts` with the first run of components that can select `suffix`
     /// replaced by it.
-    private static func window(_ parts: [String], selects suffix: [String]) -> [String]? {
+    private static func window(
+        _ parts: [String],
+        selects suffix: [String],
+        _ matching: Matching
+    ) -> [String]? {
         guard suffix.isEmpty == false, parts.count >= suffix.count else { return nil }
         for start in 0...(parts.count - suffix.count) {
             let run = parts[start..<(start + suffix.count)]
-            if zip(run, suffix).allSatisfy({ component($0, selects: $1) }) {
+            if zip(run, suffix).allSatisfy({ component($0, selects: $1, matching) }) {
                 return Array(parts[..<start]) + suffix + Array(parts[(start + suffix.count)...])
             }
         }
         return nil
     }
 
-    private static func component(_ pattern: String, selects name: String) -> Bool {
+    private static func component(_ pattern: String, selects name: String, _ matching: Matching) -> Bool {
         if pattern == name { return true }
+        if matching == .findNameFolded, pattern.lowercased() == name.lowercased() { return true }
         guard pattern.contains(where: { "*?[".contains($0) }),
             pattern.contains(where: { $0 != "*" && $0 != "?" })
         else { return false }
-        return fnmatch(pattern, name, leadingPeriod) == 0
+        return fnmatch(pattern, name, matching.flags) == 0
     }
 
     /// Expands `{a,b}` groups (nested allowed) into plain globs; nil when the
