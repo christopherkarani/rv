@@ -6,7 +6,8 @@ import RVDomain
 /// that lowers protection: uninstalling, disabling packs, lowering safety,
 /// adding allowlist entries, redeeming or minting allow-once permits,
 /// applying or saving policy, approving egress/MCP calls, trusting an
-/// edited mcp.json, removing the secrets pre-commit hook, or signing
+/// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
+/// removing the secrets pre-commit hook, or signing
 /// managed policy. `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
@@ -87,7 +88,15 @@ private func isWeakeningSub(
     case "egress", "mcp":
         return sub == "approve" || (verb == "mcp" && sub == "trust")
     case "secrets":
-        return sub == "hook" && third.map { $0 == "uninstall" || isUnmodelledWord($0) } == true
+        // Every secrets.json or Keychain write: an agent that defines or
+        // imports a secret chooses which real value reaches a cage, or which
+        // host the gateway sends it to (a Varlock `@proxy(domain=...)`).
+        switch sub {
+        case "set", "remove", "oauth-reset": return true
+        case "import": return flags.contains("--dry-run") == false
+        case "hook": return third.map { $0 == "uninstall" || isUnmodelledWord($0) } == true
+        default: return false
+        }
     case "managed":
         return sub == "sign"
     default:

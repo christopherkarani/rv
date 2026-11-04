@@ -638,6 +638,27 @@ struct SecretGatewayTests {
         #expect(upstream.requests.count == 2)
     }
 
+    /// SDKs size downloads from HEAD (S3 HeadObject's ContentLength), so a
+    /// bodiless response keeps the upstream length; a body never does.
+    @Test func headResponsesKeepTheUpstreamContentLength() throws {
+        let upstream = RecordingUpstream(status: 200, headers: [("Content-Length", "1234")])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 200)
+        #expect(response.headers["content-length"] == "1234")
+        #expect(response.headers["transfer-encoding"] == nil)
+        #expect(response.body.isEmpty)
+
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "12")]) == "12")
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "1"), ("content-length", "2")]) == nil)
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "-1")]) == nil)
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "1\r\nX: y")]) == nil)
+        #expect(GatewayHeaders.bodilessContentLength([]) == nil)
+    }
+
     @Test func oversizedBodiesAreRefused() throws {
         let upstream = RecordingUpstream()
         let audit = AuditRecords()

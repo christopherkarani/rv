@@ -117,9 +117,7 @@ actor ActionApprovalCeremonyService {
     ) async throws -> HostActionApprovalCreatedDTO {
         emit(.askReceived, approvalID: nil, principal: nil,
             digest: nil, continuation: nil, outcome: "received")
-        guard let reason = Self.askReason(dto.reason) else {
-            throw ActionApprovalCeremonyError.invalidAsk
-        }
+        let reason = dto.reason
         let definitionID = dto.definitionID
         let revision = dto.definitionRevision
         guard !definitionID.rawValue.isEmpty, !revision.digestHex.isEmpty else {
@@ -619,14 +617,6 @@ actor ActionApprovalCeremonyService {
             workspaceHostGeneration: principal.hostGeneration)
     }
 
-    private static func askReason(_ raw: String) -> RuntimeAskReason? {
-        switch raw {
-        case "mandatoryHuman": return .mandatoryHuman
-        case "reviewAsk": return .reviewAsk
-        default: return nil
-        }
-    }
-
     private static func trustedResult(
         _ outcome: UIAuthenticationOutcome
     ) -> OperatorAuthenticationResult {
@@ -711,10 +701,6 @@ actor ActionApprovalCeremonyService {
         retained: RetainedReview
     ) -> UIActionReviewItemDTO {
         let projected = Self.project(retained.action)
-        let reason: String = switch retained.reason {
-        case .mandatoryHuman: "mandatoryHuman"
-        case .reviewAsk: "reviewAsk"
-        }
         return UIActionReviewItemDTO(
             approvalID: id.rawValue,
             instanceID: retained.principal.instanceID.rawValue,
@@ -726,7 +712,7 @@ actor ActionApprovalCeremonyService {
             actionKind: projected.kind,
             exactTarget: projected.target,
             exactArguments: projected.arguments,
-            policyReason: reason,
+            policyReason: retained.reason.rawValue,
             scopeSummary: "Allow once: this exact action, single use.",
             actionDigestHex: retained.actionDigestHex,
             status: Self.status(status),
