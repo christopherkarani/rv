@@ -411,10 +411,14 @@ struct JudgeGatePacksOnlyFloorTests {
         try body(try #require(HomePath(validating: root.path)))
     }
 
+    /// Empty environment and an empty home: no bundle resolves, so no
+    /// judge can score (engine-missing), whatever the process env holds.
     static func packsOnly(_ command: String, home: HomePath) -> EvaluationResult {
         JudgeRuntime.apply(
-            to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command), home: home
-        )
+            to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command),
+            inputs: .gather(home: home, cwd: nil, environment: [:]), judge: LiveJudgePort(),
+            provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false
+        ).result
     }
 
     @Test("no judge: spawn-bearing inline programs are indeterminate", arguments: [

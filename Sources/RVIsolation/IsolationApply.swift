@@ -10,6 +10,7 @@ public enum IsolationBackendFamily: Sendable, Equatable {
     case none
     case seatbelt
     case landlock
+    case microvm
 }
 
 public enum IsolationApplyError: Error, Sendable, Equatable {
@@ -114,6 +115,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     enum Launch: Sendable, Equatable {
         case seatbelt(SeatbeltProfile)
         case landlock(LandlockRuleset)
+        case microvm(MicroVMProfile)
         case unsandboxed
     }
 
@@ -144,16 +146,21 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         switch launch {
         case .seatbelt(let profile):
             return profile
-        case .landlock, .unsandboxed:
+        case .landlock, .microvm, .unsandboxed:
             return nil
         }
+    }
+
+    var microVMProfile: MicroVMProfile? {
+        if case .microvm(let profile) = launch { return profile }
+        return nil
     }
 
     var landlockRuleset: LandlockRuleset? {
         switch launch {
         case .landlock(let ruleset):
             return ruleset
-        case .seatbelt, .unsandboxed:
+        case .seatbelt, .microvm, .unsandboxed:
             return nil
         }
     }
@@ -164,6 +171,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         switch launch {
         case .seatbelt(let profile): profile.workspacePath
         case .landlock(let ruleset): ruleset.workspacePath
+        case .microvm(let profile): profile.workspacePath
         case .unsandboxed: nil
         }
     }
@@ -184,10 +192,13 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             self.family = .seatbelt
         case (.landlock, .contained):
             self.family = .landlock
+        case (.microvm, .contained):
+            self.family = .microvm
         case (.unsandboxed, .observed), (.unsandboxed, .mediated):
             self.family = .none
         case (.seatbelt, .observed), (.seatbelt, .mediated),
             (.landlock, .observed), (.landlock, .mediated),
+            (.microvm, .observed), (.microvm, .mediated),
             (.unsandboxed, .contained):
             return nil
         }
@@ -249,6 +260,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             return IsolationBackends.sandboxExecPath
         case .landlock:
             return IsolationBackends.isolationExecName
+        case .microvm:
+            return MicroVMHelper.executableName
         case .unsandboxed:
             return command.executable
         }
@@ -261,6 +274,10 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         case .landlock(let ruleset):
             return ["--workspace", ruleset.workspacePath, "--", command.executable]
                 + command.arguments
+        case .microvm:
+            // Built per spawn by `microVMSpawnCommand`: it needs the live
+            // relay ports, forwarded names and handshake nonce.
+            return []
         case .unsandboxed:
             return command.arguments
         }
@@ -279,37 +296,49 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             case .contained:
                 return nil
             }
-        case .seatbelt, .landlock:
+        case .seatbelt, .landlock, .microvm:
             return nil
         }
     }
 }
 
-/// What a successful run established. Seatbelt carries the runtime session
-/// that reached establishment. Observed and mediated do not. Landlock is not
-/// an establishment.
+/// What a successful run established. Seatbelt and micro-VM carry the
+/// runtime session that reached establishment. Observed and mediated do
+/// not. Landlock is not an establishment.
 public enum EstablishedIsolation: Sendable, Equatable {
     case observed
     case mediated
     case seatbelt(RuntimeSession)
+    case microvm(RuntimeSession)
 }
 
 public struct IsolatedRunResult: Sendable, Equatable {
     public let established: EstablishedIsolation
     public let exitStatus: Int32
 
-    /// The session carried by `.seatbelt`. Observed and mediated runs have none.
+    /// The session carried by `.seatbelt` or `.microvm`. Observed and
+    /// mediated runs have none.
     public var session: RuntimeSession? {
-        if case .seatbelt(let session) = established { return session }
-        return nil
+        switch established {
+        case .seatbelt(let session), .microvm(let session): session
+        case .observed, .mediated: nil
+        }
     }
 
     init(established: EstablishedIsolation, exitStatus: Int32) {
-        if case .seatbelt(let session) = established {
+        switch established {
+        case .seatbelt(let session):
             precondition(
                 session.backend == .seatbelt,
                 "Seatbelt establishment requires a seatbelt runtime session"
             )
+        case .microvm(let session):
+            precondition(
+                session.backend == .microvm,
+                "Micro-VM establishment requires a micro-VM runtime session"
+            )
+        case .observed, .mediated:
+            break
         }
         self.established = established
         self.exitStatus = exitStatus
@@ -431,7 +460,7 @@ enum IsolationBackends {
                     )
                 case .landlock:
                     return runLandlock(prepared, executable: nil)
-                case .none:
+                case .none, .microvm:
                     return .failure(.backendMismatch)
                 }
             }
@@ -846,7 +875,7 @@ func spawn(
         return .success(
             IsolatedRunResult(established: established, exitStatus: process.terminationStatus)
         )
-    case .landlock, .seatbelt:
+    case .landlock, .seatbelt, .microvm:
         return .failure(.backendMismatch)
     }
 }

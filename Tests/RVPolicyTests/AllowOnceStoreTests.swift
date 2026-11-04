@@ -357,6 +357,8 @@ struct AllowOnceStoreTests {
         #expect(names.contains(".typed-rules.lock"))
         #expect(names.contains("policy.toml"))
         #expect(names.contains(".policy.lock"))
+        #expect(names.contains("egress-denials.jsonl"))
+        #expect(names.contains("egress-denials.jsonl.lock"))
     }
 
     @Test func live_usesConfigDirectoryUnderHome() throws {
