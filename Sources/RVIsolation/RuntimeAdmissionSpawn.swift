@@ -5,7 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
-import Synchronization
+import RVFileStore
 
 enum RuntimeAdmissionDescriptors {
     /// Child writes admission requests here. The handshake pipe stays on fd 3
@@ -110,8 +110,6 @@ func installAdmissionDescriptors(
 }
 #endif
 
-private let admissionAppendLock = Mutex<Void>(())
-
 /// Appends one admission audit event. Returns true only when the line is
 /// persisted. Every failure path reports through `diagnose` (stderr by
 /// default) instead of dropping the audit row silently: the admission
@@ -127,40 +125,26 @@ func appendAdmissionEvent(
 ) -> Bool {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
-    guard var data = try? encoder.encode(event) else {
+    guard let data = try? encoder.encode(event) else {
         diagnose("rv.admission: audit encode failed session=\(event.session ?? "none")")
         return false
     }
-    data.append(UInt8(ascii: "\n"))
-    let directory = url.deletingLastPathComponent()
     do {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONLAppendLog.append(data, to: url, sync: true)
+        return true
     } catch {
-        diagnose("rv.admission: audit directory failed path=\(url.path) error=\(error.localizedDescription)")
+        let detail: String
+        switch error {
+        case .directory: detail = "directory failed path=\(url.path) error=directory create failed"
+        case .lock(let code): detail = "lock failed path=\(url.path) errno=\(code)"
+        case .open(let code): detail = "open failed path=\(url.path) errno=\(code)"
+        case .notRegularFile: detail = "open failed path=\(url.path) error=not a regular file"
+        case .write(let code): detail = "write failed path=\(url.path) errno=\(code)"
+        case .sync(let code): detail = "sync failed path=\(url.path) errno=\(code)"
+        }
+        diagnose("rv.admission: audit \(detail)")
         return false
     }
-    var persisted = false
-    admissionAppendLock.withLock { _ in
-        let fd = url.path.withCString { path in
-            open(path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC, 0o600)
-        }
-        guard fd >= 0 else {
-            diagnose("rv.admission: audit open failed path=\(url.path) errno=\(errno)")
-            return
-        }
-        defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else {
-            diagnose("rv.admission: audit lock failed path=\(url.path) errno=\(errno)")
-            return
-        }
-        defer { _ = flock(fd, LOCK_UN) }
-        guard admissionWriteAll(fd, data) else {
-            diagnose("rv.admission: audit write failed path=\(url.path) errno=\(errno)")
-            return
-        }
-        persisted = true
-    }
-    return persisted
 }
 
 func admissionClose(_ fd: Int32) {

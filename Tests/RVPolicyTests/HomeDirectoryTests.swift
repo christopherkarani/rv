@@ -27,4 +27,18 @@ import RVPolicy
             _ = try JSONDecoder().decode(HomeDirectory.self, from: empty)
         }
     }
+
+    @Test(arguments: [
+        ("/Users/op", "/Users/op/.config/rv"),
+        ("/Users/op/", "/Users/op/.config/rv"),
+        ("/", "/.config/rv"),
+    ])
+    func configRootAppendsDotConfigRv(home: String, expected: String) {
+        #expect(HomeDirectory.configRoot(for: home)?.path == expected)
+    }
+
+    @Test(arguments: ["", "relative/home", "~", "/Users/op\0evil"])
+    func configRootRejectsNonAbsoluteOrNulHome(home: String) {
+        #expect(HomeDirectory.configRoot(for: home) == nil)
+    }
 }

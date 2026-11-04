@@ -262,11 +262,9 @@ struct CodingBenchmark: Sendable {
             .init(name: "gzip stdout", command: "gzip -c a", cwd: ws, routine: false, expected: .allow),
             .init(name: "zip archive outside", command: "zip /tmp/bench.zip a b", cwd: ws, routine: false, expected: .denyPinned),
             .init(name: "zip move outside source", command: "zip -m in.zip /tmp/bench-zipsrc", cwd: ws, routine: false, expected: .denyPinned),
-            .init(name: // LIMITATION (standing): dynamic writers are
-            // Turing-complete; they are bounded by the workspace sandbox
-            // (process confinement), not the static layer — the same
-            // property as every other opaque-exec shape.
-            "python dynamic write", command: "python3 -c \"open('/tmp/bench-py','w').write('x')\"", cwd: ws, routine: false, expected: .allow),
+            .init(name: // Literal write-mode `open` is limited at the unwrap peel; other
+            // dynamic writers stay bounded by the workspace sandbox, not the static layer.
+            "python dynamic write", command: "python3 -c \"open('/tmp/bench-py','w').write('x')\"", cwd: ws, routine: false, expected: .denyPinned),
         ]
         let chains: [CodingBenchmarkCase] = [
             .init(

@@ -429,6 +429,7 @@ func installSh_refusesOlderMacOS(_ productVersion: String) throws {
     )
     try writeSwiftLibsTarball(in: assets)
     try writePackBundleTarball(in: assets, target: "linux-x86_64", bundle: "rv_RVPacks.resources")
+    try writeChecksums(in: assets)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeLinuxShims(in: shim, arch: "x86_64")
@@ -742,7 +743,7 @@ private func proveLinuxInstall(arch: String) throws {
 
 @Test func installSh_fetchesGitHubLatestWhenInstallBinUnset() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
-    #expect(text.contains("https://github.com/christopherkarani/rv/releases/latest/download"))
+    #expect(text.contains("https://github.com/christopherkarani/rv/releases"))
     #expect(text.contains("rv_RVPacks-$target.tar.gz"))
     #expect(text.contains("rv-swiftlibs-$target.tar.gz"))
     #expect(text.contains("rv-$target"))
@@ -820,6 +821,25 @@ private func writeSwiftLibsTarball(in assets: URL, target: String = "linux-x86_6
     try FileManager.default.removeItem(at: libs)
 }
 
+/// Writes SHA256SUMS the way the release workflow does: `sha256sum -- *`
+/// inside the asset directory (`<hex>  <name>`).
+private func writeChecksums(in assets: URL, omitting: [String] = []) throws {
+    let names = try FileManager.default.contentsOfDirectory(atPath: assets.path)
+        .filter { $0 != "SHA256SUMS" && !omitting.contains($0) }
+        .sorted()
+    let script = "for f in \"$@\"; do if command -v sha256sum >/dev/null 2>&1; then sha256sum -- \"$f\"; else shasum -a 256 -- \"$f\"; fi; done > SHA256SUMS"
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", script, "sums"] + names
+    process.currentDirectoryURL = assets
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        struct ChecksumsFailed: Error {}
+        throw ChecksumsFailed()
+    }
+}
+
 private func isDirectory(_ url: URL) -> Bool {
     var isDir: ObjCBool = false
     return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
@@ -828,7 +848,9 @@ private func isDirectory(_ url: URL) -> Bool {
 private func writeCurlShim(
     in shim: URL,
     assets: URL,
-    failAll: Bool = false
+    failAll: Bool = false,
+    latestTag: String = "v9.9.9",
+    servedTag: String? = nil
 ) throws {
     try writeExecutable(
         shim.appendingPathComponent("curl"),
@@ -847,6 +869,9 @@ private func writeCurlShim(
               out="$2"
               shift 2
               ;;
+            -w)
+              shift 2
+              ;;
             -I|--head|-*I*)
               head=1
               shift
@@ -860,6 +885,22 @@ private func writeCurlShim(
               ;;
           esac
         done
+        echo "$url" >> "\(shim.path)/curl.log"
+        case "$url" in
+          */releases/latest)
+            printf '%s' "https://github.com/christopherkarani/rv/releases/tag/\(latestTag)"
+            exit 0
+            ;;
+        esac
+        if [ -n "\(servedTag ?? "")" ]; then
+          case "$url" in
+            */download/\(servedTag ?? "")/*) ;;
+            *)
+              echo "curl: (22) The requested URL returned error: 404" >&2
+              exit 22
+              ;;
+          esac
+        fi
         name="${url##*/}"
         src="\(assets.path)/$name"
         if [ ! -f "$src" ]; then
@@ -915,6 +956,7 @@ private func writeCurlShim(
         contents: "#!/bin/sh\nexit 0\n"
     )
     try writePackBundleTarball(in: assets)
+    try writeChecksums(in: assets)
     #expect(FileManager.default.fileExists(atPath: assets.appendingPathComponent("rv_RVPacks-darwin-arm64.tar.gz").path))
     #expect(isDirectory(assets.appendingPathComponent("rv_RVPacks.bundle")) == false)
 
@@ -985,6 +1027,7 @@ private func writeCurlShim(
         assets.appendingPathComponent("rv-workspace-host-darwin-arm64"),
         contents: "#!/bin/sh\nexit 0\n"
     )
+    try writeChecksums(in: assets)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
@@ -1289,6 +1332,7 @@ private func runSignedDownloadInstall(
     }
     let assets = root.appendingPathComponent("assets", isDirectory: true)
     try writeReleaseAssets(in: assets, withSpanRuntime: withSpanRuntime, withPTYClaim: withPTYClaim)
+    try writeChecksums(in: assets)
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
     try writeCurlShim(in: shim, assets: assets)
@@ -1960,4 +2004,205 @@ private func flippedSignedReleasesScript() throws -> URL {
 
     #expect(process.terminationStatus == 0)
     #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("tools.log").path) == false)
+}
+
+// MARK: - Release checksums (SHA256SUMS) and single-tag resolution
+
+private struct ChecksumRun {
+    let status: Int32
+    let stderr: String
+    let destBin: URL
+    let curlLog: String
+    let root: URL
+}
+
+/// Download install with a Linux-shaped (default) or Darwin-shaped fake
+/// platform. `afterSums` runs on the asset directory after SHA256SUMS is
+/// written (or skipped), so a test can tamper with an asset. Darwin runs
+/// refuse before any signature tool is consulted, so no mounted codesign shim
+/// is needed for the failure paths.
+private func runChecksumInstall(
+    darwin: Bool = false,
+    writeSums: Bool = true,
+    environment: [String: String] = [:],
+    servedTag: String? = nil,
+    afterSums: (URL) throws -> Void = { _ in }
+) throws -> ChecksumRun {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-sums-\(UUID().uuidString)", isDirectory: true)
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let destBin = home.appendingPathComponent(".local/bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: destBin, withIntermediateDirectories: true)
+    for name in ["rv", "rv-cli", "rvd"] {
+        try writeExecutable(destBin.appendingPathComponent(name), contents: "#!/bin/sh\n# installed-v1\n")
+    }
+    let assets = root.appendingPathComponent("assets", isDirectory: true)
+    let target = darwin ? "darwin-arm64" : "linux-x86_64"
+    try writeExecutable(assets.appendingPathComponent("rv-\(target)"), contents: "#!/bin/sh\nexec \"$(dirname \"$0\")/rv-cli\" \"$@\"\n")
+    try writeExecutable(assets.appendingPathComponent("rv-cli-\(target)"), contents: "#!/bin/sh\n# release-cli\nexit 0\n")
+    try writeExecutable(assets.appendingPathComponent("rvd-\(target)"), contents: "#!/bin/sh\n# release-rvd\nexit 0\n")
+    try writeExecutable(assets.appendingPathComponent("rv-workspace-host-\(target)"), contents: "#!/bin/sh\nexit 0\n")
+    if darwin {
+        try writeExecutable(assets.appendingPathComponent("libswiftCompatibilitySpan.dylib"), contents: "span\n")
+    } else {
+        try writeExecutable(assets.appendingPathComponent("rv-isolation-exec-\(target)"), contents: "#!/bin/sh\nexit 125\n")
+        try writeSwiftLibsTarball(in: assets)
+    }
+    try writePackBundleTarball(in: assets, target: target, bundle: darwin ? "rv_RVPacks.bundle" : "rv_RVPacks.resources")
+    if writeSums { try writeChecksums(in: assets) }
+    try afterSums(assets)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    if darwin { try writeDarwinShims(in: shim) } else { try writeLinuxShims(in: shim) }
+    try writeCurlShim(in: shim, assets: assets, latestTag: "v1.2.3", servedTag: servedTag)
+
+    var env = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+        "TAR_OPTIONS": "--no-same-owner",
+        "RV_INSTALL_NO_MODELS": "1",
+    ]
+    env.merge(environment) { $1 }
+    let (status, err) = try runInstallScript(script: installScriptURL(), environment: env)
+    return ChecksumRun(
+        status: status, stderr: err, destBin: destBin,
+        curlLog: (try? String(contentsOf: shim.appendingPathComponent("curl.log"), encoding: .utf8)) ?? "",
+        root: root)
+}
+
+private func expectOldInstallIntact(_ run: ChecksumRun) throws {
+    for name in ["rv", "rv-cli", "rvd"] {
+        let body = try String(contentsOf: run.destBin.appendingPathComponent(name), encoding: .utf8)
+        #expect(body.contains("installed-v1"), "\(name) was replaced")
+    }
+    #expect(FileManager.default.fileExists(atPath: run.destBin.appendingPathComponent("rv-workspace-host").path) == false)
+}
+
+private func corrupt(_ assets: URL, _ name: String) throws {
+    try "#!/bin/sh\n# tampered\nexit 0\n".write(to: assets.appendingPathComponent(name), atomically: true, encoding: .utf8)
+}
+
+@Test func installSh_linuxHappyPathVerifiesChecksums() throws {
+    let run = try runChecksumInstall()
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.curlLog.contains("SHA256SUMS"))
+    #expect(run.stderr.contains("checksum") == false)
+}
+
+@Test func installSh_checksumsVerifyUnderATmpdirWithNewlineAndBackslash() throws {
+    // sha256sum / shasum prefix the digest with `\` when the path holds a
+    // newline or backslash; hashing via stdin keeps the digest bare.
+    let parent = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-sums-nl-\(UUID().uuidString)", isDirectory: true)
+    let nasty = parent.appendingPathComponent("odd\nname\\x", isDirectory: true)
+    try FileManager.default.createDirectory(at: nasty, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let run = try runChecksumInstall(environment: ["TMPDIR": nasty.path])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("checksum mismatch") == false, "\(run.stderr)")
+}
+
+@Test func installSh_darwinShapedChecksumMismatchAborts() throws {
+    let run = try runChecksumInstall(darwin: true) { assets in
+        try corrupt(assets, "rvd-darwin-arm64")
+    }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("checksum mismatch for rvd-darwin-arm64"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_linuxBinaryChecksumMismatchAborts() throws {
+    let run = try runChecksumInstall { assets in try corrupt(assets, "rv-cli-linux-x86_64") }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("checksum mismatch for rv-cli-linux-x86_64"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_swiftLibsChecksumMismatchAborts() throws {
+    let run = try runChecksumInstall { assets in try corrupt(assets, "rv-swiftlibs-linux-x86_64.tar.gz") }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("checksum mismatch for rv-swiftlibs-linux-x86_64.tar.gz"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_packTarballChecksumMismatchAborts() throws {
+    let run = try runChecksumInstall { assets in try corrupt(assets, "rv_RVPacks-linux-x86_64.tar.gz") }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("checksum mismatch for rv_RVPacks-linux-x86_64.tar.gz"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_missingSHA256SUMSAborts() throws {
+    let run = try runChecksumInstall(writeSums: false)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("SHA256SUMS"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_missingChecksumEntryAborts() throws {
+    let run = try runChecksumInstall(writeSums: false) { assets in
+        try writeChecksums(in: assets, omitting: ["rvd-linux-x86_64"])
+    }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("SHA256SUMS has no entry for rvd-linux-x86_64"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_missingPackChecksumEntryAborts() throws {
+    let run = try runChecksumInstall(writeSums: false) { assets in
+        try writeChecksums(in: assets, omitting: ["rv_RVPacks-linux-x86_64.tar.gz"])
+    }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("SHA256SUMS has no entry for rv_RVPacks-linux-x86_64.tar.gz"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_everyAssetComesFromTheSameResolvedTag() throws {
+    let run = try runChecksumInstall(servedTag: "v1.2.3")
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    let downloads = run.curlLog.split(separator: "\n").map(String.init)
+        .filter { !$0.hasSuffix("/releases/latest") }
+    #expect(downloads.isEmpty == false)
+    let base = "https://github.com/christopherkarani/rv/releases/download/v1.2.3/"
+    for url in downloads {
+        #expect(url.hasPrefix(base), "\(url) is not from v1.2.3")
+    }
+    #expect(downloads.contains(base + "SHA256SUMS"))
+    #expect(run.curlLog.components(separatedBy: "/releases/latest").count - 1 == 1, "latest must resolve once")
+    #expect(run.curlLog.contains("/latest/download") == false)
+}
+
+@Test func installSh_versionEnvPinsTheTagWithoutResolvingLatest() throws {
+    let run = try runChecksumInstall(environment: ["RV_INSTALL_VERSION": "v0.2.1"], servedTag: "v0.2.1")
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.curlLog.contains("/releases/latest") == false)
+    #expect(run.curlLog.contains("/download/v0.2.1/SHA256SUMS"))
+}
+
+@Test func installSh_rejectsMalformedVersionPin() throws {
+    let run = try runChecksumInstall(environment: ["RV_INSTALL_VERSION": "v1/../x"])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("could not resolve a release tag"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_skipChecksumsInstallsAndWarnsLoudly() throws {
+    let run = try runChecksumInstall(writeSums: false, environment: ["RV_INSTALL_SKIP_CHECKSUMS": "1"])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("RV_INSTALL_SKIP_CHECKSUMS=1"))
+    #expect(run.stderr.contains("NOT verified"))
+    #expect(run.curlLog.contains("SHA256SUMS") == false)
 }

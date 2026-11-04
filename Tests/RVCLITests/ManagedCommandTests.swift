@@ -52,9 +52,9 @@ struct ManagedCommandTests {
             output: nil
         ).get()
         let status = try ManagedRun.verify(directory: bundle).get()
-        #expect(status.state == "active")
-        #expect(status.signed == true)
-        #expect(status.organization == "Acme")
+        guard case .active(let active) = status else { Issue.record("expected active, got \(status)"); return }
+        #expect(active.signed)
+        #expect(active.organization == "Acme")
         #expect(ManagedRun.statusText(status).contains("mcp blocked servers: shell-*"))
 
         try scratch.write("bundle/policy.json", #"{"version": 1, "organization": "Acme"}"#)
@@ -72,8 +72,9 @@ struct ManagedCommandTests {
             .active(ManagedPolicyBundle(
                 policy: policy, sha256: "abc", isSigned: true, directory: "/managed", signingKey: 2, highestSerial: 8)),
             directory: "/managed")
-        #expect(status.signingKey == 2)
-        #expect(status.highestSerial == 8)
+        guard case .active(let active) = status else { Issue.record("expected active, got \(status)"); return }
+        #expect(active.signingKey == 2)
+        #expect(active.highestSerial == 8)
         let text = ManagedRun.statusText(status)
         #expect(text.contains("organization policy active: Acme serial 8\n"))
         #expect(text.contains("  signed by key 2 in org-key.pub sha256 abc\n"))
@@ -219,11 +220,13 @@ struct ManagedCommandTests {
         #expect(ReportRun.text(plain).contains("NOT compliant"))
 
         let governed = ReportRun.build(inputs(try active(#"{"version": 1, "secrets": {"allowEnvironmentDelivery": false}}"#)))
-        #expect(governed.managed.state == "active")
+        #expect(governed.managed.isInvalid == false)
+        #expect({ if case .active = governed.managed { true } else { false } }())
         #expect(governed.secrets.items.first?.policyViolation?.contains("not allowed") == true)
 
         let broken = ReportRun.build(inputs(.invalid("bad owner")))
-        #expect(broken.managed.state == "invalid")
+        #expect(broken.managed.isInvalid)
+        #expect(broken.compliant == false)
         #expect(broken.mcp.ok == false)
         #expect(broken.mcp.error?.contains("bad owner") == true)
     }
