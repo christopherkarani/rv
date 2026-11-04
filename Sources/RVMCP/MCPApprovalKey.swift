@@ -59,10 +59,35 @@ public enum MCPApprovalKeyStatus: String, Sendable, Equatable, Codable {
     case unavailable
 }
 
+/// What a MAC check concluded. `noKey` means the holder of the key had
+/// none to judge with; `forged` means it judged and the MAC did not match.
+public enum MCPMACVerdict: Sendable, Equatable {
+    case valid
+    case forged
+    case noKey
+
+    /// Maps the wire's `Bool?` (nil: no key; false: forged).
+    init(wire: Bool?) {
+        switch wire {
+        case .some(true): self = .valid
+        case .some(false): self = .forged
+        case .none: self = .noKey
+        }
+    }
+
+    var wire: Bool? {
+        switch self {
+        case .valid: true
+        case .forged: false
+        case .noKey: nil
+        }
+    }
+}
+
 /// The only thing callers may do with the approvals key: ask for a MAC or
 /// ask whether a MAC verifies. Key bytes never leave the implementation
-/// behind this struct. `verify` never creates a key, and its nil means
-/// "no key to judge with" — distinct from false, "judged and forged".
+/// behind this struct. `verify` never creates a key, and `.noKey` means
+/// "no key to judge with" — distinct from `.forged`, "judged and forged".
 /// Only `mac` with `createIfMissing` may enroll a new key.
 public struct MCPApprovalSigning: Sendable {
     /// Whether a grant MAC'd under this key proves a person approved.
@@ -77,8 +102,8 @@ public struct MCPApprovalSigning: Sendable {
     /// authentication in the operation is the key use.
     public var presenceAtSigning: Bool
     public var status: @Sendable () -> MCPApprovalKeyStatus
-    public var mac: @Sendable (_ purpose: String, _ fields: [String], _ createIfMissing: Bool) -> String?
-    public var verify: @Sendable (_ candidate: String?, _ purpose: String, _ fields: [String]) -> Bool?
+    public var mac: @Sendable (_ purpose: MCPMACPurpose, _ fields: [String], _ createIfMissing: Bool) -> String?
+    public var verify: @Sendable (_ candidate: String?, _ purpose: MCPMACPurpose, _ fields: [String]) -> MCPMACVerdict
     /// Ends any reusable authentication window so the next key use in
     /// this operation prompts exactly once. No-op where key use does not
     /// authenticate (file store) or cannot reuse (in-process test fakes).
@@ -88,8 +113,8 @@ public struct MCPApprovalSigning: Sendable {
         honorsGrants: Bool = true,
         presenceAtSigning: Bool = false,
         status: @escaping @Sendable () -> MCPApprovalKeyStatus,
-        mac: @escaping @Sendable (String, [String], Bool) -> String?,
-        verify: @escaping @Sendable (String?, String, [String]) -> Bool?,
+        mac: @escaping @Sendable (MCPMACPurpose, [String], Bool) -> String?,
+        verify: @escaping @Sendable (String?, MCPMACPurpose, [String]) -> MCPMACVerdict,
         beginFreshAuth: @escaping @Sendable () -> Void = {}
     ) {
         self.honorsGrants = honorsGrants
@@ -101,7 +126,7 @@ public struct MCPApprovalSigning: Sendable {
     }
 
     public static let unavailable = MCPApprovalSigning(
-        honorsGrants: false, status: { .unavailable }, mac: { _, _, _ in nil }, verify: { _, _, _ in nil })
+        honorsGrants: false, status: { .unavailable }, mac: { _, _, _ in nil }, verify: { _, _, _ in .noKey })
 
     /// Custodian-side adapter over a signer held by this process. Every
     /// operation loads the signer fresh, so what is judged is the key as
@@ -117,10 +142,10 @@ public struct MCPApprovalSigning: Sendable {
             honorsGrants: honorsGrants,
             status: status ?? { load() == nil ? .notEnrolled : .enrolled },
             mac: { purpose, fields, createIfMissing in
-                (createIfMissing ? loadOrCreate() : load())?.mac(purpose, fields)
+                (createIfMissing ? loadOrCreate() : load())?.mac(purpose.rawValue, fields)
             },
             verify: { candidate, purpose, fields in
-                load().map { $0.verify(candidate, purpose, fields) }
+                load().map { $0.verify(candidate, purpose.rawValue, fields) ? .valid : .forged } ?? .noKey
             },
             beginFreshAuth: beginFreshAuth)
     }

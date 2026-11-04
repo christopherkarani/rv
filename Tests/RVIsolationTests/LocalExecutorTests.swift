@@ -657,10 +657,12 @@ private func expectContainedPlatform(
         Issue.record("contained run must not establish observed", sourceLocation: sourceLocation)
     case .mediated:
         Issue.record("contained run must not establish mediated", sourceLocation: sourceLocation)
+    case .microvm:
+        Issue.record("must not establish a micro-VM", sourceLocation: sourceLocation)
     }
     #elseif os(Linux)
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         Issue.record(
             "Linux contained success must not mint IsolatedRunResult",
             sourceLocation: sourceLocation
@@ -669,7 +671,7 @@ private func expectContainedPlatform(
     #else
     Issue.record("first-slice LocalExecutor requires Darwin or Linux", sourceLocation: sourceLocation)
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         break
     }
     #endif

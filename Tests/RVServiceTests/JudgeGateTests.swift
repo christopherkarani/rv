@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import RVService
 import RVDomain
+import RVLaya
 
 @Suite("Judge gate")
 struct JudgeGateTests {
@@ -415,10 +416,10 @@ struct JudgeGatePacksOnlyFloorTests {
     /// judge can score (engine-missing), whatever the process env holds.
     static func packsOnly(_ command: String, home: HomePath) -> EvaluationResult {
         JudgeRuntime.apply(
-            to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command), home: home,
+            to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command),
             inputs: .gather(home: home, cwd: nil, environment: [:]), judge: LiveJudgePort(),
             provenance: .unknown, now: Date(), cwd: nil, allowSafeLane: true, isPeek: false
-        )
+        ).result
     }
 
     @Test("no judge: spawn-bearing inline programs are indeterminate", arguments: [
@@ -452,3 +453,25 @@ struct JudgeGatePacksOnlyFloorTests {
         }
     }
 }
+
+#if canImport(CoreML)
+@Suite("Judge invalid label set")
+struct JudgeInvalidLabelsTests {
+    /// A stock judge with a respelled label must fail closed: `.failed`
+    /// raises to review/Ask, never an allow and never packs-only.
+    @Test func badLabelsFailClosedToReview() {
+        var questions = LayaQuestions.guardQuestions
+        questions.action.options[2].label = "blok"
+        let run = JudgeRuntime.runJudge(
+            command: "ls", context: JudgeContext(), engine: .laya,
+            bundle: URL(fileURLWithPath: "/nonexistent-rv-bundle"),
+            wait: nil, questions: questions
+        )
+        guard case .failed = run else { Issue.record("expected .failed, got \(run)"); return }
+        let result = EvaluationResult(outcome: .plain, matchingView: "ls", analysis: .unknown)
+        let (raised, note) = JudgeRuntime.failClosed(run, over: result)
+        #expect(note == "prediction-failed")
+        if case .plain = raised.outcome { Issue.record("bad labels must not allow") }
+    }
+}
+#endif

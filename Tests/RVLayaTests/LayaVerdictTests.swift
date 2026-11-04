@@ -87,5 +87,68 @@ struct LayaVerdictTests {
             return why.contains("deny")
         }
     }
+
+    private func ftBundle(config: String?) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("laya-cfg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8)
+            .write(to: dir.appendingPathComponent("tokenizer.json"))
+        if let config { try Data(config.utf8).write(to: dir.appendingPathComponent("config.json")) }
+        return dir
+    }
+
+    /// Absent config keeps the default order: the load proceeds past config
+    /// parsing and fails only on the missing model package.
+    @Test func absentConfigKeepsDefaultOrder() throws {
+        let dir = try ftBundle(config: nil)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect {
+            _ = try FineTunedJudge(bundleDir: dir)
+        } throws: { error in
+            guard case LayaError.badBundle(let why) = error else { return false }
+            return why.contains("model.mlpackage")
+        }
+    }
+
+    @Test func unparseableConfigFailsLoading() throws {
+        let dir = try ftBundle(config: "{not json")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect {
+            _ = try FineTunedJudge(bundleDir: dir)
+        } throws: { error in
+            guard case LayaError.badBundle(let why) = error else { return false }
+            return why.contains("config.json")
+        }
+    }
+
+    @Test(arguments: [
+        #"{"logit_order":["allow","review"]}"#,
+        #"{"logit_order":["allow","allow","block"]}"#,
+        #"{"logit_order":"allow,review,block"}"#,
+        #"{"labels":["block","review"]}"#,
+    ])
+    func invalidLabelOrderFailsLoading(config: String) throws {
+        let dir = try ftBundle(config: config)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect {
+            _ = try FineTunedJudge(bundleDir: dir)
+        } throws: { error in
+            guard case LayaError.badBundle(let why) = error else { return false }
+            return !why.contains("model.mlpackage")
+        }
+    }
+
+    @Test func stockJudgeRejectsBadLabelsAtBuild() throws {
+        var questions = LayaQuestions.guardQuestions
+        questions.action.options[2].label = "blok"
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("no-bundle-\(UUID().uuidString)")
+        #expect {
+            _ = try LayaCoreMLJudge(bundleDir: missing, questions: questions)
+        } throws: { error in
+            guard case LayaError.badBundle(let why) = error else { return false }
+            return why.contains("blok")
+        }
+    }
     #endif
 }

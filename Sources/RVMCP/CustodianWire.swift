@@ -3,10 +3,17 @@ import Foundation
 /// Wire shapes between an approvals client and the custodian that holds
 /// the key. No request or response can carry key material: clients send
 /// purposes and fields, the custodian returns MAC strings and verdicts.
+public enum MCPMACPurpose: String, Sendable, Codable, CaseIterable {
+    case grant
+    case code
+    case argumentKeys = "argument-keys"
+    case mcpJSON = "mcp.json"
+}
+
 public enum MCPCustodianRequest: Sendable, Equatable, Codable {
     case status
-    case mac(purpose: String, fields: [String], createIfMissing: Bool)
-    case verify(candidate: String?, purpose: String, fields: [String])
+    case mac(purpose: MCPMACPurpose, fields: [String], createIfMissing: Bool)
+    case verify(candidate: String?, purpose: MCPMACPurpose, fields: [String])
     /// Invalidate any reusable authentication in the custodian, so the
     /// next key use in this operation prompts exactly once. Prompt-free
     /// itself; answers with `.status`.
@@ -24,6 +31,8 @@ public enum MCPCustodianResponse: Sendable, Equatable, Codable {
     case status(MCPApprovalKeyStatus)
     case mac(String?)
     /// Nil means the custodian has no key to judge with; false means forged.
+    /// Kept as `Bool?` so the bytes on the wire do not change; the Swift
+    /// API reads it as `MCPMACVerdict`.
     case verify(Bool?)
     case error(MCPCustodianError)
 }
@@ -63,7 +72,8 @@ public struct MCPCustodianHelloAck: Sendable, Equatable, Codable {
 }
 
 /// Bounds on every custodian request, enforced on both sides of the seam.
-/// The `enrollment` purpose is custodian-internal and never crosses it.
+/// `MCPMACPurpose` is the whole wire vocabulary: the custodian-internal
+/// enrollment check is not a member, so it cannot be decoded off the wire.
 public enum MCPCustodianWire {
     public static let protocolVersion = "rv.mcp-custodian.v2"
     /// Mach service, bundle id, and LaunchAgent label are one name.
@@ -75,7 +85,6 @@ public enum MCPCustodianWire {
     /// Keychain access-group suffix; the full group is the custodian's own
     /// team prefix plus this suffix.
     public static let accessGroupSuffix = "dev.rv.mcp-custodian"
-    public static let allowedPurposes: Set<String> = ["grant", "code", "argument-keys", "mcp.json"]
     public static let maximumFields = 16
     public static let maximumFieldBytes = 64 * 1024
     public static let maximumCandidateBytes = 128
@@ -83,13 +92,13 @@ public enum MCPCustodianWire {
     public static func isValid(_ request: MCPCustodianRequest) -> Bool {
         switch request {
         case .status, .beginFreshAuth: true
-        case .mac(let purpose, let fields, _): isValid(purpose: purpose, fields: fields, candidate: nil)
-        case .verify(let candidate, let purpose, let fields): isValid(purpose: purpose, fields: fields, candidate: candidate)
+        case .mac(_, let fields, _): isValid(fields: fields, candidate: nil)
+        case .verify(let candidate, _, let fields): isValid(fields: fields, candidate: candidate)
         }
     }
 
-    static func isValid(purpose: String, fields: [String], candidate: String?) -> Bool {
-        guard allowedPurposes.contains(purpose), fields.count <= maximumFields else { return false }
+    static func isValid(fields: [String], candidate: String?) -> Bool {
+        guard fields.count <= maximumFields else { return false }
         guard fields.reduce(0, { $0 + $1.utf8.count }) <= maximumFieldBytes else { return false }
         if let candidate, candidate.utf8.count > maximumCandidateBytes { return false }
         return true

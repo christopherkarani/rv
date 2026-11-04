@@ -99,10 +99,21 @@ public final class FineTunedJudge: @unchecked Sendable {
         var lengths = [16, 32, 64, 96, 128, 192, 256, 384, 512]
         var checkpoint = "laya-ft-v2-fp16"
         let configURL = bundleDir.appendingPathComponent("config.json")
-        if let data = try? Data(contentsOf: configURL),
-           let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let l = cfg["logit_order"] as? [String], l.count == 3 { labels = l }
-            else if let l = cfg["labels"] as? [String], l.count == 3 { labels = l }
+        // Absent config keeps the shipped defaults. A present config that
+        // cannot be read, or whose label order is not a valid permutation,
+        // is a bad bundle: guessing the order could read block as allow.
+        if fm.fileExists(atPath: configURL.path) {
+            guard let data = try? Data(contentsOf: configURL),
+                  let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw LayaError.badBundle("config.json unreadable in \(bundleDir.path)")
+            }
+            for key in ["logit_order", "labels"] where cfg[key] != nil {
+                guard let l = cfg[key] as? [String] else {
+                    throw LayaError.badBundle("\(key) in config.json is not a string array")
+                }
+                labels = l
+                break
+            }
             if let m = (cfg["max_len"] as? NSNumber)?.intValue { maxLen = m }
             if let ls = cfg["lengths"] as? [NSNumber] {
                 let parsed = ls.map(\.intValue).filter { $0 > 0 }.sorted()

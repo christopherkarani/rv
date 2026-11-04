@@ -5,6 +5,8 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
+import RVPolicy
 
 /// Identities needed to prove a protected workspace still belongs to RV.
 ///
@@ -179,14 +181,7 @@ enum WorkspaceLifecycleLog {
 
     /// `$HOME/.config/rv/workspace-sessions.jsonl`. Ignores `XDG_CONFIG_HOME`.
     static func productionURL() -> URL? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"],
-            home.hasPrefix("/"), home.contains("\0") == false
-        else {
-            return nil
-        }
-        return URL(fileURLWithPath: home, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("rv", isDirectory: true)
+        HomeDirectory.processConfigDirectory()?
             .appendingPathComponent("workspace-sessions.jsonl", isDirectory: false)
     }
 
@@ -216,7 +211,12 @@ enum WorkspaceLifecycleLog {
             return .failure(.sessionRecordFailed)
         }
         data.append(UInt8(ascii: "\n"))
-        return RuntimeSessionLog.appendExclusiveLine(data, to: url)
+        do {
+            try JSONLAppendLog.append(data, to: url)
+        } catch {
+            return .failure(.sessionRecordFailed)
+        }
+        return .success(())
     }
 
     static func records(at url: URL) -> [WorkspaceLifecycleRecord] {
@@ -307,7 +307,7 @@ enum WorkspaceLifecycleLog {
             return .skippedSmall
         }
         guard
-            let outcome = RuntimeSessionLog.withExclusiveFileLock(at: url, body: { locked in
+            let outcome = JSONLAppendLog.withExclusiveLock(at: url, body: { locked in
                 compactLocked(at: locked)
             })
         else {
@@ -389,7 +389,7 @@ enum WorkspaceLifecycleLog {
 
     /// Temp-file + rename rewrite with the same durability shape as endpoint
     /// files: exclusive create, full write, fsync, 0600, atomic rename, then
-    /// a directory fsync. Runs under `withExclusiveFileLock`.
+    /// a directory fsync. Runs under `JSONLAppendLog.withExclusiveLock`.
     private static func writeAtomically(_ data: Data, to url: URL) -> Bool {
         let temporary = url.appendingPathExtension("tmp")
         _ = temporary.path.withCString { unlink($0) }

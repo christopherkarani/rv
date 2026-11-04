@@ -167,8 +167,14 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
     let lengths: [Int]
     let maxOptions = 32
     let lock = NSLock()
+    let questions: LayaQuestions
+    let actionLabels: [LayaVerdict.Action]
 
-    public init(bundleDir: URL) throws {
+    /// The question set's action labels are checked here, before any bundle
+    /// file is touched, so judging never meets an invalid label set.
+    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
+        actionLabels = try questions.actionLabels()
+        self.questions = questions
         tokenizer = try LayaTokenizer(bundleDir: bundleDir)
         let configURL = bundleDir.appendingPathComponent("rl_agent_config.json")
         var maxLen = 1024
@@ -262,11 +268,11 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
     /// Judge one command text. Windows are unnecessary at rv's 65,536-byte
     /// cap only for short commands; long states truncate inside the
     /// sequence budget, and a truncated allow is raised by the caller.
-    public func judge(_ command: String, questions: LayaQuestions = .guardQuestions) throws -> LayaVerdict {
+    public func judge(_ command: String) throws -> LayaVerdict {
         let start = Date()
         let action = try questionProbabilities(state: command, question: questions.action)
         let actionProbs = action.probabilities
-        let labels = try questions.actionLabels()
+        let labels = actionLabels
         guard actionProbs.count == labels.count, !labels.isEmpty else {
             throw LayaError.predictionFailed("action probabilities do not match option labels")
         }
@@ -308,7 +314,7 @@ public struct LayaCoreMLJudge: Sendable {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 
-    public func judge(_ command: String, questions: LayaQuestions = .guardQuestions) throws -> LayaVerdict {
+    public func judge(_ command: String) throws -> LayaVerdict {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 }

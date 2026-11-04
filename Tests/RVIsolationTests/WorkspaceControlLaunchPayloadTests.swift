@@ -777,3 +777,70 @@ private final class LaunchReplyBox: Sendable {
     }
 }
 #endif
+
+@Suite("Micro-VM launch wire")
+struct MicroVMLaunchWireTests {
+    private let options = MicroVMLaunchOptions(image: "alpine:3.20", cpus: 2, memoryMiB: 1024)!
+
+    @Test func launchRequestCarriesMicroVMOptionsRoundTrip() throws {
+        let request = WorkspaceControlRequest(
+            operation: .launchRuntime,
+            id: LaunchParityFixtures.id,
+            executable: "/bin/sh",
+            microvm: options
+        )
+        let body = try #require(request.encode())
+        let text = try #require(String(data: body, encoding: .utf8))
+        #expect(text.contains(#""microvm":{"cpus":2,"image":"alpine:3.20","memoryMiB":1024}"#))
+        guard case .request(let decoded) = WorkspaceControlRequest.decode(body) else {
+            Issue.record("micro-VM launch did not decode")
+            return
+        }
+        #expect(decoded.microvm == options)
+        #expect(decoded.encode() == body)
+    }
+
+    @Test func invalidMicroVMFieldsFailClosed() {
+        let bodies = [
+            #"{"v":1,"op":"launchRuntime","executable":"/bin/sh","microvm":{"image":"alpine","cpus":0}}"#,
+            #"{"v":1,"op":"launchRuntime","executable":"/bin/sh","microvm":{"image":"alpine","net":true}}"#,
+            #"{"v":1,"op":"launchRuntime","executable":"/bin/sh","microvm":{"image":""}}"#,
+            #"{"v":1,"op":"launchRuntime","executable":"/bin/sh","microvm":"alpine"}"#,
+        ]
+        for body in bodies {
+            if case .message = WorkspaceControlCodec.decode(Data(body.utf8)) {
+                Issue.record("accepted \(body)")
+            }
+        }
+    }
+
+    @Test func launchParseCarriesMicroVMOptions() {
+        let parsed = LaunchRuntimePayload.parse(
+            WorkspaceControlRequest(operation: .launchRuntime, executable: "/bin/sh", microvm: options),
+            resourcePolicy: .empty,
+            project: "/proj"
+        )
+        guard case .success(let payload) = parsed else {
+            Issue.record("micro-VM launch rejected: \(parsed)")
+            return
+        }
+        #expect(payload.microVM == options)
+    }
+
+    @Test func ensureTerminalRuntimeRefusesMicroVM() {
+        let parsed = EnsureTerminalRuntimePayload.parse(
+            WorkspaceControlRequest(
+                operation: .ensureTerminalRuntime,
+                executable: "/bin/sh",
+                microvm: options,
+                io: "terminal",
+                rows: 24,
+                columns: 80
+            )
+        )
+        guard case .failure(.invalidRequest) = parsed else {
+            Issue.record("ensure must refuse a micro-VM request: \(parsed)")
+            return
+        }
+    }
+}
