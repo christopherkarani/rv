@@ -33,6 +33,23 @@ struct SecretAllowPathSetTests {
         )
     }
 
+    @Test func dotDotNeverClimbsOutOfAnAllowedDirectory() throws {
+        let set = SecretAllowPathSet(literals: ["fixtures", "/tmp/proj"])
+        let rule = try #require(SecretPathCatalog.dayOne.firstMatch(of: ".env"))
+        #expect(set.exempts("fixtures/.env", rule: rule))
+        #expect(set.exempts("fixtures/../.env", rule: rule) == false)
+        #expect(set.exempts("/tmp/proj/../other/.env", rule: rule) == false)
+        #expect(set.exempts("/tmp/proj/sub/../../.env", rule: rule) == false)
+        #expect(SecretAllowPathSet(literals: ["fixtures/.."]).exempts(".env", rule: rule) == false)
+    }
+
+    @Test func dotComponentsReadAsTheirPath() throws {
+        let set = SecretAllowPathSet(literals: [".env", "/tmp/proj"])
+        let rule = try #require(SecretPathCatalog.dayOne.firstMatch(of: ".env"))
+        #expect(set.exempts("./.env", rule: rule))
+        #expect(set.exempts("/tmp/./proj//.env", rule: rule))
+    }
+
     @Test func homeExpansion_matchesTilde() throws {
         let set = SecretAllowPathSet(literals: ["~/.env"])
         let rule = try #require(SecretPathCatalog.dayOne.firstMatch(of: "/Users/ada/.env"))

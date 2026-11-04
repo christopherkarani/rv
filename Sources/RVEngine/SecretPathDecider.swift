@@ -76,20 +76,76 @@ public struct SecretPathDecider: Sendable {
         )
     }
 
+    /// `fold`, plus a second scan of the command's secret-scan view when the
+    /// matching view masked operands a search or data-reading command reads
+    /// (`grep "k" ".env"`, `jq . .env`). The deny keeps the matching view and
+    /// never quotes the unmasked text.
+    public func fold(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        let folded = fold(result)
+        guard folded == result, escalatesToAliasPass(result) else { return folded }
+        // A pager set in the environment runs a command the view dropped.
+        if var matched = pagerAssignmentHit(in: command) {
+            matched.searchText = result.matchingView.rawValue
+            return EvaluationResult(
+                outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+                matchingView: result.matchingView
+            )
+        }
+        // Command heads are never masked, so the view says whether a second
+        // derivation could reveal anything.
+        let words = result.matchingView.rawValue.split { " \t\n;|&()".contains($0) }
+        guard words.contains(where: { revealsFileOperands(String($0.split(separator: "/").last ?? $0)) }) else {
+            return folded
+        }
+        let revealed = Normalize.secretScanView(of: command)
+        guard revealed != result.matchingView, var matched = firstHit(in: revealed) else { return folded }
+        matched.searchText = result.matchingView.rawValue
+        return EvaluationResult(
+            outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+            matchingView: result.matchingView
+        )
+    }
+
+    /// `MANPAGER='cat ~/.ssh/id_rsa' man ls`, `env PAGER=… man`, `git -c
+    /// core.pager=…`, `LESSOPEN='|cat …'`: the matching view drops the
+    /// assignment, but the pager runs as a command. A bare command name reads
+    /// nothing; any other value is scanned as a command line.
+    func pagerAssignmentHit(in command: ShellCommand) -> RuleMatch? {
+        for token in ShellPipeline.tokenize(command.rawValue) {
+            guard let equals = token.lexeme.firstIndex(of: "="), equals > token.lexeme.startIndex else { continue }
+            let name = token.lexeme[..<equals]
+            guard name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }) else { continue }
+            let lowered = name.lowercased()
+            guard lowered.hasSuffix("pager") || lowered == "lessopen" || lowered == "lessclose" else { continue }
+            var value = String(token.lexeme[token.lexeme.index(after: equals)...])
+            while let first = value.first, first == "|" || first == "-" || first.isWhitespace { value.removeFirst() }
+            guard value.isEmpty == false, SecretPathGuard.isPlainCommandName(value) == false else { continue }
+            if let hit = firstHit(in: MatchingView(value)) { return hit }
+        }
+        return nil
+    }
+
     /// The catalog rule one file-tool path hits, with the spelling that
-    /// hit it (the resolved spelling when the adapter supplies a
-    /// distinct target). Nil means the path clears the catalog.
+    /// hit it. The resolved spelling (when the adapter supplies a distinct
+    /// target) is checked first, then the typed one: `.env` symlinked to
+    /// `config/dev.env` still holds the secret the name promises, and the
+    /// shell door already denies `cat .env` on its typed pass. An exemption
+    /// on one spelling never vouches for the other. Nil means both clear.
     public func filePathHit(_ path: String) -> (rule: SecretPathRule, spelling: String)? {
-        var spelling = path
+        var spellings = [path]
         if let resolution,
            let resolved = resolution.resolve(path),
            resolved != path, !resolved.isEmpty
         {
-            spelling = resolved
+            spellings.insert(resolved, at: 0)
         }
-        guard let rule = catalog.firstMatch(of: spelling) else { return nil }
-        if allowPaths.exempts(spelling, rule: rule, home: home) { return nil }
-        return (rule, spelling)
+        for spelling in spellings {
+            guard let rule = catalog.firstMatch(of: spelling),
+                  allowPaths.exempts(spelling, rule: rule, home: home) == false
+            else { continue }
+            return (rule, spelling)
+        }
+        return nil
     }
 
     /// Whether an outcome is an allow the alias pass may still tighten.
