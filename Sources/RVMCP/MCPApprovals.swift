@@ -137,14 +137,14 @@ public struct MCPApprovalStore: Sendable {
             let codeCandidate = MCPConfirmationCode.generate()
             func codeMAC(_ id: String) -> String? {
                 signing.mac(
-                    "code", Self.codeFields(
+                    .code, Self.codeFields(
                         id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
                         code: codeCandidate),
                     true)
             }
             func keysMAC(_ id: String) -> String? {
                 signing.mac(
-                    "argument-keys", Self.boundFields(
+                    .argumentKeys, Self.boundFields(
                         id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys),
                     true)
             }
@@ -190,14 +190,14 @@ public struct MCPApprovalStore: Sendable {
             // The hash alone is not the call. A grant signed for other key names stays put.
             guard requests[index].argumentKeys == argumentKeys else { return MCPGrantLookup.none }
             // Verify the row as read under this lock. No key to verify
-            // with (nil): leave the grant for a keyed gateway instead of
+            // with (.noKey): leave the grant for a keyed gateway instead of
             // deleting a legitimate approval as "forged".
-            switch signing.verify(requests[index].grantMAC, "grant", requests[index].grantFields) {
-            case .none:
+            switch signing.verify(requests[index].grantMAC, .grant, requests[index].grantFields) {
+            case .noKey:
                 return MCPGrantLookup.none
-            case .some(false):
+            case .forged:
                 return .forged(id: requests.remove(at: index).id)
-            case .some(true):
+            case .valid:
                 return .granted(id: requests.remove(at: index).id)
             }
         } ?? MCPGrantLookup.none
@@ -206,7 +206,7 @@ public struct MCPApprovalStore: Sendable {
     /// Whether the stored names are the names inside `argumentKeysMAC`.
     /// A missing MAC or a rewritten list is not something to show or sign.
     public func argumentKeysAreBound(_ request: MCPApprovalRequest) -> Bool {
-        signing.verify(request.argumentKeysMAC, "argument-keys", request.grantFields) == true
+        signing.verify(request.argumentKeysMAC, .argumentKeys, request.grantFields) == .valid
     }
 
     /// Whether `typed` is the code for this pending request as it stands now.
@@ -217,9 +217,9 @@ public struct MCPApprovalStore: Sendable {
         guard let request else { return false }
         // The row is read before the verify call, so the MAC judges the
         // row as it stands now, not one swapped in during a key load.
-        return signing.verify(request.codeMAC, "code", Self.codeFields(
+        return signing.verify(request.codeMAC, .code, Self.codeFields(
             id: request.id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
-            argumentKeys: request.argumentKeys, code: typed)) == true
+            argumentKeys: request.argumentKeys, code: typed)) == .valid
     }
 
     public func hasCode(id: String) -> Bool {
@@ -240,8 +240,8 @@ public struct MCPApprovalStore: Sendable {
             guard requests[index].server == server, requests[index].tool == tool,
                 requests[index].argumentsHash == argumentsHash, requests[index].argumentKeys == argumentKeys
             else { return nil }
-            guard signing.verify(requests[index].argumentKeysMAC, "argument-keys", requests[index].grantFields) == true,
-                let grantMAC = signing.mac("grant", requests[index].grantFields, true)
+            guard signing.verify(requests[index].argumentKeysMAC, .argumentKeys, requests[index].grantFields) == .valid,
+                let grantMAC = signing.mac(.grant, requests[index].grantFields, true)
             else { return nil }
             requests[index].state = .granted
             requests[index].grantMAC = grantMAC

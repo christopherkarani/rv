@@ -492,9 +492,10 @@ struct JudgePortThresholdTests {
 
 @Suite("Judge port: packs-only floor through the gated door")
 struct JudgePortPacksOnlyFloorTests {
-    /// Pack-allowed (the packs mask the payload as data) but spawn-bearing,
-    /// so `InlineProgramGuard.requiresJudge` flags it.
-    static let inline = ShellCommand(rawValue: #"perl -e 'system("rm -rf ~")'"#)
+    /// Allowed at the door (the unwrap peel finds no spawn or write in it) but
+    /// carrying a filesystem-delete identifier, so
+    /// `InlineProgramGuard.requiresJudge` flags it.
+    static let inline = ShellCommand(rawValue: #"python3 -c 'print(shred)'"#)
 
     @Test("enforce: unscored inline program is indeterminate; the log keeps the pack allow")
     func enforceFloorsUnscoredInlineProgram() throws {
