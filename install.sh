@@ -878,6 +878,8 @@ else
   size_claim=0
   size_microvm=0
   size_relay=0
+  size_macvm=0
+  size_macvm_agent=0
   size_approvals=0
   if [ "$os" = "Darwin" ]; then
     size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
@@ -885,10 +887,13 @@ else
     # Micro-VM backend (`rv workspace run --microvm`). Older releases omit it.
     size_microvm="$(normalize_size "$(content_length "$release_base/rv-microvm-$target")")"
     size_relay="$(normalize_size "$(content_length "$release_base/rv-guest-relay-$target")")"
+    # macOS guest backend (`rv workspace run --macvm`). Older releases omit it.
+    size_macvm="$(normalize_size "$(content_length "$release_base/rv-macvm-$target")")"
+    size_macvm_agent="$(normalize_size "$(content_length "$release_base/rv-macvm-agent-$target")")"
     size_approvals="$(normalize_size "$(content_length "$release_base/rv-approvals-darwin-arm64.zip")")"
   fi
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_microvm + size_relay + size_approvals))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_microvm + size_relay + size_macvm + size_macvm_agent + size_approvals))
   size_isolation=0
   size_swiftlibs=0
   if [ "$os" = "Linux" ]; then
@@ -918,6 +923,11 @@ else
     download_release_asset "$tmp_fetch" "rv-guest-relay-$target" "$size_relay" "rv-guest-relay"
     chmod 755 "$tmp_fetch/rv-microvm" "$tmp_fetch/rv-guest-relay"
   fi
+  if [ "$os" = "Darwin" ] && [ "$size_macvm" -gt 0 ] && [ "$size_macvm_agent" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "rv-macvm-$target" "$size_macvm" "rv-macvm"
+    download_release_asset "$tmp_fetch" "rv-macvm-agent-$target" "$size_macvm_agent" "rv-macvm-agent"
+    chmod 755 "$tmp_fetch/rv-macvm" "$tmp_fetch/rv-macvm-agent"
+  fi
   # Optional: releases without a provisioned custodian bundle omit the asset.
   if [ "$os" = "Darwin" ] && [ "$size_approvals" -gt 0 ]; then
     download_release_asset "$tmp_fetch" "rv-approvals-darwin-arm64.zip" "$size_approvals"
@@ -944,7 +954,7 @@ else
   }
   if [ "$os" = "Darwin" ]; then
     verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
-      rv rv-cli rvd rv-workspace-host rv-pty-claim rv-microvm RVApprovals.app
+      rv rv-cli rvd rv-workspace-host rv-pty-claim rv-microvm rv-macvm rv-macvm-agent RVApprovals.app
   fi
 fi
 
@@ -1023,6 +1033,16 @@ fi
 # beside itself. rv-guest-relay is a Linux binary and carries no signature.
 if [ "$os" = "Darwin" ] && [ -x "$src/rv-microvm" ] && [ -x "$src/rv-guest-relay" ]; then
   for helper in rv-microvm rv-guest-relay; do
+    rm -f "$bin/.$helper.installing"
+    cp "$src/$helper" "$bin/.$helper.installing"
+    chmod 755 "$bin/.$helper.installing"
+    rm -f "$bin/$helper"
+    mv -f "$bin/.$helper.installing" "$bin/$helper"
+  done
+fi
+# Optional pair: `rv-macvm prepare` installs rv-macvm-agent from beside itself.
+if [ "$os" = "Darwin" ] && [ -x "$src/rv-macvm" ] && [ -x "$src/rv-macvm-agent" ]; then
+  for helper in rv-macvm rv-macvm-agent; do
     rm -f "$bin/.$helper.installing"
     cp "$src/$helper" "$bin/.$helper.installing"
     chmod 755 "$bin/.$helper.installing"

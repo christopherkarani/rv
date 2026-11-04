@@ -342,3 +342,204 @@ struct MicroVMControlPlaceholderTests {
         #expect(exists(ws, ".git") == false && exists(ws, ".rv") == false)
     }
 }
+
+@Suite("macOS guest launch")
+struct MacOSGuestLaunchTests {
+    private let command = IsolatedCommand(executable: "/usr/bin/swift", arguments: ["build"])!
+
+    @Test("macOS guests take a prepared image name and at least 4 GiB")
+    func options() {
+        #expect(MicroVMLaunchOptions(image: "dev", guest: .macOS)?.guest == .macOS)
+        #expect(MicroVMLaunchOptions(image: "xcode-26", guest: .macOS, cpus: 4, memoryMiB: 8192) != nil)
+        #expect(MicroVMLaunchOptions(image: "Dev", guest: .macOS) == nil)
+        #expect(MicroVMLaunchOptions(image: "alpine:3.20", guest: .macOS) == nil)
+        #expect(MicroVMLaunchOptions(image: "dev", guest: .macOS, memoryMiB: 2048) == nil)
+        #expect(MicroVMLaunchOptions(image: "alpine:3.20")?.guest == .linux)
+    }
+
+    @Test("the guest round-trips on the wire; absent means Linux; unknown guests are refused")
+    func codec() throws {
+        let options = try #require(MicroVMLaunchOptions(image: "dev", guest: .macOS, cpus: 4))
+        let decoded = try JSONDecoder().decode(MicroVMLaunchOptions.self, from: try JSONEncoder().encode(options))
+        #expect(decoded == options)
+        let linux = try JSONDecoder().decode(MicroVMLaunchOptions.self, from: Data(#"{"image":"alpine"}"#.utf8))
+        #expect(linux.guest == .linux)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MicroVMLaunchOptions.self, from: Data(#"{"image":"dev","guest":"windows"}"#.utf8))
+        }
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MicroVMLaunchOptions.self, from: Data(#"{"image":"Dev","guest":"macOS"}"#.utf8))
+        }
+    }
+
+    @Test("each guest has its own helper and state root")
+    func helpers() {
+        #expect(MicroVMHelper.executableName(for: .linux) == "rv-microvm")
+        #expect(MicroVMHelper.executableName(for: .macOS) == "rv-macvm")
+        #expect(MicroVMHelper.stateRoot(home: "/Users/dev", guest: .macOS) == "/Users/dev/.config/rv/macvm")
+        #expect(MicroVMHelper.stateRoot(home: "/Users/dev", guest: .linux) == "/Users/dev/.config/rv/microvm")
+    }
+
+    @Test("the guest sandbox profile is the host cage's workspace control rules")
+    func guestProfile() {
+        let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
+        // LaunchServices would start an opened app outside the sandbox, and an
+        // Apple event can make a running app (System Events) run a shell command there.
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n"))
+        #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
+    }
+
+    #if os(macOS)
+    /// Runs a command, optionally under the guest profile, and kills it after
+    /// `timeout` seconds (a consent prompt must not hang CI). Stderr goes to a
+    /// file so no read can block.
+    private func launchProbe(
+        _ arguments: [String], profile: String?, errorFile: URL, timeout: TimeInterval = 15
+    ) throws -> (status: Int32, error: String, timedOut: Bool) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: profile == nil ? arguments[0] : "/usr/bin/sandbox-exec")
+        process.arguments = profile.map { ["-p", $0] + arguments } ?? Array(arguments.dropFirst())
+        process.standardOutput = FileHandle.nullDevice
+        FileManager.default.createFile(atPath: errorFile.path, contents: nil)
+        let errors = try FileHandle(forWritingTo: errorFile)
+        defer { try? errors.close() }
+        process.standardError = errors
+        try process.run()
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        let timedOut = process.isRunning
+        if timedOut {
+            process.terminate()
+            Thread.sleep(forTimeInterval: 0.5)
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+        process.waitUntilExit()
+        let error = (try? String(contentsOf: errorFile, encoding: .utf8)) ?? ""
+        return (process.terminationStatus, error, timedOut)
+    }
+
+    /// Setuid binaries fail on their own too (no crontab, no password), so
+    /// only sandbox-exec's own refusal proves the exec was blocked.
+    @Test("the guest profile refuses to exec setuid binaries")
+    func guestProfileRefusesSetuid() throws {
+        let scratch = try #require(posixRealpath(NSTemporaryDirectory()))
+        let directory = URL(fileURLWithPath: scratch).appendingPathComponent("rv-guest-setuid-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = macOSGuestSandboxProfile(workspacePath: directory.path)
+        let errors = directory.appendingPathComponent("err")
+        #expect(try launchProbe(["/usr/bin/true"], profile: profile, errorFile: errors).status == 0)
+        for setuid in [["/usr/bin/crontab", "-l"], ["/usr/bin/sudo", "-n", "/usr/bin/true"]] {
+            let result = try launchProbe(setuid, profile: profile, errorFile: errors)
+            #expect(result.status == 71 && result.error.contains("Operation not permitted"), "\(setuid): \(result)")
+        }
+    }
+
+    /// The guest profile allows everything but the control paths, so it
+    /// must not leave a way to start a process outside the sandbox: such a
+    /// process could write `.git/hooks`. Each launchd, LaunchServices and
+    /// Apple event route runs once unsandboxed as a control, and only if
+    /// that control writes its marker (within ~10 s) does the probe mean
+    /// anything: then the route runs under the profile, where it must not.
+    /// A route whose control fails here (no GUI login session, no
+    /// Automation consent) is skipped with a visible warning, not a failure.
+    @Test("nothing under the guest profile can start an unsandboxed process")
+    func guestProfileHasNoEscape() throws {
+        let scratch = try #require(posixRealpath(NSTemporaryDirectory()))
+        let directory = URL(fileURLWithPath: scratch).appendingPathComponent("rv-guest-escape-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = macOSGuestSandboxProfile(workspacePath: directory.path)
+        let domain = "gui/\(getuid())"
+        let base = "dev.rv.guest-escape-probe-\(getpid())"
+        var jobs: [String] = []
+        defer {
+            for label in jobs {
+                for job in [["bootout", "\(domain)/\(label)"], ["remove", label]] {
+                    let cleanup = Process()
+                    cleanup.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                    cleanup.arguments = job
+                    cleanup.standardError = FileHandle.nullDevice
+                    if (try? cleanup.run()) != nil { cleanup.waitUntilExit() }
+                }
+            }
+        }
+        /// The routes, each writing its own marker if its process runs.
+        func routes(_ tag: String) throws -> [(name: String, arguments: [String], marker: URL)] {
+            func marker(_ name: String) -> URL { directory.appendingPathComponent("\(tag)-\(name)") }
+            let bootstrapped = "\(base)-\(tag)-bootstrap"
+            let submitted = "\(base)-\(tag)-submit"
+            jobs += [bootstrapped, submitted]
+            let plist = directory.appendingPathComponent("\(bootstrapped).plist")
+            let job: [String: Any] = [
+                "Label": bootstrapped, "ProgramArguments": ["/usr/bin/touch", marker("bootstrap").path], "RunAtLoad": true,
+            ]
+            try PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
+            let app = directory.appendingPathComponent("\(tag)-probe.app")
+            let executable = app.appendingPathComponent("Contents/MacOS/probe")
+            try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("#!/bin/sh\n/usr/bin/touch '\(marker("open").path)'\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            let info: [String: Any] = [
+                "CFBundleExecutable": "probe", "CFBundleIdentifier": "\(base)-\(tag)-open", "CFBundlePackageType": "APPL",
+            ]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+                .write(to: app.appendingPathComponent("Contents/Info.plist"))
+            return [
+                ("launchctl bootstrap", ["/bin/launchctl", "bootstrap", domain, plist.path], marker("bootstrap")),
+                ("launchctl submit", ["/bin/launchctl", "submit", "-l", submitted, "--", "/usr/bin/touch", marker("submit").path], marker("submit")),
+                ("open", ["/usr/bin/open", "-g", "-j", app.path], marker("open")),
+                (
+                    "osascript",
+                    ["/usr/bin/osascript", "-e", "tell application \"System Events\" to do shell script \"/usr/bin/touch '\(marker("osascript").path)'\""],
+                    marker("osascript")
+                ),
+            ]
+        }
+        func appears(_ marker: URL, within seconds: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
+            repeat {
+                if FileManager.default.fileExists(atPath: marker.path) { return true }
+                Thread.sleep(forTimeInterval: 0.1)
+            } while Date() < deadline
+            return FileManager.default.fileExists(atPath: marker.path)
+        }
+        let errors = directory.appendingPathComponent("err")
+        let controls = try routes("control")
+        let probes = try routes("sandboxed")
+        for (control, probe) in zip(controls, probes) {
+            _ = try launchProbe(control.arguments, profile: nil, errorFile: errors)
+            guard appears(control.marker, within: 10) else {
+                Issue.record(
+                    "skipped \(control.name): unsandboxed it started nothing here (no GUI login session or consent?), so its probe would prove nothing",
+                    severity: .warning
+                )
+                continue
+            }
+            _ = try launchProbe(probe.arguments, profile: profile, errorFile: errors)
+            // A negative result needs a fixed wait; the control's own latency is unknown, so allow 3 s.
+            #expect(!appears(probe.marker, within: 3), "\(probe.name) escaped the sandbox")
+        }
+    }
+    #endif
+
+    @Test("a macOS launch hands rv-macvm the guest profile in its environment, not argv")
+    func helperEnvironment() throws {
+        let options = try #require(MicroVMLaunchOptions(image: "dev", guest: .macOS, memoryMiB: 8192))
+        let profile = MicroVMProfile(workspacePath: "/Users/dev/p", options: options)
+        let environment = microVMHelperEnvironment(["PATH=/usr/bin:/bin", "RV_GUEST_TOKEN=t"], profile: profile)
+        let entry = try #require(environment.first { $0.hasPrefix("\(MicroVMHelper.guestProfileVariable)=") })
+        #expect(entry == "\(MicroVMHelper.guestProfileVariable)=\(macOSGuestSandboxProfile(workspacePath: "/Users/dev/p"))")
+        #expect(environment.contains("RV_GUEST_TOKEN=t"))
+        let spawn = microVMSpawnCommand(
+            helper: "/opt/rv/rv-macvm", claim: nil, profile: profile, stateRoot: "/s",
+            relayPorts: [41000], forwardedNames: ["TOKEN"], nonce: "n", command: command
+        )
+        #expect(spawn.arguments.contains { $0.contains("allow default") } == false)
+        #expect(spawn.arguments.prefix(8) == ["/opt/rv/rv-macvm", "run", "--root", "/s", "--image", "dev", "--workspace", "/Users/dev/p"])
+        #expect(spawn.arguments.contains("--memory-mib"))
+
+        let linux = MicroVMProfile(workspacePath: "/w", options: try #require(MicroVMLaunchOptions(image: "alpine")))
+        #expect(microVMHelperEnvironment(["PATH=/usr/bin"], profile: linux) == ["PATH=/usr/bin"])
+    }
+}

@@ -1,44 +1,64 @@
 import Foundation
 import RVDomain
 
-/// Caller-selected micro-VM launch: an OCI image and optional VM size.
+/// The guest operating system of a VM launch.
+public enum MicroVMGuest: String, Sendable, Equatable, Codable {
+    /// A Linux VM booted from an OCI image (`rv-microvm`).
+    case linux
+    /// A macOS VM cloned from an image built by `rv-macvm prepare`.
+    case macOS
+}
+
+/// Caller-selected VM launch: the guest, its image and optional VM size.
 ///
-/// The guest is a fresh Linux VM (`rv-microvm`): no network interface, the
-/// protected workspace volume shared at the same path, and only the
-/// runtime's egress proxy and secret gateway relayed to guest loopback.
-/// Unset sizes take `rv-microvm`'s defaults.
+/// The guest is a fresh VM with no network interface, the protected
+/// workspace volume shared at the same path, and only the runtime's egress
+/// proxy and secret gateway relayed to guest loopback. A Linux guest boots
+/// an OCI image; a macOS guest boots a clone of a prepared image and runs
+/// the command under rv's workspace control rules (Seatbelt in the guest).
+/// Unset sizes take the helper's defaults.
 public struct MicroVMLaunchOptions: Sendable, Equatable, Codable {
     public static let cpuRange = 1...64
     public static let memoryRangeMiB = 256...1_048_576
     public static let maxImageBytes = 512
+    /// macOS guests need at least this much memory to boot.
+    public static let macOSMinimumMemoryMiB = 4096
+    public static let macOSImageNameBytes = 63
 
     public let image: String
+    public let guest: MicroVMGuest
     public let cpus: Int?
     public let memoryMiB: Int?
 
     /// Nil for an image that is empty, too long, not printable ASCII, or
     /// starts with `-`, or for a size out of range. `rv-microvm` performs
     /// the full reference grammar check; this only keeps the argv sane.
-    public init?(image: String, cpus: Int? = nil, memoryMiB: Int? = nil) {
-        guard Self.isAcceptableImage(image),
+    /// A macOS image is a prepared image name (lowercase letters, digits
+    /// and `-`) and needs ``macOSMinimumMemoryMiB``.
+    public init?(image: String, guest: MicroVMGuest = .linux, cpus: Int? = nil, memoryMiB: Int? = nil) {
+        guard Self.isAcceptableImage(image, guest: guest),
             cpus.map(Self.cpuRange.contains) ?? true,
-            memoryMiB.map(Self.memoryRangeMiB.contains) ?? true
+            memoryMiB.map(Self.memoryRangeMiB.contains) ?? true,
+            guest == .linux || (memoryMiB ?? Self.macOSMinimumMemoryMiB) >= Self.macOSMinimumMemoryMiB
         else { return nil }
         self.image = image
+        self.guest = guest
         self.cpus = cpus
         self.memoryMiB = memoryMiB
     }
 
     private enum CodingKeys: String, CodingKey {
-        case image, cpus, memoryMiB
+        case image, guest, cpus, memoryMiB
     }
 
+    /// An absent guest is Linux, the original wire format.
     public init(from decoder: Decoder) throws {
         let keys = try decoder.container(keyedBy: AnyKey.self).allKeys.map(\.stringValue)
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard Set(keys).isSubset(of: ["image", "cpus", "memoryMiB"]),
+        guard Set(keys).isSubset(of: ["image", "guest", "cpus", "memoryMiB"]),
             let options = MicroVMLaunchOptions(
                 image: try container.decode(String.self, forKey: .image),
+                guest: try container.decodeIfPresent(MicroVMGuest.self, forKey: .guest) ?? .linux,
                 cpus: try container.decodeIfPresent(Int.self, forKey: .cpus),
                 memoryMiB: try container.decodeIfPresent(Int.self, forKey: .memoryMiB)
             )
@@ -53,15 +73,23 @@ public struct MicroVMLaunchOptions: Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(image, forKey: .image)
+        if guest != .linux { try container.encode(guest, forKey: .guest) }
         try container.encodeIfPresent(cpus, forKey: .cpus)
         try container.encodeIfPresent(memoryMiB, forKey: .memoryMiB)
     }
 
-    private static func isAcceptableImage(_ image: String) -> Bool {
+    private static func isAcceptableImage(_ image: String, guest: MicroVMGuest) -> Bool {
         guard let first = image.unicodeScalars.first, first != "-",
             image.utf8.count <= maxImageBytes
         else { return false }
-        return image.unicodeScalars.allSatisfy { (0x21...0x7e).contains($0.value) }
+        switch guest {
+        case .linux:
+            return image.unicodeScalars.allSatisfy { (0x21...0x7e).contains($0.value) }
+        case .macOS:
+            // Same grammar as `MacVMImageName` in `Packages/rv-microvm`.
+            return image.utf8.count <= macOSImageNameBytes
+                && image.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
+        }
     }
 
     private struct AnyKey: CodingKey {
@@ -79,25 +107,58 @@ struct MicroVMProfile: Sendable, Equatable {
     let options: MicroVMLaunchOptions
 }
 
-/// `rv-microvm`: location and state root.
+/// The VM helpers: `rv-microvm` (Linux) and `rv-macvm` (macOS).
 public enum MicroVMHelper {
     public static let executableName = "rv-microvm"
+    /// Carries the guest Seatbelt profile to `rv-macvm`. Must match
+    /// `MacVMRunner.profileVariable` in `Packages/rv-microvm`.
+    public static let guestProfileVariable = "RV_MACVM_GUEST_PROFILE"
 
-    /// `~/.config/rv/microvm`: kernel, init filesystem, image cache.
-    public static func stateRoot(home: String) -> String {
-        "\(home)/.config/rv/microvm"
+    public static func executableName(for guest: MicroVMGuest) -> String {
+        switch guest {
+        case .linux: executableName
+        case .macOS: "rv-macvm"
+        }
+    }
+
+    /// `~/.config/rv/microvm` (kernel, init filesystem, image cache) or
+    /// `~/.config/rv/macvm` (prepared macOS images, per-run clones).
+    public static func stateRoot(home: String, guest: MicroVMGuest = .linux) -> String {
+        switch guest {
+        case .linux: "\(home)/.config/rv/microvm"
+        case .macOS: "\(home)/.config/rv/macvm"
+        }
     }
 
     /// Same rules as `rv-pty-claim`: next to the running binary or in a
     /// build tree, never an environment override, never in the workspace.
-    /// Always nil off macOS: the VM backend needs a macOS host.
-    public static func locate(workspace: String) -> String? {
+    /// Always nil off macOS: the VM backends need a macOS host.
+    public static func locate(workspace: String, guest: MicroVMGuest = .linux) -> String? {
         #if os(macOS)
-        resolvedHelperPath(named: executableName, workspace: workspace)
+        resolvedHelperPath(named: executableName(for: guest), workspace: workspace)
         #else
         nil
         #endif
     }
+}
+
+/// Seatbelt profile the macOS guest agent applies to the command: the host
+/// cage's workspace control rules (hooks, `.rv`, `.config/rv`, git config
+/// and the `.git`/`.config` entries), so a guest cannot plant what the
+/// host later executes or trusts. Everything else in the guest is allowed:
+/// the VM is the boundary. LaunchServices is denied because it starts an
+/// opened app outside the caller's sandbox, where it could write them.
+func macOSGuestSandboxProfile(workspacePath: String) -> String {
+    "(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n" + workspaceControlDenies(workspacePath: workspacePath)
+}
+
+/// envp of the helper: a macOS guest also gets its sandbox profile, by
+/// environment so it never shows in argv.
+func microVMHelperEnvironment(_ environment: [String], profile: MicroVMProfile) -> [String] {
+    guard profile.options.guest == .macOS else { return environment }
+    return environment + [
+        "\(MicroVMHelper.guestProfileVariable)=\(macOSGuestSandboxProfile(workspacePath: profile.workspacePath))"
+    ]
 }
 
 /// Contained launch in a micro-VM. Pure checks first, then the same

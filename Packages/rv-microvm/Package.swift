@@ -12,6 +12,8 @@ let package = Package(
     ],
     products: [
         .executable(name: "rv-microvm", targets: ["rv-microvm"]),
+        .executable(name: "rv-macvm-agent", targets: ["rv-macvm-agent"]),
+        .executable(name: "rv-macvm", targets: ["rv-macvm"]),
     ],
     dependencies: [
         // 0.x: source-stable only within a minor. The vminit image pin in
@@ -36,6 +38,20 @@ let package = Package(
             ]
         ),
         .testTarget(name: "RVMicroVMCoreTests", dependencies: ["RVMicroVMCore"]),
+        // macOS guests on Virtualization.framework. Carries the same
+        // virtualization entitlement as rv-microvm; no Containerization.
+        .executableTarget(
+            name: "rv-macvm",
+            dependencies: [
+                "RVMicroVMCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
+        // Runs inside macOS guests (LaunchDaemon); Foundation only.
+        .target(name: "RVMacVMAgent", dependencies: ["RVMicroVMCore"]),
+        .executableTarget(name: "rv-macvm-agent", dependencies: ["RVMacVMAgent"]),
+        // Depends on the executable so the tests can use it as the exec trampoline.
+        .testTarget(name: "RVMacVMAgentTests", dependencies: ["RVMacVMAgent", "RVMicroVMCore", "rv-macvm-agent"]),
     ],
     swiftLanguageModes: [.v6]
 )

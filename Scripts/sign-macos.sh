@@ -9,8 +9,9 @@ Usage: Scripts/sign-macos.sh [--dry-run] [--keychain-from-env] STAGE
 
   codesign (hardened runtime, secure timestamp, identifier dev.rv.<name>)
     libswiftCompatibilitySpan.dylib (when staged), rv, rv-cli, rvd,
-    rv-workspace-host, rv-pty-claim, and rv-microvm (when staged, with its
-    virtualization entitlement); codesign --verify --strict each;
+    rv-workspace-host, rv-pty-claim, rv-microvm and rv-macvm (when staged,
+    with their virtualization entitlement) and rv-macvm-agent (when
+    staged); codesign --verify --strict each;
   notarytool submit --wait (App Store Connect API key) a zip of them;
   spctl assessment once notarized.
 
@@ -87,9 +88,11 @@ fi
 binaries+=(rv rv-cli rvd rv-workspace-host rv-pty-claim)
 # Micro-VM backend: Virtualization.framework refuses a binary without the
 # entitlement, and re-signing drops whatever entitlements were there.
-if [[ -e "$stage/rv-microvm" || -L "$stage/rv-microvm" ]]; then
-  binaries+=(rv-microvm)
-fi
+for vm_helper in rv-microvm rv-macvm rv-macvm-agent; do
+  if [[ -e "$stage/$vm_helper" || -L "$stage/$vm_helper" ]]; then
+    binaries+=("$vm_helper")
+  fi
+done
 microvm_entitlements="$(cd "$(dirname "$0")/.." && pwd)/Packages/rv-microvm/rv-microvm.entitlements"
 for name in "${binaries[@]}"; do
   path="$stage/$name"
@@ -238,7 +241,9 @@ for name in "${binaries[@]}"; do
   identifier="dev.rv.$name"
   [[ "$name" != libswiftCompatibilitySpan.dylib ]] || identifier="dev.rv.libswiftCompatibilitySpan"
   entitlement_args=()
-  [[ "$name" != rv-microvm ]] || entitlement_args=(--entitlements "$microvm_entitlements")
+  case "$name" in
+    rv-microvm|rv-macvm) entitlement_args=(--entitlements "$microvm_entitlements") ;;
+  esac
   run codesign --force --options runtime --timestamp ${keychain_args[@]+"${keychain_args[@]}"} \
     ${entitlement_args[@]+"${entitlement_args[@]}"} \
     --identifier "$identifier" --sign "$identity" "$stage/$name"

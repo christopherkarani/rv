@@ -245,7 +245,7 @@ private func lines(_ text: String, containing needle: String) -> [String] {
 @Test func signDryRunSignsTheMicroVMBackendWithItsEntitlement() throws {
     let stage = try makeStage()
     defer { try? FileManager.default.removeItem(at: stage) }
-    for name in ["rv-microvm", "rv-guest-relay"] {
+    for name in ["rv-microvm", "rv-guest-relay", "rv-macvm", "rv-macvm-agent"] {
         let file = stage.appendingPathComponent(name)
         try Data("fixture \(name)\n".utf8).write(to: file)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
@@ -255,12 +255,19 @@ private func lines(_ text: String, containing needle: String) -> [String] {
 
     #expect(run.status == 0, "\(run.output)")
     let signs = lines(run.stdout, containing: "codesign --force")
-    #expect(signs.count == 7)
+    #expect(signs.count == 9)
     let microvm = try #require(signs.first { $0.hasSuffix("/rv-microvm") })
     #expect(microvm.contains("--options runtime"))
     #expect(microvm.contains("--identifier dev.rv.rv-microvm "))
     #expect(microvm.contains("--entitlements "))
     #expect(microvm.contains("Packages/rv-microvm/rv-microvm.entitlements"))
+    let macvm = try #require(signs.first { $0.hasSuffix("/rv-macvm") })
+    #expect(macvm.contains("--identifier dev.rv.rv-macvm "))
+    #expect(macvm.contains("Packages/rv-microvm/rv-microvm.entitlements"))
+    // The guest agent needs no entitlement; it runs inside the macOS guest.
+    let agent = try #require(signs.first { $0.hasSuffix("/rv-macvm-agent") })
+    #expect(agent.contains("--options runtime"))
+    #expect(agent.contains("--entitlements") == false)
     // The guest relay is a Linux ELF: not code-signable, never notarized.
     #expect(signs.contains { $0.contains("rv-guest-relay") } == false)
 }

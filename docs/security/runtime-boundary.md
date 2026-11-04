@@ -1437,3 +1437,102 @@ This is the "VM backend" extension named in [the remediation plan](runtime-remed
   - an unprepared image fails.
   Hosted CI runners lack nested virtualization, so this suite runs on developer machines.
 - **Not exercised end to end.** The CLI → workspace-host socket hop with debug builds: peer trust only admits the Developer ID-signed `rv-cli` and the installed host. That hop is covered by the protocol and host unit tests.
+
+## macOS guest contained launches (2026-11-02)
+
+`rv workspace run --macvm NAME [--cpus N] [--memory-mib M] -- CMD` runs the command in a fresh macOS VM through `rv-macvm`, built from `Packages/rv-microvm` on Virtualization.framework (no third-party VM code). It takes the same supervisor path as `--microvm`: session record, private workspace volume, PTY claim, process group, per-runtime credentialed egress proxy, secret lease and publish-on-close. Requirements: Apple silicon and macOS 27 on the host, and a guest image built once with `rv-macvm prepare --image NAME`. Design and checklist: `docs/plans/vm-isolation/MACVM.md`.
+
+Like the Linux backend, this is a "VM backend" extension under [the remediation plan](runtime-remediation-plan.md). It needs its own security review before it counts as release evidence.
+
+### Image preparation
+
+`rv-macvm prepare` is unattended and runs only when the user asks for it. `rv workspace run --macvm` never prepares an image: it checks with `rv-macvm status` and, if the image is missing, fails with the prepare command to run.
+
+1. **Restore image.** It first checks that unattended setup is possible: macOS 27 on this Mac and an `rv-macvm` built with the macOS 27 SDK. `Scripts/build-microvm.sh` leaves `rv-macvm` and `rv-macvm-agent` out of a release built with an older SDK, with a warning, rather than ship a `prepare` that cannot finish. It then downloads Apple's restore image: the latest supported one, or `--ipsw PATH|URL` when Apple's catalog does not answer. The image is about 25 GB, and the download resumes if interrupted. Free space is checked first: download size plus 30 GB. After the download, the install and setup boots take a slot under Apple's two-VM limit like a run, so a long download holds none.
+2. **Install.** It installs macOS with `VZMacOSInstaller` into a sparse disk.
+3. **Provisioning boot.** It boots the guest once with `VZMacGuestProvisioningOptions`, which needs the macOS 27 SDK and a macOS 27 or later guest. This creates user `rv` with a random 32-character password that exists only in `rv-macvm`'s memory and reaches `ssh` only through `SSH_ASKPASS`'s environment. The guest has NAT networking for this boot only. Remote Login stays on: run boots start commands through it (see "How a command starts"), and they have no network interface.
+4. **Setup session.** One SSH session runs a fixed script as root. It installs `rv-macvm-agent` from a read-only virtiofs share as a LaunchDaemon (root:wheel). It sets up the session path below: a root-only ed25519 key, the guest's host key pinned for it, and an `sshd` drop-in. It turns off Spotlight indexing, sleep and automatic updates, then schedules the guest's shutdown, since password logins are now off. The installed agent's SHA-256 must match the host's copy. The session ignores the user's ssh configuration (`-F /dev/null`, no connection sharing), sends keepalives, and is killed after 30 minutes. Host keys are not checked (`StrictHostKeyChecking=no`): the guest is new, and the password is random, single-use and valid only in this image. The guest sits on vmnet's shared NAT (192.168.64.0/24 by default), which other vmnet VMs on this Mac (UTM and the like) share, so the NAT is not private. **Residual:** an on-path VM could answer the provisioning connection, and the agent hash the guest prints is not proof against it, since the guest reports it. Provisioning is not hardened against a hostile VM on the same Mac; the session path below pins the guest's host key from then on.
+5. **Record.** The guest shuts down; if it does not stop on its own within 300 s, prepare fails instead of saving a disk that may be unflushed. `image.json` records the hardware model, OS version and agent hash. Images live in `~/.config/rv/macvm/images/NAME`. The image is staged inside prepare's run directory, so a prepare that dies leaves it behind only until the next `status`, `run` or `prepare` sweeps unheld run directories.
+6. **Updates.** `prepare` refuses an existing image unless given `--replace`. With `--replace` it builds the new image in its run directory and swaps it in with one `renamex_np(RENAME_SWAP)`, so `run` sees the old image or the new one, never neither. `status` compares the image's agent hash with the agent beside `rv-macvm`. On a mismatch it warns and names the `--replace` command, and `rv` shows that warning before a `--macvm` launch. `status --require-current-agent` makes a mismatch fatal; `Scripts/macvm-proof.sh` uses it, so a proof always exercises the agent it was built with.
+
+### What it enforces
+
+- **No guest network interface.** Run boots have no NIC. The agent relays guest `127.0.0.1:P` to the host's vsock listener for P, and the host bridges that to `127.0.0.1:P`. P is one of rv's ports only: the egress proxy and, when the lease has placeholders, the secret gateway. Outbound traffic therefore goes only through the credentialed proxy. An anonymous `CONNECT` gets `407`.
+- **Disposable guest.** Each run boots an APFS clone of the image's disk and auxiliary storage with a fresh machine identifier. The clone is deleted when `rv-macvm` exits, so nothing a command does in the guest survives the run except workspace writes.
+- **Filesystem.** Only the protected workspace volume is shared, over virtiofs (tag `rvws`), at the same absolute path. The agent mounts it owned by `rv` and checks with `statfs` that it is a virtiofs mount at that path before it runs anything. Guest writes land on the private volume and publish only when the workspace closes.
+- **How a command starts.** TCC treats the virtiofs share as a network volume. In an unattended guest, only Remote Login can open it: provisioning grants `sshd-keygen-wrapper` Full Disk Access. A LaunchDaemon, as root or as `rv`, and everything it starts get `EPERM`, and the system TCC database is SIP-protected. So the agent starts each command with `ssh` to the guest's own `sshd` on `127.0.0.1`, as `rv`:
+  - **Client.** `ssh -F /dev/null -e none` with the root-only key, `BatchMode`, and the guest's host key pinned (`StrictHostKeyChecking=yes`, a root-only known-hosts file). Input never reaches ssh escape commands.
+  - **Server.** The drop-in, included before Apple's defaults, turns off password and keyboard-interactive logins and root login. It allows only `rv@127.0.0.1` with the root-owned authorized key, and disables forwarding and user environment files. It forces the command `rv-macvm-agent session` and adds `RV_MACVM_SESSION` to the environment it accepts. Apple's defaults also accept `LANG` and `LC_*`; the agent's `ssh` sends only `RV_MACVM_SESSION`, and the command's environment is only the request's. Run boots have no NIC, so loopback is the only way in.
+  - **Request.** The exec request rides in `RV_MACVM_SESSION` (`SendEnv`/`AcceptEnv`), never in argv or on disk. The `session` verb validates it again, removes it from its environment, enters the workspace, and runs `sandbox-exec` with the profile and the request's environment.
+  - **Readiness.** launchd loads `sshd` in parallel with the agent, so the agent opens its vsock listener only once `127.0.0.1:22` accepts (it gives up waiting after 60 s and logs it). The host retries the agent for up to 180 s.
+  - **No way back in.** The `session` verb appends `(deny network-outbound (remote tcp "localhost:22"))` to every profile, so the command cannot reach `sshd`, whose sessions run outside its sandbox. It also lacks the key.
+- **Workspace control paths.** The command runs as `rv` under `sandbox-exec`. The profile is `(allow default)` plus the host cage's own `workspaceControlDenies` for the workspace path, so there is one source of truth. `.git/hooks`, `.git/config`, `.rv` and `.config/rv` cannot be written, and `.git` and `.config` cannot be created, renamed or removed. This holds whether or not the paths exist, so the Linux backend's placeholders are not needed.
+  - **Profile delivery.** rv passes the profile to `rv-macvm` in the environment variable `RV_MACVM_GUEST_PROFILE`, never in argv. The agent refuses an exec request without a profile.
+  - **No known escape from the sandbox.** Seatbelt is inherited by every child, so the routes out are those that ask another process to start one. A launchd job bootstrapped (`gui/` domain) or submitted (`launchctl submit`) from a sandboxed caller never runs. LaunchServices is different: under `(allow default)` an `open`ed app starts outside the caller's sandbox, so the guest profile adds `(deny lsopen)`. Apple events are a second route: a sandboxed `osascript` told System Events (already running) to `do shell script` ran the command unsandboxed, even with `(deny lsopen)`, which only blocks it when the target app has to be launched (verified on the host). So the profile also carries `(deny appleevent-send)`, after which the same command is refused; ordinary tools (`git`, `swift`) are unaffected. `sandbox-exec` refuses to exec setuid binaries (`sudo`, `su`, `crontab`) with `Operation not permitted`. These are the routes we know of to an unsandboxed process that could write control paths; this rests on Seatbelt's behaviour, not on a proof that no other route exists (Apple Events are covered by `(deny appleevent-send)` and an `osascript` probe on the host). `guestProfileHasNoEscape` checks them on the host against the real profile. It runs each launchd and LaunchServices route once unsandboxed, where it must write its marker (a route whose unsandboxed control fails here, e.g. with no GUI login session, is skipped with a warning), and once under the profile, where it must not; the setuid checks are a separate, always-on test; for setuid it asserts `sandbox-exec`'s own refusal (exit 71). Without `(deny lsopen)` the sandboxed `open` wrote its marker. `guestCannotPlantWorkspaceControlFiles` repeats the probes inside a real guest, where a process that escaped could write `.git/hooks`. There, `open` failed even before the deny, most likely because the guest has no GUI login; the guest probes show that nothing ran, but do not tell a refusal apart from a missing GUI session.
+- **Environment.** As for Linux: guest values travel only in `rv-macvm`'s environment, as `RV_GUEST_<NAME>`, and are forwarded by name inside the exec request over vsock. They are never written to argv or a file. The guest gets PATH, HOME=/Users/rv, USER, SHELL, LANG and TMPDIR defaults.
+- **Only the host opens sessions.** The agent accepts vsock connections from the host's context ID (2) only and closes any other. A guest process connecting to the agent locally cannot send an exec request with its own profile.
+- **Exec request validation.** The agent accepts one exec frame per connection. It requires:
+  - protocol version 1;
+  - a canonical absolute workspace other than `/` (no empty, `.` or `..` components, no trailing `/`) that is not at, under or above a guest system directory (`/System`, `/Library`, `/usr`, `/etc`, `/var/root`, `/var/db`, `/Users/rv` and similar). The comparison works like the guest's APFS volume: it ignores Unicode normalization and folds case fully, so `/uſr` (with a long s) is `/usr`. So the root agent never mounts the share over the system, itself, its session key, launchd or sudo configuration;
+  - an absolute executable;
+  - no NUL bytes;
+  - `NAME=value` environment entries;
+  - at most 8 relay ports;
+  - a non-empty profile;
+  - at most 128 KiB once encoded for the session, since one ssh environment request and `execve` carry it.
+  Frames are length-prefixed and capped at 1 MiB, and an oversized length is rejected from the header alone. The agent serves exactly one session per boot and answers any later connection with a failure frame: a run boots a fresh clone for one command, so a second session could only come from that command's leftovers.
+- **Privilege drop.** The command runs as `rv`: `sshd` drops privileges for the session. The agent's `exec-as` trampoline still drops to `rv` for the end-of-run sweep, calling `initgroups`, `setgid` and `setuid`, then checking that `setuid(0)` fails.
+- **Signals and exit.** The `session` verb leads the command's process group and ignores the signals the group gets, so a terminal Ctrl-C, or a signal the host forwards (the agent signals the group of the guest's `session` process), reaches the command once. The host can forward a signal as soon as the agent reports `started`, before `ssh` has connected. The agent then waits up to 5 s for the `session` process. It signals that process only once it has a child, because the verb ignores the signals before spawning the command, so an early signal cannot end the session. The exit status is the command's, or 128 + signal; `ssh` reports 255 if the session itself fails. When the command exits, the verb gives the rest of its group 300 ms, then kills it and every other `rv` process except its own `sshd` session (one exec runs per VM).
+- **Output.** All output the command wrote reaches the host before `exit`. The agent waits for its output pumps, each reading its own duplicate descriptor, then sweeps `rv`'s processes once more. If a pump cannot start, the agent says so on stderr and kills the command rather than truncate its output silently. A host that stops reading gets 30 s for already-written output before `exit` is sent anyway.
+- **Lifetime.** If the host connection ends, the agent SIGKILLs the command's process group, and `sshd` hangs up the session. The agent reaps the command only after its last group kill, so a group signal never reaches a recycled pid. Cancel and close SIGKILL `rv-macvm`, which kills the VM, because the Virtualization XPC service exits with its client. `rv-macvm` writes the handshake after it validates the image and clones the disk, and before the guest boots. Nothing guest-side has run when the session establishes.
+- **Concurrency.** Apple allows two macOS guests at a time. Each run (and each prepare) holds an exclusive `flock` on its directory under `runs/` for as long as it lives, so a killed run releases it and a reused pid cannot fake it. Counting and creating happen under a lock on `runs/`, so two launches cannot both take the last slot. A third is refused.
+
+### What it refuses (fail closed)
+
+- An unprepared or unreadable image, or a hardware model this Mac cannot run: exit 125 before the handshake.
+- Fewer than 4096 MiB of memory, or an image name that is not 1–63 lowercase letters, digits or `-`.
+- Starting with `RV_MACVM_GUEST_PROFILE` unset.
+- `--macvm` together with `--microvm`.
+- Everything the Linux backend refuses: host-path resource profiles, agent-definition launches, `ensureTerminal` with VM options, and non-contained plans.
+
+### What it does not guarantee
+
+- **No admission broker in the guest.** Binary-scoped egress rules cannot match a guest binary, so they deny.
+- **The guest user is the provisioning account.** `rv` is the account `VZMacGuestProvisioningOptions` created, which is an administrator. Its password is never stored, and password logins are off. The sandbox blocks setuid exec, so the command cannot use `sudo`. The agent runs as root, outside the sandbox.
+- **The command has Remote Login's disk access.** Inside the guest it can read and write what Full Disk Access allows, such as the guest user's TCC-protected folders. The guest is a fresh clone holding nothing but the image and the workspace share, and Seatbelt, which is separate from TCC, still denies the workspace control paths.
+- **`sshd` runs in the guest.** It is reachable only on guest loopback, and only with the root-only key, and every session is the forced `session` verb. A guest-local flaw in `sshd` would still be inside the VM. The VM boundary is the isolation; a Virtualization.framework escape lands in the user-privileged `rv-macvm` / VZ XPC context.
+- **Agent fixes need a new prepare.** The agent is baked into the image. An rv update that changes it reaches an existing image only through `prepare --replace`, which takes about 5 minutes with a cached restore image. Until then `status`, and so every `--macvm` launch, warns. The mismatch is not fatal, because the protocol version gates compatibility. A change that must reach every image bumps the protocol version, which makes old images fail closed.
+- **Image trust is local.** The restore image comes from Apple's CDN over HTTPS, and Virtualization.framework refuses files that are not restore images. rv does not pin its hash. The prepared image under `~/.config/rv/macvm` is writable by the same uid, like the rest of `~/.config/rv`.
+- **Guest processes share guest loopback.** The proxy credential is per runtime, not per guest process.
+- **Disk and time.** Preparing needs about 55 GB free and a 25 GB download. Each run boots macOS, which takes about 30–60 s. Clones cost only what the guest writes.
+- **Host leftovers after cancel.** Cancel SIGKILLs `rv-macvm`, so its clone in `runs/` stays until the next `rv-macvm status`, run or prepare, which removes every run directory nobody holds. rv runs `status` before every `--macvm` launch. Until then the clone costs only what the guest wrote.
+
+### Verification
+
+- **Unit tests.** `MacOSGuestLaunchTests` (6): options, wire format, helper and state-root selection, the profile, profile-by-environment, and the escape check. `WorkspaceMicroVMTests` covers the CLI (`--macvm`, mutual exclusion, no implicit prepare). `signDryRunSignsTheMicroVMBackendWithItsEntitlement` covers signing of `rv-macvm` and `rv-macvm-agent`.
+- **Helper package.** `Packages/rv-microvm` adds `MacVMCoreTests` (protocol, validation, image layout and records, DHCP lease parsing, run directories, setup script) and `RVMacVMAgentTests`. The agent tests run the real agent session on the host under the real trampoline and `sandbox-exec`:
+  - terminal and pipe commands;
+  - signals;
+  - control-path denial;
+  - the loopback relay;
+  - request refusals;
+  - process-group kill when the host goes away;
+  - all output delivered before `exit` to a slow host;
+  - Ctrl-C and forwarded SIGINT;
+  - background leftovers killed;
+  - the command cannot reach `127.0.0.1:22`.
+- **End to end.** `Scripts/macvm-proof.sh` runs `MacVMWorkspaceEndToEndTests` (opt-in, `RV_MACVM_E2E=1`, needs a prepared image). It drives real guests through `WorkspaceSessionSupervisor` and asserts:
+  - macOS, user `rv`, the workspace path and the 30x100 PTY;
+  - no non-loopback address and no default route, and an outside connection fails;
+  - the command cannot reach the guest's `sshd`;
+  - no sibling host file;
+  - an authenticated `CONNECT` reaches a host stub, while an anonymous one gets `407`;
+  - exit status 7;
+  - publish on close;
+  - control-path denial with git writes still working, and no way out of the sandbox (setuid exec refused by Seatbelt, launchd jobs never run);
+  - cancel teardown, and the cancelled run's clone removed by the next `status`;
+  - an unprepared image fails.
+  Last run: macOS 27.2 (26B123) guest on a macOS 27 host, 2026-11-03, all four tests passing (including the LaunchServices probe), on an image rebuilt with `prepare --replace` for the current agent; `runs/` was empty afterwards. That run predates `(deny appleevent-send)` and the `osascript` probe.
+- **Signed binaries.** `rv-macvm` and `rv-macvm-agent` were signed as `sign-macos.sh` does: Developer ID, hardened runtime, and the virtualization entitlement on `rv-macvm`, without a timestamp or notarization. With them, a full `prepare` and `run` worked. In the guest, the LaunchDaemon agent kept its Developer ID signature and hardened runtime. Notarization itself is untested locally.
+- **Early signals.** A SIGTERM sent the moment `rv-macvm` reports `started` reached the command in 5 of 5 runs (exit 143), and in 3 of 3 again after signals moved behind the unreaped-leader lock. Before the fix it was lost.
+  Hosted runners cannot boot macOS guests, so this suite runs on developer machines.
