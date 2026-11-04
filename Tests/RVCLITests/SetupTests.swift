@@ -384,6 +384,10 @@ private func fixtureLoginHome() throws -> URL {
         #expect(preToolUse.count == 1)
         #expect(preToolUse[0]["command"] as? String == "python3 \(layout.cursorHook)")
         #expect(preToolUse[0]["failClosed"] as? Bool == true)
+        let reads = try #require(hooksRoot["beforeReadFile"] as? [[String: Any]])
+        #expect(reads.count == 1)
+        #expect(reads[0]["command"] as? String == "python3 \(layout.cursorHook)")
+        #expect(reads[0]["failClosed"] as? Bool == true)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
         #expect(uninstall.exitCode == 0)

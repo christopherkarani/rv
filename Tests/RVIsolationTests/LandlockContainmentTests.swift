@@ -88,6 +88,8 @@ struct LandlockContainmentTests {
                 Issue.record("observed control must not establish mediated")
             case .seatbelt:
                 Issue.record("observed control must not establish seatbelt")
+            case .microvm:
+                Issue.record("observed control must not establish a micro-VM")
             }
         case .failure(let error):
             recordUnexpectedContainmentError(error, expected: "unsandboxed observed outside touch")
@@ -421,7 +423,7 @@ private func expectContainedLandlock(
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch established {
-    case .observed, .mediated, .seatbelt:
+    case .observed, .mediated, .seatbelt, .microvm:
         Issue.record(
             "Landlock cannot be a successful IsolatedRunResult",
             sourceLocation: sourceLocation
