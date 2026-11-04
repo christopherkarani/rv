@@ -162,7 +162,7 @@ struct RuntimeAdmissionIsolationTests {
             fingerprint: nil,
             authorization: .allowed,
             executionAttempted: true,
-            result: "exit:0"
+            result: .exit(0)
         )
         let diagnostics = AdmissionDiagnosticCollector()
         let url = directory.appendingPathComponent("runtime-admission.jsonl")
@@ -188,7 +188,7 @@ struct RuntimeAdmissionIsolationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let event = RuntimeAdmissionEvent(
             session: "s-1", requestID: "r-1", fingerprint: "fp", authorization: .allowed,
-            executionAttempted: true, result: "exit:0"
+            executionAttempted: true, result: .exit(0)
         )
         let url = directory.appendingPathComponent("runtime-admission.jsonl")
         #expect(appendAdmissionEvent(event, to: url, diagnose: { _ in }))
@@ -223,7 +223,7 @@ struct RuntimeAdmissionIsolationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let event = RuntimeAdmissionEvent(
             session: "s-1", requestID: nil, fingerprint: nil, authorization: .allowed,
-            executionAttempted: true, result: "exit:0"
+            executionAttempted: true, result: .exit(0)
         )
         let url = directory.appendingPathComponent("runtime-admission.jsonl")
         let target = directory.appendingPathComponent("target.txt")
@@ -322,7 +322,7 @@ struct RuntimeAdmissionIsolationTests {
         let transfers = attempted.filter { $0.httpMethod != nil }
         #expect(shells.count == 1)
         #expect(shells.first?.authorization == .allowed)
-        #expect(shells.first?.result == "exit:0")
+        #expect(shells.first?.result.wire == "exit:0")
         #expect(transfers.count == 1)
         #expect(transfers.first?.authorization == .allowed)
         let rejected = evidence.snapshot().filter { $0.eventExecutionWasRejected }
@@ -451,10 +451,10 @@ struct RuntimeCredentialBrokerTests {
         #expect(delivery.all.first?.host == "approved.example.com")
         #expect(delivery.all.first?.value == brokerSecretValue)
         let grantedEvents = harness.evidence.snapshot().filter {
-            $0.result.hasPrefix("credential")
+            $0.result.wire.hasPrefix("credential")
         }
         #expect(grantedEvents.count == 1)
-        #expect(grantedEvents.first?.result == "credentialGranted:API_KEY")
+        #expect(grantedEvents.first?.result.wire == "credentialGranted:API_KEY")
         #expect(grantedEvents.first?.authorization == .allowed)
         #expect(grantedEvents.first?.executionAttempted == false)
 
@@ -470,7 +470,7 @@ struct RuntimeCredentialBrokerTests {
         #expect(delivery.all.count == 1)
         #expect(
             harness.evidence.snapshot().contains {
-                $0.result == "credentialWithheld:endpointNotApproved" && $0.authorization == .denied
+                $0.result.wire == "credentialWithheld:endpointNotApproved" && $0.authorization == .denied
             }
         )
 
@@ -523,7 +523,7 @@ struct RuntimeCredentialBrokerTests {
         #expect(delivery.all.count == 1)
         #expect(transport.runs == 1)
         #expect(
-            harness.evidence.snapshot().filter { $0.result.hasPrefix("credential") }.count == 1
+            harness.evidence.snapshot().filter { $0.result.wire.hasPrefix("credential") }.count == 1
         )
     }
 
@@ -566,7 +566,7 @@ struct RuntimeCredentialBrokerTests {
         #expect(delivery.all.isEmpty)
         #expect(transport.runs == 0)
         #expect(
-            harness.evidence.snapshot().allSatisfy { $0.result.hasPrefix("credential") == false }
+            harness.evidence.snapshot().allSatisfy { $0.result.wire.hasPrefix("credential") == false }
         )
     }
 
@@ -685,10 +685,10 @@ struct RuntimeCredentialBrokerTests {
             return
         }
         let brokerEvents = harness.evidence.snapshot().filter {
-            $0.result.hasPrefix("credential")
+            $0.result.wire.hasPrefix("credential")
         }
         #expect(brokerEvents.count == 1)
-        #expect(brokerEvents.first?.result == "credentialUnwired:API_KEY")
+        #expect(brokerEvents.first?.result.wire == "credentialUnwired:API_KEY")
         #expect(brokerEvents.first?.authorization == .executorFailed)
         #expect(brokerEvents.first?.executionAttempted == false)
     }

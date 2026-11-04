@@ -32,6 +32,7 @@ func parseGitSegments(
     context: GitAnalysisContext
 ) -> [GitAction] {
     splitSegments(view).flatMap { splitSegments(ShellPipeline.stripLeadingAssignmentPrefixes($0)) }
+        .flatMap(peeledSegments)
         .compactMap { segment in
             parseGitInvocation(tokenizeCommand(segment).map(\.decoded), context: context)
         }
@@ -64,7 +65,7 @@ private func parseGitInvocation(
     }
     guard index < tokens.count else { return nil }
     let subcommand = tokens[index].lowercased()
-    let args = Array(tokens[(index + 1)...])
+    let args = resolveGitLongOptions(subcommand: subcommand, args: Array(tokens[(index + 1)...]))
     if subcommand == "push" {
         // Push is authority-expanding with no allow arm: a recognized
         // push verb that fails to parse fails closed as an unproven

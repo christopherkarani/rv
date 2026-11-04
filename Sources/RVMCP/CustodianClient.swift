@@ -23,10 +23,10 @@ extension MCPApprovalSigning {
                 return value
             },
             verify: { candidate, purpose, fields in
-                guard let candidate else { return false }
+                guard let candidate else { return .forged }
                 let request = MCPCustodianRequest.verify(candidate: candidate, purpose: purpose, fields: fields)
-                guard MCPCustodianWire.isValid(request), case .verify(let valid)? = transport(request) else { return nil }
-                return valid
+                guard MCPCustodianWire.isValid(request), case .verify(let valid)? = transport(request) else { return .noKey }
+                return MCPMACVerdict(wire: valid)
             },
             beginFreshAuth: { _ = transport(.beginFreshAuth) })
     }
@@ -52,7 +52,7 @@ public struct MCPCustodianKeyService: Sendable {
         case .mac(let purpose, let fields, let createIfMissing):
             return .mac(signing.mac(purpose, fields, createIfMissing))
         case .verify(let candidate, let purpose, let fields):
-            return .verify(signing.verify(candidate, purpose, fields))
+            return .verify(signing.verify(candidate, purpose, fields).wire)
         }
     }
 

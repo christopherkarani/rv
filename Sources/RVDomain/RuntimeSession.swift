@@ -5,6 +5,8 @@ import Foundation
 public enum RuntimeIsolationBackend: String, Sendable, Equatable {
     case seatbelt
     case landlock
+    /// One Linux micro-VM per launch (`rv-microvm`, Virtualization.framework).
+    case microvm
 }
 
 /// Immediate child of an RV contained launch, recorded after spawn.

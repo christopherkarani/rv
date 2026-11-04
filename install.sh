@@ -2,8 +2,12 @@
 # Install rv (C hook), rv-cli, and rvd into $HOME/.local/bin, then run rv setup.
 # Darwin: macOS 15 or newer + arm64. Linux: aarch64 or x86_64. No Windows.
 # Tests must set HOME to a temp directory.
-# Unset RV_INSTALL_BIN downloads the latest GitHub release trio into a temp
-# dir, then uses the same atomic stage+setup path as a local stage.
+# Unset RV_INSTALL_BIN downloads a GitHub release into a temp dir, then uses
+# the same atomic stage+setup path as a local stage. The release tag is
+# resolved once (RV_INSTALL_VERSION pins it, otherwise the /releases/latest
+# redirect) and every asset, SHA256SUMS included, comes from that tag. Every
+# downloaded asset is checked against SHA256SUMS on all OSes before anything
+# is unpacked or staged; RV_INSTALL_SKIP_CHECKSUMS=1 skips that (loudly).
 # Downloaded macOS files are signature-checked before anything is staged. A
 # file counts as signed only with a valid, notarized Developer ID signature
 # from the pinned team. Ad-hoc and missing signatures, and Developer ID
@@ -47,7 +51,10 @@ esac
 bin="$HOME/.local/bin"
 mkdir -p "$bin"
 
-release_base="https://github.com/christopherkarani/rv/releases/latest/download"
+release_repo="https://github.com/christopherkarani/rv/releases"
+# Set by resolve_release_tag: $release_repo/download/<tag>.
+release_base=""
+sums_file=""
 # Laya judge weights (Hugging Face). macOS curl installs fetch these into
 # ~/.config/rv/models/laya-ft-v2-coreml so the judge binds on first run;
 # Linux skips (no ONNX runtime yet — an ONNX-only dir would read as
@@ -234,6 +241,7 @@ download_release_asset() {
     echo "rv: failed to download $name from $url" >&2
     exit 1
   fi
+  verify_checksum "$name" "$out"
   got="$(bytes_of "$out")"
   if [ "$expected" -gt 0 ]; then
     progress_base=$((progress_base + expected))
@@ -245,6 +253,70 @@ download_release_asset() {
     progress_total=$progress_have
   fi
   progress_update
+}
+
+# Resolve the release tag exactly once so a download racing a new release
+# cannot mix assets from two versions.
+resolve_release_tag() {
+  tag="${RV_INSTALL_VERSION:-}"
+  if [ -z "$tag" ]; then
+    final="$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$release_repo/latest" 2>/dev/null)" || final=""
+    tag="${final##*/releases/tag/}"
+    [ "$tag" != "$final" ] || tag=""
+  fi
+  case "$tag" in
+    ''|*[!A-Za-z0-9._-]*)
+      echo "rv: failed to download: could not resolve a release tag (set RV_INSTALL_VERSION to pin one)" >&2
+      exit 1
+      ;;
+  esac
+  release_base="$release_repo/download/$tag"
+}
+
+# Hash via stdin: with a path argument, sha256sum / shasum prefix the digest
+# with `\` when the path holds a newline or backslash (e.g. an odd TMPDIR).
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum < "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 < "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+
+# Download SHA256SUMS from the resolved tag. Fails closed: no checksum tool,
+# or no SHA256SUMS, means no install.
+fetch_checksums() {
+  if [ "${RV_INSTALL_SKIP_CHECKSUMS:-}" = "1" ]; then
+    echo "rv: WARNING: RV_INSTALL_SKIP_CHECKSUMS=1 set; downloaded files are NOT verified against SHA256SUMS" >&2
+    return 0
+  fi
+  sha256_of /dev/null >/dev/null 2>&1 || {
+    echo "rv: refusing to install: neither sha256sum nor shasum is available to verify the download" >&2
+    exit 1
+  }
+  sums_file="$tmp_fetch/SHA256SUMS"
+  if ! curl -fsSL "$release_base/SHA256SUMS" -o "$sums_file"; then
+    echo "rv: refusing to install: failed to download $release_base/SHA256SUMS" >&2
+    exit 1
+  fi
+}
+
+# Check one downloaded asset ($1 release name, $2 local path) against
+# SHA256SUMS. A missing entry is as fatal as a mismatch.
+verify_checksum() {
+  [ -n "$sums_file" ] || return 0
+  want="$(awk -v n="$1" '$2 == n || $2 == "*" n { print tolower($1); exit }' "$sums_file")"
+  if [ -z "$want" ]; then
+    echo "rv: refusing to install: SHA256SUMS has no entry for $1" >&2
+    exit 1
+  fi
+  have="$(sha256_of "$2")" || have=""
+  if [ "$have" != "$want" ]; then
+    echo "rv: refusing to install: checksum mismatch for $1 (expected $want, got $have)" >&2
+    exit 1
+  fi
 }
 
 fetch_pack_bundles() {
@@ -279,6 +351,8 @@ fetch_pack_bundles() {
       return 0
     fi
   fi
+
+  verify_checksum "$name" "$tarball"
 
   # Unpack into a scratch dir, never straight over $dest: the tarball is
   # not signature-checked, and an entry named like a binary must not
@@ -343,6 +417,8 @@ fetch_swift_libs() {
       exit 1
     fi
   fi
+
+  verify_checksum "$name" "$tarball"
 
   unpack="$dest/.swiftlibs-unpack"
   rm -rf "$unpack"
@@ -790,6 +866,8 @@ if [ -n "${RV_INSTALL_BIN:-}" ]; then
   }
 else
   tmp_fetch="$(mktemp -d "${TMPDIR:-/tmp}/rv-install.XXXXXX")"
+  resolve_release_tag
+  fetch_checksums
 
   size_rv="$(normalize_size "$(content_length "$release_base/rv-$target")")"
   size_cli="$(normalize_size "$(content_length "$release_base/rv-cli-$target")")"
@@ -798,14 +876,24 @@ else
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks-$target.tar.gz")")"
   size_span=0
   size_claim=0
+  size_microvm=0
+  size_relay=0
+  size_macvm=0
+  size_macvm_agent=0
   size_approvals=0
   if [ "$os" = "Darwin" ]; then
     size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
     size_claim="$(normalize_size "$(content_length "$release_base/rv-pty-claim-$target")")"
+    # Micro-VM backend (`rv workspace run --microvm`). Older releases omit it.
+    size_microvm="$(normalize_size "$(content_length "$release_base/rv-microvm-$target")")"
+    size_relay="$(normalize_size "$(content_length "$release_base/rv-guest-relay-$target")")"
+    # macOS guest backend (`rv workspace run --macvm`). Older releases omit it.
+    size_macvm="$(normalize_size "$(content_length "$release_base/rv-macvm-$target")")"
+    size_macvm_agent="$(normalize_size "$(content_length "$release_base/rv-macvm-agent-$target")")"
     size_approvals="$(normalize_size "$(content_length "$release_base/rv-approvals-darwin-arm64.zip")")"
   fi
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_approvals))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim + size_microvm + size_relay + size_macvm + size_macvm_agent + size_approvals))
   size_isolation=0
   size_swiftlibs=0
   if [ "$os" = "Linux" ]; then
@@ -829,6 +917,16 @@ else
   if [ "$os" = "Darwin" ] && [ "$size_claim" -gt 0 ]; then
     download_release_asset "$tmp_fetch" "rv-pty-claim-$target" "$size_claim" "rv-pty-claim"
     chmod 755 "$tmp_fetch/rv-pty-claim"
+  fi
+  if [ "$os" = "Darwin" ] && [ "$size_microvm" -gt 0 ] && [ "$size_relay" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "rv-microvm-$target" "$size_microvm" "rv-microvm"
+    download_release_asset "$tmp_fetch" "rv-guest-relay-$target" "$size_relay" "rv-guest-relay"
+    chmod 755 "$tmp_fetch/rv-microvm" "$tmp_fetch/rv-guest-relay"
+  fi
+  if [ "$os" = "Darwin" ] && [ "$size_macvm" -gt 0 ] && [ "$size_macvm_agent" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "rv-macvm-$target" "$size_macvm" "rv-macvm"
+    download_release_asset "$tmp_fetch" "rv-macvm-agent-$target" "$size_macvm_agent" "rv-macvm-agent"
+    chmod 755 "$tmp_fetch/rv-macvm" "$tmp_fetch/rv-macvm-agent"
   fi
   # Optional: releases without a provisioned custodian bundle omit the asset.
   if [ "$os" = "Darwin" ] && [ "$size_approvals" -gt 0 ]; then
@@ -856,7 +954,7 @@ else
   }
   if [ "$os" = "Darwin" ]; then
     verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
-      rv rv-cli rvd rv-workspace-host rv-pty-claim RVApprovals.app
+      rv rv-cli rvd rv-workspace-host rv-pty-claim rv-microvm rv-macvm rv-macvm-agent RVApprovals.app
   fi
 fi
 
@@ -930,6 +1028,27 @@ if [ -n "$tmp_claim" ]; then
   rm -f "$bin/rv-pty-claim"
   mv -f "$tmp_claim" "$bin/rv-pty-claim"
   tmp_claim=""
+fi
+# Optional pair: rv-microvm installs rv-guest-relay into each guest from
+# beside itself. rv-guest-relay is a Linux binary and carries no signature.
+if [ "$os" = "Darwin" ] && [ -x "$src/rv-microvm" ] && [ -x "$src/rv-guest-relay" ]; then
+  for helper in rv-microvm rv-guest-relay; do
+    rm -f "$bin/.$helper.installing"
+    cp "$src/$helper" "$bin/.$helper.installing"
+    chmod 755 "$bin/.$helper.installing"
+    rm -f "$bin/$helper"
+    mv -f "$bin/.$helper.installing" "$bin/$helper"
+  done
+fi
+# Optional pair: `rv-macvm prepare` installs rv-macvm-agent from beside itself.
+if [ "$os" = "Darwin" ] && [ -x "$src/rv-macvm" ] && [ -x "$src/rv-macvm-agent" ]; then
+  for helper in rv-macvm rv-macvm-agent; do
+    rm -f "$bin/.$helper.installing"
+    cp "$src/$helper" "$bin/.$helper.installing"
+    chmod 755 "$bin/.$helper.installing"
+    rm -f "$bin/$helper"
+    mv -f "$bin/.$helper.installing" "$bin/$helper"
+  done
 fi
 tmp_rv=""
 tmp_cli=""
