@@ -15,7 +15,7 @@ public enum SelfProtectionGuard {
         launchedCommandHeads(command.rawValue).contains { launched in
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
             // or glob head may resolve to rv: judged as rv (fail closed).
-            launched.truncated || isWeakeningInvocation(launched.argv, headMayBeRV: launched.headIsDynamic)
+            launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
         }
     }
 }
@@ -39,7 +39,7 @@ private let maxVerbCandidates = 256
 
 private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bool {
     guard let program = rawArgv.first, headMayBeRV || rvProgramNames.contains(program) else { return false }
-    let args = strippingRedirects(Array(rawArgv.dropFirst())).map(foldedWord)
+    let args = rawArgv.dropFirst().map(foldedWord)
     guard let firstWord = args.firstIndex(where: { $0.hasPrefix("-") == false }) else { return false }
     // An option before the verb may take a value (`rv --config x uninstall`),
     // so any later word could be the verb.

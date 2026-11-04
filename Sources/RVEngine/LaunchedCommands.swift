@@ -22,13 +22,53 @@ func launchedCommands(_ raw: String) -> [[String]] {
 /// input the depth cap could not follow; callers must treat it as unknown.
 struct LaunchedCommand {
     let head: String
+    /// argv as written, redirect operators included (`python3 < x.py`).
     let argv: [String]
+    /// argv without structural redirects, for judging positional arguments.
+    let guardArgv: [String]
     var headIsDynamic = false
     var speculative = false
     var truncated = false
 
+    init(
+        head: String, argv: [String], guardArgv: [String]? = nil,
+        headIsDynamic: Bool = false, speculative: Bool = false, truncated: Bool = false
+    ) {
+        self.head = head
+        self.argv = argv
+        self.guardArgv = guardArgv ?? argv
+        self.headIsDynamic = headIsDynamic
+        self.speculative = speculative
+        self.truncated = truncated
+    }
+
     static let truncatedMarker = LaunchedCommand(head: "$", argv: ["$"], headIsDynamic: true, truncated: true)
+
+    /// A command from a program name and operands that may carry redirect marks.
+    static func make(head: String, program: String, args: [String], headIsDynamic: Bool, speculative: Bool = false) -> LaunchedCommand {
+        LaunchedCommand(
+            head: head,
+            argv: [program] + args.map(unmarkedWord),
+            guardArgv: [program] + args.filter { isRedirectWord($0) == false },
+            headIsDynamic: headIsDynamic,
+            speculative: speculative
+        )
+    }
+
+    var asSpeculative: LaunchedCommand {
+        LaunchedCommand(
+            head: head, argv: argv, guardArgv: guardArgv,
+            headIsDynamic: headIsDynamic, speculative: true, truncated: truncated
+        )
+    }
 }
+
+/// Structural redirect words (operator and target) are marked in the word
+/// list so launcher parsing skips them, while `argv` still shows them to the
+/// inline-program floor. A quoted `'>'` is never marked.
+private let redirectMark: Character = "\u{1}"
+func isRedirectWord(_ word: String) -> Bool { word.first == redirectMark }
+func unmarkedWord(_ word: String) -> String { isRedirectWord(word) ? String(word.dropFirst()) : word }
 
 func launchedCommandHeads(_ raw: String) -> [LaunchedCommand] {
     launchedCommandHeads(raw, depth: 0)
@@ -41,14 +81,22 @@ private let maxShellOperands = 64
 
 private func launchedCommandHeads(_ raw: String, depth: Int) -> [LaunchedCommand] {
     guard depth < maxLaunchDepth else { return [.truncatedMarker] }
-    // `\<newline>` joins words only when the backslash is not itself escaped
-    // or quoted, and the splitter is not quote-aware: judge the raw text and
-    // the continuation-joined text, so a real separator (`echo \\<LF>rv x`)
-    // and a real continuation (`rv \<LF>uninstall`) are both seen.
-    let joined = raw.replacingOccurrences(of: "\\\n", with: "")
-    var commands = segmentCommands(raw, depth: depth)
-    if joined != raw {
-        commands.append(contentsOf: segmentCommands(joined, depth: depth))
+    var commands: [LaunchedCommand] = []
+    // `splitSegments` peels `{a,b}` groups, so an expansion naming rv, a
+    // launcher or a shell anywhere is judged unmodelled instead (fail closed).
+    if hasSensitiveBraceExpansion(raw) { commands.append(.truncatedMarker) }
+    // The splitter is not escape-aware: judge the raw text and the text with
+    // real line continuations joined, so both a separator (`echo \\<LF>rv x`)
+    // and a continuation (`rv \<LF>uninstall`) are seen.
+    // A third, naive view (every `\<LF>` removed) over-claims where quoting or
+    // escaping makes the parity view disagree: extra flags, never fewer.
+    var views = [raw]
+    for view in [joiningLineContinuations(raw), raw.replacingOccurrences(of: "\\\n", with: "")]
+    where views.contains(view) == false {
+        views.append(view)
+    }
+    for view in views {
+        commands.append(contentsOf: segmentCommands(view, depth: depth))
     }
     return commands
 }
@@ -56,44 +104,120 @@ private func launchedCommandHeads(_ raw: String, depth: Int) -> [LaunchedCommand
 private func segmentCommands(_ text: String, depth: Int) -> [LaunchedCommand] {
     var commands: [LaunchedCommand] = []
     for segment in splitSegments(text) {
-        let words = ShellPipeline.tokenize(segment)
-            .filter { $0.isNewline == false }
-            .map(\.lexeme)
-        commands.append(contentsOf: resolve(words, depth: depth, expand: true))
+        commands.append(contentsOf: resolve(commandWords(segment), depth: depth, expand: true))
     }
-    commands.append(contentsOf: braceHeadCommands(text, depth: depth))
     return commands
 }
 
-private let commandSeparators: Set<String> = [";", "&&", "||", "|", "&", "(", ")", "{", "}", "!", "then", "do", "else", "elif", "time"]
-
-/// `splitSegments` peels `{a,b}` as a group (`{rv,uninstall}` -> `rv,uninstall`),
-/// losing the expansion. Re-scan the tokens: a word that starts a command and
-/// carries a comma group is resolved with the rest of its command.
-private func braceHeadCommands(_ text: String, depth: Int) -> [LaunchedCommand] {
-    guard text.contains("{"), text.contains(",") else { return [] }
-    let tokens = ShellPipeline.tokenize(text)
-    var out: [LaunchedCommand] = []
-    var atStart = true
-    var current: [String] = []
-    func flush() {
-        if current.isEmpty == false {
-            out.append(contentsOf: resolve(current, depth: depth + 1, expand: true))
+/// Lexemes of `text` without newline tokens; structural redirects (`2>&1`,
+/// `< file`) are marked. A quoted `'>'` is an ordinary word, not a redirect.
+private func commandWords(_ text: String) -> [String] {
+    let tokens = ShellPipeline.tokenize(text).filter { $0.isNewline == false }
+    var words: [String] = []
+    var index = 0
+    while index < tokens.count {
+        let token = tokens[index]
+        let skip = token.wasQuoted ? 0 : redirectWordCount(token.lexeme)
+        if skip > 0 {
+            for offset in 0..<min(skip, tokens.count - index) {
+                words.append(String(redirectMark) + tokens[index + offset].lexeme)
+            }
+            index += skip
+        } else {
+            words.append(token.lexeme)
+            index += 1
         }
-        current = []
     }
-    for token in tokens {
-        if token.isNewline || (token.wasQuoted == false && commandSeparators.contains(token.lexeme)) {
-            flush()
-            atStart = true
+    return words
+}
+
+/// `text` with each `\<LF>` that is a real continuation removed: the
+/// backslash must be unescaped (an even run before it) and outside single
+/// quotes. Scanned left to right, so `\\<LF>\<LF>` joins only the second.
+func joiningLineContinuations(_ text: String) -> String {
+    var out = ""
+    var inSingle = false
+    var inDouble = false
+    var ansi = false
+    var iterator = text.makeIterator()
+    var previous: Character?
+    while let char = iterator.next() {
+        if inSingle {
+            out.append(char)
+            if ansi, char == "\\", let next = iterator.next() {
+                out.append(next)
+            } else if char == "'" {
+                inSingle = false
+                ansi = false
+            }
+            previous = char
             continue
         }
-        if atStart, token.lexeme.contains("{"), token.lexeme.contains(",") { current = [] ; atStart = false; current.append(token.lexeme); continue }
-        if current.isEmpty == false { current.append(token.lexeme) }
-        atStart = false
+        if char == "\\" {
+            guard let next = iterator.next() else {
+                out.append(char)
+                break
+            }
+            if next != "\n" { out.append(char); out.append(next) }
+            previous = next
+            continue
+        }
+        if char == "'", inDouble == false {
+            inSingle = true
+            ansi = previous == "$"
+        } else if char == "\"" {
+            inDouble.toggle()
+        }
+        out.append(char)
+        previous = char
+    }
+    return out
+}
+
+private let braceSensitiveNames: Set<String> = {
+    var names: Set<String> = ["rv", "rv-cli", "sudo", "env", "timeout", "busybox", "eval"]
+    names.formUnion(plainLaunchers)
+    names.formUnion(shellNames)
+    return names
+}()
+
+/// True when an unquoted brace-comma group in `text` can expand to rv, a
+/// launcher or a shell (`{rv,uninstall}`, `{r,}v`, `{sh,-c,...}`), or cannot be
+/// expanded within bounds. Single quotes and `\{` are literal; double quotes
+/// are not tracked (`$(...)` runs inside them).
+func hasSensitiveBraceExpansion(_ text: String) -> Bool {
+    guard text.contains("{"), text.contains(",") else { return false }
+    var words: [String] = []
+    var current = ""
+    var iterator = text.makeIterator()
+    var previous: Character?
+    func flush() {
+        if current.contains("{"), current.contains(",") { words.append(current) }
+        current = ""
+    }
+    while let char = iterator.next() {
+        defer { previous = char }
+        if char == "\\" {
+            _ = iterator.next()
+            current.append("x")
+        } else if char == "'" {
+            while let inner = iterator.next() {
+                if inner == "'" { break }
+                if previous == "$", inner == "\\" { _ = iterator.next() }
+            }
+            current.append("x")
+        } else if char.isWhitespace || ";&|()<>`".contains(char) {
+            flush()
+        } else if char != "\"" {
+            current.append(char)
+        }
     }
     flush()
-    return out
+    for word in words {
+        guard let expansions = braceExpanded(word) else { return true }
+        if expansions.contains(where: { braceSensitiveNames.contains(commandName($0)) }) { return true }
+    }
+    return false
 }
 
 private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCommand] {
@@ -106,13 +230,12 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
     var splits = 0
     while index < words.count {
         let word = words[index]
-        if isAssignmentWord(word) {
+        if isRedirectWord(word) {
             index += 1
             continue
         }
-        let redirect = redirectWordCount(word)
-        if redirect > 0 {
-            index += redirect
+        if isAssignmentWord(word) {
+            index += 1
             continue
         }
         // Option letters are case-sensitive (`-S` vs `-s`): unescape only.
@@ -131,7 +254,7 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
                 splits += 1
                 guard splits < maxLaunchDepth else { return out + [.truncatedMarker] }
                 out.append(contentsOf: launchedCommandHeads(payload, depth: depth + 1))
-                let payloadWords = ShellPipeline.tokenize(payload).filter { $0.isNewline == false }.map(\.lexeme)
+                let payloadWords = commandWords(payload)
                 words = payloadWords + Array(words[min(index + count, words.count)...])
                 index = 0
                 launcher = nil
@@ -144,14 +267,6 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
             launcher = nil
             index += 1
             continue
-        }
-        if word.contains("{"), word.contains(",") {
-            // `{rv,uninstall}` expands to several words; judge them as the argv.
-            if let expanded = braceExpanded(word) {
-                if expanded != [word] { out.append(contentsOf: resolve(expanded + Array(words[(index + 1)...]), depth: depth + 1, expand: expand)) }
-            } else {
-                out.append(.truncatedMarker)
-            }
         }
         if isDynamicHead(word) {
             out.append(contentsOf: dynamicCandidates(Array(words[index...]), depth: depth, expand: expand))
@@ -168,11 +283,12 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
     guard index < words.count else { return out }
     let head = words[index]
     let args = Array(words[(index + 1)...])
+    let operands = args.filter { isRedirectWord($0) == false }
     let program = commandName(head)
     let name = decodedCommandName(head)
     if shellNames.contains(name),
-       let flag = args.firstIndex(where: { isShellCommandFlag(foldedWord($0), shell: name) }),
-       case let payloads = args[(flag + 1)...].filter({ foldedWord($0).hasPrefix("-") == false }),
+       let flag = operands.firstIndex(where: { isShellCommandFlag(foldedWord($0), shell: name) }),
+       case let payloads = operands[(flag + 1)...].filter({ foldedWord($0).hasPrefix("-") == false }),
        payloads.isEmpty == false
     {
         // Valued shell options (`-O extglob`, `-o pipefail`) precede the real
@@ -186,14 +302,14 @@ private func resolve(_ input: [String], depth: Int, expand: Bool) -> [LaunchedCo
         return out
     }
     if name == "eval" {
-        let operands = args.drop(while: { foldedWord($0) == "--" })
+        let operands = operands.drop(while: { foldedWord($0) == "--" })
         let raw = operands.joined(separator: " ")
         let decoded = operands.map { $0.ansiCDecodedIfMarked }.joined(separator: " ")
         for variant in Set([raw, decoded]) {
             out.append(contentsOf: launchedCommandHeads(variant, depth: depth + 1))
         }
     }
-    out.append(LaunchedCommand(head: head, argv: [program] + args, headIsDynamic: isDynamicHead(head)))
+    out.append(.make(head: head, program: program, args: args, headIsDynamic: isDynamicHead(head)))
     return out
 }
 
@@ -206,8 +322,8 @@ private func dynamicCandidates(_ slice: [String], depth: Int, expand: Bool) -> [
     // closed on absurd operand counts rather than going quadratic.
     guard slice.count <= maxDynamicOperands else { return [.truncatedMarker] }
     let rest = Array(slice.dropFirst())
-    var out = [LaunchedCommand(head: head, argv: [commandName(head)] + rest, headIsDynamic: true, speculative: true)]
-    for word in rest where word.contains(where: \.isWhitespace) {
+    var out = [LaunchedCommand.make(head: head, program: commandName(head), args: rest, headIsDynamic: true, speculative: true)]
+    for word in rest where isRedirectWord(word) == false && word.contains(where: \.isWhitespace) {
         out.append(contentsOf: launchedCommandHeads(word, depth: depth + 1).map(\.asSpeculative))
     }
     if expand {
@@ -216,12 +332,6 @@ private func dynamicCandidates(_ slice: [String], depth: Int, expand: Bool) -> [
         }
     }
     return out
-}
-
-private extension LaunchedCommand {
-    var asSpeculative: LaunchedCommand {
-        LaunchedCommand(head: head, argv: argv, headIsDynamic: headIsDynamic, speculative: true, truncated: truncated)
-    }
 }
 
 /// True when the head may resolve to a program other than its literal text:
@@ -474,20 +584,4 @@ private func expandableGroup(_ word: String) -> (open: Int, close: Int, alternat
         return (i, j - 1, alternatives)
     }
     return nil
-}
-
-/// `words` without redirect operators and their targets.
-func strippingRedirects(_ words: [String]) -> [String] {
-    var out: [String] = []
-    var index = 0
-    while index < words.count {
-        let skip = redirectWordCount(words[index])
-        if skip > 0 {
-            index += skip
-        } else {
-            out.append(words[index])
-            index += 1
-        }
-    }
-    return out
 }
