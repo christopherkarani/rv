@@ -2,7 +2,9 @@ import Testing
 import RVDomain
 
 /// REQ-006 / AC-005: producers build fingerprints through one injective
-/// encoder. Components without `\ , :` keep their historical spelling.
+/// encoder, injective over the projected fields (not `nil` vs `""`, nor the
+/// unencoded `startPoint`/`source`). Components without `\ , :` keep their
+/// historical spelling.
 @Suite("ActionFingerprint injective encoding")
 struct ActionFingerprintInjectiveTests {
     private func target(_ path: String) -> FilesystemTarget {

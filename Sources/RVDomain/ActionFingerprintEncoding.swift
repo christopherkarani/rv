@@ -88,7 +88,11 @@ public enum FingerprintSegment: Sendable, Equatable {
 }
 
 extension ActionFingerprint {
-    /// The only producer API. `kind` is a trusted literal prefix and is not
+    /// The only producer API. Injective over the projected fields only: `nil`
+    /// and `""` alias for `remote`/`target`/`source`/`mode`, and
+    /// `createBranch.startPoint` and `restore.source` are not encoded. That
+    /// fails closed, since no fingerprint grants authority.
+    /// `kind` is a trusted literal prefix and is not
     /// escaped. Segments are escaped, then joined with `:` (list items with `,`).
     public static func make(_ kind: String, _ segments: [FingerprintSegment]) -> ActionFingerprint {
         ActionFingerprint(rawValue: ([kind] + segments.map(\.encoded)).joined(separator: ":"))
