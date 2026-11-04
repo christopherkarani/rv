@@ -293,7 +293,9 @@ func copyTree(
         let mode = modeBits(status.st_mode)
         switch kind {
         case .directory:
-            guard mkdiratWithinCopyClock(destination, name, mode) == true else {
+            // Owner-only until the children land: a 0555 directory would refuse
+            // their creates. The fchmod below sets the real mode (and sidesteps umask).
+            guard mkdiratWithinCopyClock(destination, name, 0o700) == true else {
                 return false
             }
             let childSource = openatWithinCopyClock(
@@ -317,9 +319,10 @@ func copyTree(
                 expectDevice: expectDevice,
                 isWorkspaceRoot: false
             )
+            let modeOK = copied && fchmodWithinCopyClock(childDest, mode) == true
             close(childSource)
             close(childDest)
-            if copied == false { return false }
+            if modeOK == false { return false }
         case .symlink:
             guard let target = readlinkWithinCopyClock(source, name) else {
                 return false
@@ -343,11 +346,14 @@ func copyTree(
                 close(input)
                 return false
             }
+            // Owner-only while bytes and xattrs land: `fsetxattr` checks the
+            // inode mode, not the descriptor, so a 0444 create cannot take
+            // `com.apple.provenance`. The fchmod below sets the real mode.
             let output = openatWithinCopyClock(
                 destination,
                 name,
                 O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
-                mode
+                0o600
             )
             guard output >= 0 else {
                 close(input)

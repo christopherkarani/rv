@@ -238,7 +238,7 @@ enum AuditForwardRun {
     /// rule applies: headers are resolved on the host and never enter a cage.
     static func resolveHeaders(
         _ headers: [String: String], secrets: () -> Result<SecretsConfiguration, SecretsConfigurationError>,
-        resolver: SecretResolver, policy: ManagedPolicy?
+        resolver: SecretResolver, policy: ManagedPolicy?, now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[String: String], CommandFailure> {
         let names = Set(headers.values.flatMap { MCPSecretReference.names(in: $0) ?? [] })
         guard names.isEmpty == false else { return .success(headers) }
@@ -247,31 +247,36 @@ enum AuditForwardRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let loaded): configuration = loaded
         }
-        var values: [String: String] = [:]
+        var definitions: [SecretDefinition] = []
         for name in names.sorted() {
             guard let secret = configuration.secret(named: name) else {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
             }
-            if let reason = SecretOrganizationRules.sourceViolation(secret, policy: policy) {
-                return .failure(CommandFailure("header secret \(DisplayedText.field(name)): organization policy: \(reason)"))
-            }
-            if secret.gatewayOnly {
-                return .failure(CommandFailure(
-                    "header secret \(DisplayedText.field(name)): \(secret.source.kind) secrets are spent only by the secret gateway"))
-            }
-            switch resolver.resolve(secret.source) {
-            case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
-            case .success(let value):
-                guard let text = String(validating: value.revealed(), as: UTF8.self) else {
-                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not text"))
-                }
-                guard text.contains("\r") == false, text.contains("\n") == false, text.contains("\0") == false else {
-                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) contains a line break"))
-                }
-                values[name] = text
-            }
+            definitions.append(secret)
         }
-        return .success(headers.mapValues { MCPSecretReference.substitute($0, values: values) })
+        switch SecretRelease(resolver: resolver, policy: policy, now: now).release(definitions, to: .header) {
+        case .failure(.policyInvalid(let reason)):
+            return .failure(CommandFailure("organization policy is invalid: \(reason)"))
+        case .failure(.refused(let name, let reason)):
+            let kind = configuration.secret(named: name)?.source.kind.rawValue ?? ""
+            return .failure(CommandFailure(headerRefusal(reason, secret: name, kind: kind)))
+        case .success(let released):
+            var values: [String: String] = [:]
+            for secret in released { values[secret.definition.name] = secret.text }
+            return .success(headers.mapValues { MCPSecretReference.substitute($0, values: values) })
+        }
+    }
+
+    static func headerRefusal(_ reason: SecretRefusal.Reason, secret name: String, kind: String) -> String {
+        let field = "header secret \(DisplayedText.field(name))"
+        switch reason {
+        case .organizationPolicy(let rule): return "\(field): organization policy: \(rule.message(secret: name))"
+        case .gatewayOnly: return "\(field): \(kind) secrets are spent only by the secret gateway"
+        case .expired(let date): return "\(field) expired at \(SecretExpiry.text(date))"
+        case .resolution(let error): return "\(field): \(error.message)"
+        case .lineBreak: return "\(field) contains a line break"
+        case .unusableToken, .unusableCredentials, .unusableEnvironmentValue, .notText: return "\(field) is not text"
+        }
     }
 
     static func parseHeaders(_ raw: [String]) -> Result<[String: String], CommandFailure> {

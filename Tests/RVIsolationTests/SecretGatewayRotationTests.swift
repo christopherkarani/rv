@@ -497,4 +497,50 @@ struct SecretLaunchBrokerRotationTests {
         #expect(failed.count == 1)
         #expect((failed.first?["reason"] as? String)?.contains("different source or delivery") == true)
     }
+
+    /// `keychainJSON()` with `extra` appended to the OPENAI secret (a gateway one) only.
+    private static func gatewayJSON(adding extra: String) -> String {
+        keychainJSON().replacingOccurrences(
+            of: #""placeholderPrefix":"sk-"}}"#, with: #""placeholderPrefix":"sk-"}}\#(extra)"#)
+    }
+
+    /// Characterization: limits are not part of the route, so an on-disk edit that
+    /// touches only `refresh` or only `binaries` must not stop a running session refreshing,
+    /// whether the session launched without limits or with them.
+    @Test(arguments: [
+        ("", #","refresh":"15m""#),
+        ("", #","binaries":["/usr/bin/curl"]"#),
+        ("", #","refresh":"1h","binaries":["/usr/bin/curl","/usr/bin/git"]"#),
+        (#","refresh":"15m""#, #","refresh":"1h""#),
+        (#","refresh":"15m""#, ""),
+        (#","refresh":"15m""#, #","refresh":"15m","binaries":["/usr/bin/curl"]"#),
+    ])
+    func aLimitsOnlyEditKeepsARunningSessionRefreshing(launched: String, edited: String) throws {
+        #expect(Self.gatewayJSON(adding: launched) != Self.gatewayJSON(adding: edited))
+        let fixture = try SecretsFixture(Self.gatewayJSON(adding: launched))
+        defer { fixture.tearDown() }
+        let keychain = RotatingKeychain()
+        keychain.store("OPENAI_API_KEY", "sk-live-OLD-0123456789")
+        let clock = TestClock()
+        let upstream = RecordingUpstream()
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: keychain.resolver,
+            transport: upstream.transport, peers: .fixed(.member), workspace: nil, now: { clock.now })
+        defer { broker.stop() }
+        let lease = try broker.lease(names: ["OPENAI_API_KEY"], agent: nil).get()
+        broker.bind(lease, processGroup: testProcessGroup)
+        let placeholder = try #require(lease.environment.first { $0.name == "OPENAI_API_KEY" }?.value)
+        let port = try #require(broker.gatewayPort)
+
+        keychain.store("OPENAI_API_KEY", "sk-live-NEW-9876543210")
+        try rewrite(fixture, Self.gatewayJSON(adding: edited))
+        clock.advance(3)
+        #expect(try call(port, placeholder).status == 200)
+        #expect(upstream.requests.first?.headers["authorization"] == "Bearer sk-live-NEW-9876543210")
+        let refreshed = fixture.auditLines.filter { ($0["detail"] as? [String: String])?["event"] == "refresh" }
+        #expect(refreshed.count == 1)
+        let failed = fixture.auditLines.filter { ($0["detail"] as? [String: String])?["activity"] == "refreshFailed" }
+        #expect(failed.isEmpty)
+        #expect(fixture.auditText.contains("different source or delivery") == false)
+    }
 }

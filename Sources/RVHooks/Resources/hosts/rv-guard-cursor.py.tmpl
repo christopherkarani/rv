@@ -1,6 +1,7 @@
 """RV destructive-command guard for Cursor shell.
 
-Cursor beforeShellExecution command hook plus preToolUse Read / Edit / Write.
+Cursor beforeShellExecution command hook, beforeReadFile, plus preToolUse
+Read / Edit / Write / Grep.
 Live deny is the official native
 honor path ``{"permission":"deny","user_message":...,"agent_message":...}``
 on stdout and process exit 0. See https://cursor.com/docs/hooks.md.
@@ -37,7 +38,7 @@ def main():
 
 
 _SHELL_TOOLS = ("Shell", "Bash")
-_FILE_TOOLS = ("Read", "Edit", "Write", "read_file", "edit_file", "write_file")
+_FILE_TOOLS = ("Read", "Edit", "Write", "read_file", "edit_file", "write_file", "Grep")
 
 
 def _guard(raw):
@@ -51,7 +52,7 @@ def _guard(raw):
         tool = envelope.get("tool_name") or ""
         if tool not in _SHELL_TOOLS and tool not in _FILE_TOOLS:
             return {"action": "allow"}
-    elif event not in ("", "beforeShellExecution"):
+    elif event not in ("", "beforeShellExecution", "beforeReadFile"):
         return {"action": "allow"}
     mapped = _spawn_rv_hook("cursor", raw)
     if mapped["action"] == "block":

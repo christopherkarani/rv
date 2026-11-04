@@ -102,6 +102,8 @@ struct SeatbeltContainmentTests {
                 Issue.record("observed control must not establish mediated")
             case .seatbelt:
                 Issue.record("observed control must not establish seatbelt")
+            case .microvm:
+                Issue.record("must not establish a micro-VM")
             }
         case .failure(let error):
             recordUnexpectedContainmentError(error, expected: "unsandboxed observed outside touch")
@@ -149,6 +151,8 @@ private func expectContainedSeatbelt(
             "Darwin contained establish must be seatbelt, not mediated",
             sourceLocation: sourceLocation
         )
+    case .microvm:
+        Issue.record("must not establish a micro-VM", sourceLocation: sourceLocation)
     }
     switch plan.mode {
     case .contained(let guarantees):

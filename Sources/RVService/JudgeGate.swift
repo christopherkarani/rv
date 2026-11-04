@@ -350,10 +350,11 @@ public enum JudgeRuntime {
     /// `allowSafeLane` is false when the package-script graph could not
     /// be resolved: such a command must reach the judge (or a human),
     /// never the judge-skipping lane. `isPeek` only tags the log row.
+    /// The log row is returned, not written; nil when the judge is not
+    /// consulted (a pack deny).
     static func apply(
         to result: EvaluationResult,
         command: ShellCommand,
-        home: HomeDirectory?,
         inputs: EvaluationInputs,
         judge: any JudgePort,
         provenance: ActionProvenance,
@@ -361,18 +362,17 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool
-    ) -> EvaluationResult {
-        guard case .allow = result.decision else { return result }
+    ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow?) {
+        guard case .allow = result.decision else { return (result, nil) }
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
         if allowSafeLane, SafeCommandLane.isSafe(command.rawValue) {
-            log(
-                home: home, guardMode: inputs.guardMode, live: result, wouldBe: nil,
+            return (result, logRow(
+                guardMode: inputs.guardMode, subject: .live(result),
                 verdict: nil, action: nil, engine: selection.engine,
                 note: noteFor("safe-lane", contextPartial: partial), now: now, isPeek: isPeek
-            )
-            return result
+            ))
         }
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
@@ -380,34 +380,32 @@ public enum JudgeRuntime {
         // A bundle that cannot LOAD is unavailable: packs-only plus a
         // note (doctor surfaces it), never an eternal Ask loop.
         guard let bundle = selection.bundle else {
-            log(
-                home: home, guardMode: inputs.guardMode, live: result, wouldBe: nil,
+            return (packsOnlyFloor(result, command: command), logRow(
+                guardMode: inputs.guardMode, subject: .live(result),
                 verdict: nil, action: nil, engine: selection.engine,
                 note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
-            )
-            return packsOnlyFloor(result, command: command)
+            ))
         }
         let run = judge.judge(JudgeCall(
             command: command.rawValue, context: context,
             engine: selection.engine, bundle: bundle
         ))
         let reading = read(run, over: result, provenance: provenance)
-        log(
-            home: home, guardMode: inputs.guardMode, live: reading.outcome, wouldBe: nil,
+        let row = logRow(
+            guardMode: inputs.guardMode, subject: .live(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
         )
         // Only enforce floors an unscored allow; the log keeps the pack
         // result, as for engine-missing above.
-        if case .unavailable = run { return packsOnlyFloor(reading.outcome, command: command) }
-        return reading.outcome
+        if case .unavailable = run { return (packsOnlyFloor(reading.outcome, command: command), row) }
+        return (reading.outcome, row)
     }
 
-    /// Observe path: log the would-be verdict, always allow.
+    /// Observe path: the would-be verdict as a log row, always allow.
     static func observe(
         wouldBe result: EvaluationResult,
         command: ShellCommand,
-        home: HomeDirectory?,
         inputs: EvaluationInputs,
         judge: any JudgePort,
         provenance: ActionProvenance,
@@ -415,7 +413,7 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool
-    ) -> EvaluationResult {
+    ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -433,12 +431,11 @@ public enum JudgeRuntime {
                 provenance: provenance
             )
         }
-        log(
-            home: home, guardMode: inputs.guardMode, live: nil, wouldBe: reading.outcome,
+        return (result.observedAllow, logRow(
+            guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
-        )
-        return result.observedAllow
+        ))
     }
 
     /// What one judge run means for a pack-allow: the threshold-resolved
@@ -605,61 +602,99 @@ public enum JudgeRuntime {
         )
     }
 
-    private static let logLock = UnfairLock<Bool>(true)
+    /// Which result a judge-log row describes: the enforced verdict, or the
+    /// observe-mode would-be verdict.
+    enum LogSubject {
+        case live(EvaluationResult)
+        case wouldBe(EvaluationResult)
+    }
 
-    /// Hash-only log (never command text), laya-guard parity.
-    /// `live`/`wouldBe` are post-judge results and `action` is the
-    /// threshold-resolved action, so would-block rates read correctly.
-    static func log(
-        home: HomeDirectory?,
+    /// Hash-only row (never command text), laya-guard parity. The subject
+    /// is the post-judge result and `action` is the threshold-resolved
+    /// action, so would-block rates read correctly.
+    static func logRow(
         guardMode: GuardMode,
-        live: EvaluationResult?,
-        wouldBe: EvaluationResult?,
+        subject: LogSubject,
         verdict: LayaVerdict?,
         action: LayaVerdict.Action?,
         engine: JudgeEngine,
-        note: String? = nil,
+        note: String?,
         now: Date,
-        isPeek: Bool = false
-    ) {
-        guard let home else { return }
-        let subject = wouldBe ?? live
-        guard let subject else { return }
+        isPeek: Bool
+    ) -> GatedEffect.JudgeLogRow {
+        func kind(_ decision: Decision) -> GatedEffect.JudgeLogRow.Verdict {
+            switch decision {
+            case .allow: .allow
+            case .deny: .deny
+            case .indeterminate: .indeterminate
+            }
+        }
+        let described: EvaluationResult
+        let rowSubject: GatedEffect.JudgeLogRow.Subject
+        switch subject {
+        case .live(let live):
+            described = live
+            rowSubject = .live(kind(live.decision))
+        case .wouldBe(let wouldBe):
+            described = wouldBe
+            let rule: String?
+            if case .deny(let deny) = wouldBe.decision { rule = deny.ruleID.rawValue } else { rule = nil }
+            rowSubject = .wouldBe(kind(wouldBe.decision), rule: rule)
+        }
+        return GatedEffect.JudgeLogRow(
+            at: now,
+            guardMode: guardMode,
+            engine: engine,
+            hash: String(RVDigest.sha256Hex([UInt8](described.matchingView.rawValue.utf8)).prefix(16)),
+            subject: rowSubject,
+            note: note,
+            isPeek: isPeek,
+            score: verdict.map { verdict in
+                GatedEffect.JudgeLogRow.Score(
+                    choice: verdict.choice,
+                    action: (action ?? verdict.action()).rawValue,
+                    risk: (verdict.risk * 1000).rounded() / 1000,
+                    malicious: (verdict.malicious * 10000).rounded() / 10000,
+                    checkpoint: verdict.checkpoint,
+                    milliseconds: (verdict.latencyMilliseconds * 10).rounded() / 10,
+                    truncated: verdict.truncated
+                )
+            }
+        )
+    }
+
+    private static let logLock = UnfairLock<Bool>(true)
+
+    /// Appends one row to `<config>/judge-log.jsonl`. Best effort.
+    static func appendLog(_ row: GatedEffect.JudgeLogRow, home: HomeDirectory) {
         let dir = RVPolicyPaths.configDirectory(home: home)
         let file = dir.appendingPathComponent("judge-log.jsonl")
-        var row: [String: Any] = [
-            "ts": ISO8601DateFormatter().string(from: now),
-            "guard": guardMode.rawValue,
-            "engine": engine.rawValue,
-            "hash": String(RVDigest.sha256Hex([UInt8](subject.matchingView.rawValue.utf8)).prefix(16)),
+        var object: [String: Any] = [
+            "ts": ISO8601DateFormatter().string(from: row.at),
+            "guard": row.guardMode.rawValue,
+            "engine": row.engine.rawValue,
+            "hash": row.hash,
         ]
-        if let wouldBe {
-            switch wouldBe.decision {
-            case .allow: row["wouldBe"] = "allow"
-            case .deny: row["wouldBe"] = "deny"
-            case .indeterminate: row["wouldBe"] = "indeterminate"
-            }
-            if case .deny(let deny) = wouldBe.decision { row["wouldBeRule"] = deny.ruleID.rawValue }
-            row["live"] = "allow"
-        } else if let live {
-            switch live.decision {
-            case .allow: row["live"] = "allow"
-            case .deny: row["live"] = "deny"
-            case .indeterminate: row["live"] = "indeterminate"
-            }
+        switch row.subject {
+        case .wouldBe(let verdict, let rule):
+            object["wouldBe"] = verdict.rawValue
+            if let rule { object["wouldBeRule"] = rule }
+            object["live"] = "allow"
+        case .live(let verdict):
+            object["live"] = verdict.rawValue
         }
-        if let note { row["note"] = note }
-        if isPeek { row["peek"] = true }
-        if let verdict {
-            row["choice"] = verdict.choice
-            row["action"] = (action ?? verdict.action()).rawValue
-            row["risk"] = (verdict.risk * 1000).rounded() / 1000
-            row["malicious"] = (verdict.malicious * 10000).rounded() / 10000
-            row["checkpoint"] = verdict.checkpoint
-            row["ms"] = (verdict.latencyMilliseconds * 10).rounded() / 10
-            if verdict.truncated { row["truncated"] = true }
+        if let note = row.note { object["note"] = note }
+        if row.isPeek { object["peek"] = true }
+        if let score = row.score {
+            object["choice"] = score.choice
+            object["action"] = score.action
+            object["risk"] = score.risk
+            object["malicious"] = score.malicious
+            object["checkpoint"] = score.checkpoint
+            object["ms"] = score.milliseconds
+            if score.truncated { object["truncated"] = true }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
         var line = data
         line.append(0x0A)
         // Serialized in-process; seek-to-end + single write keeps rows

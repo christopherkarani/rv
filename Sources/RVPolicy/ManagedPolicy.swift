@@ -13,7 +13,7 @@ import RVDomain
 
 /// The closed set of secret source kinds, as named in secrets.json and in
 /// managed policy `secrets.allowedSources`.
-public enum SecretSourceKind: String, CaseIterable, Codable, Sendable {
+public enum SecretSourceKind: String, CaseIterable, Sendable {
     case keychain, hostEnvironment, onePassword, vault, awsSecretsManager
     case infisical, bitwarden, gcp, azure, awsProfile, oauth
 }
