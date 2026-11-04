@@ -97,12 +97,34 @@ private let maxSegmentDepth = 8
 
 private func expandSegment(_ text: String, depth: Int) -> [String] {
     let pieces = splitTopLevel(text)
-    guard depth < maxSegmentDepth else { return pieces }
+    guard depth < maxSegmentDepth else { return pieces + [unscannableSegment] }
     var out: [String] = []
     out.reserveCapacity(pieces.count * 2)
-    for piece in pieces {
+    var heads = SegmentHeadState()
+    for rawPiece in pieces {
+        let stripped = heads.strip(rawPiece)
+        // A stripped head (`case $(cmd) in`, arm patterns) still executes
+        // its substitutions, even when no command text remains.
+        let dropped = stripped.map { rawPiece.hasSuffix($0) ? String(rawPiece.dropLast($0.count)) : rawPiece }
+            ?? rawPiece
+        if dropped.isEmpty == false {
+            for inner in substitutionInners(dropped) {
+                out.append(contentsOf: expandSegment(inner, depth: depth + 1))
+            }
+        }
+        guard let piece = stripped else { continue }
         if let peeled = peelGrouping(piece) {
             out.append(contentsOf: expandSegment(peeled, depth: depth + 1))
+        } else if let (inner, redirect) = groupingWithRedirectTail(piece) {
+            // `( cmd ) > file`: the group's commands, plus the redirect alone.
+            out.append(contentsOf: expandSegment(inner, depth: depth + 1))
+            out.append(": " + redirect)
+        } else if startsWithGroupOpener(piece) {
+            // A head that is still `{`/`(` but does not peel was not understood.
+            out.append(unscannableSegment)
+            for inner in substitutionInners(piece) {
+                out.append(contentsOf: expandSegment(inner, depth: depth + 1))
+            }
         } else {
             out.append(piece)
             for inner in substitutionInners(piece) {
@@ -160,8 +182,17 @@ private func splitTopLevelEvents(_ text: String) -> (prefix: String, parts: [Top
     while index < utf8.endIndex {
         let byte = utf8[index]
         if let currentQuote = quote {
+            if byte == UInt8(ascii: "\\"), currentQuote == UInt8(ascii: "\"") {
+                index = indexSkippingEscape(utf8, at: index)
+                continue
+            }
             if byte == currentQuote { quote = nil }
             utf8.formIndex(after: &index)
+            continue
+        }
+        if byte == UInt8(ascii: "\\") {
+            // A backslash-escaped byte is literal (`\;` in `find -exec`).
+            index = indexSkippingEscape(utf8, at: index)
             continue
         }
         if byte == UInt8(ascii: "'") || byte == UInt8(ascii: "\"") {
@@ -321,12 +352,76 @@ private func isGroupOpener(
             cursor = prev
             continue
         }
-        return byte == UInt8(ascii: ";") || byte == UInt8(ascii: "&")
+        if byte == UInt8(ascii: ";") || byte == UInt8(ascii: "&")
             || byte == UInt8(ascii: "|") || byte == UInt8(ascii: "(")
             || byte == UInt8(ascii: "{") || byte == UInt8(ascii: "\n")
             || byte == UInt8(ascii: "\r")
+        {
+            return true
+        }
+        // After a reserved word, a function head, or a `case` arm head the
+        // opener still begins a command body.
+        // Only the text since the last separator counts: inside an outer
+        // group `segmentStart` is far behind (`{ if :; then ( rm ); fi; }`).
+        var commandStart = index
+        while commandStart != segmentStart {
+            let before = utf8.index(before: commandStart)
+            let byte = utf8[before]
+            if byte == UInt8(ascii: ";") || byte == UInt8(ascii: "&") || byte == UInt8(ascii: "|")
+                || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")
+            {
+                break
+            }
+            commandStart = before
+        }
+        let prefix = String(decoding: utf8[commandStart..<index], as: UTF8.self)
+        return prefixIntroducesBody(prefix)
     }
     return true
+}
+
+/// Index past the escaping backslash at `index` and the byte it escapes.
+private func indexSkippingEscape(_ utf8: String.UTF8View, at index: String.Index) -> String.Index {
+    let escaped = utf8.index(after: index)
+    guard escaped < utf8.endIndex else { return escaped }
+    return utf8.index(after: escaped)
+}
+
+private func startsWithGroupOpener(_ segment: String) -> Bool {
+    let first = segment.trimmingCharacters(in: .whitespaces).first
+    return first == "(" || first == "{"
+}
+
+/// `( cmd ) > file` / `{ cmd; } 2>&1`: the group's inner text and the
+/// redirect tail, when only redirects follow the closing bracket.
+private func groupingWithRedirectTail(_ segment: String) -> (inner: String, redirect: String)? {
+    let trimmed = segment.trimmingCharacters(in: .whitespaces)
+    guard startsWithGroupOpener(trimmed) else { return nil }
+    var depth = 0
+    var quote: Character?
+    var index = trimmed.startIndex
+    while index < trimmed.endIndex {
+        let char = trimmed[index]
+        if let open = quote {
+            if char == open { quote = nil }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "(" || char == "{" {
+            depth += 1
+        } else if char == ")" || char == "}" {
+            depth -= 1
+            if depth == 0 {
+                let rest = trimmed[trimmed.index(after: index)...].trimmingCharacters(in: .whitespaces)
+                guard let lead = rest.first, lead == ">" || lead == "<" || lead == "&" || lead.isNumber else {
+                    return nil
+                }
+                let inner = trimmed[trimmed.index(after: trimmed.startIndex)..<index]
+                return (String(inner).trimmingCharacters(in: .whitespaces), rest)
+            }
+        }
+        trimmed.formIndex(after: &index)
+    }
+    return nil
 }
 
 /// Strips one layer of fully-wrapping `(...)`/`{...}` grouping.

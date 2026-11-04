@@ -373,6 +373,11 @@ jobs:
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
+      # rv-guest-relay (micro-VM backend) is a static Linux binary built
+      # with zig's bundled musl; release.sh stages it.
+      - name: Install zig
+        run: brew install zig
+
       # C hook units ran in the previous step; release.sh skips its own copy.
       - name: Stage release binaries
         env:
@@ -532,3 +537,32 @@ jobs:
           if [ -e "/Library/Application Support/RV/peer-trust.json" ]; then
             sudo Scripts/phase2a-development-trust.sh uninstall
           fi
+
+  # Micro-VM backend: the guest relay (native build, unix echo server) and
+  # the separate Packages/rv-microvm package (pure option tests; compiling
+  # its executable also type-checks the Containerization integration). The
+  # VM itself needs nested virtualization, which hosted runners lack; the
+  # end-to-end suite is RV_MICROVM_E2E=1 on a developer machine.
+  macos-microvm:
+    name: macos micro-VM backend
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      - name: Guest relay tests
+        run: Sources/rv-guest-relay/tests/run.sh
+
+      - name: rv-microvm package tests
+        run: Scripts/swift-6.4 test --package-path Packages/rv-microvm

@@ -6,6 +6,8 @@ const RV_DECISION_TYPE = "rv-decision";
 const RV_BLOCK_WIDGET = "rv-block";
 const RV_DISPLAY_BRAND = "RV";
 const RV_CMD_PREVIEW = 96;
+const RV_FAILED_REASON = "rv failed";
+const RV_MALFORMED_REASON = "rv blocked a malformed bash tool call (missing command).";
 const MINIMAL_LABEL_WIDTH = 4;
 const PLAIN_THEME = {
   fg(_name, text) {
@@ -21,24 +23,34 @@ export default function (pi) {
   }
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash") {
-      return;
+    // Fail closed: any thrown error blocks instead of leaving the outcome to the host.
+    try {
+      return await guardToolCall(pi, event, ctx);
+    } catch {
+      return { block: true, reason: RV_FAILED_REASON };
     }
-    const command = event.input && event.input.command;
-    if (typeof command !== "string" || command.length === 0) {
-      return;
-    }
-    const cwd = pickCwd(event && (event.cwd || event.cwdPath));
-    const mapped = await consultRv(command, cwd);
-    // Step 8B: host dialogs never authorize. Approval happens in
-    // RVOperatorUI (or `rv allow-once`); the agent retries afterwards.
-    // A legacy `ask` decision blocks like a deny.
-    if (mapped.action === "ask" || mapped.action === "block") {
-      showDecision(pi, ctx, cardFromBlock(mapped, command));
-      return { block: true, reason: mapped.reason };
-    }
-    clearWidget(ctx);
   });
+}
+
+async function guardToolCall(pi, event, ctx) {
+  if (!event || event.toolName !== "bash") {
+    return;
+  }
+  const command = event.input && event.input.command;
+  if (typeof command !== "string" || command.length === 0) {
+    // Malformed bash payload: python adapters hand this to rv, which denies.
+    return { block: true, reason: RV_MALFORMED_REASON };
+  }
+  const cwd = pickCwd(event.cwd || event.cwdPath);
+  const mapped = await consultRv(command, cwd);
+  // Step 8B: host dialogs never authorize. Approval happens in
+  // RVOperatorUI (or `rv allow-once`); the agent retries afterwards.
+  // A legacy `ask` decision blocks like a deny.
+  if (mapped.action === "ask" || mapped.action === "block") {
+    showDecision(pi, ctx, cardFromBlock(mapped, command));
+    return { block: true, reason: mapped.reason };
+  }
+  clearWidget(ctx);
 }
 
 function showDecision(pi, ctx, card) {

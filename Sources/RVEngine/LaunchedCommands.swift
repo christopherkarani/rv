@@ -43,7 +43,7 @@ private func isShellCommandFlag(_ word: String) -> Bool {
 }
 
 /// Launchers whose next non-flag word is the real command.
-private let plainLaunchers: Set<String> = ["command", "exec", "nohup", "time", "builtin", "nice", "doas"]
+let plainLaunchers: Set<String> = ["command", "exec", "nohup", "time", "builtin", "nice", "doas"]
 
 /// Launcher flags that consume the following word as their value.
 private let valuedLauncherFlags: [String: Set<String>] = [
