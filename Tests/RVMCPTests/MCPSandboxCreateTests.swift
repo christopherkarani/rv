@@ -1003,8 +1003,9 @@ struct MCPSandboxCreateTests {
         var movedAside: [(from: String, to: String)] = []
         for name in ["x", "foo"] {
             let path = "/private/tmp/" + name
-            var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+            // attributesOfItem does not follow symlinks, so files, directories
+            // and dangling links are all moved aside.
+            if (try? FileManager.default.attributesOfItem(atPath: path)) != nil {
                 let aside = path + ".rv-test-aside-\(UUID().uuidString)"
                 try FileManager.default.moveItem(atPath: path, toPath: aside)
                 movedAside.append((from: path, to: aside))
@@ -1012,7 +1013,11 @@ struct MCPSandboxCreateTests {
         }
         defer {
             for moved in movedAside.reversed() {
-                try? FileManager.default.moveItem(atPath: moved.to, toPath: moved.from)
+                do {
+                    try FileManager.default.moveItem(atPath: moved.to, toPath: moved.from)
+                } catch {
+                    Issue.record("failed to restore \(moved.from) from \(moved.to): \(error)")
+                }
             }
         }
         let opened = "/private/tmp/future-keys"

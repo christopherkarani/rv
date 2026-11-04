@@ -393,14 +393,15 @@ jobs:
 
       # Linux PR already ran unfiltered swift test. Darwin XPC / LaunchAgent
       # and the isolated-HOME oracle only exist here. RVIsolationTests run in
-      # the parallel macos isolation job. RVMCPTests belong here too:
-      # MCPSandboxCreateTests are Darwin-shaped (/private firmlinks) and were
-      # silently never run on macOS while this filter omitted them. Skip the
+      # the parallel macos isolation job. Only the MCPSandboxCreateTests suite
+      # is added from RVMCPTests: it is Darwin-shaped (/private firmlinks) and
+      # was silently never run on macOS. The rest of RVMCPTests (remote
+      # transport / OAuth) needs the loopback fixture and is not run here. Skip the
       # in-process CHookPipeTests proof — this job already ran
       # Scripts/c-hook-proof.sh. One invocation: a second
       # `swift test --filter` would re-plan and re-typecheck.
       - name: Darwin Swift (XPC / CLI)
-        run: Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests|RVWorkspaceTUITests|RVOperatorUITests|RVMCPTests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
+        run: Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests|RVWorkspaceTUITests|RVOperatorUITests|MCPSandboxCreateTests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh
