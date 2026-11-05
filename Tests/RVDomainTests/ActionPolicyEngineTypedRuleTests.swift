@@ -23,7 +23,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         guard case .hardDeny(let deny) = verdict.decision else {
             Issue.record("expected hardDeny, got \(verdict.decision)")
@@ -40,7 +41,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(verdict.explanation.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
@@ -57,7 +59,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         guard case .mandatoryHuman(let deny) = verdict.decision else {
             Issue.record("expected mandatoryHuman, got \(verdict.decision)")
@@ -74,7 +77,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(verdict.explanation.zone == .hardDeny)
@@ -95,7 +99,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [allow, ask])
+            policy: EffectiveActionPolicy(rules: [allow, ask]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         guard case .mandatoryHuman(let deny) = verdict.decision else {
             Issue.record("expected mandatoryHuman, got \(verdict.decision)")
@@ -111,7 +116,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let featureVerdict = ActionPolicyEngine.evaluate(
             action: proposed(feature, supportingCommand: "git push --force origin main"),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         #expect(featureVerdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
 
@@ -119,7 +125,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let mainVerdict = ActionPolicyEngine.evaluate(
             action: proposed(main, supportingCommand: "git push --force origin feature"),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         guard case .hardDeny(let deny) = mainVerdict.decision else {
             Issue.record("expected hardDeny, got \(mainVerdict.decision)")
@@ -151,7 +158,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: stripped,
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(verdict.explanation.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
@@ -167,7 +175,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let denied = ActionPolicyEngine.evaluate(
             action: proposed(git, supportingCommand: "git reset --hard"),
             context: shared,
-            policy: EffectiveActionPolicy(packFallback: .deny(packDeny), rules: [typed])
+            policy: EffectiveActionPolicy(packFallback: .deny(packDeny), rules: [typed]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(denied.decision == .hardDeny(packDeny))
         #expect(denied.explanation.ruleID == packDeny.ruleID)
@@ -212,7 +221,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         guard case .hardDeny(let deny) = verdict.decision else {
             Issue.record("expected hardDeny, got \(verdict.decision)")
@@ -234,7 +244,8 @@ struct ActionPolicyEngineTypedRuleTests {
                 workingDirectory: WorkingDirectory(validating: "/repo")
             ),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         guard case .mandatoryHuman(let deny) = verdict.decision else {
             Issue.record("expected mandatoryHuman, got \(verdict.decision)")
@@ -272,7 +283,8 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: action,
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule])
+            policy: EffectiveActionPolicy(rules: [rule]),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         guard case .mandatoryHuman(let deny) = verdict.decision else {
             Issue.record("expected mandatoryHuman, got \(verdict.decision)")

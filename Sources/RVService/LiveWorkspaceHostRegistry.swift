@@ -47,7 +47,7 @@ enum LiveWorkspaceHostError: Error, Sendable, Equatable {
     /// The prepare reverse-RPC failed (transport, timeout, or peer change).
     case prepareRPCFailed
     /// The host refused preparation; the reason is a coarse machine-readable code.
-    case prepareRefused(String)
+    case prepareRefused(HostPrepareRefusal)
     /// The registered host never offered redemption (predates the RPC).
     case redeemUnsupported
     /// The redeem reverse-RPC failed (transport, timeout, or peer change).
@@ -232,7 +232,7 @@ actor LiveWorkspaceHostRegistry {
             throw LiveWorkspaceHostError.disconnected
         }
         guard let description = response.description else {
-            throw LiveWorkspaceHostError.prepareRefused(response.error ?? "refused")
+            throw LiveWorkspaceHostError.prepareRefused(response.error ?? .refused)
         }
         return HostPreparedLaunch(
             description: description,

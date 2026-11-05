@@ -121,14 +121,27 @@ private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
     #expect(deny.ruleID.rawValue == "core.secrets:home-aws")
 }
 
-@Test func evaluateFileTool_resolvedToBenignPath_overridesTypedMatch() {
-    // The file genuinely is /tmp/ok.txt; a typed .env spelling resolving
-    // to it must not deny on cosmetics.
+@Test func evaluateFileTool_resolvedToBenignPath_stillDeniesTypedSecret() {
+    // `.env -> config/dev.env` holds the secret its name promises; the shell
+    // door denies `cat ~/.env` on its typed pass, and the file door agrees.
     let result = evaluateFileTool(
         FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/.env")),
         secretPaths: SecretPathDecider(resolution: mapping(["~/.env": "/tmp/ok.txt"]))
     )
-    #expect(result.decision == .allow)
+    guard case .deny(let deny, _) = result.outcome else {
+        Issue.record("expected deny for a symlinked .env")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.secrets:env")
+
+    // An exemption on the typed spelling still clears it.
+    let exempt = evaluateFileTool(
+        FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/.env")),
+        secretPaths: SecretPathDecider(
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
+            resolution: mapping(["~/.env": "/tmp/ok.txt"]))
+    )
+    #expect(exempt.decision == .allow)
 }
 
 @Test func evaluateFileTool_noResolution_keepsTypedOnlyBehavior() {

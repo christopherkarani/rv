@@ -54,6 +54,16 @@ struct HTTPEgressTests {
         #expect(action.fingerprint.rawValue.contains(":q:none") == false)
     }
 
+    /// REQ-006 golden: plain slots keep their spelling; the audited resource
+    /// always carries `://` and `:port`, so its colons are escaped.
+    @Test func runtimeHTTPFingerprintGolden() throws {
+        let action = try httpAction(url: "https://example.com/a")
+        let session = try #require(action.fingerprint.rawValue.split(separator: ":").dropFirst().first)
+        #expect(
+            action.fingerprint.rawValue
+                == #"runtime:\#(session):/tmp/rv-http:http:GET:https\://example.com\:443/a:q:none"#)
+    }
+
     @Test(arguments: [
         "POST", "PUT", "HEAD", "DELETE", "OPTIONS", "PATCH", "TRACE", "CONNECT",
     ])

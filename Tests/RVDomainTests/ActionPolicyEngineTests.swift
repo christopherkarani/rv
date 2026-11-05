@@ -10,8 +10,18 @@ struct ActionPolicyEngineTests {
     @Test func identicalInputs_yieldIdenticalVerdict() {
         let action = ActionPolicyFixtures.forcePush()
         let policy = EffectiveActionPolicy.empty
-        let first = ActionPolicyEngine.evaluate(action: action, context: shared, policy: policy)
-        let second = ActionPolicyEngine.evaluate(action: action, context: shared, policy: policy)
+        let first = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: policy,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
+        let second = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: policy,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(first == second)
         #expect(first.decision == second.decision)
         #expect(first.explanation == second.explanation)
@@ -21,7 +31,11 @@ struct ActionPolicyEngineTests {
 
     @Test func stubAllow_cannotLiftHardDeny() {
         let action = ActionPolicyFixtures.forcePush()
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
 
         let bound = ActionPolicyEngine.bind(
@@ -39,7 +53,11 @@ struct ActionPolicyEngineTests {
 
     @Test func stubAllow_cannotLiftMandatoryHuman() {
         let action = ActionPolicyFixtures.forcePush(branchName: "topic")
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: privateBranch)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: privateBranch,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
+        )
         #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
 
         let bound = ActionPolicyEngine.bind(
@@ -55,7 +73,11 @@ struct ActionPolicyEngineTests {
         let action = ProposedAction.secretRequest(SecretRequestAction(
             secret: "GH", method: "POST", host: "api.example.com", path: "/repos/o/r/merges",
             targetSHA256: "t", bodySHA256: "b", bodyBytes: 1, headersSHA256: "h", operationHeaders: []))
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: privateBranch)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: privateBranch,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
+        )
         #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.secretRequestApproval))
         let bound = ActionPolicyEngine.bind(action: action, context: privateBranch, review: .success(allowReview))
         #expect(bound == .mandatoryHuman(ActionPolicyEngine.Builtin.secretRequestApproval))
@@ -64,7 +86,8 @@ struct ActionPolicyEngineTests {
     @Test func plainPush_isMandatoryHumanOnPrivateBranch() {
         let verdict = ActionPolicyEngine.evaluate(
             action: ActionPolicyFixtures.plainPush(branchName: "topic"),
-            context: privateBranch
+            context: privateBranch,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
         #expect(verdict.explanation.zone == .mandatoryHuman)
@@ -74,7 +97,8 @@ struct ActionPolicyEngineTests {
         // Fast-forward push is not destructive: ask, never deny, on main.
         let verdict = ActionPolicyEngine.evaluate(
             action: ActionPolicyFixtures.plainPush(branchName: "main"),
-            context: shared
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
     }
@@ -100,12 +124,14 @@ struct ActionPolicyEngineTests {
         let denied = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: overlay
+            policy: overlay,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         let asked = ActionPolicyEngine.evaluate(
             action: ActionPolicyFixtures.forcePush(branchName: "topic"),
             context: privateBranch,
-            policy: overlay
+            policy: overlay,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(asked.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
@@ -186,8 +212,16 @@ struct ActionPolicyEngineTests {
             effects: [.workingTreeDiscard],
             supportingCommand: family
         )
-        let createVerdict = ActionPolicyEngine.evaluate(action: create, context: shared)
-        let discardVerdict = ActionPolicyEngine.evaluate(action: discard, context: shared)
+        let createVerdict = ActionPolicyEngine.evaluate(
+            action: create,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
+        let discardVerdict = ActionPolicyEngine.evaluate(
+            action: discard,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
 
         #expect(create.supportingCommand == discard.supportingCommand)
         #expect(create.effects.kinds != discard.effects.kinds)
@@ -220,20 +254,44 @@ struct ActionPolicyEngineTests {
         )
 
         #expect(
-            ActionPolicyEngine.evaluate(action: create, context: shared).decision
+            ActionPolicyEngine.evaluate(
+                action: create,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision
                 == .hardAllow
         )
         #expect(
-            ActionPolicyEngine.evaluate(action: discard, context: shared).decision
+            ActionPolicyEngine.evaluate(
+                action: discard,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision
                 == .hardDeny(ActionPolicyEngine.Builtin.workingTreeDiscard)
         )
         #expect(
-            ActionPolicyEngine.evaluate(action: labelledCreate, context: shared).decision
-                == ActionPolicyEngine.evaluate(action: create, context: shared).decision
+            ActionPolicyEngine.evaluate(
+                action: labelledCreate,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision
+                == ActionPolicyEngine.evaluate(
+                    action: create,
+                    context: shared,
+                    gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+                ).decision
         )
         #expect(
-            ActionPolicyEngine.evaluate(action: labelledDiscard, context: shared).decision
-                == ActionPolicyEngine.evaluate(action: discard, context: shared).decision
+            ActionPolicyEngine.evaluate(
+                action: labelledDiscard,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision
+                == ActionPolicyEngine.evaluate(
+                    action: discard,
+                    context: shared,
+                    gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+                ).decision
         )
     }
 
@@ -248,7 +306,8 @@ struct ActionPolicyEngineTests {
         let denied = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: EffectiveActionPolicy(packFallback: .deny(packDeny))
+            policy: EffectiveActionPolicy(packFallback: .deny(packDeny)),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(denied.decision == .hardDeny(packDeny))
         #expect(denied.explanation.ruleID == packDeny.ruleID)
@@ -261,7 +320,8 @@ struct ActionPolicyEngineTests {
         let asked = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: EffectiveActionPolicy(packFallback: .ask(packAsk))
+            policy: EffectiveActionPolicy(packFallback: .ask(packAsk)),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(asked.decision == .mandatoryHuman(packAsk))
         #expect(asked.explanation.zone == .mandatoryHuman)
@@ -273,7 +333,8 @@ struct ActionPolicyEngineTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: packAllow
+            policy: packAllow,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
     }
@@ -297,7 +358,11 @@ struct ActionPolicyEngineTests {
 
     @Test func uncoveredWithoutPack_isReviewEligible() {
         let action = ActionPolicyFixtures.uncovered(supportingCommand: "echo hello")
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(verdict.decision == .reviewEligible(fallback: ActionPolicyEngine.Builtin.uncovered))
         #expect(verdict.explanation.zone == .reviewEligible)
     }
@@ -308,12 +373,17 @@ struct ActionPolicyEngineTests {
             path: "/home/.ssh/id_rsa",
             scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
         )
-        let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let denied = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
         let overlay = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .allow)
+            policy: EffectiveActionPolicy(overlay: .allow),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
     }
@@ -324,12 +394,17 @@ struct ActionPolicyEngineTests {
             path: "/home/.ssh/id_rsa",
             scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
         )
-        let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let denied = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
         let overlay = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .allow)
+            policy: EffectiveActionPolicy(overlay: .allow),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
         let bound = ActionPolicyEngine.bind(
@@ -351,10 +426,26 @@ struct ActionPolicyEngineTests {
             path: "/repo/new.swift",
             scope: .insideRepository
         )
-        #expect(ActionPolicyEngine.evaluate(action: write, context: shared).decision == .hardAllow)
-        #expect(ActionPolicyEngine.evaluate(action: create, context: shared).decision == .hardAllow)
         #expect(
-            ActionPolicyEngine.evaluate(action: write, context: shared).explanation.ruleID
+            ActionPolicyEngine.evaluate(
+                action: write,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision == .hardAllow
+        )
+        #expect(
+            ActionPolicyEngine.evaluate(
+                action: create,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision == .hardAllow
+        )
+        #expect(
+            ActionPolicyEngine.evaluate(
+                action: write,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).explanation.ruleID
                 == ActionPolicyEngine.Builtin.inRepository
         )
         let overlayDeny = Deny(
@@ -364,7 +455,8 @@ struct ActionPolicyEngineTests {
         let tightened = ActionPolicyEngine.evaluate(
             action: write,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny)),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(tightened.decision == .hardDeny(overlayDeny))
     }
@@ -380,16 +472,25 @@ struct ActionPolicyEngineTests {
             path: "/tmp/outside-file",
             scope: .outsideRepository
         )
-        let denied = ActionPolicyEngine.evaluate(action: write, context: shared)
+        let denied = ActionPolicyEngine.evaluate(
+            action: write,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository))
         #expect(
-            ActionPolicyEngine.evaluate(action: delete, context: shared).decision
+            ActionPolicyEngine.evaluate(
+                action: delete,
+                context: shared,
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+            ).decision
                 == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
         )
         let overlay = ActionPolicyEngine.evaluate(
             action: write,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .allow)
+            policy: EffectiveActionPolicy(overlay: .allow),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository))
         let bound = ActionPolicyEngine.bind(
@@ -406,7 +507,11 @@ struct ActionPolicyEngineTests {
             path: "/tmp/outside-file",
             scope: .outsideRepository
         )
-        let allowed = ActionPolicyEngine.evaluate(action: read, context: shared)
+        let allowed = ActionPolicyEngine.evaluate(
+            action: read,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(allowed.decision == .hardAllow)
         #expect(allowed.explanation.ruleID == ActionPolicyEngine.Builtin.outsideRepositoryRead)
         let overlayDeny = Deny(
@@ -416,7 +521,8 @@ struct ActionPolicyEngineTests {
         let tightened = ActionPolicyEngine.evaluate(
             action: read,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny)),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(tightened.decision == .hardDeny(overlayDeny))
         #expect(
@@ -427,7 +533,8 @@ struct ActionPolicyEngineTests {
                     scope: .outsideRepository
                 ),
                 context: shared,
-                policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+                policy: EffectiveActionPolicy(overlay: .deny(overlayDeny)),
+                gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
             ).decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
         )
     }
@@ -438,12 +545,17 @@ struct ActionPolicyEngineTests {
             path: "/gone/file",
             scope: .unknown
         )
-        let denied = ActionPolicyEngine.evaluate(action: unknown, context: shared)
+        let denied = ActionPolicyEngine.evaluate(
+            action: unknown,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
         let overlay = ActionPolicyEngine.evaluate(
             action: unknown,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .allow)
+            policy: EffectiveActionPolicy(overlay: .allow),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
     }
@@ -461,8 +573,118 @@ struct ActionPolicyEngineTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: action,
             context: shared,
-            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny)),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
         )
         #expect(verdict.decision == .hardDeny(overlayDeny))
+    }
+
+    @Test func filesystemWorlds_unresolvedOnly_probedDeniesUnprobedDefersToPackFloor() {
+        let unknown = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite, .unresolvedFilesystem],
+            path: "/gone/file",
+            scope: .unknown
+        )
+        let probed = ActionPolicyEngine.evaluate(
+            action: unknown,
+            context: shared,
+            gitWorld: .unprobed,
+            filesystemWorld: .probed(.empty)
+        )
+        #expect(probed.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
+
+        let unprobed = ActionPolicyEngine.evaluate(
+            action: unknown,
+            context: shared,
+            gitWorld: .unprobed,
+            filesystemWorld: .unprobed
+        )
+        #expect(
+            unprobed.decision
+                == .reviewEligible(fallback: ActionPolicyEngine.Builtin.uncovered)
+        )
+    }
+
+    @Test func filesystemWorlds_unresolvedPlusOutside_probedRanksUnresolvedUnprobedRanksBoundary() {
+        let mixed = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemDelete, .outsideRepositoryMutation, .unresolvedFilesystem],
+            path: "/gone/file",
+            scope: .unknown
+        )
+        let probed = ActionPolicyEngine.evaluate(
+            action: mixed,
+            context: shared,
+            gitWorld: .unprobed,
+            filesystemWorld: .probed(.empty)
+        )
+        #expect(probed.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
+
+        let unprobed = ActionPolicyEngine.evaluate(
+            action: mixed,
+            context: shared,
+            gitWorld: .unprobed,
+            filesystemWorld: .unprobed
+        )
+        #expect(unprobed.decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository))
+    }
+
+    @Test func filesystemWorlds_protectedMutation_deniesInBothWorlds() {
+        let protected = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemDelete, .protectedPathMutation, .unresolvedFilesystem],
+            path: "/home/.ssh/id_rsa",
+            scope: .unknown
+        )
+        for world in [FilesystemAnalysisWorld.probed(.empty), .unprobed] {
+            let verdict = ActionPolicyEngine.evaluate(
+                action: protected,
+                context: shared,
+                gitWorld: .unprobed,
+                filesystemWorld: world
+            )
+            #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+        }
+    }
+
+    @Test func filesystemWorlds_analyzedMixedTargets_rankPerWorld() {
+        // Real IR behind the Apply door: one resolved outside target and one
+        // unresolved target. Probed ranks unresolved first; unprobed lets
+        // the boundary hit deny instead of masking it.
+        let mixed = FilesystemAction.delete(
+            targets: [
+                FilesystemTarget(
+                    apparent: "../outside-file",
+                    canonical: "/outside-file",
+                    scope: .outsideRepository,
+                    kind: .unknown
+                ),
+                FilesystemTarget(
+                    apparent: "file",
+                    canonical: "/repo/file",
+                    scope: .unknown,
+                    kind: .unknown
+                ),
+            ],
+            recursive: false,
+            force: false
+        )
+        let action = mixed.proposedAction(
+            command: ShellCommand(rawValue: "rm file ../outside-file"),
+            workingDirectory: nil
+        )
+        let probed = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: .unprobed,
+            filesystemWorld: .probed(.empty)
+        )
+        #expect(probed.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
+
+        let unprobed = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: .unprobed,
+            filesystemWorld: .unprobed
+        )
+        #expect(unprobed.decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository))
     }
 }

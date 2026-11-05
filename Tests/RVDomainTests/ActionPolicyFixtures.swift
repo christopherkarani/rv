@@ -17,6 +17,18 @@ enum ActionPolicyFixtures {
         )
     )
 
+    /// The git world a caller effectively had when the engine forced
+    /// `.probed` from the review context. Migrated call sites state it
+    /// explicitly through this fixture so the branch fact stays in one
+    /// place; production callers spell the literal at their seam.
+    static func probedGitWorld(for context: ReviewContext) -> GitAnalysisWorld {
+        .probed(
+            GitAnalysisContext(
+                currentBranch: context.repository.currentBranch
+            )
+        )
+    }
+
     static let qualifiedAllow = ActionReview.make(
         decision: .allow,
         risk: .low,

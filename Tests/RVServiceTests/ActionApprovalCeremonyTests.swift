@@ -41,7 +41,7 @@ struct ActionApprovalCeremonyTests {
     private func createDTO(
         reference: AgentPrincipalReference,
         action: ProposedAction? = nil,
-        reason: String = "reviewAsk",
+        reason: RuntimeAskReason = .reviewAsk,
         policyContext: String = "runtime:/work"
     ) -> HostActionApprovalCreateDTO {
         HostActionApprovalCreateDTO(
@@ -145,14 +145,16 @@ struct ActionApprovalCeremonyTests {
         }
     }
 
-    @Test func invalidReasonVocabularyFailsClosed() async throws {
-        let (hosts, ceremonies) = world()
-        let ref = reference()
-        let host = peer()
-        try await register(hosts, ref, host)
-        await #expect(throws: ActionApprovalCeremonyError.invalidAsk) {
-            try await ceremonies.requestApproval(
-                createDTO(reference: ref, reason: "alwaysAllow"), hostPeer: host)
+    @Test func invalidReasonVocabularyFailsClosedAtDecode() async throws {
+        // The reason is a closed enum on the wire: an out-of-vocabulary value
+        // cannot decode, so it never reaches the ceremony (the bridge answers
+        // an opaque denial). Nothing is created.
+        let (_, ceremonies) = world()
+        let text = String(
+            decoding: try IPCJSON.encode(createDTO(reference: reference())), as: UTF8.self
+        ).replacingOccurrences(of: "\"reviewAsk\"", with: "\"alwaysAllow\"")
+        #expect(throws: (any Error).self) {
+            try IPCJSON.decode(HostActionApprovalCreateDTO.self, from: Data(text.utf8))
         }
         #expect(await ceremonies.listActionReviews().items.isEmpty)
     }

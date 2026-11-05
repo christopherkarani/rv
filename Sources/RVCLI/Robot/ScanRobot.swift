@@ -72,15 +72,8 @@ func renderScanSessionsRobot(
     showCommand: Bool,
     setupNudge: Bool = false
 ) throws -> String {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    let payload = scanSessionsRobotPayload(from: report, showCommand: showCommand, setupNudge: setupNudge)
-    do {
-        let data = try encoder.encode(payload)
-        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
-    } catch {
-        throw RobotRenderError.encodingFailed(String(describing: error))
-    }
+    try RobotJSON.encode(
+        scanSessionsRobotPayload(from: report, showCommand: showCommand, setupNudge: setupNudge))
 }
 
 private func scanFindingRobotRow(

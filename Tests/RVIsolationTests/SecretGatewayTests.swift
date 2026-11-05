@@ -378,7 +378,7 @@ struct SecretGatewayTests {
         let records = audit.items.withLock { $0 }
         #expect(records.map(\.stage) == [.forward, .complete])
         #expect(records.last?.activity == .refused)
-        #expect(records.last?.refusal == "auditUnavailable")
+        #expect(records.last?.refusal?.code == "auditUnavailable")
         #expect(records.last?.status == 503)
     }
 
@@ -420,7 +420,7 @@ struct SecretGatewayTests {
         _ = try gatewayExchange(port: port, "GET /s/AWS_SECRET/rvph%5F\(fake) HTTP/1.1\r\n\r\n")
         _ = try gatewayExchange(port: port, "TRACE /s/OPENAI_API_KEY/x HTTP/1.1\r\n\r\n")
         let records = audit.items.withLock { $0 }
-        #expect(records.map(\.refusal) == ["echoMethod", "encodedPlaceholder", "echoMethod"])
+        #expect(records.map(\.refusal?.code) == ["echoMethod", "encodedPlaceholder", "echoMethod"])
         #expect(records.map(\.activity) == [.refused, .refused, .blocked])
     }
 
@@ -433,7 +433,7 @@ struct SecretGatewayTests {
         _ = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/m HTTP/1.1\r\n\r\n")
         let records = audit.items.withLock { $0 }
         #expect(records.map(\.activity) == [.blocked, .refused])
-        #expect(records.map(\.refusal) == ["surfaceNotAllowed", "noPlaceholder"])
+        #expect(records.map(\.refusal?.code) == ["surfaceNotAllowed", "noPlaceholder"])
         #expect(records.allSatisfy { $0.allowed == false && $0.stage == .complete })
 
         let failing = AuditRecords()
@@ -636,6 +636,27 @@ struct SecretGatewayTests {
         #expect(zero.status == 200)
         #expect(zero.body.isEmpty)
         #expect(upstream.requests.count == 2)
+    }
+
+    /// SDKs size downloads from HEAD (S3 HeadObject's ContentLength), so a
+    /// bodiless response keeps the upstream length; a body never does.
+    @Test func headResponsesKeepTheUpstreamContentLength() throws {
+        let upstream = RecordingUpstream(status: 200, headers: [("Content-Length", "1234")])
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let response = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n\r\n")
+        #expect(response.status == 200)
+        #expect(response.headers["content-length"] == "1234")
+        #expect(response.headers["transfer-encoding"] == nil)
+        #expect(response.body.isEmpty)
+
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "12")]) == "12")
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "1"), ("content-length", "2")]) == nil)
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "-1")]) == nil)
+        #expect(GatewayHeaders.bodilessContentLength([("Content-Length", "1\r\nX: y")]) == nil)
+        #expect(GatewayHeaders.bodilessContentLength([]) == nil)
     }
 
     @Test func oversizedBodiesAreRefused() throws {

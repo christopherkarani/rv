@@ -63,10 +63,12 @@ struct MidWordRedirectSplitTests {
             "overwrite",
             paths: ["b", "/tmp/log"]
         )
+        // The dispatcher strips the operator before the `mv` scan and
+        // unions the target after it (T2): no literal `>` path remains.
         expectSplitParsed(
             parseFilesystemCommand(tokenizeFilesystemWords("mv a b>/tmp/log")),
             "move",
-            paths: ["a", "b", ">", "/tmp/log"]
+            paths: ["a", "b", "/tmp/log"]
         )
     }
 }

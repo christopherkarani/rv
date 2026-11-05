@@ -89,6 +89,14 @@ struct AuthenticatedOperatorUIConnectionID: Hashable, Sendable, Equatable {
 enum WorkspaceOperationKind: Sendable, Equatable {
     case launchAgent
     case launchCustom
+
+    /// Wire spelling shared by the redeem commit and the UI challenge/review DTOs.
+    var wireName: String {
+        switch self {
+        case .launchAgent: "launchAgent"
+        case .launchCustom: "launchCustom"
+        }
+    }
 }
 
 // MARK: - Descriptive bindings (service-derived, never wire-decoded)

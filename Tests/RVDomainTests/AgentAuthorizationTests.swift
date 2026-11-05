@@ -355,7 +355,11 @@ struct AgentAuthorizationTests {
 
     @Test func implicitForcePush_unprobedDefault_isPendingNotProbedSharedDeny() {
         let action = ActionPolicyFixtures.implicitForcePush()
-        let probed = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let probed = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: shared)
+        )
         #expect(probed.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         expectPending(
             AgentAuthorization.decide(action: action, context: shared),

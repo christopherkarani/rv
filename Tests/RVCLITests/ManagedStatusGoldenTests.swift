@@ -20,9 +20,9 @@ struct ManagedStatusGoldenTests {
             policy: policy, sha256: "abc", isSigned: signed, directory: "/managed", signingKey: key, highestSerial: highest))
     }
 
-    @Test func noneGolden() {
+    @Test func noneGolden() throws {
         let status = ManagedRun.status(.none, directory: "/managed")
-        #expect(ManagedRun.robotJSON(status) == """
+        #expect(try RobotJSON.encode(status, options: .pretty) == """
             {
               "directory" : "/managed",
               "state" : "none"
@@ -32,9 +32,9 @@ struct ManagedStatusGoldenTests {
         #expect(ManagedRun.statusText(status) == "no organization policy installed (/managed)\n")
     }
 
-    @Test func invalidGolden() {
+    @Test func invalidGolden() throws {
         let status = ManagedRun.status(.invalid("bad signature"), directory: "/managed")
-        #expect(ManagedRun.robotJSON(status) == """
+        #expect(try RobotJSON.encode(status, options: .pretty) == """
             {
               "directory" : "/managed",
               "reason" : "bad signature",
@@ -49,7 +49,7 @@ struct ManagedStatusGoldenTests {
 
     @Test func activeSignedGolden() throws {
         let status = ManagedRun.status(try bundle(signed: true, key: 2, highest: 8), directory: "/managed")
-        #expect(ManagedRun.robotJSON(status) == """
+        #expect(try RobotJSON.encode(status, options: .pretty) == """
             {
               "directory" : "/managed",
               "highestSerial" : 8,
@@ -76,7 +76,7 @@ struct ManagedStatusGoldenTests {
 
     @Test func activeSignedWithoutKeyGolden() throws {
         let status = ManagedRun.status(try bundle(signed: true, key: nil, highest: nil), directory: "/managed")
-        #expect(ManagedRun.robotJSON(status) == """
+        #expect(try RobotJSON.encode(status, options: .pretty) == """
             {
               "directory" : "/managed",
               "organization" : "Acme",
@@ -100,7 +100,7 @@ struct ManagedStatusGoldenTests {
 
     @Test func activeUnsignedGolden() throws {
         let status = ManagedRun.status(try bundle(signed: false, key: nil, highest: nil), directory: "/managed")
-        #expect(ManagedRun.robotJSON(status) == """
+        #expect(try RobotJSON.encode(status, options: .pretty) == """
             {
               "directory" : "/managed",
               "organization" : "Acme",
@@ -127,7 +127,7 @@ struct ManagedStatusGoldenTests {
         let status = ManagedRun.status(
             .active(ManagedPolicyBundle(policy: policy, sha256: "abc", isSigned: false, directory: "/managed")),
             directory: "/ignored")
-        #expect(ManagedRun.robotJSON(status) == """
+        #expect(try RobotJSON.encode(status, options: .pretty) == """
             {
               "directory" : "/managed",
               "restrictions" : [
@@ -147,7 +147,7 @@ struct ManagedStatusGoldenTests {
             """)
     }
 
-    @Test func reportEmbedsTheSameFlatManagedObject() {
+    @Test func reportEmbedsTheSameFlatManagedObject() throws {
         let report = ReportRun.Report(
             schema: ReportRun.schema,
             generatedAt: "2026-01-01T00:00:00Z",
@@ -159,7 +159,7 @@ struct ManagedStatusGoldenTests {
             secrets: .init(error: nil, items: []),
             audit: .init(since: "2026-01-01T00:00:00Z", total: 0, byKind: [:], lastEventAt: nil),
             sandbox: .init(platform: "linux", mcpSandbox: false, peerTrustInstalled: false))
-        #expect(ReportRun.json(report).contains("""
+        #expect(try RobotJSON.encode(report, options: .pretty).contains("""
               "managed" : {
                 "directory" : "/managed",
                 "reason" : "bad owner",

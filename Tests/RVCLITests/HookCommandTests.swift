@@ -199,10 +199,11 @@ private let daemonDownReason = HookDaemonFallback.message(for: .unreachable)
         ),
         matchingView: "git reset --hard"
     )
-    let daemon = GrokHostCodec().encodeEvaluatedDeny(
+    let daemon = hookWire(
         from: denied,
         command: ShellCommand(rawValue: "git reset --hard"),
-        unlockCode: .code(code)
+        using: GrokHostCodec(),
+        intent: .firstCall(verdict: .deny, unlockCode: .code(code))
     )
     let transport = ScriptedTransport(
         ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),

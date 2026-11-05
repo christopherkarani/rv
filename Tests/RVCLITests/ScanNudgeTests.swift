@@ -2,6 +2,7 @@ import Foundation
 import RVDomain
 import RVPolicy
 import RVPresentation
+import RVScan
 import RVTheme
 import Testing
 @testable import RVCLI
@@ -90,19 +91,13 @@ private func robotProbe() -> ThemeProbe {
     )
 }
 
-private func runPiScan(home: ScanHome) throws -> ScanRunResult {
-    try ScanRun.execute(
-        ScanRun.Request(
-            rootPath: nil,
+private func runPiScan(home: ScanHome) throws -> SessionScanResult {
+    try SessionScan().run(
+        SessionScanRequest(
             home: home,
-            hostFilter: .pi,
-            timeWindow: .all,
-            packIDs: dayOnePackIDs,
-            allEvents: false,
-            includeGlobs: [],
-            bounds: .default,
             now: Date(),
-            fileManager: .default
+            hostFilter: .pi,
+            timeWindow: .all
         )
     )
 }
@@ -143,18 +138,12 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
 
 @Test func scanFailOnFindings_withFlag_exitsZeroWhenFindingsEmpty() throws {
     try withTempScanHome { home, _ in
-        let result = try ScanRun.execute(
-            ScanRun.Request(
-                rootPath: nil,
+        let result = try SessionScan().run(
+            SessionScanRequest(
                 home: home,
-                hostFilter: .pi,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
                 now: Date(),
-                fileManager: .default
+                hostFilter: .pi,
+                timeWindow: .all
             )
         )
         #expect(result.report.findings.isEmpty)
@@ -259,18 +248,12 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
 @Test func scanSetupNudge_claudeUnwired_recommends() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
-        let result = try ScanRun.execute(
-            ScanRun.Request(
-                rootPath: nil,
+        let result = try SessionScan().run(
+            SessionScanRequest(
                 home: home,
-                hostFilter: .claude,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
                 now: Date(),
-                fileManager: .default
+                hostFilter: .claude,
+                timeWindow: .all
             )
         )
         #expect(result.eventHosts.contains(.claude))
@@ -293,7 +276,9 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
 
 @Test func scanRobot_setupNudgeFieldFollowsCLI() throws {
     try withTempScanHome { home, _ in
-        let result = try ScanRun.execute(.fixture(home: home))
+        let result = try SessionScan().run(
+            SessionScanRequest(home: home, now: Date(), timeWindow: .all)
+        )
         let off = try JSONSerialization.jsonObject(
             with: Data(try renderScanSessionsRobot(
                 from: result.report,

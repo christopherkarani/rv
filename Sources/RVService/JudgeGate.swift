@@ -238,10 +238,8 @@ public enum JudgeRuntime {
             if fm.fileExists(atPath: configURL.path) {
                 if let data = try? Data(contentsOf: configURL),
                    let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    let labels = (cfg["logit_order"] as? [String]) ?? (cfg["labels"] as? [String])
-                    if let labels, Set(labels) != ["allow", "review", "block"] {
-                        problems.append("config labels are not allow/review/block")
-                    }
+                    do { _ = try LayaVerdict.Action.configLabels(cfg) }
+                    catch { problems.append("config labels are not allow/review/block") }
                 } else {
                     problems.append("config.json unparseable")
                 }
@@ -317,8 +315,7 @@ public enum JudgeRuntime {
         return JudgeContext(cwdInsideRepo: inside)
     }
 
-    /// String/bool seam over `judgeContext` for RVServiceTests, which has
-    /// no RVLaya dependency edge and must not name `JudgeContext`.
+    /// String seam over `judgeContext` for RVServiceTests.
     static func judgeContextLines(cwd: WorkingDirectory?) -> [String] {
         judgeContext(cwd: cwd).lines()
     }
@@ -548,7 +545,7 @@ public enum JudgeRuntime {
         return (raise(result, verdict: nil, action: .review), note)
     }
 
-    /// RVServiceTests seam (no RVLaya edge): the warming outcome over `result`.
+    /// RVServiceTests seam: the warming outcome over `result`.
     static func warmingOutcomeSeam(over result: EvaluationResult) -> (EvaluationResult, String) {
         let raised = failClosed(.warming, over: result)
         return (raised.result, raised.note)
@@ -588,7 +585,7 @@ public enum JudgeRuntime {
     ) -> EvaluationResult {
         let isBlock = action == .block
         let reason = verdict.map {
-            "Laya judge: \($0.choice) (risk \(String(format: "%.2f", $0.risk)))"
+            "Laya judge: \($0.choice.rawValue) (risk \(String(format: "%.2f", $0.risk)))"
         } ?? "Laya judge unavailable; failing closed"
         let deny = Deny(
             ruleID: RuleID(pack: .coreJudge, pattern: isBlock ? "laya-block" : "laya-review"),
@@ -651,7 +648,7 @@ public enum JudgeRuntime {
             isPeek: isPeek,
             score: verdict.map { verdict in
                 GatedEffect.JudgeLogRow.Score(
-                    choice: verdict.choice,
+                    choice: verdict.choice.rawValue,
                     action: (action ?? verdict.action()).rawValue,
                     risk: (verdict.risk * 1000).rounded() / 1000,
                     malicious: (verdict.malicious * 10000).rounded() / 10000,
