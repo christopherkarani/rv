@@ -181,7 +181,9 @@ Architecture in one line: a tiny C front door (`rv`) execs the Swift
 CLI, which talks to the `rvd` daemon over a Unix socket
 (XPC on macOS) — 15 IPC methods, one gated evaluation path for every
 door. A Python SDK lives in [`sdk/python`](sdk/python). Security
-model and evidence: [`docs/security`](docs/security).
+model and evidence: [`docs/security`](docs/security). Before opening a
+PR, read [CONTRIBUTING.md](CONTRIBUTING.md); report vulnerabilities per
+[SECURITY.md](SECURITY.md).
 
 Site: [rykanv.com](https://rykanv.com) · Docs:
 [rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) ·
