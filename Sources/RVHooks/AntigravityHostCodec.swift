@@ -58,8 +58,12 @@ public struct AntigravityHostCodec: HostCodec {
         HookWire(stdout: hookDecisionAllowJSON(), exitCode: 0)
     }
 
-    public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
-        encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
+    public func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
+        encodeLeftoverDecisionDeny(
+            reason: presentation.reason,
+            rule: presentation.rule,
+            next: presentation.next
+        )
     }
 }
 
