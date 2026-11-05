@@ -176,7 +176,7 @@ enum ReportRun {
         case .success(let configuration):
             return Report.SecretSummary(error: nil, items: configuration.secrets.map { secret in
                 Report.SecretSummary.Item(
-                    name: secret.name, source: secret.source.kind, delivery: secret.delivery.kind,
+                    name: secret.name, source: secret.source.kind.rawValue, delivery: secret.delivery.kind,
                     policyViolation: inputs.managed.invalidReason
                         ?? SecretOrganizationRules.violation(secret, policy: inputs.managed.policy))
             })

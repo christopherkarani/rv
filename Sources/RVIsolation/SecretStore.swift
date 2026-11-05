@@ -8,6 +8,7 @@ import Security
 #endif
 import Foundation
 import RVDomain
+import RVPolicy
 
 extension SecretSource {
     /// Where the value lives, safe to print. Never the value.
@@ -118,46 +119,47 @@ extension SecretsConfiguration {
             if let expires = secret.expires { entry["expires"] = SecretExpiry.text(expires) }
             if let refresh = secret.refresh { entry["refresh"] = refresh.text }
             if let binaries = secret.binaries { entry["binaries"] = binaries }
+            let sourceKind = secret.source.kind.rawValue
             switch secret.source {
             case .keychain(let service, let account):
-                entry["source"] = ["keychain": ["service": service, "account": account]]
+                entry["source"] = [sourceKind: ["service": service, "account": account]]
             case .hostEnvironment(let variable):
-                entry["source"] = ["hostEnvironment": ["variable": variable]]
+                entry["source"] = [sourceKind: ["variable": variable]]
             case .onePassword(let reference):
-                entry["source"] = ["onePassword": ["reference": reference]]
+                entry["source"] = [sourceKind: ["reference": reference]]
             case .vault(let path, let field, let address):
                 var fields: [String: Any] = ["path": path, "field": field]
                 if let address { fields["address"] = address.absoluteString }
-                entry["source"] = ["vault": fields]
+                entry["source"] = [sourceKind: fields]
             case .awsSecretsManager(let secretID, let field, let region):
                 var fields: [String: Any] = ["secretID": secretID]
                 if let field { fields["field"] = field }
                 if let region { fields["region"] = region }
-                entry["source"] = ["awsSecretsManager": fields]
+                entry["source"] = [sourceKind: fields]
             case .infisical(let name, let project, let environment, let path):
                 var fields: [String: Any] = ["name": name]
                 if let project { fields["project"] = project }
                 if let environment { fields["environment"] = environment }
                 if let path { fields["path"] = path }
-                entry["source"] = ["infisical": fields]
+                entry["source"] = [sourceKind: fields]
             case .bitwarden(let id):
-                entry["source"] = ["bitwarden": ["id": id]]
+                entry["source"] = [sourceKind: ["id": id]]
             case .gcp(let secret, let project, let version):
                 var fields: [String: Any] = ["secret": secret, "version": version]
                 if let project { fields["project"] = project }
-                entry["source"] = ["gcp": fields]
+                entry["source"] = [sourceKind: fields]
             case .azure(let vault, let name, let version):
                 var fields: [String: Any] = ["vault": vault, "name": name]
                 if let version { fields["version"] = version }
-                entry["source"] = ["azure": fields]
+                entry["source"] = [sourceKind: fields]
             case .awsProfile(let profile):
-                entry["source"] = ["awsProfile": ["profile": profile]]
+                entry["source"] = [sourceKind: ["profile": profile]]
             case .oauth(let oauth):
                 var fields: [String: Any] = ["tokenURL": oauth.tokenURL.absoluteString, "clientID": oauth.clientID]
                 if let item = oauth.clientSecret { fields["clientSecret"] = ["service": item.service, "account": item.account] }
                 if let item = oauth.refreshToken { fields["refreshToken"] = ["service": item.service, "account": item.account] }
                 if let scope = oauth.scope { fields["scope"] = scope }
-                entry["source"] = ["oauth": fields]
+                entry["source"] = [sourceKind: fields]
             }
             func allowList(_ allow: [GatewayAllowance]) -> [Any] {
                 allow.map { allowance -> Any in

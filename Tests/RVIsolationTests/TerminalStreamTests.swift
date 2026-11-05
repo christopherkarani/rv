@@ -108,20 +108,19 @@ struct TerminalStreamTests {
     @Test func oldClientFramesStillDecode() throws {
         let id = UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
         let ping = Data(#"{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","op":"ping","v":1}"#.utf8)
-        guard case .message(let message) = WorkspaceControlCodec.decode(ping) else {
+        guard case .frame(let message) = WorkspaceControlCodec.decodeRequest(ping) else {
             Issue.record("a frame without terminal fields must decode")
             return
         }
-        #expect(message.version == 1)
         #expect(message.id == id)
-        #expect(message.io == nil)
-        #expect(message.rows == nil)
-        #expect(message.terminal == nil)
+        #expect(message.payload == .ping)
         let launch = Data(
             #"{"executable":"/bin/true","id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","op":"launchRuntime","v":1}"#
                 .utf8
         )
-        guard case .message(let launched) = WorkspaceControlCodec.decode(launch) else {
+        guard case .frame(let launchedFrame) = WorkspaceControlCodec.decodeRequest(launch),
+            case .launchRuntime(let launched) = launchedFrame.payload
+        else {
             Issue.record("launch without io must decode")
             return
         }
@@ -141,51 +140,51 @@ struct TerminalStreamTests {
         let extra = Data(
             #"{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","op":"ping","terminalMode":"raw","v":1}"#.utf8
         )
-        #expect(WorkspaceControlCodec.decode(extra) == .invalid)
+        #expect(WorkspaceControlCodec.decodeRequest(extra) == .invalid)
         let version = Data(#"{"op":"ping","v":2}"#.utf8)
-        #expect(WorkspaceControlCodec.decode(version) == .incompatible)
+        #expect(WorkspaceControlCodec.decodeRequest(version) == .incompatible)
         #expect(WorkspaceControlLimits.version == 1)
         #expect(WorkspaceControlLimits.name == "rv.workspace.v1")
     }
 
     @Test func capabilityRepliesRoundTripWithinTheirBounds() {
-        let message = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
+        let message = WorkspaceControlResponseFrame(
             id: UUID(),
-            op: WorkspaceControlOp.capabilities.rawValue,
             ok: true,
-            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+            payload: .capabilities(.init(features: [WorkspaceControlFeature.ensureTerminalRuntime]))
         )
-        guard let encoded = WorkspaceControlCodec.encode(message),
-            case .message(let decoded) = WorkspaceControlCodec.decode(encoded)
+        guard let encoded = WorkspaceControlCodec.encodeResponse(message),
+            case .frame(let decoded) = WorkspaceControlCodec.decodeResponse(encoded)
         else {
             Issue.record("capabilities reply should round-trip")
             return
         }
-        #expect(decoded.features == [WorkspaceControlFeature.ensureTerminalRuntime])
+        #expect(decoded == message)
 
         let tooMany = Array(repeating: "x", count: WorkspaceControlLimits.maxFeatures + 1)
-        let oversized = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
+        let oversized = WorkspaceControlResponseFrame(
             id: UUID(),
-            op: WorkspaceControlOp.capabilities.rawValue,
             ok: true,
-            features: tooMany
+            payload: .capabilities(.init(features: tooMany))
         )
-        guard let oversizedBytes = WorkspaceControlCodec.encode(oversized) else {
+        guard let oversizedBytes = WorkspaceControlCodec.encodeResponse(oversized) else {
             Issue.record("bounded capability test frame should fit the control frame")
             return
         }
-        #expect(WorkspaceControlCodec.decode(oversizedBytes) == .invalid)
+        #expect(WorkspaceControlCodec.decodeResponse(oversizedBytes) == .invalid)
     }
 
     @Test func denialDetailRoundTripsAndOversizeFailsClosed() {
-        let denial = WorkspaceControlMessage.error(
-            id: UUID(), op: WorkspaceControlOp.launchRuntime.rawValue,
+        let request = WorkspaceControlRequestFrame(
+            id: UUID(),
+            payload: .launchRuntime(.init(executable: "/bin/sh"))
+        )
+        let denial = WorkspaceControlResponseFrame.failure(
+            request: request,
             code: .resourceStagingFailed, detail: "executable link 'grok'"
         )
-        guard let encoded = WorkspaceControlCodec.encode(denial),
-            case .message(let decoded) = WorkspaceControlCodec.decode(encoded)
+        guard let encoded = WorkspaceControlCodec.encodeResponse(denial),
+            case .frame(let decoded) = WorkspaceControlCodec.decodeResponse(encoded)
         else {
             Issue.record("denial detail should round-trip")
             return
@@ -193,24 +192,18 @@ struct TerminalStreamTests {
         #expect(decoded.error == WorkspaceControlCode.resourceStagingFailed.rawValue)
         #expect(decoded.detail == "executable link 'grok'")
 
-        let oversized = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            id: UUID(),
-            op: WorkspaceControlOp.launchRuntime.rawValue,
-            ok: false,
-            error: WorkspaceControlCode.resourceStagingFailed.rawValue,
-            detail: String(repeating: "x", count: WorkspaceControlLimits.maxDetailBytes + 1)
-        )
-        guard let oversizedBytes = WorkspaceControlCodec.encode(oversized) else {
+        var oversized = denial
+        oversized.detail = String(repeating: "x", count: WorkspaceControlLimits.maxDetailBytes + 1)
+        guard let oversizedBytes = WorkspaceControlCodec.encodeResponse(oversized) else {
             Issue.record("oversize denial test frame should fit the control frame")
             return
         }
-        #expect(WorkspaceControlCodec.decode(oversizedBytes) == .invalid)
+        #expect(WorkspaceControlCodec.decodeResponse(oversizedBytes) == .invalid)
 
-        // The error constructor clamps: a hand-built overlong detail
+        // The failure constructor clamps: a hand-built overlong detail
         // never leaves the host, and control bytes never reach chrome.
-        let clamped = WorkspaceControlMessage.error(
-            id: UUID(), op: WorkspaceControlOp.launchRuntime.rawValue,
+        let clamped = WorkspaceControlResponseFrame.failure(
+            request: request,
             code: .resourceStagingFailed,
             detail: "credential 'a\u{07}b" + String(repeating: "x", count: 200)
         )

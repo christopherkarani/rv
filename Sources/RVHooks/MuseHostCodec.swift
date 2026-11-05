@@ -49,16 +49,9 @@ public struct MuseHostCodec: HostCodec {
     /// Muse honor path: `hookSpecificOutput.permissionDecision: deny`
     /// JSON + exit 0. The reason is required non-empty on the wire, so
     /// blank reasons fall back to `rv failed` inside the encoder.
-    /// Defaults must live here: a one-argument `encodeDeny(reason:)`
-    /// otherwise binds the protocol extension and emits leftover
-    /// `decision: deny`.
-    public func encodeDeny(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
+    public func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
         HookWire(
-            stdout: musePermissionDenyJSON(reason: reason),
+            stdout: musePermissionDenyJSON(reason: presentation.reason),
             exitCode: host.denyExitCode
         )
     }

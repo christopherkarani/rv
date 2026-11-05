@@ -1,9 +1,116 @@
+/// Review input with credentials removed. Deliberately NOT a `ProposedAction`:
+/// redaction can delete the very text a deny rule matches, so hard policy must
+/// never be evaluated on this type. `ActionPolicyEngine` accepts only
+/// `ProposedAction`, which makes that mistake a compile error.
+///
+/// The shell and file arms expose no `ActionFingerprint`. Their redacted
+/// fingerprint is display text (`fingerprintText`) and cannot be used for
+/// approval lookup. The http and secretRequest arms keep the real types
+/// because redaction leaves them credential-free and policy-equivalent: HTTP
+/// only drops the query, whose SHA-256 token already sits in the fingerprint,
+/// and a secret request is returned unchanged.
+public enum RedactedAction: Sendable, Equatable, Codable {
+    case shell(RedactedShell)
+    case file(RedactedFile)
+    case http(HTTPAction)
+    case secretRequest(SecretRequestAction)
+
+    public var scope: ActionScope {
+        switch self {
+        case .shell(let shell):
+            return shell.scope
+        case .file(let file):
+            return file.scope
+        case .http(let http):
+            return http.scope
+        case .secretRequest(let request):
+            return request.scope
+        }
+    }
+
+    public var supportingCommand: ShellCommand? {
+        switch self {
+        case .shell(let shell):
+            return shell.supportingCommand
+        case .file, .http, .secretRequest:
+            return nil
+        }
+    }
+
+    /// Wire shape identical to the sanitized `ProposedAction`.
+    private var wire: ProposedAction {
+        switch self {
+        case .shell(let shell):
+            return .shell(shell.sanitized)
+        case .file(let file):
+            return .file(file.sanitized)
+        case .http(let http):
+            return .http(http)
+        case .secretRequest(let request):
+            return .secretRequest(request)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        self = ReviewSanitizer.sanitize(try ProposedAction(from: decoder))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try wire.encode(to: encoder)
+    }
+}
+
+/// Redacted shell action. Wraps the sanitized value privately so its
+/// `ActionFingerprint` is unreachable.
+public struct RedactedShell: Sendable, Equatable, Encodable {
+    fileprivate let sanitized: ShellAction
+
+    fileprivate init(_ sanitized: ShellAction) {
+        self.sanitized = sanitized
+    }
+
+    /// Redacted display text. Not a lookup key.
+    public var fingerprintText: String { sanitized.fingerprint.rawValue }
+    public var effects: ActionEffects { sanitized.effects }
+    public var resources: ResourceScope { sanitized.resources }
+    public var scope: ActionScope { sanitized.scope }
+    public var supportingCommand: ShellCommand? { sanitized.supportingCommand }
+    // Internal (tests only): a public `GitAction`/`FilesystemAction` would
+    // rebuild a `ProposedAction` via `proposedAction(command:workingDirectory:)`.
+    var gitAction: GitAction? { sanitized.gitAction }
+    var filesystemAction: FilesystemAction? { sanitized.filesystemAction }
+
+    public func encode(to encoder: Encoder) throws {
+        try sanitized.encode(to: encoder)
+    }
+}
+
+/// Redacted file-tool action. See `RedactedShell`.
+public struct RedactedFile: Sendable, Equatable, Encodable {
+    fileprivate let sanitized: FileAction
+
+    fileprivate init(_ sanitized: FileAction) {
+        self.sanitized = sanitized
+    }
+
+    /// Redacted display text. Not a lookup key.
+    public var fingerprintText: String { sanitized.fingerprint.rawValue }
+    public var file: FileToolAction { sanitized.file }
+    public var effects: ActionEffects { sanitized.effects }
+    public var resources: ResourceScope { sanitized.resources }
+    public var scope: ActionScope { sanitized.scope }
+
+    public func encode(to encoder: Encoder) throws {
+        try sanitized.encode(to: encoder)
+    }
+}
+
 /// Drops raw credentials from review input. Raw shell strings stay supporting
 /// evidence and are redacted when they carry secret-shaped text.
 public enum ReviewSanitizer: Sendable {
     public static let redactedPlaceholder = "[redacted]"
 
-    public static func sanitize(_ action: ProposedAction) -> ProposedAction {
+    public static func sanitize(_ action: ProposedAction) -> RedactedAction {
         switch action {
         case .shell(let shell):
             return .shell(sanitize(shell))
@@ -11,13 +118,21 @@ public enum ReviewSanitizer: Sendable {
             return .file(sanitize(file))
         case .http(let http):
             return .http(http.redactingQuery())
-        case .secretRequest:
+        case .secretRequest(let request):
             // Built without the query or any placeholder.
-            return action
+            return .secretRequest(request)
         }
     }
 
-    public static func sanitize(_ shell: ShellAction) -> ShellAction {
+    public static func sanitize(_ shell: ShellAction) -> RedactedShell {
+        RedactedShell(redact(shell))
+    }
+
+    public static func sanitize(_ file: FileAction) -> RedactedFile {
+        RedactedFile(redact(file))
+    }
+
+    private static func redact(_ shell: ShellAction) -> ShellAction {
         let fingerprint = ActionFingerprint(
             rawValue: redactCredentials(in: shell.fingerprint.rawValue)
         )
@@ -58,7 +173,7 @@ public enum ReviewSanitizer: Sendable {
         }
     }
 
-    public static func sanitize(_ file: FileAction) -> FileAction {
+    private static func redact(_ file: FileAction) -> FileAction {
         FileAction(
             fingerprint: ActionFingerprint(
                 rawValue: redactCredentials(in: file.fingerprint.rawValue)

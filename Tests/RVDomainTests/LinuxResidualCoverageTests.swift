@@ -444,11 +444,13 @@ struct LinuxResidualCoverageTests {
             ActionPolicyEngine.evaluate(action: writeProtected).decision
                 == .hardDeny(ActionPolicyEngine.Builtin.protectedPath)
         )
-        let request = ReviewRequest(
-            action: writeInside,
-            context: ReviewContext(repository: RepositoryReviewContext())
+        // Hard policy runs on the real action; `ReviewRequest` holds only a `RedactedAction`.
+        #expect(
+            ActionPolicyEngine.evaluate(
+                action: writeInside,
+                context: ReviewContext(repository: RepositoryReviewContext())
+            ).decision == .hardAllow
         )
-        #expect(ActionPolicyEngine.evaluate(request).decision == .hardAllow)
     }
 
     @Test func boundReview_packProjectedIndeterminateIsAllow() {

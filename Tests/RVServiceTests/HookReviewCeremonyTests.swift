@@ -1,5 +1,4 @@
 import Foundation
-import Synchronization
 import Testing
 import RVDomain
 import RVIPC
@@ -452,17 +451,32 @@ struct HookReviewCeremonyTests {
         }
     }
 
-    @Test func allowOncePeekResolvesInjectedGatedAtPeekTime() async throws {
-        // AC-001: the ceremony peek runs on the gated the runtime holds at
-        // peek time, not a per-peek `EvaluationWorld.assemble` from disk.
-        let source = SwappableGated(GatedEvaluate(EvaluateSession(enabledPacks: [])))
-        let env = try HookCeremonyEnv(now: now, gated: { source.resolve() })
+    @Test func allowOncePeekSeesCompileSetFreshnessAtPeekTime() async throws {
+        // AC-001 at the compile-set seam: the ceremony peek requests the
+        // module's ready door at peek time. The probe rule exists only in
+        // the injected snapshots' sqlite pack, so a peek through a stale
+        // (pre-enable) door allows and plants nothing; after the disk
+        // enable, the same ceremony's next peek heals and plants.
+        let sqlite = PackID(rawValue: "database.sqlite")
+        let snapshots = EvaluationWorld.resolveSnapshots(nil).map { pack in
+            guard pack.id == sqlite else { return pack }
+            var probed = pack
+            probed.destructive.append(
+                DestructiveRule(
+                    name: "t3-peek-probe",
+                    pattern: "rv-t3-peek-probe",
+                    severity: .critical,
+                    reason: "T3 peek freshness probe",
+                    explanation: nil
+                ))
+            return probed
+        }
+        let env = try HookCeremonyEnv(now: now, snapshots: snapshots)
         defer { env.tearDown() }
         let ui = AuthenticatedOperatorUIConnectionID()
+        #expect(env.compileSet.compiledPackIDs.contains(sqlite) == false)
 
-        // Current gated has no core packs: indeterminate refuses, no grant.
-        // An assemble from disk would compile day-one and plant.
-        _ = try await env.seed(command: "git reset --hard", id: "hook-stale")
+        _ = try await env.seed(command: "sqlite3 rv-t3-peek-probe", id: "hook-stale")
         let (stale, _) = try await env.ceremonies.bindHookReview(
             approvalID: "hook-stale", uiConnection: ui)
         await #expect(throws: HookReviewCeremonyError.notReviewable) {
@@ -477,9 +491,9 @@ struct HookReviewCeremonyTests {
         }
         #expect(try await env.grantedCount() == 0)
 
-        // The runtime rebuilds gated; the next peek must see the new one.
-        source.replace(with: GatedEvaluate(EvaluateSession(enabledPacks: dayOnePackIDs)))
-        _ = try await env.seed(command: "git reset --hard HEAD", id: "hook-live")
+        // Behind-our-back enable; the next peek must see the healed set.
+        _ = try PacksFacade.enable(home: env.home, ids: [sqlite.rawValue])
+        _ = try await env.seed(command: "sqlite3 rv-t3-peek-probe --again", id: "hook-live")
         let (live, _) = try await env.ceremonies.bindHookReview(
             approvalID: "hook-live", uiConnection: ui)
         let status = try await env.ceremonies.completeHookCeremony(
@@ -492,12 +506,12 @@ struct HookReviewCeremonyTests {
         )
         #expect(status == .allowedOnce)
         #expect(try await env.grantedCount() == 1)
-        #expect(source.resolutions == 2)
+        #expect(env.compileSet.compiledPackIDs.contains(sqlite))
     }
 
     @Test func runtimeCeremonyPeekSeesPackEnabledAfterInit() async throws {
         // AC-001 through ServiceRuntime: a pack enabled after init is
-        // visible to the hook ceremony peek via the runtime's live gated.
+        // visible to the hook ceremony peek via the compile-set module.
         // The probe rule exists only in the runtime's snapshots, so a
         // peek that re-assembled bundled packs would allow and plant nothing.
         let sqlite = PackID(rawValue: "database.sqlite")
@@ -565,34 +579,6 @@ private final class FrozenClock: @unchecked Sendable {
     init(_ now: Date) { self.now = now }
 }
 
-/// Stands in for `ServiceRuntime.gated`: replaced on a pack-set rebuild,
-/// counting how often the ceremony resolves it.
-private final class SwappableGated: Sendable {
-    private struct State {
-        var gated: GatedEvaluate
-        var resolutions = 0
-    }
-
-    private let state: Mutex<State>
-
-    init(_ gated: GatedEvaluate) {
-        state = Mutex(State(gated: gated))
-    }
-
-    var resolutions: Int { state.withLock { $0.resolutions } }
-
-    func replace(with gated: GatedEvaluate) {
-        state.withLock { $0.gated = gated }
-    }
-
-    func resolve() -> GatedEvaluate {
-        state.withLock { state in
-            state.resolutions += 1
-            return state.gated
-        }
-    }
-}
-
 private final class HookCeremonyEnv {
     private let homeURL: URL
     private let allowOnceDirectory: URL
@@ -600,12 +586,14 @@ private final class HookCeremonyEnv {
     let home: HomeDirectory
     let clock: @Sendable () -> Date
     let ceremonies: HookReviewCeremonyService
+    let compileSet: LiveCompileSet
     let pending: PendingApprovalStore
     let grants: AllowOnceStore
 
-    /// `gated` defaults to the day-one compile set for this isolated home,
-    /// assembled once (as the daemon holds it), not per peek.
-    init(now: Date, gated: (@Sendable () -> GatedEvaluate)? = nil) throws {
+    /// The ceremony fronts one live compile-set module for this isolated
+    /// home (as the daemon holds it); `snapshots` lets a test plant probe
+    /// rules only that set can compile.
+    init(now: Date, snapshots: [PackSnapshot]? = nil) throws {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
@@ -616,13 +604,13 @@ private final class HookCeremonyEnv {
         grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         let clock: @Sendable () -> Date = { frozen.now }
         self.clock = clock
-        let dayOne = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
+        let compileSet = LiveCompileSet(snapshots: snapshots, catalog: nil, home: home)
+        self.compileSet = compileSet
         ceremonies = HookReviewCeremonyService(
             pending: pending,
             allowOnce: grants,
             grants: EphemeralAllowOnceTable(),
-            home: home,
-            gated: gated ?? { dayOne },
+            compileSet: compileSet,
             clock: clock
         )
     }

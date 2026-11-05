@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVIPC
 
 /// Operator launch plumbing (Step 4): propose an identity launch for review
@@ -79,10 +80,10 @@ struct OperatorPropose: AsyncParsableCommand {
             }
             return id
         }
-        guard kind == "named" || kind == "custom" else {
+        guard let launchKind = WorkspaceLaunchKind(rawValue: kind) else {
             throw ValidationError("--kind must be named or custom")
         }
-        if kind == "named" {
+        if launchKind == .named {
             guard definition != nil else {
                 throw ValidationError("--definition is required for named proposals")
             }
@@ -101,7 +102,7 @@ struct OperatorPropose: AsyncParsableCommand {
             workspace: workspace,
             hostID: try uuid(hostID, flag: "hostID"),
             workspaceSessionID: try uuid(sessionID, flag: "sessionID"),
-            kind: kind,
+            kind: launchKind,
             definitionID: definition,
             executable: executable,
             expectedDigest: digest,

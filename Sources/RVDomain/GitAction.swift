@@ -243,7 +243,7 @@ public enum GitAction: Sendable, Equatable, Codable {
         .shell(
             ShellAction.analyzed(
                 AnalyzedShell(
-                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    fingerprint: fingerprint,
                     scope: ActionScope(workingDirectory: workingDirectory),
                     supportingCommand: command,
                     analysis: .git(self)
@@ -287,38 +287,42 @@ public enum GitAction: Sendable, Equatable, Codable {
         }
     }
 
-    private var fingerprint: String {
+    private var fingerprint: ActionFingerprint {
         switch self {
         case .createBranch(let name, _, let force):
-            return "shell:git.create-branch:\(force ? "force:" : "")\(name)"
+            return .make("shell:git.create-branch", (force ? [.field("force")] : []) + [.field(name)])
         case .switchBranch(let name, let force):
-            return "shell:git.switch:\(force ? "force:" : "")\(name)"
+            return .make("shell:git.switch", (force ? [.field("force")] : []) + [.field(name)])
         case .discardWorktree(let pathspecs, let source):
-            return "shell:git.discard:\(source ?? ""):\(pathspecs.joined(separator: ","))"
+            return .make("shell:git.discard", [.field(source ?? ""), .list(pathspecs)])
         case .restore(let pathspecs, let destination, _):
-            return "shell:git.restore:\(destination.rawValue):\(pathspecs.joined(separator: ","))"
+            return .make("shell:git.restore", [.field(destination.rawValue), .list(pathspecs)])
         case .reset(let mode, let target):
-            return "shell:git.reset:\(mode.rawValue):\(target ?? "")"
+            return .make("shell:git.reset", [.field(mode.rawValue), .field(target ?? "")])
         case .clean(let force, let dryRun, let directories):
-            return "shell:git.clean:\(force):\(dryRun):\(directories)"
+            return .make(
+                "shell:git.clean", [.field("\(force)"), .field("\(dryRun)"), .field("\(directories)")])
         case .push(let remote, let refspec, let force):
-            return "shell:git.push:\(force.rawValue):\(remote ?? ""):\(refspec ?? "")"
+            return .make(
+                "shell:git.push", [.field(force.rawValue), .field(remote ?? ""), .field(refspec ?? "")])
         case .pushUnparsed(let args):
             // The fingerprint must not embed raw argv: unparsed args can
             // carry secrets (credential-bearing URLs), and space-joining
             // collides (["a b"] vs ["a", "b"]). Hash NUL-joined args
             // instead; exec argv cannot contain NUL, so the join is exact.
-            return "shell:git.push:unparsed:\(RVDigest.sha256Hex(Array(args.joined(separator: "\u{0}").utf8)))"
+            return .make(
+                "shell:git.push",
+                [.field("unparsed"), .field(RVDigest.sha256Hex(Array(args.joined(separator: "\u{0}").utf8)))])
         case .deleteRemoteRef(let remote, let refspec):
-            return "shell:git.delete-remote-ref:\(remote ?? ""):\(refspec ?? "")"
+            return .make("shell:git.delete-remote-ref", [.field(remote ?? ""), .field(refspec ?? "")])
         case .deleteBranch(let name, let force):
-            return "shell:git.delete-branch:\(force):\(name)"
+            return .make("shell:git.delete-branch", [.field("\(force)"), .field(name)])
         case .deleteTag(let name, let remote):
-            return "shell:git.delete-tag:\(remote ?? ""):\(name)"
+            return .make("shell:git.delete-tag", [.field(remote ?? ""), .field(name)])
         case .stash(let verb):
-            return "shell:git.stash:\(verb.rawValue)"
+            return .make("shell:git.stash", [.field(verb.rawValue)])
         case .rebase(let verb, let onto):
-            return "shell:git.rebase:\(verb.rawValue):\(onto ?? "")"
+            return .make("shell:git.rebase", [.field(verb.rawValue), .field(onto ?? "")])
         }
     }
 }
