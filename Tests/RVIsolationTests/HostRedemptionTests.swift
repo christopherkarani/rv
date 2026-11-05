@@ -1190,7 +1190,7 @@ struct HostRedemptionTests {
                 admission: .failClosed, host: host, generation: generation,
                 audit: { event in events.withLock { $0.append(event) } })
             #expect(response.accepted == false)
-            #expect(response.error == "unknown")
+            #expect(response.error == .unknown)
         }
         // The honest commit still launches through the handler.
         let launched = WorkspaceHostRedeemHandler.redeem(
@@ -1228,7 +1228,7 @@ struct HostRedemptionTests {
             admission: .failClosed, host: host, generation: generation,
             audit: { event in events.withLock { $0.append(event) } })
         #expect(response.accepted == false)
-        #expect(response.error == "unknown")
+        #expect(response.error == .unknown)
         let recorded = try #require(events.withLock { $0.first })
         #expect(recorded.kind == .commitRefused)
         #expect(recorded.intentDigestHex.isEmpty)

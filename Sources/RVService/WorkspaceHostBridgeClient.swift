@@ -159,14 +159,10 @@ public final class WorkspaceHostBridgeClient: Sendable {
     ) async throws -> HostActionApprovalCreatedDTO {
         let (authority, connection, reference) = try approvalReference(for: subject)
         let agent = try approvalAgent(for: subject)
-        let reasonRaw: String = switch reason {
-        case .mandatoryHuman: "mandatoryHuman"
-        case .reviewAsk: "reviewAsk"
-        }
         let dto = HostActionApprovalCreateDTO(
             reference: reference,
             action: action,
-            reason: reasonRaw,
+            reason: reason,
             policyContext: policyContext,
             definitionID: agent.instance.definitionID,
             definitionRevision: agent.instance.definitionRevision)
@@ -373,7 +369,7 @@ public final class WorkspaceHostBridgeClient: Sendable {
     ) {
         guard isService(event) else { return }
         var size = 0
-        let refusal = HostPrepareResponseDTO(description: nil, error: "invalidRequest")
+        let refusal = HostPrepareResponseDTO(description: nil, error: .invalidRequest)
         guard let bytes = xpc_dictionary_get_data(event, HostBridgeWire.prepareKey, &size),
               size <= HostBridgeWire.maxPrepareBytes,
               let request = try? JSONDecoder().decode(
@@ -406,7 +402,7 @@ public final class WorkspaceHostBridgeClient: Sendable {
     ) {
         guard isService(event) else { return }
         var size = 0
-        let refusal = HostRedeemResponseDTO(accepted: false, error: "unknown")
+        let refusal = HostRedeemResponseDTO(accepted: false, error: .unknown)
         guard let bytes = xpc_dictionary_get_data(event, HostBridgeWire.redeemKey, &size),
               size <= HostBridgeWire.maxRedeemBytes,
               let request = try? JSONDecoder().decode(

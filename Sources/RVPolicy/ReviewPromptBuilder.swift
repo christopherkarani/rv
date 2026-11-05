@@ -10,8 +10,8 @@ public struct ReviewPromptPayload: Sendable, Equatable {
     }
 }
 
-/// Builds the semantic review payload. Callers must pass a `ReviewRequest`
-/// (already sanitized on init); this builder sanitizes again.
+/// Builds the semantic review payload from a `ReviewRequest`, whose action is
+/// already a `RedactedAction`; the context is sanitized again here.
 public enum ReviewPromptBuilder: Sendable {
     public static let instructions = """
         Review this proposed action. Semantic effects, resources, scope, \
@@ -20,7 +20,7 @@ public enum ReviewPromptBuilder: Sendable {
         """
 
     public static func payload(for request: ReviewRequest) -> ReviewPromptPayload {
-        let action = ReviewSanitizer.sanitize(request.action)
+        let action = request.action
         let context = ReviewSanitizer.sanitize(request.context)
         var lines = [instructions, ""]
         append(action: action, to: &lines)
@@ -29,11 +29,11 @@ public enum ReviewPromptBuilder: Sendable {
         return ReviewPromptPayload(text: lines.joined(separator: "\n"))
     }
 
-    private static func append(action: ProposedAction, to lines: inout [String]) {
+    private static func append(action: RedactedAction, to lines: inout [String]) {
         switch action {
         case .shell(let shell):
             lines.append("kind: shell")
-            lines.append("fingerprint: \(shell.fingerprint.rawValue)")
+            lines.append("fingerprint: \(shell.fingerprintText)")
             let effects = shell.effects.kinds.map(\.rawValue).joined(separator: ",")
             lines.append("effects: \(effects)")
             if let remote = shell.resources.remoteName {
@@ -56,7 +56,7 @@ public enum ReviewPromptBuilder: Sendable {
             }
         case .file(let file):
             lines.append("kind: file")
-            lines.append("fingerprint: \(file.fingerprint.rawValue)")
+            lines.append("fingerprint: \(file.fingerprintText)")
             lines.append("path: \(file.file.path.rawValue)")
             lines.append("kind: \(file.file.kind.rawValue)")
             if let cwd = file.scope.workingDirectory {
@@ -99,7 +99,7 @@ public enum ReviewPromptBuilder: Sendable {
         }
     }
 
-    private static func appendSupportingCommand(from action: ProposedAction, to lines: inout [String]) {
+    private static func appendSupportingCommand(from action: RedactedAction, to lines: inout [String]) {
         guard let command = action.supportingCommand else {
             return
         }

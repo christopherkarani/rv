@@ -71,6 +71,8 @@ struct EgressProposalTests {
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:api.example.com:notaport")) == nil)
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:127.0.0.1:443")) == nil)
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "EGRESS:api.example.com:443")) == nil)
+        #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:a:b:443")) == nil)
+        #expect(EgressProposal.parse(ActionFingerprint(rawValue: #"egress:a\x.example.com:443"#)) == nil)
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "file:grok:s:c:read:/x")) == nil)
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "")) == nil)
     }

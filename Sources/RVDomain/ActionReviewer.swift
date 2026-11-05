@@ -103,7 +103,8 @@ public struct ReviewContext: Sendable, Equatable, Codable {
 }
 
 public struct ReviewRequest: Sendable, Equatable, Codable {
-    public let action: ProposedAction
+    /// Redacted copy. Never feed this to `ActionPolicyEngine`; it takes only a real `ProposedAction`.
+    public let action: RedactedAction
     public let context: ReviewContext
 
     public init(action: ProposedAction, context: ReviewContext) {

@@ -44,9 +44,12 @@ public struct SecretRequestAction: Sendable, Equatable, Codable {
         secret: String, method: String, host: String, path: String, targetSHA256: String, bodySHA256: String,
         bodyBytes: Int, headersSHA256: String, operationHeaders: [Header], scope: ActionScope = ActionScope()
     ) {
-        self.fingerprint = ActionFingerprint(
-            rawValue:
-                "secret-request:\(secret):\(method):\(host):\(targetSHA256):\(bodySHA256):\(headersSHA256)")
+        self.fingerprint = ActionFingerprint.make(
+            "secret-request",
+            [
+                .field(secret), .field(method), .field(host), .field(targetSHA256),
+                .field(bodySHA256), .field(headersSHA256),
+            ])
         self.secret = secret
         self.method = method
         self.host = host
