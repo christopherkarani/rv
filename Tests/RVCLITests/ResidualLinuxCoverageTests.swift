@@ -4,6 +4,7 @@ import Testing
 import RVDomain
 import RVIPC
 import RVPolicy
+import RVScan
 import RVTheme
 @testable import RVCLI
 
@@ -84,12 +85,17 @@ struct ResidualLinuxCoverageTests {
         }
     }
 
-    @Test func scanRun_includeGlobRequiresPathAndUnlistable() throws {
+    @Test func sessionScan_includeGlobRequiresPathAndUnlistable() throws {
         let home = try isolatedHome()
         let scanHome = try #require(ScanHome(validating: home.rawValue))
-        #expect(throws: ScanRun.Error.includeGlobRequiresPath) {
-            _ = try ScanRun.execute(
-                .fixture(home: scanHome, includeGlobs: ["*.jsonl"])
+        #expect(throws: SessionScanError.includeGlobRequiresPath) {
+            _ = try SessionScan().run(
+                SessionScanRequest(
+                    home: scanHome,
+                    now: Date(),
+                    includeGlobs: ["*.jsonl"],
+                    timeWindow: .all
+                )
             )
         }
         #expect(
