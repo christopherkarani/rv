@@ -4929,7 +4929,7 @@ struct MCPCommandTests {
         let row = MCPRun.PendingRow(
             id: raw + broken + "\u{2029}" + sentence + reversed, server: "github", tool: "list_issues",
             argumentKeys: [], argumentKeysBound: true, requestedAt: Date(timeIntervalSince1970: 0))
-        let robot = MCPRun.robotJSON([row])
+        let robot = try RobotJSON.encode([row], options: .pretty)
         escaped(robot)
         #expect(robot.contains("\\u001b"))
         #expect(robot.contains("\\\\u001b") == false)

@@ -72,6 +72,37 @@ public enum HookRequest: Equatable, Sendable {
     }
 }
 
+/// Deny presentation: the composed deny content before per-adapter wire
+/// rendering. `HookMapper` (the deny-dispatch module) composes it once at
+/// this seam; adapters only render. `reason` is the user-facing deny text,
+/// already composed (`hostDenyLine`, `hostFileDenyLine`, or a plain
+/// sentence). `matched` carries the deny's rule match across the seam as
+/// data so the Claude adapter can render its rich shape; adapters without
+/// a rich shape ignore it. `agentText` is the agent-facing text (Cursor
+/// `agent_message`): the stop line on a plain deny, the ask-retry line on
+/// an ask-denial; adapters with no agent copy ignore it.
+public struct HookDenyPresentation: Equatable, Sendable {
+    public var reason: String
+    public var rule: RuleID?
+    public var next: HookVoiceNext
+    public var matched: RuleMatch?
+    public var agentText: String
+
+    public init(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none,
+        matched: RuleMatch? = nil,
+        agentText: String = cursorAgentStopLine
+    ) {
+        self.reason = reason
+        self.rule = rule
+        self.next = next
+        self.matched = matched
+        self.agentText = agentText
+    }
+}
+
 public struct HookWire: Equatable, Sendable {
     public var stdout: String
     public var exitCode: Int32
@@ -85,24 +116,16 @@ public struct HookWire: Equatable, Sendable {
     }
 }
 
+/// Host adapter interface: decode host stdin and render allow/deny wire.
+/// One deny rendering entry — `encodeDeny(_:)` — takes the presentation
+/// `HookMapper` composed; the evaluated/ask/file dispatch that produced
+/// it lives in `HookMapper`, not per adapter.
 public protocol HostCodec: Sendable {
     var host: HookHost { get }
     func decode(_ stdin: String) -> HookDecodeOutcome
     func proposedAction(from request: HookRequest) -> ProposedAction
     func encodeAllow() -> HookWire
-    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
-    func encodeEvaluatedDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint?
-    ) -> HookWire
-    func encodeEvaluatedAskDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint?,
-        askRecorded: Bool
-    ) -> HookWire
-    func encodeFileDeny(from result: EvaluationResult) -> HookWire
+    func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire
 }
 
 /// One switch for production codecs. Step 8B: every host is deny/allow
@@ -186,67 +209,15 @@ extension HostCodec {
         )
     }
 
-    /// Leftover live deny: `encodeDeny` plus `hostDenyLine` / incomplete sentence.
-    public func encodeEvaluatedDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil
+    /// Plain presentation from parts: no matched rule, agent stop line.
+    /// The spelling plain-sentence callers (malformed payload, daemon
+    /// unreachable, timeout) use; rendering still crosses the single
+    /// `encodeDeny(_:)` entry.
+    public func encodeDeny(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
     ) -> HookWire {
-        switch result.decision {
-        case .allow:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            return encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
-                rule: deny.ruleID,
-                next: unlockHookVoiceNext(unlockCode)
-            )
-        }
-    }
-
-    /// Ask-denial: same deny shape plus the approval-pending guidance.
-    /// The policy verdict stays ASK; only the wire renders deny because no
-    /// host can pause for a human. The TTY unlock line still applies, so a
-    /// minted code and the RVOperatorUI row are offered together. The
-    /// guidance joins AFTER `hostDenyLine`: annotating the reason would
-    /// lose it to the two-sentence truncation on multi-sentence reasons.
-    /// When the pending row failed to record, the guidance says so instead
-    /// of promising an approval that cannot exist (M-25).
-    public func encodeEvaluatedAskDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil,
-        askRecorded: Bool = true
-    ) -> HookWire {
-        switch result.decision {
-        case .allow, .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            let line =
-                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
-            return encodeDeny(
-                reason: line,
-                rule: deny.ruleID,
-                next: unlockHookVoiceNext(unlockCode)
-            )
-        }
-    }
-
-    /// File-tool deny. Allow stays allow; incomplete uses the PLAN sentence.
-    public func encodeFileDeny(from result: EvaluationResult) -> HookWire {
-        switch result.decision {
-        case .allow:
-            return encodeAllow()
-        case .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-        case .deny(let deny):
-            return encodeDeny(
-                reason: hostFileDenyLine(reason: deny.reason),
-                rule: deny.ruleID,
-                next: .none
-            )
-        }
+        encodeDeny(HookDenyPresentation(reason: reason, rule: rule, next: next))
     }
 }

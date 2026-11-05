@@ -407,23 +407,17 @@ enum PolicyShowRun {
         _ snapshot: PolicyShowSnapshot,
         exemptions: SecretExemptionsView
     ) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let document = PolicyShowRobotDocument(
-            builtin: snapshot.builtin,
-            machine: snapshot.machine,
-            repo: snapshot.repo,
-            secretAllowPaths: exemptions
-        )
-        let data = try encoder.encode(document)
-        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
+        try RobotJSON.encode(
+            PolicyShowRobotDocument(
+                builtin: snapshot.builtin,
+                machine: snapshot.machine,
+                repo: snapshot.repo,
+                secretAllowPaths: exemptions
+            ))
     }
 
     static func robotEffective(_ rules: [TypedRule]) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(PolicyShowEffectiveSnapshot(effective: rules))
-        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
+        try RobotJSON.encode(PolicyShowEffectiveSnapshot(effective: rules))
     }
 
     static func robotCombined(
@@ -431,18 +425,14 @@ enum PolicyShowRun {
         effective: [TypedRule],
         exemptions: SecretExemptionsView
     ) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(
+        try RobotJSON.encode(
             PolicyShowCombinedSnapshot(
                 builtin: snapshot.builtin,
                 machine: snapshot.machine,
                 repo: snapshot.repo,
                 effective: effective,
                 secretAllowPaths: exemptions
-            )
-        )
-        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
+            ))
     }
 }
 
@@ -480,10 +470,7 @@ enum PolicyListRun {
     }
 
     static func robot(_ revisions: [PolicyRevision]) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(revisions)
-        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
+        try RobotJSON.encode(revisions)
     }
 }
 

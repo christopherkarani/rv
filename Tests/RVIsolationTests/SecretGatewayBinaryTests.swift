@@ -207,7 +207,7 @@ struct SecretGatewayBinaryTests {
         #expect(upstream.requests.isEmpty)
         let record = try #require(audit.items.withLock { $0.last })
         #expect(audit.items.withLock { $0.count } == 1)
-        #expect(record.refusal == "binaryMismatch")
+        #expect(record.refusal?.code == "binaryMismatch")
         #expect(record.activity == .blocked)
         #expect(record.secret == "OPENAI_API_KEY")
         #expect(GatewayRefusal.binaryMismatch.isMisuse)
@@ -230,7 +230,7 @@ struct SecretGatewayBinaryTests {
         defer { unverified.stop() }
         #expect(try gatewayExchange(port: port2, bearer(placeholder2)).status == 403)
         let record = try #require(audit.items.withLock { $0.last })
-        #expect(record.refusal == "runtimeUnverified")
+        #expect(record.refusal?.code == "runtimeUnverified")
         #expect(record.activity == .refused)
         #expect(upstream.requests.count == 1)
     }
@@ -421,7 +421,7 @@ struct SecretGatewayBinaryTests {
             if status.isEmpty == false { break }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        return (status, audit.items.withLock { $0.last?.refusal })
+        return (status, audit.items.withLock { $0.last?.refusal?.code })
     }
 
     @Test func theRealScanAdmitsAPinnedHolderOrAncestorAndRefusesOthers() throws {

@@ -65,19 +65,19 @@ struct UntrustedTextEscapeTests {
         #expect(try EgressReviewRun.robotDenials(denials) == String(decoding: try encoder.encode(denials), as: UTF8.self))
     }
 
-    @Test func auditVerifyEscapes() {
+    @Test func auditVerifyEscapes() throws {
         let broken = AuditChainReport(
             lines: 2, unchained: 0, head: "h",
             firstBreak: .init(line: 2, reason: "bad \(Self.hostile)"))
-        expectClean(AuditVerifyRun.json(broken))
+        expectClean(try AuditVerifyRun.json(broken))
         expectClean(AuditVerifyRun.text(broken, path: "/tmp/\(Self.hostile)"))
     }
 
-    @Test func auditVerifyPlainASCIIUnchanged() {
+    @Test func auditVerifyPlainASCIIUnchanged() throws {
         let ok = AuditChainReport(lines: 1, unchained: 0, head: "abc", firstBreak: nil)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        #expect(AuditVerifyRun.json(ok) == String(decoding: try! encoder.encode(ok), as: UTF8.self) + "\n")
+        #expect(try AuditVerifyRun.json(ok) == String(decoding: try! encoder.encode(ok), as: UTF8.self) + "\n")
     }
 
     /// AC-007 for `rv egress denials`: a hostile host in the proxy denial
@@ -102,7 +102,7 @@ struct UntrustedTextEscapeTests {
     }
 
     /// SEC-002: `rv secrets describe` robot output escapes a hostile
-    /// description once and keeps plain-ASCII bytes identical to `json`.
+    /// description once and keeps plain-ASCII bytes identical to the seam.
     @Test func secretsDescribeRobotEscapes() throws {
         func report(_ description: String) -> SecretsRun.DescribeReport {
             SecretsRun.DescribeReport(secrets: [
@@ -116,7 +116,7 @@ struct UntrustedTextEscapeTests {
         let rows = try #require(object["secrets"] as? [[String: Any]])
         #expect(rows.first?["description"] as? String == Self.hostile)
         let plain = report("plain text")
-        #expect(SecretsRun.describeOutput(plain, robot: true) == SecretsRun.json(plain))
+        #expect(SecretsRun.describeOutput(plain, robot: true) == (try RobotJSON.encode(plain, options: .pretty)))
         #expect(SecretsRun.describeOutput(plain, robot: false) == SecretsRun.describeText(plain))
     }
 }

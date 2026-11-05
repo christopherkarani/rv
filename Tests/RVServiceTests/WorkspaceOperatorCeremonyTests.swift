@@ -62,7 +62,7 @@ struct WorkspaceOperatorCeremonyTests {
         generation: WorkspaceHostGeneration,
         requestID: UUID,
         intentHex: String,
-        target: String = "custom"
+        target: WorkspaceLaunchKind = .custom
     ) -> HostPreparedDescriptionDTO {
         HostPreparedDescriptionDTO(
             workspaceSessionID: workspace.rawValue,
@@ -71,10 +71,10 @@ struct WorkspaceOperatorCeremonyTests {
             preparedID: UUID(),
             requestID: requestID,
             target: target,
-            definitionID: target == "named" ? "test-agent" : nil,
-            revisionDigest: target == "named" ? Self.digest : nil,
+            definitionID: target == .named ? "test-agent" : nil,
+            revisionDigest: target == .named ? Self.digest : nil,
             executable: "/bin/echo",
-            expectedDigest: target == "custom" ? Self.digest : nil,
+            expectedDigest: target == .custom ? Self.digest : nil,
             workingDirectory: "/tmp",
             arguments: [],
             io: .discard,
@@ -118,7 +118,7 @@ struct WorkspaceOperatorCeremonyTests {
             workspace: "/tmp/proj",
             hostID: fixture.host.rawValue,
             workspaceSessionID: fixture.workspace.rawValue,
-            kind: "custom",
+            kind: .custom,
             executable: "/bin/echo",
             expectedDigest: Self.digest)
     }
@@ -135,7 +135,7 @@ struct WorkspaceOperatorCeremonyTests {
             workspace: "/tmp/proj",
             hostID: fixture.host.rawValue,
             workspaceSessionID: fixture.workspace.rawValue,
-            kind: "bogus",
+            kind: .named,
             executable: "/bin/echo",
             expectedDigest: Self.digest)
         await #expect(throws: WorkspaceOperatorCeremonyError.invalidProposal) {
@@ -152,29 +152,29 @@ struct WorkspaceOperatorCeremonyTests {
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: fixture.host.rawValue,
                 workspaceSessionID: fixture.workspace.rawValue,
-                kind: "named", definitionID: ""),
+                kind: .named, definitionID: ""),
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: fixture.host.rawValue,
                 workspaceSessionID: fixture.workspace.rawValue,
-                kind: "named", definitionID: huge),
+                kind: .named, definitionID: huge),
             // Custom executables are bounded and non-empty.
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: fixture.host.rawValue,
                 workspaceSessionID: fixture.workspace.rawValue,
-                kind: "custom", executable: "", expectedDigest: Self.digest),
+                kind: .custom, executable: "", expectedDigest: Self.digest),
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: fixture.host.rawValue,
                 workspaceSessionID: fixture.workspace.rawValue,
-                kind: "custom", executable: huge, expectedDigest: Self.digest),
+                kind: .custom, executable: huge, expectedDigest: Self.digest),
             // Custom digests are fixed 64-hex.
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: fixture.host.rawValue,
                 workspaceSessionID: fixture.workspace.rawValue,
-                kind: "custom", executable: "/bin/echo", expectedDigest: "short"),
+                kind: .custom, executable: "/bin/echo", expectedDigest: "short"),
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: fixture.host.rawValue,
                 workspaceSessionID: fixture.workspace.rawValue,
-                kind: "custom", executable: "/bin/echo",
+                kind: .custom, executable: "/bin/echo",
                 expectedDigest: String(repeating: "A", count: 64)),
         ]
         for bad in proposals {
@@ -189,7 +189,7 @@ struct WorkspaceOperatorCeremonyTests {
         let ceremonies = WorkspaceOperatorCeremonyService()
         let params = ProposeLaunchParams(
             workspace: "/tmp/proj", hostID: UUID(), workspaceSessionID: UUID(),
-            kind: "custom", executable: "/bin/echo", expectedDigest: Self.digest)
+            kind: .custom, executable: "/bin/echo", expectedDigest: Self.digest)
         await #expect(throws: WorkspaceOperatorCeremonyError.unknownHost) {
             try await ceremonies.propose(params, requester: requester(), clientRequestID: nil)
         }
@@ -209,7 +209,7 @@ struct WorkspaceOperatorCeremonyTests {
 
     @Test func hostRefusalSurfacesPrepareFailed() async throws {
         let fixture = try await makeFixture(prepare: { _, _, _ in
-            { _ in HostPrepareResponseDTO(description: nil, error: "unknownDefinition") }
+            { _ in HostPrepareResponseDTO(description: nil, error: .unknownDefinition) }
         })
         await #expect(throws: WorkspaceOperatorCeremonyError.prepareFailed("unknownDefinition")) {
             try await fixture.ceremonies.propose(
@@ -229,7 +229,7 @@ struct WorkspaceOperatorCeremonyTests {
         let params = ProposeLaunchParams(
             workspace: "/tmp/proj", hostID: host.rawValue,
             workspaceSessionID: workspace.rawValue,
-            kind: "custom", executable: "/bin/echo", expectedDigest: Self.digest)
+            kind: .custom, executable: "/bin/echo", expectedDigest: Self.digest)
         await #expect(throws: WorkspaceOperatorCeremonyError.prepareFailed("unavailable")) {
             try await ceremonies.propose(params, requester: requester(), clientRequestID: nil)
         }
@@ -258,13 +258,13 @@ struct WorkspaceOperatorCeremonyTests {
                 HostPrepareResponseDTO(description: self.description(
                     workspace: workspace, host: host,
                     generation: generation, requestID: request.requestID,
-                    intentHex: Self.digest, target: "named"))
+                    intentHex: Self.digest, target: .named))
             }
         })
         let params = ProposeLaunchParams(
             workspace: "/tmp/proj", hostID: fixture.host.rawValue,
             workspaceSessionID: fixture.workspace.rawValue,
-            kind: "named", definitionID: "test-agent")
+            kind: .named, definitionID: "test-agent")
         let reply = try await fixture.ceremonies.propose(
             params, requester: requester(), clientRequestID: nil)
         #expect(reply.status == .pendingReview)
@@ -321,7 +321,7 @@ struct WorkspaceOperatorCeremonyTests {
             prepare: { _, _, _ in
                 { _ in
                     connected.withLock { $0 = false }
-                    return HostPrepareResponseDTO(description: nil, error: "gone")
+                    return HostPrepareResponseDTO(description: nil, error: .refused)
                 }
             },
             isConnected: { connected.withLock { $0 } })
@@ -715,7 +715,12 @@ struct WorkspaceOperatorCeremonyTests {
 
     @Test func unknownRefusalReasonCollapses() async throws {
         let fixture = try await makeFixture(prepare: { _, _, _ in
-            { _ in HostPrepareResponseDTO(description: nil, error: "EVIL\nreason") }
+            { _ in
+                // An out-of-vocabulary host string decodes to `.refused`.
+                try! IPCJSON.decode(
+                    HostPrepareResponseDTO.self,
+                    from: Data("{\"error\":\"EVIL\\nreason\"}".utf8))
+            }
         })
         await #expect(throws: WorkspaceOperatorCeremonyError.prepareFailed("refused")) {
             try await fixture.ceremonies.propose(

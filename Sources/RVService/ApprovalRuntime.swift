@@ -4,8 +4,9 @@ import RVIPC
 import RVPolicy
 
 /// Pending list/watch/resolve and rule preview/save. Owned by `ServiceRuntime`.
-/// Watch generation is isolated here. Allow-once peek is `LiveEvaluateWorld.peek`
-/// with the compile set loaded at peek time so pack enable cannot leave a stale session.
+/// Watch generation is isolated here. The allow-once peek arrives from the
+/// compile-set module (`LiveCompileSet.livePeek`): freshness is resolved at
+/// peek time behind that seam, so a pack enable cannot leave a stale door.
 actor ApprovalRuntime {
     private var pendingGeneration: UInt64 = 0
     private var pendingSetFingerprint: [String] = []
@@ -21,24 +22,6 @@ actor ApprovalRuntime {
         self.allowOnce = allowOnce
         self.clock = clock
         self.pendingApprovals = pendingApprovals
-    }
-
-    /// Frozen-clock peek. `gated` runs at peek time — do not pass a `GatedEvaluate`
-    /// captured at `ApprovalRuntime` init or at `dispatch` entry, or a later
-    /// `setPackEnabled` rebuild is invisible to allow-once.
-    nonisolated static func livePeek(
-        home: HomeDirectory?,
-        grants: EphemeralAllowOnceTable,
-        gated: @escaping @Sendable () async -> GatedEvaluate
-    ) -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
-        { command, cwd, now in
-            await LiveEvaluateWorld(
-                home: home,
-                grants: grants,
-                gated: await gated(),
-                clock: { now }
-            ).peek(command: command, cwd: cwd)
-        }
     }
 
     func pendingListResult() async -> Result<PendingListReply, IPCError> {

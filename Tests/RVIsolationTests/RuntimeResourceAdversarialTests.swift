@@ -283,30 +283,28 @@ import Testing
     defer { server.stop(); _ = supervisor.close() }
     let raw = try WorkspaceControlSocket.connect(path: server.endpoint.socketPath, timeout: 2).get()
     defer { close(raw) }
-    let hello = WorkspaceControlMessage(
-        version: WorkspaceControlLimits.version,
+    let hello = WorkspaceControlRequestFrame(
         id: UUID(),
-        op: WorkspaceControlOp.hello.rawValue,
-        token: server.endpoint.ownerToken
+        payload: .hello(.init(token: server.endpoint.ownerToken))
     )
-    let helloBody = try #require(WorkspaceControlCodec.encode(hello))
+    let helloBody = try #require(WorkspaceControlCodec.encodeRequest(hello))
     #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: helloBody))
     _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-    let ensure = WorkspaceControlMessage(
-        version: WorkspaceControlLimits.version,
+    let ensure = WorkspaceControlRequestFrame(
         id: UUID(),
-        op: WorkspaceControlOp.ensureTerminalRuntime.rawValue,
-        executable: "/bin/sh",
-        arguments: ["-c", "/bin/sleep 30"],
-        resourceProfileID: "alpha",
-        io: "terminal",
-        rows: 24,
-        columns: 80
+        payload: .ensureTerminalRuntime(.init(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            resourceProfileID: "alpha",
+            io: "terminal",
+            rows: 24,
+            columns: 80
+        ))
     )
-    let ensureBody = try #require(WorkspaceControlCodec.encode(ensure))
+    let ensureBody = try #require(WorkspaceControlCodec.encodeRequest(ensure))
     #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: ensureBody))
     let reply = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 10).get()
-    guard case .message(let refused) = WorkspaceControlCodec.decode(reply) else {
+    guard case .frame(let refused) = WorkspaceControlCodec.decodeResponse(reply) else {
         Issue.record("ensure with an unknown profile must receive a protocol error")
         return
     }

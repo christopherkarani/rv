@@ -64,7 +64,7 @@ struct ActionApprovalWireRoundTripTests {
 
     @Test func hostDTOsRoundTrip() throws {
         let create = HostActionApprovalCreateDTO(
-            reference: reference(), action: action(), reason: "reviewAsk",
+            reference: reference(), action: action(), reason: .reviewAsk,
             policyContext: "runtime:/work",
             definitionID: AgentDefinitionID(rawValue: "test-agent"),
             definitionRevision: AgentDefinitionRevision(

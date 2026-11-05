@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVPolicy
 import Synchronization
 import Testing
@@ -111,8 +112,30 @@ struct SecretReleaseTests {
         let keychainOnly = try Self.policy(#"{"version":1,"secrets":{"allowedSources":["keychain"]}}"#)
         for target in [SecretTarget.cage, .stdioServer, .header] {
             #expect(Self.reason(Self.release([Self.environment("A")], to: target, provider: provider, managed: keychainOnly))
-                == .organizationPolicy(.source(kind: "hostEnvironment")))
+                == .organizationPolicy(.source(kind: .hostEnvironment)))
         }
+    }
+
+    /// A resource profile's `keychain` entry puts a real value in the cage's
+    /// environment, so it answers to the same organization rules.
+    @Test func profileKeychainEntriesAnswerToOrganizationPolicy() throws {
+        let entry = RuntimeResourceProfile.KeychainEntry(service: "s", account: "a", env: "OPENAI_API_KEY")
+        let noEnvironment = try Self.policy(#"{"version":1,"secrets":{"allowEnvironmentDelivery":false}}"#)
+        let vaultOnly = try Self.policy(#"{"version":1,"secrets":{"allowedSources":["vault"]}}"#)
+        let open = try Self.policy(#"{"version":1,"secrets":{"allowedSources":["keychain"]}}"#)
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: noEnvironment.policy) == .environmentDelivery)
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: vaultOnly.policy) == .source(kind: .keychain))
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: open.policy) == nil)
+        #expect(SecretOrganizationRules.profileKeychainRule(policy: nil) == nil)
+
+        func refusal(_ managed: ManagedPolicyState) -> SecretLeaseError? {
+            SecretLaunchBroker.profileKeychainRefusal([entry], managed: managed)
+        }
+        #expect(refusal(noEnvironment) == .organizationPolicy(
+            SecretOrganizationRule.environmentDelivery.message(secret: "resource profile keychain entry $OPENAI_API_KEY")))
+        #expect(refusal(.invalid("x")) == .organizationPolicy("invalid, so keychain entries are not staged: x"))
+        #expect(refusal(.none) == nil)
+        #expect(SecretLaunchBroker.profileKeychainRefusal([], managed: .invalid("x")) == nil)
     }
 
     @Test func gatewayOnlyValuesNeverLeaveForAServerOrHeader() {
