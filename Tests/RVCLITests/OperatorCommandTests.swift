@@ -15,7 +15,7 @@ struct OperatorCommandTests {
     @Test func namedRequiresDefinition() throws {
         let params = try propose(["--workspace", "/tmp/p", "--kind", "named",
             "--definition", "test-agent"])
-        #expect(params.kind == "named")
+        #expect(params.kind == .named)
         #expect(params.definitionID == "test-agent")
         #expect(params.executable == nil)
     }
@@ -36,7 +36,7 @@ struct OperatorCommandTests {
     @Test func customRequiresExecutableAndDigest() throws {
         let params = try propose(["--workspace", "/tmp/p", "--kind", "custom",
             "--executable", "/bin/echo", "--digest", String(repeating: "a", count: 64)])
-        #expect(params.kind == "custom")
+        #expect(params.kind == .custom)
         #expect(params.executable == "/bin/echo")
         #expect(params.definitionID == nil)
     }

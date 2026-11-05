@@ -27,14 +27,34 @@ struct ManagedPolicyTests {
         #expect(policy.mcp.allowDirect == false)
         #expect(policy.mcp.requireSandbox)
         #expect(policy.mcp.defaultDecision == .ask)
-        #expect(policy.secrets.allowedSources == ["keychain", "vault"])
+        #expect(policy.secrets.allowedSources == [.keychain, .vault])
         #expect(policy.secrets.allowEnvironmentDelivery == false)
         #expect(policy.auditForward == .init(url: "https://siem.example.com/rv", headers: ["Authorization": "${secret:SIEM}"]))
 
         let empty = try ManagedPolicy.decode(Data(#"{"version": 1}"#.utf8)).get()
         #expect(empty == ManagedPolicy())
         #expect(empty.mcpDecision(server: "any", tool: "thing") == .allow)
-        #expect(empty.allowsSecretSource("hostEnvironment"))
+        #expect(empty.allowsSecretSource(.hostEnvironment))
+    }
+
+    @Test func allowedSourcesAcceptsEveryKindAndRejectsUnknownOnes() throws {
+        let kinds = [
+            "keychain", "hostEnvironment", "onePassword", "vault", "awsSecretsManager", "infisical", "bitwarden",
+            "gcp", "azure", "awsProfile", "oauth",
+        ]
+        let list = kinds.map { "\"\($0)\"" }.joined(separator: ",")
+        let policy = try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowedSources":[\#(list)]}}"#.utf8)).get()
+        for kind in SecretSourceKind.allCases { #expect(policy.allowsSecretSource(kind)) }
+        #expect(SecretSourceKind.allCases.map(\.rawValue) == kinds)
+        #expect(ManagedPolicy.secretSourceKinds == kinds)
+        let none = try ManagedPolicy.decode(Data(#"{"version":1,"secrets":{"allowedSources":[]}}"#.utf8)).get()
+        for kind in SecretSourceKind.allCases { #expect(none.allowsSecretSource(kind) == false) }
+        // An unknown kind rejects the whole policy rather than being ignored.
+        if case .success = ManagedPolicy.decode(
+            Data(#"{"version":1,"secrets":{"allowedSources":["keychain","bogus"]}}"#.utf8))
+        {
+            Issue.record("unknown source kind was accepted")
+        }
     }
 
     @Test func rejectsTyposAndBadValues() {
@@ -69,8 +89,8 @@ struct ManagedPolicyTests {
         #expect(policy.mcpDecision(server: "fs", tool: "read") == .ask)
         #expect(policy.isServerBlocked("shell-runner"))
         #expect(policy.isServerBlocked("github") == false)
-        #expect(policy.allowsSecretSource("keychain"))
-        #expect(policy.allowsSecretSource("hostEnvironment") == false)
+        #expect(policy.allowsSecretSource(.keychain))
+        #expect(policy.allowsSecretSource(.hostEnvironment) == false)
     }
 
     @Test func argumentRulesSitBesideGlobsAndTheStrictestWins() throws {

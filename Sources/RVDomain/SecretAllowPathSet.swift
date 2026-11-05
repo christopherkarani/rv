@@ -10,15 +10,31 @@ public struct SecretAllowPathSet: Sendable, Equatable {
 
     public static let empty = SecretAllowPathSet(literals: [])
 
+    /// A spelling with a `..` component is never exempt: `fixtures/../.env`
+    /// names `.env`, not a file under an allowed `fixtures`. `.` components
+    /// are dropped, so `./.env` reads as `.env`.
     public func exempts(_ path: String, rule: SecretPathRule, home: HomePath? = nil) -> Bool {
-        guard rule.category != .host else { return false }
-        let candidate = Self.normalize(path, home: home)
+        guard rule.category != .host,
+              let candidate = Self.lexical(Self.normalize(path, home: home))
+        else { return false }
         for literal in literals {
-            if Self.covers(candidate: candidate, allow: Self.normalize(literal, home: home)) {
+            guard let allow = Self.lexical(Self.normalize(literal, home: home)) else { continue }
+            if Self.covers(candidate: candidate, allow: allow) {
                 return true
             }
         }
         return false
+    }
+
+    /// `path` without `.` components or repeated slashes; nil when it climbs
+    /// with `..`, which only the filesystem can settle.
+    static func lexical(_ path: String) -> String? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.contains("..") == false else { return nil }
+        let kept = parts.filter { $0 != "." }
+        let joined = kept.joined(separator: "/")
+        if path.hasPrefix("/") { return "/" + joined }
+        return joined.isEmpty ? path : joined
     }
 
     public static func normalize(_ path: String, home: HomePath?) -> String {

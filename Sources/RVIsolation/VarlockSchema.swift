@@ -249,11 +249,29 @@ public enum VarlockSchema {
         return nil
     }
 
+    /// A Varlock provider function and the `@init` decorator that configures it.
+    private enum Provider: String, CaseIterable {
+        case op, infisical, gsm, azureSecret, bitwarden, vaultSecret, awsSecret
+
+        var initDecorator: String {
+            switch self {
+            case .op: "initOp"
+            case .infisical: "initInfisical"
+            case .gsm: "initGsm"
+            case .azureSecret: "initAzure"
+            case .bitwarden: "initBitwarden"
+            case .vaultSecret: "initHcpVault"
+            case .awsSecret: "initAws"
+            }
+        }
+
+        static func isInitDecorator(_ name: String) -> Bool {
+            allCases.contains { $0.initDecorator == name }
+        }
+    }
+
     private static func rootDecorator(_ name: String) -> Bool {
-        [
-            "defaultSensitive", "disable", "plugin", "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws",
-            "initHcpVault", "initOp",
-        ].contains(name)
+        ["defaultSensitive", "disable", "plugin"].contains(name) || Provider.isInitDecorator(name)
     }
 
     private static func apply(_ found: [Decorator], to document: inout Document) {
@@ -267,7 +285,7 @@ public enum VarlockSchema {
                 case false?: .no
                 case nil: .conditional
                 }
-            case "initInfisical", "initGsm", "initAzure", "initBitwarden", "initAws", "initHcpVault", "initOp":
+            case _ where Provider.isInitDecorator(decorator.name):
                 let fields = if case .call(let found) = decorator.form { arguments(found) } else { Arguments() }
                 document.inits[decorator.name, default: []].append(Init(
                     decorator: decorator.name, id: fields.named["id"], fields: fields.named,
@@ -353,39 +371,28 @@ public enum VarlockSchema {
             call = found
         }
         guard call.arguments.hasReference == false else { throw Skip("an argument is a reference rv cannot resolve") }
-        let declared = inits[initName(call.name)] ?? []
-        switch call.name {
-        case "op": return try op(call, declared)
-        case "infisical": return try infisical(item, call, declared)
-        case "bitwarden":
+        guard let provider = Provider(rawValue: call.name) else {
+            if call.name == "awsParam" { throw Skip("rv has no AWS Parameter Store provider") }
+            throw unsupported
+        }
+        let declared = inits[provider.initDecorator] ?? []
+        switch provider {
+        case .op: return try op(call, declared)
+        case .infisical: return try infisical(item, call, declared)
+        case .bitwarden:
             guard let id = try instance(call, declared, maximum: 2).rest.first, SecretsDecoding.uuid(id) else {
                 throw unsupported
             }
             return Resolved(source: .bitwarden(id: id.lowercased()))
-        case "gsm":
+        case .gsm:
             let (config, rest) = try instance(call, declared, maximum: 2)
             let reference = rest.first ?? item.name
             let project = if reference.hasPrefix("projects/") { nil as String? } else { try config?.literal("projectId") }
             guard let resolved = gcp(reference, project: project) else { throw unsupported }
             return Resolved(source: resolved)
-        case "azureSecret": return try azureSecret(item, call, declared)
-        case "vaultSecret": return try vaultSecret(item, call, declared)
-        case "awsSecret": return try awsSecret(item, call, declared)
-        case "awsParam": throw Skip("rv has no AWS Parameter Store provider")
-        default: throw unsupported
-        }
-    }
-
-    private static func initName(_ call: String) -> String {
-        switch call {
-        case "op": "initOp"
-        case "infisical": "initInfisical"
-        case "gsm": "initGsm"
-        case "azureSecret": "initAzure"
-        case "bitwarden": "initBitwarden"
-        case "vaultSecret": "initHcpVault"
-        case "awsSecret": "initAws"
-        default: ""
+        case .azureSecret: return try azureSecret(item, call, declared)
+        case .vaultSecret: return try vaultSecret(item, call, declared)
+        case .awsSecret: return try awsSecret(item, call, declared)
         }
     }
 
@@ -400,7 +407,7 @@ public enum VarlockSchema {
         guard positional.count > 1 else {
             let config = declared.first { $0.id == nil }
             if config == nil, declared.isEmpty == false {
-                throw Skip("no @\(initName(call.name)) without an id; name the instance")
+                throw Skip("no @\(Provider(rawValue: call.name)?.initDecorator ?? "") without an id; name the instance")
             }
             return (config, positional)
         }

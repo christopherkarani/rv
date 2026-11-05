@@ -169,7 +169,7 @@ struct SecretDefinitionInvariantTests {
 
     @Test func everySourceCaseHasOneSampleAndTheKindListsAgree() {
         #expect(Self.samples.map(index) == Array(0..<11))
-        let kinds = Self.samples.map(\.kind)
+        let kinds = Self.samples.map(\.kind.rawValue)
         #expect(kinds.count == 11)
         #expect(Set(kinds) == Set(ManagedPolicy.secretSourceKinds))
         #expect(Set(kinds).count == ManagedPolicy.secretSourceKinds.count)
@@ -181,7 +181,7 @@ struct SecretDefinitionInvariantTests {
                 SecretDefinition(name: "A", source: source, delivery: delivery(for: source))
             ])
             let encoded = try entry(configuration)
-            #expect((encoded["source"] as? [String: Any])?.keys.sorted() == [source.kind])
+            #expect((encoded["source"] as? [String: Any])?.keys.sorted() == [source.kind.rawValue])
             #expect(try SecretsConfiguration.decode(configuration.encoded()).get() == configuration)
         }
     }

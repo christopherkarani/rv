@@ -62,12 +62,12 @@ struct FineTunedJudgeTests {
             let verdict = try judge.judge(row.text)
             var rowDrift = 0.0
             for (label, gp) in zip(golden.labels, row.probs) {
-                let d = abs((verdict.probabilities[label] ?? -1) - gp)
+                let d = abs((verdict.probabilities.first { $0.key.rawValue == label }?.value ?? -1) - gp)
                 rowDrift = max(rowDrift, d)
                 maxDrift = max(maxDrift, d)
             }
             worst.append((rowDrift, row.set, row.command))
-            if verdict.choice == Self.argmax(row.probs, labels: golden.labels) {
+            if verdict.choice.rawValue == Self.argmax(row.probs, labels: golden.labels) {
                 agree += 1
             }
         }
@@ -91,7 +91,7 @@ struct FineTunedJudgeTests {
             let rows = golden.rows.filter { $0.set == set }
             var held = 0, heldN = 0, kept = 0, keptN = 0
             for row in rows {
-                let pred = try judge.judge(row.text).choice
+                let pred = try judge.judge(row.text).choice.rawValue
                 let exp = row.expected
                 if exp == "review" || exp == "block" {
                     heldN += 1

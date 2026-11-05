@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVPolicy
 
 /// Where a secret's real value lives. rv reads it host-side and never stores it.
 public enum SecretSource: Sendable, Equatable {
@@ -32,19 +33,19 @@ public enum SecretSource: Sendable, Equatable {
     /// Keychain. Only `gateway` delivery spends it.
     case oauth(OAuthSource)
 
-    public var kind: String {
+    public var kind: SecretSourceKind {
         switch self {
-        case .keychain: "keychain"
-        case .hostEnvironment: "hostEnvironment"
-        case .onePassword: "onePassword"
-        case .vault: "vault"
-        case .awsSecretsManager: "awsSecretsManager"
-        case .infisical: "infisical"
-        case .bitwarden: "bitwarden"
-        case .gcp: "gcp"
-        case .azure: "azure"
-        case .awsProfile: "awsProfile"
-        case .oauth: "oauth"
+        case .keychain: .keychain
+        case .hostEnvironment: .hostEnvironment
+        case .onePassword: .onePassword
+        case .vault: .vault
+        case .awsSecretsManager: .awsSecretsManager
+        case .infisical: .infisical
+        case .bitwarden: .bitwarden
+        case .gcp: .gcp
+        case .azure: .azure
+        case .awsProfile: .awsProfile
+        case .oauth: .oauth
         }
     }
 }
@@ -435,28 +436,31 @@ enum SecretsDecoding {
     }
 
     static func source(_ value: Any?, secret: String) throws -> SecretSource {
-        let (kind, fields) = try single(value, secret: secret, field: "source")
-        let place = "\(secret).source.\(kind)"
+        let (name, fields) = try single(value, secret: secret, field: "source")
+        guard let kind = SecretSourceKind(rawValue: name) else {
+            throw Failure("\(secret).source kind \(DisplayedText.field(name)) is not supported")
+        }
+        let place = "\(secret).source.\(name)"
         switch kind {
-        case "keychain":
+        case .keychain:
             try onlyKeys(fields, ["service", "account"], at: place)
             guard let service = fields["service"] as? String, label(service, max: 256),
                 let account = fields["account"] as? String, label(account, max: 256)
             else { throw Failure("\(place) needs service and account") }
             return .keychain(service: service, account: account)
-        case "hostEnvironment":
+        case .hostEnvironment:
             try onlyKeys(fields, ["variable"], at: place)
             guard let variable = fields["variable"] as? String, self.variable(variable) else {
                 throw Failure("\(place).variable must be an environment variable name")
             }
             return .hostEnvironment(variable: variable)
-        case "onePassword":
+        case .onePassword:
             try onlyKeys(fields, ["reference"], at: place)
             guard let reference = fields["reference"] as? String, reference.hasPrefix("op://"),
                 label(reference, max: 512), reference.contains(" ") == false
             else { throw Failure("\(place).reference must be an op:// reference") }
             return .onePassword(reference: reference)
-        case "vault":
+        case .vault:
             try onlyKeys(fields, ["path", "field", "address"], at: place)
             guard let path = fields["path"] as? String, vaultPath(path),
                 let field = fields["field"] as? String, label(field, max: 128)
@@ -469,7 +473,7 @@ enum SecretsDecoding {
                 address = url
             }
             return .vault(path: path, field: field, address: address)
-        case "awsSecretsManager":
+        case .awsSecretsManager:
             try onlyKeys(fields, ["secretID", "field", "region"], at: place)
             guard let secretID = fields["secretID"] as? String, label(secretID, max: 512),
                 secretID.hasPrefix("-") == false
@@ -485,7 +489,7 @@ enum SecretsDecoding {
                 region = text
             }
             return .awsSecretsManager(secretID: secretID, field: field, region: region)
-        case "infisical":
+        case .infisical:
             try onlyKeys(fields, ["name", "project", "environment", "path"], at: place)
             guard let secretName = fields["name"] as? String, cliToken(secretName) else {
                 throw Failure("\(place).name is required")
@@ -494,13 +498,13 @@ enum SecretsDecoding {
             let environment = try optionalToken(fields["environment"], "\(place).environment")
             let path = try optionalToken(fields["path"], "\(place).path")
             return .infisical(name: secretName, project: project, environment: environment, path: path)
-        case "bitwarden":
+        case .bitwarden:
             try onlyKeys(fields, ["id"], at: place)
             guard let id = fields["id"] as? String, uuid(id) else {
                 throw Failure("\(place).id must be a UUID")
             }
             return .bitwarden(id: id.lowercased())
-        case "gcp":
+        case .gcp:
             try onlyKeys(fields, ["secret", "project", "version"], at: place)
             guard let secretName = fields["secret"] as? String, cliToken(secretName) else {
                 throw Failure("\(place).secret is required")
@@ -509,20 +513,20 @@ enum SecretsDecoding {
             let version = (fields["version"] as? String) ?? "latest"
             guard cliToken(version) else { throw Failure("\(place).version is invalid") }
             return .gcp(secret: secretName, project: project, version: version)
-        case "azure":
+        case .azure:
             try onlyKeys(fields, ["vault", "name", "version"], at: place)
             guard let vault = fields["vault"] as? String, cliToken(vault),
                 let secretName = fields["name"] as? String, cliToken(secretName)
             else { throw Failure("\(place) needs vault and name") }
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
-        case "awsProfile":
+        case .awsProfile:
             try onlyKeys(fields, ["profile"], at: place)
             guard let profile = fields["profile"] as? String, profile.utf8.count <= 64, profile.hasPrefix("-") == false,
                 profile.isEmpty == false, profile.utf8.allSatisfy({ placeholderByte($0) || $0 == 46 })
             else { throw Failure("\(place).profile must be an AWS profile name: letters, digits, ., _ or -") }
             return .awsProfile(profile: profile)
-        case "oauth":
+        case .oauth:
             try onlyKeys(fields, ["tokenURL", "clientID", "clientSecret", "refreshToken", "scope"], at: place)
             guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
                 throw Failure("\(place).tokenURL must be an https URL with no query")
@@ -545,8 +549,6 @@ enum SecretsDecoding {
             return .oauth(OAuthSource(
                 tokenURL: tokenURL, clientID: clientID, clientSecret: clientSecret, refreshToken: refreshToken,
                 scope: scope))
-        default:
-            throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
     }
 

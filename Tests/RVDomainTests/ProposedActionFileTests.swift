@@ -62,7 +62,7 @@ struct ProposedActionFileTests {
         )
         let sanitized = ReviewSanitizer.sanitize(dirty)
         guard case .file(let cleaned) = sanitized else {
-            Issue.record("expected ProposedAction.file after sanitize")
+            Issue.record("expected RedactedAction.file after sanitize")
             return
         }
         #expect(cleaned.file.path.rawValue.contains("ghp_exampletoken") == false)
@@ -71,7 +71,7 @@ struct ProposedActionFileTests {
         } else {
             Issue.record("expected filesystem resources after sanitize")
         }
-        #expect(cleaned.fingerprint.rawValue.contains("ghp_exampletoken") == false)
+        #expect(cleaned.fingerprintText.contains("ghp_exampletoken") == false)
         #expect(cleaned.file.path.rawValue.contains(ReviewSanitizer.redactedPlaceholder))
         #expect(
             cleaned.resources

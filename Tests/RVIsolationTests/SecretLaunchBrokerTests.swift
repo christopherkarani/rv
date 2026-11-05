@@ -214,7 +214,7 @@ struct SecretLaunchBrokerTests {
         #expect(gatewayOnly.liveCount == 0)
 
         policy = ManagedPolicy()
-        policy.secrets.allowedSources = ["keychain"]
+        policy.secrets.allowedSources = [.keychain]
         let keychainOnly = broker(.active(ManagedPolicyBundle(policy: policy, sha256: "", isSigned: false, directory: "")))
         #expect(throws: SecretLeaseError.organizationPolicy(
             "OPENAI_API_KEY uses a hostEnvironment source, which is not allowed")) {

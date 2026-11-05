@@ -51,16 +51,17 @@ struct CanonicalActionDigestTests {
     }
 
     @Test func colonSplitCollisionDistinguished() {
-        // Legacy shell spelling `host:session:cwd:command` collides here:
-        // cwd="a:b" + command="c" versus cwd="a" + command="b:c" spell the
-        // same fingerprint string. The canonical digest must not.
-        let legacyLeft = ActionFingerprint.make(
+        // The raw `host:session:cwd:command` spelling once collided here
+        // (cwd="a:b" + command="c" versus cwd="a" + command="b:c"); the
+        // injective fingerprint encoder and the canonical digest both
+        // distinguish them now.
+        let rawLeft = ActionFingerprint.make(
             host: .opencode, session: nil,
             cwd: WorkingDirectory(rawValue: "a:b"), command: ShellCommand(rawValue: "c"))
-        let legacyRight = ActionFingerprint.make(
+        let rawRight = ActionFingerprint.make(
             host: .opencode, session: nil,
             cwd: WorkingDirectory(rawValue: "a"), command: ShellCommand(rawValue: "b:c"))
-        #expect(legacyLeft == legacyRight)
+        #expect(rawLeft != rawRight)
         #expect(
             CanonicalActionDigest.sha256Hex(of: shell("c", cwd: "a:b"))
                 != CanonicalActionDigest.sha256Hex(of: shell("b:c", cwd: "a")))
@@ -68,14 +69,14 @@ struct CanonicalActionDigestTests {
 
     @Test func sessionSplitCollisionDistinguished() {
         // Same flaw through the session slot: session="s:x" + cwd="w" versus
-        // session="s" + cwd="x:w" spell the same legacy string.
-        let legacyLeft = ActionFingerprint.make(
+        // session="s" + cwd="x:w" once spelled the same string.
+        let rawLeft = ActionFingerprint.make(
             host: .opencode, session: SessionID(validating: "s:x"),
             cwd: WorkingDirectory(rawValue: "w"), command: ShellCommand(rawValue: "c"))
-        let legacyRight = ActionFingerprint.make(
+        let rawRight = ActionFingerprint.make(
             host: .opencode, session: SessionID(validating: "s"),
             cwd: WorkingDirectory(rawValue: "x:w"), command: ShellCommand(rawValue: "c"))
-        #expect(legacyLeft == legacyRight)
+        #expect(rawLeft != rawRight)
     }
 
     @Test func fileKindDistinguishes() {

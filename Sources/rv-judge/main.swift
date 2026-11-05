@@ -91,7 +91,7 @@ do {
             let verdict = try runJudge(command)
             var row: [String: Any] = [
                 "command": command,
-                "choice": verdict.choice,
+                "choice": verdict.choice.rawValue,
                 "action": verdict.action().rawValue,
                 "risk": (verdict.risk * 1000).rounded() / 1000,
                 "malicious": (verdict.malicious * 10000).rounded() / 10000,
@@ -100,7 +100,7 @@ do {
                 "checkpoint": verdict.checkpoint,
             ]
             if verdict.truncated { row["truncated"] = true }
-            row["probabilities"] = verdict.probabilities.mapValues { ($0 * 10000).rounded() / 10000 }
+            row["probabilities"] = Dictionary(uniqueKeysWithValues: verdict.probabilities.map { ($0.key.rawValue, ($0.value * 10000).rounded() / 10000) })
             let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))
         } catch {
