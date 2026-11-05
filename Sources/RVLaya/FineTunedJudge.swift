@@ -75,7 +75,7 @@ public final class FineTunedJudge: @unchecked Sendable {
     let model: MLModel
     let tokenizer: LayaTokenizer
     public let checkpoint: String
-    public let labels: [String]
+    public let labels: [LayaVerdict.Action]
     let maxLen: Int
     let lengths: [Int]
     let lock = NSLock()
@@ -99,10 +99,15 @@ public final class FineTunedJudge: @unchecked Sendable {
         var lengths = [16, 32, 64, 96, 128, 192, 256, 384, 512]
         var checkpoint = "laya-ft-v2-fp16"
         let configURL = bundleDir.appendingPathComponent("config.json")
-        if let data = try? Data(contentsOf: configURL),
-           let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let l = cfg["logit_order"] as? [String], l.count == 3 { labels = l }
-            else if let l = cfg["labels"] as? [String], l.count == 3 { labels = l }
+        // Absent config keeps the shipped defaults. A present config that
+        // cannot be read, or whose label order is not a valid permutation,
+        // is a bad bundle: guessing the order could read block as allow.
+        if fm.fileExists(atPath: configURL.path) {
+            guard let data = try? Data(contentsOf: configURL),
+                  let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw LayaError.badBundle("config.json unreadable in \(bundleDir.path)")
+            }
+            if let l = try LayaVerdict.Action.configLabels(cfg) { labels = l.map(\.rawValue) }
             if let m = (cfg["max_len"] as? NSNumber)?.intValue { maxLen = m }
             if let ls = cfg["lengths"] as? [NSNumber] {
                 let parsed = ls.map(\.intValue).filter { $0 > 0 }.sorted()
@@ -113,9 +118,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         // Unknown or permuted-to-wrong-meaning labels must never load:
         // probabilities are read by label name, so a label set without
         // exactly allow/review/block would silently score risk 0.
-        guard labels.count == 3, Set(labels) == ["allow", "review", "block"] else {
-            throw LayaError.badBundle("config labels are not exactly allow/review/block")
-        }
+        let parsedLabels = try LayaVerdict.Action.parse(labels: labels)
         guard (16...8192).contains(maxLen) else {
             throw LayaError.badBundle("implausible max_len in config.json")
         }
@@ -123,7 +126,7 @@ public final class FineTunedJudge: @unchecked Sendable {
         guard !validLengths.isEmpty else {
             throw LayaError.badBundle("no usable lengths in config.json")
         }
-        self.labels = labels
+        self.labels = parsedLabels
         self.maxLen = maxLen
         self.lengths = validLengths
         self.checkpoint = checkpoint
@@ -188,15 +191,15 @@ public final class FineTunedJudge: @unchecked Sendable {
         let total = exps.reduce(0, +)
         let probs = exps.map { $0 / max(total, .leastNonzeroMagnitude) }
 
-        var probabilities: [String: Double] = [:]
+        var probabilities: [LayaVerdict.Action: Double] = [:]
         for (label, p) in zip(labels, probs) { probabilities[label] = p }
-        let choice = labels.enumerated().max { probs[$0.offset] < probs[$1.offset] }?.element ?? "review"
+        let choice = labels.enumerated().max { probs[$0.offset] < probs[$1.offset] }?.element ?? .review
 
         // Single-pass head: no separate risk/malicious questions. Risk keeps
         // the laya-guard formula; malicious is P(block) by definition here.
         let risk = min(1.0, max(0.0,
-            (probabilities["block"] ?? 0) + 0.5 * (probabilities["review"] ?? 0)))
-        let malicious = probabilities["block"] ?? 0
+            (probabilities[.block] ?? 0) + 0.5 * (probabilities[.review] ?? 0)))
+        let malicious = probabilities[.block] ?? 0
         guard risk.isFinite, malicious.isFinite else {
             throw LayaError.predictionFailed("non-finite verdict")
         }
