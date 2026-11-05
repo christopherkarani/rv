@@ -460,7 +460,8 @@ struct LinuxResidualCoverageTests {
         #expect(
             ActionPolicyEngine.evaluate(
                 action: writeInside,
-                context: ReviewContext(repository: RepositoryReviewContext())
+                context: ReviewContext(repository: RepositoryReviewContext()),
+                gitWorld: .probed(.empty)
             ).decision == .hardAllow
         )
     }
