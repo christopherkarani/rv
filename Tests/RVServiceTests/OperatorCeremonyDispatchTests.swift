@@ -29,7 +29,7 @@ struct OperatorCeremonyDispatchTests {
     private func params() -> ProposeLaunchParams {
         ProposeLaunchParams(
             workspace: "/tmp/proj", hostID: UUID(), workspaceSessionID: UUID(),
-            kind: "custom", executable: "/bin/echo",
+            kind: .custom, executable: "/bin/echo",
             expectedDigest: String(repeating: "a", count: 64))
     }
 
@@ -53,7 +53,7 @@ struct OperatorCeremonyDispatchTests {
         let runtime = ServiceRuntime()
         let bad = ProposeLaunchParams(
             workspace: "", hostID: UUID(), workspaceSessionID: UUID(),
-            kind: "custom", executable: "/bin/echo",
+            kind: .custom, executable: "/bin/echo",
             expectedDigest: String(repeating: "a", count: 64))
         let response = await runtime.dispatch(
             IPCRequest(method: .proposeWorkspaceLaunch(bad)),

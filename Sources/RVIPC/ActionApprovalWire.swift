@@ -42,7 +42,7 @@ public enum HostActionApprovalWire {
 public struct HostActionApprovalCreateDTO: Sendable, Equatable, Codable {
     public let reference: AgentPrincipalReference
     public let action: ProposedAction
-    public let reason: String
+    public let reason: RuntimeAskReason
     public let policyContext: String
     public let definitionID: AgentDefinitionID
     public let definitionRevision: AgentDefinitionRevision
@@ -50,7 +50,7 @@ public struct HostActionApprovalCreateDTO: Sendable, Equatable, Codable {
     public init(
         reference: AgentPrincipalReference,
         action: ProposedAction,
-        reason: String,
+        reason: RuntimeAskReason,
         policyContext: String,
         definitionID: AgentDefinitionID,
         definitionRevision: AgentDefinitionRevision

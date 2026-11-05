@@ -7,7 +7,7 @@ import RVPolicy
 import Synchronization
 
 private struct Reply {
-    var message: WorkspaceControlResponse
+    var message: WorkspaceControlResponseFrame
     var endConnection = false
     var retire = false
     /// Runs after the reply frame is written, so streamed bytes cannot precede it.
@@ -71,8 +71,8 @@ private final class WorkspaceControlConnection: Sendable {
         flags.withLock { $0.hello = true }
     }
 
-    func send(_ message: WorkspaceControlResponse) -> Bool {
-        guard let body = message.encode() else { return false }
+    func send(_ message: WorkspaceControlResponseFrame) -> Bool {
+        guard let body = WorkspaceControlCodec.encodeResponse(message) else { return false }
         let fd = flags.withLock { flags -> Int32 in
             guard flags.closed == false, flags.fd >= 0 else { return -1 }
             return Darwin.dup(flags.fd)
@@ -338,12 +338,12 @@ final class WorkspaceHostServer: Sendable {
         guard let peer = try? WorkspacePeerAuthenticator.capture(fd: fd, trust: trust),
             peer.effectiveUserID == getuid(), peer.componentRole != nil
         else {
-            let refusal = WorkspaceControlResponse.failure(
+            let refusal = WorkspaceControlResponseFrame.failure(
                 id: nil,
                 operation: .hello,
                 code: .unauthorizedClient
             )
-            if let body = refusal.encode() {
+            if let body = WorkspaceControlCodec.encodeResponse(refusal) {
                 _ = WorkspaceControlSocket.writeFrame(fd: fd, body: body)
             }
             Darwin.close(fd)
@@ -402,10 +402,10 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func respond(_ body: Data, connection: WorkspaceControlConnection) -> Reply {
-        switch WorkspaceControlRequest.decode(body) {
+        switch WorkspaceControlCodec.decodeRequest(body) {
         case .incompatible:
             return Reply(
-                message: WorkspaceControlResponse.failure(
+                message: WorkspaceControlResponseFrame.failure(
                     id: nil,
                     operation: .hello,
                     code: .incompatibleProtocol
@@ -414,16 +414,16 @@ final class WorkspaceHostServer: Sendable {
             )
         case .invalid:
             return Reply(
-                message: WorkspaceControlResponse.failure(
+                message: WorkspaceControlResponseFrame.failure(
                     id: nil,
                     operation: .ping,
                     code: .invalidRequest
                 )
             )
-        case .request(let message):
+        case .frame(let message):
             guard message.id != nil else {
                 return Reply(
-                    message: WorkspaceControlResponse.failure(
+                    message: WorkspaceControlResponseFrame.failure(
                         request: message,
                         code: .invalidRequest
                     )
@@ -437,14 +437,14 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func hello(
-        _ message: WorkspaceControlRequest,
+        _ message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard message.operation == .hello,
-            message.token == credential.token
+        guard case .hello(let hello) = message.payload,
+            hello.token == credential.token
         else {
             return Reply(
-                message: WorkspaceControlResponse.failure(
+                message: WorkspaceControlResponseFrame.failure(
                     id: message.id,
                     operation: .hello,
                     code: .unauthorizedClient
@@ -454,18 +454,19 @@ final class WorkspaceHostServer: Sendable {
         }
         connection.markHello()
         return Reply(
-            message: WorkspaceControlResponse(
-                operation: .hello,
+            message: WorkspaceControlResponseFrame(
                 id: message.id,
                 ok: true,
-                workspace: supervisor.id.rawValue,
-                host: hostID.rawValue
+                payload: .hello(.init(
+                    workspace: supervisor.id.rawValue,
+                    host: hostID.rawValue
+                ))
             )
         )
     }
 
     private func operation(
-        _ message: WorkspaceControlRequest,
+        _ message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
         guard let op = message.operation else {
@@ -474,25 +475,23 @@ final class WorkspaceHostServer: Sendable {
         guard WorkspaceOperationAuthorization.permits(op, peer: connection.peer) else {
             return Reply(message: failure(message, .unauthorizedClient))
         }
-        switch op {
-        case .hello:
+        switch message.payload {
+        case .hello, .unsupported, .unknown:
             return Reply(message: failure(message, .invalidRequest))
         case .capabilities:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: op,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
                     ok: true,
-                    features: advertisedFeatures
+                    payload: .capabilities(.init(features: advertisedFeatures))
                 )
             )
         case .ping:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: op,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
                     ok: true,
-                    host: hostID.rawValue
+                    payload: .ping(.init(host: hostID.rawValue))
                 )
             )
         case .describeWorkspace:
@@ -506,33 +505,29 @@ final class WorkspaceHostServer: Sendable {
             return close(message, connection: connection)
         case .detach:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: op,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    ok: true
+                    ok: true,
+                    payload: .detach
                 ),
                 endConnection: true
             )
-        case .workspaceClosed, .terminalReplayBegin, .terminalReplay, .terminalReplayEnd,
-            .terminalOutput, .terminalInputOwner, .terminalWindow,
-            .runtimeExited, .terminalOverflow:
-            return Reply(message: failure(message, .invalidRequest))
-        case .subscribeTerminal:
-            return subscribe(message, connection: connection)
-        case .unsubscribeTerminal:
-            return unsubscribe(message, connection: connection)
-        case .terminalInput:
-            return input(message, connection: connection)
-        case .acquireTerminalInput:
-            return acquire(message, connection: connection)
-        case .releaseTerminalInput:
-            return release(message, connection: connection)
-        case .resizeTerminal:
-            return resize(message, connection: connection)
+        case .subscribeTerminal(let fields):
+            return subscribe(fields, request: message, connection: connection)
+        case .unsubscribeTerminal(let fields):
+            return unsubscribe(fields, request: message, connection: connection)
+        case .terminalInput(let fields):
+            return input(fields, request: message, connection: connection)
+        case .acquireTerminalInput(let fields):
+            return acquire(fields, request: message, connection: connection)
+        case .releaseTerminalInput(let fields):
+            return release(fields, request: message, connection: connection)
+        case .resizeTerminal(let fields):
+            return resize(fields, request: message, connection: connection)
         }
     }
 
-    private func describe(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+    private func describe(_ message: WorkspaceControlRequestFrame) -> WorkspaceControlResponseFrame {
         let snapshot = supervisor.snapshot
         guard snapshot.originalPath.rawValue.utf8.count <= WorkspaceControlLimits.maxProjectBytes else {
             return failure(message, .invalidRequest)
@@ -540,29 +535,29 @@ final class WorkspaceHostServer: Sendable {
         let attached = registry.withLock { state in
             state.connections.values.filter(\.isHello).count
         }
-        return WorkspaceControlResponse(
-            operation: .describeWorkspace,
+        return WorkspaceControlResponseFrame(
             id: message.id,
             ok: true,
-            workspace: snapshot.id.rawValue,
-            host: hostID.rawValue,
-            phase: snapshot.phase.rawValue,
-            project: snapshot.originalPath.rawValue,
-            attached: attached
+            payload: .describeWorkspace(.init(
+                workspace: snapshot.id.rawValue,
+                host: hostID.rawValue,
+                phase: snapshot.phase.rawValue,
+                project: snapshot.originalPath.rawValue,
+                attached: attached
+            ))
         )
     }
 
-    private func list(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+    private func list(_ message: WorkspaceControlRequestFrame) -> WorkspaceControlResponseFrame {
         supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
         let facts = supervisor.runtimeFacts()
         guard facts.count <= WorkspaceControlLimits.maxRuntimes else {
             return failure(message, .runtimeLimit)
         }
-        return WorkspaceControlResponse(
-            operation: .listRuntimes,
+        return WorkspaceControlResponseFrame(
             id: message.id,
             ok: true,
-            runtimes: facts.map {
+            payload: .listRuntimes(.init(runtimes: facts.map {
                 WorkspaceRuntimeReport(
                     runtime: $0.id,
                     hook: $0.hookHost,
@@ -572,14 +567,14 @@ final class WorkspaceHostServer: Sendable {
                     columns: $0.columns,
                     inputOwner: $0.inputOwner
                 )
-            }
+            }))
         )
     }
 
-    /// Typed launch-family dispatch. The parse layer validates the
-    /// request; the inner switch routes fully-validated payloads to the
-    /// per-op cores. Unmigrated ops never reach here.
-    private func launchFamily(_ message: WorkspaceControlRequest) -> Reply {
+    /// Launch-family dispatch. The parse layer validates the op's
+    /// payload; the switch routes fully-validated payloads to the
+    /// per-op cores. Other ops never reach here.
+    private func launchFamily(_ message: WorkspaceControlRequestFrame) -> Reply {
         // Phase gate sits exactly where the legacy handlers gated: launch
         // and ensure refuse a non-accepting workspace before validating;
         // cancel and the identity door never gated on phase. Ensure
@@ -594,41 +589,50 @@ final class WorkspaceHostServer: Sendable {
                 ))
             }
         }
-        let context = WorkspaceControlLaunchRequest.Context(
-            resourcePolicy: resourcePolicy,
-            project: supervisor.snapshot.originalPath.rawValue
-        )
-        guard let parsed = WorkspaceControlLaunchRequest.parse(message, context: context) else {
-            // Unreachable: the caller matched a launch-family op.
-            return Reply(message: failure(message, .invalidRequest))
-        }
-        switch parsed {
-        case .failure(let code):
-            return Reply(message: failure(message, code))
-        case .success(let typed):
-            switch typed {
-            case .launchRuntime(let payload):
+        switch message.payload {
+        case .launchRuntime(let fields):
+            switch LaunchRuntimePayload.parse(
+                fields,
+                resourcePolicy: resourcePolicy,
+                project: supervisor.snapshot.originalPath.rawValue
+            ) {
+            case .failure(let code):
+                return Reply(message: failure(message, code))
+            case .success(let payload):
                 return Reply(message: launchCore(
                     payload,
                     request: message,
                     responseOp: .launchRuntime
                 ))
-            case .launchAgentRuntime, .launchCustomRuntime:
-                // The parse above constructed the op payload (documenting
-                // its contract), but the deny door consumes no fields:
-                // any request, valid or not, is denied identically.
-                return Reply(message: failure(message, .requiresOperatorPermit))
-            case .ensureTerminalRuntime(let payload):
+            }
+        case .launchAgentRuntime, .launchCustomRuntime:
+            // The payload documents the op's contract, but the deny door
+            // consumes no fields: any request, valid or not, is denied
+            // identically.
+            return Reply(message: failure(message, .requiresOperatorPermit))
+        case .ensureTerminalRuntime(let fields):
+            switch EnsureTerminalRuntimePayload.parse(fields) {
+            case .failure(let code):
+                return Reply(message: failure(message, code))
+            case .success(let payload):
                 return Reply(message: ensureCore(payload, request: message))
-            case .cancelRuntime(let payload):
+            }
+        case .cancelRuntime(let fields):
+            switch CancelRuntimePayload.parse(fields) {
+            case .failure(let code):
+                return Reply(message: failure(message, code))
+            case .success(let payload):
                 return Reply(message: cancelCore(payload, request: message))
             }
+        default:
+            // Unreachable: the caller matched a launch-family op.
+            return Reply(message: failure(message, .invalidRequest))
         }
     }
 
     /// Internal for direct-handler tests: exercises the
     /// wire-to-supervisor wiring without socket peer authentication.
-    func ensureTerminalRuntime(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+    func ensureTerminalRuntime(_ message: WorkspaceControlRequestFrame) -> WorkspaceControlResponseFrame {
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
 
@@ -636,7 +640,10 @@ final class WorkspaceHostServer: Sendable {
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
         }
-        switch EnsureTerminalRuntimePayload.parse(message) {
+        guard case .ensureTerminalRuntime(let fields) = message.payload else {
+            return failure(message, .invalidRequest)
+        }
+        switch EnsureTerminalRuntimePayload.parse(fields) {
         case .failure(let code):
             return failure(message, code)
         case .success(let payload):
@@ -646,8 +653,8 @@ final class WorkspaceHostServer: Sendable {
 
     private func ensureCore(
         _ payload: EnsureTerminalRuntimePayload,
-        request: WorkspaceControlRequest
-    ) -> WorkspaceControlResponse {
+        request: WorkspaceControlRequestFrame
+    ) -> WorkspaceControlResponseFrame {
         ensureLockArrivals.withLock { $0 += 1 }
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
@@ -656,8 +663,8 @@ final class WorkspaceHostServer: Sendable {
 
     private func ensureLocked(
         _ payload: EnsureTerminalRuntimePayload,
-        request: WorkspaceControlRequest
-    ) -> WorkspaceControlResponse {
+        request: WorkspaceControlRequestFrame
+    ) -> WorkspaceControlResponseFrame {
         // Close flips the phase before it stops children, and it does not
         // take this lock. A request that already passed the pre-parse gate
         // can be blocked here and resume in `.closing` while the terminal
@@ -685,18 +692,19 @@ final class WorkspaceHostServer: Sendable {
             .sorted(by: { $0.id.uuidString < $1.id.uuidString })
             .first
         {
-            return WorkspaceControlResponse(
-                operation: .ensureTerminalRuntime,
+            return WorkspaceControlResponseFrame(
                 id: request.id,
-                runtime: existing.id,
-                hook: existing.hookHost,
                 ok: true,
-                running: true,
-                rows: existing.rows,
-                columns: existing.columns,
-                terminal: true,
-                inputOwner: existing.inputOwner,
-                created: false
+                payload: .ensureTerminalRuntime(.init(
+                    runtime: existing.id,
+                    hook: existing.hookHost,
+                    running: true,
+                    rows: existing.rows,
+                    columns: existing.columns,
+                    terminal: true,
+                    inputOwner: existing.inputOwner,
+                    created: false
+                ))
             )
         }
         return launch(request, responseOp: .ensureTerminalRuntime)
@@ -705,15 +713,24 @@ final class WorkspaceHostServer: Sendable {
     /// Internal for the Step 8 direct-handler test: exercises the
     /// wire-to-supervisor wiring without socket peer authentication.
     func launch(
-        _ message: WorkspaceControlRequest,
+        _ message: WorkspaceControlRequestFrame,
         responseOp: WorkspaceControlOp = .launchRuntime
-    ) -> WorkspaceControlResponse {
+    ) -> WorkspaceControlResponseFrame {
         let phase = supervisor.snapshot.phase
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
         }
+        // Creation from `ensureLocked` re-enters here with the ensure
+        // frame; both ops carry the same launch fields.
+        let fields: WorkspaceControlRequestPayload.Launch
+        switch message.payload {
+        case .launchRuntime(let launch), .ensureTerminalRuntime(let launch):
+            fields = launch
+        default:
+            return failure(message, .invalidRequest)
+        }
         switch LaunchRuntimePayload.parse(
-            message,
+            fields,
             resourcePolicy: resourcePolicy,
             project: supervisor.snapshot.originalPath.rawValue
         ) {
@@ -726,9 +743,9 @@ final class WorkspaceHostServer: Sendable {
 
     private func launchCore(
         _ payload: LaunchRuntimePayload,
-        request: WorkspaceControlRequest,
+        request: WorkspaceControlRequestFrame,
         responseOp: WorkspaceControlOp
-    ) -> WorkspaceControlResponse {
+    ) -> WorkspaceControlResponseFrame {
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         let result = supervisor.launchLegacy(
             host: payload.hook,
@@ -745,9 +762,9 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func launchResponse(
-        _ message: WorkspaceControlRequest, responseOp: WorkspaceControlOp, io: IsolatedIO,
+        _ message: WorkspaceControlRequestFrame, responseOp: WorkspaceControlOp, io: IsolatedIO,
         result: Result<RunningRuntime, WorkspaceSessionError>
-    ) -> WorkspaceControlResponse {
+    ) -> WorkspaceControlResponseFrame {
         switch result {
         case .failure(.apply(.resourceStagingFailed(let detail))):
             return failure(message, .resourceStagingFailed, detail: detail)
@@ -768,18 +785,22 @@ final class WorkspaceHostServer: Sendable {
                 launchedRows = nil
                 launchedColumns = nil
             }
-            return WorkspaceControlResponse(
-                operation: responseOp,
-                id: message.id,
+            let launched = WorkspaceControlResponsePayload.Launch(
                 runtime: running.id.rawValue,
                 hook: running.session.host?.rawValue,
-                ok: true,
                 running: fact?.running ?? true,
                 rows: fact?.rows ?? launchedRows,
                 columns: fact?.columns ?? launchedColumns,
                 terminal: (fact?.terminal ?? false) || launchedTerminal,
                 inputOwner: fact?.inputOwner ?? false,
                 created: responseOp == .ensureTerminalRuntime ? true : nil
+            )
+            return WorkspaceControlResponseFrame(
+                id: message.id,
+                ok: true,
+                payload: responseOp == .ensureTerminalRuntime
+                    ? .ensureTerminalRuntime(launched)
+                    : .launchRuntime(launched)
             )
         }
     }
@@ -822,20 +843,21 @@ final class WorkspaceHostServer: Sendable {
     /// `requiresOperatorPermit` code instead of spawning. The
     /// authorization fence above denies these ops first, so this denial
     /// is defense in depth. Internal so tests pin the invariant.
-    func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+    func launchIdentity(_ message: WorkspaceControlRequestFrame) -> WorkspaceControlResponseFrame {
         failure(message, .requiresOperatorPermit)
     }
 
     private func subscribe(
-        _ message: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.Subscribe,
+        request message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime else {
+        guard let runtime = fields.runtime else {
             return Reply(message: failure(message, .invalidRequest))
         }
         let client = connection.id
-        let windowNotices = message.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
-        let replayBatches = message.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
+        let windowNotices = fields.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
+        let replayBatches = fields.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
         switch supervisor.subscribeTerminal(
             runtime: runtime, client: client,
             emit: { notice in
@@ -849,14 +871,15 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             let window = supervisor.terminalWindow(runtime: runtime)
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .subscribeTerminal,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    runtime: runtime,
                     ok: true,
-                    rows: window?.rows,
-                    columns: window?.columns,
-                    terminal: true
+                    payload: .subscribeTerminal(.init(
+                        runtime: runtime,
+                        rows: window?.rows,
+                        columns: window?.columns,
+                        terminal: true
+                    ))
                 ),
                 afterSend: { [supervisor] in
                     supervisor.activateTerminal(runtime: runtime, client: client)
@@ -866,10 +889,11 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func unsubscribe(
-        _ message: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.RuntimeRef,
+        request message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime else {
+        guard let runtime = fields.runtime else {
             return Reply(message: failure(message, .invalidRequest))
         }
         switch supervisor.unsubscribeTerminal(runtime: runtime, client: connection.id) {
@@ -877,21 +901,21 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .unsubscribeTerminal,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    runtime: runtime,
-                    ok: true
+                    ok: true,
+                    payload: .unsubscribeTerminal(.init(runtime: runtime))
                 )
             )
         }
     }
 
     private func input(
-        _ message: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.TerminalInput,
+        request message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime, let encoded = message.bytes,
+        guard let runtime = fields.runtime, let encoded = fields.bytes,
             let data = TerminalBytesCodec.decode(encoded, maximum: TerminalStreamLimits.maximumInputBytes),
             data.isEmpty == false
         else {
@@ -902,21 +926,21 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .terminalInput,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    runtime: runtime,
-                    ok: true
+                    ok: true,
+                    payload: .terminalInput(.init(runtime: runtime))
                 )
             )
         }
     }
 
     private func acquire(
-        _ message: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.RuntimeRef,
+        request message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime else {
+        guard let runtime = fields.runtime else {
             return Reply(message: failure(message, .invalidRequest))
         }
         switch supervisor.acquireTerminalInput(runtime: runtime, client: connection.id) {
@@ -924,22 +948,21 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .acquireTerminalInput,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    runtime: runtime,
                     ok: true,
-                    inputOwner: true
+                    payload: .acquireTerminalInput(.init(runtime: runtime, inputOwner: true))
                 )
             )
         }
     }
 
     private func release(
-        _ message: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.RuntimeRef,
+        request message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime else {
+        guard let runtime = fields.runtime else {
             return Reply(message: failure(message, .invalidRequest))
         }
         switch supervisor.releaseTerminalInput(runtime: runtime, client: connection.id) {
@@ -947,22 +970,21 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .releaseTerminalInput,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    runtime: runtime,
                     ok: true,
-                    inputOwner: false
+                    payload: .releaseTerminalInput(.init(runtime: runtime, inputOwner: false))
                 )
             )
         }
     }
 
     private func resize(
-        _ message: WorkspaceControlRequest,
+        _ fields: WorkspaceControlRequestPayload.Resize,
+        request message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime, let rows = message.rows, let columns = message.columns else {
+        guard let runtime = fields.runtime, let rows = fields.rows, let columns = fields.columns else {
             return Reply(message: failure(message, .invalidRequest))
         }
         switch supervisor.resizeTerminal(runtime: runtime, client: connection.id, rows: rows, columns: columns) {
@@ -970,13 +992,10 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .resizeTerminal,
+                message: WorkspaceControlResponseFrame(
                     id: message.id,
-                    runtime: runtime,
                     ok: true,
-                    rows: rows,
-                    columns: columns
+                    payload: .resizeTerminal(.init(runtime: runtime, rows: rows, columns: columns))
                 )
             )
         }
@@ -984,8 +1003,11 @@ final class WorkspaceHostServer: Sendable {
 
     /// Internal for direct-handler tests: exercises the
     /// wire-to-supervisor wiring without socket peer authentication.
-    func cancel(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
-        switch CancelRuntimePayload.parse(message) {
+    func cancel(_ message: WorkspaceControlRequestFrame) -> WorkspaceControlResponseFrame {
+        guard case .cancelRuntime(let fields) = message.payload else {
+            return failure(message, .invalidRequest)
+        }
+        switch CancelRuntimePayload.parse(fields) {
         case .failure(let code):
             return failure(message, code)
         case .success(let payload):
@@ -995,15 +1017,14 @@ final class WorkspaceHostServer: Sendable {
 
     private func cancelCore(
         _ payload: CancelRuntimePayload,
-        request: WorkspaceControlRequest
-    ) -> WorkspaceControlResponse {
+        request: WorkspaceControlRequestFrame
+    ) -> WorkspaceControlResponseFrame {
         switch supervisor.cancel(runtime: payload.runtime) {
         case .success:
-            return WorkspaceControlResponse(
-                operation: .cancelRuntime,
+            return WorkspaceControlResponseFrame(
                 id: request.id,
-                runtime: payload.runtime,
-                ok: true
+                ok: true,
+                payload: .cancelRuntime(.init(runtime: payload.runtime))
             )
         case .failure(let error):
             return failure(request, workspaceControlCode(error))
@@ -1011,7 +1032,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func close(
-        _ message: WorkspaceControlRequest,
+        _ message: WorkspaceControlRequestFrame,
         connection: WorkspaceControlConnection
     ) -> Reply {
         // The child dies during `close`, and its exit is on the terminal
@@ -1020,18 +1041,19 @@ final class WorkspaceHostServer: Sendable {
         announceClosed(excluding: connection.id)
         let result = supervisor.close()
         let closed = supervisor.snapshot.phase == .closed
-        let response: WorkspaceControlResponse
+        let response: WorkspaceControlResponseFrame
         switch result {
         case .success where closed:
-            response = WorkspaceControlResponse(
-                operation: .closeWorkspace,
+            response = WorkspaceControlResponseFrame(
                 id: message.id,
                 ok: true,
-                workspace: supervisor.id.rawValue,
-                host: hostID.rawValue,
-                phase: WorkspaceLifecycle.closed.rawValue,
-                project: supervisor.snapshot.originalPath.rawValue,
-                attached: 0
+                payload: .closeWorkspace(.init(
+                    workspace: supervisor.id.rawValue,
+                    host: hostID.rawValue,
+                    phase: WorkspaceLifecycle.closed.rawValue,
+                    project: supervisor.snapshot.originalPath.rawValue,
+                    attached: 0
+                ))
             )
         case .failure(let error):
             response = failure(message, workspaceControlCode(error), detail: workspaceControlDetail(error))
@@ -1042,25 +1064,26 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func failure(
-        _ message: WorkspaceControlRequest,
+        _ message: WorkspaceControlRequestFrame,
         _ code: WorkspaceControlCode,
         detail: String? = nil
-    ) -> WorkspaceControlResponse {
-        WorkspaceControlResponse.failure(request: message, code: code, detail: detail)
+    ) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame.failure(request: message, code: code, detail: detail)
     }
 
     private func announceClosed(excluding: UUID?) {
         let others = registry.withLock { state in
             Array(state.connections.values.filter { $0.id != excluding })
         }
-        let event = WorkspaceControlResponse(
-            operation: .workspaceClosed,
+        let event = WorkspaceControlResponseFrame(
             ok: true,
-            workspace: supervisor.id.rawValue,
-            host: hostID.rawValue,
-            phase: WorkspaceLifecycle.closed.rawValue,
-            project: supervisor.snapshot.originalPath.rawValue,
-            attached: 0
+            payload: .workspaceClosed(.init(
+                workspace: supervisor.id.rawValue,
+                host: hostID.rawValue,
+                phase: WorkspaceLifecycle.closed.rawValue,
+                project: supervisor.snapshot.originalPath.rawValue,
+                attached: 0
+            ))
         )
         for connection in others {
             _ = connection.send(event)
@@ -1103,8 +1126,8 @@ final class WorkspaceHostServer: Sendable {
     /// Direct `ensureTerminalRuntime` is a different entry and still gates
     /// inside its own lock acquisition.
     func testingDispatchLaunchFamily(
-        _ message: WorkspaceControlRequest
-    ) -> WorkspaceControlResponse {
+        _ message: WorkspaceControlRequestFrame
+    ) -> WorkspaceControlResponseFrame {
         launchFamily(message).message
     }
 
@@ -1132,10 +1155,9 @@ final class WorkspaceHostServer: Sendable {
     /// and the runtime is left running. Tests use this for the protocol-error
     /// raw-mode path; it is not a client operation.
     func testingInjectMalformedTerminalFrame() -> Bool {
-        let message = WorkspaceControlResponse(
-            operation: .terminalOutput,
-            runtime: UUID(),
-            ok: true
+        let message = WorkspaceControlResponseFrame(
+            ok: true,
+            payload: .terminalOutput(.init(runtime: UUID()))
         )
         let connections = registry.withLock { Array($0.connections.values) }
         guard connections.isEmpty == false else { return false }
@@ -1146,68 +1168,62 @@ final class WorkspaceHostServer: Sendable {
 private func workspaceTerminalMessage(
     _ notice: TerminalNotice,
     runtime: UUID
-) -> WorkspaceControlResponse {
+) -> WorkspaceControlResponseFrame {
     switch notice {
     case .replayBegin(let batch, let truncated, let byteCount):
-        WorkspaceControlResponse(
-            operation: .terminalReplayBegin,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            batch: batch,
-            truncated: truncated,
-            replayLength: byteCount
+            payload: .terminalReplayBegin(.init(
+                runtime: runtime,
+                batch: batch,
+                truncated: truncated,
+                replayLength: byteCount
+            ))
         )
     case .replay(let sequence, let bytes):
-        WorkspaceControlResponse(
-            operation: .terminalReplay,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            sequence: sequence,
-            bytes: TerminalBytesCodec.encode(bytes)
+            payload: .terminalReplay(.init(
+                runtime: runtime,
+                sequence: sequence,
+                bytes: TerminalBytesCodec.encode(bytes)
+            ))
         )
     case .replayEnd(let batch):
-        WorkspaceControlResponse(
-            operation: .terminalReplayEnd,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            batch: batch
+            payload: .terminalReplayEnd(.init(runtime: runtime, batch: batch))
         )
     case .output(let sequence, let bytes):
-        WorkspaceControlResponse(
-            operation: .terminalOutput,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            sequence: sequence,
-            bytes: TerminalBytesCodec.encode(bytes)
+            payload: .terminalOutput(.init(
+                runtime: runtime,
+                sequence: sequence,
+                bytes: TerminalBytesCodec.encode(bytes)
+            ))
         )
     case .inputOwner(let owned):
-        WorkspaceControlResponse(
-            operation: .terminalInputOwner,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            inputOwner: owned
+            payload: .terminalInputOwner(.init(runtime: runtime, inputOwner: owned))
         )
     case .window(let rows, let columns):
-        WorkspaceControlResponse(
-            operation: .terminalWindow,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            rows: rows,
-            columns: columns
+            payload: .terminalWindow(.init(runtime: runtime, rows: rows, columns: columns))
         )
     case .exited(let status):
-        WorkspaceControlResponse(
-            operation: .runtimeExited,
-            runtime: runtime,
+        WorkspaceControlResponseFrame(
             ok: true,
-            running: false,
-            exitStatus: status
+            payload: .runtimeExited(.init(
+                runtime: runtime, running: false, exitStatus: status
+            ))
         )
     case .overflow:
-        WorkspaceControlResponse(
-            operation: .terminalOverflow,
-            runtime: runtime,
-            ok: true
+        WorkspaceControlResponseFrame(
+            ok: true,
+            payload: .terminalOverflow(.init(runtime: runtime))
         )
     }
 }

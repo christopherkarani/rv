@@ -97,6 +97,10 @@ secret-selecting globs in search tools (Claude `Grep`/`Glob`, Cursor
 can still match inside non-ignored secret files there, because rv does
 not inspect file contents.
 
+**Vault secrets.** A secret definition with an `address` is refused unless
+`VAULT_ADDR` is set to the same origin: rv never sends your Vault token to a
+server the environment does not name.
+
 ## When you're blocked (and you meant it)
 
 Every hook deny prints a six-character code. Redeem it once, from
