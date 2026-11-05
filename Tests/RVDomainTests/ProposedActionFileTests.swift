@@ -95,7 +95,11 @@ struct ProposedActionFileTests {
                 scope: ActionScope()
             )
         )
-        let verdict = ActionPolicyEngine.evaluate(action: action)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: ReviewContext(repository: RepositoryReviewContext()),
+            gitWorld: .probed(.empty)
+        )
         #expect(verdict.explanation.ruleID != ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID)
         #expect(verdict.explanation.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
         #expect(
@@ -108,7 +112,9 @@ struct ProposedActionFileTests {
         )
         let withFallback = ActionPolicyEngine.evaluate(
             action: action,
-            policy: EffectiveActionPolicy(packFallback: .deny(packDeny))
+            context: ReviewContext(repository: RepositoryReviewContext()),
+            policy: EffectiveActionPolicy(packFallback: .deny(packDeny)),
+            gitWorld: .probed(.empty)
         )
         #expect(withFallback.decision == .hardDeny(packDeny))
         #expect(withFallback.explanation.ruleID != ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID)

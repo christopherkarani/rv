@@ -27,10 +27,20 @@ public enum ShadowReviewRunner: Sendable {
         policy: EffectiveActionPolicy,
         reviewer: some ActionReviewer
     ) async -> ShadowReviewResult {
+        // States the worlds this door effectively had when the engine
+        // forced them: repository facts came with `context` (`.probed`
+        // git), and unresolved filesystem paths failed closed
+        // (`.probed` filesystem).
         let verdict = ActionPolicyEngine.evaluate(
             action: action,
             context: context,
-            policy: policy
+            policy: policy,
+            gitWorld: .probed(
+                GitAnalysisContext(
+                    currentBranch: context.repository.currentBranch
+                )
+            ),
+            filesystemWorld: .probed(.empty)
         )
         return await run(
             hardDecision: verdict.decision,

@@ -152,31 +152,21 @@ public enum ActionPolicyEngine: Sendable {
         )
     }
 
-    /// ReviewContext-only door: repository facts were supplied, so treat them
-    /// as `.probed`. The Engine evaluation door passes `gitWorld:` explicitly
-    /// (default `.unprobed` there) and must not go through this overload.
-    public static func evaluate(
-        action: ProposedAction,
-        context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
-        policy: EffectiveActionPolicy = .empty
-    ) -> ActionPolicyVerdict {
-        evaluate(
-            action: action,
-            context: context,
-            policy: policy,
-            gitWorld: .probed(
-                GitAnalysisContext(
-                    currentBranch: context.repository.currentBranch
-                )
-            )
-        )
-    }
-
+    /// The single evaluation door. Both analysis worlds are part of the
+    /// interface: `gitWorld` is always stated by the caller;
+    /// `filesystemWorld` defaults to `.probed(.empty)`, the world every
+    /// caller effectively had before this door stated it (an unresolved
+    /// path fails closed). Doors that inject a filesystem world (the
+    /// filesystem Apply adapter) pass it explicitly; only there does an
+    /// `.unprobed` world defer an unresolved-only hit to the pack floor.
+    /// The `bind` and `ReviewRequest` doors state both worlds as
+    /// `.probed`: repository facts were supplied with the request.
     public static func evaluate(
         action: ProposedAction,
         context: ReviewContext,
         policy: EffectiveActionPolicy = .empty,
-        gitWorld: GitAnalysisWorld
+        gitWorld: GitAnalysisWorld,
+        filesystemWorld: FilesystemAnalysisWorld = .probed(.empty)
     ) -> ActionPolicyVerdict {
         switch action {
         case .shell(let shell):
@@ -184,7 +174,8 @@ public enum ActionPolicyEngine: Sendable {
                 shell,
                 context: context,
                 policy: policy,
-                gitWorld: gitWorld
+                gitWorld: gitWorld,
+                filesystemWorld: filesystemWorld
             )
         case .file(let file):
             return evaluateFile(file, policy: policy)
@@ -234,6 +225,8 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     /// Structural bind: reviewer output is applied only through `ReviewBind`.
+    /// Like the `ReviewRequest` door, both worlds are stated `.probed`:
+    /// repository facts were supplied in `context`.
     public static func bind(
         action: ProposedAction,
         context: ReviewContext,
@@ -241,7 +234,17 @@ public enum ActionPolicyEngine: Sendable {
         review: Result<ActionReview, ActionReviewerError>
     ) -> BoundReview {
         ReviewBind.apply(
-            hardDecision: evaluate(action: action, context: context, policy: policy).decision,
+            hardDecision: evaluate(
+                action: action,
+                context: context,
+                policy: policy,
+                gitWorld: .probed(
+                    GitAnalysisContext(
+                        currentBranch: context.repository.currentBranch
+                    )
+                ),
+                filesystemWorld: .probed(.empty)
+            ).decision,
             review: review
         )
     }
@@ -250,7 +253,8 @@ public enum ActionPolicyEngine: Sendable {
         _ shell: ShellAction,
         context: ReviewContext,
         policy: EffectiveActionPolicy,
-        gitWorld: GitAnalysisWorld
+        gitWorld: GitAnalysisWorld,
+        filesystemWorld: FilesystemAnalysisWorld
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
         hit = applyTypedRules(
@@ -262,6 +266,7 @@ public enum ActionPolicyEngine: Sendable {
             hit = applyPackFallback(hit, policy.packFallback)
         }
         hit = applyOverlay(hit, policy.overlay)
+        hit = rankUnprobedFilesystem(hit, shell: shell, filesystemWorld: filesystemWorld)
         return ActionPolicyVerdict(
             decision: hit.decision,
             explanation: ActionPolicyExplanation(
@@ -473,6 +478,56 @@ public enum ActionPolicyEngine: Sendable {
             reason: Builtin.uncovered.reason,
             semanticallyCovered: false
         )
+    }
+
+    /// Depth for the unprobed filesystem world: the ranking the Apply
+    /// adapter used to perform on this module's verdict now lives behind
+    /// this interface. `filesystemHit` ranks unresolved first; an
+    /// `.unprobed` world does not tighten on unresolved alone (the pack
+    /// floor decides, spelled `.reviewEligible`), but a catalog or
+    /// boundary hit on another target must still deny. Ranking runs on
+    /// the final hit, after typed rules, pack fallback, and overlay —
+    /// the exact verdict the adapter ranked — so a typed deny that
+    /// replaced the unresolved deny is left alone. A `.probed` world
+    /// keeps the fail-closed unresolved deny untouched.
+    private static func rankUnprobedFilesystem(
+        _ hit: CoreHit,
+        shell: ShellAction,
+        filesystemWorld: FilesystemAnalysisWorld
+    ) -> CoreHit {
+        guard case .unprobed = filesystemWorld,
+            case .hardDeny(let deny) = hit.decision,
+            deny.ruleID == Builtin.unresolvedFilesystem.ruleID
+        else {
+            return hit
+        }
+        if let boundary = catalogOrBoundaryDeny(kinds: shell.effects.kinds) {
+            return CoreHit(
+                decision: .hardDeny(boundary),
+                ruleID: boundary.ruleID,
+                reason: boundary.reason,
+                semanticallyCovered: true
+            )
+        }
+        return CoreHit(
+            decision: .reviewEligible(fallback: Builtin.uncovered),
+            ruleID: Builtin.uncovered.ruleID,
+            reason: Builtin.uncovered.reason,
+            semanticallyCovered: false
+        )
+    }
+
+    /// Catalog (protected-path) outranks boundary (out-of-repo), matching
+    /// target severity. The protected kind normally denies earlier in
+    /// `builtinHit`; the arm keeps this ranking total over effect kinds.
+    private static func catalogOrBoundaryDeny(kinds: [ActionEffectKind]) -> Deny? {
+        if kinds.contains(.protectedPathMutation) {
+            return Builtin.protectedPath
+        }
+        if kinds.contains(.outsideRepositoryMutation) {
+            return Builtin.outsideRepository
+        }
+        return nil
     }
 
     private static func isFilesystemAction(_ kinds: [ActionEffectKind]) -> Bool {
