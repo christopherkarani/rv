@@ -102,8 +102,8 @@ struct WorkspaceLifecycleTests {
         #expect(workspaceControlDetail(.alreadyClosed) == nil)
         #expect(WorkspaceSessionFailure.isolation(error) == .workspaceInodeBoundaryFailed)
         // The path survives the wire bound and the control-character filter.
-        let request = WorkspaceControlRequest(operation: .closeWorkspace, id: UUID(), token: UUID())
-        let response = WorkspaceControlResponse.failure(request: request, code: .publishRejected, detail: detail)
+        let request = WorkspaceControlRequestFrame(id: UUID(), payload: .closeWorkspace)
+        let response = WorkspaceControlResponseFrame.failure(request: request, code: .publishRejected, detail: detail)
         #expect(response.detail == image)
     }
 
