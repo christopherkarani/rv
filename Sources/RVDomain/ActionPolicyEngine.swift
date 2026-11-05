@@ -224,25 +224,6 @@ public enum ActionPolicyEngine: Sendable {
         }
     }
 
-    /// `ReviewRequest` door: repository facts were supplied with the
-    /// request, so both worlds are stated `.probed` at this seam.
-    public static func evaluate(
-        _ request: ReviewRequest,
-        policy: EffectiveActionPolicy = .empty
-    ) -> ActionPolicyVerdict {
-        evaluate(
-            action: request.action,
-            context: request.context,
-            policy: policy,
-            gitWorld: .probed(
-                GitAnalysisContext(
-                    currentBranch: request.context.repository.currentBranch
-                )
-            ),
-            filesystemWorld: .probed(.empty)
-        )
-    }
-
     /// Structural bind: reviewer output is applied only through `ReviewBind`.
     /// Like the `ReviewRequest` door, both worlds are stated `.probed`:
     /// repository facts were supplied in `context`.
