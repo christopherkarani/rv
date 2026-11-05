@@ -82,7 +82,7 @@ struct SecretGatewayRotationTests {
     }
 
     private func refusals(_ audit: AuditRecords) -> [String] {
-        audit.items.withLock { $0.compactMap(\.refusal) }
+        audit.items.withLock { $0.compactMap(\.refusal?.code) }
     }
 
     private func activities(_ audit: AuditRecords, _ activity: SecretGatewayActivity) -> [SecretUseRecord] {
@@ -104,7 +104,7 @@ struct SecretGatewayRotationTests {
         #expect(expired.body.contains("expired"))
         #expect(upstream.requests.count == 1)
         let record = try #require(audit.items.withLock { $0.last })
-        #expect(record.refusal == "expired")
+        #expect(record.refusal?.code == "expired")
         #expect(record.activity == .refused)
         #expect(record.secret == "OPENAI_API_KEY")
     }

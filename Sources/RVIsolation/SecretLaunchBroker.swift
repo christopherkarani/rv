@@ -397,7 +397,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             detail: compact([
                 "event": record.stage == .forward ? "forward" : "request",
                 "activity": record.activity.rawValue,
-                "refusal": record.refusal,
+                "refusal": record.refusal?.code,
                 "method": record.method,
                 "path": record.path,
                 "surfaces": record.surfaces.isEmpty ? nil : record.surfaces.joined(separator: ","),
@@ -413,9 +413,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
 
     /// A high-severity finding for a request the secret's own policy refused.
     /// Names the secret, refusal, method, and redacted path; never a value,
-    /// placeholder, or query string.
+    /// placeholder, or query string. Every blocked record raises one, even
+    /// without a refusal, so the alert fails closed.
     static func misuseEvent(_ record: SecretUseRecord, workspace: String?) -> AuditEvent? {
-        guard record.activity == .blocked, let refusal = record.refusal else { return nil }
+        guard record.activity == .blocked else { return nil }
         return AuditEvent(
             time: Date(),
             kind: .secretMisuse,
@@ -425,7 +426,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
             workspace: workspace,
             runtime: record.runtime,
             source: "secret-gateway",
-            detail: ["refusal": refusal, "method": record.method, "path": record.path, "severity": "high"]
+            detail: compact([
+                "refusal": record.refusal?.code, "method": record.method, "path": record.path, "severity": "high",
+            ])
         )
     }
 
