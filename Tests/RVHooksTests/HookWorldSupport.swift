@@ -2,7 +2,7 @@ import RVDomain
 import RVHooks
 
 /// Test-local HookEvaluateWorld. Omitted file port returns indeterminate
-/// so encodeFileDeny emits `incompleteEvalSentence`.
+/// so the file deny presentation emits `incompleteEvalSentence`.
 func hookWorld(
     evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
     evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,

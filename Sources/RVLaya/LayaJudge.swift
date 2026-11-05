@@ -7,8 +7,8 @@ import CoreML
 /// The judge's answer for one command: choice probabilities plus the
 /// laya-guard risk formula (`P(block) + 0.5*P(review)`, max with malicious).
 public struct LayaVerdict: Sendable, Equatable, Codable {
-    public var choice: String
-    public var probabilities: [String: Double]
+    public var choice: Action
+    public var probabilities: [Action: Double]
     public var riskScore: Double
     public var malicious: Double
     public var risk: Double
@@ -18,16 +18,33 @@ public struct LayaVerdict: Sendable, Equatable, Codable {
     /// allow on a truncated view.
     public var truncated: Bool = false
 
-    public enum Action: String, Sendable, Codable {
+    public enum Action: String, Sendable, Codable, CodingKeyRepresentable {
         case allow
         case review
         case block
+
+        /// Parses model/config label strings, in model order. The result is
+        /// exactly allow/review/block, each once: an unknown, missing or
+        /// duplicated label is a bad bundle, since risk reads probabilities
+        /// by action and a missing one would score 0 (fail-open).
+        public static func parse(labels: [String]) throws -> [Action] {
+            let actions = try labels.map {
+                guard let action = Action(rawValue: $0) else {
+                    throw LayaError.badBundle("unknown action label \"\($0)\"")
+                }
+                return action
+            }
+            guard actions.count == 3, Set(actions).count == 3 else {
+                throw LayaError.badBundle("action labels are not exactly allow/review/block")
+            }
+            return actions
+        }
     }
 
     public func action(blockThreshold: Double = 0.8, reviewThreshold: Double = 0.45) -> Action {
         if risk >= blockThreshold { return .block }
-        if choice == "review" || risk >= reviewThreshold { return .review }
-        return choice == "block" ? .review : .allow
+        if choice == .review || risk >= reviewThreshold { return .review }
+        return choice == .block ? .review : .allow
     }
 }
 
@@ -40,8 +57,8 @@ extension LayaVerdict {
     /// default it to false.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        choice = try c.decode(String.self, forKey: .choice)
-        probabilities = try c.decode([String: Double].self, forKey: .probabilities)
+        choice = try c.decode(Action.self, forKey: .choice)
+        probabilities = try c.decode([Action: Double].self, forKey: .probabilities)
         riskScore = try c.decode(Double.self, forKey: .riskScore)
         malicious = try c.decode(Double.self, forKey: .malicious)
         risk = try c.decode(Double.self, forKey: .risk)
@@ -56,6 +73,11 @@ public struct LayaQuestions: Sendable {
     public var action: LayaQuestion
     public var risk: LayaQuestion
     public var malicious: LayaQuestion
+
+    /// The action question's option labels as typed actions.
+    public func actionLabels() throws -> [LayaVerdict.Action] {
+        try LayaVerdict.Action.parse(labels: action.options.map(\.label))
+    }
 
     /// The exact questions laya-guard asks (Korean instruction strings are
     /// part of that project's tuned prompt; Phase 1 measured the English
@@ -145,8 +167,14 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
     let lengths: [Int]
     let maxOptions = 32
     let lock = NSLock()
+    let questions: LayaQuestions
+    let actionLabels: [LayaVerdict.Action]
 
-    public init(bundleDir: URL) throws {
+    /// The question set's action labels are checked here, before any bundle
+    /// file is touched, so judging never meets an invalid label set.
+    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
+        actionLabels = try questions.actionLabels()
+        self.questions = questions
         tokenizer = try LayaTokenizer(bundleDir: bundleDir)
         let configURL = bundleDir.appendingPathComponent("rl_agent_config.json")
         var maxLen = 1024
@@ -240,17 +268,17 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
     /// Judge one command text. Windows are unnecessary at rv's 65,536-byte
     /// cap only for short commands; long states truncate inside the
     /// sequence budget, and a truncated allow is raised by the caller.
-    public func judge(_ command: String, questions: LayaQuestions = .guardQuestions) throws -> LayaVerdict {
+    public func judge(_ command: String) throws -> LayaVerdict {
         let start = Date()
         let action = try questionProbabilities(state: command, question: questions.action)
         let actionProbs = action.probabilities
-        let labels = questions.action.options.map(\.label)
+        let labels = actionLabels
         guard actionProbs.count == labels.count, !labels.isEmpty else {
             throw LayaError.predictionFailed("action probabilities do not match option labels")
         }
-        var probabilities: [String: Double] = [:]
+        var probabilities: [LayaVerdict.Action: Double] = [:]
         for (label, p) in zip(labels, actionProbs) { probabilities[label] = p }
-        let choice = labels.enumerated().max { actionProbs[$0.offset] < actionProbs[$1.offset] }?.element ?? "review"
+        let choice = labels.enumerated().max { actionProbs[$0.offset] < actionProbs[$1.offset] }?.element ?? .review
 
         let score = try questionProbabilities(state: command, question: questions.risk)
         let riskScore = zip(score.probabilities.indices, score.probabilities).reduce(0.0) { $0 + Double($1.0) * $1.1 }
@@ -261,7 +289,7 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
         }
         let malicious = noul.probabilities[1]
 
-        var risk = (probabilities["block"] ?? 0) + 0.5 * (probabilities["review"] ?? 0)
+        var risk = (probabilities[.block] ?? 0) + 0.5 * (probabilities[.review] ?? 0)
         risk = min(1.0, max(0.0, max(risk, malicious)))
         guard risk.isFinite, malicious.isFinite, riskScore.isFinite else {
             throw LayaError.predictionFailed("non-finite verdict")
@@ -282,11 +310,11 @@ public final class LayaCoreMLJudge: @unchecked Sendable {
 /// Linux seam: symmetric with the FineTunedJudge stub. The gate treats
 /// this as unavailable (packs-only); it never invents an allow.
 public struct LayaCoreMLJudge: Sendable {
-    public init(bundleDir: URL) throws {
+    public init(bundleDir: URL, questions: LayaQuestions = .guardQuestions) throws {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 
-    public func judge(_ command: String, questions: LayaQuestions = .guardQuestions) throws -> LayaVerdict {
+    public func judge(_ command: String) throws -> LayaVerdict {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 }

@@ -21,7 +21,7 @@ struct ActionReviewerTests {
                 == .git(remote: RemoteName("origin"), ref: .branch(BranchName("main")))
         )
         #expect(shell.scope.workingDirectory?.rawValue == "/tmp/rv")
-        #expect(request.action.fingerprint.rawValue == "shell:git.force-push:origin:main")
+        #expect(shell.fingerprintText == "shell:git.force-push:origin:main")
         #expect(request.context.repository.isSharedBranch)
         #expect(request.context.repository.currentBranch == "main")
         #expect(shell.supportingCommand?.rawValue == "git push --force origin main")
@@ -87,9 +87,13 @@ struct ActionReviewerTests {
             )
         )
 
-        #expect(request.action.fingerprint.rawValue.contains("ghp_exampletoken") == false)
+        guard case .shell(let redactedShell) = request.action else {
+            Issue.record("expected shell action")
+            return
+        }
+        #expect(redactedShell.fingerprintText.contains("ghp_exampletoken") == false)
         #expect(
-            request.action.fingerprint.rawValue
+            redactedShell.fingerprintText
                 == "shell:git.push \(ReviewSanitizer.redactedPlaceholder)"
         )
         #expect(request.action.supportingCommand?.rawValue.contains("ghp_exampletoken") == false)

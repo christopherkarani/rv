@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import RVService
 import RVDomain
+import RVLaya
 
 @Suite("Judge gate")
 struct JudgeGateTests {
@@ -450,5 +451,55 @@ struct JudgeGatePacksOnlyFloorTests {
         try Self.withEmptyHome { home in
             #expect(Self.packsOnly(command, home: home).decision == .allow)
         }
+    }
+}
+
+#if canImport(CoreML)
+@Suite("Judge invalid label set")
+struct JudgeInvalidLabelsTests {
+    /// Label validation is a build-time check, before any bundle file is read.
+    @Test func badLabelsRejectedAtBuild() {
+        var questions = LayaQuestions.guardQuestions
+        questions.action.options[2].label = "blok"
+        #expect(throws: LayaError.self) { try questions.actionLabels() }
+        #expect(throws: LayaError.self) {
+            _ = try LayaCoreMLJudge(
+                bundleDir: URL(fileURLWithPath: "/nonexistent-rv-bundle"), questions: questions)
+        }
+    }
+
+    /// A bad FT config disables the judge (packs-only plus floor); it does not
+    /// fail closed to review.
+    @Test func invalidFTConfigIsUnavailable() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ft-badcfg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(#"{"model":{"vocab":{},"merges":[]}}"#.utf8)
+            .write(to: dir.appendingPathComponent("tokenizer.json"))
+        try Data(#"{"logit_order":"allow,review,block"}"#.utf8)
+            .write(to: dir.appendingPathComponent("config.json"))
+        let run = JudgeRuntime.runJudge(
+            command: "ls", context: JudgeContext(), engine: .ft, bundle: dir, wait: nil)
+        guard case .unavailable = run else { Issue.record("expected .unavailable, got \(run)"); return }
+    }
+}
+#endif
+
+@Suite("Doctor bundle problems (FT config)")
+struct BundleProblemsConfigTests {
+    @Test(arguments: [
+        #"{"logit_order":"allow,review,block"}"#,
+        #"{"logit_order":null}"#,
+        #"{"logit_order":["allow","review","block","block"]}"#,
+    ])
+    func invalidLabelConfigIsReported(config: String) throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-doctor-cfg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(config.utf8).write(to: dir.appendingPathComponent("config.json"))
+        let problems = JudgeRuntime.bundleProblems(engine: .ft, dir: dir)
+        #expect(problems.contains("config labels are not allow/review/block"))
     }
 }

@@ -34,6 +34,19 @@ struct DoorBypassCorpusTests {
             }
         }
     }
+
+    @Test func selfProtectionRowsAreIndeterminateAtTheDoor() throws {
+        let harness = try StressHarness.dayOne()
+        let rows = try loadStressCorpus("door-bypass.json").filter { $0.expected == "self-protection" }
+        #expect(rows.isEmpty == false)
+        for row in rows {
+            guard let command = row.command else { continue }
+            let result = door(harness, command)
+            if result.decision != .indeterminate(.selfProtection) {
+                Issue.record("\(row.id) must be self-protection, got \(describeDecision(result)): \(command)")
+            }
+        }
+    }
 }
 
 /// Product door with a probed home so `~` deletes classify as home mutations,

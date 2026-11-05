@@ -241,7 +241,7 @@ enum AuditForwardRun {
         case .failure(.policyInvalid(let reason)):
             return .failure(CommandFailure("organization policy is invalid: \(reason)"))
         case .failure(.refused(let name, let reason)):
-            let kind = configuration.secret(named: name)?.source.kind ?? ""
+            let kind = configuration.secret(named: name)?.source.kind.rawValue ?? ""
             return .failure(CommandFailure(headerRefusal(reason, secret: name, kind: kind)))
         case .success(let released):
             var values: [String: String] = [:]

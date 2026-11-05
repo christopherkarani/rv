@@ -105,7 +105,7 @@ struct OperatorRedemptionTests {
         generation: WorkspaceHostGeneration,
         requestID: UUID,
         intentHex: String,
-        target: String = "custom"
+        target: WorkspaceLaunchKind = .custom
     ) -> HostPreparedDescriptionDTO {
         HostPreparedDescriptionDTO(
             workspaceSessionID: workspace.rawValue,
@@ -114,10 +114,10 @@ struct OperatorRedemptionTests {
             preparedID: UUID(),
             requestID: requestID,
             target: target,
-            definitionID: target == "named" ? "test-agent" : nil,
-            revisionDigest: target == "named" ? Self.digest : nil,
+            definitionID: target == .named ? "test-agent" : nil,
+            revisionDigest: target == .named ? Self.digest : nil,
             executable: "/bin/echo",
-            expectedDigest: target == "custom" ? Self.digest : nil,
+            expectedDigest: target == .custom ? Self.digest : nil,
             workingDirectory: "/tmp",
             arguments: [],
             io: .discard,
@@ -165,7 +165,7 @@ struct OperatorRedemptionTests {
             workspace: "/tmp/proj",
             hostID: fixture.host.rawValue,
             workspaceSessionID: fixture.workspace.rawValue,
-            kind: "custom", executable: "/bin/echo", expectedDigest: Self.digest)
+            kind: .custom, executable: "/bin/echo", expectedDigest: Self.digest)
     }
 
     private func pendingOperation(_ fixture: Fixture) async throws -> UUID {
@@ -237,7 +237,7 @@ struct OperatorRedemptionTests {
 
     @Test func hostRefusalRecordsTerminalFailure() async throws {
         let fixture = try await makeFixture(redeemBehavior: { _ in
-            HostRedeemResponseDTO(accepted: false, error: "unknown")
+            HostRedeemResponseDTO(accepted: false, error: .unknown)
         })
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -260,7 +260,7 @@ struct OperatorRedemptionTests {
 
     @Test func acceptedWithoutLaunchRecordsTerminalFailure() async throws {
         let fixture = try await makeFixture(redeemBehavior: { _ in
-            HostRedeemResponseDTO(accepted: true, error: "launchFailed")
+            HostRedeemResponseDTO(accepted: true, error: .launchFailed)
         })
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -349,7 +349,7 @@ struct OperatorRedemptionTests {
             workspace: fixture.workspace, host: fixture.host,
             generation: WorkspaceHostGeneration(),
             validate: { AgentPrincipalValidity(reference: $0, validity: .active) },
-            prepare: { _ in HostPrepareResponseDTO(description: nil, error: "refused") },
+            prepare: { _ in HostPrepareResponseDTO(description: nil, error: .refused) },
             redeem: fixture.redeemProbe.handler())
         let status = try await completeAuthenticated(
             fixture, operationID: id, challengeID: challenge.challengeID, ui: ui)
@@ -428,7 +428,7 @@ struct OperatorRedemptionTests {
                 HostPrepareResponseDTO(description: self.description(
                     workspace: workspace, host: host, generation: generation,
                     requestID: request.requestID,
-                    intentHex: intent.canonicalDigest.sha256Hex, target: "named"))
+                    intentHex: intent.canonicalDigest.sha256Hex, target: .named))
             },
             redeem: { request in
                 seenBox.withLock { $0 = request }
@@ -439,7 +439,7 @@ struct OperatorRedemptionTests {
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: host.rawValue,
                 workspaceSessionID: workspace.rawValue,
-                kind: "named", definitionID: "test-agent"),
+                kind: .named, definitionID: "test-agent"),
             requester: requester(), clientRequestID: nil)
         let ui = AuthenticatedOperatorUIConnectionID()
         let (challenge, _) = try await ceremonies.bindReview(
@@ -477,13 +477,13 @@ struct OperatorRedemptionTests {
             },
             redeem: { _ in
                 Issue.record("expired ceremony must never redeem")
-                return HostRedeemResponseDTO(accepted: false, error: "unknown")
+                return HostRedeemResponseDTO(accepted: false, error: .unknown)
             })
         let reply = try await ceremonies.propose(
             ProposeLaunchParams(
                 workspace: "/tmp/proj", hostID: host.rawValue,
                 workspaceSessionID: workspace.rawValue,
-                kind: "custom", executable: "/bin/echo",
+                kind: .custom, executable: "/bin/echo",
                 expectedDigest: Self.digest),
             requester: requester(), clientRequestID: nil)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -565,7 +565,7 @@ struct OperatorRedemptionTests {
                 connectionID: connection)
         }
         let propose = IPCMethod.proposeWorkspaceLaunch(ProposeLaunchParams(
-            workspace: "/tmp/proj", kind: "custom", executable: "/bin/echo",
+            workspace: "/tmp/proj", kind: .custom, executable: "/bin/echo",
             expectedDigest: Self.digest))
         let status = IPCMethod.launchProposalStatus(
             ProposalStatusParams(operationID: UUID()))
@@ -616,7 +616,7 @@ struct OperatorRedemptionTests {
                 let pending = HostRedeemPending(continuation)
                 pending.finish(.failure(LiveWorkspaceHostError.redeemRPCFailed))
                 pending.finish(.success(HostRedeemResponseDTO(
-                    accepted: false, error: "unknown")))
+                    accepted: false, error: .unknown)))
             }
         }
     }

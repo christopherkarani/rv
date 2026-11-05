@@ -18,8 +18,9 @@ public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable
         cwd: WorkingDirectory?,
         command: ShellCommand
     ) -> ActionFingerprint {
-        ActionFingerprint(
-            rawValue: "\(host.rawValue):\(session?.rawValue ?? ""):\(cwd?.rawValue ?? ""):\(command.rawValue)"
+        make(
+            host.rawValue,
+            [.field(session?.rawValue ?? ""), .field(cwd?.rawValue ?? ""), .field(command.rawValue)]
         )
     }
 
@@ -32,8 +33,12 @@ public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable
         cwd: WorkingDirectory?,
         file: FileToolAction
     ) -> ActionFingerprint {
-        ActionFingerprint(
-            rawValue: "file:\(host.rawValue):\(session?.rawValue ?? ""):\(cwd?.rawValue ?? ""):\(file.kind.rawValue):\(file.path.rawValue)"
+        make(
+            "file",
+            [
+                .field(host.rawValue), .field(session?.rawValue ?? ""), .field(cwd?.rawValue ?? ""),
+                .field(file.kind.rawValue), .field(file.path.rawValue),
+            ]
         )
     }
 
