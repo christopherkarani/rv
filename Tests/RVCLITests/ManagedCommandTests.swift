@@ -215,7 +215,7 @@ struct ManagedCommandTests {
         #expect(plain.secrets.items == [.init(name: "GH", source: "hostEnvironment", delivery: "environment")])
         #expect(plain.config.first { $0.file == "secrets.json" }?.sha256?.count == 64)
         #expect(plain.compliant == false)
-        let json = ReportRun.json(plain)
+        let json = try RobotJSON.encode(plain, options: .pretty)
         #expect(json.contains("ghp_") == false)
         #expect(ReportRun.text(plain).contains("NOT compliant"))
 
@@ -258,7 +258,7 @@ struct ManagedCommandTests {
         let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
         #expect(lines.contains(sentence) == false)
 
-        let robot = ManagedRun.robotJSON(status)
+        let robot = try RobotJSON.encode(status, options: .pretty)
         #expect(robot.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(robot.unicodeScalars.contains { $0.value == 0x2028 } == false)
         #expect(robot.unicodeScalars.contains { $0.value == 0x2029 } == false)

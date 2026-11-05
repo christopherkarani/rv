@@ -771,20 +771,14 @@ enum SecretsRun {
         return invoked
     }
 
-    static func json<T: Encodable>(_ value: T) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes, .prettyPrinted]
-        guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return text + "\n"
-    }
-
-    /// Robot JSON for `rv secrets`. `JSONEncoder` already writes ESC as
-    /// `\u001b` but leaves separators, NEL, bidi controls, and other format
-    /// scalars raw; `DisplayedText.escapeJSONScalars` escapes every one
-    /// `DisplayedText.needsEscape` flags. The result is still valid JSON.
-    /// `json` itself is unchanged.
+    /// One-line adapter over the robot-JSON module, kept at its
+    /// pre-module non-throwing shape for `LoginCommand`'s call sites.
+    /// `rv secrets` surfaces call `RobotJSON.encode` directly so an
+    /// encode failure is a thrown command failure (REQ-T7); this
+    /// adapter's fallback preserves the old bytes on a failure arm
+    /// its plain Codable payloads cannot reach.
     static func robotJSON<T: Encodable>(_ value: T) -> String {
-        DisplayedText.escapeJSONScalars(json(value))
+        (try? RobotJSON.encode(value, options: .pretty)) ?? "{}\n"
     }
 
     /// The secret value: hidden prompt on a terminal, otherwise all of stdin
@@ -835,7 +829,10 @@ struct SecretsList: AsyncParsableCommand {
             try ctx.fail("rv secrets list: \(failure.message)\n")
         case .success(let configuration):
             let report = SecretsRun.list(configuration, profiles: SecretsRun.profiles(environment))
-            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.listText(report))
+            ctx.writeStdout(
+                ctx.explicitRobot
+                    ? try RobotJSON.encode(report, options: .pretty)
+                    : SecretsRun.listText(report))
         }
     }
 }
@@ -857,7 +854,9 @@ struct SecretsCheck: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv secrets check: \(failure.message)\n")
         case .success(let checked): rows = checked
         }
-        let text = ctx.explicitRobot ? SecretsRun.robotJSON(rows) : SecretsRun.checkText(rows)
+        let text = ctx.explicitRobot
+            ? try RobotJSON.encode(rows, options: .pretty)
+            : SecretsRun.checkText(rows)
         if rows.allSatisfy(\.ok) {
             ctx.writeStdout(text)
         } else {
@@ -1039,7 +1038,9 @@ struct SecretsScan: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv secrets scan: \(failure.message)\n")
         case .success(let scanned): report = scanned
         }
-        let text = ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.scanText(report)
+        let text = ctx.explicitRobot
+            ? try RobotJSON.encode(report, options: .pretty)
+            : SecretsRun.scanText(report)
         if report.findings.isEmpty {
             ctx.writeStdout(text)
         } else {
