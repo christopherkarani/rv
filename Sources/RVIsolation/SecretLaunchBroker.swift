@@ -205,7 +205,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 detail: Self.compact([
                     "event": "staged",
                     "delivery": definition.delivery.kind,
-                    "provider": definition.source.kind,
+                    "provider": definition.source.kind.rawValue,
                     "fingerprint": fingerprint,
                 ])))
         }

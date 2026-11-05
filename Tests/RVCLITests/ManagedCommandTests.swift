@@ -99,6 +99,13 @@ struct ManagedCommandTests {
         #expect(ManagedRun.restrictions(plain) == [sandbox])
     }
 
+    @Test func allowedSecretSourcesKeepTheirFileOrderInRestrictions() throws {
+        // `restrictions` is robot JSON; the line must list kinds exactly as the policy file does.
+        let policy = try ManagedPolicy.decode(
+            Data(#"{"version":1,"secrets":{"allowedSources":["vault","keychain","vault"]}}"#.utf8)).get()
+        #expect(ManagedRun.restrictions(policy).last == "secret sources allowed: vault, keychain, vault")
+    }
+
     @Test func mcpCommandsFollowTheOrganization() async throws {
         let scratch = Scratch()
         var environment = MCPEnvironment(
