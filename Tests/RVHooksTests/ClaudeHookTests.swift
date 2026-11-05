@@ -152,8 +152,13 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
     #expect(wire.stdout.isEmpty)
 }
 
-@Test func claudeEncodeRichDeny_matchesResetHardFixture() throws {
-    let wire = codec.encodeRichDeny(from: resetHardDenyResult(), command: resetHard)
+@Test func claudeHookWireRichDeny_matchesResetHardFixture() throws {
+    let wire = hookWire(
+        from: resetHardDenyResult(),
+        command: resetHard,
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
     let expected = try claudeExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -167,8 +172,13 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
-@Test func claudeEncodeRichDeny_resetHardIsOneShortLine() throws {
-    let wire = codec.encodeRichDeny(from: resetHardDenyResult(), command: resetHard)
+@Test func claudeHookWireRichDeny_resetHardIsOneShortLine() throws {
+    let wire = hookWire(
+        from: resetHardDenyResult(),
+        command: resetHard,
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
     let parsed = try claudeDenyObject(wire.stdout)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -205,24 +215,34 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
     #expect(wire.stdout.contains("\"remediation\"") == false)
 }
 
-@Test func claudeEncodeRichDeny_neverEmitsPermissionAsk() throws {
+@Test func claudeHookWireRichDeny_neverEmitsPermissionAsk() throws {
     let leftover = EvaluationResult(
         outcome: .deny(HostNativeAsk.leftoverAskDeny, matched: nil)
     )
-    let wire = codec.encodeRichDeny(from: leftover, command: resetHard)
+    let wire = hookWire(
+        from: leftover,
+        command: resetHard,
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.isEmpty == false)
 }
 
-@Test func claudeEncodeRichDeny_unmatchedDenyIsFailClosed() throws {
+@Test func claudeHookWireRichDeny_unmatchedDenyIsFailClosed() throws {
     let result = EvaluationResult(
         outcome: .deny(
             Deny(ruleID: resetHardMatch.ruleID, reason: resetHardMatch.reason),
             matched: nil
         )
     )
-    let wire = codec.encodeRichDeny(from: result, command: resetHard)
+    let wire = hookWire(
+        from: result,
+        command: resetHard,
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("allowOnceCode") == false)

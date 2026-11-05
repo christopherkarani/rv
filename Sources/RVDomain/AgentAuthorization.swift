@@ -31,7 +31,7 @@ public struct DeniedAction: Sendable, Equatable {
 }
 
 /// Why `decide` asked a human. Ledger `ApprovalReason.hostAsk` is not a case.
-public enum RuntimeAskReason: Sendable, Equatable {
+public enum RuntimeAskReason: String, Sendable, Equatable, Codable {
     case mandatoryHuman
     case reviewAsk
 

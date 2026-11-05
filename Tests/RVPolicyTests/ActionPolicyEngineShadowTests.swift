@@ -13,7 +13,16 @@ struct ActionPolicyEngineShadowTests {
             log: log
         )
         let action = ActionPolicyEngineShadowFixtures.forcePush()
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: .probed(
+                GitAnalysisContext(
+                    currentBranch: shared.repository.currentBranch
+                )
+            ),
+            filesystemWorld: .probed(.empty)
+        )
         #expect(verdict.decision.zone == .hardDeny)
 
         let result = await ShadowReviewRunner.run(
@@ -38,7 +47,16 @@ struct ActionPolicyEngineShadowTests {
             effects: [.localBranchCreate],
             supportingCommand: "git checkout -b feature"
         )
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: .probed(
+                GitAnalysisContext(
+                    currentBranch: shared.repository.currentBranch
+                )
+            ),
+            filesystemWorld: .probed(.empty)
+        )
         #expect(verdict.decision == .hardAllow)
 
         let result = await ShadowReviewRunner.run(
@@ -59,7 +77,16 @@ struct ActionPolicyEngineShadowTests {
             log: log
         )
         let action = ActionPolicyEngineShadowFixtures.uncovered()
-        let verdict = ActionPolicyEngine.evaluate(action: action, context: shared)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            gitWorld: .probed(
+                GitAnalysisContext(
+                    currentBranch: shared.repository.currentBranch
+                )
+            ),
+            filesystemWorld: .probed(.empty)
+        )
         #expect(verdict.decision.zone == .reviewEligible)
 
         let result = await ShadowReviewRunner.run(

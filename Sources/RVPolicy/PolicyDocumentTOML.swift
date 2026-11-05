@@ -138,7 +138,7 @@ public enum PolicyDocumentTOML {
         var merged = existing
         for rule in incoming {
             if let index = merged.firstIndex(where: { $0.predicate == rule.predicate }) {
-                if restrictionRank(rule.verdict) > restrictionRank(merged[index].verdict) {
+                if PolicyDiffRisk.restrictionRank(rule.verdict) > PolicyDiffRisk.restrictionRank(merged[index].verdict) {
                     merged[index] = rule
                 }
             } else {
@@ -146,14 +146,6 @@ public enum PolicyDocumentTOML {
             }
         }
         return merged
-    }
-
-    private static func restrictionRank(_ verdict: TypedRuleVerdict) -> Int {
-        switch verdict {
-        case .allow: 0
-        case .ask: 1
-        case .deny: 2
-        }
     }
 
     private static func preambleLines(_ text: String) -> [String] {

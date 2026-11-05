@@ -4,88 +4,103 @@ import Synchronization
 import Testing
 @testable import RVIsolation
 
-// Launch-family parity pins for T5 (C04 pilot). The server's launch/ensure/
-// cancel/identity handlers move behind typed payloads; these tests pin the
-// exact current fail-closed behavior so the refactor proves parity. The
-// wire round-trip section is cross-platform; the direct-handler section
-// needs the macOS-only host server.
+// Launch-family parity pins at the codec seam (T1). The server's launch/
+// ensure/cancel/identity handlers consume typed per-op payloads; these
+// tests pin the exact fail-closed behavior so the refactor proves parity.
+// The wire round-trip section is cross-platform; the direct-handler
+// section needs the macOS-only host server.
 
 private enum LaunchParityFixtures {
     static let id = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
     static let runtime = UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!
 }
 
+private typealias LaunchFields = WorkspaceControlRequestPayload.Launch
+
+/// Test-side reading of a launch-family reply payload.
+private func launchReply(
+    _ frame: WorkspaceControlResponseFrame
+) -> WorkspaceControlResponsePayload.Launch? {
+    switch frame.payload {
+    case .launchRuntime(let fields), .launchAgentRuntime(let fields),
+        .launchCustomRuntime(let fields), .ensureTerminalRuntime(let fields):
+        fields
+    default:
+        nil
+    }
+}
+
 @Suite("Launch payload wire parity")
 struct LaunchParityWireTests {
     @Test func launchFamilyWireRoundTrips() throws {
-        let requests: [WorkspaceControlRequest] = [
-            WorkspaceControlRequest(
-                operation: .launchRuntime,
+        let requests: [WorkspaceControlRequestFrame] = [
+            WorkspaceControlRequestFrame(
                 id: LaunchParityFixtures.id,
-                executable: "/bin/sh",
-                arguments: ["-c", "echo hi"],
-                resourceProfileID: "shell",
-                hook: "codex",
-                io: "terminal",
-                rows: 24,
-                columns: 80
+                payload: .launchRuntime(.init(
+                    executable: "/bin/sh",
+                    arguments: ["-c", "echo hi"],
+                    resourceProfileID: "shell",
+                    hook: "codex",
+                    io: "terminal",
+                    rows: 24,
+                    columns: 80
+                ))
             ),
-            WorkspaceControlRequest(
-                operation: .launchAgentRuntime,
+            WorkspaceControlRequestFrame(
                 id: LaunchParityFixtures.id,
-                arguments: ["--once"],
-                agentDefinitionID: "agent"
+                payload: .launchAgentRuntime(.init(
+                    agentDefinitionID: "agent",
+                    arguments: ["--once"]
+                ))
             ),
-            WorkspaceControlRequest(
-                operation: .launchCustomRuntime,
+            WorkspaceControlRequestFrame(
                 id: LaunchParityFixtures.id,
-                executable: "/bin/sleep",
-                arguments: ["30"],
-                customDefinitionDigest: String(repeating: "a", count: 64)
+                payload: .launchCustomRuntime(.init(
+                    executable: "/bin/sleep",
+                    arguments: ["30"],
+                    customDefinitionDigest: String(repeating: "a", count: 64)
+                ))
             ),
-            WorkspaceControlRequest(
-                operation: .ensureTerminalRuntime,
+            WorkspaceControlRequestFrame(
                 id: LaunchParityFixtures.id,
-                executable: "/bin/sh",
-                resourceProfileID: "shell",
-                hook: "codex",
-                io: "terminal",
-                rows: 24,
-                columns: 80
+                payload: .ensureTerminalRuntime(.init(
+                    executable: "/bin/sh",
+                    resourceProfileID: "shell",
+                    hook: "codex",
+                    io: "terminal",
+                    rows: 24,
+                    columns: 80
+                ))
             ),
-            WorkspaceControlRequest(
-                operation: .cancelRuntime,
+            WorkspaceControlRequestFrame(
                 id: LaunchParityFixtures.id,
-                runtime: LaunchParityFixtures.runtime
+                payload: .cancelRuntime(.init(runtime: LaunchParityFixtures.runtime))
             ),
         ]
         #expect(requests.count == 5)
         for request in requests {
-            let body = try #require(request.encode())
-            guard case .request(let decoded) = WorkspaceControlRequest.decode(body) else {
+            let body = try #require(WorkspaceControlCodec.encodeRequest(request))
+            guard case .frame(let decoded) = WorkspaceControlCodec.decodeRequest(body) else {
                 Issue.record("op \(request.rawOperation) did not decode")
                 continue
             }
             #expect(decoded == request)
-            #expect(decoded.encode() == body)
+            #expect(WorkspaceControlCodec.encodeRequest(decoded) == body)
         }
     }
 }
 
 @Suite("Launch payload parse")
 struct LaunchPayloadParseTests {
-    private var context: WorkspaceControlLaunchRequest.Context {
-        WorkspaceControlLaunchRequest.Context(
-            resourcePolicy: RuntimeResourcePolicy(profiles: [
-                RuntimeResourceProfile(id: "shell", projects: ["/proj"])
-            ]),
-            project: "/proj"
-        )
+    private var resourcePolicy: RuntimeResourcePolicy {
+        RuntimeResourcePolicy(profiles: [
+            RuntimeResourceProfile(id: "shell", projects: ["/proj"])
+        ])
     }
 
     @Test func launchParseAcceptsMinimalDiscard() {
         let parsed = LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(operation: .launchRuntime, executable: "/bin/sh"),
+            LaunchFields(executable: "/bin/sh"),
             resourcePolicy: .empty,
             project: "/proj"
         )
@@ -101,8 +116,7 @@ struct LaunchPayloadParseTests {
 
     @Test func launchParseResolvesProfileAndHookAndTerminal() {
         let parsed = LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .launchRuntime,
+            LaunchFields(
                 executable: "/bin/sh",
                 arguments: ["-c", "echo hi"],
                 resourceProfileID: "shell",
@@ -111,7 +125,7 @@ struct LaunchPayloadParseTests {
                 rows: 24,
                 columns: 80
             ),
-            resourcePolicy: context.resourcePolicy,
+            resourcePolicy: resourcePolicy,
             project: "/proj"
         )
         guard case .success(let payload) = parsed else {
@@ -125,59 +139,39 @@ struct LaunchPayloadParseTests {
     }
 
     @Test func launchParseRejectsBadShapes() {
-        let profile = context.resourcePolicy
-        let cases: [(WorkspaceControlRequest, WorkspaceControlCode, String)] = [
-            (WorkspaceControlRequest(operation: .launchRuntime), .invalidRequest, "missing executable"),
+        let profile = resourcePolicy
+        let cases: [(LaunchFields, WorkspaceControlCode, String)] = [
+            (LaunchFields(), .invalidRequest, "missing executable"),
+            (LaunchFields(executable: "bin/sh"), .invalidRequest, "relative executable"),
+            (LaunchFields(executable: "/bin/\0sh"), .invalidRequest, "NUL executable"),
             (
-                WorkspaceControlRequest(operation: .launchRuntime, executable: "bin/sh"),
-                .invalidRequest, "relative executable"
-            ),
-            (
-                WorkspaceControlRequest(operation: .launchRuntime, executable: "/bin/\0sh"),
-                .invalidRequest, "NUL executable"
-            ),
-            (
-                WorkspaceControlRequest(
-                    operation: .launchRuntime, executable: "/bin/sh", arguments: ["a\0b"]
-                ),
+                LaunchFields(executable: "/bin/sh", arguments: ["a\0b"]),
                 .invalidRequest, "NUL argument"
             ),
             (
-                WorkspaceControlRequest(
-                    operation: .launchRuntime, executable: "/bin/sh",
-                    resourceProfileID: "nope"
-                ),
+                LaunchFields(executable: "/bin/sh", resourceProfileID: "nope"),
                 .resourceProfileUnavailable, "unknown profile"
             ),
             (
-                WorkspaceControlRequest(
-                    operation: .launchRuntime, executable: "/bin/sh", hook: "not a tag!"
-                ),
+                LaunchFields(executable: "/bin/sh", hook: "not a tag!"),
                 .invalidRequest, "malformed hook"
             ),
             (
-                WorkspaceControlRequest(
-                    operation: .launchRuntime, executable: "/bin/sh", io: "terminal"
-                ),
+                LaunchFields(executable: "/bin/sh", io: "terminal"),
                 .invalidRequest, "terminal without dimensions"
             ),
             (
-                WorkspaceControlRequest(
-                    operation: .launchRuntime, executable: "/bin/sh",
-                    io: "discard", rows: 24, columns: 80
-                ),
+                LaunchFields(executable: "/bin/sh", io: "discard", rows: 24, columns: 80),
                 .invalidRequest, "discard with dimensions"
             ),
             (
-                WorkspaceControlRequest(
-                    operation: .launchRuntime, executable: "/bin/sh", io: "inherit"
-                ),
+                LaunchFields(executable: "/bin/sh", io: "inherit"),
                 .invalidRequest, "unknown io"
             ),
         ]
-        for (request, code, label) in cases {
+        for (fields, code, label) in cases {
             #expect(
-                LaunchRuntimePayload.parse(request, resourcePolicy: profile, project: "/proj")
+                LaunchRuntimePayload.parse(fields, resourcePolicy: profile, project: "/proj")
                     == .failure(code),
                 "\(label)"
             )
@@ -185,24 +179,18 @@ struct LaunchPayloadParseTests {
     }
 
     @Test func launchParseOrdersExecutableBeforeProfileBeforeHook() {
-        let profile = context.resourcePolicy
+        let profile = resourcePolicy
         // Unknown profile plus malformed hook reports the profile: the
         // lookup precedes hook selection.
         #expect(LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .launchRuntime, executable: "/bin/sh",
-                resourceProfileID: "nope", hook: "not a tag!"
-            ),
+            LaunchFields(executable: "/bin/sh", resourceProfileID: "nope", hook: "not a tag!"),
             resourcePolicy: profile,
             project: "/proj"
         ) == .failure(.resourceProfileUnavailable))
         // Relative executable plus unknown profile reports invalidRequest:
         // the executable check precedes the lookup.
         #expect(LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .launchRuntime, executable: "bin/sh",
-                resourceProfileID: "nope"
-            ),
+            LaunchFields(executable: "bin/sh", resourceProfileID: "nope"),
             resourcePolicy: profile,
             project: "/proj"
         ) == .failure(.invalidRequest))
@@ -210,10 +198,7 @@ struct LaunchPayloadParseTests {
         // lookup precedes command construction. A command-first reorder
         // would report invalidRequest instead.
         #expect(LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .launchRuntime, executable: "/bin/\0sh",
-                resourceProfileID: "nope"
-            ),
+            LaunchFields(executable: "/bin/\0sh", resourceProfileID: "nope"),
             resourcePolicy: profile,
             project: "/proj"
         ) == .failure(.resourceProfileUnavailable))
@@ -221,20 +206,15 @@ struct LaunchPayloadParseTests {
 
     @Test func launchParseGatesProfileOnProject() {
         #expect(LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .launchRuntime, executable: "/bin/sh",
-                resourceProfileID: "shell"
-            ),
-            resourcePolicy: context.resourcePolicy,
+            LaunchFields(executable: "/bin/sh", resourceProfileID: "shell"),
+            resourcePolicy: resourcePolicy,
             project: "/other"
         ) == .failure(.resourceProfileUnavailable))
     }
 
     @Test func launchParseAcceptsWellFormedNonHostHookAsNil() {
         let parsed = LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .launchRuntime, executable: "/bin/sh", hook: "agent-A"
-            ),
+            LaunchFields(executable: "/bin/sh", hook: "agent-A"),
             resourcePolicy: .empty,
             project: "/proj"
         )
@@ -246,8 +226,7 @@ struct LaunchPayloadParseTests {
     }
 
     @Test func ensureParseRequiresTerminal() {
-        let valid = EnsureTerminalRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let valid = EnsureTerminalRuntimePayload.parse(LaunchFields(
             executable: "/bin/sh",
             arguments: ["-l"],
             resourceProfileID: "shell",
@@ -264,23 +243,21 @@ struct LaunchPayloadParseTests {
         #expect(payload.io == .pseudoTerminal(rows: 24, columns: 80))
         #expect(payload.hook == .codex)
         #expect(payload.resourceProfileID == "shell")
-        #expect(EnsureTerminalRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime, executable: "/bin/sh"
-        )) == .failure(.invalidRequest))
-        #expect(EnsureTerminalRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime, executable: "/bin/sh", io: "terminal"
-        )) == .failure(.invalidRequest))
-        #expect(EnsureTerminalRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime, hook: "not a tag!",
-            io: "terminal", rows: 24, columns: 80
-        )) == .failure(.invalidRequest))
+        #expect(EnsureTerminalRuntimePayload.parse(
+            LaunchFields(executable: "/bin/sh")
+        ) == .failure(.invalidRequest))
+        #expect(EnsureTerminalRuntimePayload.parse(
+            LaunchFields(executable: "/bin/sh", io: "terminal")
+        ) == .failure(.invalidRequest))
+        #expect(EnsureTerminalRuntimePayload.parse(
+            LaunchFields(hook: "not a tag!", io: "terminal", rows: 24, columns: 80)
+        ) == .failure(.invalidRequest))
     }
 
     @Test func ensureParseDefersProfileLookup() {
         // An unknown profile parses: the existing-runtime shortcut is
         // profile-agnostic and creation re-adjudicates through launch().
-        let parsed = EnsureTerminalRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let parsed = EnsureTerminalRuntimePayload.parse(LaunchFields(
             executable: "/bin/sh",
             resourceProfileID: "no-such-profile",
             io: "terminal",
@@ -295,12 +272,8 @@ struct LaunchPayloadParseTests {
     }
 
     @Test func cancelParseRequiresRuntime() {
-        #expect(CancelRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .cancelRuntime
-        )) == .failure(.invalidRequest))
-        let parsed = CancelRuntimePayload.parse(WorkspaceControlRequest(
-            operation: .cancelRuntime, runtime: LaunchParityFixtures.runtime
-        ))
+        #expect(CancelRuntimePayload.parse(.init()) == .failure(.invalidRequest))
+        let parsed = CancelRuntimePayload.parse(.init(runtime: LaunchParityFixtures.runtime))
         guard case .success(let payload) = parsed else {
             Issue.record("cancel rejected: \(parsed)")
             return
@@ -308,96 +281,112 @@ struct LaunchPayloadParseTests {
         #expect(payload.runtime == LaunchParityFixtures.runtime)
     }
 
-    @Test func identityPayloadsCarryOpFieldsInfallibly() {
-        let agent = LaunchAgentRuntimePayload(WorkspaceControlRequest(
-            operation: .launchAgentRuntime,
-            arguments: ["--once"],
-            agentDefinitionID: "agent"
-        ))
+    @Test func identityPayloadsCarryOpFieldsInfallibly() throws {
+        // The codec yields identity-launch payloads without adjudicating
+        // their fields: the deny door consumes none, so even a bare or
+        // malformed frame decodes to a payload the door denies.
+        let agentBody = Data(
+            "{\"v\":1,\"op\":\"launchAgentRuntime\",\"arguments\":[\"--once\"],\"agentDefinitionID\":\"agent\"}".utf8
+        )
+        guard case .frame(let agentFrame) = WorkspaceControlCodec.decodeRequest(agentBody),
+            case .launchAgentRuntime(let agent) = agentFrame.payload
+        else {
+            Issue.record("agent launch frame did not decode to its payload")
+            return
+        }
         #expect(agent.agentDefinitionID == "agent")
         #expect(agent.arguments == ["--once"])
-        // Even a malformed request constructs: the deny door consumes no
-        // fields and denies it exactly like a valid one.
-        let agentBare = LaunchAgentRuntimePayload(WorkspaceControlRequest(
-            operation: .launchAgentRuntime, executable: "relative"
-        ))
-        #expect(agentBare.agentDefinitionID == nil)
-        let custom = LaunchCustomRuntimePayload(WorkspaceControlRequest(
-            operation: .launchCustomRuntime,
-            executable: "/bin/sleep",
-            customDefinitionDigest: String(repeating: "a", count: 64)
-        ))
+        let bareBody = Data("{\"v\":1,\"op\":\"launchAgentRuntime\"}".utf8)
+        guard case .frame(let bareFrame) = WorkspaceControlCodec.decodeRequest(bareBody),
+            case .launchAgentRuntime(let bare) = bareFrame.payload
+        else {
+            Issue.record("bare agent launch frame did not decode")
+            return
+        }
+        #expect(bare.agentDefinitionID == nil)
+        let customBody = Data(
+            "{\"v\":1,\"op\":\"launchCustomRuntime\",\"executable\":\"/bin/sleep\",\"customDefinitionDigest\":\"\(String(repeating: "a", count: 64))\"}".utf8
+        )
+        guard case .frame(let customFrame) = WorkspaceControlCodec.decodeRequest(customBody),
+            case .launchCustomRuntime(let custom) = customFrame.payload
+        else {
+            Issue.record("custom launch frame did not decode to its payload")
+            return
+        }
         #expect(custom.executable == "/bin/sleep")
         #expect(custom.customDefinitionDigest == String(repeating: "a", count: 64))
-        #expect(custom.arguments == [])
+        #expect(custom.arguments == nil)
     }
 
-    @Test func launchRequestParseRoutesFamilyAndSkipsOthers() {
-        let context = context
-        let family: [WorkspaceControlRequest] = [
-            WorkspaceControlRequest(operation: .launchRuntime, executable: "/bin/sh"),
-            WorkspaceControlRequest(
-                operation: .launchAgentRuntime, agentDefinitionID: "agent"
+    @Test func codecRoutesLaunchFamilyAndOtherOps() throws {
+        // Every launch-family op decodes to its payload case at the seam.
+        let family: [(String, WorkspaceControlOp)] = [
+            ("{\"v\":1,\"op\":\"launchRuntime\",\"executable\":\"/bin/sh\"}", .launchRuntime),
+            ("{\"v\":1,\"op\":\"launchAgentRuntime\",\"agentDefinitionID\":\"agent\"}", .launchAgentRuntime),
+            ("{\"v\":1,\"op\":\"launchCustomRuntime\",\"executable\":\"/bin/sleep\"}", .launchCustomRuntime),
+            (
+                "{\"v\":1,\"op\":\"ensureTerminalRuntime\",\"executable\":\"/bin/sh\",\"io\":\"terminal\",\"rows\":24,\"cols\":80}",
+                .ensureTerminalRuntime
             ),
-            WorkspaceControlRequest(
-                operation: .launchCustomRuntime, executable: "/bin/sleep"
-            ),
-            WorkspaceControlRequest(
-                operation: .ensureTerminalRuntime, executable: "/bin/sh",
-                io: "terminal", rows: 24, columns: 80
-            ),
-            WorkspaceControlRequest(
-                operation: .cancelRuntime, runtime: LaunchParityFixtures.runtime
+            (
+                "{\"v\":1,\"op\":\"cancelRuntime\",\"runtime\":\"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC\"}",
+                .cancelRuntime
             ),
         ]
-        for request in family {
-            let parsed = WorkspaceControlLaunchRequest.parse(request, context: context)
-            guard case .success = parsed else {
-                Issue.record("family op \(request.rawOperation) did not parse: \(String(describing: parsed))")
+        for (json, op) in family {
+            guard case .frame(let frame) = WorkspaceControlCodec.decodeRequest(Data(json.utf8)) else {
+                Issue.record("family op \(op.rawValue) did not decode")
                 continue
             }
+            #expect(frame.operation == op)
         }
-        let invalid = WorkspaceControlLaunchRequest.parse(
-            WorkspaceControlRequest(operation: .launchRuntime),
-            context: context
-        )
-        #expect(invalid == .failure(.invalidRequest))
-        // Every non-launch op keeps the bag path (nil parse). The parse
-        // switch is compiler-exhaustive; this list pins the fallback for
-        // each unmigrated op so a mistyped arm cannot slip through.
-        for op: WorkspaceControlOp in [
-            .hello, .capabilities, .ping, .describeWorkspace, .listRuntimes,
-            .closeWorkspace, .detach, .workspaceClosed,
-            .subscribeTerminal, .unsubscribeTerminal, .terminalInput,
-            .acquireTerminalInput, .releaseTerminalInput, .resizeTerminal,
-            .terminalReplayBegin, .terminalReplay, .terminalReplayEnd,
-            .terminalOutput, .terminalInputOwner, .terminalWindow,
-            .runtimeExited, .terminalOverflow,
-        ] {
-            #expect(
-                WorkspaceControlLaunchRequest.parse(
-                    WorkspaceControlRequest(operation: op, id: LaunchParityFixtures.id),
-                    context: context
-                ) == nil,
-                "\(op.rawValue) keeps the bag path"
-            )
+        // A structurally invalid launch still yields its payload (the
+        // handler refuses it), while non-family requests keep their own
+        // payload cases and server→client ops arrive as unsupported.
+        guard case .frame(let invalid) = WorkspaceControlCodec.decodeRequest(
+            Data("{\"v\":1,\"op\":\"launchRuntime\"}".utf8)
+        ), case .launchRuntime(let fields) = invalid.payload else {
+            Issue.record("invalid launch must still yield its payload")
+            return
         }
+        #expect(LaunchRuntimePayload.parse(
+            fields, resourcePolicy: .empty, project: "/proj"
+        ) == .failure(.invalidRequest))
+        guard case .frame(let driven) = WorkspaceControlCodec.decodeRequest(
+            Data("{\"v\":1,\"op\":\"terminalOutput\"}".utf8)
+        ) else {
+            Issue.record("event op must decode")
+            return
+        }
+        #expect(driven.payload == .unsupported(.terminalOutput))
     }
 
-    @Test func launchRequestParseSkipsUnknownOperation() throws {
+    @Test func codecYieldsUnknownPayloadForUnknownOperation() throws {
         let body = Data(
             "{\"v\":1,\"id\":\"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\",\"op\":\"killProcess\"}".utf8
         )
-        guard case .request(let request) = WorkspaceControlRequest.decode(body) else {
+        guard case .frame(let request) = WorkspaceControlCodec.decodeRequest(body) else {
             Issue.record("unknown-op frame did not decode")
             return
         }
         #expect(request.operation == nil)
-        #expect(WorkspaceControlLaunchRequest.parse(request, context: context) == nil)
+        #expect(request.payload == .unknown(rawOperation: "killProcess"))
     }
 }
 
 #if os(macOS)
+private func launchRequest(_ fields: LaunchFields) -> WorkspaceControlRequestFrame {
+    WorkspaceControlRequestFrame(payload: .launchRuntime(fields))
+}
+
+private func ensureRequest(_ fields: LaunchFields) -> WorkspaceControlRequestFrame {
+    WorkspaceControlRequestFrame(payload: .ensureTerminalRuntime(fields))
+}
+
+private func cancelRequest(_ runtime: UUID?) -> WorkspaceControlRequestFrame {
+    WorkspaceControlRequestFrame(payload: .cancelRuntime(.init(runtime: runtime)))
+}
+
 private struct LaunchParityHost {
     var tree: ContainmentTree
     var supervisor: WorkspaceSessionSupervisor
@@ -434,10 +423,7 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         let before = host.supervisor.runtimeFacts().count
-        let refused = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
-            executable: "bin/sh"
-        ))
+        let refused = host.server.launch(launchRequest(.init(executable: "bin/sh")))
         #expect(refused.ok != true)
         #expect(refused.code == .invalidRequest)
         #expect(host.supervisor.runtimeFacts().count == before)
@@ -447,12 +433,11 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         let before = host.supervisor.runtimeFacts().count
-        let refused = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let refused = host.server.launch(launchRequest(.init(
             executable: "/bin/sleep",
             arguments: ["30"],
             resourceProfileID: "no-such-profile"
-        ))
+        )))
         #expect(refused.ok != true)
         #expect(refused.code == .resourceProfileUnavailable)
         #expect(host.supervisor.runtimeFacts().count == before)
@@ -462,12 +447,11 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         let before = host.supervisor.runtimeFacts().count
-        let refused = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let refused = host.server.launch(launchRequest(.init(
             executable: "/bin/sleep",
             arguments: ["30"],
             io: "terminal"
-        ))
+        )))
         #expect(refused.ok != true)
         #expect(refused.code == .invalidRequest)
         #expect(host.supervisor.runtimeFacts().count == before)
@@ -478,23 +462,21 @@ struct LaunchParityHandlerTests {
         // message with both faults reports resourceProfileUnavailable.
         let host = try LaunchParityHost()
         defer { host.close() }
-        let refused = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let refused = host.server.launch(launchRequest(.init(
             executable: "/bin/sleep",
             arguments: ["30"],
             resourceProfileID: "no-such-profile",
             hook: "not a tag!"
-        ))
+        )))
         #expect(refused.ok != true)
         #expect(refused.code == .resourceProfileUnavailable)
         // Profile lookup also precedes command construction: NUL plus an
         // unknown profile still reports resourceProfileUnavailable.
-        let refusedCommand = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let refusedCommand = host.server.launch(launchRequest(.init(
             executable: "/bin/\0sleep",
             arguments: ["30"],
             resourceProfileID: "no-such-profile"
-        ))
+        )))
         #expect(refusedCommand.ok != true)
         #expect(refusedCommand.code == .resourceProfileUnavailable)
     }
@@ -505,20 +487,18 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         let requests = [
-            WorkspaceControlRequest(operation: .launchAgentRuntime, id: UUID()),
-            WorkspaceControlRequest(
-                operation: .launchAgentRuntime,
+            WorkspaceControlRequestFrame(id: UUID(), payload: .launchAgentRuntime(.init())),
+            WorkspaceControlRequestFrame(
                 id: UUID(),
-                executable: "relative",
-                arguments: ["x"],
-                hook: "not a tag!"
+                payload: .launchAgentRuntime(.init(arguments: ["x"], io: "terminal"))
             ),
-            WorkspaceControlRequest(operation: .launchCustomRuntime, id: UUID()),
-            WorkspaceControlRequest(
-                operation: .launchCustomRuntime,
+            WorkspaceControlRequestFrame(id: UUID(), payload: .launchCustomRuntime(.init())),
+            WorkspaceControlRequestFrame(
                 id: UUID(),
-                executable: "relative",
-                customDefinitionDigest: "zzz"
+                payload: .launchCustomRuntime(.init(
+                    executable: "relative",
+                    customDefinitionDigest: "zzz"
+                ))
             ),
         ]
         for request in requests {
@@ -533,43 +513,41 @@ struct LaunchParityHandlerTests {
     @Test func ensureCreatesThenReusesTerminal() throws {
         let host = try LaunchParityHost()
         defer { host.close() }
-        let created = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let created = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"],
             io: "terminal",
             rows: 24,
             columns: 80
-        ))
+        )))
         #expect(created.operation == .ensureTerminalRuntime)
         #expect(created.ok == true)
-        #expect(created.created == true)
-        #expect(created.terminal == true)
-        #expect(created.rows == 24)
-        #expect(created.columns == 80)
-        let runtime = try #require(created.runtime)
+        let createdFields = try #require(launchReply(created))
+        #expect(createdFields.created == true)
+        #expect(createdFields.terminal == true)
+        #expect(createdFields.rows == 24)
+        #expect(createdFields.columns == 80)
+        let runtime = try #require(createdFields.runtime)
         // Canonical shell: reuse ignores the requested executable.
-        let reused = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let reused = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sh",
             io: "terminal",
             rows: 30,
             columns: 100
-        ))
+        )))
         #expect(reused.ok == true)
-        #expect(reused.created == false)
-        #expect(reused.runtime == runtime)
+        #expect(launchReply(reused)?.created == false)
+        #expect(launchReply(reused)?.runtime == runtime)
     }
 
     @Test func ensureRejectsNonTerminalIO() throws {
         let host = try LaunchParityHost()
         defer { host.close() }
         let before = host.supervisor.runtimeFacts().count
-        let refused = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let refused = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"]
-        ))
+        )))
         #expect(refused.ok != true)
         #expect(refused.code == .invalidRequest)
         #expect(host.supervisor.runtimeFacts().count == before)
@@ -579,73 +557,61 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         // No existing terminal: creation adjudicates the unknown profile.
-        let refused = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let refused = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"],
             resourceProfileID: "no-such-profile",
             io: "terminal",
             rows: 24,
             columns: 80
-        ))
+        )))
         #expect(refused.ok != true)
         #expect(refused.code == .resourceProfileUnavailable)
-        let created = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let created = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"],
             io: "terminal",
             rows: 24,
             columns: 80
-        ))
+        )))
         #expect(created.ok == true)
-        #expect(created.created == true)
+        #expect(launchReply(created)?.created == true)
         // Existing terminal: the shortcut reuses despite the bad profile.
-        let reused = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let reused = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"],
             resourceProfileID: "no-such-profile",
             io: "terminal",
             rows: 24,
             columns: 80
-        ))
+        )))
         #expect(reused.ok == true)
-        #expect(reused.created == false)
-        #expect(reused.runtime == created.runtime)
+        #expect(launchReply(reused)?.created == false)
+        #expect(launchReply(reused)?.runtime == launchReply(created)?.runtime)
     }
 
     @Test func cancelLaunchedRuntime() throws {
         let host = try LaunchParityHost()
         defer { host.close() }
-        let launched = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let launched = host.server.launch(launchRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"]
-        ))
+        )))
         #expect(launched.ok == true)
-        let runtime = try #require(launched.runtime)
-        let cancelled = host.server.cancel(WorkspaceControlRequest(
-            operation: .cancelRuntime,
-            runtime: runtime
-        ))
+        let runtime = try #require(launchReply(launched)?.runtime)
+        let cancelled = host.server.cancel(cancelRequest(runtime))
         #expect(cancelled.operation == .cancelRuntime)
         #expect(cancelled.ok == true)
-        #expect(cancelled.runtime == runtime)
+        #expect(cancelled.payload.runtime == runtime)
     }
 
     @Test func cancelRejectsMissingAndUnknownRuntime() throws {
         let host = try LaunchParityHost()
         defer { host.close() }
-        let missing = host.server.cancel(WorkspaceControlRequest(
-            operation: .cancelRuntime
-        ))
+        let missing = host.server.cancel(cancelRequest(nil))
         #expect(missing.ok != true)
         #expect(missing.code == .invalidRequest)
-        let unknown = host.server.cancel(WorkspaceControlRequest(
-            operation: .cancelRuntime,
-            runtime: UUID()
-        ))
+        let unknown = host.server.cancel(cancelRequest(UUID()))
         #expect(unknown.ok != true)
         #expect(unknown.code == .runtimeNotFound)
     }
@@ -654,35 +620,29 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         _ = host.supervisor.close()
-        let launchRefused = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let launchRefused = host.server.launch(launchRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"]
-        ))
+        )))
         #expect(launchRefused.ok != true)
         #expect(launchRefused.code == .workspaceClosed)
-        let ensureRefused = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let ensureRefused = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"],
             io: "terminal",
             rows: 24,
             columns: 80
-        ))
+        )))
         #expect(ensureRefused.ok != true)
         #expect(ensureRefused.code == .workspaceClosed)
         // The phase gate precedes validation: malformed requests on a
         // closed workspace report workspaceClosed, never invalidRequest.
-        let launchInvalid = host.server.launch(WorkspaceControlRequest(
-            operation: .launchRuntime,
-            executable: "bin/sh"
-        ))
+        let launchInvalid = host.server.launch(launchRequest(.init(executable: "bin/sh")))
         #expect(launchInvalid.ok != true)
         #expect(launchInvalid.code == .workspaceClosed)
-        let ensureInvalid = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let ensureInvalid = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "bin/sh"
-        ))
+        )))
         #expect(ensureInvalid.ok != true)
         #expect(ensureInvalid.code == .workspaceClosed)
     }
@@ -695,16 +655,14 @@ struct LaunchParityHandlerTests {
         let host = try LaunchParityHost()
         defer { host.close() }
         _ = host.supervisor.close()
-        let launchInvalid = host.server.testingDispatchLaunchFamily(WorkspaceControlRequest(
-            operation: .launchRuntime,
-            executable: "bin/sh"
-        ))
+        let launchInvalid = host.server.testingDispatchLaunchFamily(
+            launchRequest(.init(executable: "bin/sh"))
+        )
         #expect(launchInvalid.ok != true)
         #expect(launchInvalid.code == .workspaceClosed)
-        let ensureInvalid = host.server.testingDispatchLaunchFamily(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
-            executable: "bin/sh"
-        ))
+        let ensureInvalid = host.server.testingDispatchLaunchFamily(
+            ensureRequest(.init(executable: "bin/sh"))
+        )
         #expect(ensureInvalid.ok != true)
         #expect(ensureInvalid.code == .workspaceClosed)
     }
@@ -717,24 +675,22 @@ struct LaunchParityHandlerTests {
         // this window: it gates only after it owns the lock.
         let host = try LaunchParityHost()
         defer { host.close() }
-        let created = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        let created = host.server.ensureTerminalRuntime(ensureRequest(.init(
             executable: "/bin/sleep",
             arguments: ["60"],
             io: "terminal",
             rows: 24,
             columns: 80
-        ))
+        )))
         #expect(created.ok == true)
-        #expect(created.created == true)
-        let runtime = try #require(created.runtime)
-        let request = WorkspaceControlRequest(
-            operation: .ensureTerminalRuntime,
+        #expect(launchReply(created)?.created == true)
+        let runtime = try #require(launchReply(created)?.runtime)
+        let request = ensureRequest(.init(
             executable: "/bin/sh",
             io: "terminal",
             rows: 24,
             columns: 80
-        )
+        ))
         let server = host.server
         let box = LaunchReplyBox()
         var queuedThenClosed = false
@@ -760,7 +716,7 @@ struct LaunchParityHandlerTests {
         let refused = try #require(box.value)
         #expect(refused.ok != true)
         #expect(refused.code == .workspaceClosing)
-        #expect(refused.runtime == nil)
+        #expect(refused.payload.runtime == nil)
         #expect(host.supervisor.snapshot.phase == .closing)
         #expect(host.supervisor.runtimeFacts().contains {
             $0.id == runtime && $0.running && $0.terminal
@@ -769,9 +725,9 @@ struct LaunchParityHandlerTests {
 }
 
 private final class LaunchReplyBox: Sendable {
-    private let box = Mutex<WorkspaceControlResponse?>(nil)
+    private let box = Mutex<WorkspaceControlResponseFrame?>(nil)
 
-    var value: WorkspaceControlResponse? {
+    var value: WorkspaceControlResponseFrame? {
         get { box.withLock { $0 } }
         set { box.withLock { $0 = newValue } }
     }
@@ -783,21 +739,23 @@ struct MicroVMLaunchWireTests {
     private let options = MicroVMLaunchOptions(image: "alpine:3.20", cpus: 2, memoryMiB: 1024)!
 
     @Test func launchRequestCarriesMicroVMOptionsRoundTrip() throws {
-        let request = WorkspaceControlRequest(
-            operation: .launchRuntime,
+        let request = WorkspaceControlRequestFrame(
             id: LaunchParityFixtures.id,
-            executable: "/bin/sh",
-            microvm: options
+            payload: .launchRuntime(.init(executable: "/bin/sh", microvm: options))
         )
-        let body = try #require(request.encode())
+        let body = try #require(WorkspaceControlCodec.encodeRequest(request))
         let text = try #require(String(data: body, encoding: .utf8))
         #expect(text.contains(#""microvm":{"cpus":2,"image":"alpine:3.20","memoryMiB":1024}"#))
-        guard case .request(let decoded) = WorkspaceControlRequest.decode(body) else {
+        guard case .frame(let decoded) = WorkspaceControlCodec.decodeRequest(body) else {
             Issue.record("micro-VM launch did not decode")
             return
         }
-        #expect(decoded.microvm == options)
-        #expect(decoded.encode() == body)
+        guard case .launchRuntime(let fields) = decoded.payload else {
+            Issue.record("micro-VM launch decoded to \(decoded.payload)")
+            return
+        }
+        #expect(fields.microvm == options)
+        #expect(WorkspaceControlCodec.encodeRequest(decoded) == body)
     }
 
     @Test func invalidMicroVMFieldsFailClosed() {
@@ -808,7 +766,7 @@ struct MicroVMLaunchWireTests {
             #"{"v":1,"op":"launchRuntime","executable":"/bin/sh","microvm":"alpine"}"#,
         ]
         for body in bodies {
-            if case .message = WorkspaceControlCodec.decode(Data(body.utf8)) {
+            if case .frame = WorkspaceControlCodec.decodeRequest(Data(body.utf8)) {
                 Issue.record("accepted \(body)")
             }
         }
@@ -816,7 +774,7 @@ struct MicroVMLaunchWireTests {
 
     @Test func launchParseCarriesMicroVMOptions() {
         let parsed = LaunchRuntimePayload.parse(
-            WorkspaceControlRequest(operation: .launchRuntime, executable: "/bin/sh", microvm: options),
+            .init(executable: "/bin/sh", microvm: options),
             resourcePolicy: .empty,
             project: "/proj"
         )
@@ -829,8 +787,7 @@ struct MicroVMLaunchWireTests {
 
     @Test func ensureTerminalRuntimeRefusesMicroVM() {
         let parsed = EnsureTerminalRuntimePayload.parse(
-            WorkspaceControlRequest(
-                operation: .ensureTerminalRuntime,
+            .init(
                 executable: "/bin/sh",
                 microvm: options,
                 io: "terminal",

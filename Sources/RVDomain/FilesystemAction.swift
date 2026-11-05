@@ -219,7 +219,7 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         .shell(
             ShellAction.analyzed(
                 AnalyzedShell(
-                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    fingerprint: fingerprint,
                     scope: ActionScope(workingDirectory: workingDirectory),
                     supportingCommand: command,
                     analysis: .filesystem(self)
@@ -263,21 +263,21 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         return kinds
     }
 
-    private var fingerprint: String {
-        let paths = targets.map(\.canonical).joined(separator: ",")
+    private var fingerprint: ActionFingerprint {
+        let paths = FingerprintSegment.list(targets.map(\.canonical))
         switch self {
         case .delete(_, let recursive, let force):
-            return "shell:fs.delete:\(recursive):\(force):\(paths)"
+            return .make("shell:fs.delete", [.field("\(recursive)"), .field("\(force)"), paths])
         case .move:
-            return "shell:fs.move:\(paths)"
+            return .make("shell:fs.move", [paths])
         case .overwrite:
-            return "shell:fs.overwrite:\(paths)"
+            return .make("shell:fs.overwrite", [paths])
         case .chmod(_, let mode, let recursive):
-            return "shell:fs.chmod:\(recursive):\(mode ?? ""):\(paths)"
+            return .make("shell:fs.chmod", [.field("\(recursive)"), .field(mode ?? ""), paths])
         case .create:
-            return "shell:fs.create:\(paths)"
+            return .make("shell:fs.create", [paths])
         case .read:
-            return "shell:fs.read:\(paths)"
+            return .make("shell:fs.read", [paths])
         }
     }
 

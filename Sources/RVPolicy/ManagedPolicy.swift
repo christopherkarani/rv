@@ -11,6 +11,13 @@ import Glibc
 import Foundation
 import RVDomain
 
+/// The closed set of secret source kinds, as named in secrets.json and in
+/// managed policy `secrets.allowedSources`.
+public enum SecretSourceKind: String, CaseIterable, Sendable {
+    case keychain, hostEnvironment, onePassword, vault, awsSecretsManager
+    case infisical, bitwarden, gcp, azure, awsProfile, oauth
+}
+
 /// Organization policy installed by an administrator (MDM, root). It only
 /// restricts: user configuration can never loosen what it sets.
 public struct ManagedPolicy: Sendable, Equatable {
@@ -51,8 +58,9 @@ public struct ManagedPolicy: Sendable, Equatable {
     }
 
     public struct Secrets: Sendable, Equatable {
-        /// Source kinds (`keychain`, `vault`, …); nil allows every kind.
-        public var allowedSources: [String]?
+        /// Source kinds (`keychain`, `vault`, …) in policy-file order, which
+        /// `rv managed status` echoes; nil allows every kind.
+        public var allowedSources: [SecretSourceKind]?
         public var allowEnvironmentDelivery = true
 
         public init() {}
@@ -69,10 +77,7 @@ public struct ManagedPolicy: Sendable, Equatable {
         }
     }
 
-    public static let secretSourceKinds = [
-        "keychain", "hostEnvironment", "onePassword", "vault", "awsSecretsManager",
-        "infisical", "bitwarden", "gcp", "azure", "awsProfile", "oauth",
-    ]
+    public static let secretSourceKinds = SecretSourceKind.allCases.map(\.rawValue)
 
     public var organization: String?
     public var serial: Int?
@@ -104,7 +109,7 @@ public struct ManagedPolicy: Sendable, Equatable {
         mcp.rules.contains { $0.rule.namesTool("\(server)/\(tool)") }
     }
 
-    public func allowsSecretSource(_ kind: String) -> Bool {
+    public func allowsSecretSource(_ kind: SecretSourceKind) -> Bool {
         secrets.allowedSources.map { $0.contains(kind) } ?? true
     }
 
@@ -206,12 +211,14 @@ extension ManagedPolicy {
             guard case .object(let secrets) = raw else { throw ManagedPolicyError("\"secrets\" must be an object") }
             try keys(secrets, allowed: ["allowedSources", "allowEnvironmentDelivery"], context: "secrets")
             if secrets["allowedSources"] != nil {
-                let kinds = try strings(secrets["allowedSources"], "secrets.allowedSources")
-                if let unknown = kinds.first(where: { secretSourceKinds.contains($0) == false }) {
-                    throw ManagedPolicyError(
-                        "unknown secret source \"\(DisplayedText.field(unknown))\" in secrets.allowedSources")
+                let names = try strings(secrets["allowedSources"], "secrets.allowedSources")
+                policy.secrets.allowedSources = try names.map { name in
+                    guard let kind = SecretSourceKind(rawValue: name) else {
+                        throw ManagedPolicyError(
+                            "unknown secret source \"\(DisplayedText.field(name))\" in secrets.allowedSources")
+                    }
+                    return kind
                 }
-                policy.secrets.allowedSources = kinds
             }
             policy.secrets.allowEnvironmentDelivery =
                 try bool(secrets["allowEnvironmentDelivery"], "secrets.allowEnvironmentDelivery") ?? true

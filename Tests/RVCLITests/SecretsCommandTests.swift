@@ -523,8 +523,20 @@ struct SecretsCommandTests {
         let text = SecretsRun.describeText(report)
         #expect(text.contains("op://") == false)
         #expect(text.contains("OPENAI_API_KEY  onePassword  environment"))
-        let json = SecretsRun.json(report)
+        let json = try RobotJSON.encode(report, options: .pretty)
         #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
+    }
+
+    /// rv sends a Vault token to a schema's `@initHcpVault` url, so the import names it.
+    @Test func varlockImportNamesASchemaVaultServer() {
+        let pinned = SecretDefinition(
+            name: "DB_PASS",
+            source: .vault(path: "kv/data/db", field: "DB_PASS", address: URL(string: "https://vault.example.com:8200")),
+            delivery: .environment)
+        #expect(SecretsRun.importLine(pinned).hasSuffix(", Vault server vault.example.com:8200"))
+        let ambient = SecretDefinition(
+            name: "DB_PASS", source: .vault(path: "kv/data/db", field: "DB_PASS", address: nil), delivery: .environment)
+        #expect(SecretsRun.importLine(ambient).contains("Vault server") == false)
     }
 
     @Test func varlockProxyImportsAsGatewayDelivery() throws {

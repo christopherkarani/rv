@@ -138,7 +138,7 @@ struct AgentDeathPropagationTests {
         HostActionApprovalCreateDTO(
             reference: reference,
             action: action ?? self.action(),
-            reason: "reviewAsk",
+            reason: .reviewAsk,
             policyContext: "runtime:/work",
             definitionID: AgentDefinitionID(rawValue: "death-agent"),
             definitionRevision: AgentDefinitionRevision(digestHex: String(repeating: "d", count: 64)))
