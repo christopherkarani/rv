@@ -3,27 +3,37 @@ import RVPolicy
 
 extension JSONValue {
     /// The same value in RVDomain's model, which RVPolicy rules evaluate.
-    /// An exact integer keeps its digits when `Double` cannot hold it, including
-    /// spellings with a trailing fraction or an exponent. Anything else that
-    /// `Double` would round into an integer fails closed as text.
+    /// The conversion itself is the `JSONSpellingValue` interface in
+    /// RVPolicy, shared with the managed-policy adapter: exact integers keep
+    /// their digits, and anything `Double` would round fails closed as text.
     public var domainValue: ToolArgumentRule.Value {
+        spellingValue.domainValue()
+    }
+
+    /// The same value in the parser module's spelling model.
+    var spellingValue: JSONSpellingValue {
         switch self {
         case .null: return .null
         case .bool(let flag): return .bool(flag)
+        case .number(let spelling): return .number(spelling)
         case .string(let text): return .string(text)
-        case .array(let items): return .array(items.map(\.domainValue))
+        case .array(let items): return .array(items.map(\.spellingValue))
         case .object(let object):
-            var members: [String: ToolArgumentRule.Value] = [:]
-            for (key, value) in object.entries { members[key] = value.domainValue }
-            return .object(members)
-        case .number(let spelling):
-            if let digits = JSONExactInteger.digits(spelling) {
-                return JSONExactInteger.domainValue(digits)
-            }
-            if let number = JSONExactInteger.finiteNonInteger(spelling) {
-                return .number(number)
-            }
-            return .string(JSONExactInteger.numberMarker + spelling)
+            return .object(object.entries.map { .init(key: $0.key, value: $0.value.spellingValue) })
+        }
+    }
+
+    init(spelling value: JSONSpellingValue) {
+        switch value {
+        case .null: self = .null
+        case .bool(let flag): self = .bool(flag)
+        case .number(let spelling): self = .number(spelling)
+        case .string(let text): self = .string(text)
+        case .array(let items): self = .array(items.map(JSONValue.init(spelling:)))
+        case .object(let entries):
+            var object = JSONObject()
+            for entry in entries { object[entry.key] = JSONValue(spelling: entry.value) }
+            self = .object(object)
         }
     }
 

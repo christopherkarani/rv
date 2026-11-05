@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVHistory
 import RVIsolation
+import RVMCP
 import RVPolicy
 import Synchronization
 import Testing
@@ -221,6 +222,59 @@ struct AuditForwardTests {
         #expect(secret.message.contains("\\u001b[2J"))
         #expect(secret.message.contains("\\u202e"))
         #expect(secret.message.contains("\\\\u001b") == false)
+    }
+
+    /// The same spelling table as the classification seam in RVMCPTests:
+    /// audit forwarding accepts or refuses exactly where the one
+    /// classification does, wording each refusal in its own sentences.
+    /// REQ-T6 named divergence: parsed-loopback spellings http may reach
+    /// (127.0.0.2, [::ffff:127.0.0.1]) are accepted now, and loopback
+    /// aliases in non-canonical spellings are refused as non-canonical
+    /// even over https, where the old literal list let them through.
+    @Test func destinationsFollowTheOneEndpointClassification() throws {
+        let accepted = [
+            "https://siem.example.com/rv",
+            "http://localhost:9000/x",
+            "http://127.0.0.1:9000/x",
+            "http://127.0.0.2:9000/x",
+            "http://[::1]:9000/x",
+            "http://[::ffff:127.0.0.1]:9000/x",
+            "https://%31%32%37.0.0.1/x",
+        ]
+        for spelling in accepted {
+            let url = try #require(URL(string: spelling), "\(spelling)")
+            #expect(SecretFreeEndpoint.problemKind(url: url, rawSpelling: spelling) == nil, "\(spelling)")
+            #expect((try? AuditForwardRun.destination(spelling).get()) != nil, "\(spelling)")
+        }
+        let refused: [(String, String)] = [
+            ("not a url", "--to must be an absolute URL"),
+            ("siem.example.com/rv", "--to must be an absolute URL"),
+            ("http://siem.example.com/rv", "audit forwarding needs https (plain http is allowed only to localhost)"),
+            ("http://localhost./rv", "audit forwarding needs https (plain http is allowed only to localhost)"),
+            ("http://127.000.0.1/rv", "--to must name its host as a canonical IP address or DNS name"),
+            ("https://127.000.0.1/rv", "--to must name its host as a canonical IP address or DNS name"),
+            ("http://127.1/rv", "--to must name its host as a canonical IP address or DNS name"),
+            ("http://2130706433/rv", "--to must name its host as a canonical IP address or DNS name"),
+            ("http://0x7f000001/rv", "--to must name its host as a canonical IP address or DNS name"),
+            ("https://%31%32%37.000.0.1/rv", "--to must name its host as a canonical IP address or DNS name"),
+            ("https://user:pass@siem.example/ingest", "--to must not include a username or password"),
+            ("https://siem.example/ingest#x", "--to must not have a fragment"),
+            ("https://supersecretpassword%40siem.example/ingest", "--to must not carry a secret in its host"),
+            ("https://siem.example/hook?api_key=zzz", "--to must not carry a secret in its query"),
+            ("https://siem.example/https://user:supersecretpassword@evil.example/hook", "--to must not carry a secret in its path"),
+            ("https://siem.example/user:?z@collector.example", "--to must not carry a secret in its path"),
+        ]
+        for (spelling, sentence) in refused {
+            guard case .failure(let failure) = AuditForwardRun.destination(spelling) else {
+                Issue.record("accepted \(spelling)")
+                continue
+            }
+            #expect(failure.message == sentence, "\(spelling) -> \(failure.message)")
+            #expect(failure.message.contains("supersecretpassword") == false, "\(spelling)")
+            if let url = URL(string: spelling) {
+                #expect(SecretFreeEndpoint.problemKind(url: url, rawSpelling: spelling) != nil, "\(spelling)")
+            }
+        }
     }
 
     @Test func anExpiredHeaderSecretIsNeverResolved() {

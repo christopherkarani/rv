@@ -124,9 +124,11 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         reason: "git reset --hard destroys uncommitted changes"
     )
-    let wire = codec.encodeEvaluatedAskDeny(
+    let wire = hookWire(
         from: EvaluationResult(outcome: .deny(deny, matched: nil)),
-        command: ShellCommand(rawValue: "git reset --hard")
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: codec,
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.isEmpty == false)

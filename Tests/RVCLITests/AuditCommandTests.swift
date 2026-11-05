@@ -35,8 +35,8 @@ struct AuditCommandTests {
         let events = AuditRun.events(home: home, filter: AuditFilter())
         #expect(events.isEmpty)
         #expect(AuditRun.pretty(events) == "")
-        #expect(AuditRun.jsonArray(events) == "[]\n")
-        #expect(AuditRun.jsonLines(events) == "")
+        #expect(try AuditRun.jsonArray(events) == "[]\n")
+        #expect(try AuditRun.jsonLines(events) == "")
     }
 
     @Test func joinsRealLedgerWritersIntoOneTimeline() throws {
@@ -85,15 +85,15 @@ struct AuditCommandTests {
         )
         #expect(recentEgress.map(\.subject) == ["exfil.example:443"])
 
-        let exported = AuditRun.jsonLines(all).split(separator: "\n")
+        let exported = try AuditRun.jsonLines(all).split(separator: "\n")
         #expect(exported.count == 3)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let roundTrip = try exported.map { try decoder.decode(AuditEvent.self, from: Data($0.utf8)) }
         #expect(roundTrip.map(\.subject) == all.map(\.subject))
         #expect(roundTrip.allSatisfy { $0.schema == "rv.audit.v1" })
-        #expect(AuditRun.jsonLines(all).contains("STRIPE_SECRET_KEY"))
-        #expect(AuditRun.jsonArray(all).hasPrefix("["))
+        #expect(try AuditRun.jsonLines(all).contains("STRIPE_SECRET_KEY"))
+        #expect(try AuditRun.jsonArray(all).hasPrefix("["))
     }
 
     @Test func toolNameIsEscapedOnSubjectReasonRobotAndExport() throws {
@@ -120,8 +120,8 @@ struct AuditCommandTests {
         let lines = pretty.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
         #expect(lines.contains(sentence) == false)
 
-        let robot = AuditRun.jsonArray([event])
-        let exported = AuditRun.jsonLines([event])
+        let robot = try AuditRun.jsonArray([event])
+        let exported = try AuditRun.jsonLines([event])
         func row(_ text: String) throws -> [String: Any] {
             #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
             #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)

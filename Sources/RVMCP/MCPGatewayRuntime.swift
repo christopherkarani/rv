@@ -157,7 +157,7 @@ public enum MCPLaunchPlanner {
             return .failure(.secretUnavailable(
                 server: server, secret: names.first ?? "", reason: "organization policy is invalid: \(reason)"))
         case .failure(.refused(let secretName, let reason)):
-            let kind = secrets.secret(named: secretName)?.source.kind ?? ""
+            let kind = secrets.secret(named: secretName)?.source.kind.rawValue ?? ""
             return .failure(.secretUnavailable(server: server, secret: secretName, reason: unavailable(reason, kind: kind)))
         case .success(let released):
             var resolved: [String: String] = [:]

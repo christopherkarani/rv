@@ -675,16 +675,10 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// Seam gate: a rollback restoring `incoming` refuses when that
-    /// replacement is weaker than either baseline:
-    ///
-    /// - a deny or ask whose predicate is absent from the restored document
-    ///   (`removedRuleFindings`);
-    /// - an explicit verdict relaxation on a surviving predicate
-    ///   (deny → ask/allow), via share semantics. Duplicate predicates in
-    ///   legacy `typed-rules.json` use the strictest verdict, the same
-    ///   ranking enforcement uses. The first row must not hide a later deny;
-    /// - a safety-level downgrade (`strict` → anything else);
-    /// - a widening of secret `allowPaths`.
+    /// replacement is weaker than either baseline. The store owns only
+    /// the dual-baseline orchestration; `PolicyDiffRisk` owns the
+    /// replacement decision itself (`evaluateReplacement` with
+    /// blocking exemption severity) at one deep seam.
     ///
     /// `live` is the file enforcement loads. `historyHead` is the sealed
     /// tail on the machine layer and the JSONL head on the repo layer.
@@ -701,10 +695,21 @@ public struct TypedRuleStore: Sendable {
         historyHead: PolicyDocument,
         incoming: PolicyDocument
     ) throws {
+        var baselines: [PolicyDocument] = []
         if let live {
-            try refuseRelaxingRollback(existing: live, incoming: incoming)
+            baselines.append(live)
         }
-        try refuseRelaxingRollback(existing: historyHead, incoming: incoming)
+        baselines.append(historyHead)
+        for baseline in baselines {
+            let report = PolicyDiffRisk.evaluateReplacement(
+                existing: baseline,
+                incoming: incoming,
+                secretExemptionSeverity: .blocking
+            )
+            if report.hasBlockingFindings {
+                throw PolicyDiffRiskError.blockedByFindings(report)
+            }
+        }
     }
 
     /// Loads the live document for the rollback gate. Only
@@ -717,75 +722,6 @@ public struct TypedRuleStore: Sendable {
             return try load()
         } catch TypedRuleStoreError.invalidFile {
             return nil
-        }
-    }
-
-    /// One baseline. Callers compare the live file and the history head.
-    /// Legacy JSON keeps every row. Enforcement ranks the strictest verdict
-    /// for a predicate. Share's first-row match and removal's presence check
-    /// would otherwise treat allow-then-deny as allow, and a rollback to an
-    /// allow head would seal that allow over the live deny.
-    private static func strictestRules(_ rules: [PolicyDocumentRule]) -> [PolicyDocumentRule] {
-        var merged: [PolicyDocumentRule] = []
-        for rule in rules {
-            if let index = merged.firstIndex(where: { $0.predicate == rule.predicate }) {
-                if restrictionRank(rule.verdict) > restrictionRank(merged[index].verdict) {
-                    merged[index] = rule
-                }
-            } else {
-                merged.append(rule)
-            }
-        }
-        return merged
-    }
-
-    private static func refuseRelaxingRollback(
-        existing: PolicyDocument,
-        incoming: PolicyDocument
-    ) throws {
-        let existingRules = strictestRules(existing.rules)
-        let incomingRules = strictestRules(incoming.rules)
-        let existingDocument = PolicyDocument(
-            schemaVersion: existing.schemaVersion,
-            rules: existingRules,
-            safetyLevel: existing.safetyLevel,
-            allowPaths: existing.allowPaths
-        )
-        let incomingDocument = PolicyDocument(
-            schemaVersion: incoming.schemaVersion,
-            rules: incomingRules,
-            safetyLevel: incoming.safetyLevel,
-            allowPaths: incoming.allowPaths
-        )
-        var findings = PolicyDiffRisk.evaluateShare(
-            existing: existingDocument,
-            incoming: incomingDocument
-        ).findings
-        findings += PolicyDiffRisk.removedRuleFindings(
-            old: existingRules,
-            new: incomingRules
-        )
-        if existing.safetyLevel == .strict, incoming.safetyLevel != .strict {
-            findings.append(
-                PolicyDiffRiskFinding(
-                    kind: .safetyDowngrade,
-                    severity: .blocking,
-                    detail: "strict -> \(incoming.safetyLevel?.rawValue ?? "unset")"
-                )
-            )
-        }
-        for added in Set(incoming.allowPaths).subtracting(Set(existing.allowPaths)).sorted() {
-            findings.append(
-                PolicyDiffRiskFinding(
-                    kind: .newSecretExemption,
-                    severity: .blocking,
-                    detail: added
-                )
-            )
-        }
-        let report = PolicyDiffRiskReport(findings: findings)
-        if report.hasBlockingFindings {
-            throw PolicyDiffRiskError.blockedByFindings(report)
         }
     }
 
@@ -826,23 +762,12 @@ public struct TypedRuleStore: Sendable {
                 origin: origin
             )
             if let index = merged.firstIndex(where: { $0.predicate == stamped.predicate }) {
-                if restrictionRank(stamped.verdict) > restrictionRank(merged[index].verdict) {
+                if PolicyDiffRisk.restrictionRank(stamped.verdict) > PolicyDiffRisk.restrictionRank(merged[index].verdict) {
                     merged[index] = stamped
                 }
             } else {
                 merged.append(stamped)
             }
-        }
-    }
-
-    private static func restrictionRank(_ verdict: TypedRuleVerdict) -> Int {
-        switch verdict {
-        case .allow:
-            0
-        case .ask:
-            1
-        case .deny:
-            2
         }
     }
 

@@ -5,6 +5,7 @@ import SQLite3
 import Testing
 import RVDomain
 import RVPresentation
+import RVScan
 import RVTheme
 @testable import RVCLI
 
@@ -57,6 +58,28 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     return try #require(object as? [String: Any])
 }
 
+/// Runs the RVScan seam with the whole-history window the deleted
+/// `ScanRun.Request.fixture` defaulted to.
+private func scanReport(
+    home: ScanHome,
+    rootPath: String? = nil,
+    hostFilter: ScanHostID? = nil,
+    packIDs: [PackID] = dayOnePackIDs,
+    includeGlobs: [String] = []
+) throws -> ScanReport {
+    try SessionScan().run(
+        SessionScanRequest(
+            home: home,
+            now: Date(),
+            rootPath: rootPath,
+            includeGlobs: includeGlobs,
+            hostFilter: hostFilter,
+            timeWindow: .all,
+            packIDs: packIDs
+        )
+    ).report
+}
+
 @Test func scanConfiguration_sessionsOnly_noRepoSubcommand() {
     #expect(ScanSessions.configuration.commandName == "sessions")
     #expect(Scan.configuration.defaultSubcommand == ScanSessions.self)
@@ -65,19 +88,17 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     #expect(subcommandNames.contains("repo") == false)
 }
 
-@Test func scanRun_autoMode_findsClaudeDenyInTempHome() throws {
+@Test func sessionScan_autoMode_findsClaudeDenyInTempHome() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
-        let report = try ScanRun.run(
-            .fixture(home: home)
-        )
+        let report = try scanReport(home: home)
         #expect(report.findings.count == 1)
         #expect(report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
         #expect(report.eventsExtracted == 1)
     }
 }
 
-@Test func scanRun_autoMode_doesNotReadOutsideRegisteredRoots() throws {
+@Test func sessionScan_autoMode_doesNotReadOutsideRegisteredRoots() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         let outside = homeURL.appendingPathComponent("outside-reset-hard.jsonl")
@@ -86,9 +107,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         """
         try payload.write(to: outside, atomically: true, encoding: .utf8)
 
-        let report = try ScanRun.run(
-            .fixture(home: home)
-        )
+        let report = try scanReport(home: home)
 
         #expect(report.findings.count == 1)
         #expect(report.findings.first?.sourcePath.contains("outside-reset-hard.jsonl") == false)
@@ -96,14 +115,12 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
-@Test func scanRun_hostFilterPi_ignoresClaudeFixture() throws {
+@Test func sessionScan_hostFilterPi_ignoresClaudeFixture() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         try installPiFixture(into: homeURL)
 
-        let report = try ScanRun.run(
-            .fixture(home: home, hostFilter: .pi)
-        )
+        let report = try scanReport(home: home, hostFilter: .pi)
 
         #expect(report.findings.allSatisfy { $0.host == .pi })
         #expect(report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
@@ -111,7 +128,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
-@Test func scanRun_includeGlob_withExplicitPath_forwardsGlobsAndFindsUnrecognizedGrokDeny() throws {
+@Test func sessionScan_includeGlob_withExplicitPath_findsUnrecognizedGrokDeny() throws {
     try withTempScanHome { home, homeURL in
         let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
         try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
@@ -120,18 +137,14 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
             to: tree.appendingPathComponent("notes.txt")
         )
 
-        let skipped = try ScanRun.run(
-            .fixture(rootPath: tree.path, home: home)
-        )
+        let skipped = try scanReport(home: home, rootPath: tree.path)
         #expect(skipped.findings.isEmpty)
         #expect(skipped.eventsExtracted == 0)
 
-        let report = try ScanRun.run(
-            .fixture(
-                rootPath: tree.path,
-                home: home,
-                includeGlobs: ["*.txt"]
-            )
+        let report = try scanReport(
+            home: home,
+            rootPath: tree.path,
+            includeGlobs: ["*.txt"]
         )
         #expect(report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
         #expect(report.findings.first?.host == .grok)
@@ -139,53 +152,47 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
-@Test func scanRun_includeGlobWithoutPath_failsClosedWithoutWalkingHome() throws {
+@Test func sessionScan_includeGlobWithoutPath_failsClosedWithoutWalkingHome() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         do {
-            _ = try ScanRun.run(
-                .fixture(home: home, includeGlobs: ["**/*.jsonl"])
-            )
+            _ = try scanReport(home: home, includeGlobs: ["**/*.jsonl"])
             Issue.record("expected includeGlobRequiresPath without walking HOME")
-        } catch ScanRun.Error.includeGlobRequiresPath {
+        } catch SessionScanError.includeGlobRequiresPath {
             // usage error; registered roots under HOME must not be walked
         }
     }
 }
 
-@Test func scanRun_missingPath_failsClosed() throws {
+@Test func sessionScan_missingPath_failsClosed() throws {
     let missing = "/tmp/rv-scan-missing-\(UUID().uuidString)"
     do {
-        _ = try ScanRun.run(
-            .fixture(
-                rootPath: missing,
-                home: try #require(ScanHome(validating: "/tmp"))
-            )
+        _ = try scanReport(
+            home: try #require(ScanHome(validating: "/tmp")),
+            rootPath: missing
         )
         Issue.record("expected pathNotFound for missing path")
-    } catch ScanRun.Error.pathNotFound(let path) {
+    } catch SessionScanError.pathNotFound(let path) {
         #expect(path == missing)
     }
 }
 
-@Test func scanRun_unknownPacks_mapsPacksUnavailable() throws {
+@Test func sessionScan_unknownPacks_throwsPacksUnavailable() throws {
     try withTempScanHome { home, homeURL in
         do {
-            _ = try ScanRun.run(
-                .fixture(
-                    rootPath: homeURL.path,
-                    home: home,
-                    packIDs: [PackID(rawValue: "no.such.pack")]
-                )
+            _ = try scanReport(
+                home: home,
+                rootPath: homeURL.path,
+                packIDs: [PackID(rawValue: "no.such.pack")]
             )
             Issue.record("expected packsUnavailable")
-        } catch ScanRun.Error.packsUnavailable {
-            // mapped from SessionScanError.packsUnavailable
+        } catch SessionScanError.packsUnavailable {
+            // fail-closed pack resolution at the RVScan seam
         }
     }
 }
 
-@Test func scanRun_listingFailure_mapsListingFailed() throws {
+@Test func sessionScan_listingFailure_throwsListingFailed() throws {
     try withTempScanHome { home, homeURL in
         try FileManager.default.setAttributes([.posixPermissions: 0o111], ofItemAtPath: homeURL.path)
         defer {
@@ -193,17 +200,15 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         }
         let expected = URL(fileURLWithPath: homeURL.path, isDirectory: true).standardizedFileURL.path
         do {
-            _ = try ScanRun.run(
-                .fixture(rootPath: homeURL.path, home: home)
-            )
+            _ = try scanReport(home: home, rootPath: homeURL.path)
             Issue.record("expected listingFailed")
-        } catch ScanRun.Error.listingFailed(let path) {
+        } catch SessionScanError.listingFailed(let path) {
             #expect(path == expected)
         }
     }
 }
 
-@Test func scanRun_unreadableStore_mapsUnreadableStore() throws {
+@Test func sessionScan_unreadableStore_throwsUnreadableStore() throws {
     try withTempScanHome { home, homeURL in
         let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
         try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
@@ -211,11 +216,9 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         try Data().write(to: db, options: .atomic)
         let expected = db.standardizedFileURL.path
         do {
-            _ = try ScanRun.run(
-                .fixture(rootPath: tree.path, home: home)
-            )
+            _ = try scanReport(home: home, rootPath: tree.path)
             Issue.record("expected unreadableStore")
-        } catch ScanRun.Error.unreadableStore(let path) {
+        } catch SessionScanError.unreadableStore(let path) {
             #expect(path == expected)
         }
     }
@@ -224,7 +227,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
 // The Linux gate has no SQLite3 clang module (see scanLinkerSettings in
 // Package.swift): this fixture-backed test compiles only where SQLite3 imports.
 #if canImport(SQLite3)
-@Test func scanRun_prepareFailed_mapsPrepareFailed() throws {
+@Test func sessionScan_prepareFailed_throwsPrepareFailed() throws {
     try withTempScanHome { home, homeURL in
         let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
         try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
@@ -232,18 +235,16 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         try writeScanSQLiteDatabase(at: db, sql: "CREATE TABLE other (id TEXT);")
         let expected = db.standardizedFileURL.path
         do {
-            _ = try ScanRun.run(
-                .fixture(rootPath: tree.path, home: home)
-            )
+            _ = try scanReport(home: home, rootPath: tree.path)
             Issue.record("expected prepareFailed")
-        } catch ScanRun.Error.prepareFailed(let path) {
+        } catch SessionScanError.prepareFailed(let path) {
             #expect(path == expected)
         }
     }
 }
 #endif
 
-@Test func scanRun_executeDoesNotContainPipelineLoops() throws {
+@Test func scanCommand_doesNotContainPipelineLoops() throws {
     let url = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -251,6 +252,8 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         .appendingPathComponent("Sources/RVCLI/Commands/ScanCommand.swift")
     let text = try String(contentsOf: url, encoding: .utf8)
     #expect(text.contains("SessionScan()"))
+    #expect(text.contains("SessionScanRequest("))
+    #expect(text.contains("ScanRun.Request") == false)
     #expect(text.contains("DirectoryWalker") == false)
     #expect(text.contains("ScanClassify") == false)
     #expect(text.contains("ScanDedupe") == false)
@@ -260,9 +263,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
 @Test func scanRobot_defaultRedaction_usesSchemaAndEllipsis() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
-        let report = try ScanRun.run(
-            .fixture(home: home)
-        )
+        let report = try scanReport(home: home)
         let json = try renderScanSessionsRobot(from: report, showCommand: false)
         let object = try decodedJSON(json)
         #expect(object["schema"] as? String == "rv.scan.sessions.v1")
@@ -279,9 +280,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
 @Test func scanRobot_showCommand_includesFullMatchingView() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
-        let report = try ScanRun.run(
-            .fixture(home: home)
-        )
+        let report = try scanReport(home: home)
         let json = try renderScanSessionsRobot(from: report, showCommand: true)
         let object = try decodedJSON(json)
         let findings = try #require(object["findings"] as? [[String: Any]])
@@ -299,7 +298,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         let reset = try scanFixtureURL("claude/projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl")
         let destination = projects.appendingPathComponent("ac001-reset-hard.jsonl")
         try FileManager.default.copyItem(at: reset, to: destination)
-        let report = try ScanRun.run(.fixture(home: home))
+        let report = try scanReport(home: home)
         let json = try renderScanSessionsRobot(from: report, showCommand: false)
         #expect(json.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(json.unicodeScalars.contains { $0.value == 0x2028 } == false)
@@ -318,9 +317,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
 @Test func scanPretty_defaultRedaction_hidesFullArgv() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
-        let report = try ScanRun.run(
-            .fixture(home: home)
-        )
+        let report = try scanReport(home: home)
         let outcome = try ScanRun.render(
             report: report,
             showCommand: false,
@@ -354,9 +351,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
             to: projects.appendingPathComponent("dup-reset-hard.jsonl")
         )
 
-        let report = try ScanRun.run(
-            .fixture(home: home)
-        )
+        let report = try scanReport(home: home)
 
         let pretty = try ScanRun.render(
             report: report,

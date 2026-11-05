@@ -90,7 +90,17 @@ public enum RulePinning: Sendable {
     }
 
     public static func hardStop(in action: ProposedAction) -> RuleHardStopKind? {
-        let verdict = ActionPolicyEngine.evaluate(action: action)
+        // States the worlds this door effectively had when the engine
+        // forced them: the default context carries no branch (`.probed`
+        // git over no facts), and unresolved filesystem paths failed
+        // closed (`.probed` filesystem) — `.unresolvedPath` below is
+        // only reachable in that world.
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: ReviewContext(repository: RepositoryReviewContext()),
+            gitWorld: .probed(.empty),
+            filesystemWorld: .probed(.empty)
+        )
         if case .hardDeny(let deny) = verdict.decision {
             if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
                 return .workingTreeDiscard

@@ -164,14 +164,14 @@ public struct SecretRelease: Sendable {
 /// One organization rule a definition breaks.
 public enum SecretOrganizationRule: Sendable, Equatable {
     /// The policy does not list the definition's source kind.
-    case source(kind: String)
+    case source(kind: SecretSourceKind)
     /// The policy forbids handing the real value to a process's environment.
     case environmentDelivery
 
     /// The wording `rv secrets`, the launch broker, and `rv report` show.
     public func message(secret: String) -> String {
         switch self {
-        case .source(let kind): "\(secret) uses a \(kind) source, which is not allowed"
+        case .source(let kind): "\(secret) uses a \(kind.rawValue) source, which is not allowed"
         case .environmentDelivery:
             "\(secret) is delivered as an environment variable, which is not allowed; use the gateway"
         }
@@ -195,6 +195,17 @@ public enum SecretOrganizationRules {
         case .stdioServer: return .environmentDelivery
         case .header: return nil
         }
+    }
+
+    /// The rule a resource profile's `keychain` entry breaks, if any. Such an
+    /// entry reads a Keychain item and puts the real value in the cage's
+    /// environment without a secrets.json definition, so it answers to the
+    /// same source and environment-delivery rules as a keychain-sourced,
+    /// environment-delivered definition.
+    public static func profileKeychainRule(policy: ManagedPolicy?) -> SecretOrganizationRule? {
+        guard let policy else { return nil }
+        if policy.allowsSecretSource(.keychain) == false { return .source(kind: .keychain) }
+        return policy.secrets.allowEnvironmentDelivery ? nil : .environmentDelivery
     }
 
     /// The source rule alone: for callers that read a secret on the host and

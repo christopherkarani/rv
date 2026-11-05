@@ -29,7 +29,7 @@ struct SocketPeerAuthorizationTests {
 
     private func proposeMethod() -> IPCMethod {
         .proposeWorkspaceLaunch(ProposeLaunchParams(
-            workspace: "/tmp/proj", kind: "custom", executable: "/bin/echo"))
+            workspace: "/tmp/proj", kind: .custom, executable: "/bin/echo"))
     }
 
     private func evaluateMethod() -> IPCMethod {

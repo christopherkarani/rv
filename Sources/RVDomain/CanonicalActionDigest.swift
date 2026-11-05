@@ -2,14 +2,16 @@ import Foundation
 
 /// Canonical security digest of one `ProposedAction` for approval binding.
 ///
-/// Step 6 binds principal-bound approvals to this digest, not to the legacy
-/// `ActionFingerprint` spellings. The legacy spellings concatenate trusted
-/// and untrusted fields with `:` separators (`host:session:cwd:command` and
-/// friends), so two different actions can share one fingerprint string — e.g.
-/// `cwd="a:b", command="c"` versus `cwd="a", command="b:c"`. Those collisions
-/// are fail-closed wherever the legacy fingerprint is still used (deny-lists
-/// and describe-only APIs), but they are not sound enough to authorize an
-/// exact action. This digest covers the full decoded action struct instead.
+/// Step 6 binds principal-bound approvals to this digest, not to the
+/// `ActionFingerprint` spellings. Fingerprints are built by the injective
+/// `ActionFingerprint.make` encoder, so distinct projected fields no longer
+/// collide (`cwd="a:b", command="c"` versus `cwd="a", command="b:c"`). That
+/// injectivity holds only over the fields a fingerprint projects: `nil` and
+/// `""` alias for `remote`/`target`/`source`/`mode`, and
+/// `createBranch.startPoint` and `restore.source` are not encoded. This fails
+/// closed, because no fingerprint grants authority; fingerprints stay for
+/// deny-lists and describe-only APIs. This digest covers the full decoded
+/// action struct instead, which is what authorizing an exact action needs.
 ///
 /// Properties:
 /// - Deterministic: same action value always yields the same digest.

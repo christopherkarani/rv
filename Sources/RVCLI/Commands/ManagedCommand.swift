@@ -124,7 +124,7 @@ enum ManagedRun {
         for ruled in mcp.rules { lines.append("mcp \(ruled.decision.rawValue): \(ruled.rule.summary)") }
         if mcp.defaultDecision != .allow { lines.append("mcp default for other tools: \(mcp.defaultDecision.rawValue)") }
         if let sources = policy.secrets.allowedSources {
-            lines.append("secret sources allowed: " + (sources.isEmpty ? "none" : sources.joined(separator: ", ")))
+            lines.append("secret sources allowed: " + (sources.isEmpty ? "none" : sources.map(\.rawValue).joined(separator: ", ")))
         }
         if policy.secrets.allowEnvironmentDelivery == false { lines.append("secrets: gateway delivery only") }
         if let forward = policy.auditForward { lines.append("audit forwarded to \(forward.url)") }
@@ -190,18 +190,6 @@ enum ManagedRun {
         return .success("wrote \(DisplayedText.field(destination.path))\n")
     }
 
-    /// Robot JSON for `rv managed`. `JSONEncoder` already writes ESC as
-    /// `\u001b` but leaves separators, NEL, bidi controls, and other format
-    /// scalars raw; `DisplayedText.escapeJSONScalars` escapes every one
-    /// `DisplayedText.needsEscape` flags. The result is still valid JSON.
-    /// Policy strings are not fielded first: that would turn ESC into the
-    /// literal spelling `\\u001b`.
-    static func robotJSON<T: Encodable>(_ value: T) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return DisplayedText.escapeJSONScalars(text + "\n")
-    }
 }
 
 struct Managed: AsyncParsableCommand {
@@ -224,7 +212,7 @@ struct ManagedStatus: AsyncParsableCommand {
         let status = ManagedRun.status(
             ManagedRun.installed(home: home), directory: ManagedPolicyLocation.installedDirectory)
         if ctx.explicitRobot {
-            ctx.writeStdout(ManagedRun.robotJSON(status))
+            ctx.writeStdout(try RobotJSON.encode(status, options: .pretty))
         } else {
             ctx.writeStdout(ManagedRun.statusText(status))
         }
@@ -246,7 +234,11 @@ struct ManagedVerify: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "managed verify", format: format)
         switch ManagedRun.verify(directory: URL(fileURLWithPath: directory, isDirectory: true)) {
         case .failure(let failure): try ctx.fail("rv managed verify: \(failure.message)\n")
-        case .success(let status): ctx.writeStdout(ctx.explicitRobot ? ManagedRun.robotJSON(status) : ManagedRun.statusText(status))
+        case .success(let status):
+            ctx.writeStdout(
+                ctx.explicitRobot
+                    ? try RobotJSON.encode(status, options: .pretty)
+                    : ManagedRun.statusText(status))
         }
     }
 }

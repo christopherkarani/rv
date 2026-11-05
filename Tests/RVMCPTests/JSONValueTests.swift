@@ -48,6 +48,40 @@ struct JSONValueTests {
         #expect((try? JSONValue.parse(deep, maximumDepth: 80)) != nil)
     }
 
+    /// Exact boundaries the adapter must keep after the parser move: an
+    /// empty container costs one level less than the scalar inside it.
+    @Test func depthBoundariesAreExact() {
+        func emptyArrays(_ depth: Int) -> String {
+            String(repeating: "[", count: depth) + String(repeating: "]", count: depth)
+        }
+        func scalarArrays(_ depth: Int) -> String {
+            String(repeating: "[", count: depth) + "1" + String(repeating: "]", count: depth)
+        }
+        func emptyObjects(_ depth: Int) -> String {
+            String(repeating: "{\"a\":", count: depth - 1) + "{}" + String(repeating: "}", count: depth - 1)
+        }
+        func scalarObjects(_ depth: Int) -> String {
+            String(repeating: "{\"a\":", count: depth) + "1" + String(repeating: "}", count: depth)
+        }
+        #expect((try? JSONValue.parse(emptyArrays(65))) != nil)
+        #expect(throws: JSONParseError.tooDeep) { try JSONValue.parse(emptyArrays(66)) }
+        #expect((try? JSONValue.parse(scalarArrays(64))) != nil)
+        #expect(throws: JSONParseError.tooDeep) { try JSONValue.parse(scalarArrays(65)) }
+        #expect((try? JSONValue.parse(emptyObjects(65))) != nil)
+        #expect(throws: JSONParseError.tooDeep) { try JSONValue.parse(emptyObjects(66)) }
+        #expect((try? JSONValue.parse(scalarObjects(64))) != nil)
+        #expect(throws: JSONParseError.tooDeep) { try JSONValue.parse(scalarObjects(65)) }
+        #expect((try? JSONValue.parse(emptyArrays(3), maximumDepth: 2)) != nil)
+        #expect(throws: JSONParseError.tooDeep) { try JSONValue.parse(emptyArrays(4), maximumDepth: 2) }
+        #expect((try? JSONValue.parse(scalarArrays(2), maximumDepth: 2)) != nil)
+        #expect(throws: JSONParseError.tooDeep) { try JSONValue.parse(scalarArrays(3), maximumDepth: 2) }
+    }
+
+    @Test func duplicateKeyWinsOverAMalformedRepeatedValue() {
+        #expect(throws: JSONParseError.duplicateKey) { try JSONValue.parse(#"{"a":1,"a":}"#) }
+        #expect(throws: JSONParseError.invalid(offset: 7)) { try JSONValue.parse(#"{"a":1}x"#) }
+    }
+
     @Test func objectEqualityIgnoresOrderButOutputKeepsIt() throws {
         let a = try JSONValue.parse(#"{"x":1,"y":2}"#)
         let b = try JSONValue.parse(#"{"y":2,"x":1}"#)

@@ -11,8 +11,8 @@ struct BlocksCommandTests {
         #expect(names.contains("blocks"))
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        #expect(BlocksRun.list(home: home, json: false) == "")
-        #expect(BlocksRun.list(home: home, json: true) == "[]\n")
+        #expect(try BlocksRun.list(home: home, json: false) == "")
+        #expect(try BlocksRun.list(home: home, json: true) == "[]\n")
     }
 
     @Test func listsNewestFirstAndJSON() throws {
@@ -42,7 +42,7 @@ struct BlocksCommandTests {
             ),
             now: now
         )
-        let pretty = BlocksRun.list(home: home, json: false, now: now)
+        let pretty = try BlocksRun.list(home: home, json: false, now: now)
         let first = pretty.split(separator: "\n").first.map(String.init) ?? ""
         #expect(first.contains("core.secrets:id-ed25519"))
         #expect(
@@ -50,11 +50,13 @@ struct BlocksCommandTests {
         )
         #expect(pretty.contains("core.secrets:env"))
         #expect(pretty.contains("claude  Read  core.secrets:env  environment  /tmp/rv-oracle/.env"))
-        let json = BlocksRun.list(home: home, json: true, now: now)
+        let json = try BlocksRun.list(home: home, json: true, now: now)
         #expect(json.contains("\"rule_id\":\"core.secrets:id-ed25519\""))
         #expect(json.contains("\"host\":\"cursor\""))
         #expect(json.contains("\"tool\":\"Read\""))
         #expect(json.contains("\"category\":\"ssh\""))
+        #expect(json.contains("/tmp/rv-oracle/.env"))
+        #expect(json.contains("\\/tmp") == false)
         #expect(json.contains("git reset") == false)
     }
 
@@ -78,7 +80,7 @@ struct BlocksCommandTests {
                 now: now
             )
         }
-        let pretty = BlocksRun.list(home: home, json: false, now: now)
+        let pretty = try BlocksRun.list(home: home, json: false, now: now)
         #expect(pretty.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(pretty.unicodeScalars.contains { $0.value == 0x2028 } == false)
         #expect(pretty.unicodeScalars.contains { $0.value == 0x202E } == false)
@@ -90,7 +92,7 @@ struct BlocksCommandTests {
         #expect(pretty.contains("Write"))
         let lines = pretty.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
         #expect(lines.contains(sentence) == false)
-        let json = BlocksRun.list(home: home, json: true, now: now)
+        let json = try BlocksRun.list(home: home, json: true, now: now)
         #expect(json.unicodeScalars.contains { $0.value == 0x2028 } == false)
         #expect(json.unicodeScalars.contains { $0.value == 0x202E } == false)
         #expect(json.contains("\\u2028"))
@@ -119,7 +121,7 @@ struct BlocksCommandTests {
             ),
             now: now
         )
-        let pretty = BlocksRun.list(home: home, json: false, now: now)
+        let pretty = try BlocksRun.list(home: home, json: false, now: now)
         #expect(pretty.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(pretty.unicodeScalars.contains { $0.value == 0x2028 } == false)
         #expect(pretty.unicodeScalars.contains { $0.value == 0x2029 } == false)
@@ -131,7 +133,7 @@ struct BlocksCommandTests {
         #expect(pretty.contains("\\u202e"))
         let lines = pretty.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
         #expect(lines.contains(sentence) == false)
-        let json = BlocksRun.list(home: home, json: true, now: now)
+        let json = try BlocksRun.list(home: home, json: true, now: now)
         let parsed = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
         #expect(parsed.first?["rule_id"] as? String == "core.git:\(raw)")
     }

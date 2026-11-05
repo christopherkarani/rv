@@ -1,5 +1,4 @@
 import Foundation
-import Synchronization
 import Testing
 import RVDomain
 @testable import RVHooks
@@ -68,7 +67,7 @@ import RVDomain
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
-@Test func encodeEvaluatedDeny_leftoverCodecIsEncodeDeny() throws {
+@Test func hookWire_evaluatedDeny_leftoverCodecIsEncodeDeny() throws {
     let codec = LeftoverVoiceCodec()
     let command = ShellCommand(rawValue: "git reset --hard")
     let deny = Deny(
@@ -76,10 +75,11 @@ import RVDomain
         reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
     )
     let result = EvaluationResult(outcome: .deny(deny, matched: nil))
-    let evaluated = codec.encodeEvaluatedDeny(
+    let evaluated = hookWire(
         from: result,
         command: command,
-        unlockCode: nil
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let leftover = codec.encodeDeny(
         reason: hostDenyLine(command: command, reason: deny.reason),
@@ -89,10 +89,11 @@ import RVDomain
     #expect(evaluated == leftover)
 
     let code = try mintedUnlock()
-    let mintedEvaluated = codec.encodeEvaluatedDeny(
+    let mintedEvaluated = hookWire(
         from: result,
         command: command,
-        unlockCode: .code(code)
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: .code(code))
     )
     let mintedLeftover = codec.encodeDeny(
         reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: code),
@@ -102,29 +103,10 @@ import RVDomain
     #expect(mintedEvaluated == mintedLeftover)
 }
 
-@Test func hookWire_liveDenyCallsEncodeEvaluatedDeny() {
-    let spy = EvaluatedDenyDoorSpy()
-    let result = EvaluationResult(
-        outcome: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
-            matched: nil
-        )
-    )
-    let wire = hookWire(
-        from: result,
-        command: ShellCommand(rawValue: "git reset --hard"),
-        using: spy,
-        intent: .firstCall(verdict: .deny, unlockCode: nil)
-    )
-    #expect(wire.stdout == "evaluated\n")
-    #expect(spy.evaluatedCalls == 1)
-    #expect(spy.denyCalls == 0)
-}
-
-@Test func encodeFileDeny_leftoverCodecIsEncodeDeny() {
+@Test func hookFileWire_deny_leftoverCodecIsEncodeDeny() {
     let codec = LeftoverVoiceCodec()
     let result = secretsEnvFileDeny()
-    let file = codec.encodeFileDeny(from: result)
+    let file = hookFileWire(from: result, using: codec)
     let leftover = codec.encodeDeny(
         reason: hostFileDenyLine(reason: "Access to a sensitive path is not allowed."),
         rule: RuleID(pack: .coreSecrets, pattern: "env"),
@@ -133,22 +115,24 @@ import RVDomain
     #expect(file == leftover)
 }
 
-@Test func encodeEvaluatedDeny_claudeAllowOrIncomplete_isIncompleteDeny() {
+@Test func hookWire_claudeEvaluatedAllowOrIncomplete_isIncompleteDeny() {
     let codec = ClaudeHostCodec()
     let command = ShellCommand(rawValue: "git status")
-    let allow = codec.encodeEvaluatedDeny(
+    let allow = hookWire(
         from: EvaluationResult(outcome: .plain),
         command: command,
-        unlockCode: nil
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let incomplete = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     #expect(allow == incomplete)
     #expect(allow != codec.encodeAllow())
 
-    let oversize = codec.encodeEvaluatedDeny(
+    let oversize = hookWire(
         from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: command,
-        unlockCode: nil
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(oversize == incomplete)
 
@@ -161,20 +145,8 @@ import RVDomain
     #expect(live == incomplete)
 }
 
-@Test func encodeRichDeny_claudeAllowIsIncompleteDeny() {
-    let codec = ClaudeHostCodec()
-    let allow = codec.encodeRichDeny(
-        from: EvaluationResult(outcome: .plain),
-        command: ShellCommand(rawValue: "git status"),
-        unlockCode: nil
-    )
-    let incomplete = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-    #expect(allow == incomplete)
-    #expect(allow != codec.encodeAllow())
-}
-
-@Test func encodeFileDeny_claudeMatchedDenyIsRichJSON() {
-    let wire = ClaudeHostCodec().encodeFileDeny(from: secretsEnvFileDeny())
+@Test func hookFileWire_claudeMatchedDenyIsRichJSON() {
+    let wire = hookFileWire(from: secretsEnvFileDeny(), using: ClaudeHostCodec())
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("\"ruleId\":\"core.secrets:env\""))
@@ -182,7 +154,7 @@ import RVDomain
     #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
 }
 
-@Test func encodeFileDeny_claudeUnmatchedAndIncompleteUseEncodeDeny() {
+@Test func hookFileWire_claudeUnmatchedAndIncompleteUseEncodeDeny() {
     let codec = ClaudeHostCodec()
     let deny = Deny(
         ruleID: RuleID(pack: .coreSecrets, pattern: "env"),
@@ -190,7 +162,7 @@ import RVDomain
     )
     let unmatched = EvaluationResult(outcome: .deny(deny, matched: nil))
     #expect(
-        codec.encodeFileDeny(from: unmatched)
+        hookFileWire(from: unmatched, using: codec)
             == codec.encodeDeny(
                 reason: hostFileDenyLine(reason: deny.reason),
                 rule: deny.ruleID,
@@ -198,21 +170,67 @@ import RVDomain
             )
     )
     #expect(
-        codec.encodeFileDeny(from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)))
+        hookFileWire(
+            from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
+            using: codec
+        )
             == codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     )
     #expect(
-        codec.encodeFileDeny(from: EvaluationResult(outcome: .plain))
+        hookFileWire(from: EvaluationResult(outcome: .plain), using: codec)
             == codec.encodeAllow()
     )
 }
 
-@Test func hookFileWire_usesEncodeFileDeny() {
-    let spy = FileDenyDoorSpy()
-    let wire = hookFileWire(from: secretsEnvFileDeny(), using: spy)
-    #expect(wire.stdout == "file-deny\n")
-    #expect(spy.fileCalls == 1)
-    #expect(spy.denyCalls == 0)
+/// REQ-T4 at the presentation seam: evaluated allow composes the
+/// incomplete deny, file allow composes no deny; the matched rule and
+/// the ask agent text cross the seam as data.
+@Test func presentation_carriesMatchedRuleAndAskAgentText() {
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let match = RuleMatch(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        severity: .critical,
+        reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+    )
+    let denied = EvaluationResult(
+        outcome: .deny(Deny(ruleID: match.ruleID, reason: match.reason), matched: match)
+    )
+
+    let deny = denyPresentation(from: denied, command: command, unlockCode: nil)
+    #expect(deny.matched == match)
+    #expect(deny.rule == match.ruleID)
+    #expect(deny.next == .none)
+    #expect(deny.agentText == cursorAgentStopLine)
+    #expect(deny.reason == resetHardHostDeny)
+
+    let ask = askDenyPresentation(
+        from: denied,
+        command: command,
+        unlockCode: nil,
+        askRecorded: true
+    )
+    #expect(ask.matched == match)
+    #expect(ask.agentText == cursorAgentAskLine)
+    #expect(ask.reason == "\(resetHardHostDeny) \(approvalPendingLine)")
+
+    let askUnrecorded = askDenyPresentation(
+        from: denied,
+        command: command,
+        unlockCode: nil,
+        askRecorded: false
+    )
+    #expect(askUnrecorded.agentText == cursorAgentAskUnrecordedLine)
+    #expect(askUnrecorded.reason == "\(resetHardHostDeny) \(approvalUnrecordedLine)")
+
+    let evaluatedAllow = denyPresentation(
+        from: EvaluationResult(outcome: .plain),
+        command: command,
+        unlockCode: nil
+    )
+    #expect(evaluatedAllow.reason == incompleteEvalSentence)
+    #expect(evaluatedAllow.matched == nil)
+    #expect(fileDenyPresentation(from: EvaluationResult(outcome: .plain)) == nil)
+    #expect(fileDenyPresentation(from: denied)?.matched == match)
 }
 
 private func secretsEnvFileDeny() -> EvaluationResult {
@@ -235,65 +253,11 @@ private struct LeftoverVoiceCodec: HostCodec {
         .malformed(.missingCommand)
     }
 
-    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
-    }
-}
-
-private final class EvaluatedDenyDoorSpy: HostCodec {
-    var host: HookHost { .grok }
-    private let counts = Mutex<Counts>(Counts())
-
-    private struct Counts: Sendable {
-        var evaluatedCalls = 0
-        var denyCalls = 0
-    }
-
-    var evaluatedCalls: Int { counts.withLock { $0.evaluatedCalls } }
-    var denyCalls: Int { counts.withLock { $0.denyCalls } }
-
-    func decode(_ stdin: String) -> HookDecodeOutcome {
-        .malformed(.missingCommand)
-    }
-
-    func encodeEvaluatedDeny(
-        from result: EvaluationResult,
-        command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint?
-    ) -> HookWire {
-        counts.withLock { $0.evaluatedCalls += 1 }
-        return HookWire(stdout: "evaluated\n", exitCode: 7)
-    }
-
-    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        counts.withLock { $0.denyCalls += 1 }
-        return HookWire(stdout: "deny\n", exitCode: 9)
-    }
-}
-
-private final class FileDenyDoorSpy: HostCodec {
-    var host: HookHost { .grok }
-    private let counts = Mutex<Counts>(Counts())
-
-    private struct Counts: Sendable {
-        var fileCalls = 0
-        var denyCalls = 0
-    }
-
-    var fileCalls: Int { counts.withLock { $0.fileCalls } }
-    var denyCalls: Int { counts.withLock { $0.denyCalls } }
-
-    func decode(_ stdin: String) -> HookDecodeOutcome {
-        .malformed(.missingCommand)
-    }
-
-    func encodeFileDeny(from result: EvaluationResult) -> HookWire {
-        counts.withLock { $0.fileCalls += 1 }
-        return HookWire(stdout: "file-deny\n", exitCode: 7)
-    }
-
-    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        counts.withLock { $0.denyCalls += 1 }
-        return HookWire(stdout: "deny\n", exitCode: 9)
+    func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
+        encodeLeftoverDecisionDeny(
+            reason: presentation.reason,
+            rule: presentation.rule,
+            next: presentation.next
+        )
     }
 }

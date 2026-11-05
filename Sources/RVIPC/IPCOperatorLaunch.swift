@@ -17,8 +17,7 @@ public struct ProposeLaunchParams: Sendable, Equatable, Codable {
     /// only the live registration names the incarnation.
     public let hostID: UUID?
     public let workspaceSessionID: UUID?
-    /// "named" or "custom".
-    public let kind: String
+    public let kind: WorkspaceLaunchKind
     public let definitionID: String?
     public let executable: String?
     public let expectedDigest: String?
@@ -27,7 +26,7 @@ public struct ProposeLaunchParams: Sendable, Equatable, Codable {
 
     public init(
         workspace: String, hostID: UUID? = nil, workspaceSessionID: UUID? = nil,
-        kind: String, definitionID: String? = nil, executable: String? = nil,
+        kind: WorkspaceLaunchKind, definitionID: String? = nil, executable: String? = nil,
         expectedDigest: String? = nil, arguments: [String] = [], io: UIIODTO = .discard
     ) {
         self.workspace = workspace
