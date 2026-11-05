@@ -35,9 +35,9 @@ struct OperatorRedeemWireRoundTripTests {
         let values = [
             HostRedeemResponseDTO(
                 accepted: true, runtimeSessionID: UUID(), agentInstanceID: UUID()),
-            HostRedeemResponseDTO(accepted: true, error: "launchFailed"),
-            HostRedeemResponseDTO(accepted: true, error: "alreadyAccepted"),
-            HostRedeemResponseDTO(accepted: false, error: "unknown"),
+            HostRedeemResponseDTO(accepted: true, error: .launchFailed),
+            HostRedeemResponseDTO(accepted: true, error: .alreadyAccepted),
+            HostRedeemResponseDTO(accepted: false, error: .unknown),
         ]
         for value in values {
             let data = try JSONEncoder().encode(value)

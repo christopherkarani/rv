@@ -23,18 +23,12 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    /// Live compile set, replaced by `rebuildGated`. Boxed so the hook
-    /// ceremony, built in `init` before `self` can be captured, reads the
-    /// same value at peek time.
-    private let liveGated: UnfairLock<GatedEvaluate>
-    private var gated: GatedEvaluate {
-        get { liveGated.withLock { $0 } }
-        set { liveGated.withLock { $0 = newValue } }
-    }
-    private var catalog: PackCatalog
-    private var lastUncoveredWanted: Set<PackID> = []
-    private var lastCoverageRebuildAt: UInt64 = 0
-    private let sessionSnapshots: [PackSnapshot]
+    /// The live compile-set module owns the catalog, snapshots, compiled
+    /// door, and the freshness rule (throttle + rebuild). Callers here
+    /// request a ready door/world for a wanted set; the hook ceremony,
+    /// built in `init` before `self` can be captured, shares the same
+    /// module reference and reads the same live set at peek time.
+    private let compileSet: LiveCompileSet
     private let configHome: HomeDirectory?
     private let allowOnce: AllowOnceStore
     /// Step 8B.1 sole grant authority: service-held memory, one instance per
@@ -45,7 +39,6 @@ public actor ServiceRuntime {
     private let clock: @Sendable () -> Date
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
-    private var analyticsEnabledPackIDs: [String] = []
     /// Operator launch ceremonies (proposal → review → permit). Shared with
     /// the XPC UI sessions so IPC dispatch and the UI bridge see one state.
     let ceremonies: WorkspaceOperatorCeremonyService
@@ -58,8 +51,7 @@ public actor ServiceRuntime {
     /// only: never an `AgentInstance` grant (F3).
     let hookCeremonies: HookReviewCeremonyService
 
-    package private(set) var compiledPackIDs: [PackID]
-    private var compiledPackIDSet: Set<PackID>
+    package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
     public init(
         snapshots: [PackSnapshot]? = nil,
@@ -108,24 +100,15 @@ public actor ServiceRuntime {
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
-        if let catalog {
-            self.catalog = catalog
-        } else {
-            self.catalog = Self.makeCatalog(home: resolvedHome) ?? PackCatalog()
-        }
-        let loaded = EvaluationWorld.resolveSnapshots(snapshots)
-        self.sessionSnapshots = loaded
-        let coverage = EvaluationWorld.coverage(catalog: self.catalog, home: resolvedHome)
-        let session = EvaluateSession(
-            snapshots: loaded,
-            compiledPacks: coverage.compiled
+        // Built before the hook ceremony below: the ceremony captures
+        // this local module reference, never `self` (init order).
+        let compileSet = LiveCompileSet(
+            snapshots: snapshots,
+            catalog: catalog,
+            home: resolvedHome
         )
-        self.compiledPackIDs = session.compiledPackIDs
-        self.compiledPackIDSet = Set(session.compiledPackIDs)
-        let gated = GatedEvaluate(session)
-        let liveGated = UnfairLock(gated)
-        self.liveGated = liveGated
-        self.corePacksReady = gated.corePacksReady
+        self.compileSet = compileSet
+        self.corePacksReady = compileSet.corePacksReady
         if let allowOnce {
             self.allowOnce = allowOnce
         } else if let allowOnceDirectory {
@@ -149,15 +132,13 @@ public actor ServiceRuntime {
             clock: clock,
             pendingApprovals: self.pendingApprovals
         )
-        self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
         self.ceremonies = ceremonies
         self.actionCeremonies = actionCeremonies ?? ActionApprovalCeremonyService()
         self.hookCeremonies = hookCeremonies ?? HookReviewCeremonyService(
             pending: self.pendingApprovals,
             allowOnce: self.allowOnce,
             grants: self.grants,
-            home: resolvedHome,
-            gated: { liveGated.withLock { $0 } },
+            compileSet: compileSet,
             clock: clock
         )
     }
@@ -378,11 +359,7 @@ public actor ServiceRuntime {
         case .pendingResolve(let params):
             switch await approvals.pendingResolveResult(
                 params,
-                peek: ApprovalRuntime.livePeek(
-                    home: configHome,
-                    grants: grants,
-                    gated: { await self.currentGated() }
-                )
+                peek: compileSet.livePeek(store: nil, grants: grants)
             ) {
             case .success(let reply): result = .pendingResolve(reply)
             case .failure(let error): result = .error(error)
@@ -528,8 +505,10 @@ public actor ServiceRuntime {
         _ params: EvaluateParams, requestID: UUID, context: ServiceValidatedAgentContext
     ) async -> EvaluateReply {
         let started = DispatchTime.now()
-        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: params.request.enabledPacks))
-        let (gated, home) = (gated, configHome)
+        let gated = compileSet.readyDoor(
+            wanted: WalkedPackIDs(ids: params.request.enabledPacks)
+        )
+        let home = configHome
         // Off the actor: the judge path blocks (load wait, inference).
         let reply = EvaluateReply(result: await JudgeOffload.run {
             gated.evaluateAgent(params.request, cwd: params.cwd, home: home)
@@ -551,12 +530,13 @@ public actor ServiceRuntime {
         deadline: HookDeadline
     ) async -> Result<HookEvaluateReply, IPCError> {
         do {
-            rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
             let reply = try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
                 world: HookEvaluateWorld.live(
-                    world: liveWorld(),
+                    world: readyWorld(
+                        wanted: EvaluationWorld.walkedPackIDs(home: configHome)
+                    ),
                     host: params.host,
                     pending: pendingApprovals,
                     clock: clock,
@@ -572,20 +552,15 @@ public actor ServiceRuntime {
         }
     }
 
-    private func liveWorld() -> LiveEvaluateWorld {
-        LiveEvaluateWorld(
-            home: configHome,
+    /// Ready world for `wanted`: the compile-set module heals coverage
+    /// before the world exists, so no caller evaluates stale.
+    private func readyWorld(wanted: WalkedPackIDs) -> LiveEvaluateWorld {
+        compileSet.readyWorld(
+            wanted: wanted,
             store: allowOnce,
             grants: grants,
-            gated: gated,
             clock: clock
         )
-    }
-
-    /// Compile set after the last `rebuildGated` / `setPackEnabled`. Read at peek
-    /// time so allow-once does not snapshot `gated` across the ApprovalRuntime hop.
-    private func currentGated() -> GatedEvaluate {
-        gated
     }
 
     private func runEvaluate(
@@ -593,8 +568,8 @@ public actor ServiceRuntime {
         cwd: WorkingDirectory?,
         host: LedgerHost = .tty
     ) async -> EvaluationResult {
-        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
-        let result = await liveWorld().apply(request, cwd: cwd, host: host)
+        let result = await readyWorld(wanted: WalkedPackIDs(ids: request.enabledPacks))
+            .apply(request, cwd: cwd, host: host)
         recordAnalytics(for: result)
         return result
     }
@@ -615,7 +590,7 @@ public actor ServiceRuntime {
 
     private func analyticsRecorder() -> @Sendable (EvaluationResult) -> Void {
         let analytics = self.analytics
-        let packs = analyticsEnabledPackIDs
+        let packs = compileSet.analyticsEnabledPackIDs
         return { result in
             Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs)
         }
@@ -625,7 +600,7 @@ public actor ServiceRuntime {
         Self.recordAnalytics(
             result,
             analytics: analytics,
-            enabledPackIDs: analyticsEnabledPackIDs
+            enabledPackIDs: compileSet.analyticsEnabledPackIDs
         )
     }
 
@@ -653,7 +628,11 @@ public actor ServiceRuntime {
 
     private func explain(_ params: ExplainParams) async -> ExplainReply {
         let cwd = params.cwd
-        let result = await liveWorld().peek(params.request, cwd: cwd)
+        // Same coverage rule as evaluate: explain must not peek through
+        // a door compiled before the request's packs were enabled.
+        let result = await readyWorld(
+            wanted: WalkedPackIDs(ids: params.request.enabledPacks)
+        ).peek(params.request, cwd: cwd)
         let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id, elapsedMs: 0)
@@ -677,7 +656,10 @@ public actor ServiceRuntime {
 
     private func classify(_ params: ClassifyParams) async -> ClassifyReply {
         let cwd = params.cwd
-        let result = await liveWorld().peek(params.request, cwd: cwd)
+        // Same coverage rule as evaluate (see `explain`).
+        let result = await readyWorld(
+            wanted: WalkedPackIDs(ids: params.request.enabledPacks)
+        ).peek(params.request, cwd: cwd)
         let suggestions: [String]
         switch result.decision {
         case .deny:
@@ -691,23 +673,18 @@ public actor ServiceRuntime {
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> Result<SetPackEnabledReply, IPCError> {
-        guard let configHome else {
+        guard configHome != nil else {
             return .failure(.packEnableFailed)
         }
         do {
-            if params.enabled {
-                _ = try PacksFacade.enable(home: configHome, ids: [params.id.rawValue])
-            } else {
-                _ = try PacksFacade.disable(home: configHome, ids: [params.id.rawValue])
-            }
-            catalog = try PacksFacade.makeCatalog(home: configHome)
-            guard let updated = catalog.records.first(where: { $0.id == params.id }) else {
+            // The compile-set module's single mutation entry: config
+            // write, catalog reload, and rebuild land together, so the
+            // next ready door already covers the change.
+            try compileSet.setPackEnabled(params.id, enabled: params.enabled)
+            guard let updated = compileSet.catalog.records.first(where: { $0.id == params.id }) else {
                 return .failure(.packNotFound(params.id))
             }
-            rebuildGated()
-            lastUncoveredWanted = []
-            analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
-            let packs = analyticsEnabledPackIDs
+            let packs = compileSet.analyticsEnabledPackIDs
             if let analytics {
                 Task {
                     await analytics.noteEnabledPacks(packs)
@@ -726,8 +703,10 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        refreshCatalogFromDisk()
-        let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.isEnabled, bundled: $0.isBundled) }
+        // Refresh (reload + coverage heal) is the compile-set module's:
+        // config is the operator switch, visible without bouncing rvd.
+        let packs = compileSet.refreshCatalogFromDisk().records
+            .map { PackRecord(id: $0.id, enabled: $0.isEnabled, bundled: $0.isBundled) }
         return ListPacksReply(
             packs: packs,
             enabledCount: packs.filter(\.enabled).count,
@@ -736,24 +715,11 @@ public actor ServiceRuntime {
     }
 
     private func doctorSnapshot() -> DoctorSnapshotReply {
-        refreshCatalogFromDisk()
-        return DoctorSnapshotBuilder.make(
-            catalog: catalog,
+        DoctorSnapshotBuilder.make(
+            catalog: compileSet.refreshCatalogFromDisk(),
             corePacksReady: corePacksReady,
             idleExitSeconds: idleExitSeconds,
             home: configHome
-        )
-    }
-
-    /// Config is the operator switch. Reload before list/doctor so a local
-    /// `rv packs enable` is visible without bouncing rvd.
-    private func refreshCatalogFromDisk() {
-        if let refreshed = Self.makeCatalog(home: configHome) {
-            catalog = refreshed
-        }
-        analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
-        rebuildWhenUncovered(
-            wanted: EvaluationWorld.coverage(catalog: catalog, home: configHome).compiled
         )
     }
 
@@ -818,65 +784,6 @@ public actor ServiceRuntime {
 
     private func elapsedMs(since start: DispatchTime) -> Double {
         Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-    }
-
-    private func rebuildGated() {
-        let coverage = EvaluationWorld.coverage(catalog: catalog, home: configHome)
-        let session = EvaluateSession(
-            snapshots: sessionSnapshots,
-            compiledPacks: coverage.compiled
-        )
-        let compiledPackIDs = session.compiledPackIDs
-        self.compiledPackIDs = compiledPackIDs
-        compiledPackIDSet = Set(compiledPackIDs)
-        gated = GatedEvaluate(session)
-    }
-
-    /// Wire request walk set. Those IDs must already be compiled, or we rebuild.
-    private func rebuildWhenUncovered(wanted: WalkedPackIDs) {
-        rebuildWhenUncovered(wantedIDs: wanted.ids)
-    }
-
-    /// Coverage compile set after catalog refresh (`listPacks`).
-    private func rebuildWhenUncovered(wanted: CompiledPackIDs) {
-        rebuildWhenUncovered(wantedIDs: wanted.ids)
-    }
-
-    /// Warm-runtime self-heal for behind-our-back config edits: `rv packs
-    /// enable` writes config.toml directly, so a request can name packs this
-    /// session never compiled. Uncompiled-but-requested packs are dropped
-    /// toward allow, so rebuild before evaluating. Failed attempts retry at
-    /// most once per second so a pack that can never compile costs one
-    /// rebuild per interval, not one per evaluate.
-    private func rebuildWhenUncovered(wantedIDs: [PackID]) {
-        guard wantedIDs.contains(where: { !compiledPackIDSet.contains($0) }) else { return }
-        let wantedIDs = Set(wantedIDs)
-        let now = DispatchTime.now().uptimeNanoseconds
-        if wantedIDs == lastUncoveredWanted,
-           now < lastCoverageRebuildAt &+ 1_000_000_000
-        {
-            return
-        }
-        lastUncoveredWanted = wantedIDs
-        lastCoverageRebuildAt = now
-        catalog = Self.makeCatalog(home: configHome) ?? catalog
-        analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
-        rebuildGated()
-    }
-
-    /// Catalog for a home; nil home mirrors the old empty-HOME catalog with the day-one packs enabled.
-    private static func makeCatalog(home: HomeDirectory?) -> PackCatalog? {
-        guard let home else {
-            return try? PackCatalog.make(
-                enabled: Set(dayOnePackIDs),
-                index: PackRegistry.loadIndex()
-            )
-        }
-        return try? PacksFacade.makeCatalog(home: home)
-    }
-
-    private static func analyticsEnabledPackIDs(from catalog: PackCatalog) -> [String] {
-        catalog.enabledIDs.map(\.rawValue)
     }
 
     private static func resolvePendingApprovals(

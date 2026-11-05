@@ -504,13 +504,20 @@ extension ShellPipeline {
     }
 
     /// Derives the matching bundle for raw input in one pass.
-    static func deriveMatching(_ input: String) -> MatchingDerivation {
+    static func deriveMatching(_ input: String, revealSearchOperands: Bool = false) -> MatchingDerivation {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             return MatchingDerivation(view: MatchingView(""), masked: [], prefix: [], assignmentValues: [])
         }
         let (peeled, heredoc) = maskNonExecutingHeredocBodiesDetailed(trimmed)
-        return deriveMatching(peeled: peeled, heredocMasked: heredoc)
+        return deriveMatching(peeled: peeled, heredocMasked: heredoc, revealSearchOperands: revealSearchOperands)
+    }
+
+    /// The matching view with search and data-reader operands left visible
+    /// (`applyRoleAwareQuotesDetailed(tokens:revealSearchOperands:)`). Only
+    /// the secret-path guard reads it; it is never a grant key.
+    static func secretScanView(of input: String) -> MatchingView {
+        deriveMatching(input, revealSearchOperands: true).view
     }
 
     /// Derives the matching bundle for already-peeled text (trimmed,
@@ -520,7 +527,9 @@ extension ShellPipeline {
     /// Mask-before-strip order is load-bearing: an ANSI-C argv0 such as
     /// `$'sudo'` only surfaces as a wrapper *after* masking, so the strip
     /// loop runs on the masked text, exactly as the legacy pipeline did.
-    static func deriveMatching(peeled: String, heredocMasked: [String] = []) -> MatchingDerivation {
+    static func deriveMatching(
+        peeled: String, heredocMasked: [String] = [], revealSearchOperands: Bool = false
+    ) -> MatchingDerivation {
         var prefix: [InvocationPiece] = []
         var assignmentValues: [String] = []
         let stripped = mapTopLevelPieces(peeled) { piece in
@@ -531,7 +540,8 @@ extension ShellPipeline {
             assignmentValues.append(contentsOf: part.values)
             return part.stripped
         }
-        let (maskedView, quoteMasked) = applyRoleAwareQuotesDetailed(tokens: tokenize(stripped))
+        let (maskedView, quoteMasked) = applyRoleAwareQuotesDetailed(
+            tokens: tokenize(stripped), revealSearchOperands: revealSearchOperands)
         var current = maskedView
         var iteration = 0
         while iteration < Normalize.maxWrapperIterations {

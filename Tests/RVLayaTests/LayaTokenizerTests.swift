@@ -91,8 +91,8 @@ struct LayaJudgeTests {
         // Oracle (laya-coreml Python, multilingual bundle): ls -la ->
         // allow 0.1075, review 0.0156, block 0.8769. Gate: <= 0.02 drift.
         let verdict = try judge.judge("ls -la")
-        #expect(abs((verdict.probabilities["block"] ?? 0) - 0.8769) <= 0.02)
-        #expect(abs((verdict.probabilities["allow"] ?? 0) - 0.1075) <= 0.02)
+        #expect(abs((verdict.probabilities[.block] ?? 0) - 0.8769) <= 0.02)
+        #expect(abs((verdict.probabilities[.allow] ?? 0) - 0.1075) <= 0.02)
         #endif
     }
 }
