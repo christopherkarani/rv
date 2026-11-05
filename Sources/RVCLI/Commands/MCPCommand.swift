@@ -792,15 +792,6 @@ enum MCPRun {
         MCPDisplayedText.field(text)
     }
 
-    /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b` but leaves
-    /// separators, NEL, bidi controls, and other format scalars raw;
-    /// `DisplayedText.escapeJSONScalars` escapes every one
-    /// `DisplayedText.needsEscape` flags. The result is still valid JSON.
-    /// `SecretsRun.json` itself is unchanged.
-    static func robotJSON<T: Encodable>(_ value: T) -> String {
-        DisplayedText.escapeJSONScalars(SecretsRun.json(value))
-    }
-
     static func denyMissingIDMessage(_ id: String) -> String {
         "no MCP approval has id \(reviewField(id))"
     }
@@ -1313,7 +1304,10 @@ struct MCPList: AsyncParsableCommand {
             let report = MCPRun.report(
                 environment, project: MCPRun.projectURL(project), configuration: configuration,
                 rvExecutable: MCPExecutable.currentPath())
-            ctx.writeStdout(ctx.explicitRobot ? MCPRun.robotJSON(report) : MCPRun.listText(report, home: environment.home))
+            ctx.writeStdout(
+                ctx.explicitRobot
+                    ? try RobotJSON.encode(report, options: .pretty)
+                    : MCPRun.listText(report, home: environment.home))
         }
     }
 }
@@ -1336,7 +1330,9 @@ struct MCPCheck: AsyncParsableCommand {
             let report = MCPRun.report(
                 environment, project: MCPRun.projectURL(project), configuration: configuration,
                 rvExecutable: MCPExecutable.currentPath())
-            let text = ctx.explicitRobot ? MCPRun.robotJSON(report) : MCPRun.checkText(report, home: environment.home)
+            let text = ctx.explicitRobot
+                ? try RobotJSON.encode(report, options: .pretty)
+                : MCPRun.checkText(report, home: environment.home)
             if report.passes {
                 ctx.writeStdout(text)
             } else {
@@ -1415,7 +1411,10 @@ struct MCPPending: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp pending", format: format)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         let rows = MCPRun.pendingRows(environment.approvals)
-        ctx.writeStdout(ctx.explicitRobot ? MCPRun.robotJSON(rows) : MCPRun.pendingText(rows))
+        ctx.writeStdout(
+            ctx.explicitRobot
+                ? try RobotJSON.encode(rows, options: .pretty)
+                : MCPRun.pendingText(rows))
     }
 }
 

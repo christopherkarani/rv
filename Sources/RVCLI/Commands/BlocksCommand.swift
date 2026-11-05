@@ -5,12 +5,12 @@ import RVHistory
 import RVPolicy
 
 enum BlocksRun {
-    static func list(home: HomeDirectory, json: Bool, now: Date = Date()) -> String {
+    static func list(home: HomeDirectory, json: Bool, now: Date = Date()) throws -> String {
         let records = DenialLedger(
             configDirectory: RVPolicyPaths.configDirectory(home: home)
         ).records(asOf: now)
         if json {
-            return encodeJSON(records)
+            return try encodeJSON(records)
         }
         if records.isEmpty {
             return ""
@@ -29,16 +29,9 @@ enum BlocksRun {
         ].joined(separator: "  ")
     }
 
-    private static func encodeJSON(_ records: [DenialLedgerRecord]) -> String {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(records),
-              let text = String(data: data, encoding: .utf8)
-        else {
-            return "[]\n"
-        }
-        return DisplayedText.escapeJSONScalars(text) + "\n"
+    // REQ-T7 named divergence: slashes are no longer spelled `\/`.
+    private static func encodeJSON(_ records: [DenialLedgerRecord]) throws -> String {
+        try RobotJSON.encode(records, options: .compactISO8601) + "\n"
     }
 
     private static func iso8601(_ date: Date) -> String {
@@ -60,7 +53,7 @@ struct Blocks: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "blocks", format: format)
         let home = try ctx.requireHome()
-        let text = BlocksRun.list(
+        let text = try BlocksRun.list(
             home: home,
             json: ctx.explicitRobot
         )

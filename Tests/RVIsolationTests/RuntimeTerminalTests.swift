@@ -31,24 +31,26 @@ import Darwin
     let decoded = TerminalBytesCodec.decode(encoded, maximum: payload.count)
     #expect(decoded == payload)
     let extra = Data(#"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"launchRuntime","executable":"/bin/sh","pty":true}"#.utf8)
-    #expect(WorkspaceControlCodec.decode(extra) == .invalid)
+    #expect(WorkspaceControlCodec.decodeRequest(extra) == .invalid)
     let unknown = Data(#"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"stealTerminal","runtime":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"}"#.utf8)
-    guard case .message(let unknownMessage) = WorkspaceControlCodec.decode(unknown) else {
+    guard case .frame(let unknownFrame) = WorkspaceControlCodec.decodeRequest(unknown) else {
         Issue.record("an unknown operation is a v1 message the host rejects")
         return
     }
-    #expect(unknownMessage.op == "stealTerminal")
-    #expect(WorkspaceControlOp(rawValue: unknownMessage.op) == nil)
+    #expect(unknownFrame.rawOperation == "stealTerminal")
+    #expect(unknownFrame.operation == nil)
     let rows = Data(#"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"resizeTerminal","runtime":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","rows":0,"cols":80}"#.utf8)
-    #expect(WorkspaceControlCodec.decode(rows) == .invalid)
+    #expect(WorkspaceControlCodec.decodeRequest(rows) == .invalid)
     let wide = Data(#"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"resizeTerminal","runtime":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","rows":24,"cols":513}"#.utf8)
-    #expect(WorkspaceControlCodec.decode(wide) == .invalid)
+    #expect(WorkspaceControlCodec.decodeRequest(wide) == .invalid)
     let legacy = Data(#"{"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"launchRuntime","executable":"/bin/echo"}"#.utf8)
-    guard case .message(let message) = WorkspaceControlCodec.decode(legacy) else {
+    guard case .frame(let legacyFrame) = WorkspaceControlCodec.decodeRequest(legacy),
+        case .launchRuntime(let launched) = legacyFrame.payload
+    else {
         Issue.record("a launch without io must remain a v1 message")
         return
     }
-    #expect(message.io == nil)
+    #expect(launched.io == nil)
 }
 
 #if os(Linux)
@@ -806,23 +808,19 @@ struct RuntimeTerminalTests {
         defer { opened.close() }
         let raw = try WorkspaceControlSocket.connect(path: opened.server.endpoint.socketPath, timeout: 2).get()
         defer { close(raw) }
-        let hello = WorkspaceControlMessage(
-            version: 1,
+        let hello = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: WorkspaceControlOp.hello.rawValue,
-            token: opened.server.endpoint.ownerToken
+            payload: .hello(.init(token: opened.server.endpoint.ownerToken))
         )
         #expect(writeFrame(raw, hello))
         _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-        let stolen = WorkspaceControlMessage(
-            version: 1,
+        let stolen = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: "stealTerminal",
-            runtime: UUID()
+            payload: .unknown(rawOperation: "stealTerminal")
         )
         #expect(writeFrame(raw, stolen))
         let body = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-        guard case .message(let reply) = WorkspaceControlCodec.decode(body) else {
+        guard case .frame(let reply) = WorkspaceControlCodec.decodeResponse(body) else {
             Issue.record("unknown terminal operation must get a reply")
             return
         }
@@ -1017,19 +1015,15 @@ struct RuntimeTerminalTests {
         defer { close(raw) }
         var receive = 2048
         _ = setsockopt(raw, SOL_SOCKET, SO_RCVBUF, &receive, socklen_t(MemoryLayout<Int32>.size))
-        let hello = WorkspaceControlMessage(
-            version: 1,
+        let hello = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: WorkspaceControlOp.hello.rawValue,
-            token: opened.server.endpoint.ownerToken
+            payload: .hello(.init(token: opened.server.endpoint.ownerToken))
         )
         #expect(writeFrame(raw, hello))
         _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-        let subscribe = WorkspaceControlMessage(
-            version: 1,
+        let subscribe = WorkspaceControlRequestFrame(
             id: UUID(),
-            op: WorkspaceControlOp.subscribeTerminal.rawValue,
-            runtime: runtime.runtime
+            payload: .subscribeTerminal(.init(runtime: runtime.runtime))
         )
         #expect(writeFrame(raw, subscribe))
         _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
@@ -1510,8 +1504,8 @@ private func writeAll(fd: Int32, bytes: Data) -> Bool {
     return true
 }
 
-private func writeFrame(_ fd: Int32, _ message: WorkspaceControlMessage) -> Bool {
-    guard let body = WorkspaceControlCodec.encode(message) else { return false }
+private func writeFrame(_ fd: Int32, _ message: WorkspaceControlRequestFrame) -> Bool {
+    guard let body = WorkspaceControlCodec.encodeRequest(message) else { return false }
     return WorkspaceControlSocket.writeFrame(fd: fd, body: body)
 }
 

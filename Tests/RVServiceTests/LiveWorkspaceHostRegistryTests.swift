@@ -321,7 +321,7 @@ struct LiveWorkspaceHostRegistryTests {
             validate: { _ in nil },
             redeem: { _ in
                 firstCalls.withLock { $0 += 1 }
-                return HostRedeemResponseDTO(accepted: false, error: "unknown")
+                return HostRedeemResponseDTO(accepted: false, error: .unknown)
             })
         let stale = try #require(await registry.liveBinding(host: ref.workspaceHostID))
         func commit() -> HostRedeemCommitDTO {
@@ -348,7 +348,7 @@ struct LiveWorkspaceHostRegistryTests {
             validate: { _ in nil },
             redeem: { _ in
                 secondCalls.withLock { $0 += 1 }
-                return HostRedeemResponseDTO(accepted: false, error: "unknown")
+                return HostRedeemResponseDTO(accepted: false, error: .unknown)
             })
         await #expect(throws: LiveWorkspaceHostError.staleRegistration) {
             try await registry.redeemLaunch(

@@ -369,6 +369,16 @@ enum SecretVaultProvider {
         guard let base = address ?? environment["VAULT_ADDR"].flatMap(vaultAddress) else {
             return .failure(.providerUnavailable("VAULT_ADDR is not set to an https (or loopback http) URL"))
         }
+        // The ambient token was issued by VAULT_ADDR's server. A definition's
+        // own address (which a Varlock schema can supply) must not carry it
+        // to another server, nor anywhere when VAULT_ADDR is unset: then
+        // nothing says which server `~/.vault-token` belongs to.
+        if let address,
+            environment["VAULT_ADDR"].flatMap(vaultAddress).map({ sameOrigin($0, address) }) != true
+        {
+            return .failure(.providerUnavailable(
+                "Vault address \(address.host ?? "") is not VAULT_ADDR; set VAULT_ADDR to it to send your Vault token there"))
+        }
         let token = environment["VAULT_TOKEN"]
             ?? (try? String(contentsOfFile: (home as NSString).appendingPathComponent(".vault-token"), encoding: .utf8))
         guard let token = token?.trimmingCharacters(in: .whitespacesAndNewlines), token.isEmpty == false else {
@@ -395,6 +405,17 @@ enum SecretVaultProvider {
             return .failure(.notFound("field \(field) at Vault path \(path)"))
         }
         return SecretResolver.value(Array(picked.utf8), from: "\(path)#\(field)")
+    }
+
+    /// Scheme, host (case-insensitive), and port, with default ports filled in.
+    static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        func origin(_ url: URL) -> (String, String, Int)? {
+            guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return nil }
+            let port = url.port ?? (scheme == "https" ? 443 : scheme == "http" ? 80 : -1)
+            return (scheme, host, port)
+        }
+        guard let left = origin(a), let right = origin(b) else { return false }
+        return left == right
     }
 
     static func vaultAddress(_ text: String) -> URL? {

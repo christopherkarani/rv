@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import RVDomain
+@testable import RVDomain
 
 @Suite("EvaluationResult.pendingAction")
 struct PendingActionTests {

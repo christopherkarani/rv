@@ -40,17 +40,11 @@ public struct CodexHostCodec: HostCodec {
 
     /// Official Codex honor path: older `decision: block` JSON + exit 2.
     /// Claude permission deny JSON is not a Codex TUI honor path.
-    /// Defaults must live here: a one-argument `encodeDeny(reason:)` otherwise
-    /// binds the protocol extension and emits leftover `decision: deny`.
-    public func encodeDeny(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
+    public func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
         HookWire(
-            stdout: hookBlockJSON(reason: reason),
+            stdout: hookBlockJSON(reason: presentation.reason),
             exitCode: host.denyExitCode,
-            stderr: hookBlockStderr(reason: reason)
+            stderr: hookBlockStderr(reason: presentation.reason)
         )
     }
 }

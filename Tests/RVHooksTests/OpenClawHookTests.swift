@@ -162,8 +162,18 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
     )
     let result = EvaluationResult(outcome: .deny(deny, matched: nil))
     let command = ShellCommand(rawValue: "git reset --hard")
-    let openclaw = OpenClawHostCodec().encodeEvaluatedAskDeny(from: result, command: command)
-    let hermes = HermesHostCodec().encodeEvaluatedAskDeny(from: result, command: command)
+    let openclaw = hookWire(
+        from: result,
+        command: command,
+        using: OpenClawHostCodec(),
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
+    )
+    let hermes = hookWire(
+        from: result,
+        command: command,
+        using: HermesHostCodec(),
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
+    )
     #expect(openclaw.stdout == hermes.stdout)
     #expect(openclaw.exitCode == 1)
     #expect(openclaw.stdout.contains("\"decision\":\"deny\""))

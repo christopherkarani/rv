@@ -11,6 +11,20 @@ import Testing
 /// Darwin firmlink tree; hosts without one (Linux CI) skip them.
 private let hostHasPrivateTmp = FileManager.default.fileExists(atPath: "/private/tmp")
 
+/// Fixture roots spelled the way the kernel resolves them. The system
+/// temporary directory keeps its `/var` firmlink spelling on Darwin, and
+/// the pinning code under test refuses any path with a symlink ancestor —
+/// including that firmlink — so an unresolved root fails every fixture at
+/// setup. `resolveExisting` is production's `realpath` spelling; Foundation's
+/// `resolvingSymlinksInPath()` deliberately keeps the firmlink spelling and
+/// does not help here. Production scratch paths live under `~/Library`, so
+/// this only affects tests.
+private func fixtureTemporaryDirectory() -> URL {
+    let raw = FileManager.default.temporaryDirectory
+    guard let resolved = MCPSandbox.resolveExisting(raw.path) else { return raw }
+    return URL(fileURLWithPath: resolved, isDirectory: true)
+}
+
 @Suite("MCP sandbox directory creation")
 struct MCPSandboxCreateTests {
     /// These tests create and remove `/private/tmp/future-keys` and
@@ -18,7 +32,7 @@ struct MCPSandboxCreateTests {
     /// another test is still reading.
     private static let hostPrivateTmpLock = NSLock()
     @Test func scratchLeafIsCreatedOnTheCheckedDirectoryAfterTheParentIsSwapped() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-swap-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -38,7 +52,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func scratchLeafIsNotCreatedWhenLibraryItselfIsSwapped() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-library-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -61,7 +75,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func renamedAncestorDoesNotReceiveTheScratchLeaf() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-rename-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -103,7 +117,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func plantedMissingScratchComponentIsNotTheLeaf() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-planted-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -157,7 +171,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func swappedCachesAfterTheAncestorMatchDoesNotCreateTheLeaf() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-caches-swap-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -182,7 +196,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func dotDotThroughASymlinkNamesThePrivateTmpTarget() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-kernel-dotdot-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -211,7 +225,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func symlinkToAnAncestorOpensThePrivateTmpTarget() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-ancestor-link-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let zone = root.appendingPathComponent("zone/tmp")
@@ -232,7 +246,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func laterMissingComponentOpensTheWritableAncestor() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-later-missing-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let zone = root.appendingPathComponent("zone/tmp")
@@ -256,7 +270,7 @@ struct MCPSandboxCreateTests {
 
     @Test func npmOrCacheSwapAfterTheAncestorMatchDoesNotCreateTheLeaf() throws {
         for name in [".npm", ".cache"] {
-            let root = FileManager.default.temporaryDirectory
+            let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-cache-swap-\(name)-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let project = root.appendingPathComponent("project")
@@ -293,7 +307,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func cachesSwapAfterCreatePinnedDoesNotAllowTheProject() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-after-pin-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -325,7 +339,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func librarySymlinkAfterTheAncestorMatchDoesNotCreateTheLeafInTheProject() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-library-link-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -353,7 +367,7 @@ struct MCPSandboxCreateTests {
 
     @Test func nonemptyNpmOrCacheSwapDoesNotCreateTheLeafOrAllowTheProject() throws {
         for name in [".npm", ".cache"] {
-            let root = FileManager.default.temporaryDirectory
+            let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-nonempty-\(name)-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let project = root.appendingPathComponent("project")
@@ -388,7 +402,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func projectMovedUnderCachesDoesNotCreateTheLeafOrAllowCaches() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-caches-child-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -421,7 +435,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func plantedScratchLeafDoesNotLetTheCachesSwapAllowTheProject() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-planted-swap-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -459,7 +473,7 @@ struct MCPSandboxCreateTests {
             ("Library/Caches", "com.apple.nsurl"),
         ]
         for (rootName, childName) in nests {
-            let root = FileManager.default.temporaryDirectory
+            let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-nested-\(childName)-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let project = root.appendingPathComponent("project")
@@ -496,7 +510,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func movingTheLeafInodeIntoTheProjectThenSwappingCachesDoesNotAllowTheProject() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-leaf-move-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -654,7 +668,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func dotSymlinkAtTheMissingNameOpensTheCreationDirectory() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-dot-link-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let zone = root.appendingPathComponent("zone/tmp")
@@ -680,7 +694,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func laterMissingNameOpensTheWritableAncestor() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-fresh-link-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let zone = root.appendingPathComponent("zone/tmp")
@@ -704,7 +718,7 @@ struct MCPSandboxCreateTests {
             ("Library/Caches", "com.apple.nsurl/fsCachedData"),
         ]
         for (rootName, childPath) in nests {
-            let root = FileManager.default.temporaryDirectory
+            let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-grandchild-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let project = root.appendingPathComponent("project")
@@ -741,7 +755,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func movingTheLeafWithItsParentThenSwappingCachesDoesNotAllowTheProject() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-parent-move-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project")
@@ -775,7 +789,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func deepRelativeLinkAfterTheMissingNameOpensThePrivateTmpTarget() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-deep-link-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let zone = root.appendingPathComponent("zone/tmp")
@@ -802,7 +816,7 @@ struct MCPSandboxCreateTests {
             ("Library/Caches", "com.apple.nsurl/fsCachedData"),
         ]
         for (rootName, childPath) in nests {
-            let root = FileManager.default.temporaryDirectory
+            let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-later-grandchild-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let project = root.appendingPathComponent("project")
@@ -845,7 +859,7 @@ struct MCPSandboxCreateTests {
             ("Library/Caches", "com.apple.nsurl/fsCachedData", "fsCachedData"),
         ]
         for (rootName, childPath, linkName) in nests {
-            let root = FileManager.default.temporaryDirectory
+            let root = fixtureTemporaryDirectory()
                 .appendingPathComponent("rv-sandbox-grandchild-link-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let project = root.appendingPathComponent("project")
@@ -884,7 +898,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func deepRelativeLinkThroughALaterNameStillOpensThePrivateTmpTarget() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-later-name-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -905,7 +919,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func privateNameAfterLinkDotDotStillOpensTheCreationDirectory() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-private-name-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -921,7 +935,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func privateNameAtTheMissingComponentStillOpensTheCreationDirectory() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-private-component-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -935,7 +949,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func laterNameUnderPrivateTmpStillOpensTheCreationDirectory() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-private-tmp-later-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -965,7 +979,7 @@ struct MCPSandboxCreateTests {
             if createdOpened { try? FileManager.default.removeItem(atPath: opened) }
             if createdAnchor { try? FileManager.default.removeItem(atPath: anchor) }
         }
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-final-name-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -982,6 +996,30 @@ struct MCPSandboxCreateTests {
     @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func singleNameUnderPrivateTmpStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
+        // The shapes below name /private/tmp/x and /private/tmp/foo as
+        // missing. A real directory leaked at either path by an earlier
+        // interrupted run silently changes the openings, so move any
+        // pre-existing one aside for the test and put it back after.
+        var movedAside: [(from: String, to: String)] = []
+        for name in ["x", "foo"] {
+            let path = "/private/tmp/" + name
+            // attributesOfItem does not follow symlinks, so files, directories
+            // and dangling links are all moved aside.
+            if (try? FileManager.default.attributesOfItem(atPath: path)) != nil {
+                let aside = path + ".rv-test-aside-\(UUID().uuidString)"
+                try FileManager.default.moveItem(atPath: path, toPath: aside)
+                movedAside.append((from: path, to: aside))
+            }
+        }
+        defer {
+            for moved in movedAside.reversed() {
+                do {
+                    try FileManager.default.moveItem(atPath: moved.to, toPath: moved.from)
+                } catch {
+                    Issue.record("failed to restore \(moved.from) from \(moved.to): \(error)")
+                }
+            }
+        }
         let opened = "/private/tmp/future-keys"
         let anchor = "/private/tmp/anchor"
         let createdOpened = FileManager.default.fileExists(atPath: opened) == false
@@ -997,7 +1035,7 @@ struct MCPSandboxCreateTests {
             if createdAnchor { try? FileManager.default.removeItem(atPath: anchor) }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-single-name-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1041,7 +1079,7 @@ struct MCPSandboxCreateTests {
             if createdAnchor { try? FileManager.default.removeItem(atPath: anchor) }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-link-dotdot-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1088,7 +1126,7 @@ struct MCPSandboxCreateTests {
             }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-anchor-dotdot-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1139,7 +1177,7 @@ struct MCPSandboxCreateTests {
             }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-dot-before-key-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1187,7 +1225,7 @@ struct MCPSandboxCreateTests {
             }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-sibling-link-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1237,7 +1275,7 @@ struct MCPSandboxCreateTests {
             }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-missing-suffix-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1286,7 +1324,7 @@ struct MCPSandboxCreateTests {
             }
         }
         try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-anchor-name-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let me = root.appendingPathComponent("Users/me")
@@ -1382,7 +1420,7 @@ struct MCPSandboxCreateTests {
         let keys = zone + "/sst-keys"
         defer { try? FileManager.default.removeItem(atPath: zone) }
         try FileManager.default.createDirectory(atPath: keys, withIntermediateDirectories: true)
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-sandbox-st-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
@@ -1483,7 +1521,7 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func undoEscapesTheRecordedHostName() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = fixtureTemporaryDirectory()
             .appendingPathComponent("rv-setup-undo-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
@@ -1604,7 +1642,7 @@ private func denyMoveIntoUnlistableChild(_ planted: PlantedCacheLink, duringCrea
 }
 
 private func plantedCacheLink(_ planted: PlantedCacheLink) throws -> PlantedCacheLinkFixture {
-    let root = FileManager.default.temporaryDirectory
+    let root = fixtureTemporaryDirectory()
         .appendingPathComponent("rv-sandbox-planted-link-\(UUID().uuidString)", isDirectory: true)
     let project = root.appendingPathComponent("project")
     let home = root.appendingPathComponent("home")

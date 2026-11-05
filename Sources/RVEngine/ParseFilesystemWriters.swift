@@ -33,8 +33,10 @@ import RVDomain
 ///   value-taking (over-consumption is safe there because even a single
 ///   remaining operand is evaluated as the destination).
 /// - `--help`/`--version` return nil: the tool prints and writes nothing.
-/// - Redirect targets are UNIONED with writer destinations: `tee /tmp/a >
-///   /tmp/b` writes both files.
+/// - Redirects never reach these parsers: the dispatcher strips them
+///   before the scan and unions their destinations after it
+///   (`WriterRedirectFold`), so each parser here returns only its own
+///   destinations on redirect-stripped argv.
 ///
 /// Deliberately out of scope: dynamic writers (`python -c`, `node -e`,
 /// `bash -c`, `rsync -e 'cmd'`, `tar --to-command` excepted as unbounded).
@@ -487,40 +489,6 @@ private func isShortClusterWord(_ word: String) -> Bool {
     word.hasPrefix("-") && word.hasPrefix("--") == false && word.count > 1
 }
 
-/// Output-redirect destinations united with writer destinations.
-func writerRedirectDests(_ argv: Argv) -> [String] {
-    parseRedirectOnly(argv)?.paths ?? []
-}
-
-/// Removes redirect syntax from writer argv so operators and their targets
-/// never pollute the operand scan. Output operators drop with their target
-/// (the union re-adds the target); input/heredoc operators drop WITHOUT
-/// their target — the target stays an operand, which over-approximates in
-/// the fail-closed direction and cannot eat a quoted metachar operand the
-/// way target-eating would. Attached input words (`<f`, `<<EOF`) drop whole
-/// (their target is inseparable); fd dups/closes drop whole (no file).
-func stripWriterRedirectWords(_ args: [String]) -> [String] {
-    var clean: [String] = []
-    var index = args.startIndex
-    while index < args.endIndex {
-        let word = args[index]
-        if isRedirectOperator(word) {
-            args.formIndex(after: &index)
-            if index < args.endIndex {
-                args.formIndex(after: &index)
-            }
-            continue
-        }
-        if RedirectOperatorLexer.isAttachedRedirectWord(word) {
-            args.formIndex(after: &index)
-            continue
-        }
-        clean.append(word)
-        args.formIndex(after: &index)
-    }
-    return clean
-}
-
 private func writerParsed(
     operation: FilesystemOperation,
     paths: [String]
@@ -545,7 +513,7 @@ private func writerParsed(
 /// separate `-S` stays bare, and each platform's destination stays sound.
 func parseCp(_ argv: Argv) -> ParsedFilesystemCommand? {
     let (targetDirs, reduced, overrideAmbiguous) = extractTargetDirectory(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         conflictedShorts: ["S"]
     )
     let scan = scanWriterArgs(
@@ -569,9 +537,6 @@ func parseCp(_ argv: Argv) -> ParsedFilesystemCommand? {
             dests.append(last)
         }
     }
-    // Redirects are shell-side: they write even when the verb errors or
-    // prints help, so the union survives verb-parse failure.
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -602,7 +567,7 @@ private let cpBareLongs: Set<String> = [
 /// scan is bare-only; a bare `tee` reads stdin to stdout and parses to nil.
 func parseTee(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: [],
         valueLongs: [],
         bareShorts: ["a", "i", "p"],
@@ -612,7 +577,6 @@ func parseTee(_ argv: Argv) -> ParsedFilesystemCommand? {
     if scan.failed == false, scan.sawHelp == false {
         dests += scan.operands + scan.candidates
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -628,13 +592,12 @@ func parseTee(_ args: [String]) -> ParsedFilesystemCommand? {
 /// value-vs-bare mirrored on BSD), consuming attached rest only. `-M`
 /// (BSD metalog file) always evaluates.
 func parseInstall(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let stripped = stripWriterRedirectWords(argv.args)
     let (targetDirs, reduced, overrideAmbiguous) = extractTargetDirectory(
-        stripped,
+        argv.args,
         valueShorts: installValueShorts,
         conflictedShorts: ["S", "T"]
     )
-    let dValues = extractInstallDValues(stripped, valueShorts: installValueShorts)
+    let dValues = extractInstallDValues(argv.args, valueShorts: installValueShorts)
     let scan = scanWriterArgs(
         reduced,
         valueShorts: installValueShorts,
@@ -672,7 +635,6 @@ func parseInstall(_ argv: Argv) -> ParsedFilesystemCommand? {
     if scan.sawHelp == false {
         dests += dValues
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: directoryMode ? .create : .overwrite, paths: dests)
 }
 
@@ -698,7 +660,7 @@ func parseInstall(_ args: [String]) -> ParsedFilesystemCommand? {
 /// operand links into the working directory. Parses as `.create`.
 func parseLn(_ argv: Argv) -> ParsedFilesystemCommand? {
     let (targetDirs, reduced, overrideAmbiguous) = extractTargetDirectory(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: ["S"]
     )
     let scan = scanWriterArgs(
@@ -727,7 +689,6 @@ func parseLn(_ argv: Argv) -> ParsedFilesystemCommand? {
             }
         }
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .create, paths: dests)
 }
 
@@ -750,7 +711,7 @@ func parseLn(_ args: [String]) -> ParsedFilesystemCommand? {
 /// is still bounded here.
 func parseRsync(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: ["T", "e", "f", "M", "B"],
         valueLongs: rsyncValueLongs,
         bareShorts: rsyncBareShorts,
@@ -774,7 +735,6 @@ func parseRsync(_ argv: Argv) -> ParsedFilesystemCommand? {
             dests.append(rsyncLocalOrRemote(last))
         }
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -843,12 +803,12 @@ private let rsyncBareLongs: Set<String> = [
 /// so only `-f`/`-C`/`-g` values matter and they are consumed exactly like
 /// the tool consumes them; an erroring invocation can only fail closed.
 func parseTar(_ argv: Argv) -> ParsedFilesystemCommand? {
+    // Nil when the tool errored or printed help: the dispatcher's fold
+    // still claims any shell-side redirect target.
     guard let scan = tarScan(argv.args) else {
-        // The tool errored or printed help, but shell-side redirects still
-        // wrote; the union is verb-independent.
-        return writerParsed(operation: .overwrite, paths: writerRedirectDests(argv))
+        return nil
     }
-    return tarDecide(scan, argv: argv)
+    return tarDecide(scan)
 }
 
 private func tarScan(_ args: [String]) -> TarScan? {
@@ -1110,22 +1070,22 @@ private func tarSetMode(_ mode: Character, scan: inout TarScan) -> Bool {
     return true
 }
 
-private func tarDecide(_ scan: TarScan, argv: Argv) -> ParsedFilesystemCommand? {
+private func tarDecide(_ scan: TarScan) -> ParsedFilesystemCommand? {
     if scan.unboundedExec {
         return writerParsed(
             operation: .overwrite,
-            paths: [unboundedWriteSentinel] + writerRedirectDests(argv)
+            paths: [unboundedWriteSentinel]
         )
     }
     guard let mode = scan.mode else {
-        return writerParsed(operation: .overwrite, paths: writerRedirectDests(argv))
+        return nil
     }
     switch mode {
     case "t", "d":
-        // List/compare read, but their stdout redirect still wrote.
-        return writerParsed(operation: .overwrite, paths: writerRedirectDests(argv))
+        // List/compare only read; a stdout redirect is the fold's claim.
+        return nil
     case "c", "r", "u", "A", "D":
-        var dests = scan.snapshotFiles + writerRedirectDests(argv)
+        var dests = scan.snapshotFiles
         if let archive = scan.archive {
             dests.append(archive)
         }
@@ -1134,10 +1094,10 @@ private func tarDecide(_ scan: TarScan, argv: Argv) -> ParsedFilesystemCommand? 
         if scan.absoluteNames {
             return writerParsed(
                 operation: .overwrite,
-                paths: [unboundedWriteSentinel] + writerRedirectDests(argv)
+                paths: [unboundedWriteSentinel]
             )
         }
-        var dirs = scan.snapshotFiles + writerRedirectDests(argv)
+        var dirs = scan.snapshotFiles
         if let dir = scan.changeDir {
             dirs.append(dir)
         }
@@ -1218,7 +1178,9 @@ func parseCurl(_ argv: Argv) -> ParsedFilesystemCommand? {
                     dests.append(unboundedWriteSentinel)
                 }
             case "help", "version", "manual":
-                return writerParsed(operation: .overwrite, paths: writerRedirectDests(argv))
+                // Help prints and writes nothing; the fold claims any
+                // shell-side redirect target.
+                return nil
             default:
                 break
             }
@@ -1264,7 +1226,7 @@ func parseCurl(_ argv: Argv) -> ParsedFilesystemCommand? {
         // inside while curl writes outside. Claim the joined form too.
         // Superset over order and --next transfers: every dir seen
         // anywhere joins every relative curl dest, so no transfer can
-        // under-claim. Shell-redirect dests (appended below) are
+        // under-claim. Shell-redirect dests (the fold's union) are
         // unaffected by curl's output-dir and never join.
         let curlDests = dests
         for dir in outputDirs {
@@ -1282,7 +1244,6 @@ func parseCurl(_ argv: Argv) -> ParsedFilesystemCommand? {
             dests += outputDirs
         }
     }
-    dests += writerRedirectDests(argv)
     dests.removeAll { $0 == "-" }
     return writerParsed(operation: .overwrite, paths: dests)
 }
@@ -1349,7 +1310,7 @@ func parseDd(_ argv: Argv) -> ParsedFilesystemCommand? {
     var dests: [String] = []
     for word in argv.args {
         if word == "--help" || word == "--version" {
-            return writerParsed(operation: .overwrite, paths: writerRedirectDests(argv))
+            return nil
         }
         guard word.hasPrefix("-") == false,
             let equals = word.firstIndex(of: "=")
@@ -1360,13 +1321,12 @@ func parseDd(_ argv: Argv) -> ParsedFilesystemCommand? {
             let target = String(word[word.index(after: equals)...])
             // `of=-` and `of=/dev/std{out,err,in}` write the process's own
             // stdio, not a file — except when the shell redirected that fd,
-            // which the redirect union below already collects.
+            // which the fold's redirect union already collects.
             if ddStdioTargets.contains(target) == false {
                 dests.append(target)
             }
         }
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1400,8 +1360,8 @@ private let rsyncValueLongs: Set<String> = [
 /// missed output would need the tool to accept a flag the parser rejects,
 /// and getopt tools error there instead). Longs resolve unique prefixes via
 /// `resolveWriterLong` (ambiguous abbreviations error in the tool, so
-/// skipping them is sound). `-` (stdout) is skipped: shell redirects union
-/// separately. Stops at `--`. `skipShorts`/`skipLongs` are consumed and
+/// skipping them is sound). `-` (stdout) is skipped: shell redirects are
+/// the fold's claim. Stops at `--`. `skipShorts`/`skipLongs` are consumed and
 /// ignored so their values cannot misread as flags.
 func extractOutputValues(
     _ args: [String],
@@ -1477,14 +1437,13 @@ func extractOutputValues(
 /// commands, so `-e logfile=/tmp/x` redirects output opaquely (same class as
 /// every other embedded-language residual).
 func parseWget(_ argv: Argv) -> ParsedFilesystemCommand? {
-    var dests = extractOutputValues(
-        stripWriterRedirectWords(argv.args),
+    let dests = extractOutputValues(
+        argv.args,
         shorts: ["O", "P", "o", "a"],
         longs: ["output-document", "directory-prefix", "output-file", "append-output"],
         skipShorts: ["e"],
         skipLongs: ["execute"]
     )
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1495,14 +1454,13 @@ func parseWget(_ args: [String]) -> ParsedFilesystemCommand? {
 /// `iconv` writes `-o file` (`--output`) or stdout. Operands are inputs
 /// (reads, never claimed).
 func parseIconv(_ argv: Argv) -> ParsedFilesystemCommand? {
-    var dests = extractOutputValues(
-        stripWriterRedirectWords(argv.args),
+    let dests = extractOutputValues(
+        argv.args,
         shorts: ["o"],
         longs: ["output"],
         skipShorts: ["f", "t"],
         skipLongs: ["from-code", "to-code"]
     )
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1516,16 +1474,13 @@ func parseIconv(_ args: [String]) -> ParsedFilesystemCommand? {
 /// List/test/pipe modes never touch the disk and claim nothing. Residual:
 /// archive-slip (`../../`) depends on member names, unknowable statically.
 func parseUnzip(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let args = stripWriterRedirectWords(argv.args)
-    let redirectDests = writerRedirectDests(argv)
-    if unzipListsOnly(args) || unzipArchiveOperands(args).isEmpty {
-        return writerParsed(operation: .overwrite, paths: redirectDests)
+    if unzipListsOnly(argv.args) || unzipArchiveOperands(argv.args).isEmpty {
+        return nil
     }
-    var dests = extractOutputValues(args, shorts: ["d"], longs: [])
+    var dests = extractOutputValues(argv.args, shorts: ["d"], longs: [])
     if dests.isEmpty {
         dests.append(".")
     }
-    dests += redirectDests
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1612,7 +1567,7 @@ private let splitBareLongs: Set<String> = [
 /// as `python -c`).
 func parseSplit(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: splitValueShorts,
         valueLongs: splitValueLongs,
         bareShorts: splitBareShorts,
@@ -1627,7 +1582,6 @@ func parseSplit(_ argv: Argv) -> ParsedFilesystemCommand? {
             dests.append(".")
         }
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1654,9 +1608,8 @@ private let sedBareLongs: Set<String> = [
 /// Script `w` targets are claimed too (`sedScriptEffects`). Residual: the GNU
 /// `e` command executes; the unwrap peel limits it (`.sed`), not this parse.
 func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let stripped = stripWriterRedirectWords(argv.args)
     let scan = scanWriterArgs(
-        stripped,
+        argv.args,
         valueShorts: sedValueShorts,
         valueLongs: sedValueLongs,
         bareShorts: sedBareShorts,
@@ -1666,7 +1619,7 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     var dests: [String] = []
     // The main scan drops bare `=`-longs, so `--in-place=.bak` also needs
     // the marker pre-scan (exact or unique-prefix, either `=` form).
-    let inPlaceLong = stripped.contains { word in
+    let inPlaceLong = argv.args.contains { word in
         guard word.hasPrefix("--") else { return false }
         let rest = String(word.dropFirst(2))
         let name: String
@@ -1694,7 +1647,6 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     if scan.failed == false, scan.sawHelp == false {
         dests += sedScriptWriteTargets(scan)
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1780,7 +1732,7 @@ private func stripSqliteDashWords(_ args: [String]) -> (reduced: [String], reado
 /// `-x` fails the parse, and the tool errors there too. Residual: dot
 /// commands (`-cmd ".output /tmp/x"`) redirect output opaquely.
 func parseSqlite3(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (stripped, readonly) = stripSqliteDashWords(stripWriterRedirectWords(argv.args))
+    let (stripped, readonly) = stripSqliteDashWords(argv.args)
     var dests: [String] = []
     if readonly == false {
         let scan = scanWriterArgs(
@@ -1798,7 +1750,6 @@ func parseSqlite3(_ argv: Argv) -> ParsedFilesystemCommand? {
             dests += scan.candidates
         }
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1847,7 +1798,7 @@ private let dittoBareLongs: Set<String> = [
 /// files and are claimed too. ditto takes no value shorts.
 func parseDitto(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: [],
         valueLongs: dittoValueLongs,
         bareShorts: dittoBareShorts,
@@ -1862,7 +1813,6 @@ func parseDitto(_ argv: Argv) -> ParsedFilesystemCommand? {
         dests += scan.flagValues["keepBinariesList"] ?? []
         dests += scan.candidates
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 
@@ -1899,10 +1849,10 @@ private let inplaceCompressNoWriteLongs: Set<String> = [
 /// sidecar (`.gz`/`.bz2`/`.xz`/`.Z`), so every operand is claimed: the
 /// operand's own directory decides the verdict. Stdout (`-c`), test (`-t`),
 /// and list (`-l`) modes write no files and claim nothing (shell redirects
-/// union separately). `-r` marks the claim recursive.
+/// are the fold's claim). `-r` marks the claim recursive.
 func parseInplaceCompress(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: inplaceCompressValueShorts,
         valueLongs: inplaceCompressValueLongs,
         bareShorts: inplaceCompressBareShorts,
@@ -1919,7 +1869,6 @@ func parseInplaceCompress(_ argv: Argv) -> ParsedFilesystemCommand? {
         recursive = scan.bareShortHits.contains("r")
             || scan.bareLongHits.contains("recursive")
     }
-    dests += writerRedirectDests(argv)
     guard dests.isEmpty == false else { return nil }
     return ParsedFilesystemCommand(
         operation: .overwrite,
@@ -1961,7 +1910,7 @@ private let zipBareLongs: Set<String> = [
 /// are operands but never the first, so they stay unclaimed.
 func parseZip(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
-        stripWriterRedirectWords(argv.args),
+        argv.args,
         valueShorts: zipValueShorts,
         valueLongs: zipValueLongs,
         bareShorts: zipBareShorts,
@@ -1991,7 +1940,6 @@ func parseZip(_ argv: Argv) -> ParsedFilesystemCommand? {
         }
         dests += scan.candidates
     }
-    dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)
 }
 

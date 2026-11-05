@@ -62,7 +62,7 @@ struct ProposedActionFileTests {
         )
         let sanitized = ReviewSanitizer.sanitize(dirty)
         guard case .file(let cleaned) = sanitized else {
-            Issue.record("expected ProposedAction.file after sanitize")
+            Issue.record("expected RedactedAction.file after sanitize")
             return
         }
         #expect(cleaned.file.path.rawValue.contains("ghp_exampletoken") == false)
@@ -71,7 +71,7 @@ struct ProposedActionFileTests {
         } else {
             Issue.record("expected filesystem resources after sanitize")
         }
-        #expect(cleaned.fingerprint.rawValue.contains("ghp_exampletoken") == false)
+        #expect(cleaned.fingerprintText.contains("ghp_exampletoken") == false)
         #expect(cleaned.file.path.rawValue.contains(ReviewSanitizer.redactedPlaceholder))
         #expect(
             cleaned.resources
@@ -95,7 +95,11 @@ struct ProposedActionFileTests {
                 scope: ActionScope()
             )
         )
-        let verdict = ActionPolicyEngine.evaluate(action: action)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: ReviewContext(repository: RepositoryReviewContext()),
+            gitWorld: .probed(.empty)
+        )
         #expect(verdict.explanation.ruleID != ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID)
         #expect(verdict.explanation.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
         #expect(
@@ -108,7 +112,9 @@ struct ProposedActionFileTests {
         )
         let withFallback = ActionPolicyEngine.evaluate(
             action: action,
-            policy: EffectiveActionPolicy(packFallback: .deny(packDeny))
+            context: ReviewContext(repository: RepositoryReviewContext()),
+            policy: EffectiveActionPolicy(packFallback: .deny(packDeny)),
+            gitWorld: .probed(.empty)
         )
         #expect(withFallback.decision == .hardDeny(packDeny))
         #expect(withFallback.explanation.ruleID != ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID)

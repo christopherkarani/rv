@@ -233,17 +233,24 @@ per ticket.
   `Sources/RVHooks/ClaudeHostCodec.swift`,
   `Sources/RVHooks/CursorHostCodec.swift`,
   `Sources/RVHooks/ClaudeRichDeny.swift`,
-  `Sources/RVHooks/HookDispatch.swift`, other `*HostCodec.swift` only
-  if they override the deleted methods, tests under
-  `Tests/RVHooksTests/`
+  `Sources/RVHooks/HookDispatch.swift`, every `*HostCodec.swift`
+  adapter (amended 2026-11-04 after implementer STOP: migrating all
+  adapters to the single deny entry is the ticket, non-overriders
+  included), tests under `Tests/RVHooksTests/`, plus
+  `Tests/RVCLITests/HookCommandTests.swift` (its
+  `encodeEvaluatedDeny` caller must repoint so AC-003 holds)
 - acceptance:
   - `encodeEvaluatedDeny`/`encodeEvaluatedAskDeny`/`encodeFileDeny`
     deleted from protocol, defaults, and overrides; `HostCodec`
     shrinks to decode + proposedAction + encodeAllow +
     encodeDeny(presentation) (exact deny spelling at implementer's
-    design, one rendering entry); HookMapper composes the deny
-    presentation once, including Claude matched-rich and Cursor ask
-    variance as data.
+    design, one rendering entry; the presentation value carries
+    composed reason, rule, next, optional matched `RuleMatch`, and
+    ask-vs-user agent text so Claude rich and Cursor ask variance
+    cross the seam as data — amended 2026-11-04); HookMapper
+    composes the deny presentation once. Every adapter's wire output
+    stays byte-identical (incl. Codex native block JSON, Muse
+    permission-deny JSON).
   - Every host's wire output byte-identical across the existing
     parametric wire tables; door-spy tests deleted, wire assertions
     kept; `RVHooksTests` passes.

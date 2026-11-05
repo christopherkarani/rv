@@ -41,7 +41,8 @@ struct TypedRuleAskWinsTests {
                 workingDirectory: WorkingDirectory(validating: "/tmp/rv")
             ),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: rules)
+            policy: EffectiveActionPolicy(rules: rules),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
 
         guard case .mandatoryHuman(let deny) = verdict.decision else {
@@ -84,7 +85,8 @@ struct TypedRuleAskWinsTests {
                 workingDirectory: WorkingDirectory(validating: "/tmp/rv")
             ),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: rules)
+            policy: EffectiveActionPolicy(rules: rules),
+            gitWorld: ActionPolicyFixtures.probedGitWorld(for: privateBranch)
         )
 
         guard case .mandatoryHuman(let deny) = verdict.decision else {
