@@ -196,66 +196,70 @@ struct GatewayRoute: Equatable {
     }
 }
 
-enum GatewayRefusal: Error, Equatable {
-    case malformed
-    case unknownRoute
-    case noPlaceholder
-    case unknownPlaceholder
-    case foreignPlaceholder
-    case tooLarge
+/// Every raw value is the literal audit/OCSF code: renaming a case cannot change
+/// what reaches the log. Raw-value enums cannot carry associated values: a case
+/// that needs a payload drops the raw type and makes `code` an exhaustive
+/// switch returning the same literals, so no code changes with the payload.
+public enum GatewayRefusal: String, Error, Equatable, Sendable, CaseIterable {
+    case malformed = "malformed"
+    case unknownRoute = "unknownRoute"
+    case noPlaceholder = "noPlaceholder"
+    case unknownPlaceholder = "unknownPlaceholder"
+    case foreignPlaceholder = "foreignPlaceholder"
+    case tooLarge = "tooLarge"
     /// The value would change the request's shape where the placeholder sits.
-    case unsafeValue
+    case unsafeValue = "unsafeValue"
     /// TRACE and TRACK make the upstream echo the request, credential included.
-    case echoMethod
+    case echoMethod = "echoMethod"
     /// A percent-encoded placeholder: never swapped, so never forwarded.
-    case encodedPlaceholder
+    case encodedPlaceholder = "encodedPlaceholder"
     /// The placeholder sits on a surface its binding does not allow.
-    case surfaceNotAllowed
+    case surfaceNotAllowed = "surfaceNotAllowed"
     /// A second placeholder on one surface, e.g. a copy in another header
     /// that the upstream might log or echo.
-    case repeatedPlaceholder
+    case repeatedPlaceholder = "repeatedPlaceholder"
     /// Method or path outside the secret's allow rules.
-    case outsideAllowRules
+    case outsideAllowRules = "outsideAllowRules"
     /// With allow rules, a path an upstream could read differently from the
     /// matcher: encoded `/` or dots, `..`, `;`, `//`, or double encoding.
-    case ambiguousPath
+    case ambiguousPath = "ambiguousPath"
     /// The forward record did not reach the audit log.
-    case auditUnavailable
+    case auditUnavailable = "auditUnavailable"
     /// The connection came from outside the runtime the placeholder was leased to.
-    case runtimeMismatch
+    case runtimeMismatch = "runtimeMismatch"
     /// The gateway could not tie the connection to the placeholder's runtime.
-    case runtimeUnverified
+    case runtimeUnverified = "runtimeUnverified"
     /// The secret's `expires` has passed.
-    case expired
+    case expired = "expired"
     /// The refresh interval and its grace have passed without a successful refresh.
-    case refreshFailed
+    case refreshFailed = "refreshFailed"
     /// A SigV4 request whose access key id is not the secret's placeholder.
-    case awsKeyMismatch
+    case awsKeyMismatch = "awsKeyMismatch"
     /// A signed-chunk or event-stream payload: each chunk signature chains to
     /// the agent's seed signature, which the gateway replaces.
-    case awsSignedStreaming
+    case awsSignedStreaming = "awsSignedStreaming"
     /// An `approve` rule holds this request and no human has said yes yet.
-    case approvalPending
+    case approvalPending = "approvalPending"
     /// The human denied it, the approval lapsed, or the grant could not be consumed.
-    case approvalDenied
+    case approvalDenied = "approvalDenied"
     /// No approval service can be asked: no admission channel, no live agent
     /// principal, or the service declined to file it.
-    case approvalUnavailable
+    case approvalUnavailable = "approvalUnavailable"
     /// A process holding the connection, and none of its ancestors up to the
     /// runtime's leader, runs a binary the secret's `binaries` list allows.
-    case binaryMismatch
+    case binaryMismatch = "binaryMismatch"
     /// An unsigned-payload mode on a service other than S3, whose signature
     /// the gateway cannot produce for it.
-    case awsUnsignedPayload
+    case awsUnsignedPayload = "awsUnsignedPayload"
     /// The upstream's answer carried a `SecretAccessKey`: credentials minted
     /// by the call, which would otherwise reach the agent unscrubbed.
-    case awsCredentialsInResponse
+    case awsCredentialsInResponse = "awsCredentialsInResponse"
 
     /// Seconds a client should wait before retrying, sent as `Retry-After`.
     var retryAfter: Int? { self == .approvalPending ? 5 : nil }
 
-    /// The case name, a stable code for audit records.
-    var code: String { "\(self)" }
+    /// The stable code for audit records: the explicit raw value.
+    var code: String { rawValue }
 
     /// A request the secret's own policy forbids: worth an alert, since a
     /// well-behaved client using the placeholder as documented never sends one.
@@ -580,6 +584,19 @@ enum GatewayHeaders {
         headers.filter { $0.name.lowercased() == "content-encoding" }
             .flatMap { $0.value.split(separator: ",") }
             .allSatisfy { $0.trimmingCharacters(in: .whitespaces).lowercased() == "identity" }
+    }
+
+    /// The single digits-only `Content-Length` of a response the gateway
+    /// relays without a body (HEAD, 304). It frames nothing the gateway sends;
+    /// SDKs size downloads from it. A GET through the gateway is chunked, so a
+    /// scrubbed body of a different length never contradicts it on the wire.
+    static func bodilessContentLength(_ headers: [(name: String, value: String)]) -> String? {
+        let values = Set(headers.filter { $0.name.lowercased() == "content-length" }
+            .map { $0.value.trimmingCharacters(in: .whitespaces) })
+        guard values.count == 1, let value = values.first, value.isEmpty == false, value.utf8.count <= 19,
+            value.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") })
+        else { return nil }
+        return value
     }
 
     static let dropOnResponse: Set<String> = [

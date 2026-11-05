@@ -3,6 +3,52 @@ import Foundation
 import Testing
 @testable import RVIsolation
 
+// Test-side field readers over the typed payloads, so queue assertions
+// name the same facts they pinned against the legacy field bag.
+private extension WorkspaceControlResponseFrame {
+    var runtime: UUID? { payload.runtime }
+
+    var sequence: Int64? {
+        switch payload {
+        case .terminalReplay(let chunk), .terminalOutput(let chunk): chunk.sequence
+        default: nil
+        }
+    }
+
+    var batch: UUID? {
+        switch payload {
+        case .terminalReplayBegin(let begin): begin.batch
+        case .terminalReplayEnd(let end): end.batch
+        default: nil
+        }
+    }
+
+    var truncated: Bool? {
+        if case .terminalReplayBegin(let begin) = payload { return begin.truncated }
+        return nil
+    }
+
+    var replayLength: Int? {
+        if case .terminalReplayBegin(let begin) = payload { return begin.replayLength }
+        return nil
+    }
+
+    var rows: Int? {
+        if case .terminalWindow(let window) = payload { return window.rows }
+        return nil
+    }
+
+    var columns: Int? {
+        if case .terminalWindow(let window) = payload { return window.columns }
+        return nil
+    }
+
+    var exitStatus: Int32? {
+        if case .runtimeExited(let exited) = payload { return exited.exitStatus }
+        return nil
+    }
+}
+
 @Suite("Workspace client terminal queue")
 struct WorkspaceClientQueueTests {
     @Test func drainsRuntimesFairlyWithoutReorderingOneRuntime() throws {
@@ -269,10 +315,8 @@ struct WorkspaceClientQueueTests {
         }
         #expect(board.deliver(Self.output(exiting, sequence: 1, count: 2)))
         #expect(board.deliver(
-            WorkspaceControlResponse(
-                operation: .runtimeExited,
-                runtime: exiting,
-                exitStatus: 7
+            WorkspaceControlResponseFrame(
+                payload: .runtimeExited(.init(runtime: exiting, exitStatus: 7))
             )
         ))
         board.failAll(.disconnected)
@@ -311,20 +355,19 @@ struct WorkspaceClientQueueTests {
         #expect(try Self.next(board).runtime == other)
     }
 
-    private static func output(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlResponse {
-        WorkspaceControlResponse(
-            operation: .terminalOutput,
-            runtime: runtime,
-            sequence: sequence,
-            bytes: TerminalBytesCodec.encode(Data(repeating: 0x61, count: count))
+    private static func output(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame(
+            payload: .terminalOutput(.init(
+                runtime: runtime,
+                sequence: sequence,
+                bytes: TerminalBytesCodec.encode(Data(repeating: 0x61, count: count))
+            ))
         )
     }
 
-    private static func owner(_ runtime: UUID) -> WorkspaceControlResponse {
-        WorkspaceControlResponse(
-            operation: .terminalInputOwner,
-            runtime: runtime,
-            inputOwner: true
+    private static func owner(_ runtime: UUID) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame(
+            payload: .terminalInputOwner(.init(runtime: runtime, inputOwner: true))
         )
     }
 
@@ -340,12 +383,9 @@ struct WorkspaceClientQueueTests {
         #expect(try board.next(timeout: 0).get() == nil)
     }
 
-    private static func window(_ runtime: UUID, rows: Int, columns: Int) -> WorkspaceControlResponse {
-        WorkspaceControlResponse(
-            operation: .terminalWindow,
-            runtime: runtime,
-            rows: rows,
-            columns: columns
+    private static func window(_ runtime: UUID, rows: Int, columns: Int) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame(
+            payload: .terminalWindow(.init(runtime: runtime, rows: rows, columns: columns))
         )
     }
 
@@ -354,34 +394,34 @@ struct WorkspaceClientQueueTests {
         batch: UUID,
         truncated: Bool,
         byteCount: Int
-    ) -> WorkspaceControlResponse {
-        WorkspaceControlResponse(
-            operation: .terminalReplayBegin,
-            runtime: runtime,
-            batch: batch,
-            truncated: truncated,
-            replayLength: byteCount
+    ) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame(
+            payload: .terminalReplayBegin(.init(
+                runtime: runtime,
+                batch: batch,
+                truncated: truncated,
+                replayLength: byteCount
+            ))
         )
     }
 
-    private static func replay(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlResponse {
-        WorkspaceControlResponse(
-            operation: .terminalReplay,
-            runtime: runtime,
-            sequence: sequence,
-            bytes: TerminalBytesCodec.encode(Data(repeating: 0x61, count: count))
+    private static func replay(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame(
+            payload: .terminalReplay(.init(
+                runtime: runtime,
+                sequence: sequence,
+                bytes: TerminalBytesCodec.encode(Data(repeating: 0x61, count: count))
+            ))
         )
     }
 
-    private static func replayEnd(_ runtime: UUID, batch: UUID) -> WorkspaceControlResponse {
-        WorkspaceControlResponse(
-            operation: .terminalReplayEnd,
-            runtime: runtime,
-            batch: batch
+    private static func replayEnd(_ runtime: UUID, batch: UUID) -> WorkspaceControlResponseFrame {
+        WorkspaceControlResponseFrame(
+            payload: .terminalReplayEnd(.init(runtime: runtime, batch: batch))
         )
     }
 
-    private static func next(_ board: EventBoard) throws -> WorkspaceControlResponse {
+    private static func next(_ board: EventBoard) throws -> WorkspaceControlResponseFrame {
         let message = try board.next(timeout: 0).get()
         return try #require(message)
     }

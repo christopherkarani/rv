@@ -72,7 +72,9 @@ private func hookBody(
     case .foreign:
         return codec.encodeAllow()
     case .malformed(let malformation):
-        return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: .none)
+        return codec.encodeDeny(
+            HookDenyPresentation(reason: malformedHookSentence(malformation))
+        )
     }
 }
 
@@ -84,20 +86,23 @@ private func hookFileBody(
 ) async -> HookWire {
     if file.path.isEmpty {
         return codec.encodeDeny(
-            reason: malformedHookSentence(.missingCommand),
-            rule: nil,
-            next: .none
+            HookDenyPresentation(reason: malformedHookSentence(.missingCommand))
         )
     }
     let result = await evaluateFile(file, request.cwd)
     return hookFileWire(from: result, using: codec)
 }
 
+/// File wire: `HookMapper` composes the presentation; a file result that
+/// allows composes none and stays allow.
 func hookFileWire(
     from result: EvaluationResult,
     using codec: any HostCodec
 ) -> HookWire {
-    codec.encodeFileDeny(from: result)
+    guard let presentation = fileDenyPresentation(from: result) else {
+        return codec.encodeAllow()
+    }
+    return codec.encodeDeny(presentation)
 }
 
 private func pendingAction(

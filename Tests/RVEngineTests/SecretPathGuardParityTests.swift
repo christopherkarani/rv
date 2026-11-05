@@ -121,8 +121,10 @@ struct SecretPathGuardParityTests {
         return "\(hit?.ruleID.rawValue ?? "-")\t\(hit?.matchedText ?? "-")"
     }
 
-    // Verified identical on the base-branch implementation over the full corpus.
-    static let expectedDigest = "1d95bb532764198e"
+    // Verified identical on the base-branch implementation over the full corpus,
+    // except the 148 `find -f PATH` / `find -H PATH` cases whose path operand
+    // (after a global option) now scans: each moved from allow to deny.
+    static let expectedDigest = "a9799351e80ed52a"
     static let expectedCount = 10407
 
     /// Every 647th command's exact outcome (includeMetadata: false), generated

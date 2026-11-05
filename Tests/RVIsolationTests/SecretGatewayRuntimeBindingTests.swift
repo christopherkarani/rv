@@ -71,7 +71,7 @@ struct SecretGatewayRuntimeBindingTests {
         #expect(upstream.requests.isEmpty)
         let record = try #require(audit.items.withLock { $0.last })
         #expect(audit.items.withLock { $0.count } == 1)
-        #expect(record.refusal == "runtimeMismatch")
+        #expect(record.refusal?.code == "runtimeMismatch")
         #expect(record.activity == .blocked)
         #expect(record.runtime == "R1")
         #expect(record.secret == "OPENAI_API_KEY")
@@ -86,7 +86,7 @@ struct SecretGatewayRuntimeBindingTests {
         #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 403)
         #expect(upstream.requests.isEmpty)
         let record = try #require(audit.items.withLock { $0.last })
-        #expect(record.refusal == "runtimeUnverified")
+        #expect(record.refusal?.code == "runtimeUnverified")
         #expect(record.activity == .refused)
         #expect(record.runtime == "R1")
     }
@@ -101,7 +101,7 @@ struct SecretGatewayRuntimeBindingTests {
         #expect(try gatewayExchange(port: port, bearer(placeholder)).status == 403)
         #expect(upstream.requests.isEmpty)
         #expect(checks.seen.withLock { $0.isEmpty })
-        #expect(audit.items.withLock { $0.last?.refusal } == "runtimeUnverified")
+        #expect(audit.items.withLock { $0.last?.refusal?.code } == "runtimeUnverified")
     }
 
     @Test func theCheckSeesThisConnectionsPortPairAndTheEntrysGroup() throws {
@@ -139,7 +139,7 @@ struct SecretGatewayRuntimeBindingTests {
         #expect(response.status == 403)
         #expect(upstream.requests.isEmpty)
         let record = try #require(audit.items.withLock { $0.last })
-        #expect(record.refusal == "runtimeMismatch")
+        #expect(record.refusal?.code == "runtimeMismatch")
         #expect(record.runtime == "R2")
     }
 
@@ -153,7 +153,7 @@ struct SecretGatewayRuntimeBindingTests {
             "GET /s/OPENAI_API_KEY/models?key=\(placeholder.text) HTTP/1.1\r\n\r\n")
         #expect(response.status == 403)
         let record = try #require(audit.items.withLock { $0.last })
-        #expect(record.refusal == "surfaceNotAllowed")
+        #expect(record.refusal?.code == "surfaceNotAllowed")
         #expect(record.runtime == "R1")
         // No live placeholder, so no runtime to name.
         _ = try gatewayExchange(port: port, "GET /s/OPENAI_API_KEY/models HTTP/1.1\r\n\r\n")
@@ -268,7 +268,7 @@ struct SecretGatewayRuntimeBindingTests {
         waitpid(sibling, &status, 0)
         #expect(try String(contentsOfFile: out, encoding: .utf8) == "403")
         #expect(upstream.requests.isEmpty)
-        #expect(audit.items.withLock { $0.last?.refusal } == "runtimeMismatch")
+        #expect(audit.items.withLock { $0.last?.refusal?.code } == "runtimeMismatch")
     }
 
     private func spawnShell(

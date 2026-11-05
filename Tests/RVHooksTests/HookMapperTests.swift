@@ -371,9 +371,9 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
 
 private final class EncodeDenySpy: HostCodec {
     var host: HookHost { .grok }
-    private let calls = Mutex<[(reason: String, rule: RuleID?, next: HookVoiceNext)]>([])
+    private let calls = Mutex<[HookDenyPresentation]>([])
 
-    var denyCalls: [(reason: String, rule: RuleID?, next: HookVoiceNext)] {
+    var denyCalls: [HookDenyPresentation] {
         calls.withLock { $0 }
     }
 
@@ -381,8 +381,8 @@ private final class EncodeDenySpy: HostCodec {
         .malformed(.missingCommand)
     }
 
-    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        calls.withLock { $0.append((reason, rule, next)) }
+    func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
+        calls.withLock { $0.append(presentation) }
         return HookWire(stdout: "spy\n", exitCode: 9)
     }
 }
@@ -414,10 +414,10 @@ private final class EncodeDoorSpy: HostCodec {
         return HookWire(stdout: "allow\n", exitCode: 0)
     }
 
-    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
+    func encodeDeny(_ presentation: HookDenyPresentation) -> HookWire {
         counts.withLock {
             $0.denyCalls += 1
-            $0.denyReasons.append(reason)
+            $0.denyReasons.append(presentation.reason)
         }
         return HookWire(stdout: "deny\n", exitCode: 9)
     }

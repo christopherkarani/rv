@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVHistory
 import RVPolicy
 
@@ -204,12 +205,31 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 detail: Self.compact([
                     "event": "staged",
                     "delivery": definition.delivery.kind,
-                    "provider": definition.source.kind,
+                    "provider": definition.source.kind.rawValue,
                     "fingerprint": fingerprint,
                 ])))
         }
         for event in staged { _ = AuditLog.append(event, configDirectory: configDirectory) }
         return .success(SecretLease(placeholders: placeholders, environment: environment))
+    }
+
+    /// Organization rules for a resource profile's `keychain` entries, checked
+    /// before any is read so a refused launch prompts for nothing.
+    func profileKeychainRefusal(_ entries: [RuntimeResourceProfile.KeychainEntry]) -> SecretLeaseError? {
+        guard entries.isEmpty == false else { return nil }
+        return Self.profileKeychainRefusal(entries, managed: managed())
+    }
+
+    /// An invalid policy refuses every entry, like it refuses every secret.
+    static func profileKeychainRefusal(
+        _ entries: [RuntimeResourceProfile.KeychainEntry], managed: ManagedPolicyState
+    ) -> SecretLeaseError? {
+        guard let first = entries.first else { return nil }
+        if let reason = managed.invalidReason {
+            return .organizationPolicy("invalid, so keychain entries are not staged: \(reason)")
+        }
+        guard let rule = SecretOrganizationRules.profileKeychainRule(policy: managed.policy) else { return nil }
+        return .organizationPolicy(rule.message(secret: "resource profile keychain entry $\(first.env)"))
     }
 
     func bind(_ lease: SecretLease, runtime: String) {
@@ -377,7 +397,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             detail: compact([
                 "event": record.stage == .forward ? "forward" : "request",
                 "activity": record.activity.rawValue,
-                "refusal": record.refusal,
+                "refusal": record.refusal?.code,
                 "method": record.method,
                 "path": record.path,
                 "surfaces": record.surfaces.isEmpty ? nil : record.surfaces.joined(separator: ","),
@@ -393,9 +413,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
 
     /// A high-severity finding for a request the secret's own policy refused.
     /// Names the secret, refusal, method, and redacted path; never a value,
-    /// placeholder, or query string.
+    /// placeholder, or query string. Every blocked record raises one, even
+    /// without a refusal, so the alert fails closed.
     static func misuseEvent(_ record: SecretUseRecord, workspace: String?) -> AuditEvent? {
-        guard record.activity == .blocked, let refusal = record.refusal else { return nil }
+        guard record.activity == .blocked else { return nil }
         return AuditEvent(
             time: Date(),
             kind: .secretMisuse,
@@ -405,7 +426,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
             workspace: workspace,
             runtime: record.runtime,
             source: "secret-gateway",
-            detail: ["refusal": refusal, "method": record.method, "path": record.path, "severity": "high"]
+            detail: compact([
+                "refusal": record.refusal?.code, "method": record.method, "path": record.path, "severity": "high",
+            ])
         )
     }
 

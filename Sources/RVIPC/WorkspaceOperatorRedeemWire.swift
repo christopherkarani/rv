@@ -59,6 +59,23 @@ public struct HostRedeemCommitDTO: Sendable, Equatable, Codable {
     }
 }
 
+/// Closed vocabulary of host redemption outcome codes. Raw values are the
+/// wire strings.
+public enum HostRedeemOutcome: String, Sendable, Equatable, Codable, CaseIterable {
+    case unknown
+    case alreadyAccepted
+    case launchFailed
+
+    /// Lenient toward newer hosts: the service already collapsed unknown
+    /// outcome codes to "unknown" for audit, and acceptance is carried by
+    /// `accepted` and the IDs, never by this field, so unknown strings decode
+    /// as `.unknown`.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .unknown
+    }
+}
+
 /// Host redemption outcome. Refusals are data, never throws.
 ///
 /// - success: `accepted` with runtime/instance IDs (identifiers for audit
@@ -77,11 +94,11 @@ public struct HostRedeemResponseDTO: Sendable, Equatable, Codable {
     public let runtimeSessionID: UUID?
     public let agentInstanceID: UUID?
     /// Machine-readable outcome when IDs are absent (see above).
-    public let error: String?
+    public let error: HostRedeemOutcome?
 
     public init(
         accepted: Bool, runtimeSessionID: UUID? = nil, agentInstanceID: UUID? = nil,
-        error: String? = nil
+        error: HostRedeemOutcome? = nil
     ) {
         self.accepted = accepted
         self.runtimeSessionID = runtimeSessionID

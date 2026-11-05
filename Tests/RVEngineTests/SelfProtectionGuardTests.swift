@@ -20,6 +20,11 @@ struct SelfProtectionGuardTests {
         "rv mcp approve 1",
         "rv mcp trust",
         "rv secrets hook uninstall",
+        "rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL",
+        "printf %s x | rv secrets set GH_TOKEN --environment",
+        "rv secrets remove OPENAI_API_KEY",
+        "rv secrets oauth-reset API",
+        "rv secrets import --varlock .env.schema --resource-profile main",
         "rv managed sign policy.json",
         "~/.local/bin/rv packs disable core.git",
         "sudo rv uninstall",
@@ -48,6 +53,13 @@ struct SelfProtectionGuardTests {
         "ls rv",
         "rv-cli packs list",
         "rv-cli doctor",
+        "rv secrets",
+        "rv secrets list",
+        "rv secrets check",
+        "rv secrets describe",
+        "rv secrets scan .",
+        "rv secrets import --varlock .env.schema --dry-run",
+        "rv secrets hook install",
     ]
 
     @Test("agent-issued rv commands that weaken policy are flagged", arguments: weakening)
