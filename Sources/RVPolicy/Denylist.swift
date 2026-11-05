@@ -15,15 +15,21 @@ public struct DenylistEntry: Equatable, Sendable {
 
 public struct DenylistSnapshot: Equatable, Sendable {
     public var entries: [DenylistEntry]
+    /// `denylist.toml` is present but could not be read or parsed. Any
+    /// Always-block pin may be in it, so the snapshot matches every view.
+    public var isUnreadable: Bool
 
-    public init(entries: [DenylistEntry]) {
+    public init(entries: [DenylistEntry], isUnreadable: Bool = false) {
         self.entries = entries
+        self.isUnreadable = isUnreadable
     }
 
     public static let empty = DenylistSnapshot(entries: [])
 
+    public static let unreadable = DenylistSnapshot(entries: [], isUnreadable: true)
+
     public func matches(_ matchingView: MatchingView) -> Bool {
-        entries.contains { $0.matchingView == matchingView }
+        isUnreadable || entries.contains { $0.matchingView == matchingView }
     }
 }
 

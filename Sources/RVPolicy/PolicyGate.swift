@@ -22,6 +22,14 @@ public struct PolicyDecision: Equatable, Sendable {
 
 /// Chooses allowlist, allow-once, or rebase-recovery overrides for an evaluation result.
 public enum PolicyGate {
+    /// A deny the allowlist would have overridden, held because
+    /// `denylist.toml` is unreadable. Builtin pack: pinned, no allow-once.
+    public static let denylistUnreadable = Deny(
+        ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "denylist-invalid"),
+        reason: "Allowlist override suspended: denylist.toml (Always-block pins) could not be read. "
+            + "Fix or remove ~/.config/rv/denylist.toml."
+    )
+
     /// Total override order. No store, clock, or filesystem.
     ///
     /// `safety` selects the coding profile: `.normal` is
@@ -60,6 +68,24 @@ public enum PolicyGate {
                 invocationPrefix: invocationPrefix
             ) {
                 return allowDecision(result, override: .allowlist)
+            }
+            if allowlist.blocked.isUnreadable, AllowlistSnapshot(entries: allowlist.entries).matches(
+                ruleID: deny.ruleID,
+                matchingView: result.matchingView,
+                now: now,
+                maskedSegments: maskedSegments,
+                invocationPrefix: invocationPrefix
+            ) {
+                // The allowlist would have overridden this deny, but an
+                // unreadable denylist may pin it: hold it and say why.
+                return PolicyDecision(
+                    result: EvaluationResult(
+                        outcome: .deny(denylistUnreadable, matched: nil),
+                        matchingView: result.matchingView,
+                        analysis: result.analysis
+                    ),
+                    override: .none
+                )
             }
             guard cwd != nil, result.matchingView.isEmpty == false else {
                 return PolicyDecision(result: result, override: .none)
@@ -189,6 +215,7 @@ public enum PolicyGate {
     ) -> WorkingDirectory? {
         guard
             withoutGrant.override == .none,
+            RulePinning.blocksAllowOverride(withoutGrant.result) == false,
             case .deny = result.decision,
             let cwd,
             result.matchingView.isEmpty == false

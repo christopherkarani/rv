@@ -13,10 +13,15 @@ public struct DenylistStore: Sendable {
         RVPolicyPaths.denylistFile(inConfigDir: baseDirectory)
     }
 
+    /// Fail-closed load for evaluate. Missing → empty. Present but unreadable,
+    /// non-UTF-8, or unparseable → `.unreadable` (matches every view): it may
+    /// hold any Always-block pin, so it never reads as "no pins".
     public func loadSnapshot() -> DenylistSnapshot {
         switch load() {
-        case .missing, .invalid:
+        case .missing:
             return .empty
+        case .invalid:
+            return .unreadable
         case .ok(let entries):
             return DenylistSnapshot(entries: entries)
         }

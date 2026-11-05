@@ -18,6 +18,7 @@ public struct AllowlistStore: Sendable {
     }
 
     /// Fail-open load for evaluate. Symlink into `workspacePath` → empty. Invalid TOML → empty.
+    /// The denylist fails closed instead: see `DenylistStore.loadSnapshot`.
     public func loadUserSnapshot(workspacePath: String?, now: Date) -> AllowlistSnapshot {
         let blocked = DenylistStore(baseDirectory: baseDirectory).loadSnapshot()
         switch loadForValidate(workspacePath: workspacePath) {
@@ -176,10 +177,14 @@ public struct AllowlistStore: Sendable {
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
             return false
         }
-        let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
-        let parentValues = try? url.deletingLastPathComponent()
-            .resourceValues(forKeys: [.isSymbolicLinkKey])
-        let isLink = (values?.isSymbolicLink == true) || (parentValues?.isSymbolicLink == true)
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey]),
+              let parentValues = try? url.deletingLastPathComponent()
+                .resourceValues(forKeys: [.isSymbolicLinkKey])
+        else {
+            // Link state unknown: treat as poisoned (fail closed → empty allowlist).
+            return true
+        }
+        let isLink = (values.isSymbolicLink == true) || (parentValues.isSymbolicLink == true)
         guard isLink else { return false }
         let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
         let workspace = URL(fileURLWithPath: workspacePath)

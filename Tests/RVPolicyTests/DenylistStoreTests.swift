@@ -10,6 +10,7 @@ struct DenylistStoreTests {
         let store = DenylistStore(baseDirectory: root)
         #expect(store.load() == .missing)
         #expect(store.loadSnapshot() == .empty)
+        #expect(store.loadSnapshot().isUnreadable == false)
         #expect(store.fileURL == RVPolicyPaths.denylistFile(inConfigDir: root))
     }
 
@@ -61,13 +62,50 @@ struct DenylistStoreTests {
         #expect(entries[0].reason == "first")
     }
 
-    @Test func invalidUTF8_isInvalidAndEmptySnapshot() throws {
+    @Test func invalidUTF8_isInvalidAndUnreadableSnapshot() throws {
         let root = try makeDirectory("bytes")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DenylistStore(baseDirectory: root)
         try Data([0xFF, 0xFE, 0x00]).write(to: store.fileURL)
         #expect(store.load() == .invalid)
-        #expect(store.loadSnapshot() == .empty)
+        expectBlocksEverything(store.loadSnapshot())
+    }
+
+    @Test(.enabled(if: getuid() != 0, "root reads mode-000 files"))
+    func unreadableFile_isInvalidAndUnreadableSnapshot() throws {
+        let root = try makeDirectory("perms")
+        let store = DenylistStore(baseDirectory: root)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store.fileURL.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try store.pin(
+            DenylistEntry(
+                matchingView: MatchingView("git reset --hard"),
+                reason: "always block",
+                addedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: store.fileURL.path)
+        #expect(store.load() == .invalid)
+        expectBlocksEverything(store.loadSnapshot())
+    }
+
+    @Test func validFile_snapshotMatchesOnlyItsEntries() throws {
+        let root = try makeDirectory("valid")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DenylistStore(baseDirectory: root)
+        try """
+        [[block]]
+        exact_command = "git reset --hard"
+        reason = "always block"
+        added_at = "2023-11-14T22:13:20Z"
+        """.write(to: store.fileURL, atomically: true, encoding: .utf8)
+        let snap = store.loadSnapshot()
+        #expect(snap.isUnreadable == false)
+        #expect(snap.entries.count == 1)
+        #expect(snap.matches(MatchingView("git reset --hard")))
+        #expect(snap.matches(MatchingView("git status")) == false)
     }
 
     @Test func invalidTOML_isInvalidAndPinFailsClosed() throws {
@@ -76,7 +114,7 @@ struct DenylistStoreTests {
         let store = DenylistStore(baseDirectory: root)
         try "not toml {{{".write(to: store.fileURL, atomically: true, encoding: .utf8)
         #expect(store.load() == .invalid)
-        #expect(store.loadSnapshot() == .empty)
+        expectBlocksEverything(store.loadSnapshot())
         #expect(throws: DenylistParseError.invalidTOML) {
             try store.pin(
                 DenylistEntry(
@@ -111,6 +149,15 @@ struct DenylistStoreTests {
         #expect(artifacts.contains(RVPolicyPaths.denylistFile(inConfigDir: root)))
         #expect(artifacts.contains(RVPolicyPaths.denylistLockFile(inConfigDir: root)))
     }
+}
+
+/// A present-but-unusable denylist may hold any Always-block pin, so it
+/// must match every view rather than read as empty.
+private func expectBlocksEverything(_ snap: DenylistSnapshot) {
+    #expect(snap != .empty)
+    #expect(snap.isUnreadable)
+    #expect(snap.matches(MatchingView("git reset --hard")))
+    #expect(snap.matches(MatchingView("anything at all")))
 }
 
 private func makeDirectory(_ label: String) throws -> URL {
