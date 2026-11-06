@@ -50,6 +50,12 @@ public enum CommandMode: Equatable, Sendable {
     case scroll(pane: PaneID)
     case navigator(index: Int)
     case confirmCancel(pane: PaneID)
+    /// The review pane. Keys here never reach a runtime, and keys typed
+    /// into a runtime never reach this pane: only Ctrl-B R opens it.
+    case review
+    /// Typing the reason to deny one egress proposal. The id is captured
+    /// when the prompt opens, so a refresh cannot retarget it.
+    case reviewDenyReason(id: String, input: String)
 }
 
 public enum TUICommand: Equatable, Sendable {
@@ -87,6 +93,14 @@ public enum TUICommand: Equatable, Sendable {
     case acquireInput
     case releaseInput
     case relaunchShell
+    case enterReview
+    case reviewMove(delta: Int)
+    case reviewTop
+    case reviewBottom
+    case reviewApprove
+    case reviewDenyStart
+    case reviewDenySubmit(id: String, reason: String)
+    case exitReview
 }
 
 /// Arrow-key direction, shared by terminal input and spatial pane focus.
@@ -146,6 +160,7 @@ public enum CommandPrefix {
         (.character("["), .enterScroll),
         (.character("w"), .enterNavigator),
         (.character("!"), .enterConfirmCancel),
+        (.character("R"), .enterReview),
     ]
 
     /// Ctrl-B is the RV prefix. It is never forwarded to the runtime.
@@ -181,6 +196,10 @@ public enum CommandPrefix {
             return routeNavigator(key, index: index)
         case .confirmCancel(let pane):
             return routeConfirmCancel(key, pane: pane)
+        case .review:
+            return routeReview(key)
+        case .reviewDenyReason(let id, let input):
+            return routeDenyReason(key, id: id, input: input)
         case .prefix(let prefixTarget):
             return routePrefix(key, target: prefixTarget)
         case .terminal:
@@ -210,6 +229,7 @@ public enum CommandPrefix {
             guard let target else { return (.terminal, .invalidPrefix) }
             return (.scroll(pane: target.pane), command)
         case .enterNavigator: return (.navigator(index: 0), command)
+        case .enterReview: return (.review, command)
         case .enterConfirmCancel:
             guard let target else { return (.terminal, .invalidPrefix) }
             return (.confirmCancel(pane: target.pane), command)
@@ -261,6 +281,33 @@ public enum CommandPrefix {
         case .enter, .character("y"): return (.terminal, .confirmCancel)
         case .escape, .character("n"): return (.terminal, .dismissConfirm)
         default: return (mode, nil)
+        }
+    }
+
+    private static func routeReview(_ key: TUIKey) -> (CommandMode, TUICommand?) {
+        switch key {
+        case .character("j"), .arrow(.down): return (.review, .reviewMove(delta: 1))
+        case .character("k"), .arrow(.up): return (.review, .reviewMove(delta: -1))
+        case .character("g"): return (.review, .reviewTop)
+        case .character("G"): return (.review, .reviewBottom)
+        case .character("a"): return (.review, .reviewApprove)
+        case .character("d"): return (.review, .reviewDenyStart)
+        case .escape, .character("q"): return (.terminal, .exitReview)
+        default: return (.review, nil)
+        }
+    }
+
+    private static func routeDenyReason(
+        _ key: TUIKey, id: String, input: String
+    ) -> (CommandMode, TUICommand?) {
+        switch key {
+        case .escape: return (.review, nil)
+        case .enter: return (.review, .reviewDenySubmit(id: id, reason: input))
+        case .backspace: return (.reviewDenyReason(id: id, input: String(input.dropLast())), nil)
+        case .character(let character)
+            where input.count < WorkspaceReviewState.maximumReasonLength:
+            return (.reviewDenyReason(id: id, input: input + String(character)), nil)
+        default: return (.reviewDenyReason(id: id, input: input), nil)
         }
     }
 

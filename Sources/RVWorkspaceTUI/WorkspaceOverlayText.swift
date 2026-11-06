@@ -37,6 +37,8 @@ enum WorkspaceOverlayText {
         case .scroll: "SCROLL j/k · q live"
         case .navigator: "NAVIGATE j/k · Enter select"
         case .confirmCancel: "CONFIRM y/n"
+        case .review: "REVIEW"
+        case .reviewDenyReason: "DENY type a reason"
         case .terminal, .prefix, .help, .launcher, .runCommand: nil
         }
     }

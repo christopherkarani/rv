@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- `rv tui` review pane (Ctrl-B R): pending egress proposals and recent blocks in one live list with a pending badge, details, and approve/deny through the same owner-authenticated ceremony as `rv egress approve`/`deny`.
 - Secrets gateway: AWS SigV4 request signing from an `awsProfile` source, OAuth access-token minting from Keychain credentials, approve-rule requests held for a human, and binding of gateway secrets to the binaries allowed to spend them. (#483, #484, #485, #486, #487)
 - Secrets gateway controls: per-secret substitution surfaces, method/path allow rules, Basic-auth placeholders, placeholders bound to their runtime, secret expiry with TTL refresh and live rotation, and per-position value encoding. (#452, #454, #455, #456, #459, #460)
 - Secrets gateway audit: fail-closed audit, activity records and misuse findings. (#458)
