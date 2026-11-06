@@ -783,6 +783,12 @@ struct RulePinningTests {
         let stop = RulePinning.hardStop(in: wait(kind: .forbiddenHTTPDestination).action)
         #expect(stop != .protectedSharedBranch)
         #expect(stop == .forbiddenHTTPDestination)
+        let preview = RulePinning.preview(
+            record: wait(kind: .forbiddenHTTPDestination),
+            polarity: .allow
+        )
+        #expect(preview.sentence.contains("forbidden HTTP destination"))
+        #expect(preview.sentence.contains("shared branch") == false)
     }
 
     private func wait(
