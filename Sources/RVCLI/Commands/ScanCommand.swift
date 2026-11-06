@@ -88,31 +88,29 @@ struct ScanSessions: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "scan", format: format)
         let scanHome = try ctx.requireHome()
         let packIDs = try flags.resolvedPackIDs()
-        let result: ScanRunResult
+        let result: SessionScanResult
         do {
-            result = try ScanRun.execute(
-                ScanRun.Request(
-                    rootPath: path,
+            result = try SessionScan().run(
+                SessionScanRequest(
                     home: scanHome,
+                    now: Date(),
+                    rootPath: path,
+                    includeGlobs: flags.includeGlobs,
                     hostFilter: flags.host,
                     timeWindow: flags.timeWindow,
                     packIDs: packIDs,
-                    allEvents: flags.allEvents,
-                    includeGlobs: flags.includeGlobs,
-                    bounds: .default,
-                    now: Date(),
-                    fileManager: .default
+                    reportsEveryEvent: flags.allEvents
                 )
             )
-        } catch ScanRun.Error.pathNotFound(let missing) {
+        } catch SessionScanError.pathNotFound(let missing) {
             try ctx.fail("rv scan: path not found: \(DisplayedText.field(missing))\n")
-        } catch ScanRun.Error.listingFailed(let path) {
+        } catch SessionScanError.listingFailed(let path) {
             try ctx.fail("rv scan: listing failed: \(DisplayedText.field(path))\n")
-        } catch ScanRun.Error.unreadableStore(let path) {
+        } catch SessionScanError.unreadableStore(let path) {
             try ctx.fail("rv scan: unreadable store: \(DisplayedText.field(path))\n")
-        } catch ScanRun.Error.prepareFailed(let path) {
+        } catch SessionScanError.prepareFailed(let path) {
             try ctx.fail("rv scan: prepare failed: \(DisplayedText.field(path))\n")
-        } catch ScanRun.Error.packsUnavailable {
+        } catch SessionScanError.packsUnavailable {
             try ctx.fail("rv scan: packs unavailable\n")
         } catch {
             throw error
@@ -143,97 +141,9 @@ struct ScanOutcome: Equatable, Sendable {
     var exitCode: Int32
 }
 
-struct ScanRunResult: Equatable, Sendable {
-    var report: ScanReport
-    var eventHosts: Set<ScanHostID>
-}
-
+/// Rendering plus the fail-on-findings exit code; scanning itself is
+/// the RVScan seam (`SessionScan`).
 enum ScanRun {
-    struct Request {
-        var rootPath: String?
-        var home: ScanHome
-        var hostFilter: ScanHostID?
-        var timeWindow: ScanTimeWindow
-        var packIDs: [PackID]
-        var allEvents: Bool
-        var includeGlobs: [String]
-        var bounds: ScanBounds
-        var now: Date
-        var fileManager: FileManager
-
-        static func fixture(
-            rootPath: String? = nil,
-            home: ScanHome,
-            hostFilter: ScanHostID? = nil,
-            timeWindow: ScanTimeWindow = .all,
-            packIDs: [PackID] = dayOnePackIDs,
-            allEvents: Bool = false,
-            includeGlobs: [String] = [],
-            bounds: ScanBounds = .default,
-            now: Date = Date(),
-            fileManager: FileManager = .default
-        ) -> Request {
-            Request(
-                rootPath: rootPath,
-                home: home,
-                hostFilter: hostFilter,
-                timeWindow: timeWindow,
-                packIDs: packIDs,
-                allEvents: allEvents,
-                includeGlobs: includeGlobs,
-                bounds: bounds,
-                now: now,
-                fileManager: fileManager
-            )
-        }
-    }
-
-    enum Error: Swift.Error, Equatable {
-        case pathNotFound(String)
-        case packsUnavailable
-        case includeGlobRequiresPath
-        case listingFailed(String)
-        case unreadableStore(String)
-        case prepareFailed(String)
-    }
-
-    static func run(_ request: Request) throws -> ScanReport {
-        try execute(request).report
-    }
-
-    static func execute(_ request: Request) throws -> ScanRunResult {
-        do {
-            let result = try SessionScan().run(
-                SessionScanRequest(
-                    home: request.home,
-                    now: request.now,
-                    rootPath: request.rootPath,
-                    includeGlobs: request.includeGlobs,
-                    hostFilter: request.hostFilter,
-                    timeWindow: request.timeWindow,
-                    packIDs: request.packIDs,
-                    reportsEveryEvent: request.allEvents,
-                    bounds: request.bounds
-                ),
-                fileManager: request.fileManager
-            )
-            return ScanRunResult(report: result.report, eventHosts: result.eventHosts)
-        } catch {
-            throw mapped(error)
-        }
-    }
-
-    private static func mapped(_ error: SessionScanError) -> Error {
-        switch error {
-        case .pathNotFound(let path): .pathNotFound(path)
-        case .packsUnavailable: .packsUnavailable
-        case .includeGlobRequiresPath: .includeGlobRequiresPath
-        case .listingFailed(let path): .listingFailed(path)
-        case .unreadableStore(let path): .unreadableStore(path)
-        case .prepareFailed(let path): .prepareFailed(path)
-        }
-    }
-
     static func render(
         report: ScanReport,
         showCommand: Bool,

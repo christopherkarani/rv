@@ -66,9 +66,7 @@ func runTool(
         }
     }
     while true {
-        if blockingWorkIsCancelled() {
-            clock.arm(spentSinceCancel: CooperativeLaunchStop.spentSinceCancel())
-        }
+        clock.armIfWorkCancelled()
         if let end = clock.deadline {
             // The wait is the sequence clock. A 45-second default, or a
             // 0.5-second umount slice, must not expire it while a peer
@@ -394,7 +392,7 @@ func runToolBody(
                 arguments: arguments
             )
             var cap = Date().addingTimeInterval(allowed)
-            if let end = clock?.deadline ?? CooperativeLaunchStop.cancelClock?.deadline {
+            if let end = CooperativeLaunchStop.effectiveDeadline(local: clock) {
                 cap = min(cap, end)
             }
             limit = limit.map { min($0, cap) } ?? cap
@@ -417,7 +415,7 @@ func runToolBody(
             process.terminate()
             // Grace and the reap stop at the cancel clock. Adding them
             // after that deadline would put the return past 8 seconds.
-            let stopAt = clock?.deadline ?? CooperativeLaunchStop.cancelClock?.deadline ?? returnDeadline
+            let stopAt = CooperativeLaunchStop.effectiveDeadline(local: clock, fallback: returnDeadline)
             let graceEnd = Date().addingTimeInterval(DiskImageCancelBudget.signalGrace)
             let graceStop = stopAt.map { min($0, graceEnd) } ?? graceEnd
             while process.isRunning, Date() < graceStop {
@@ -437,7 +435,7 @@ func runToolBody(
         // Bounded reap, then park. `parkIfStuck: false` used to spin until
         // the process exited, so a D-state umount kept the cancelled caller
         // past 8 seconds. The return deadline cuts the reap short.
-        let reapBound = clock?.deadline ?? CooperativeLaunchStop.cancelClock?.deadline ?? returnDeadline
+        let reapBound = CooperativeLaunchStop.effectiveDeadline(local: clock, fallback: returnDeadline)
         let reapDeadline = reapBound.map {
             Date().addingTimeInterval(DiskImageCancelBudget.reapSlice(until: $0, now: Date()))
         } ?? Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
