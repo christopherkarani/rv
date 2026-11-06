@@ -66,14 +66,14 @@ struct ServiceStatusTests {
     @Test func requestFailureIsDownNotFalseRunning() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
-            sendError: .interrupted
+            sendError: .unreachable
         )
 
         let client = try isolatedClient(transport: transport)
         let health = ServiceHealth.inspect(await client.diagnostics())
         #expect(
             health == .requestFailed(
-                failure: .transport(.interrupted),
+                failure: .transport(.unreachable),
                 local: .init(
                     corePacksReady: true,
                     serviceSemver: "1.0.0",

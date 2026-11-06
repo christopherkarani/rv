@@ -173,10 +173,13 @@ public struct ServiceClient: Sendable {
                 transport.invalidate()
                 return await inProcessRoute()
             }
-        } catch is IPCCallError {
-            transport.invalidate()
-            return await inProcessRoute()
         } catch {
+            switch error {
+            case .identityMismatch, .unexpectedResult, .service:
+                transport.invalidate()
+            case .transport, .codec:
+                break
+            }
             return await inProcessRoute()
         }
     }
@@ -186,7 +189,11 @@ public struct ServiceClient: Sendable {
         await evaluate(command: command, cwd: cwd).result
     }
 
-    private enum IPCCallError: Error, Sendable, Equatable {
+    /// Closed set of ways an IPC call can fail.
+    private enum IPCCallError: Error {
+        case transport(ServiceTransportFailure)
+        /// The request did not encode or the reply did not decode.
+        case codec(any Error)
         case identityMismatch
         case unexpectedResult
         case service(IPCError)
@@ -197,19 +204,33 @@ public struct ServiceClient: Sendable {
         using transport: any ServiceTransport,
         timeoutMs: Int? = nil,
         hookConsult: Bool = false
-    ) async throws -> C.Reply {
+    ) async throws(IPCCallError) -> C.Reply {
         let request = IPCRequest(method: call.method)
-        let body = try IPCJSON.encode(request)
-        let data: Data
-        if hookConsult {
-            data = try await transport.sendHookConsult(
-                body, timeoutMs: timeoutMs ?? transport.oneShotEvaluateTimeoutMs)
-        } else if let timeoutMs {
-            data = try await transport.send(body, timeoutMs: timeoutMs)
-        } else {
-            data = try await transport.send(body)
+        let body: Data
+        do {
+            body = try IPCJSON.encode(request)
+        } catch {
+            throw .codec(error)
         }
-        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        let data: Data
+        do {
+            if hookConsult {
+                data = try await transport.sendHookConsult(
+                    body, timeoutMs: timeoutMs ?? transport.oneShotEvaluateTimeoutMs)
+            } else if let timeoutMs {
+                data = try await transport.send(body, timeoutMs: timeoutMs)
+            } else {
+                data = try await transport.send(body)
+            }
+        } catch {
+            throw .transport(error)
+        }
+        let response: IPCResponse
+        do {
+            response = try IPCJSON.decode(IPCResponse.self, from: data)
+        } catch {
+            throw .codec(error)
+        }
         guard response.id == request.id, response.protocolName == request.protocolName else {
             throw IPCCallError.identityMismatch
         }
@@ -243,10 +264,8 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 ProposeLaunchCall(params: params), using: transport)
             return .success(reply)
-        } catch let error as IPCCallError {
-            return .failure(mapCallError(error))
         } catch {
-            return .failure(.transport(String(describing: error)))
+            return .failure(mapCallError(error))
         }
     }
 
@@ -261,10 +280,8 @@ public struct ServiceClient: Sendable {
                 ProposalStatusCall(params: ProposalStatusParams(operationID: operationID)),
                 using: transport)
             return .success(reply)
-        } catch let error as IPCCallError {
-            return .failure(mapCallError(error))
         } catch {
-            return .failure(.transport(String(describing: error)))
+            return .failure(mapCallError(error))
         }
     }
 
@@ -286,10 +303,8 @@ public struct ServiceClient: Sendable {
                 timeoutMs: transport.oneShotEvaluateTimeoutMs
             )
             return .success(reply)
-        } catch let error as IPCCallError {
-            return .failure(mapCallError(error))
         } catch {
-            return .failure(.transport(String(describing: error)))
+            return .failure(mapCallError(error))
         }
     }
 
@@ -301,6 +316,10 @@ public struct ServiceClient: Sendable {
             return .transport("unexpectedResult")
         case .service(let ipcError):
             return .service(String(describing: ipcError))
+        case .transport(let failure):
+            return .transport(String(describing: failure))
+        case .codec(let underlying):
+            return .transport(String(describing: underlying))
         }
     }
 
@@ -351,11 +370,18 @@ public struct ServiceClient: Sendable {
                 transport.invalidate()
                 return unavailable(.protocol)
             }
-        } catch is IPCCallError {
-            transport.invalidate()
-            return unavailable(.protocol)
         } catch {
-            return unavailable(HookDaemonFallback.classify(error))
+            switch error {
+            case .transport(let failure):
+                if failure == .malformedReply {
+                    transport.invalidate()
+                }
+                return unavailable(HookDaemonFallback.classify(failure))
+            case .codec, .identityMismatch, .unexpectedResult, .service:
+                // No trustworthy verdict (malformed reply): never softened.
+                transport.invalidate()
+                return unavailable(.protocol)
+            }
         }
     }
 
@@ -412,34 +438,22 @@ public struct ServiceClient: Sendable {
                     snapshot: snapshot,
                     localCorePacksReady: localCorePacksReady
                 )
-            } catch IPCCallError.identityMismatch {
-                return localDiagnostic(
-                    cause: .requestFailed(.invalidResponse),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch IPCCallError.unexpectedResult {
-                return localDiagnostic(
-                    cause: .requestFailed(.unexpectedResponse),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch let IPCCallError.service(error) {
-                if case .protocolSkew = error {
-                    return localDiagnostic(
-                        cause: .skew(.protocolMismatch),
-                        corePacksReady: localCorePacksReady,
-                        serviceSemver: serviceSemver
-                    )
+            } catch {
+                let cause: ServiceFallbackCause
+                switch error {
+                case .identityMismatch, .codec:
+                    cause = .requestFailed(.invalidResponse)
+                case .unexpectedResult:
+                    cause = .requestFailed(.unexpectedResponse)
+                case .service(.protocolSkew):
+                    cause = .skew(.protocolMismatch)
+                case .service(let serviceError):
+                    cause = .requestFailed(.service(serviceError))
+                case .transport(let failure):
+                    cause = .requestFailed(Self.diagnosticFailure(from: failure))
                 }
                 return localDiagnostic(
-                    cause: .requestFailed(.service(error)),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch {
-                return localDiagnostic(
-                    cause: .requestFailed(Self.diagnosticFailure(from: error)),
+                    cause: cause,
                     corePacksReady: localCorePacksReady,
                     serviceSemver: serviceSemver
                 )
@@ -474,38 +488,8 @@ public struct ServiceClient: Sendable {
         )
     }
 
-    private static func diagnosticFailure(from error: Error) -> ServiceDiagnosticFailure {
-        switch error {
-        case is DecodingError, is EncodingError:
-            .invalidResponse
-        case let error as ServiceTransportError:
-            .transport(error)
-        default:
-            xpcClientFailure(error) == .daemonRejected ? .daemonRejected : .transport(.unexpected)
-        }
-    }
-
-    /// Typed view of `XPCEvaluateClientError`, which otherwise collapses into
-    /// "request failed": no listener is down; a failed identity check is a
-    /// daemon the hook client would also refuse.
-    private enum XPCClientFailure {
-        case down
-        case daemonRejected
-    }
-
-    private static func xpcClientFailure(_ error: Error) -> XPCClientFailure? {
-#if canImport(XPC)
-        switch error as? XPCEvaluateClientError {
-        case .connectFailed, .cancelled:
-            return .down
-        case .authenticationFailed:
-            return .daemonRejected
-        case nil:
-            return nil
-        }
-#else
-        return nil
-#endif
+    private static func diagnosticFailure(from failure: ServiceTransportFailure) -> ServiceDiagnosticFailure {
+        failure == .untrusted ? .daemonRejected : .transport(failure)
     }
 
     private enum Route {
@@ -524,21 +508,12 @@ public struct ServiceClient: Sendable {
                 return .skew(reason, serviceSemver: ack.serviceSemver)
             }
             return .xpc(transport, serviceSemver: ack.serviceSemver)
-        } catch let error as ServiceTransportError {
-            switch error {
-            case .connectFailed, .timeout, .interrupted:
-                return .down
-            case .decodeFailed, .unexpected:
-                return .failed(.transport(error))
-            }
         } catch {
-            switch Self.xpcClientFailure(error) {
-            case .down:
+            switch error {
+            case .timeout, .unreachable:
                 return .down
-            case .daemonRejected:
-                return .failed(.daemonRejected)
-            case nil:
-                return .failed(.transport(.unexpected))
+            case .untrusted, .malformedReply:
+                return .failed(Self.diagnosticFailure(from: error))
             }
         }
     }

@@ -164,7 +164,7 @@ public final class XPCEvaluateClient: Sendable {
                         return
                     }
                     guard let data = XPCIPCWire.body(from: reply) else {
-                        once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        once.resume(throwing: XPCEvaluateClientError.malformedReply)
                         return
                     }
                     let endpoint: XPCHeld?
@@ -232,5 +232,7 @@ public enum XPCEvaluateClientError: Error, Sendable, Equatable {
     case authenticationFailed
     case connectFailed
     case cancelled
+    /// An authenticated peer answered with no body.
+    case malformedReply
 }
 #endif
