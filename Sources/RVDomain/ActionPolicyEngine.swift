@@ -199,9 +199,7 @@ public enum ActionPolicyEngine: Sendable {
     ) -> ActionPolicyVerdict? {
         guard rules.isEmpty == false else { return nil }
         let uncovered = CoreHit(
-            decision: .reviewEligible(fallback: Builtin.uncovered),
-            ruleID: Builtin.uncovered.ruleID,
-            reason: Builtin.uncovered.reason,
+            reviewEligibleFallback: Builtin.uncovered,
             semanticallyCovered: false
         )
         let hit = applyTypedRules(
@@ -288,16 +286,13 @@ public enum ActionPolicyEngine: Sendable {
         let hit: CoreHit
         if http.destination.isPublicPinned && http.method == .get {
             hit = CoreHit(
-                decision: .hardAllow,
-                ruleID: Builtin.publicHTTPSGet,
+                allowRuleID: Builtin.publicHTTPSGet,
                 reason: Builtin.publicHTTPSGetReason,
                 semanticallyCovered: true
             )
         } else {
             hit = CoreHit(
-                decision: .hardDeny(Builtin.forbiddenHTTPDestination),
-                ruleID: Builtin.forbiddenHTTPDestination.ruleID,
-                reason: Builtin.forbiddenHTTPDestination.reason,
+                hardDeny: Builtin.forbiddenHTTPDestination,
                 semanticallyCovered: true
             )
         }
@@ -317,9 +312,7 @@ public enum ActionPolicyEngine: Sendable {
         policy: EffectiveActionPolicy
     ) -> ActionPolicyVerdict {
         var hit = CoreHit(
-            decision: .reviewEligible(fallback: Builtin.uncovered),
-            ruleID: Builtin.uncovered.ruleID,
-            reason: Builtin.uncovered.reason,
+            reviewEligibleFallback: Builtin.uncovered,
             semanticallyCovered: false
         )
         hit = applyTypedRules(hit, policy.rules, action: nil)
@@ -345,42 +338,32 @@ public enum ActionPolicyEngine: Sendable {
         let kinds = shell.effects.kinds
         if kinds.contains(.protectedPathMutation) {
             return CoreHit(
-                decision: .hardDeny(Builtin.protectedPath),
-                ruleID: Builtin.protectedPath.ruleID,
-                reason: Builtin.protectedPath.reason,
+                hardDeny: Builtin.protectedPath,
                 semanticallyCovered: true
             )
         }
         if kinds.contains(.workingTreeDiscard) {
             return CoreHit(
-                decision: .hardDeny(Builtin.workingTreeDiscard),
-                ruleID: Builtin.workingTreeDiscard.ruleID,
-                reason: Builtin.workingTreeDiscard.reason,
+                hardDeny: Builtin.workingTreeDiscard,
                 semanticallyCovered: true
             )
         }
         if kinds.contains(.remoteSharedBranchMutation) {
             if isSharedTarget(resources: shell.resources, context: context, gitWorld: gitWorld) {
                 return CoreHit(
-                    decision: .hardDeny(Builtin.remoteSharedBranch),
-                    ruleID: Builtin.remoteSharedBranch.ruleID,
-                    reason: Builtin.remoteSharedBranch.reason,
+                    hardDeny: Builtin.remoteSharedBranch,
                     semanticallyCovered: true
                 )
             }
             if case .unprobed = gitWorld, shell.resources.gitRef == nil {
                 // Implicit HEAD was not injected. Pack floor; do not treat as private.
                 return CoreHit(
-                    decision: .reviewEligible(fallback: Builtin.uncovered),
-                    ruleID: Builtin.uncovered.ruleID,
-                    reason: Builtin.uncovered.reason,
+                    reviewEligibleFallback: Builtin.uncovered,
                     semanticallyCovered: false
                 )
             }
             return CoreHit(
-                decision: .mandatoryHuman(Builtin.remoteBranchAsk),
-                ruleID: Builtin.remoteBranchAsk.ruleID,
-                reason: Builtin.remoteBranchAsk.reason,
+                mandatoryHuman: Builtin.remoteBranchAsk,
                 semanticallyCovered: true
             )
         }
@@ -389,16 +372,13 @@ public enum ActionPolicyEngine: Sendable {
             // every target, including shared branches and unknown refs —
             // there is no allow arm for remote mutation.
             return CoreHit(
-                decision: .mandatoryHuman(Builtin.remoteBranchAsk),
-                ruleID: Builtin.remoteBranchAsk.ruleID,
-                reason: Builtin.remoteBranchAsk.reason,
+                mandatoryHuman: Builtin.remoteBranchAsk,
                 semanticallyCovered: true
             )
         }
         if kinds.contains(.localBranchCreate) {
             return CoreHit(
-                decision: .hardAllow,
-                ruleID: Builtin.localBranchCreate,
+                allowRuleID: Builtin.localBranchCreate,
                 reason: Builtin.localBranchCreateReason,
                 semanticallyCovered: true
             )
@@ -407,9 +387,7 @@ public enum ActionPolicyEngine: Sendable {
             return filesystemHit(shell)
         }
         return CoreHit(
-            decision: .reviewEligible(fallback: Builtin.uncovered),
-            ruleID: Builtin.uncovered.ruleID,
-            reason: Builtin.uncovered.reason,
+            reviewEligibleFallback: Builtin.uncovered,
             semanticallyCovered: false
         )
     }
@@ -425,9 +403,7 @@ public enum ActionPolicyEngine: Sendable {
         }
         if kinds.contains(.unresolvedFilesystem) || scope == .unknown || scope == nil {
             return CoreHit(
-                decision: .hardDeny(Builtin.unresolvedFilesystem),
-                ruleID: Builtin.unresolvedFilesystem.ruleID,
-                reason: Builtin.unresolvedFilesystem.reason,
+                hardDeny: Builtin.unresolvedFilesystem,
                 semanticallyCovered: true
             )
         }
@@ -440,9 +416,7 @@ public enum ActionPolicyEngine: Sendable {
             || (isWriteLike(kinds) && scope?.protectedMatch != nil)
         {
             return CoreHit(
-                decision: .hardDeny(Builtin.protectedPath),
-                ruleID: Builtin.protectedPath.ruleID,
-                reason: Builtin.protectedPath.reason,
+                hardDeny: Builtin.protectedPath,
                 semanticallyCovered: true
             )
         }
@@ -450,32 +424,26 @@ public enum ActionPolicyEngine: Sendable {
             || (isWriteLike(kinds) && scope == .outsideRepository)
         {
             return CoreHit(
-                decision: .hardDeny(Builtin.outsideRepository),
-                ruleID: Builtin.outsideRepository.ruleID,
-                reason: Builtin.outsideRepository.reason,
+                hardDeny: Builtin.outsideRepository,
                 semanticallyCovered: true
             )
         }
         if scope == .insideRepository {
             return CoreHit(
-                decision: .hardAllow,
-                ruleID: Builtin.inRepository,
+                allowRuleID: Builtin.inRepository,
                 reason: Builtin.inRepositoryReason,
                 semanticallyCovered: true
             )
         }
         if kinds.contains(.filesystemRead) {
             return CoreHit(
-                decision: .hardAllow,
-                ruleID: Builtin.outsideRepositoryRead,
+                allowRuleID: Builtin.outsideRepositoryRead,
                 reason: Builtin.outsideRepositoryReadReason,
                 semanticallyCovered: true
             )
         }
         return CoreHit(
-            decision: .reviewEligible(fallback: Builtin.uncovered),
-            ruleID: Builtin.uncovered.ruleID,
-            reason: Builtin.uncovered.reason,
+            reviewEligibleFallback: Builtin.uncovered,
             semanticallyCovered: false
         )
     }
@@ -503,16 +471,12 @@ public enum ActionPolicyEngine: Sendable {
         }
         if let boundary = catalogOrBoundaryDeny(kinds: shell.effects.kinds) {
             return CoreHit(
-                decision: .hardDeny(boundary),
-                ruleID: boundary.ruleID,
-                reason: boundary.reason,
+                hardDeny: boundary,
                 semanticallyCovered: true
             )
         }
         return CoreHit(
-            decision: .reviewEligible(fallback: Builtin.uncovered),
-            ruleID: Builtin.uncovered.ruleID,
-            reason: Builtin.uncovered.reason,
+            reviewEligibleFallback: Builtin.uncovered,
             semanticallyCovered: false
         )
     }
@@ -625,9 +589,7 @@ public enum ActionPolicyEngine: Sendable {
         case .deny:
             let deny = Deny(ruleID: rule.id, reason: "A typed rule denied this action.")
             return CoreHit(
-                decision: .hardDeny(deny),
-                ruleID: rule.id,
-                reason: deny.reason,
+                hardDeny: deny,
                 semanticallyCovered: true
             )
         case .ask:
@@ -636,9 +598,7 @@ public enum ActionPolicyEngine: Sendable {
             }
             let deny = Deny(ruleID: rule.id, reason: "A typed rule requires a human.")
             return CoreHit(
-                decision: .mandatoryHuman(deny),
-                ruleID: rule.id,
-                reason: deny.reason,
+                mandatoryHuman: deny,
                 semanticallyCovered: true
             )
         case .allow:
@@ -663,16 +623,12 @@ public enum ActionPolicyEngine: Sendable {
             return hit
         case .deny(let deny):
             return CoreHit(
-                decision: .hardDeny(deny),
-                ruleID: deny.ruleID,
-                reason: deny.reason,
+                hardDeny: deny,
                 semanticallyCovered: false
             )
         case .ask(let deny):
             return CoreHit(
-                decision: .mandatoryHuman(deny),
-                ruleID: deny.ruleID,
-                reason: deny.reason,
+                mandatoryHuman: deny,
                 semanticallyCovered: false
             )
         }
@@ -687,9 +643,7 @@ public enum ActionPolicyEngine: Sendable {
                 return hit
             }
             return CoreHit(
-                decision: .mandatoryHuman(deny),
-                ruleID: deny.ruleID,
-                reason: deny.reason,
+                mandatoryHuman: deny,
                 semanticallyCovered: hit.semanticallyCovered
             )
         case .deny(let deny):
@@ -697,18 +651,69 @@ public enum ActionPolicyEngine: Sendable {
                 return hit
             }
             return CoreHit(
-                decision: .hardDeny(deny),
-                ruleID: deny.ruleID,
-                reason: deny.reason,
+                hardDeny: deny,
                 semanticallyCovered: hit.semanticallyCovered
             )
         }
     }
 }
 
+/// One policy hit. A decision that carries a `Deny` derives its rule and
+/// reason from it, so an explanation can never name a different rule than
+/// the deny it describes. Only allow carries them explicitly.
 private struct CoreHit: Sendable, Equatable {
-    var decision: HardPolicyDecision
-    var ruleID: RuleID
-    var reason: String
-    var semanticallyCovered: Bool
+    private enum Outcome: Sendable, Equatable {
+        case allow(ruleID: RuleID, reason: String)
+        case hardDeny(Deny)
+        case mandatoryHuman(Deny)
+        case reviewEligible(fallback: Deny)
+    }
+
+    private let outcome: Outcome
+    let semanticallyCovered: Bool
+
+    init(allowRuleID: RuleID, reason: String, semanticallyCovered: Bool) {
+        outcome = .allow(ruleID: allowRuleID, reason: reason)
+        self.semanticallyCovered = semanticallyCovered
+    }
+
+    init(hardDeny deny: Deny, semanticallyCovered: Bool) {
+        outcome = .hardDeny(deny)
+        self.semanticallyCovered = semanticallyCovered
+    }
+
+    init(mandatoryHuman deny: Deny, semanticallyCovered: Bool) {
+        outcome = .mandatoryHuman(deny)
+        self.semanticallyCovered = semanticallyCovered
+    }
+
+    init(reviewEligibleFallback deny: Deny, semanticallyCovered: Bool) {
+        outcome = .reviewEligible(fallback: deny)
+        self.semanticallyCovered = semanticallyCovered
+    }
+
+    var decision: HardPolicyDecision {
+        switch outcome {
+        case .allow: return .hardAllow
+        case .hardDeny(let deny): return .hardDeny(deny)
+        case .mandatoryHuman(let deny): return .mandatoryHuman(deny)
+        case .reviewEligible(let deny): return .reviewEligible(fallback: deny)
+        }
+    }
+
+    var ruleID: RuleID {
+        switch outcome {
+        case .allow(let ruleID, _): return ruleID
+        case .hardDeny(let deny), .mandatoryHuman(let deny), .reviewEligible(let deny):
+            return deny.ruleID
+        }
+    }
+
+    var reason: String {
+        switch outcome {
+        case .allow(_, let reason): return reason
+        case .hardDeny(let deny), .mandatoryHuman(let deny), .reviewEligible(let deny):
+            return deny.reason
+        }
+    }
 }
