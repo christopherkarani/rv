@@ -787,7 +787,8 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::808:808")))
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::a9fe:a9fe")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::7f00:1")) == false)
-    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:808:808::")))
+    // The 64:ff9b:1::/48 local-use block has no fixed embedding: refused.
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:808:808::")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:a00:1::")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1::808:808")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001::1")) == false)

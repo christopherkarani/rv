@@ -119,7 +119,8 @@ public enum EgressStartError: Error, Sendable, Equatable {
 /// failure from policy filtering from refused connections.
 enum DialOutcome: Sendable, Equatable {
     case connected(Int32)
-    /// No address resolved.
+    /// No address resolved: lookup failure, empty answer, or a lookup
+    /// that outlived `resolveTimeout` or the resolver budget.
     case dnsFailed
     /// Any resolved address failed the public-unicast filter (external
     /// verdict is consensus over the whole answer set: a mixed answer is
@@ -147,13 +148,13 @@ struct EgressDialCandidate: Sendable {
 /// seatbelt `localhost` rule and can dial nothing else directly. Each
 /// CONNECT is admitted by policy (generic public web hosts in Standard
 /// mode, or loopback targets on any port) and resolved here, host-side:
-/// clients never supply IPs. Resolution happens once per admission and the
-/// proxy dials exactly the filtered sockaddr it resolved, so there is no
-/// check-to-use race and no pin cache a poisoned first answer can persist
-/// in; external names whose answer set is not entirely public-unicast are
-/// refused without dialing. Denials are logged; allowed streams relay as
-/// opaque bytes. One proxy per runtime (REQ-2-1); `stop` ends new accepts and
-/// lets in-flight relays drain.
+/// clients never supply IPs. Resolution happens once per admission, bounded
+/// by `resolveTimeout`, and the proxy dials exactly the filtered sockaddr
+/// it resolved, so there is no check-to-use race and no pin cache a
+/// poisoned first answer can persist in; external names whose answer set
+/// is not entirely public-unicast are refused without dialing. Denials are
+/// logged; allowed streams relay as opaque bytes. One proxy per runtime
+/// (REQ-2-1); `stop` ends new accepts and lets in-flight relays drain.
 ///
 /// Binary scope (per-runtime attribution): TCP loopback carries no peer
 /// credentials, so there is deliberately no per-connection PID lookup —
@@ -184,6 +185,9 @@ public final class EgressProxy: @unchecked Sendable {
     private let pins: EgressBinaryPinCache
     private let grants: [EgressProxyCredential: EgressGrant]?
     private let record: @Sendable (EgressProxyDenial) -> Void
+    /// Resolves one admitted target to the candidate set `dial` checks and
+    /// connects. Production is `resolveBounded`; tests inject answers.
+    private let resolve: @Sendable (String, Int) -> [EgressDialCandidate]
     private let lock = NSLock()
     /// Phase 4 live supplement: human-approved exact host/port rules loaded
     /// without restart. Additive to the startup policy; every admission
@@ -201,20 +205,17 @@ public final class EgressProxy: @unchecked Sendable {
     /// Open mode: any local connector is judged against `policy`. This mode
     /// cannot scope rights per runtime or per workspace; prefer
     /// `init(grants:)` wherever co-tenants must not share rights.
-    public init(
+    public convenience init(
         policy: EgressHostPolicy = .publicHTTPS,
         binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
         record: (@Sendable (EgressProxyDenial) -> Void)? = nil
     ) {
-        self.policy = policy
-        self.binaryPolicy = binaryPolicy
-        self.attribution = attribution
-        self.pins = pins
-        self.grants = nil
-        self.record = record ?? EgressProxy.productionDenialLog()
-        admitAttributionPin()
+        self.init(
+            policy: policy, grants: nil, binaryPolicy: binaryPolicy, attribution: attribution,
+            pins: pins, record: record, resolve: EgressProxy.resolveBounded
+        )
     }
 
     /// Credentialed mode: each request must present a mapped credential and
@@ -223,19 +224,37 @@ public final class EgressProxy: @unchecked Sendable {
     /// policy runs, so an unauthenticated sibling cannot ride any grant.
     /// Binary scope composes: when `binaryPolicy` is scoped, the instance
     /// attribution gate runs before credential authentication in both modes.
-    public init(
+    public convenience init(
         grants: [EgressProxyCredential: EgressGrant],
         binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
         record: (@Sendable (EgressProxyDenial) -> Void)? = nil
     ) {
-        self.policy = .publicHTTPS
+        self.init(
+            policy: .publicHTTPS, grants: grants, binaryPolicy: binaryPolicy, attribution: attribution,
+            pins: pins, record: record, resolve: EgressProxy.resolveBounded
+        )
+    }
+
+    /// Designated initializer behind both modes. `grants == nil` is open
+    /// mode. Module-internal so tests can inject the resolver.
+    init(
+        policy: EgressHostPolicy,
+        grants: [EgressProxyCredential: EgressGrant]?,
+        binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
+        attribution: EgressRuntimeAttribution? = nil,
+        pins: EgressBinaryPinCache = EgressBinaryPinCache(),
+        record: (@Sendable (EgressProxyDenial) -> Void)?,
+        resolve: @escaping @Sendable (String, Int) -> [EgressDialCandidate]
+    ) {
+        self.policy = policy
         self.binaryPolicy = binaryPolicy
         self.attribution = attribution
         self.pins = pins
         self.grants = grants
         self.record = record ?? EgressProxy.productionDenialLog()
+        self.resolve = resolve
         admitAttributionPin()
     }
 
@@ -777,7 +796,7 @@ public final class EgressProxy: @unchecked Sendable {
     /// tunnel the client believes is open.
     private func dialUpstream(host: String, port: Int, external: Bool, client: Int32, established: Bool = false) -> Int32? {
         let reason: EgressDenialReason
-        switch EgressProxy.dial(host: host, port: port, external: external) {
+        switch EgressProxy.dial(host: host, port: port, external: external, resolve: resolve) {
         case .connected(let fd):
             return fd
         case .dnsFailed:
@@ -981,7 +1000,46 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     static func dial(host: String, port: Int, external: Bool) -> DialOutcome {
-        dial(host: host, port: port, external: external, resolve: resolveDialCandidates)
+        dial(host: host, port: port, external: external, resolve: resolveBounded)
+    }
+
+    /// Longest the proxy waits for one name to resolve. `getaddrinfo` has no
+    /// timeout of its own; past this the request is denied `dns-failed`.
+    static let resolveTimeout: DispatchTimeInterval = .seconds(10)
+
+    /// Production resolver: `getaddrinfo` under `resolveTimeout` and the
+    /// process-wide lookup budget.
+    @Sendable static func resolveBounded(host: String, port: Int) -> [EgressDialCandidate] {
+        resolveWithDeadline(
+            host: host, port: port, timeout: resolveTimeout, budget: .shared, resolve: resolveDialCandidates
+        )
+    }
+
+    /// Runs `resolve` off the calling thread and waits at most `timeout`.
+    /// Fails closed with an empty answer (which `dial` records as
+    /// `dns-failed`) when the lookup is late or the budget is spent. A late
+    /// lookup keeps its budget slot until it returns, so a resolver that
+    /// hangs every query cannot pile up unbounded blocked threads; its
+    /// answer is dropped, never dialed.
+    static func resolveWithDeadline(
+        host: String,
+        port: Int,
+        timeout: DispatchTimeInterval,
+        budget: EgressResolverBudget,
+        resolve: @escaping @Sendable (String, Int) -> [EgressDialCandidate]
+    ) -> [EgressDialCandidate] {
+        guard budget.acquire() else { return [] }
+        let answer = Mutex<[EgressDialCandidate]?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        let lookup = { @Sendable in
+            let candidates = resolve(host, port)
+            answer.withLock { $0 = candidates }
+            budget.release()
+            done.signal()
+        }
+        DispatchQueue.global(qos: .userInitiated).async(execute: lookup)
+        guard done.wait(timeout: .now() + timeout) == .success else { return [] }
+        return answer.withLock { $0 } ?? []
     }
 
     /// Dial one relay upstream. `external == false` replaces the
@@ -1081,10 +1139,11 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     /// True when `address` is a globally routable unicast destination.
-    /// Rejects loopback, unspecified, private, link-local, site-local,
-    /// multicast, reserved, documentation, and benchmarking ranges,
-    /// recursing into the embedded IPv4 of mapped, compatible, and 6to4
-    /// addresses. Unknown families fail closed.
+    /// Rejects loopback, unspecified, private, CGNAT, link-local,
+    /// site-local, unique-local, cloud metadata, multicast, reserved,
+    /// documentation, and benchmarking ranges, recursing into the embedded
+    /// IPv4 of mapped, translated, compatible, 6to4, and NAT64 addresses.
+    /// Unknown families fail closed.
     static func isPublicUnicast(_ address: UnsafePointer<sockaddr>?) -> Bool {
         guard let address else { return false }
         switch Int32(address.pointee.sa_family) {
@@ -1095,7 +1154,7 @@ public final class EgressProxy: @unchecked Sendable {
         case AF_INET6:
             return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
                 withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
-                    isPublicIPv6(raw)
+                    isPublicIPv6(Array(raw))
                 }
             }
         default:
@@ -1103,18 +1162,25 @@ public final class EgressProxy: @unchecked Sendable {
         }
     }
 
-    private static func isPublicIPv4(_ hostOrder: UInt32) -> Bool {
+    /// Pure public-unicast verdict for one IPv4 address in host byte order.
+    static func isPublicIPv4(_ hostOrder: UInt32) -> Bool {
         func contains(_ base: UInt32, _ bits: UInt32) -> Bool {
             let mask: UInt32 = bits == 0 ? 0 : (~UInt32(0) << (32 - bits))
             return hostOrder & mask == base & mask
         }
-        // Unspecified, loopback, private, CGNAT, link-local (covers the
-        // 169.254.169.254 metadata endpoint), multicast, reserved.
+        // Unspecified, loopback, private, CGNAT (covers the 100.100.100.200
+        // metadata endpoint), link-local (covers 169.254.169.254),
+        // multicast, reserved.
         let denied: [(UInt32, UInt32)] = [
             (0x00000000, 8), (0x7F000000, 8),
             (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
             (0x64400000, 10), (0xA9FE0000, 16),
             (0xE0000000, 4), (0xF0000000, 4),
+            // IETF protocol assignments (NAT64 discovery, DS-Lite) and the
+            // deprecated 6to4 relay anycast.
+            (0xC0000000, 24), (0xC0586300, 24),
+            // Azure WireServer: a platform endpoint in public space.
+            (0xA83F8110, 32),
             // Documentation and benchmarking: never a real API endpoint.
             (0xC0000200, 24), (0xC6336400, 24), (0xCB007100, 24),
             (0xC6120000, 15),
@@ -1122,53 +1188,52 @@ public final class EgressProxy: @unchecked Sendable {
         return denied.allSatisfy { contains($0.0, $0.1) == false }
     }
 
-    private static func isPublicIPv6(_ raw: UnsafeRawBufferPointer) -> Bool {
-        guard raw.count == 16 else { return false }
-        let bytes = (0..<16).map { raw[$0] }
+    /// Pure public-unicast verdict for one IPv6 address (16 bytes, network
+    /// order). Forms that embed an IPv4 address the host may dial (mapped,
+    /// translated, compatible, 6to4, NAT64 well-known prefix) take the
+    /// embedded address's verdict; everything else must be global unicast
+    /// (2000::/3) outside the special-purpose blocks.
+    static func isPublicIPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return false }
         if bytes.allSatisfy({ $0 == 0 }) { return false } // ::
         if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return false } // ::1
-        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return false } // fe80::/10
-        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return false } // fec0::/10 deprecated site-local
-        if bytes[0] & 0xFE == 0xFC { return false } // fc00::/7
-        if bytes[0] == 0xFF { return false } // ff00::/8
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 {
-            return false // 2001:db8::/32 documentation
-        }
+        let embedded = v4(bytes[12], bytes[13], bytes[14], bytes[15])
         if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
-            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15])) // ::ffff:0:0/96
+            return isPublicIPv4(embedded) // ::ffff:0:0/96 IPv4-mapped
+        }
+        if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0] {
+            return isPublicIPv4(embedded) // ::ffff:0:0:0/96 IPv4-translated (SIIT)
         }
         if bytes.prefix(12).allSatisfy({ $0 == 0 }) {
             // ::/96 deprecated IPv4-compatible (:: and ::1 already rejected).
-            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
+            return isPublicIPv4(embedded)
+        }
+        if Array(bytes.prefix(4)) == [0x00, 0x64, 0xFF, 0x9B] {
+            // NAT64: on a NAT64/CLAT host the dial reaches the IPv4 embedded
+            // in the last 32 bits of 64:ff9b::/96, so it takes that verdict.
+            // The rest of 64:ff9b::/32 is refused, including the
+            // 64:ff9b:1::/48 local-use block, whose operator-chosen prefix
+            // length leaves the embedded address ambiguous.
+            guard bytes[4..<12].allSatisfy({ $0 == 0 }) else { return false }
+            return isPublicIPv4(embedded)
         }
         if bytes[0] == 0x20, bytes[1] == 0x02 { // 2002::/16 6to4
             return isPublicIPv4(v4(bytes[2], bytes[3], bytes[4], bytes[5]))
         }
-        if bytes[0] == 0x00, bytes[1] == 0x64, bytes[2] == 0xFF, bytes[3] == 0x9B {
-            // NAT64: 64:ff9b::/96 embeds the IPv4 in the last 32 bits;
-            // the 64:ff9b:1::/48 local-use form embeds it at bits 48-79.
-            // On a NAT64/CLAT host the dial reaches the embedded address,
-            // so it must pass the same public-unicast verdict.
-            if bytes[4] == 0x00, bytes[5] == 0x01 {
-                return isPublicIPv4(v4(bytes[6], bytes[7], bytes[8], bytes[9]))
-            }
-            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
+        // Global unicast is 2000::/3. Everything outside it is refused:
+        // link-local, site-local, ULA (covers the fd00:ec2::254 metadata
+        // endpoint), multicast, discard-only, SRv6 SIDs, unallocated space.
+        guard bytes[0] & 0xE0 == 0x20 else { return false }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] & 0xFE == 0x00 {
+            // 2001::/23 IETF protocol assignments: Teredo (encapsulates an
+            // IPv4 peer), benchmarking, AMT, AS112, ORCHID.
+            return false
         }
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x00 {
-            return false // 2001::/32 Teredo (encapsulates an IPv4 peer)
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 {
+            return false // 2001:db8::/32 documentation
         }
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] & 0xF0 == 0x20 {
-            return false // 2001:20::/28 ORCHIDv2
-        }
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x02,
-            bytes[4] == 0x00, bytes[5] == 0x00
-        {
-            return false // 2001:2::/48 benchmarking
-        }
-        if bytes[0] == 0x01, bytes[1] == 0x00, bytes[2] == 0x00, bytes[3] == 0x00,
-            bytes[4] == 0x00, bytes[5] == 0x00, bytes[6] == 0x00, bytes[7] == 0x00
-        {
-            return false // 100::/64 discard-only
+        if bytes[0] == 0x3F, bytes[1] == 0xFF, bytes[2] & 0xF0 == 0x00 {
+            return false // 3fff::/20 documentation
         }
         return true
     }
@@ -1440,5 +1505,32 @@ public final class EgressProxy: @unchecked Sendable {
             diagnose("rv.egress: denial log \(detail)")
             return false
         }
+    }
+}
+
+/// Caps how many host lookups may be outstanding at once. A lookup that
+/// outlives the proxy's deadline still holds its slot until `getaddrinfo`
+/// returns; once the budget is spent, new requests deny `dns-failed`
+/// without resolving.
+final class EgressResolverBudget: Sendable {
+    static let shared = EgressResolverBudget(limit: 32)
+
+    let limit: Int
+    private let inFlight = Mutex(0)
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func acquire() -> Bool {
+        inFlight.withLock { count in
+            guard count < limit else { return false }
+            count += 1
+            return true
+        }
+    }
+
+    func release() {
+        inFlight.withLock { $0 -= 1 }
     }
 }
