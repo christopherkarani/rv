@@ -61,8 +61,19 @@ public enum PolicyGate {
             ) {
                 return allowDecision(result, override: .allowlist)
             }
+            // An unreadable denylist may pin anything: behave as if this command
+            // were validly pinned, and say why the allowlist entry was ignored.
+            let shown = allowlist.blocked.isUnreadable
+                && AllowlistSnapshot(entries: allowlist.entries).matches(
+                    ruleID: deny.ruleID,
+                    matchingView: result.matchingView,
+                    now: now,
+                    maskedSegments: maskedSegments,
+                    invocationPrefix: invocationPrefix
+                )
+                ? withRecoveryText(result) : result
             guard cwd != nil, result.matchingView.isEmpty == false else {
-                return PolicyDecision(result: result, override: .none)
+                return PolicyDecision(result: shown, override: .none)
             }
             switch grant {
             case .pending:
@@ -71,7 +82,7 @@ public enum PolicyGate {
                 if safety == .normal, ContainedReversibleDelete.permits(result) {
                     return allowDecision(result, override: .containedReversible)
                 }
-                return PolicyDecision(result: result, override: .none)
+                return PolicyDecision(result: shown, override: .none)
             }
         }
     }
@@ -196,6 +207,21 @@ public enum PolicyGate {
             return nil
         }
         return cwd
+    }
+
+    private static let denylistRecoveryText =
+        "Allowlist override suspended: denylist.toml (Always-block pins) could not be read. "
+        + "Fix or remove ~/.config/rv/denylist.toml."
+
+    /// Same deny (rule, match, bound review); only the reason gains the recovery text.
+    private static func withRecoveryText(_ result: EvaluationResult) -> EvaluationResult {
+        guard case .deny(let deny, let matched) = result.outcome else { return result }
+        var held = result
+        held.outcome = .deny(
+            Deny(ruleID: deny.ruleID, reason: deny.reason + " " + denylistRecoveryText),
+            matched: matched
+        )
+        return held
     }
 
     private static func allowDecision(
