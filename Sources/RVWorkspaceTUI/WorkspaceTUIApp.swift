@@ -1,35 +1,42 @@
 #if os(macOS)
 import Foundation
+import RVTheme
 import SwiftTUICLI
 
 /// Starts one SwiftTUI application value and owns only local session cleanup.
 /// Event delivery starts here and stops inside `detachSession`.
 public enum WorkspaceTUILaunch {
+    /// `background` must be detected before this call: SwiftTUI puts the
+    /// terminal in raw mode and owns its input from here on.
     @MainActor
-    public static func run(_ model: WorkspaceTUIModel) async throws {
+    public static func run(_ model: WorkspaceTUIModel, background: TerminalBackground = .dark) async throws {
         model.startEventDelivery()
         defer {
             model.detachSession()
         }
-        try await TerminalRunner.run(WorkspaceShellApp(model: model))
+        try await TerminalRunner.run(WorkspaceShellApp(model: model, ink: WorkspaceInk(background: background)))
     }
 }
 
 struct WorkspaceShellApp: App {
     private let model: WorkspaceTUIModel?
+    private let ink: WorkspaceInk
 
     nonisolated init() {
         model = nil
+        ink = WorkspaceInk(background: .dark)
     }
 
-    init(model: WorkspaceTUIModel) {
+    init(model: WorkspaceTUIModel, ink: WorkspaceInk) {
         self.model = model
+        self.ink = ink
     }
 
     var body: some Scene {
         WindowGroup("RV") {
             if let model {
                 WorkspaceShellView(model: model)
+                    .environment(\.workspaceInk, ink)
             } else {
                 Text("RV workspace is not connected")
             }
@@ -45,6 +52,7 @@ struct WorkspaceShellView: View {
     let model: WorkspaceTUIModel
     @State private var revision = 0
     @Environment(\.requestTermination) private var requestTermination
+    @Environment(\.workspaceInk) private var ink
 
     var body: some View {
         let _ = revision
@@ -96,13 +104,13 @@ struct WorkspaceShellView: View {
             || snapshot.terminal?.overflowed == true
         let indicatorColor: Color
         if snapshot.connection == .disconnected {
-            indicatorColor = .red
+            indicatorColor = ink.danger
         } else if terminalNeedsAttention {
-            indicatorColor = .yellow
+            indicatorColor = ink.attention
         } else if snapshot.phase == "active", snapshot.protected {
-            indicatorColor = .green
+            indicatorColor = ink.ok
         } else {
-            indicatorColor = .yellow
+            indicatorColor = ink.attention
         }
         let headerLabel = WorkspaceStatusLabel.header(
             connection: snapshot.connection, terminalNeedsAttention: terminalNeedsAttention,
@@ -129,30 +137,30 @@ struct WorkspaceShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             if snapshot.mode == .help {
                 Text(WorkspaceHelp.text)
-                    .foregroundStyle(Color.yellow)
+                    .foregroundStyle(ink.attention)
             }
             if snapshot.mode == .launcher {
                 Text(launcherText(snapshot.launcher) + "    Esc close")
-                    .foregroundStyle(Color.yellow)
+                    .foregroundStyle(ink.attention)
             }
             if case .runCommand(let input, let error) = snapshot.mode {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Run command: " + input).foregroundStyle(Color.yellow).lineLimit(1)
+                    Text("Run command: " + input).foregroundStyle(ink.attention).lineLimit(1)
                     if let error {
-                        Text(error).foregroundStyle(Color.red).lineLimit(1)
+                        Text(error).foregroundStyle(ink.danger).lineLimit(1)
                     }
-                    Text("Enter run · Esc launcher").foregroundStyle(Color.gray)
+                    Text("Enter run · Esc launcher").foregroundStyle(ink.muted)
                 }
             }
             if snapshot.mode == .resize {
                 Text(WorkspaceOverlayText.resizeHelp())
-                    .foregroundStyle(Color.yellow)
+                    .foregroundStyle(ink.attention)
             }
             if case .scroll(let pane) = snapshot.mode {
                 Text(WorkspaceOverlayText.scrollStatus(
                     anchor: snapshot.scrollAnchors[pane] ?? 0, unread: false
                 ))
-                .foregroundStyle(Color.yellow)
+                .foregroundStyle(ink.attention)
             }
             if case .navigator(let index) = snapshot.mode {
                 Text(WorkspaceOverlayText.navigatorRows(
@@ -160,14 +168,14 @@ struct WorkspaceShellView: View {
                     selected: index,
                     tabTitles: navigatorTabTitles(snapshot.view)
                 ).joined(separator: "\n"))
-                .foregroundStyle(Color.yellow)
+                .foregroundStyle(ink.attention)
             }
             if case .confirmCancel(let pane) = snapshot.mode {
                 let title = snapshot.view.panes[pane].map {
                     WorkspacePaneChrome.title($0, terminal: snapshot.terminals[pane])
                 }
                 Text(WorkspaceOverlayText.confirmText(paneTitle: title))
-                    .foregroundStyle(Color.red)
+                    .foregroundStyle(ink.danger)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -180,7 +188,7 @@ struct WorkspaceShellView: View {
             return "\(tab.id == snapshot.view.activeTabID ? "●" : "○") \(index + 1):\(String(title.prefix(12)))"
         }
         Text(tabs.isEmpty ? "No tabs" : tabs.joined(separator: "   "))
-            .foregroundStyle(Color.gray)
+            .foregroundStyle(ink.muted)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -198,7 +206,7 @@ struct WorkspaceShellView: View {
             ?? WorkspaceOverlayText.modeHint(for: snapshot.mode)
             ?? "\(snapshot.view.tabs.count) tabs · \(count) panes\(connection) · Ctrl-B ? help · Ctrl-B w runtimes"
         Text(hint)
-            .foregroundStyle(snapshot.feedback == nil ? Color.gray : Color.yellow)
+            .foregroundStyle(snapshot.feedback == nil ? ink.muted : ink.attention)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

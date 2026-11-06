@@ -139,7 +139,7 @@ struct CommandContext: Sendable {
         case .robot:
             return .robot
         case .pretty:
-            return .pretty(Palette(for: ColorCapability(probe: probe, mode: mode)))
+            return .pretty(Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background))
         }
     }
 

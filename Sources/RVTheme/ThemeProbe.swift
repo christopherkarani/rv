@@ -66,6 +66,9 @@ public struct ThemeProbe: Equatable, Sendable {
     public var terminal: TTYPair
     public var forbid: OutputForbid
     public var columns: Int
+    /// Terminal background the palette is drawn for. `.dark` unless
+    /// `BackgroundProbe` found a light one or `RV_THEME` said so.
+    public var background: TerminalBackground
 
     public var stdinIsTTY: Bool { terminal.stdinIsTTY }
     public var stdoutIsTTY: Bool { terminal.stdoutIsTTY }
@@ -82,10 +85,11 @@ public struct ThemeProbe: Equatable, Sendable {
         terminal.isBrowseEligible && forbid.isBrowseEligible
     }
 
-    public init(terminal: TTYPair, forbid: OutputForbid, columns: Int = 80) {
+    public init(terminal: TTYPair, forbid: OutputForbid, columns: Int = 80, background: TerminalBackground = .dark) {
         self.terminal = terminal
         self.forbid = forbid
         self.columns = max(16, columns)
+        self.background = background
     }
 
     /// Spec-locked 10-field construction. Prefer `init(terminal:forbid:columns:)`.

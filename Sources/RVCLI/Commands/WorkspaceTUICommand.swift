@@ -117,8 +117,12 @@ enum WorkspaceTUICommand {
         // SIGKILL between the reduce and the next frame loses nothing.
         model.setDurableViewChangedHook { [weak savePump] view in savePump?.saveSync(view) }
         savePump.start()
+        // Asked before SwiftTUI takes the terminal into raw mode.
+        let background = ThemeProbeFactory.live(
+            jsonFlag: false, robotFlag: false, plainFlag: false, noColorFlag: false
+        ).background
         do {
-            try await WorkspaceTUILaunch.run(model)
+            try await WorkspaceTUILaunch.run(model, background: background)
         } catch {
             model.detachSession()
             if let saveError = savePump.stop() {

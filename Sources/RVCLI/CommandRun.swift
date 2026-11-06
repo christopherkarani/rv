@@ -180,7 +180,7 @@ public enum CommandRun {
         requested: RequestedMode
     ) throws -> CLIResult {
         let mode = OutputMode(probe: probe, requested: requested)
-        let palette = Palette(for: ColorCapability(probe: probe, mode: mode))
+        let palette = Palette(for: ColorCapability(probe: probe, mode: mode), background: probe.background)
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
