@@ -140,6 +140,31 @@ struct HookDaemonFallbackTests {
         #expect(transport.sendCount == 1, "a hook request is never resent")
     }
 
+    /// Every transport failure through `hookEvaluate` under `whenDown=ask`:
+    /// only `timeout` and `unreachable` may soften to a native ask.
+    @Test(arguments: [
+        (ServiceTransportFailure.timeout, HookDaemonFailure.timeout, true),
+        (.unreachable, .unreachable, true),
+        (.untrusted, .untrusted, false),
+        (.malformedReply, .protocol, false),
+    ])
+    func transportFailureSoftensOnlyWhenTimeoutOrUnreachable(
+        failure: ServiceTransportFailure,
+        classified: HookDaemonFailure,
+        softened: Bool
+    ) async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: failure
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: classified, mode: .ask))
+        #expect(wire.stdout.contains("\"ask\"") == softened)
+        #expect(wire.stdout.contains("\"deny\"") == !softened)
+        #expect(transport.invalidationCount == (failure == .malformedReply ? 1 : 0))
+    }
+
     @Test func undecodableReplyDeniesUnderWhenDownAskAndInvalidates() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
