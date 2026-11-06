@@ -154,7 +154,12 @@ struct LiveEvaluateWorldTests {
             await world.peek(command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/ws")),
             await world.apply(command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/ws")),
         ] {
-            #expect(result.decision == .deny(PolicyGate.denylistUnreadable))
+            guard case .deny(let deny) = result.decision else {
+                Issue.record("corrupt denylist must hold the deny")
+                continue
+            }
+            #expect(deny.ruleID == ruleID)
+            #expect(deny.reason.contains("denylist.toml"))
         }
     }
 

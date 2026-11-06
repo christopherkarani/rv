@@ -22,14 +22,6 @@ public struct PolicyDecision: Equatable, Sendable {
 
 /// Chooses allowlist, allow-once, or rebase-recovery overrides for an evaluation result.
 public enum PolicyGate {
-    /// A deny the allowlist would have overridden, held because
-    /// `denylist.toml` is unreadable. Builtin pack: pinned, no allow-once.
-    public static let denylistUnreadable = Deny(
-        ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "denylist-invalid"),
-        reason: "Allowlist override suspended: denylist.toml (Always-block pins) could not be read. "
-            + "Fix or remove ~/.config/rv/denylist.toml."
-    )
-
     /// Total override order. No store, clock, or filesystem.
     ///
     /// `safety` selects the coding profile: `.normal` is
@@ -69,26 +61,19 @@ public enum PolicyGate {
             ) {
                 return allowDecision(result, override: .allowlist)
             }
-            if allowlist.blocked.isUnreadable, AllowlistSnapshot(entries: allowlist.entries).matches(
-                ruleID: deny.ruleID,
-                matchingView: result.matchingView,
-                now: now,
-                maskedSegments: maskedSegments,
-                invocationPrefix: invocationPrefix
-            ) {
-                // The allowlist would have overridden this deny, but an
-                // unreadable denylist may pin it: hold it and say why.
-                return PolicyDecision(
-                    result: EvaluationResult(
-                        outcome: .deny(denylistUnreadable, matched: nil),
-                        matchingView: result.matchingView,
-                        analysis: result.analysis
-                    ),
-                    override: .none
+            // An unreadable denylist may pin anything: behave as if this command
+            // were validly pinned, and say why the allowlist entry was ignored.
+            let shown = allowlist.blocked.isUnreadable
+                && AllowlistSnapshot(entries: allowlist.entries).matches(
+                    ruleID: deny.ruleID,
+                    matchingView: result.matchingView,
+                    now: now,
+                    maskedSegments: maskedSegments,
+                    invocationPrefix: invocationPrefix
                 )
-            }
+                ? withRecoveryText(result) : result
             guard cwd != nil, result.matchingView.isEmpty == false else {
-                return PolicyDecision(result: result, override: .none)
+                return PolicyDecision(result: shown, override: .none)
             }
             switch grant {
             case .pending:
@@ -97,7 +82,7 @@ public enum PolicyGate {
                 if safety == .normal, ContainedReversibleDelete.permits(result) {
                     return allowDecision(result, override: .containedReversible)
                 }
-                return PolicyDecision(result: result, override: .none)
+                return PolicyDecision(result: shown, override: .none)
             }
         }
     }
@@ -215,7 +200,6 @@ public enum PolicyGate {
     ) -> WorkingDirectory? {
         guard
             withoutGrant.override == .none,
-            RulePinning.blocksAllowOverride(withoutGrant.result) == false,
             case .deny = result.decision,
             let cwd,
             result.matchingView.isEmpty == false
@@ -223,6 +207,21 @@ public enum PolicyGate {
             return nil
         }
         return cwd
+    }
+
+    private static let denylistRecoveryText =
+        "Allowlist override suspended: denylist.toml (Always-block pins) could not be read. "
+        + "Fix or remove ~/.config/rv/denylist.toml."
+
+    /// Same deny (rule, match, bound review); only the reason gains the recovery text.
+    private static func withRecoveryText(_ result: EvaluationResult) -> EvaluationResult {
+        guard case .deny(let deny, let matched) = result.outcome else { return result }
+        var held = result
+        held.outcome = .deny(
+            Deny(ruleID: deny.ruleID, reason: deny.reason + " " + denylistRecoveryText),
+            matched: matched
+        )
+        return held
     }
 
     private static func allowDecision(

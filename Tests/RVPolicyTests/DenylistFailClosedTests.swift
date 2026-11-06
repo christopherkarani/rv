@@ -31,7 +31,9 @@ struct DenylistFailClosedTests {
             Issue.record("corrupt denylist must not let the allowlist override a deny")
             return
         }
-        #expect(deny == PolicyGate.denylistUnreadable)
+        // Same deny as a validly pinned command, plus the recovery text.
+        #expect(deny.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+        #expect(deny.reason.hasPrefix("git reset --hard destroys uncommitted changes"))
         #expect(deny.reason.contains("denylist.toml"))
         #expect(deny.reason.contains("Fix or remove"))
         #expect(gated.result.matchingView == "git reset --hard")
@@ -68,29 +70,116 @@ struct DenylistFailClosedTests {
         #expect(gated == PolicyDecision(result: denied, override: .none))
     }
 
-    @Test func corruptDenylist_suspendedOverrideDoesNotSpendGrant() async throws {
+    @Test func corruptDenylist_behavesExactlyLikeValidPin_withAndWithoutGrant() async throws {
         let ruleID = RuleID(pack: .coreGit, pattern: "reset-hard")
-        let snap = AllowlistSnapshot(
-            entries: [AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now)],
-            blocked: .unreadable
+        let entries = [AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now)]
+        let pinned = AllowlistSnapshot(
+            entries: entries,
+            blocked: DenylistSnapshot(entries: [
+                DenylistEntry(matchingView: "git reset --hard", reason: "pin", addedAt: now)
+            ])
         )
-        let grants = EphemeralAllowOnceTable()
-        #expect(
-            await grants.plant(
-                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "denylist-corrupt",
-                now: now
-            ) == .planted
+        let corrupt = AllowlistSnapshot(entries: entries, blocked: .unreadable)
+
+        for planted in [false, true] {
+            var outcomes: [PolicyDecision] = []
+            for snap in [pinned, corrupt] {
+                let grants = EphemeralAllowOnceTable()
+                if planted {
+                    _ = await grants.plant(
+                        matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "c", now: now
+                    )
+                }
+                outcomes.append(
+                    await PolicyGate.consumingGrant(
+                        for: resetHardDeny(), cwd: wd("/tmp/ws"), allowlist: snap,
+                        grants: grants, now: now
+                    )
+                )
+            }
+            #expect(outcomes[0].override == outcomes[1].override)
+            #expect(outcomes[0].result.boundReview == outcomes[1].result.boundReview)
+            #expect(outcomes[0].result.matchingView == outcomes[1].result.matchingView)
+        }
+    }
+
+    // MARK: HookAuthorization parity: a corrupt denylist reads as "every command validly pinned".
+
+    @Test func corruptDenylist_ruleAllowlistedDeny_isAskableNotPinned() {
+        let entries = [AllowlistEntry(
+            selector: .rule(RuleID(pack: .coreGit, pattern: "reset-hard")), reason: "ci", addedAt: now
+        )]
+        let valid = verdict(entries: entries, blocked: validPin, result: resetHardDeny())
+        let corrupt = verdict(entries: entries, blocked: .unreadable, result: resetHardDeny())
+        #expect(valid == .ask)
+        #expect(corrupt == valid)
+    }
+
+    @Test func corruptDenylist_exactCommandWithDigests_isAskableNotPinned() {
+        let masked = ["payload"]
+        let prefix = ["sudo"]
+        let entries = [AllowlistEntry(
+            selector: .exactCommand("git reset --hard"),
+            reason: "ci",
+            addedAt: now,
+            maskedPayloadDigest: maskedPayloadContentDigest(masked),
+            invocationDigest: maskedPayloadContentDigest(prefix)
+        )]
+        let valid = verdict(
+            entries: entries, blocked: validPin, result: resetHardDeny(),
+            masked: masked, prefix: prefix
         )
-        let gated = await PolicyGate.consumingGrant(
-            for: resetHardDeny(),
+        let corrupt = verdict(
+            entries: entries, blocked: .unreadable, result: resetHardDeny(),
+            masked: masked, prefix: prefix
+        )
+        #expect(valid == .ask)
+        #expect(corrupt == valid)
+    }
+
+    @Test func corruptDenylist_keepsMandatoryHumanBind_staysAskable() {
+        let builtin = Deny(
+            ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "review"),
+            reason: "needs a human"
+        )
+        let result = EvaluationResult(
+            outcome: .deny(builtin, matched: nil),
+            matchingView: "git reset --hard",
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(builtin)
+        )
+        let entries = [AllowlistEntry(
+            selector: .exactCommand("git reset --hard"), reason: "ci", addedAt: now
+        )]
+        let valid = verdict(entries: entries, blocked: validPin, result: result)
+        let corrupt = verdict(entries: entries, blocked: .unreadable, result: result)
+        #expect(valid == .ask)
+        #expect(corrupt == valid)
+    }
+
+    private var validPin: DenylistSnapshot {
+        DenylistSnapshot(entries: [
+            DenylistEntry(matchingView: "git reset --hard", reason: "pin", addedAt: now)
+        ])
+    }
+
+    private func verdict(
+        entries: [AllowlistEntry],
+        blocked: DenylistSnapshot,
+        result: EvaluationResult,
+        masked: [String]? = nil,
+        prefix: [String]? = nil
+    ) -> HookAuthorization {
+        let gated = PolicyGate.decision(
+            for: result,
             cwd: wd("/tmp/ws"),
-            allowlist: snap,
-            grants: grants,
-            now: now
+            allowlist: AllowlistSnapshot(entries: entries, blocked: blocked),
+            grant: .none,
+            now: now,
+            maskedSegments: masked,
+            invocationPrefix: prefix
         )
-        #expect(gated.override == .none)
-        #expect(gated.result.decision == .deny(PolicyGate.denylistUnreadable))
-        #expect(await grants.hasGrant(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now))
+        return HookAuthorization.project(result: gated.result, cwd: wd("/tmp/ws"))
     }
 
     private func allowResetHardByRule(in root: URL) throws {

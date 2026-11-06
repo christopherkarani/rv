@@ -177,14 +177,10 @@ public struct AllowlistStore: Sendable {
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
             return false
         }
-        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey]),
-              let parentValues = try? url.deletingLastPathComponent()
-                .resourceValues(forKeys: [.isSymbolicLinkKey])
-        else {
-            // Link state unknown: treat as poisoned (fail closed → empty allowlist).
-            return true
-        }
-        let isLink = (values.isSymbolicLink == true) || (parentValues.isSymbolicLink == true)
+        let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
+        let parentValues = try? url.deletingLastPathComponent()
+            .resourceValues(forKeys: [.isSymbolicLinkKey])
+        let isLink = (values?.isSymbolicLink == true) || (parentValues?.isSymbolicLink == true)
         guard isLink else { return false }
         let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
         let workspace = URL(fileURLWithPath: workspacePath)

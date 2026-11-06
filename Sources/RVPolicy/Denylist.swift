@@ -17,16 +17,21 @@ public struct DenylistSnapshot: Equatable, Sendable {
     public var entries: [DenylistEntry]
     /// `denylist.toml` is present but could not be read or parsed. Any
     /// Always-block pin may be in it, so the snapshot matches every view.
-    public var isUnreadable: Bool
+    public let isUnreadable: Bool
 
-    public init(entries: [DenylistEntry], isUnreadable: Bool = false) {
+    public init(entries: [DenylistEntry]) {
         self.entries = entries
-        self.isUnreadable = isUnreadable
+        self.isUnreadable = false
+    }
+
+    private init(unreadable: Void) {
+        self.entries = []
+        self.isUnreadable = true
     }
 
     public static let empty = DenylistSnapshot(entries: [])
 
-    public static let unreadable = DenylistSnapshot(entries: [], isUnreadable: true)
+    public static let unreadable = DenylistSnapshot(unreadable: ())
 
     public func matches(_ matchingView: MatchingView) -> Bool {
         isUnreadable || entries.contains { $0.matchingView == matchingView }
@@ -43,8 +48,13 @@ public enum DenylistParseError: Error, Sendable, Equatable {
 
 enum DenylistTOML {
     static func parse(_ text: String) throws -> [DenylistEntry] {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return [] }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        let content = lines.filter { $0.isEmpty == false && $0.hasPrefix("#") == false }
+        if content.isEmpty { return [] }
+        // Anything but comments/blanks before the first header would be
+        // silently dropped (e.g. a mistyped first header): reject it.
+        if content.first != "[[block]]" { throw DenylistParseError.invalidTOML }
         let blocks = splitBlock(text, header: "[[block]]")
         if blocks.isEmpty {
             throw DenylistParseError.invalidTOML

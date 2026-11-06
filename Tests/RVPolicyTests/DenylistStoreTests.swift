@@ -14,6 +14,27 @@ struct DenylistStoreTests {
         #expect(store.fileURL == RVPolicyPaths.denylistFile(inConfigDir: root))
     }
 
+    @Test func danglingSymlink_isInvalidNotMissing() throws {
+        let root = try makeDirectory("dangling")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DenylistStore(baseDirectory: root)
+        try FileManager.default.createSymbolicLink(
+            atPath: store.fileURL.path,
+            withDestinationPath: root.appendingPathComponent("nowhere.toml").path
+        )
+        #expect(store.load() == .invalid)
+        expectBlocksEverything(store.loadSnapshot())
+    }
+
+    @Test func commentOnlyFile_isValidEmpty() throws {
+        let root = try makeDirectory("comments")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DenylistStore(baseDirectory: root)
+        try "# my pins\n".write(to: store.fileURL, atomically: true, encoding: .utf8)
+        #expect(store.load() == .ok([]))
+        #expect(store.loadSnapshot() == .empty)
+    }
+
     @Test func pin_writesOwnerOnlyAndLoadRoundTrips() throws {
         let root = try makeDirectory("pin")
         defer { try? FileManager.default.removeItem(at: root) }
