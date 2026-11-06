@@ -141,6 +141,30 @@ struct MCPGatewayCoreOutcomeTests {
         #expect(declinedEvent?.reason == "declined by the user")
         #expect(declinedEvent?.decision == .denied)
     }
+
+    /// The base `detail` for the sites whose outcome moved: only `decision` may change.
+    @Test func auditDetailBytesAreUnchangedForMovedSites() {
+        let base: [String: String] = [
+            "server": "github", "tool": "create_issue", "policy": "ask", "argumentKeys": "body,title", "isError": "true",
+        ]
+
+        var prompt = MCPGatewayElicitationTests.harness(elicitation: "{}")
+        let held = prompt.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
+        let exited = prompt.core.handle(.upstreamExited(server: "github")).audits.first?.auditEvent()
+        #expect(exited?.detail == base.merging(["approval": held]) { $1 })
+        #expect(exited?.decision == .denied)
+
+        var outOfBand = MCPGatewayElicitationTests.harness(elicitation: nil)
+        let awaiting = outOfBand.client(Self.createCall).audits.first
+        #expect(awaiting?.auditEvent().detail == base.merging(["approval": awaiting?.approvalID ?? "?"]) { $1 })
+
+        var granted = MCPGatewayElicitationTests.harness(elicitation: nil)
+        let hash = JSONValue.object(["body": .string("b"), "title": .string("t")]).canonicalHash
+        _ = granted.approvals.granted.withLock { $0.insert("github/create_issue/\(hash)") }
+        #expect(granted.client(Self.createCall).toUpstream.count == 1)
+        let interrupted = granted.core.handle(.upstreamExited(server: "github")).audits.first?.auditEvent()
+        #expect(interrupted?.detail == base.merging(["approval": "grant1", "approvedVia": "local"]) { $1 })
+    }
 }
 
 private final class Box: @unchecked Sendable {

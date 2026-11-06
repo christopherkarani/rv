@@ -48,7 +48,8 @@ public struct MCPCallRecord: Sendable, Equatable {
         case interrupted(grant: Grant?)
         /// Stopped for an approval nobody has answered yet.
         case awaiting(approvalID: String?)
-        /// The user refused, or the prompt failed or timed out.
+        /// The prompt ended without a yes: the user refused, the prompt failed
+        /// or timed out, or its upstream exited while it was shown.
         case declined(approvalID: String)
         /// Nothing went upstream: rv refused before any grant, or answered itself (search).
         case notRun
@@ -95,7 +96,7 @@ public struct MCPCallRecord: Sendable, Equatable {
         if case .ran(let duration, _) = outcome { duration } else { nil }
     }
 
-    /// The user refused an `ask` call.
+    /// The approval prompt for an `ask` call ended without a yes.
     public var declined: Bool {
         if case .declined = outcome { true } else { false }
     }
@@ -500,7 +501,7 @@ public struct MCPGatewayCore {
             ]
         }
         guard phases[server] == .ready else {
-            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys)
+            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approved: false)
         }
         // Forward only what approval covers: the tool name and the exact
         // arguments that were hashed and shown, plus the client's progress
@@ -642,7 +643,7 @@ public struct MCPGatewayCore {
 
     func unavailable(
         client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String],
-        approved: Bool = false
+        approved: Bool
     ) -> [MCPGatewayOutput] {
         let reason: String
         if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
@@ -918,7 +919,7 @@ public struct MCPGatewayCore {
             held[key] = nil
             outputs.append(.audit(MCPCallRecord(
                 server: server, tool: call.tool, decision: .ask, argumentKeys: call.keys,
-                isError: true, reason: "upstream exited", outcome: .notRun)))
+                isError: true, reason: "upstream exited", outcome: .declined(approvalID: key))))
             outputs.append(.toClient(Self.notification("notifications/cancelled", .object([
                 "requestId": .string(key), "reason": .string("the MCP server exited"),
             ]))))
