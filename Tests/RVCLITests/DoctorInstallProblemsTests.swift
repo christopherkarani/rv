@@ -299,24 +299,28 @@ private final class ManifestlessTransport: ServiceTransport {
 
     var hookHelloCount: Int { hookHellos.withLock { $0 } }
 
-    func hello(clientSemver _: String) async throws -> HelloAckView {
-        throw ServiceTransportError.unexpected
+    func hello(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView {
+        throw ServiceTransportFailure.malformedReply
     }
 
-    func helloHookConsult(clientSemver _: String) async throws -> HelloAckView {
+    func helloHookConsult(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView {
         hookHellos.withLock { $0 += 1 }
         return HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok)
     }
 
-    func send(_: Data) async throws -> Data {
-        throw ServiceTransportError.unexpected
+    func send(_: Data) async throws(ServiceTransportFailure) -> Data {
+        throw ServiceTransportFailure.malformedReply
     }
 
-    func sendHookConsult(_ body: Data, timeoutMs _: Int) async throws -> Data {
-        let request = try IPCJSON.decode(IPCRequest.self, from: body)
-        return try IPCJSON.encode(
-            IPCResponse(id: request.id, protocolName: request.protocolName, result: .doctorSnapshot(snapshot))
-        )
+    func sendHookConsult(_ body: Data, timeoutMs _: Int) async throws(ServiceTransportFailure) -> Data {
+        do {
+            let request = try IPCJSON.decode(IPCRequest.self, from: body)
+            return try IPCJSON.encode(
+                IPCResponse(id: request.id, protocolName: request.protocolName, result: .doctorSnapshot(snapshot))
+            )
+        } catch {
+            throw .malformedReply
+        }
     }
 
     func invalidate() {}
@@ -334,24 +338,24 @@ private final class ManifestlessTransport: ServiceTransport {
 
 #if canImport(XPC)
 private struct ThrowingHelloTransport: ServiceTransport {
-    let error: any Error & Sendable
+    let error: ServiceTransportFailure
 
-    func hello(clientSemver _: String) async throws -> HelloAckView { throw error }
-    func helloHookConsult(clientSemver _: String) async throws -> HelloAckView { throw error }
-    func send(_: Data) async throws -> Data { throw error }
+    func hello(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView { throw error }
+    func helloHookConsult(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView { throw error }
+    func send(_: Data) async throws(ServiceTransportFailure) -> Data { throw error }
     func invalidate() {}
 }
 
 @Test func diagnostics_xpcConnectFailureIsDown_notRequestFailed() async throws {
     let result = try await isolatedClient(
-        transport: ThrowingHelloTransport(error: XPCEvaluateClientError.connectFailed)
+        transport: ThrowingHelloTransport(error: ServiceTransportFailure.unreachable)
     ).diagnostics()
     #expect(result == .local(.init(cause: .down, corePacksReady: true)))
 }
 
 @Test func diagnostics_daemonIdentityRejectionIsTyped() async throws {
     let result = try await isolatedClient(
-        transport: ThrowingHelloTransport(error: XPCEvaluateClientError.authenticationFailed)
+        transport: ThrowingHelloTransport(error: ServiceTransportFailure.untrusted)
     ).diagnostics()
     #expect(result == .local(.init(cause: .requestFailed(.daemonRejected), corePacksReady: true)))
     #expect(ServiceDiagnosticFailure.daemonRejected.statusMessage == "daemon identity rejected")

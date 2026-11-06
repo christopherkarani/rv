@@ -189,7 +189,7 @@ struct OneShotEvaluateClientTests {
     @Test func hookEvaluateSendFailure_bothDenyWithoutLocalFallback() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
-            sendError: .interrupted
+            sendError: .unreachable
         )
         let client = try isolatedClient(transport: transport)
         var hook = Hook()

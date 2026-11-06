@@ -80,16 +80,11 @@ struct HookDaemonFallbackTests {
         }
     }
 
-    @Test func classifiesTransportErrors() {
-        #expect(HookDaemonFallback.classify(ServiceTransportError.timeout) == .timeout)
-        #expect(HookDaemonFallback.classify(ServiceTransportError.connectFailed) == .unreachable)
-        #expect(HookDaemonFallback.classify(ServiceTransportError.interrupted) == .unreachable)
-        #expect(HookDaemonFallback.classify(ServiceTransportError.decodeFailed) == .protocol)
-        #expect(HookDaemonFallback.classify(CocoaError(.coderReadCorrupt)) == .unreachable)
-#if canImport(XPC)
-        #expect(HookDaemonFallback.classify(XPCEvaluateClientError.authenticationFailed) == .untrusted)
-        #expect(HookDaemonFallback.classify(XPCEvaluateClientError.connectFailed) == .unreachable)
-#endif
+    @Test func classifiesTransportFailuresExhaustively() {
+        #expect(HookDaemonFallback.classify(.timeout) == .timeout)
+        #expect(HookDaemonFallback.classify(.unreachable) == .unreachable)
+        #expect(HookDaemonFallback.classify(.untrusted) == .untrusted)
+        #expect(HookDaemonFallback.classify(.malformedReply) == .protocol)
     }
 
     @Test func missingTransportIsUnreachableAndFollowsMode() async throws {
@@ -128,6 +123,27 @@ struct HookDaemonFallbackTests {
         #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .timeout, mode: .ask))
         #expect(transport.lastSendTimeoutMs == ServiceClient.hookEvaluateTimeoutMs)
         #expect(transport.sendCount == 1, "a hook request is never resent")
+    }
+
+    @Test func undecodableReplyDeniesUnderWhenDownAskAndInvalidates() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendReply: Data("{not json".utf8)
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire.stdout.contains("\"deny\""))
+        #expect(transport.invalidationCount == 1)
+    }
+
+    @Test func emptyReplyDeniesUnderWhenDownAsk() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
     }
 
     @Test func serviceErrorReplyIsProtocol() async throws {

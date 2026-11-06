@@ -22,26 +22,29 @@ public struct HelloAckView: Sendable, Equatable {
     }
 }
 
-public enum ServiceTransportError: Error, Sendable, Equatable {
-    case connectFailed
+/// Closed set of ways a transport call can fail. Anything not explicitly
+/// `timeout` or `unreachable` is non-softenable on the hook consult path.
+public enum ServiceTransportFailure: Error, Sendable, Equatable {
     case timeout
-    case interrupted
-    case decodeFailed
-    case unexpected
+    case unreachable
+    /// The peer failed the daemon identity check.
+    case untrusted
+    /// Undecodable, empty, or otherwise unforeseen reply.
+    case malformedReply
 }
 
 public protocol ServiceTransport: Sendable {
     /// One-shot evaluate budget: connect (200) + request (500) = 700 ms.
     var oneShotEvaluateTimeoutMs: Int { get }
-    func hello(clientSemver: String) async throws -> HelloAckView
-    func send(_ body: Data) async throws -> Data
-    func send(_ body: Data, timeoutMs: Int) async throws -> Data
+    func hello(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView
+    func send(_ body: Data) async throws(ServiceTransportFailure) -> Data
+    func send(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data
     /// Hook-consult send: daemon identity may use the sibling pin when no
     /// trust manifest is installed (see `XPCEvaluateClient.DaemonTrustMode`).
-    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data
     /// Hello over the hook-consult session: proves the daemon the way hooks
     /// do, so a healthy manifest-free install reads as reachable.
-    func helloHookConsult(clientSemver: String) async throws -> HelloAckView
+    func helloHookConsult(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView
     /// Drops the current transport connection after a failed or skewed handshake.
     func invalidate()
 }
@@ -49,16 +52,16 @@ public protocol ServiceTransport: Sendable {
 extension ServiceTransport {
     public var oneShotEvaluateTimeoutMs: Int { 700 }
 
-    public func send(_ body: Data, timeoutMs: Int) async throws -> Data {
+    public func send(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
         _ = timeoutMs
         return try await send(body)
     }
 
-    public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+    public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
         try await send(body, timeoutMs: timeoutMs)
     }
 
-    public func helloHookConsult(clientSemver: String) async throws -> HelloAckView {
+    public func helloHookConsult(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView {
         try await hello(clientSemver: clientSemver)
     }
 }
@@ -89,27 +92,25 @@ public struct XPCServiceTransport: ServiceTransport {
         )
     }
 
-    public func hello(clientSemver: String) async throws -> HelloAckView {
+    public func hello(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView {
         let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: clientSemver)
-        let body = try IPCJSON.encode(hello)
-        let reply = try await perform(body, timeoutMs: connectTimeoutMs)
+        let reply = try await perform(try Self.encode(hello), timeoutMs: connectTimeoutMs)
         do {
             return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
         } catch {
             session.invalidate()
-            throw ServiceTransportError.decodeFailed
+            throw .malformedReply
         }
     }
 
-    public func helloHookConsult(clientSemver: String) async throws -> HelloAckView {
+    public func helloHookConsult(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView {
         let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: clientSemver)
-        let body = try IPCJSON.encode(hello)
-        let reply = try await perform(body, timeoutMs: connectTimeoutMs, on: hookSession)
+        let reply = try await perform(try Self.encode(hello), timeoutMs: connectTimeoutMs, on: hookSession)
         do {
             return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
         } catch {
             hookSession.invalidate()
-            throw ServiceTransportError.decodeFailed
+            throw .malformedReply
         }
     }
 
@@ -117,15 +118,15 @@ public struct XPCServiceTransport: ServiceTransport {
         connectTimeoutMs + requestTimeoutMs
     }
 
-    public func send(_ body: Data) async throws -> Data {
+    public func send(_ body: Data) async throws(ServiceTransportFailure) -> Data {
         try await perform(body, timeoutMs: requestTimeoutMs)
     }
 
-    public func send(_ body: Data, timeoutMs: Int) async throws -> Data {
+    public func send(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
         try await perform(body, timeoutMs: timeoutMs)
     }
 
-    public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+    public func sendHookConsult(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
         try await perform(body, timeoutMs: timeoutMs, on: hookSession)
     }
 
@@ -137,30 +138,56 @@ public struct XPCServiceTransport: ServiceTransport {
 
     var openedConnectionCount: Int { session.openedConnectionCount }
 
-    private func perform(_ body: Data, timeoutMs: Int) async throws -> Data {
+    private static func encode(_ hello: Hello) throws(ServiceTransportFailure) -> Data {
+        do {
+            return try IPCJSON.encode(hello)
+        } catch {
+            throw .malformedReply
+        }
+    }
+
+    private func perform(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
         try await perform(body, timeoutMs: timeoutMs, on: session)
     }
 
-    private func perform(_ body: Data, timeoutMs: Int, on client: XPCEvaluateClient) async throws -> Data {
-        try await withThrowingTaskGroup(of: Data.self) { group in
-            group.addTask {
-                try await client.perform(body)
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
-                throw ServiceTransportError.timeout
-            }
-            do {
-                guard let first = try await group.next() else {
-                    throw ServiceTransportError.connectFailed
+    /// The single place untyped errors from the XPC client and task group
+    /// become `ServiceTransportFailure`; anything unforeseen is `malformedReply`.
+    private func perform(
+        _ body: Data, timeoutMs: Int, on client: XPCEvaluateClient
+    ) async throws(ServiceTransportFailure) -> Data {
+        do {
+            return try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask {
+                    try await client.perform(body)
                 }
-                group.cancelAll()
-                return first
-            } catch {
-                client.invalidate()
-                group.cancelAll()
-                throw error
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
+                    throw ServiceTransportFailure.timeout
+                }
+                do {
+                    guard let first = try await group.next() else {
+                        throw ServiceTransportFailure.unreachable
+                    }
+                    group.cancelAll()
+                    return first
+                } catch {
+                    client.invalidate()
+                    group.cancelAll()
+                    throw error
+                }
             }
+        } catch let failure as ServiceTransportFailure {
+            throw failure
+        } catch let error as XPCEvaluateClientError {
+            switch error {
+            case .authenticationFailed: throw .untrusted
+            case .connectFailed, .cancelled: throw .unreachable
+            case .malformedReply: throw .malformedReply
+            }
+        } catch is CancellationError {
+            throw .unreachable
+        } catch {
+            throw .malformedReply
         }
     }
 }

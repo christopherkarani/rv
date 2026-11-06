@@ -261,11 +261,11 @@ struct ResidualLinuxCoverageTests {
 }
 
 private struct EchoServiceTransport: ServiceTransport {
-    func hello(clientSemver _: String) async throws -> HelloAckView {
+    func hello(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView {
         HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: ProtocolVersion.serviceSemver, status: .ok)
     }
 
-    func send(_ body: Data) async throws -> Data { body }
+    func send(_ body: Data) async throws(ServiceTransportFailure) -> Data { body }
 
     func invalidate() {}
 }

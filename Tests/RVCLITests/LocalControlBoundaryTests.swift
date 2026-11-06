@@ -272,16 +272,16 @@ struct LocalControlBoundaryTests {
 #if canImport(XPC)
 /// Hook consult connects, then the daemon fails verification.
 private struct DaemonAuthFailingTransport: ServiceTransport {
-    func hello(clientSemver: String) async throws -> HelloAckView {
+    func hello(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView {
         HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
     }
 
-    func send(_ body: Data) async throws -> Data {
+    func send(_ body: Data) async throws(ServiceTransportFailure) -> Data {
         Data()
     }
 
-    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
-        throw XPCEvaluateClientError.authenticationFailed
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
+        throw .untrusted
     }
 
     func invalidate() {}

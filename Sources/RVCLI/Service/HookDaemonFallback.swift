@@ -57,26 +57,15 @@ enum HookDaemonFallback {
         }
     }
 
-    /// Classifies a transport-level error from the hook consult send.
-    static func classify(_ error: any Error) -> HookDaemonFailure {
-        if let error = error as? ServiceTransportError {
-            switch error {
-            case .timeout: return .timeout
-            case .connectFailed, .interrupted: return .unreachable
-            case .decodeFailed, .unexpected: return .protocol
-            }
+    /// Classifies a typed transport failure from the hook consult send.
+    /// Only `timeout` and `unreachable` are softenable.
+    static func classify(_ failure: ServiceTransportFailure) -> HookDaemonFailure {
+        switch failure {
+        case .timeout: .timeout
+        case .unreachable: .unreachable
+        case .untrusted: .untrusted
+        case .malformedReply: .protocol
         }
-#if canImport(XPC)
-        if let error = error as? XPCEvaluateClientError {
-            switch error {
-            case .authenticationFailed: return .untrusted
-            case .connectFailed, .cancelled: return .unreachable
-            }
-        }
-#endif
-        // Unrecognized transport failure: treat as an absent daemon (ask by
-        // default). Identity failures are typed above and always deny.
-        return .unreachable
     }
 
     private static func deny(host: HookHost, message: String) -> HookWire {

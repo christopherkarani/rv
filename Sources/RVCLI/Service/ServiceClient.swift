@@ -354,8 +354,19 @@ public struct ServiceClient: Sendable {
         } catch is IPCCallError {
             transport.invalidate()
             return unavailable(.protocol)
+        } catch is DecodingError {
+            // An undecodable hook reply carries no trustworthy verdict (malformedReply).
+            transport.invalidate()
+            return unavailable(.protocol)
+        } catch let failure as ServiceTransportFailure {
+            if failure == .malformedReply {
+                transport.invalidate()
+            }
+            return unavailable(HookDaemonFallback.classify(failure))
         } catch {
-            return unavailable(HookDaemonFallback.classify(error))
+            // Unforeseen: no trustworthy verdict, never softened.
+            transport.invalidate()
+            return unavailable(.protocol)
         }
     }
 
@@ -478,34 +489,15 @@ public struct ServiceClient: Sendable {
         switch error {
         case is DecodingError, is EncodingError:
             .invalidResponse
-        case let error as ServiceTransportError:
-            .transport(error)
+        case let failure as ServiceTransportFailure:
+            diagnosticFailure(from: failure)
         default:
-            xpcClientFailure(error) == .daemonRejected ? .daemonRejected : .transport(.unexpected)
+            .transport(.malformedReply)
         }
     }
 
-    /// Typed view of `XPCEvaluateClientError`, which otherwise collapses into
-    /// "request failed": no listener is down; a failed identity check is a
-    /// daemon the hook client would also refuse.
-    private enum XPCClientFailure {
-        case down
-        case daemonRejected
-    }
-
-    private static func xpcClientFailure(_ error: Error) -> XPCClientFailure? {
-#if canImport(XPC)
-        switch error as? XPCEvaluateClientError {
-        case .connectFailed, .cancelled:
-            return .down
-        case .authenticationFailed:
-            return .daemonRejected
-        case nil:
-            return nil
-        }
-#else
-        return nil
-#endif
+    private static func diagnosticFailure(from failure: ServiceTransportFailure) -> ServiceDiagnosticFailure {
+        failure == .untrusted ? .daemonRejected : .transport(failure)
     }
 
     private enum Route {
@@ -524,21 +516,12 @@ public struct ServiceClient: Sendable {
                 return .skew(reason, serviceSemver: ack.serviceSemver)
             }
             return .xpc(transport, serviceSemver: ack.serviceSemver)
-        } catch let error as ServiceTransportError {
-            switch error {
-            case .connectFailed, .timeout, .interrupted:
-                return .down
-            case .decodeFailed, .unexpected:
-                return .failed(.transport(error))
-            }
         } catch {
-            switch Self.xpcClientFailure(error) {
-            case .down:
+            switch error {
+            case .timeout, .unreachable:
                 return .down
-            case .daemonRejected:
-                return .failed(.daemonRejected)
-            case nil:
-                return .failed(.transport(.unexpected))
+            case .untrusted, .malformedReply:
+                return .failed(Self.diagnosticFailure(from: error))
             }
         }
     }

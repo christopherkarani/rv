@@ -42,7 +42,7 @@ struct LazyFallbackTests {
     @Test func sendFailureBuildsSessionExactlyOnceOnFallback() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
-            sendError: .interrupted
+            sendError: .unreachable
         )
         let sessions = Mutex(0)
         let client = try isolatedClient(transport: transport) {

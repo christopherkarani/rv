@@ -82,7 +82,7 @@ struct ResidualLinuxEdgesTests {
         let helloResult = try await isolatedClient(transport: unexpectedHello).diagnostics()
         #expect(
             helloResult == .local(
-                .init(cause: .requestFailed(.transport(.unexpected)), corePacksReady: true)
+                .init(cause: .requestFailed(.transport(.malformedReply)), corePacksReady: true)
             )
         )
 
@@ -92,7 +92,7 @@ struct ResidualLinuxEdgesTests {
             Issue.record("expected local send diagnostic")
             return
         }
-        #expect(sendDiagnostic.cause == .requestFailed(.transport(.unexpected)))
+        #expect(sendDiagnostic.cause == .requestFailed(.transport(.malformedReply)))
 
         let major = ScriptedTransport(
             ack: HelloAckView(
@@ -987,9 +987,9 @@ private enum UnexpectedTransportStage {
 private struct UnexpectedErrorTransport: ServiceTransport {
     var stage: UnexpectedTransportStage
 
-    func hello(clientSemver _: String) async throws -> HelloAckView {
+    func hello(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView {
         if stage == .hello {
-            throw NSError(domain: "rv.cli.coverage", code: 1)
+            throw .malformedReply
         }
         return HelloAckView(
             protocolName: ProtocolVersion.name,
@@ -998,8 +998,8 @@ private struct UnexpectedErrorTransport: ServiceTransport {
         )
     }
 
-    func send(_: Data) async throws -> Data {
-        throw NSError(domain: "rv.cli.coverage", code: 2)
+    func send(_: Data) async throws(ServiceTransportFailure) -> Data {
+        throw .malformedReply
     }
 
     func invalidate() {}
