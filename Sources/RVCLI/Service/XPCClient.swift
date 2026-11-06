@@ -151,7 +151,7 @@ public struct XPCServiceTransport: ServiceTransport {
     }
 
     /// The single place untyped errors from the XPC client and task group
-    /// become `ServiceTransportFailure`; anything unforeseen is `malformedReply`.
+    /// become `ServiceTransportFailure` (see `transportFailure(from:)`).
     private func perform(
         _ body: Data, timeoutMs: Int, on client: XPCEvaluateClient
     ) async throws(ServiceTransportFailure) -> Data {
@@ -176,18 +176,28 @@ public struct XPCServiceTransport: ServiceTransport {
                     throw error
                 }
             }
-        } catch let failure as ServiceTransportFailure {
-            throw failure
-        } catch let error as XPCEvaluateClientError {
-            switch error {
-            case .authenticationFailed: throw .untrusted
-            case .connectFailed, .cancelled: throw .unreachable
-            case .malformedReply: throw .malformedReply
-            }
-        } catch is CancellationError {
-            throw .unreachable
         } catch {
-            throw .malformedReply
+            throw Self.transportFailure(from: error)
+        }
+    }
+
+    /// Maps an untyped XPC client or task-group error; anything unforeseen
+    /// (e.g. a `DecodingError` from a garbage hello ack) is `malformedReply`.
+    static func transportFailure(from error: any Error) -> ServiceTransportFailure {
+        switch error {
+        case let failure as ServiceTransportFailure:
+            failure
+        case XPCEvaluateClientError.authenticationFailed:
+            .untrusted
+        case XPCEvaluateClientError.connectFailed, XPCEvaluateClientError.cancelled:
+            .unreachable
+        case XPCEvaluateClientError.malformedReply:
+            .malformedReply
+        case is CancellationError:
+            // Only the caller's own cancellation (the timeout sleep); never peer bytes.
+            .unreachable
+        default:
+            .malformedReply
         }
     }
 }

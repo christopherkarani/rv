@@ -87,6 +87,21 @@ struct HookDaemonFallbackTests {
         #expect(HookDaemonFallback.classify(.malformedReply) == .protocol)
     }
 
+#if canImport(XPC)
+    @Test func xpcTransportMapsUnforeseenErrorsToMalformedReply() {
+        let map = XPCServiceTransport.transportFailure(from:)
+        #expect(map(ServiceTransportFailure.timeout) == .timeout)
+        #expect(map(XPCEvaluateClientError.authenticationFailed) == .untrusted)
+        #expect(map(XPCEvaluateClientError.connectFailed) == .unreachable)
+        #expect(map(XPCEvaluateClientError.cancelled) == .unreachable)
+        #expect(map(XPCEvaluateClientError.malformedReply) == .malformedReply)
+        #expect(map(CancellationError()) == .unreachable)
+        #expect(map(CocoaError(.coderReadCorrupt)) == .malformedReply)
+        #expect(map(DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "garbage"))) == .malformedReply)
+        #expect(HookDaemonFallback.classify(map(CocoaError(.coderReadCorrupt))) == .protocol)
+    }
+#endif
+
     @Test func missingTransportIsUnreachableAndFollowsMode() async throws {
         let client = try isolatedClient(transport: nil)
         let ask = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
