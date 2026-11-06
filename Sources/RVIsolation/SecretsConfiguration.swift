@@ -283,13 +283,21 @@ extension SecretsConfiguration {
 
     public static func decode(_ data: Data) -> Result<SecretsConfiguration, SecretsConfigurationError> {
         guard data.count <= maximumBytes else { return .failure(.oversized) }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard String(data: data, encoding: .utf8) != nil else { return .failure(.invalid("not valid UTF-8")) }
+        let parsed: JSONSpellingValue
+        do {
+            parsed = try JSONSpellingParser.parse(data, maximumDepth: 63)
+        } catch .duplicateKey {
+            let key = SecretsDecoding.firstDuplicateKey(in: data).map { DisplayedText.field($0) } ?? "in the document"
+            return .failure(.invalid("duplicate key \(key)"))
+        } catch {
             return .failure(.invalid("not a JSON object"))
         }
+        guard let root = parsed.object else { return .failure(.invalid("not a JSON object")) }
         do {
             try SecretsDecoding.onlyKeys(root, ["version", "secrets"], at: "document")
-            guard root["version"] as? Int == 1 else { throw SecretsDecoding.Failure("version must be 1") }
-            guard let entries = root["secrets"] as? [Any] else {
+            guard case .number("1")? = root["version"] else { throw SecretsDecoding.Failure("version must be 1") }
+            guard case .array(let entries)? = root["secrets"] else {
                 throw SecretsDecoding.Failure("secrets must be an array")
             }
             guard entries.count <= maximumSecrets else {
@@ -350,38 +358,38 @@ enum SecretsDecoding {
         "PWD", "OLDPWD", "SHLVL",
     ]
 
-    static func onlyKeys(_ object: [String: Any], _ allowed: Set<String>, at place: String) throws {
+    static func onlyKeys(_ object: [String: JSONSpellingValue], _ allowed: Set<String>, at place: String) throws {
         if let unknown = object.keys.first(where: { allowed.contains($0) == false }) {
             throw Failure("unknown key \(DisplayedText.field(unknown)) in \(place)")
         }
     }
 
-    static func secret(_ value: Any, index: Int) throws -> SecretDefinition {
+    static func secret(_ value: JSONSpellingValue, index: Int) throws -> SecretDefinition {
         let place = "secrets[\(index)]"
-        guard let object = value as? [String: Any] else { throw Failure("\(place) must be an object") }
+        guard let object = value.object else { throw Failure("\(place) must be an object") }
         try onlyKeys(
             object, ["name", "description", "agents", "source", "delivery", "type", "expires", "refresh", "binaries"],
             at: place)
-        guard let name = object["name"] as? String, variable(name), reservedVariables.contains(name) == false else {
+        guard let name = object["name"]?.string, variable(name), reservedVariables.contains(name) == false else {
             throw Failure("\(place).name must be an environment variable name")
         }
         var description: String?
         if let raw = object["description"] {
-            guard let text = raw as? String, label(text, max: 256) else {
+            guard let text = raw.string, label(text, max: 256) else {
                 throw Failure("\(name).description must be short text")
             }
             description = text
         }
         var agents: [String]?
         if let raw = object["agents"] {
-            guard let list = raw as? [String], list.count <= 8, list.allSatisfy(AgentTagValidator.isValid),
+            guard let list = raw.stringList, list.count <= 8, list.allSatisfy(AgentTagValidator.isValid),
                 Set(list).count == list.count
             else { throw Failure("\(name).agents must be up to 8 distinct agent tags") }
             agents = list.isEmpty ? nil : list
         }
         var typeName: String?
         if let raw = object["type"] {
-            guard let text = raw as? String, label(text, max: 128) else {
+            guard let text = raw.string, label(text, max: 128) else {
                 throw Failure("\(name).type must be short text")
             }
             typeName = text
@@ -391,7 +399,7 @@ enum SecretsDecoding {
         if let error = SecretDefinitionError.pairing(name, source, delivery) { throw Failure(error.reason) }
         var expires: Date?
         if let raw = object["expires"] {
-            guard let text = raw as? String, let date = SecretExpiry.parse(text) else {
+            guard let text = raw.string, let date = SecretExpiry.parse(text) else {
                 throw Failure(
                     "\(name).expires must be an ISO-8601 date (2026-12-31) or date-time with a zone (2026-12-31T18:00:00Z)")
             }
@@ -399,7 +407,7 @@ enum SecretsDecoding {
         }
         var refresh: SecretRefreshInterval?
         if let raw = object["refresh"] {
-            guard let text = raw as? String, let interval = SecretRefreshInterval(text) else {
+            guard let text = raw.string, let interval = SecretRefreshInterval(text) else {
                 throw Failure("\(name).refresh must be a whole number of s, m, h, or d from 1m to 30d, such as 15m")
             }
             if let error = SecretDefinitionError.refresh(name, delivery) { throw Failure(error.reason) }
@@ -407,7 +415,7 @@ enum SecretsDecoding {
         }
         var binaries: [String]?
         if let raw = object["binaries"] {
-            guard let list = raw as? [String], (1...16).contains(list.count), list.allSatisfy(binaryPath),
+            guard let list = raw.stringList, (1...16).contains(list.count), list.allSatisfy(binaryPath),
                 Set(list).count == list.count
             else {
                 throw Failure("\(name).binaries must be 1 to 16 distinct absolute paths, such as /opt/homebrew/bin/gh")
@@ -428,14 +436,16 @@ enum SecretsDecoding {
             && path.split(separator: "/").allSatisfy { $0 != "." && $0 != ".." }
     }
 
-    static func single(_ value: Any?, secret: String, field: String) throws -> (String, [String: Any]) {
-        guard let object = value as? [String: Any], object.count == 1,
-            let (kind, body) = object.first, let fields = body as? [String: Any]
+    static func single(
+        _ value: JSONSpellingValue?, secret: String, field: String
+    ) throws -> (String, [String: JSONSpellingValue]) {
+        guard let object = value?.object, object.count == 1,
+            let (kind, body) = object.first, let fields = body.object
         else { throw Failure("\(secret).\(field) must name exactly one kind") }
         return (kind, fields)
     }
 
-    static func source(_ value: Any?, secret: String) throws -> SecretSource {
+    static func source(_ value: JSONSpellingValue?, secret: String) throws -> SecretSource {
         let (name, fields) = try single(value, secret: secret, field: "source")
         guard let kind = SecretSourceKind(rawValue: name) else {
             throw Failure("\(secret).source kind \(DisplayedText.field(name)) is not supported")
@@ -444,30 +454,30 @@ enum SecretsDecoding {
         switch kind {
         case .keychain:
             try onlyKeys(fields, ["service", "account"], at: place)
-            guard let service = fields["service"] as? String, label(service, max: 256),
-                let account = fields["account"] as? String, label(account, max: 256)
+            guard let service = fields["service"]?.string, label(service, max: 256),
+                let account = fields["account"]?.string, label(account, max: 256)
             else { throw Failure("\(place) needs service and account") }
             return .keychain(service: service, account: account)
         case .hostEnvironment:
             try onlyKeys(fields, ["variable"], at: place)
-            guard let variable = fields["variable"] as? String, self.variable(variable) else {
+            guard let variable = fields["variable"]?.string, self.variable(variable) else {
                 throw Failure("\(place).variable must be an environment variable name")
             }
             return .hostEnvironment(variable: variable)
         case .onePassword:
             try onlyKeys(fields, ["reference"], at: place)
-            guard let reference = fields["reference"] as? String, reference.hasPrefix("op://"),
+            guard let reference = fields["reference"]?.string, reference.hasPrefix("op://"),
                 label(reference, max: 512), reference.contains(" ") == false
             else { throw Failure("\(place).reference must be an op:// reference") }
             return .onePassword(reference: reference)
         case .vault:
             try onlyKeys(fields, ["path", "field", "address"], at: place)
-            guard let path = fields["path"] as? String, vaultPath(path),
-                let field = fields["field"] as? String, label(field, max: 128)
+            guard let path = fields["path"]?.string, vaultPath(path),
+                let field = fields["field"]?.string, label(field, max: 128)
             else { throw Failure("\(place) needs a KV path and field") }
             var address: URL?
             if let raw = fields["address"] {
-                guard let text = raw as? String, let url = httpsOrigin(text) else {
+                guard let text = raw.string, let url = httpsOrigin(text) else {
                     throw Failure("\(place).address must be an https URL")
                 }
                 address = url
@@ -475,23 +485,23 @@ enum SecretsDecoding {
             return .vault(path: path, field: field, address: address)
         case .awsSecretsManager:
             try onlyKeys(fields, ["secretID", "field", "region"], at: place)
-            guard let secretID = fields["secretID"] as? String, label(secretID, max: 512),
+            guard let secretID = fields["secretID"]?.string, label(secretID, max: 512),
                 secretID.hasPrefix("-") == false
             else { throw Failure("\(place).secretID is required") }
             var field: String?
             if let raw = fields["field"] {
-                guard let text = raw as? String, label(text, max: 128) else { throw Failure("\(place).field is invalid") }
+                guard let text = raw.string, label(text, max: 128) else { throw Failure("\(place).field is invalid") }
                 field = text
             }
             var region: String?
             if let raw = fields["region"] {
-                guard let text = raw as? String, regionName(text) else { throw Failure("\(place).region is invalid") }
+                guard let text = raw.string, regionName(text) else { throw Failure("\(place).region is invalid") }
                 region = text
             }
             return .awsSecretsManager(secretID: secretID, field: field, region: region)
         case .infisical:
             try onlyKeys(fields, ["name", "project", "environment", "path"], at: place)
-            guard let secretName = fields["name"] as? String, cliToken(secretName) else {
+            guard let secretName = fields["name"]?.string, cliToken(secretName) else {
                 throw Failure("\(place).name is required")
             }
             let project = try optionalToken(fields["project"], "\(place).project")
@@ -500,45 +510,45 @@ enum SecretsDecoding {
             return .infisical(name: secretName, project: project, environment: environment, path: path)
         case .bitwarden:
             try onlyKeys(fields, ["id"], at: place)
-            guard let id = fields["id"] as? String, uuid(id) else {
+            guard let id = fields["id"]?.string, uuid(id) else {
                 throw Failure("\(place).id must be a UUID")
             }
             return .bitwarden(id: id.lowercased())
         case .gcp:
             try onlyKeys(fields, ["secret", "project", "version"], at: place)
-            guard let secretName = fields["secret"] as? String, cliToken(secretName) else {
+            guard let secretName = fields["secret"]?.string, cliToken(secretName) else {
                 throw Failure("\(place).secret is required")
             }
             let project = try optionalToken(fields["project"], "\(place).project")
-            let version = (fields["version"] as? String) ?? "latest"
+            let version = (fields["version"]?.string) ?? "latest"
             guard cliToken(version) else { throw Failure("\(place).version is invalid") }
             return .gcp(secret: secretName, project: project, version: version)
         case .azure:
             try onlyKeys(fields, ["vault", "name", "version"], at: place)
-            guard let vault = fields["vault"] as? String, cliToken(vault),
-                let secretName = fields["name"] as? String, cliToken(secretName)
+            guard let vault = fields["vault"]?.string, cliToken(vault),
+                let secretName = fields["name"]?.string, cliToken(secretName)
             else { throw Failure("\(place) needs vault and name") }
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
         case .awsProfile:
             try onlyKeys(fields, ["profile"], at: place)
-            guard let profile = fields["profile"] as? String, profile.utf8.count <= 64, profile.hasPrefix("-") == false,
+            guard let profile = fields["profile"]?.string, profile.utf8.count <= 64, profile.hasPrefix("-") == false,
                 profile.isEmpty == false, profile.utf8.allSatisfy({ placeholderByte($0) || $0 == 46 })
             else { throw Failure("\(place).profile must be an AWS profile name: letters, digits, ., _ or -") }
             return .awsProfile(profile: profile)
         case .oauth:
             try onlyKeys(fields, ["tokenURL", "clientID", "clientSecret", "refreshToken", "scope"], at: place)
-            guard let text = fields["tokenURL"] as? String, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
+            guard let text = fields["tokenURL"]?.string, let tokenURL = httpsUpstream(text, keepingTrailingSlash: true) else {
                 throw Failure("\(place).tokenURL must be an https URL with no query")
             }
-            guard let clientID = fields["clientID"] as? String, oauthText(clientID, max: 256, spaces: false) else {
+            guard let clientID = fields["clientID"]?.string, oauthText(clientID, max: 256, spaces: false) else {
                 throw Failure("\(place).clientID must be 1 to 256 printable ASCII characters without spaces")
             }
             let clientSecret = try keychainItem(fields["clientSecret"], at: "\(place).clientSecret")
             let refreshToken = try keychainItem(fields["refreshToken"], at: "\(place).refreshToken")
             var scope: String?
             if let raw = fields["scope"] {
-                guard let text = raw as? String, oauthText(text, max: 1024, spaces: true) else {
+                guard let text = raw.string, oauthText(text, max: 1024, spaces: true) else {
                     throw Failure("\(place).scope must be space-separated printable ASCII")
                 }
                 scope = text
@@ -552,7 +562,7 @@ enum SecretsDecoding {
         }
     }
 
-    static func delivery(_ value: Any?, secret: String) throws -> SecretDelivery {
+    static func delivery(_ value: JSONSpellingValue?, secret: String) throws -> SecretDelivery {
         let (kind, fields) = try single(value, secret: secret, field: "delivery")
         let place = "\(secret).delivery.\(kind)"
         switch kind {
@@ -562,13 +572,13 @@ enum SecretsDecoding {
         case "gateway":
             try onlyKeys(
                 fields, ["upstream", "baseURLEnv", "placeholderPrefix", "surfaces", "allow", "approve"], at: place)
-            guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
+            guard let text = fields["upstream"]?.string, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
-            guard let baseURLEnv = fields["baseURLEnv"] as? String, variable(baseURLEnv),
+            guard let baseURLEnv = fields["baseURLEnv"]?.string, variable(baseURLEnv),
                 reservedVariables.contains(baseURLEnv) == false, baseURLEnv != secret
             else { throw Failure("\(place).baseURLEnv must be a distinct environment variable name") }
-            let prefix = fields["placeholderPrefix"] as? String ?? ""
+            let prefix = fields["placeholderPrefix"]?.string ?? ""
             guard prefix.utf8.count <= 32, prefix.utf8.allSatisfy(placeholderByte) else {
                 throw Failure("\(place).placeholderPrefix must be up to 32 letters, digits, _ or -")
             }
@@ -580,17 +590,17 @@ enum SecretsDecoding {
                 allow: allow, approve: approve))
         case "awsSigV4":
             try onlyKeys(fields, ["upstream", "region", "service", "endpointEnv", "allow", "approve"], at: place)
-            guard let text = fields["upstream"] as? String, let upstream = httpsUpstream(text) else {
+            guard let text = fields["upstream"]?.string, let upstream = httpsUpstream(text) else {
                 throw Failure("\(place).upstream must be an https URL without credentials, query, or fragment")
             }
             // Both are credential-scope parts: `/` or spaces would forge another scope.
-            guard let region = fields["region"] as? String, regionName(region) else {
+            guard let region = fields["region"]?.string, regionName(region) else {
                 throw Failure("\(place).region must be an AWS region such as us-east-1")
             }
-            guard let service = fields["service"] as? String, regionName(service) else {
+            guard let service = fields["service"]?.string, regionName(service) else {
                 throw Failure("\(place).service must be the SigV4 signing name, such as s3 or bedrock")
             }
-            guard let endpointEnv = fields["endpointEnv"] as? String, variable(endpointEnv),
+            guard let endpointEnv = fields["endpointEnv"]?.string, variable(endpointEnv),
                 reservedVariables.contains(endpointEnv) == false,
                 AWSSigningBinding.stagedVariables.contains(endpointEnv) == false, endpointEnv != secret
             else {
@@ -616,10 +626,10 @@ enum SecretsDecoding {
 
     /// Absent means the default. Present must be a non-empty list of
     /// distinct known names, so a typo never widens or silently narrows.
-    static func surfaces(_ value: Any?, at place: String) throws -> Set<GatewaySurface> {
+    static func surfaces(_ value: JSONSpellingValue?, at place: String) throws -> Set<GatewaySurface> {
         guard let value else { return GatewaySurface.defaults }
         let names = GatewaySurface.allCases.map(\.rawValue).joined(separator: ", ")
-        guard let list = value as? [String], list.isEmpty == false, Set(list).count == list.count else {
+        guard let list = value.stringList, list.isEmpty == false, Set(list).count == list.count else {
             throw Failure("\(place) must list distinct surfaces from \(names)")
         }
         let surfaces = list.compactMap(GatewaySurface.init(rawValue:))
@@ -629,34 +639,34 @@ enum SecretsDecoding {
 
     /// Absent allows everything. Present must be non-empty, so `[]` cannot
     /// be mistaken for "allow nothing".
-    static func allow(_ value: Any?, at place: String) throws -> [GatewayAllowance] {
+    static func allow(_ value: JSONSpellingValue?, at place: String) throws -> [GatewayAllowance] {
         guard let value else { return [] }
-        guard let list = value as? [Any], list.isEmpty == false, list.count <= GatewayAllowance.maximumEntries else {
+        guard case .array(let list) = value, list.isEmpty == false, list.count <= GatewayAllowance.maximumEntries else {
             throw Failure("\(place) must list 1 to \(GatewayAllowance.maximumEntries) presets or rules")
         }
         let presets = GatewayAccessPreset.allCases.map(\.rawValue).joined(separator: ", ")
         return try list.enumerated().map { index, entry in
             let at = "\(place)[\(index)]"
-            if let name = entry as? String {
+            if let name = entry.string {
                 guard let preset = GatewayAccessPreset(rawValue: name) else {
                     throw Failure("\(at) preset \(DisplayedText.field(name)) is unknown; use \(presets)")
                 }
                 return .preset(preset)
             }
-            guard let object = entry as? [String: Any] else {
+            guard let object = entry.object else {
                 throw Failure("\(at) must be a preset name or {methods, path}")
             }
             try onlyKeys(object, ["methods", "path"], at: at)
             let methods: Set<String>?
             switch object["methods"] {
-            case let star as String where star == "*":
+            case .string("*")?:
                 methods = nil
-            case let names as [String] where Set(names).count == names.count:
-                methods = Set(names)
+            case let raw? where raw.stringList.map({ Set($0).count == $0.count }) == true:
+                methods = Set(raw.stringList ?? [])
             default:
                 throw Failure("\(at).methods must be \"*\" or a list of distinct upper-case HTTP methods")
             }
-            guard let path = object["path"] as? String else {
+            guard let path = object["path"]?.string else {
                 throw Failure("\(at).path must be a /-rooted glob")
             }
             guard let rule = GatewayAccessRule(methods: methods, path: path) else {
@@ -690,9 +700,9 @@ enum SecretsDecoding {
             }
     }
 
-    static func optionalToken(_ value: Any?, _ place: String) throws -> String? {
+    static func optionalToken(_ value: JSONSpellingValue?, _ place: String) throws -> String? {
         guard let value else { return nil }
-        guard let text = value as? String, cliToken(text) else { throw Failure("\(place) is invalid") }
+        guard let text = value.string, cliToken(text) else { throw Failure("\(place) is invalid") }
         return text
     }
 
@@ -732,12 +742,12 @@ enum SecretsDecoding {
             && value.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
     }
 
-    static func keychainItem(_ value: Any?, at place: String) throws -> SecretKeychainItem? {
+    static func keychainItem(_ value: JSONSpellingValue?, at place: String) throws -> SecretKeychainItem? {
         guard let value else { return nil }
-        guard let fields = value as? [String: Any] else { throw Failure("\(place) needs service and account") }
+        guard let fields = value.object else { throw Failure("\(place) needs service and account") }
         try onlyKeys(fields, ["service", "account"], at: place)
-        guard let service = fields["service"] as? String, label(service, max: 256),
-            let account = fields["account"] as? String, label(account, max: 256)
+        guard let service = fields["service"]?.string, label(service, max: 256),
+            let account = fields["account"]?.string, label(account, max: 256)
         else { throw Failure("\(place) needs service and account") }
         return SecretKeychainItem(service: service, account: account)
     }
@@ -767,5 +777,64 @@ enum SecretsDecoding {
         guard let url = httpsUpstream(text), URLComponents(url: url, resolvingAgainstBaseURL: false)?.path.isEmpty == true
         else { return nil }
         return url
+    }
+}
+
+extension JSONSpellingValue {
+    fileprivate var string: String? {
+        if case .string(let text) = self { return text }
+        return nil
+    }
+
+    /// Every element must be a string, (a mixed array is refused).
+    fileprivate var stringList: [String]? {
+        guard case .array(let items) = self else { return nil }
+        var list: [String] = []
+        for item in items {
+            guard let text = item.string else { return nil }
+            list.append(text)
+        }
+        return list
+    }
+}
+
+extension SecretsDecoding {
+    /// The parser reports a repeated key without naming it. This walks the
+    /// bytes it already accepted up to that point and returns the first
+    /// repeat, so the refusal can say which key to fix.
+    static func firstDuplicateKey(in data: Data) -> String? {
+        struct Frame {
+            var isObject: Bool
+            var expectingKey: Bool
+            var keys: Set<String> = []
+        }
+        let bytes = Array(data)
+        var stack: [Frame] = []
+        var index = 0
+        while index < bytes.count {
+            switch bytes[index] {
+            case UInt8(ascii: "\""):
+                let start = index
+                index += 1
+                while index < bytes.count, bytes[index] != UInt8(ascii: "\"") {
+                    index += bytes[index] == UInt8(ascii: "\\") ? 2 : 1
+                }
+                guard index < bytes.count, var frame = stack.last, frame.isObject, frame.expectingKey else { break }
+                guard case .string(let key)? = try? JSONSpellingParser.parse(Data(bytes[start...index])) else {
+                    return nil
+                }
+                if frame.keys.insert(key).inserted == false { return key }
+                frame.expectingKey = false
+                stack[stack.count - 1] = frame
+            case UInt8(ascii: "{"): stack.append(Frame(isObject: true, expectingKey: true))
+            case UInt8(ascii: "["): stack.append(Frame(isObject: false, expectingKey: false))
+            case UInt8(ascii: "}"), UInt8(ascii: "]"): _ = stack.popLast()
+            case UInt8(ascii: ","):
+                if stack.last?.isObject == true { stack[stack.count - 1].expectingKey = true }
+            default: break
+            }
+            index += 1
+        }
+        return nil
     }
 }
