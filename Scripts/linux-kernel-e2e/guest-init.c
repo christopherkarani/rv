@@ -31,6 +31,7 @@
 #include <sys/prctl.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -204,7 +205,9 @@ static int contained(const char *workspace, const char *op, const char *a, const
     return run(argv);
 }
 
-static void common_cases(void) {
+/* ABI >= 3 only: below it the helper exits 125 for every argv, so these
+ * cases could not tell the argv lock from the ABI refusal. */
+static void argv_lock_cases(void) {
     const char *marker = WORKSPACE "/argv-must-not-exec";
     char *no_args[] = {HELPER, NULL};
     char *relative_inner[] = {
@@ -312,6 +315,20 @@ static void enforcement_cases(void) {
     }
 }
 
+/* Setup failed before /dev/console was usable: point stdout at the console
+ * anyway (creating the node if devtmpfs never mounted) so the FAIL line
+ * still reaches the serial log. */
+static void console_fallback(void) {
+    int fd = open("/dev/console", O_WRONLY);
+    if (fd < 0 && mknod("/dev/console", S_IFCHR | 0600, makedev(5, 1)) == 0) {
+        fd = open("/dev/console", O_WRONLY);
+    }
+    if (fd >= 0 && fd != 1) {
+        dup2(fd, 1);
+        close(fd);
+    }
+}
+
 static long expected_abi(void) {
     char line[4096];
     char *found;
@@ -391,7 +408,11 @@ int main(int argc, char **argv) {
         strcpy(uts.release, "unknown");
     }
     if (!setup()) {
-        say("rv-kernel-e2e: FAIL setup: errno %d\n", errno);
+        int setup_errno = errno;
+        if (fcntl(1, F_GETFD) < 0) {
+            console_fallback();
+        }
+        say("rv-kernel-e2e: FAIL setup: errno %d\n", setup_errno);
         failures++;
         finish(-1, uts.release);
     }
@@ -414,8 +435,8 @@ int main(int argc, char **argv) {
             "live abi %ld errno %d, lane expects %ld", live, live_errno, expected);
     }
 
-    common_cases();
     if (live >= 3) {
+        argv_lock_cases();
         enforcement_cases();
     } else {
         refusal_cases();

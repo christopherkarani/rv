@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Boot pinned Linux guest kernels under QEMU and run rv-isolation-exec's
-# Landlock boundary checks on each (docs/linux-kernel-e2e.md).
+# Landlock boundary checks on each (docs/security/linux-kernel-e2e.md).
 #
 #   Scripts/linux-kernel-e2e.sh all            # every lane in kernels.tsv
 #   Scripts/linux-kernel-e2e.sh 5.10 6.12      # chosen lanes
@@ -130,12 +130,20 @@ build_initramfs() {
     | cpio --null --create --format=newc --owner=0:0 --quiet) > "$WORK/initramfs.cpio"
 }
 
-# One boot. Pass only on exactly one PASS result line from a kernel whose
-# release matches the lane; a timeout, panic, or missing line is a failure.
+# Exact check count guest-init.c runs per regime (ABI check + refusal cases
+# below ABI 3; ABI check + argv lock + enforcement at 3+). A dropped or added
+# case fails the lane until this is updated with it.
+CHECKS_REFUSAL=5
+CHECKS_ENFORCEMENT=21
+
+# One boot. Pass only on exactly one PASS result line, with the regime's
+# exact check count, from a kernel whose release matches the lane; a timeout,
+# panic, or missing line is a failure.
 run_lane() {
   local lane="$1" abi="$2" sha="$3" url="$4" accel="$5"
   local deb vmlinuz="$WORK/vmlinuz-$lane" log="$WORK/serial-$lane.log" status=0
-  local accel_args=()
+  local accel_args=() want=$CHECKS_REFUSAL
+  [[ "$abi" -ge 3 ]] && want=$CHECKS_ENFORCEMENT
   # Called under `if !`, where set -e is off: check each step explicitly.
   deb="$(fetch_deb "$sha" "$url")" || return 1
   extract_vmlinuz "$deb" "$vmlinuz" || return 1
@@ -161,8 +169,8 @@ run_lane() {
     say "lane $lane: FAIL ($results result lines; guest did not finish cleanly)"
     return 1
   fi
-  if ! grep -Eq "^rv-kernel-e2e-result: PASS .* kernel=${lane//./\\.}\\." "$log"; then
-    say "lane $lane: FAIL ($(grep '^rv-kernel-e2e-result: ' "$log"))"
+  if ! grep -Eq "^rv-kernel-e2e-result: PASS checks=$want failures=0 abi=.* kernel=${lane//./\\.}\\." "$log"; then
+    say "lane $lane: FAIL (want PASS checks=$want; got $(grep '^rv-kernel-e2e-result: ' "$log"))"
     return 1
   fi
   say "lane $lane: PASS"

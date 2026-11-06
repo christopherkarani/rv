@@ -2,7 +2,7 @@ name: linux-kernel-e2e
 
 # rv-isolation-exec's Landlock boundary on pinned guest kernels, not just the
 # runner's kernel (pr.yml measures that one). Informational: not a required
-# check. See docs/linux-kernel-e2e.md.
+# check. See docs/security/linux-kernel-e2e.md.
 
 on:
   pull_request:
@@ -22,6 +22,9 @@ on:
       - Scripts/linux-kernel-e2e.sh
       - Scripts/linux-kernel-e2e/**
       - .github/workflows/linux-kernel-e2e.yml
+  # Weekly, so runner or kernel drift shows up without a PR touching it.
+  schedule:
+    - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions:

@@ -41,8 +41,13 @@ workspace because there is no system read-only layer yet. So the guest runs
 its probe from a copy inside the workspace. Once a read-only system layer
 lands, the `exec-outside-workspace-denied` check is meant to flip.
 
-Every lane also checks the argv lock, a missing workspace and a
-non-canonical (symlinked) workspace. All three must exit 125 and never exec.
+The ABI 3+ lanes also check the argv lock (no arguments, a relative inner,
+a missing `--`), a missing workspace and a non-canonical (symlinked)
+workspace. Each must exit 125 and never exec. The 5.10 and 6.1 lanes skip
+those cases: below ABI 3 the trampoline exits 125 for every argv, so they
+could not tell the argv lock from the ABI refusal. Those lanes prove only the
+refusal. The host script pins the exact number of checks each regime runs (5
+below ABI 3, 21 at 3+), so a dropped case fails the lane.
 The guest compares the live Landlock ABI with the lane's expected ABI, so a
 kernel that boots with Landlock disabled fails its lane instead of quietly
 testing the wrong regime. The kernel command line passes `lsm=landlock` so
