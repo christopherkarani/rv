@@ -7,9 +7,13 @@
  * inner cannot read outside the workspace, so a dynamic inner would fail
  * on its own libraries rather than on the boundary under test.
  *
- * The same binary is the inner probe: `/init probe OP ARGS...` does one
+ * The same binary is the inner probe: `probe OP ARGS...` does one
  * filesystem operation and exits 0 on success or with errno (capped below
- * the trampoline's reserved 125/126).
+ * the trampoline's reserved 125/126). The inner runs from a copy inside the
+ * workspace: Landlock needs READ_FILE to exec, and rv grants that only
+ * beneath the workspace (no system read-only layer yet), so a binary
+ * outside it cannot be exec'd at all. `exec-outside-workspace-denied` pins
+ * that.
  *
  * Expected kernel regime comes from `rv.expect_abi=N` on the kernel command
  * line (0 = no Landlock). The live probe must match it exactly, so a lane
@@ -38,6 +42,7 @@
 
 #define HELPER "/bin/rv-isolation-exec"
 #define SELF "/init"
+#define INNER "/e2e/workspace/probe"
 #define ROOT "/e2e"
 #define WORKSPACE ROOT "/workspace"
 #define OUTSIDE ROOT "/outside"
@@ -143,6 +148,25 @@ static int content_is(const char *path, const char *expected) {
     return strcmp(buffer, expected) == 0;
 }
 
+static int copy_file(const char *from, const char *to, mode_t mode) {
+    char buffer[65536];
+    ssize_t size;
+    int ok;
+    int in = open(from, O_RDONLY);
+    int out = open(to, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    ok = in >= 0 && out >= 0;
+    while (ok && (size = read(in, buffer, sizeof(buffer))) != 0) {
+        ok = size > 0 && write(out, buffer, (size_t)size) == size;
+    }
+    if (in >= 0) {
+        close(in);
+    }
+    if (out >= 0) {
+        close(out);
+    }
+    return ok;
+}
+
 static int seed(const char *path, const char *text) {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     ssize_t want = (ssize_t)strlen(text);
@@ -171,10 +195,10 @@ static int run(char *const argv[]) {
     return WEXITSTATUS(status);
 }
 
-/* rv-isolation-exec --workspace WS -- /init probe OP A [B] */
+/* rv-isolation-exec --workspace WS -- INNER probe OP A [B] */
 static int contained(const char *workspace, const char *op, const char *a, const char *b) {
     char *argv[] = {
-        HELPER, "--workspace", (char *)workspace, "--", SELF, "probe",
+        HELPER, "--workspace", (char *)workspace, "--", INNER, "probe",
         (char *)op, (char *)a, (char *)b, NULL,
     };
     return run(argv);
@@ -275,6 +299,17 @@ static void enforcement_cases(void) {
         status = run(argv);
         check(status == EXEC_FAILED, "missing-inner-exits-126", "exit %d", status);
     }
+    {
+        /* Today's ruleset has no system read-only layer: an inner outside
+         * the workspace is not readable, so execve fails after apply. */
+        char *argv[] = {
+            HELPER, "--workspace", WORKSPACE, "--", SELF, "probe", "write",
+            WORKSPACE "/outside-binary-ran", NULL,
+        };
+        status = run(argv);
+        check(status == EXEC_FAILED && !exists(WORKSPACE "/outside-binary-ran"),
+            "exec-outside-workspace-denied", "exit %d", status);
+    }
 }
 
 static long expected_abi(void) {
@@ -324,6 +359,7 @@ static int setup(void) {
         && mkdir(OUTSIDE, 0755) == 0
         && symlink(WORKSPACE, ROOT "/workspace-link") == 0
         && symlink(OUTSIDE "/via-link.txt", WORKSPACE "/escape") == 0
+        && copy_file(SELF, INNER, 0755)
         && seed(OUTSIDE "/seed.txt", "keep-me\n")
         && seed(WORKSPACE "/note.txt", "inside-note\n");
 }

@@ -35,6 +35,12 @@ workspace symlink pointing outside is denied, and so is a rename out of the
 workspace. The inner sees `NO_NEW_PRIVS`. An fd opened outside before the
 boundary is closed (`EBADF`). A missing inner exits 126.
 
+Execing a binary outside the workspace also exits 126. Landlock needs
+`READ_FILE` to exec a file, and the ruleset grants that only beneath the
+workspace because there is no system read-only layer yet. So the guest runs
+its probe from a copy inside the workspace. Once a read-only system layer
+lands, the `exec-outside-workspace-denied` check is meant to flip.
+
 Every lane also checks the argv lock, a missing workspace and a
 non-canonical (symlinked) workspace. All three must exit 125 and never exec.
 The guest compares the live Landlock ABI with the lane's expected ABI, so a
