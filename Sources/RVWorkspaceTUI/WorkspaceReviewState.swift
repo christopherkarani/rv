@@ -32,6 +32,8 @@ public struct WorkspaceReviewState: Equatable, Sendable {
 
     /// Poll cadence for the stores while the shell runs.
     static let pollInterval: TimeInterval = 1.5
+    /// A read in flight longer than this marks the pane stale and retries.
+    static let loadTimeout: TimeInterval = 10
     /// Matches the store's canonical rejection-reason bound.
     static let maximumReasonLength = 500
 
@@ -40,6 +42,15 @@ public struct WorkspaceReviewState: Equatable, Sendable {
     public internal(set) var enabled: Bool
     public internal(set) var load: Load = .loading
     public internal(set) var selected: ReviewItemID?
+    /// False after a refresh moved the cursor because the selected row
+    /// vanished. Approve and deny stay unavailable until the user moves
+    /// the cursor, so a refresh can never retarget a keypress.
+    public internal(set) var selectionConfirmed = true
+    /// True while a read has been in flight past `loadTimeout`: rows may
+    /// be out of date, so approve and deny are unavailable.
+    public internal(set) var stale = false
+    /// Issue time of the read that last landed.
+    public internal(set) var lastUpdatedAt: Date?
     /// At most one ceremony at a time; no approve-all.
     public internal(set) var action: Action?
     public internal(set) var notice: Notice?
@@ -49,6 +60,12 @@ public struct WorkspaceReviewState: Equatable, Sendable {
     var loadSequence: UInt64 = 0
     var inflightLoad: UInt64?
     var nextPollAt: Date?
+    /// Clock of the latest tick: the reducer's only time source.
+    var lastTickAt: Date?
+    var inflightSince: Date?
+    /// A proposal this pane just resolved: its disappearance is expected,
+    /// so the next landing keeps the action's notice.
+    var settled: ReviewItemID?
 
     init(enabled: Bool) {
         self.enabled = enabled

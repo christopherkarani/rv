@@ -31,6 +31,10 @@ enum WorkspaceReviewText {
         if case .reviewDenyReason(_, let input) = mode {
             lines.append("Deny reason: \(clean(input))")
         }
+        if review.stale {
+            let updated = review.lastUpdatedAt.map { "last updated \(age($0, now: now)) ago" } ?? "no read has landed"
+            lines.append("! Review is stale · \(updated)")
+        }
         if let notice = review.notice {
             lines.append((notice.isError ? "! " : "") + clean(notice.text))
         }
@@ -43,7 +47,8 @@ enum WorkspaceReviewText {
         if case .reviewDenyReason = mode { return "Enter deny · Esc back" }
         guard review.items.isEmpty == false else { return "Esc close" }
         var keys: [String] = []
-        if review.action == nil, review.selectedItem?.kind == .pendingEgress {
+        if review.action == nil, review.stale == false, review.selectionConfirmed,
+           review.selectedItem?.kind == .pendingEgress {
             keys += ["a approve", "d deny"]
         }
         keys += ["j/k move", "g/G first/last", "Esc close"]

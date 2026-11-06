@@ -241,20 +241,129 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         #expect(refreshed.state.review.selected == .block("b1"))
     }
 
-    @Test func vanishedSelectionFallsToSamePosition() {
+    @Test func vanishedSelectionKeepsPositionButNeverRetargetsAnAction() {
         var state = openReview([
             egress("p1", "a.example.com", ageSeconds: 10), egress("p2", "b.example.com", ageSeconds: 20),
-            block("b1", ageSeconds: 30),
+            egress("p3", "c.example.com", ageSeconds: 30),
         ])
         state = press(state, .character("j")).state
         #expect(state.review.selected == .egress("p2"))
+        // p2 is resolved elsewhere; the cursor lands on p3, another pending
+        // proposal, but a keypress meant for p2 must not approve p3.
         let refreshed = reduce(
             state, .tick(now: reviewEpoch.addingTimeInterval(10)),
             .reviewLoaded(sequence: 2, result: .loaded([
-                egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 30),
+                egress("p1", "a.example.com", ageSeconds: 10), egress("p3", "c.example.com", ageSeconds: 30),
             ]))
+        ).state
+        #expect(refreshed.review.selected == .egress("p3"))
+        #expect(refreshed.review.selectionConfirmed == false)
+        #expect(refreshed.review.notice?.text == "Selected item resolved elsewhere")
+        #expect(WorkspaceReviewText.hint(refreshed.review, mode: refreshed.mode)
+            == "j/k move · g/G first/last · Esc close")
+        let approve = press(refreshed, .character("a"))
+        #expect(approve.effects.contains(where: isReviewEffect) == false)
+        #expect(approve.state.review.action == nil)
+        let deny = press(refreshed, .character("d"))
+        #expect(deny.state.mode == .review)
+        #expect(deny.effects.contains(where: isReviewEffect) == false)
+        // A later poll that keeps the fallback row does not confirm it.
+        let polled = reduce(
+            refreshed, .tick(now: reviewEpoch.addingTimeInterval(20)),
+            .reviewLoaded(sequence: 3, result: .loaded([
+                egress("p1", "a.example.com", ageSeconds: 10), egress("p3", "c.example.com", ageSeconds: 30),
+            ]))
+        ).state
+        #expect(press(polled, .character("a")).effects.contains(where: isReviewEffect) == false)
+        // Moving the cursor confirms the selection again.
+        let moved = press(polled, .character("k"), .character("j")).state
+        #expect(moved.review.selected == .egress("p3"))
+        #expect(moved.review.selectionConfirmed)
+        #expect(press(moved, .character("a")).effects == [.approveEgress(id: "p3")])
+        // Falling onto a block keeps the same position too.
+        var blocks = openReview([egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 30)])
+        blocks = reduce(
+            blocks, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([block("b1", ageSeconds: 30)]))
+        ).state
+        #expect(blocks.review.selected == .block("b1"))
+    }
+
+    @Test func ownActionKeepsItsNoticeButStillNeedsReselection() {
+        let state = openReview([egress("p1", "a.example.com", ageSeconds: 10), egress("p2", "b.example.com", ageSeconds: 20)])
+        let approving = press(state, .character("a")).state
+        let completed = reduce(approving, .reviewActionCompleted(id: "p1", outcome: .completed("approved p1")))
+        #expect(completed.effects == [.loadReview(sequence: 2)])
+        let reread = reduce(
+            completed.state, .reviewLoaded(sequence: 2, result: .loaded([egress("p2", "b.example.com", ageSeconds: 20)]))
+        ).state
+        #expect(reread.review.selected == .egress("p2"))
+        #expect(reread.review.notice?.text == "approved p1")
+        #expect(press(reread, .character("a")).effects.contains(where: isReviewEffect) == false)
+    }
+
+    @Test func hungLoadGoesStaleDisablesActionsAndRetries() {
+        let opened = press(reviewState(), .control("b"), .character("R")).state
+        var state = reduce(
+            opened, .tick(now: reviewEpoch),
+            .reviewLoaded(sequence: 1, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)]))
+        ).state
+        // The next poll is issued and never returns.
+        let polling = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(1.5)))
+        #expect(polling.effects.contains(.loadReview(sequence: 2)))
+        state = polling.state
+        let waiting = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(11.5)))
+        #expect(waiting.effects.contains(where: isReviewEffect) == false)
+        #expect(waiting.state.review.stale == false)
+        let timedOut = reduce(waiting.state, .tick(now: reviewEpoch.addingTimeInterval(12)))
+        #expect(timedOut.effects.contains(.loadReview(sequence: 3)))
+        #expect(timedOut.state.presentationRevision != waiting.state.presentationRevision)
+        state = timedOut.state
+        #expect(state.review.stale)
+        #expect(WorkspaceReviewText.hint(state.review, mode: state.mode) == "j/k move · g/G first/last · Esc close")
+        #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch.addingTimeInterval(12))
+            .contains("! Review is stale · last updated 12s ago"))
+        let approve = press(state, .character("a"))
+        #expect(approve.effects.contains(where: isReviewEffect) == false)
+        #expect(approve.state.review.action == nil)
+        #expect(press(state, .character("d")).state.mode == .review)
+        // The late result of the hung read is ignored.
+        let late = reduce(state, .reviewLoaded(sequence: 2, result: .loaded([])))
+        #expect(late.state.review.items.count == 1)
+        #expect(late.state.review.stale)
+        // The retry lands: fresh again and actionable.
+        let fresh = reduce(late.state, .reviewLoaded(
+            sequence: 3, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)])
+        )).state
+        #expect(fresh.review.stale == false)
+        #expect(press(fresh, .character("a")).effects == [.approveEgress(id: "p1")])
+    }
+
+    @Test func staleReviewRefusesDenySubmit() {
+        var state = reduce(reviewState(), .tick(now: reviewEpoch)).state
+        state = reduce(state, .reviewLoaded(sequence: 1, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)]))).state
+        state = press(state, .control("b"), .character("R"), .character("d"), .character("n")).state
+        #expect(state.mode == .reviewDenyReason(id: "p1", input: "n"))
+        state = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(20))).state
+        #expect(state.review.stale)
+        let submitted = press(state, .enter)
+        #expect(submitted.effects.contains(where: isReviewEffect) == false)
+        #expect(submitted.state.mode == .reviewDenyReason(id: "p1", input: "n"))
+    }
+
+    @Test func actionsAppendToExistingEffects() {
+        let state = openReview([egress("p1", "a.example.com", ageSeconds: 10)])
+        var next = state
+        var effects: [TUIRuntimeEffect] = [.loadReview(sequence: 99)]
+        var changed = false
+        WorkspaceTUIReducer.applyReviewCommand(.reviewApprove, to: &next, effects: &effects, presentationChanged: &changed)
+        #expect(effects == [.loadReview(sequence: 99), .approveEgress(id: "p1")])
+        var denyState = state
+        var denyEffects: [TUIRuntimeEffect] = [.loadReview(sequence: 99)]
+        WorkspaceTUIReducer.applyReviewCommand(
+            .reviewDenySubmit(id: "p1", reason: "no"), to: &denyState, effects: &denyEffects, presentationChanged: &changed
         )
-        #expect(refreshed.state.review.selected == .block("b1"))
+        #expect(denyEffects == [.loadReview(sequence: 99), .denyEgress(id: "p1", reason: "no")])
     }
 
     @Test func navigationClampsAndJumps() {
