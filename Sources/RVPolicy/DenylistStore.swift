@@ -13,10 +13,15 @@ public struct DenylistStore: Sendable {
         RVPolicyPaths.denylistFile(inConfigDir: baseDirectory)
     }
 
+    /// Fail-closed load for evaluate. Missing → empty. Present but unreadable,
+    /// non-UTF-8, or unparseable → `.unreadable` (matches every view): it may
+    /// hold any Always-block pin, so it never reads as "no pins".
     public func loadSnapshot() -> DenylistSnapshot {
         switch load() {
-        case .missing, .invalid:
+        case .missing:
             return .empty
+        case .invalid:
+            return .unreadable
         case .ok(let entries):
             return DenylistSnapshot(entries: entries)
         }
@@ -30,8 +35,10 @@ public struct DenylistStore: Sendable {
 
     public func load() -> LoadResult {
         let url = fileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return .missing
+        // lstat semantics: a dangling symlink exists and is unreadable, not missing.
+        var info = stat()
+        if lstat(url.path, &info) != 0 {
+            return errno == ENOENT ? .missing : .invalid
         }
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8)

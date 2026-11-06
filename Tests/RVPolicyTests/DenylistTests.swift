@@ -12,6 +12,27 @@ struct DenylistTests {
         #expect(DenylistSnapshot.empty.matches("git reset --hard") == false)
     }
 
+    @Test func commentAndWhitespaceOnly_isEmpty() throws {
+        #expect(try DenylistTOML.parse("# my pins\n") == [])
+        #expect(try DenylistTOML.parse("# a\n\n   \n  # b\n") == [])
+    }
+
+    @Test func contentBeforeFirstHeader_isInvalid() {
+        let mistyped = """
+            [[blok]]
+            exact_command = "git reset --hard"
+            reason = "pinned"
+
+            [[block]]
+            exact_command = "rm -rf ./build"
+            reason = "pinned"
+            """
+        #expect(throws: DenylistParseError.invalidTOML) { try DenylistTOML.parse(mistyped) }
+        #expect(throws: DenylistParseError.invalidTOML) {
+            try DenylistTOML.parse("# ok\nstray = 1\n[[block]]\nexact_command = \"x\"\nreason = \"r\"\n")
+        }
+    }
+
     @Test func parseAndMatch_exactCommand() throws {
         let entries = try DenylistTOML.parse(
             """

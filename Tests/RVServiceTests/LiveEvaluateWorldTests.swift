@@ -135,6 +135,34 @@ struct LiveEvaluateWorldTests {
         #expect(result.decision == .allow)
     }
 
+    @Test func corruptDenylistSuspendsAllowlistInsteadOfReadingEmpty() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        try AllowlistStore(baseDirectory: store.baseDirectory).add(
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+            tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        )
+        try "not toml {{{".write(
+            to: RVPolicyPaths.denylistFile(inConfigDir: store.baseDirectory),
+            atomically: true,
+            encoding: .utf8
+        )
+        let world = try makeWorld(store: store, now: now)
+
+        for result in [
+            await world.peek(command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/ws")),
+            await world.apply(command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/ws")),
+        ] {
+            guard case .deny(let deny) = result.decision else {
+                Issue.record("corrupt denylist must hold the deny")
+                continue
+            }
+            #expect(deny.ruleID == ruleID)
+            #expect(deny.reason.contains("denylist.toml"))
+        }
+    }
+
     @Test func nilHomeWalksDayOne() async throws {
         let store = try isolatedStore()
         let world = LiveEvaluateWorld(
