@@ -46,7 +46,7 @@ struct MCPGatewayCoreOutcomeTests {
         #expect(record?.auditEvent().decision == .denied)
     }
 
-    @Test func grantedCallWhoseUpstreamExitsStaysAllowed() {
+    @Test func grantedCallWhoseUpstreamExitsIsAllowed() {
         var harness = MCPGatewayElicitationTests.harness(elicitation: nil)
         let hash = JSONValue.object(["body": .string("b"), "title": .string("t")]).canonicalHash
         _ = harness.approvals.granted.withLock { $0.insert("github/create_issue/\(hash)") }
@@ -66,7 +66,7 @@ struct MCPGatewayCoreOutcomeTests {
         #expect(record?.auditEvent().decision == .denied)
     }
 
-    @Test func approvedElicitationThatFindsTheUpstreamUnavailableStaysAllowed() {
+    @Test func approvedElicitationThatFindsTheUpstreamUnavailableIsAllowed() {
         let harness = GatewayHarness(MCPConfiguration(servers: [MCPGatewayCoreTests.github]))
         let record = harness.core.unavailable(
             client: .int(1), server: "github", tool: "create_issue", decision: .ask, keys: [], approved: true).audits.first
