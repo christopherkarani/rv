@@ -13,6 +13,7 @@ struct RulePinningTests {
         .workingTreeDiscard,
         .outsideRepository,
         .unresolvedPath,
+        .forbiddenHTTPDestination,
     ])
     func alwaysAllowPreview_hardStopForbidsSave(kind: RuleHardStopKind) {
         let preview = RulePinning.preview(record: wait(kind: kind), polarity: .allow)
@@ -747,7 +748,47 @@ struct RulePinningTests {
                 effects: [],
                 branchName: nil
             )
+        case .forbiddenHTTPDestination:
+            return PendingApproval(
+                id: ApprovalID(rawValue: "http"),
+                identity: ApprovalIdentity(session: SessionID(validating: "sess")!, agent: .pi),
+                action: .http(forbiddenHTTPAction()),
+                reason: .hostAsk,
+                continuation: .hostNative,
+                timeoutPolicy: .keepWaiting,
+                createdAt: now,
+                expiresAt: now.addingTimeInterval(3600),
+                state: .awaitingHuman
+            )
         }
+    }
+
+    private func forbiddenHTTPAction() -> HTTPAction {
+        let workspace = WorkingDirectory(validating: "/tmp/rv-http")!
+        let session = RuntimeSession(
+            id: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
+            host: .opencode,
+            workspace: workspace,
+            backend: .seatbelt,
+            startedAt: Date(timeIntervalSince1970: 0),
+            child: nil
+        )
+        let subject = RuntimeAdmissionSubject(session: session, policyWorkspace: workspace)
+        let canonical = try! canonicalizeHTTP(method: "GET", url: "https://127.0.0.1/").get()
+        return makeRuntimeHTTPAction(subject: subject, canonical: canonical, resolved: .empty)!
+    }
+
+    @Test func forbiddenHTTPHardStop_isNotProtectedSharedBranch() {
+        let stop = RulePinning.hardStop(in: wait(kind: .forbiddenHTTPDestination).action)
+        #expect(stop != .protectedSharedBranch)
+        #expect(stop == .forbiddenHTTPDestination)
+        let preview = RulePinning.preview(
+            record: wait(kind: .forbiddenHTTPDestination),
+            polarity: .allow
+        )
+        #expect(preview.sentence.contains("forbidden HTTP destination"))
+        #expect(preview.sentence.contains("shared branch") == false)
     }
 
     private func wait(

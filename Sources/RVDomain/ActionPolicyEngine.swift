@@ -74,80 +74,80 @@ public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
 /// consulted.
 public enum ActionPolicyEngine: Sendable {
     public enum Builtin {
-        public static let pack = PackID(rawValue: "builtin.action")
+        public static let pack = BuiltinRule.pack
 
         public static let workingTreeDiscard = Deny(
-            ruleID: RuleID(pack: pack, pattern: "working-tree-discard"),
+            ruleID: BuiltinRule.workingTreeDiscard.ruleID,
             reason: "Discarding working-tree files is a built-in hard deny."
         )
 
         public static let remoteSharedBranch = Deny(
-            ruleID: RuleID(pack: pack, pattern: "remote-shared-branch-mutation"),
+            ruleID: BuiltinRule.remoteSharedBranchMutation.ruleID,
             reason: "Remote mutation of a shared branch is a built-in hard deny."
         )
 
         public static let remoteBranchAsk = Deny(
-            ruleID: RuleID(pack: pack, pattern: "remote-branch-mutation"),
+            ruleID: BuiltinRule.remoteBranchMutation.ruleID,
             reason: "Remote branch mutation requires a human."
         )
 
-        public static let localBranchCreate = RuleID(pack: pack, pattern: "local-branch-create")
+        public static let localBranchCreate = BuiltinRule.localBranchCreate.ruleID
 
         public static let localBranchCreateReason =
             "Creating a local branch is a built-in hard allow."
 
         public static let protectedPath = Deny(
-            ruleID: RuleID(pack: pack, pattern: "protected-path-mutation"),
+            ruleID: BuiltinRule.protectedPathMutation.ruleID,
             reason: "Mutating a protected host path is a built-in hard deny."
         )
 
-        public static let inRepository = RuleID(pack: pack, pattern: "in-repo-write")
+        public static let inRepository = BuiltinRule.inRepoWrite.ruleID
 
         public static let inRepositoryReason =
             "In-repository filesystem writes are allowed by built-in policy."
 
         public static let outsideRepository = Deny(
-            ruleID: RuleID(pack: pack, pattern: "out-of-repo-write"),
+            ruleID: BuiltinRule.outOfRepoWrite.ruleID,
             reason: "Writing outside the repository is a built-in hard deny."
         )
 
-        public static let outsideRepositoryRead = RuleID(pack: pack, pattern: "out-of-repo-read")
+        public static let outsideRepositoryRead = BuiltinRule.outOfRepoRead.ruleID
 
         public static let outsideRepositoryReadReason =
             "Reading outside the repository is independently governable."
 
         public static let unresolvedFilesystem = Deny(
-            ruleID: RuleID(pack: pack, pattern: "unresolved-path"),
+            ruleID: BuiltinRule.unresolvedPath.ruleID,
             reason: "An unresolved repository or path cannot be treated as in-repo."
         )
 
         public static let uncovered = Deny(
-            ruleID: RuleID(pack: pack, pattern: "uncovered"),
+            ruleID: BuiltinRule.uncovered.ruleID,
             reason: "No semantic rule covered this action."
         )
 
         public static let secretRequestApproval = Deny(
-            ruleID: RuleID(pack: pack, pattern: "secret-request-approval"),
+            ruleID: BuiltinRule.secretRequestApproval.ruleID,
             reason: "The secret's approve rule requires a human for this request."
         )
 
         public static let packIncomplete = Deny(
-            ruleID: RuleID(pack: pack, pattern: "pack-incomplete"),
+            ruleID: BuiltinRule.packIncomplete.ruleID,
             reason: "Pack evaluation did not finish."
         )
 
         public static let unwrapLimited = Deny(
-            ruleID: RuleID(pack: pack, pattern: "unwrap-limited"),
+            ruleID: BuiltinRule.unwrapLimited.ruleID,
             reason: "Wrapper or interpreter nesting could not be analyzed safely."
         )
 
-        public static let publicHTTPSGet = RuleID(pack: pack, pattern: "public-https-get")
+        public static let publicHTTPSGet = BuiltinRule.publicHTTPSGet.ruleID
 
         public static let publicHTTPSGetReason =
             "A public HTTPS GET is allowed by built-in policy."
 
         public static let forbiddenHTTPDestination = Deny(
-            ruleID: RuleID(pack: pack, pattern: "forbidden-http-destination"),
+            ruleID: BuiltinRule.forbiddenHTTPDestination.ruleID,
             reason: "This HTTP destination is not a public HTTPS target."
         )
     }
@@ -497,7 +497,7 @@ public enum ActionPolicyEngine: Sendable {
     ) -> CoreHit {
         guard case .unprobed = filesystemWorld,
             case .hardDeny(let deny) = hit.decision,
-            deny.ruleID == Builtin.unresolvedFilesystem.ruleID
+            BuiltinRule(deny.ruleID) == .unresolvedPath
         else {
             return hit
         }
