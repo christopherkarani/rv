@@ -27,6 +27,20 @@ struct SecretsConfigurationStrictTests {
         #expect(reason(json) == "duplicate key variable")
     }
 
+    @Test func duplicateKeySpelledWithAUnicodeEscapeIsRefusedAndNamed() {
+        let json = #"{"version":1,"secrets":[{"name":"X","\u006eame":"Y","source":{"hostEnvironment":{"variable":"X"}},"delivery":{"environment":{}}}]}"#
+        #expect(reason(json) == "duplicate key name")
+    }
+
+    @Test func duplicateKeyWithAControlCharacterIsNamedEscaped() {
+        #expect(reason(#"{"version":1,"a\u0007":1,"a\u0007":2}"#) == #"duplicate key a\u0007"#)
+    }
+
+    @Test func keyTextInsideAStringValueIsNotADuplicate() {
+        let json = #"{"version":1,"secrets":[{"name":"X","description":"\"name\":\"Y\"","source":{"hostEnvironment":{"variable":"X"}},"delivery":{"environment":{}}}]}"#
+        #expect(reason(json) == nil)
+    }
+
     @Test func sameKeyInSiblingObjectsIsNotADuplicate() {
         let json = #"{"version":1,"secrets":[\#(Self.secret),{"name":"Y","source":{"hostEnvironment":{"variable":"Y"}},"delivery":{"environment":{}}}]}"#
         #expect(reason(json) == nil)

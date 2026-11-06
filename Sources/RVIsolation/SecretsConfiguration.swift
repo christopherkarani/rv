@@ -287,9 +287,8 @@ extension SecretsConfiguration {
         let parsed: JSONSpellingValue
         do {
             parsed = try JSONSpellingParser.parse(data, maximumDepth: 63)
-        } catch .duplicateKey {
-            let key = SecretsDecoding.firstDuplicateKey(in: data).map { DisplayedText.field($0) } ?? "in the document"
-            return .failure(.invalid("duplicate key \(key)"))
+        } catch .duplicateKey(let key) {
+            return .failure(.invalid("duplicate key \(DisplayedText.field(key))"))
         } catch {
             return .failure(.invalid("not a JSON object"))
         }
@@ -658,12 +657,11 @@ enum SecretsDecoding {
             }
             try onlyKeys(object, ["methods", "path"], at: at)
             let methods: Set<String>?
-            switch object["methods"] {
-            case .string("*")?:
+            if case .string("*")? = object["methods"] {
                 methods = nil
-            case let raw? where raw.stringList.map({ Set($0).count == $0.count }) == true:
-                methods = Set(raw.stringList ?? [])
-            default:
+            } else if let names = object["methods"]?.stringList, Set(names).count == names.count {
+                methods = Set(names)
+            } else {
                 throw Failure("\(at).methods must be \"*\" or a list of distinct upper-case HTTP methods")
             }
             guard let path = object["path"]?.string else {
@@ -786,7 +784,7 @@ extension JSONSpellingValue {
         return nil
     }
 
-    /// Every element must be a string, (a mixed array is refused).
+    /// Every element must be a string; a mixed array is refused.
     fileprivate var stringList: [String]? {
         guard case .array(let items) = self else { return nil }
         var list: [String] = []
@@ -795,46 +793,5 @@ extension JSONSpellingValue {
             list.append(text)
         }
         return list
-    }
-}
-
-extension SecretsDecoding {
-    /// The parser reports a repeated key without naming it. This walks the
-    /// bytes it already accepted up to that point and returns the first
-    /// repeat, so the refusal can say which key to fix.
-    static func firstDuplicateKey(in data: Data) -> String? {
-        struct Frame {
-            var isObject: Bool
-            var expectingKey: Bool
-            var keys: Set<String> = []
-        }
-        let bytes = Array(data)
-        var stack: [Frame] = []
-        var index = 0
-        while index < bytes.count {
-            switch bytes[index] {
-            case UInt8(ascii: "\""):
-                let start = index
-                index += 1
-                while index < bytes.count, bytes[index] != UInt8(ascii: "\"") {
-                    index += bytes[index] == UInt8(ascii: "\\") ? 2 : 1
-                }
-                guard index < bytes.count, var frame = stack.last, frame.isObject, frame.expectingKey else { break }
-                guard case .string(let key)? = try? JSONSpellingParser.parse(Data(bytes[start...index])) else {
-                    return nil
-                }
-                if frame.keys.insert(key).inserted == false { return key }
-                frame.expectingKey = false
-                stack[stack.count - 1] = frame
-            case UInt8(ascii: "{"): stack.append(Frame(isObject: true, expectingKey: true))
-            case UInt8(ascii: "["): stack.append(Frame(isObject: false, expectingKey: false))
-            case UInt8(ascii: "}"), UInt8(ascii: "]"): _ = stack.popLast()
-            case UInt8(ascii: ","):
-                if stack.last?.isObject == true { stack[stack.count - 1].expectingKey = true }
-            default: break
-            }
-            index += 1
-        }
-        return nil
     }
 }
