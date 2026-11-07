@@ -182,7 +182,7 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 3 | `explain` | `ExplainParams` | `ExplainReply` | Requires prior Hello. |
 | 4 | `classify` | `ClassifyParams` | `ClassifyReply` | Requires prior Hello. |
 | 5 | `listPacks` | `{}` | `ListPacksReply` | Read-only; refreshes catalog from disk. |
-| 6 | `setPackEnabled` | `SetPackEnabledParams` | `SetPackEnabledReply` | **Operator-only**: mutates config + rebuilds compile set. |
+| 6 | `setPackEnabled` | `SetPackEnabledParams` | `SetPackEnabledReply` | **Operator-only**: mutates config + rebuilds compile set. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 7 | `doctorSnapshot` | `{}` | `DoctorSnapshotReply` | Health + versions. No separate version RPC exists. |
 | 8 | `pendingList` | `{}` | `PendingListReply` | Read-only projection + generation. |
 | 9 | `pendingWatch` | `PendingWatchParams` | `PendingWatchReply` | **Unary poll**, not a stream: unchanged generation returns `{same generation, items: []}`. |

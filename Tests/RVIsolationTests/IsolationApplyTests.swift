@@ -495,8 +495,14 @@ struct IsolationApplyTests {
             Issue.record("control-path deny must follow the workspace write-tree allow")
             return
         }
-        let afterDeny = tail[denyRange.upperBound...]
-        #expect(afterDeny.contains("file-write*") == false)
+        let afterDeny = String(tail[denyRange.upperBound...])
+        // Only more denies (the run-later paths) may follow: an allow that
+        // grants file-write after the deny would undo it.
+        let laterRules = afterDeny.components(separatedBy: "\n(").dropFirst()
+        for rule in laterRules where rule.contains("file-write") {
+            #expect(rule.hasPrefix("deny"), "a file-write rule after the control deny must be a deny: \(rule)")
+        }
+        #expect(afterDeny.contains("\(escaped)/.claude/settings.json"))
     }
 
     @Test func compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() throws {

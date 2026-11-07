@@ -1291,6 +1291,55 @@ func workspaceControlDenies(workspacePath: String) -> String {
         (literal "\(git)"))
     (deny file-write-unlink file-write-create
         (literal "\(config)"))
+    """ + "\n" + workspaceRunLaterDenies(workspacePath: workspacePath)
+}
+
+/// Agent and editor config inside the workspace that a host tool reads and
+/// acts on after the run, outside any cage (ISO-06 extension).
+///
+/// A caged agent that writes a hook into `.claude/settings.json`, a server
+/// into `.mcp.json`, or a task into `.vscode/tasks.json` gets that code run
+/// unsandboxed the next time the developer uses the tool on the host. These
+/// files are therefore treated like `.git/hooks`: the cage cannot create,
+/// rewrite or remove them.
+///
+/// Instruction files (`CLAUDE.md`, `AGENTS.md`) and skill folders are not
+/// listed: agents edit them as normal work, and they carry instructions
+/// rather than code the host runs on its own. Changes to them belong in the
+/// review shown before publish.
+enum WorkspaceRunLaterPaths {
+    /// Workspace-relative files a host agent, editor or shell executes or
+    /// trusts on its own.
+    static let files = [
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".mcp.json",
+        ".codex/config.toml",
+        ".cursor/hooks.json",
+        ".cursor/mcp.json",
+        ".vscode/tasks.json",
+        ".envrc",
+    ]
+
+    /// Parent directories whose own entry the cage may not create or
+    /// remove. Without this, a cage could build a replacement directory
+    /// under another name and rename it into place, which writes the files
+    /// above without touching their paths. Same pattern as `.config`.
+    static let pinnedDirectories = [".claude", ".codex", ".cursor", ".vscode"]
+}
+
+func workspaceRunLaterDenies(workspacePath: String) -> String {
+    let files = WorkspaceRunLaterPaths.files
+        .map { "        (literal \"\(escapeSeatbeltSubpath(workspacePath + "/" + $0))\")" }
+        .joined(separator: "\n")
+    let directories = WorkspaceRunLaterPaths.pinnedDirectories
+        .map { "        (literal \"\(escapeSeatbeltSubpath(workspacePath + "/" + $0))\")" }
+        .joined(separator: "\n")
+    return """
+    (deny file-write*
+    \(files))
+    (deny file-write-unlink file-write-create
+    \(directories))
     """
 }
 

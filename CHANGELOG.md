@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- Analytics honours the documented flat `"analytics.enabled": false` key as well as the nested form; when the two disagree, the opt-out wins. Events now report the product version instead of the IPC protocol version.
 - Workspace publish refuses escaping symlinks; read-only workspace files are copied before their mode is applied. (#445, #490)
 - Clocked vnode syscalls run on a bounded worker pool. (#444)
 - `rv` commands guard against root fallback and have a `login` help topic. (#498)
@@ -41,6 +42,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Security
 
+- A same-user process can no longer enable or disable packs, save rules or resolve approvals over the SDK socket. Owner mutations stay refused on every generic IPC path; the Python SDK's `set_pack_enabled` now raises `AuthorizationDenied`.
+- Contained runtimes (Seatbelt and the macOS guest) can no longer create, rewrite or remove agent and editor config that host tools run later: `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json`, `.cursor/mcp.json`, `.vscode/tasks.json` and `.envrc`. The cage also cannot create or remove the `.claude`, `.codex`, `.cursor` and `.vscode` directories at the workspace root.
 - Gate bypasses closed: in-place editors, interpreter writes, checkout paths, Cursor Grep/reads, Claude file tools, and a no-judge interpreter bypass. Installer downloads are now verified. (#442, #488, #491)
 - Self-protection matches `rv` and its launchers case-, Unicode- and escape-insensitively. (#499)
 - P0/P1 gaps in secrets handling and the secret-path guard fixed; `SecretValue` is redacted in reflection and gateway-only sources are refused on non-gateway delivery. (#523, #526)

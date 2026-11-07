@@ -395,16 +395,18 @@ public actor ServiceRuntime {
         return IPCResponse(id: request.id, result: result)
     }
 
-    /// The production SDK socket has already attested a same-UID peer.
-    /// Generic dispatch keeps the role matrix (evaluate, control reads, and
-    /// owner mutations stay denied for a role-less context). TTY attestation
-    /// and launch proposals stay on that matrix even for this session.
-    private static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
+    /// The production SDK socket has already attested a same-UID peer, so
+    /// it may evaluate, consult hooks and read control state without a
+    /// component role. Owner mutations stay on the role matrix, which never
+    /// admits them over generic IPC: a same-user process (including one an
+    /// agent started) must not disable packs or save rules by reaching the
+    /// socket. TTY attestation and launch proposals stay on the matrix too.
+    static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
         guard enabled else { return false }
         switch ServiceMethodAuthorization.requirement(for: method) {
-        case .ttyAttestation, .launchProposal:
+        case .ttyAttestation, .launchProposal, .ownerMutation:
             return false
-        case .diagnostic, .agent, .hookConsult, .controlRead, .ownerMutation:
+        case .diagnostic, .agent, .hookConsult, .controlRead:
             return true
         }
     }

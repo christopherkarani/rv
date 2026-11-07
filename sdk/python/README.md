@@ -56,7 +56,8 @@ installed RV runtime ≥ 0.1.5 speaking `rv.ipc.v1`.
 - Sensitive operations are gated by construction: `pending_resolve` only resolves
   items obtained from the approvals iterator (fingerprint + identity echo);
   `rule_save` only persists drafts from `rule_preview`; `set_pack_enabled` is
-  operator-only. There are no session/exec/PTY, secrets, MCP, or supervisor APIs
+  operator-only, and the service refuses it over the SDK socket
+  (`AuthorizationDenied`) so a same-user process cannot disable packs. There are no session/exec/PTY, secrets, MCP, or supervisor APIs
   in v1 — RV exposes none of those over this boundary.
 
 ## Layout

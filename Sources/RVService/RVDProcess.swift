@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVAnalytics
+import RVDomain
 import RVIPC
 import RVPolicy
 import Synchronization
@@ -9,7 +10,7 @@ import Synchronization
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let socketURL = try UnixSocketPath.production()
-        let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
+        let analytics = AnalyticsBootstrap.makeLive(productVersion: ProductVersion.semver)
         let hosts = LiveWorkspaceHostRegistry()
         let ceremonies = WorkspaceOperatorCeremonyService(hosts: hosts)
         let actionCeremonies = ActionApprovalCeremonyService(hosts: hosts)
@@ -79,6 +80,7 @@ private final class ListenerSlot: Sendable {
 #else
 import Foundation
 import RVAnalytics
+import RVDomain
 import RVIPC
 import RVPolicy
 import Synchronization
@@ -86,7 +88,7 @@ import Synchronization
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let socketURL = try UnixSocketPath.production()
-        let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
+        let analytics = AnalyticsBootstrap.makeLive(productVersion: ProductVersion.semver)
         let ceremonies = WorkspaceOperatorCeremonyService()
         let actionCeremonies = ActionApprovalCeremonyService()
         let runtime = ServiceRuntime(
