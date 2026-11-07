@@ -10,6 +10,8 @@ on:
       - "Sources/RVIsolation/EgressProxy.swift"
       - "Sources/RVIsolation/EgressAdmission.swift"
       - "Sources/RVEngine/**"
+      - "Sources/RVPacks/**"
+      - "Sources/RVDomain/**"
       - "Package.swift"
       - ".github/workflows/fuzz.yml"
   schedule:
@@ -31,9 +33,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        harness: [gateway-request, tls-client-hello, normalize]
+        include:
+          # max_len reaches past each parser's cap: the 64 KiB gateway head,
+          # the 16 KiB TLS record (+ split byte), and commandByteCap (65,536).
+          - { harness: gateway-request, dir: GatewayRequest, max_len: 66000, dict: Fuzz/GatewayRequest/http.dict }
+          - { harness: tls-client-hello, dir: TLSClientHello, max_len: 17100, dict: "" }
+          - { harness: normalize, dir: Normalize, max_len: 70000, dict: Fuzz/Normalize/shell.dict }
     env:
       RV_FUZZ: "1"
+      # Linux-only leak detection; Fuzz/lsan.supp holds one-time global
+      # allocations only, so per-input leaks still fail the run.
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/Fuzz/lsan.supp
     steps:
       - uses: actions/checkout@v4
 
@@ -61,11 +71,34 @@ jobs:
           swift build --product "rv-fuzz-${{ matrix.harness }}" \
             -Xswiftc -sanitize=fuzzer,address --scratch-path .build/fuzz
 
-      - name: Fuzz 60 s
+      - name: Seed corpus
+        env:
+          DIR: ${{ matrix.dir }}
         run: |
-          mkdir -p "corpus" "artifacts"
-          ".build/fuzz/debug/rv-fuzz-${{ matrix.harness }}" corpus \
-            -max_total_time=60 -timeout=10 -rss_limit_mb=4096 -artifact_prefix=artifacts/
+          mkdir -p corpus artifacts
+          if [ -d "Fuzz/$DIR/seeds" ]; then cp Fuzz/"$DIR"/seeds/* corpus/; fi
+          if [ "$DIR" = Normalize ]; then
+            # One file per `command` string in the gate corpora.
+            python3 -I - Tests/RVEngineTests/Fixtures/corpus corpus <<'PY'
+          import json, pathlib, sys
+          source, out = map(pathlib.Path, sys.argv[1:])
+          for name in ["deny", "near-miss", "door-bypass", "agent-parse-stress"]:
+              cases = json.loads((source / f"{name}.json").read_text())["cases"]
+              for i, case in enumerate(c for c in cases if c.get("command")):
+                  (out / f"{name}-{i}").write_text(case["command"])
+          PY
+          fi
+          echo "seed inputs: $(find corpus -type f | wc -l)"
+
+      - name: Fuzz 60 s
+        env:
+          HARNESS: ${{ matrix.harness }}
+          MAX_LEN: ${{ matrix.max_len }}
+          DICT: ${{ matrix.dict }}
+        run: |
+          ".build/fuzz/debug/rv-fuzz-$HARNESS" corpus \
+            -max_total_time=60 -timeout=10 -rss_limit_mb=4096 -max_len="$MAX_LEN" \
+            ${DICT:+-dict="$DICT"} -artifact_prefix=artifacts/
 
       - name: Upload crash inputs
         if: failure()

@@ -53,7 +53,18 @@ On Linux drop `SDKROOT`. The two `RVIsolation` harnesses run several
 hundred thousand inputs a minute; `rv-fuzz-normalize` evaluates every
 input twice through both doors and runs a few thousand. Seed its corpus
 directory with the `command` strings from
-`Tests/RVEngineTests/Fixtures/corpus/*.json` for a faster start.
+`Tests/RVEngineTests/Fixtures/corpus/*.json` for a faster start (the
+workflow's "Seed corpus" step does this); the other two start from
+`Fuzz/<Harness>/seeds`. Pass `-dict=Fuzz/Normalize/shell.dict` or
+`-dict=Fuzz/GatewayRequest/http.dict`, and a `-max_len` past the parser's
+cap (CI uses 70000 for normalize, so commands over the 65,536-byte
+`commandByteCap` are generated).
+
+Leak detection is Linux-only: LeakSanitizer is not supported with
+AddressSanitizer on macOS. On Linux, pass
+`LSAN_OPTIONS=suppressions=$PWD/Fuzz/lsan.supp`, which holds only one-time
+global allocations (the normalize harness's compiled packs); any other
+leak fails the run.
 
 Replace `normalize` with `gateway-request` or `tls-client-hello`. Pass a
 crash file instead of a directory to replay it:
@@ -66,9 +77,11 @@ suite), then a fix in its own PR.
 Open finding: heredoc masking blanks the first occurrence of the body text
 anywhere in the command, so `git reset --hard` followed by a heredoc whose
 body is `git` is allowed. `NormalizeFuzzTests.heredocBodyRepeatingAnEarlierWordDoesNotHideIt`
-holds it as a known issue. Until it is fixed the twin reports heredoc
-allows as a known issue and `rv-fuzz-normalize` skips heredoc suffixes in
-the fail-closed check.
+holds it as a known issue. Until it is fixed the twin reports allows of
+that exact shape (a line after a `<<` opener whose text already occurs
+earlier in the command) as a known issue, and `rv-fuzz-normalize` skips
+only those inputs in the fail-closed check; every other heredoc and
+here-string input is still checked.
 
 CI runs each harness for 60 seconds on Linux in the `fuzz` workflow. It is
 not a required check.

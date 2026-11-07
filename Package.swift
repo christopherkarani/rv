@@ -320,13 +320,13 @@ let fuzzHarness: [SwiftSetting] = [.unsafeFlags(["-parse-as-library"])]
 let fuzzTargets: [Target] = Context.environment["RV_FUZZ"] == "1" ? [
     .executableTarget(
         name: "rv-fuzz-gateway-request", dependencies: ["RVIsolation"], path: "Fuzz/GatewayRequest",
-        swiftSettings: fuzzHarness),
+        exclude: ["http.dict", "seeds"], swiftSettings: fuzzHarness),
     .executableTarget(
         name: "rv-fuzz-tls-client-hello", dependencies: ["RVIsolation"], path: "Fuzz/TLSClientHello",
-        swiftSettings: fuzzHarness),
+        exclude: ["seeds"], swiftSettings: fuzzHarness),
     .executableTarget(
         name: "rv-fuzz-normalize", dependencies: ["RVDomain", "RVEngine", "RVPacks"], path: "Fuzz/Normalize",
-        swiftSettings: fuzzHarness),
+        exclude: ["shell.dict"], swiftSettings: fuzzHarness),
 ] : []
 
 let package = Package(
