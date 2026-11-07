@@ -276,6 +276,56 @@
       "id": "near.heredoc-crlf-body-lf-header",
       "command": "cat <<'EOF' > f\nline one\r\ngit reset --hard\r\nEOF",
       "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-then-ls",
+      "command": "rm -rf /tmp/build && ls",
+      "expected": "allow"
+    },
+    {
+      "id": "near.cd-then-tmp-cleanup",
+      "command": "cd x && rm -rf /tmp/foo",
+      "expected": "allow"
+    },
+    {
+      "id": "near.make-clean-tmp-cleanup-make",
+      "command": "make clean && rm -rf /tmp/out && make",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-or-true",
+      "command": "rm -rf /tmp/x || true",
+      "expected": "allow"
+    },
+    {
+      "id": "near.sudo-tmp-cleanup-then-ls",
+      "command": "sudo rm -rf /tmp/foo && ls",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-around-abs-path-brew",
+      "command": "rm -rf /tmp/x\n/opt/homebrew/bin/brew update\nrm -rf /tmp/y",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-around-abs-path-make",
+      "command": "rm -rf /tmp/x\n/usr/bin/make\nrm -rf /tmp/y",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-around-home-script",
+      "command": "rm -rf /tmp/x\n~/bin/build.sh\nrm -rf /tmp/y",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-abs-path-and-cleanup",
+      "command": "rm -rf /tmp/x\n/bin/ls && rm -rf /tmp/b",
+      "expected": "allow"
+    },
+    {
+      "id": "near.rm-recursive-then-force-with-lease",
+      "command": "rm --recursive a && git push --force-with-lease && rm -rf /tmp/x",
+      "expected": "allow"
     }
   ]
 }

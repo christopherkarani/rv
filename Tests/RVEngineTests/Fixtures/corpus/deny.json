@@ -890,6 +890,54 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.fork-bomb-then-safe-tmp-cleanup-newline",
+      "command": ":(){ :|:& };:\nrm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.fork-bomb-then-safe-tmp-cleanup-and",
+      "command": ":(){ :|:& };: && rm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.safe-tmp-cleanup-then-fork-bomb",
+      "command": "rm -rf /tmp/x && :(){ :|:& };:",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.subst-echo-cp-then-delete",
+      "command": "echo $(cp -a /etc /tmp/s && rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-ls-cp-then-delete",
+      "command": "ls $(cp -a /etc /tmp/s; rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-assign-cp-then-delete",
+      "command": "x=$(cp -a /etc /tmp/s && rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-echo-ln-then-delete",
+      "command": "echo $(ln -s /etc /tmp/e && rm -rf /tmp/e)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:ln-symlink-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-echo-rsync-then-delete",
+      "command": "echo $(rsync -a /etc /tmp/s && rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rsync-sensitive-then-delete"
     }
   ]
 }
