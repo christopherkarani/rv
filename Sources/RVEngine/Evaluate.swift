@@ -192,15 +192,19 @@ private func evaluateSingle<E: PatternEngine>(
             }
         }
         // In the full view of a multi-segment command a safe match vouches only
-        // for segments the segment pass already judged; a destructive match that
-        // spans segments (fork bomb, copy-then-delete) was never seen there, so
-        // the pack still runs and only spanning matches count.
+        // for segments the segment pass already judged. A rule written to match
+        // across segments (fork bomb, copy-then-delete) was never seen there, so
+        // it still runs and its spanning matches count. Other rules stay
+        // suppressed: their `.*`/`\s` crossing a separator is incidental.
         let spanningOnly = skippedBySafe && !segments.isEmpty
         if skippedBySafe && !spanningOnly {
             continue
         }
 
         for rule in pack.destructive {
+            if spanningOnly && !rule.spansSegments {
+                continue
+            }
             attempts += 1
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))

@@ -8,6 +8,15 @@ public struct CompiledNamedPattern<Compiled: Sendable>: Sendable {
 public struct CompiledDestructive<Compiled: Sendable>: Sendable {
     public var rule: DestructiveRule
     public var compiled: Compiled
+    /// Whether the rule names a command separator, so it is written to match
+    /// across segments (fork bomb, copy-then-delete).
+    public var spansSegments: Bool
+
+    init(rule: DestructiveRule, compiled: Compiled) {
+        self.rule = rule
+        self.compiled = compiled
+        self.spansSegments = patternNamesSegmentSeparator(rule.pattern)
+    }
 }
 
 public struct CompiledPack<Compiled: Sendable>: Sendable {
