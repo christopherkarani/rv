@@ -1,0 +1,75 @@
+name: fuzz
+
+# libFuzzer smoke run of each harness (docs/fuzzing.md). Not a required
+# check: a finding here gets a regression test and its own fix PR.
+on:
+  pull_request:
+    paths:
+      - "Fuzz/**"
+      - "Sources/RVIsolation/SecretGateway*.swift"
+      - "Sources/RVIsolation/EgressProxy.swift"
+      - "Sources/RVIsolation/EgressAdmission.swift"
+      - "Sources/RVEngine/**"
+      - "Package.swift"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: libfuzzer ${{ matrix.harness }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [gateway-request, tls-client-hello, normalize]
+    env:
+      RV_FUZZ: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache official Swift Linux tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/swift
+          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+
+      - name: Tarball runtime deps (not apt swift)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils gcc git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 \
+            libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 libsqlite3-dev \
+            libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev
+
+      - name: Install official Swift 6.4 Linux tarball
+        run: |
+          bin="$(Scripts/install-official-swift-linux.sh --print-bin)"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Build rv-fuzz-${{ matrix.harness }}
+        run: |
+          swift build --product "rv-fuzz-${{ matrix.harness }}" \
+            -Xswiftc -sanitize=fuzzer,address --scratch-path .build/fuzz
+
+      - name: Fuzz 60 s
+        run: |
+          mkdir -p "corpus" "artifacts"
+          ".build/fuzz/debug/rv-fuzz-${{ matrix.harness }}" corpus \
+            -max_total_time=60 -timeout=10 -rss_limit_mb=4096 -artifact_prefix=artifacts/
+
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.harness }}-artifacts
+          path: artifacts/

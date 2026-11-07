@@ -313,6 +313,22 @@ let cliTestTargets: [Target] = [
     ),
 ]
 
+// libFuzzer harnesses (docs/fuzzing.md). Only in the graph when RV_FUZZ=1,
+// so the default build never sees targets without a `main`. Library
+// parsing keeps Swift from emitting one; `-sanitize=fuzzer` supplies it.
+let fuzzHarness: [SwiftSetting] = [.unsafeFlags(["-parse-as-library"])]
+let fuzzTargets: [Target] = Context.environment["RV_FUZZ"] == "1" ? [
+    .executableTarget(
+        name: "rv-fuzz-gateway-request", dependencies: ["RVIsolation"], path: "Fuzz/GatewayRequest",
+        swiftSettings: fuzzHarness),
+    .executableTarget(
+        name: "rv-fuzz-tls-client-hello", dependencies: ["RVIsolation"], path: "Fuzz/TLSClientHello",
+        swiftSettings: fuzzHarness),
+    .executableTarget(
+        name: "rv-fuzz-normalize", dependencies: ["RVDomain", "RVEngine", "RVPacks"], path: "Fuzz/Normalize",
+        swiftSettings: fuzzHarness),
+] : []
+
 let package = Package(
     name: "rv",
     platforms: [
@@ -329,6 +345,6 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-collections.git", exact: "1.6.0"),
     ] + extraPackageDependencies,
     targets: coreLibraryTargets + isolationExecTargets + terminalProbeTargets + serviceLibraryAndDaemon + cliTargets
-        + coreTestTargets + serviceTestTargets + cliTestTargets,
+        + coreTestTargets + serviceTestTargets + cliTestTargets + fuzzTargets,
     swiftLanguageModes: [.v6]
 )
