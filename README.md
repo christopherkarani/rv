@@ -64,8 +64,10 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
 - **95 rule packs** — git, filesystem, disks, cloud CLIs, Kubernetes,
   databases, Terraform, CI/CD, payments, and more. Safe patterns run
   first; the first blocking hit denies. Three packs are on by default
-  (`core.filesystem`, `core.git`, `system.disk`); enable the rest by
-  pack, category, or preset with `rv packs enable`.
+  (`core.filesystem`, `core.git`, `system.disk`); browse the rest with
+  `rv packs`. Enabling more from the CLI waits on the owner route
+  described below; until then list them under `[packs] enabled = [...]`
+  in `~/.config/rv/config.toml`.
 - **Script gate** — `npm test` can't hide a payload: rv evaluates the
   actual `pre`/`post`/body scripts in `package.json`, not just the
   command you see.
@@ -110,18 +112,26 @@ your terminal — the agent can't redeem its own code:
 rv allow-once a1b2c3    # next matching call in this directory runs once
 ```
 
-Need it permanently? `rv allowlist add <rule-id>`. Typed rules live in
-`~/.config/rv/policy.toml` (`rv policy show`); `rv safety set strict`
-tightens everything to deny-by-default for generated-output deletes.
+Redeeming needs owner authentication (Touch ID or your password) through
+the signed CLI, so today it works on macOS only.
+
+Typed rules live in `~/.config/rv/policy.toml` (`rv policy show`).
+Commands that change the gate itself (`rv allowlist add`,
+`rv packs enable`, `rv safety set`, policy edits, `rv egress approve`)
+refuse for now: they wait on an authenticated owner route so an agent
+running as you cannot weaken its own guard. See
+[the design](docs/plans/owner-action-route/SPEC.md).
 
 ## Beyond the shell
 
 rv is one binary, 25 commands. The rest of the surface:
 
-- **Secrets without exposure** — agents see placeholders, never values.
-  Real bytes are injected at the boundary from Keychain, 1Password,
-  Vault, AWS/GCP/Azure, Infisical, or Bitwarden, then scrubbed from
-  everything that comes back. `rv secrets scan` + a git pre-commit hook
+- **Secrets without exposure** — agents in a contained workspace
+  (macOS) see placeholders, never values. Real bytes are injected at the
+  boundary from Keychain, 1Password, Vault, AWS/GCP/Azure, Infisical, or
+  Bitwarden, then scrubbed from everything that comes back.
+  Hook-guarded agents get secret-path blocking instead; stdio MCP servers
+  receive the real value. `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
 - **App logins, once** — `rv login connect vercel` imports the Vercel or
   GitHub login you already have (CLI auth file, token variable, or
@@ -134,21 +144,30 @@ rv is one binary, 25 commands. The rest of the surface:
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
-  tunnels, binary pinning, and a human review queue (`rv egress`).
-- **Tamper-evident audit** — every decision lands in a SHA-256
-  hash-chained `audit.jsonl`. Verify with `rv audit verify`, export
+  tunnels and binary pinning. Blocked hosts are queued for review
+  (`rv egress`); approving them waits on the owner route above.
+- **Tamper-evident audit** — every deny and every override
+  (allow-once, allowlist, rebase recovery), plus MCP and secret events,
+  lands in a SHA-256 hash-chained `audit.jsonl` (rule and host, never
+  command text). Verify with `rv audit verify`, export
   as OCSF 1.3.0 to your SIEM.
 - **Session forensics** — `rv scan` replays past agent sessions
   (Claude, Codex, Cursor, Grok, Hermes, OpenClaw, OpenCode, Pi)
-  offline and reports what *would* have been denied.
+  offline and reports which commands your enabled packs would have
+  denied.
 - **Signed org policy** — fleet-wide, restrict-only rules signed with
-  Ed25519 and pinned root-owned on disk. User config can never loosen
-  them. `rv report` emits posture for MDM/fleet collection.
+  Ed25519 and pinned root-owned on disk: MCP tool rules, secret
+  sources, audit forwarding, and gate requirements (packs every agent
+  must run under, strict safety). User config can never loosen them.
+  `rv report` emits posture for MDM/fleet collection.
 - **Contained workspaces (macOS)** — `rv opencode` / `rv workspace`
   run agents on a persistent per-project host under a deny-default
   Seatbelt profile: workspace-only writes, proxied HTTPS, no Keychain,
-  no host signals. Linux refuses rather than downgrade. This is a
-  hardening layer, not a finished isolation boundary — see the
+  no host signals, and the same packs you enabled for your agents.
+  `rv workspace run --microvm <image>` runs the command in a
+  network-less Linux micro-VM instead (macOS 26+). Linux hosts refuse
+  rather than downgrade. This is a hardening layer, not a finished
+  isolation boundary — see the
   [acceptance audit](docs/security/runtime-acceptance.md).
 
 ## Everyday commands
@@ -157,7 +176,6 @@ rv is one binary, 25 commands. The rest of the surface:
 rv test 'rm -rf /'          # evaluate a command, don't run it
 rv explain 'rm -rf /'       # why would this block?
 rv packs                    # browse the 95 packs
-rv packs enable cloud.aws   # turn on more coverage
 rv blocks                   # what got denied lately?
 rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
@@ -167,7 +185,8 @@ rv uninstall                # remove everything rv owns (owner-auth)
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with
-`"analytics.enabled": false` in `~/.config/rv/config.json`.
+`"analytics.enabled": false` (or `{"analytics": {"enabled": false}}`)
+in `~/.config/rv/config.json`.
 
 ## For developers
 
