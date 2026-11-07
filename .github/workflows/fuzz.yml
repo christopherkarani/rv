@@ -41,8 +41,9 @@ jobs:
           - { harness: normalize, dir: Normalize, max_len: 70000, dict: Fuzz/Normalize/shell.dict }
     env:
       RV_FUZZ: "1"
-      # Linux-only leak detection; Fuzz/lsan.supp holds one-time global
-      # allocations only, so per-input leaks still fail the run.
+      # Linux-only leak detection; Fuzz/lsan.supp holds only allocations
+      # LSan cannot trace (NSRegularExpression internals), so other leaks
+      # still fail the run.
       LSAN_OPTIONS: suppressions=${{ github.workspace }}/Fuzz/lsan.supp
     steps:
       - uses: actions/checkout@v4

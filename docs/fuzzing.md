@@ -62,9 +62,11 @@ cap (CI uses 70000 for normalize, so commands over the 65,536-byte
 
 Leak detection is Linux-only: LeakSanitizer is not supported with
 AddressSanitizer on macOS. On Linux, pass
-`LSAN_OPTIONS=suppressions=$PWD/Fuzz/lsan.supp`, which holds only one-time
-global allocations (the normalize harness's compiled packs); any other
-leak fails the run.
+`LSAN_OPTIONS=suppressions=$PWD/Fuzz/lsan.supp`. It suppresses only
+`_CFRegularExpressionCreate`: LeakSanitizer reports corelibs Foundation's
+ICU regex allocation as leaked even while its `NSRegularExpression` is
+alive (the normalize harness's compiled packs, Foundation's pattern cache).
+Any other leak fails the run.
 
 Replace `normalize` with `gateway-request` or `tls-client-hello`. Pass a
 crash file instead of a directory to replay it:

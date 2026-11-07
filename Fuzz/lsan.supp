@@ -1,8 +1,11 @@
 # LeakSanitizer suppressions for the libFuzzer harnesses (fuzz workflow,
-# Linux). Keep each entry to one known one-time allocation so per-input
-# leaks still fail the run.
+# Linux). Keep this list to allocations LeakSanitizer cannot trace, so any
+# other per-input leak still fails the run.
 #
-# rv-fuzz-normalize: the private global `gate` compiles the day-one packs
-# once (NSRegularExpression via ICUPatternEngine.compile) and lives for the
-# whole process. Matches only stacks through that global's initializer.
-leak:rv_fuzz_normalize4gate
+# swift-corelibs-foundation's NSRegularExpression: LSan reports the ICU
+# regex that _CFRegularExpressionCreate allocates as a direct leak even
+# while the owning object is alive (seen for rv-fuzz-normalize's global
+# `gate`, whose compiled packs live for the process, and for Foundation's
+# own pattern cache behind `replacingOccurrences(options: .regularExpression)`).
+# rv compiles only constant patterns, so these are one-time allocations.
+leak:_CFRegularExpressionCreate
