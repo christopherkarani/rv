@@ -106,6 +106,9 @@ extension WorkspaceTUIReducer {
                 command, navigatorIndexBefore: navigatorIndexBefore, confirmPaneBefore: confirmPaneBefore,
                 to: &next, effects: &effects, presentationChanged: &presentationChanged
             )
+        case .enterReview, .reviewMove, .reviewTop, .reviewBottom, .reviewApprove, .reviewDenyStart,
+             .reviewDenySubmit, .exitReview:
+            applyReviewCommand(command, to: &next, effects: &effects, presentationChanged: &presentationChanged)
         case .detach, .help, .dismissOverlay, .finishResize, .exitNavigator, .dismissConfirm:
             break
         }
@@ -425,7 +428,9 @@ extension WorkspaceTUIReducer {
         case .runCommand(let input, _):
             next.mode = .runCommand(input: input + text, error: nil)
             presentationChanged = true
-        case .prefix, .help, .launcher, .resize, .scroll, .navigator, .confirmCancel:
+        // Paste never drives the review pane, including the deny reason.
+        case .prefix, .help, .launcher, .resize, .scroll, .navigator, .confirmCancel, .review,
+             .reviewDenyReason:
             break
         }
     }

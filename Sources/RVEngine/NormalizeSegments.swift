@@ -7,23 +7,26 @@ func maskNonExecutingHeredocBodies(_ text: String) -> String {
 }
 
 /// Heredoc masking plus the masked body for M-07 payload binding.
-/// The body is one segment when masking fires, empty otherwise.
+/// The body is one segment when masking fires, empty otherwise. Only the
+/// body at its parsed position is blanked, never an earlier copy of its
+/// text; a body that cannot be placed unambiguously stays visible.
 func maskNonExecutingHeredocBodiesDetailed(_ text: String) -> (view: String, masked: [String]) {
-    guard let heredoc = extractHeredoc(text), heredoc.body.isEmpty == false else {
+    guard let heredoc = locateHeredoc(text), heredoc.body.isEmpty == false else {
         return (text, [])
     }
     if peelExecutingSink(text, workingDirectory: nil) != nil {
         return (text, [])
     }
-    guard let range = text.range(of: heredoc.body) else {
+    guard let range = heredoc.bodyRange else {
         return (text, [])
     }
+    let body = String(text[range])
     return (
         text.replacingCharacters(
             in: range,
-            with: String(repeating: " ", count: heredoc.body.count)
+            with: String(repeating: " ", count: body.count)
         ),
-        [heredoc.body]
+        [body]
     )
 }
 
