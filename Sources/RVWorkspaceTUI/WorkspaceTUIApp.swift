@@ -113,6 +113,12 @@ struct WorkspaceShellView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
+            if let badge = WorkspaceReviewText.badge(snapshot.review) {
+                Text("⚑ \(badge)")
+                    .foregroundStyle(Color.yellow)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+            }
             Text("● \(headerLabel)")
                 .foregroundStyle(indicatorColor)
                 .lineLimit(1)
@@ -124,6 +130,27 @@ struct WorkspaceShellView: View {
 
     @ViewBuilder
     private func content(_ snapshot: WorkspaceTUISnapshot) -> some View {
+        if Self.showsReview(snapshot.mode) {
+            // The review pane replaces the pane grid while open; runtimes
+            // keep running and are fed in the background.
+            Text(WorkspaceReviewText.lines(snapshot.review, mode: snapshot.mode, now: Date())
+                .joined(separator: "\n"))
+                .foregroundStyle(Color.yellow)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            panes(snapshot)
+        }
+    }
+
+    private static func showsReview(_ mode: CommandMode) -> Bool {
+        switch mode {
+        case .review, .reviewDenyReason: true
+        default: false
+        }
+    }
+
+    @ViewBuilder
+    private func panes(_ snapshot: WorkspaceTUISnapshot) -> some View {
         ZStack(alignment: .bottomLeading) {
             WorkspacePaneViewport(model: model, snapshot: snapshot)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -325,6 +352,7 @@ enum WorkspaceHelp {
     ^B c new tab       ^B n/p next/previous tab       ^B x close pane
     ^B r resize        ^B [ scroll        ^B w runtimes      ^B a launcher
     ^B ! cancel runtime (confirm)         ^B q detach       ^B ^B literal Ctrl-B
+    ^B R review pending egress and recent blocks
     Esc closes help and menus
     """
 }

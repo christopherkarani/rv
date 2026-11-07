@@ -226,6 +226,56 @@
       "id": "near.find-name-rm-rf",
       "command": "find . -name '*rm -rf*'",
       "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-write-body-repeats-earlier-word",
+      "command": "git status\ncat <<EOF > x.txt\nstatus\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-tab-strip-write-reset-prose",
+      "command": "cat <<-EOF > notes.md\n\tgit reset --hard\n\tEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-commit-message-file",
+      "command": "git add -A && git commit -F - <<'EOF'\nfix: add\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.herestring-grep-reset-prose",
+      "command": "grep foo <<< 'git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-gh-pr-continuation-body-file",
+      "command": "gh pr create --title \"fix: x\" \\\n  --body-file - <<'EOF'\nStop rm -rf in setup\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-git-commit-continuation",
+      "command": "git commit \\\n  -F - <<'EOF'\nfix: stop git reset --hard in setup\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-after-printf-escape",
+      "command": "printf '%s\\n' done && cat > notes.md <<'EOF'\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-after-dquote-escape",
+      "command": "echo \"a\\tb\" && cat > f <<'EOF'\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-after-sed-escape",
+      "command": "sed -i '' 's/a\\.b/c/' x && cat <<'EOF' > f\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-crlf-body-lf-header",
+      "command": "cat <<'EOF' > f\nline one\r\ngit reset --hard\r\nEOF",
+      "expected": "allow"
     }
   ]
 }

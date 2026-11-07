@@ -412,6 +412,36 @@ enum EgressReviewRun {
         return view
     }
 
+    /// The one human approve door. `rv egress approve` and the `rv tui`
+    /// review pane both enter here, so neither can skip the local control
+    /// boundary or any gate of `approve` (TTY, robot, throttle, device
+    /// owner, re-read). The command also checks the boundary before
+    /// parsing anything else; checking again here keeps the door closed
+    /// for callers that have no such prologue.
+    static func ownerApprove(id: ApprovalID, ctx: CommandContext) async throws -> EgressProposalView {
+        try LocalControlBoundary.requireOwnerAuthorization()
+        return try await approve(
+            id: id,
+            tty: ctx.tty,
+            robot: ctx.explicitRobot,
+            store: store(home: try ctx.requireHome()),
+            now: Date()
+        )
+    }
+
+    /// The one human deny door; see `ownerApprove`.
+    static func ownerDeny(id: ApprovalID, reason: String, ctx: CommandContext) async throws -> EgressProposalView {
+        try LocalControlBoundary.requireOwnerAuthorization()
+        return try await deny(
+            id: id,
+            reason: reason,
+            tty: ctx.tty,
+            robot: ctx.explicitRobot,
+            store: store(home: try ctx.requireHome()),
+            now: Date()
+        )
+    }
+
     static func loadAwaitingNetworkProposal(
         id: ApprovalID,
         store: PendingApprovalStore,
@@ -531,13 +561,7 @@ struct EgressApprove: AsyncParsableCommand {
         try LocalControlBoundary.requireOwnerAuthorization()
         let ctx = CommandContext.current(command: "egress approve", format: format)
         do {
-            let view = try await EgressReviewRun.approve(
-                id: ApprovalID(rawValue: id),
-                tty: ctx.tty,
-                robot: ctx.explicitRobot,
-                store: EgressReviewRun.store(home: try ctx.requireHome()),
-                now: Date()
-            )
+            let view = try await EgressReviewRun.ownerApprove(id: ApprovalID(rawValue: id), ctx: ctx)
             ctx.writeStdout(
                 "approved \(DisplayedText.field(view.host)):\(view.port) (live within seconds; no restart)\n"
             )
@@ -600,13 +624,8 @@ struct EgressDeny: AsyncParsableCommand {
             try ctx.fail("rv egress deny: --reason is required\n", exitCode: 2)
         }
         do {
-            let view = try await EgressReviewRun.deny(
-                id: ApprovalID(rawValue: id),
-                reason: reason,
-                tty: ctx.tty,
-                robot: ctx.explicitRobot,
-                store: EgressReviewRun.store(home: try ctx.requireHome()),
-                now: Date()
+            let view = try await EgressReviewRun.ownerDeny(
+                id: ApprovalID(rawValue: id), reason: reason, ctx: ctx
             )
             ctx.writeStdout("denied \(DisplayedText.field(view.host)):\(view.port)\n")
         } catch AllowOnceError.ttyRequired {
