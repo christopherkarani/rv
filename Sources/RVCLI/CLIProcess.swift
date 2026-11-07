@@ -7,6 +7,7 @@ import Foundation
 import RVDomain
 import RVIPC
 import RVPolicy
+import RVTheme
 
 /// In-process overrides for operator HOME / TTY / env. Production reads the
 /// process; tests install a `Context` so `run()` never touches live `$HOME`.
@@ -76,6 +77,12 @@ enum CLIProcess: Sendable {
 
     static func stdoutIsTTY() -> Bool {
         context?.stdoutIsTTY ?? (isatty(STDOUT_FILENO) != 0)
+    }
+
+    /// The terminal the background probe asks. Installed contexts get none,
+    /// so tests never write a query to the operator's terminal.
+    static func terminalQueryChannel() -> any TerminalQueryChannel {
+        context == nil ? StandardTerminalChannel() : UnavailableTerminalChannel()
     }
 
     static func stdoutFileDescriptor() -> Int32 {

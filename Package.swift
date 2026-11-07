@@ -122,6 +122,7 @@ let coreLibraryTargets: [Target] = [
         dependencies: [
             "RVDomain",
             "RVIsolation",
+            "RVTheme",
             .product(name: "SwiftTUICLI", package: "swift-tui"),
             .product(name: "SwiftTerm", package: "SwiftTerm"),
         ]

@@ -7,6 +7,7 @@ struct WorkspacePaneViewport: View {
     let snapshot: WorkspaceTUISnapshot
     @State private var scrollBaselines: [PaneID: UInt64] = [:]
     @State private var lastScrollPane: PaneID? = nil
+    @Environment(\.workspaceInk) private var ink
 
     var body: some View {
         GeometryReader { proxy in
@@ -21,7 +22,7 @@ struct WorkspacePaneViewport: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if plan.focusedFallback {
                         Text("Terminal too small — showing focused pane")
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(ink.attention)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     PaneCanvasLayout(viewport: plan.viewport, placements: plan.placements) {
@@ -109,6 +110,7 @@ struct WorkspacePanePanel: View {
     let recentOutputOnly: Bool
     let scrolling: Bool
     let hasNewOutput: Bool
+    @Environment(\.workspaceInk) private var ink
 
     private func borderColumn(rows: Int) -> String {
         Array(repeating: "│", count: rows).joined(separator: "\n")
@@ -118,7 +120,7 @@ struct WorkspacePanePanel: View {
         let width = placement.outer.width
         let contentWidth = placement.content.width
         let contentHeight = placement.content.height
-        let border: Color = focused ? .green : .gray
+        let border: Color = focused ? ink.ok : ink.muted
         let status = scrolling
             ? (hasNewOutput ? "SCROLL • new" : "SCROLL")
             : WorkspacePaneChrome.status(pane, terminal: terminal,
@@ -132,7 +134,7 @@ struct WorkspacePanePanel: View {
                 Text(" \(WorkspacePaneChrome.title(pane, terminal: terminal))")
                     .lineLimit(1).truncationMode(.tail)
                     .frame(width: titleWidth, height: 1, alignment: .leading)
-                Text(status).foregroundStyle(status == "running" ? Color.green : Color.yellow)
+                Text(status).foregroundStyle(status == "running" ? ink.ok : ink.attention)
                     .lineLimit(1).truncationMode(.tail)
                     .frame(width: statusWidth, height: 1, alignment: .trailing)
                 Text("╮").foregroundStyle(border)

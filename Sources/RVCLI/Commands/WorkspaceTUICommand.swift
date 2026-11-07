@@ -35,6 +35,12 @@ enum WorkspaceTUICommand {
         guard let host = WorkspaceHostExecutable.currentSibling() else {
             throw ValidationError("workspace host executable is missing")
         }
+        // Asked before any host, session, or runtime exists, so no runtime
+        // pane can ever be fed a reply byte, and before SwiftTUI takes the
+        // terminal into raw mode.
+        let background = ThemeProbeFactory.live(
+            jsonFlag: false, robotFlag: false, plainFlag: false, noColorFlag: false
+        ).background
         let endpoint: WorkspaceEndpoint
         switch WorkspaceHosts.ensure(project: project, executable: host) {
         case .success(let value):
@@ -119,7 +125,7 @@ enum WorkspaceTUICommand {
         model.setDurableViewChangedHook { [weak savePump] view in savePump?.saveSync(view) }
         savePump.start()
         do {
-            try await WorkspaceTUILaunch.run(model)
+            try await WorkspaceTUILaunch.run(model, background: background)
         } catch {
             model.detachSession()
             if let saveError = savePump.stop() {
