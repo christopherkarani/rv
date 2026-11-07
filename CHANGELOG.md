@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- `rv uninstall` also removes the `dev.rv.audit-forward` LaunchAgent that `rv audit forward --install` writes.
+- `rv workspace run` help lists `--microvm`, `--macvm`, `--cpus` and `--memory-mib`.
 - Every evaluation door now uses the owner's configured packs: contained workspaces (`rv workspace`, `rv opencode`), SDK `evaluate`, `explain` and `classify`. Before, the workspace host sent only the three day-one packs and SDK callers could send an empty list, so packs such as `cloud.aws` were skipped there.
 - `rv scan` defaults to your configured packs instead of the day-one three, rejects `--packs` IDs that name no bundled pack, and refuses `--host` values it has no session reader for (Antigravity, Muse) instead of silently scanning nothing.
 - Hook timeouts are ordered so rvd always gives up first: host shims now wait 13 s and host hook configs 15 s (Codex, Cursor, Antigravity, Grok, Muse), above the C client's 3 s hello + 8 s evaluate and rvd's 7 s budget. Before, a host could drop a reply while rvd still spent an allow-once grant on it. `rv setup` rewrites hooks written with the old timeouts without `--force`.

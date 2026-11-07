@@ -137,7 +137,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] -- <absolute-executable> [args...]"),
                 HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
@@ -149,6 +149,9 @@ enum HelpCatalog {
                 HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
                 HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
                 HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
+                HelpRow(name: "--microvm", description: "Run inside a network-less Linux micro-VM booted from this OCI image (macOS 26+, Apple silicon); the executable is a path inside the guest"),
+                HelpRow(name: "--macvm", description: "Run inside a network-less macOS VM cloned from an image built with rv-macvm prepare (macOS 27); the executable is a path inside the guest"),
+                HelpRow(name: "--cpus / --memory-mib", description: "VM size, with --microvm or --macvm"),
             ]),
             HelpSection(heading: "Platform", rows: [
                 HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux the workspace host refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),

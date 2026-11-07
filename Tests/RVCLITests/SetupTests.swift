@@ -1921,3 +1921,20 @@ private func expectedClaudeHookCommand(
         #expect(FileManager.default.fileExists(atPath: layout.claudeDirectory))
     }
 }
+
+@Test func uninstall_removesTheAuditForwardLaunchAgent() throws {
+    // `rv audit forward --install` writes this agent; "remove everything rv
+    // owns" must include it.
+    try withTempHome { home, layout, launchctl in
+        _ = SetupRun.setup(env(home: home, launchctl: launchctl))
+        try FileManager.default.createDirectory(
+            atPath: (layout.auditForwardLaunchAgent as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try "<plist/>".write(toFile: layout.auditForwardLaunchAgent, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.auditForwardLaunchAgent) == false)
+        #expect(launchctl.bootouts.contains(AuditForwardInstall.label))
+    }
+}

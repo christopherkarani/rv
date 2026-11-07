@@ -30,12 +30,13 @@ extension SetupRun {
         let servicePath = evaluateServicePath(layout: layout, supervisor: env.supervisor)
         let launchAgentExisted = files.fileExists(servicePath)
         let custodianAgentExisted = files.fileExists(layout.custodianLaunchAgent)
+        let auditForwardAgentExisted = files.fileExists(layout.auditForwardLaunchAgent)
         let binariesExisted = files.fileExists(layout.localRv)
             || files.fileExists(layout.localRvCli)
             || files.fileExists(layout.localRvd)
         removedPaths.append(
             contentsOf: [
-                servicePath, layout.custodianLaunchAgent,
+                servicePath, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent,
                 layout.localRv, layout.localRvCli, layout.localRvd,
             ]
         )
@@ -64,6 +65,12 @@ extension SetupRun {
                     domain: LaunchdDomain.user(uid), label: custodianLaunchAgentLabel)
                 try? env.launchctl.bootout(
                     domain: LaunchdDomain.gui(uid), label: custodianLaunchAgentLabel)
+            }
+            if auditForwardAgentExisted {
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.user(uid), label: AuditForwardInstall.label)
+                try? env.launchctl.bootout(
+                    domain: LaunchdDomain.gui(uid), label: AuditForwardInstall.label)
             }
             try? env.launchctl.bootout(domain: LaunchdDomain.user(uid), label: launchAgentLabel)
             do {
