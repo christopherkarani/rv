@@ -34,6 +34,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- The egress proxy bounds host resolution (10 s; a late or over-budget lookup denies `dns-failed`) and refuses more non-public destinations after resolving: 192.0.0.0/24, 192.88.99.0/24, the Azure WireServer address, IPv4-translated IPv6, 2001::/23, 3fff::/20, anything outside 2000::/3, and NAT64 forms other than 64:ff9b::/96.
 - Workspace publish refuses escaping symlinks; read-only workspace files are copied before their mode is applied. (#445, #490)
 - Clocked vnode syscalls run on a bounded worker pool. (#444)
 - `rv` commands guard against root fallback and have a `login` help topic. (#498)
