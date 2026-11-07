@@ -14,7 +14,7 @@ enum CodexHooksMerge {
     static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
     static let hookType = "command"
-    static let timeout = 5
+    static let timeout = 15
     static let statusMessage = "RV"
 
     static let wiringDescriptor = HostWiringDescriptor(

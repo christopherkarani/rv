@@ -171,7 +171,7 @@ struct ResidualLinuxCoverageTests {
             CursorHooksMerge.matchesCurrentHook(
                 .object([
                     "command": .string(CursorHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
-                    "timeout": .number(5),
+                    "timeout": .number(15),
                     "failClosed": .bool(true),
                 ]),
                 adapterPath: "/tmp/rv-guard.py"

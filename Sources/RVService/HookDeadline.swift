@@ -14,6 +14,13 @@ import Synchronization
 public final class HookDeadline: Sendable {
     /// Must stay below the C client's 8 s hookEvaluate timeout in
     /// Sources/rv-c/rv.c, leaving room for the reply to travel back.
+    ///
+    /// The full chain must stay ordered so the daemon always gives up first
+    /// and never spends a grant on a reply the host already dropped:
+    /// daemon 7 s < C client 3 s hello + 8 s evaluate < host shim 13 s
+    /// (`RV_HOOK_TIMEOUT_S` / `RV_HOOK_TIMEOUT_MS` in the host templates)
+    /// < host hook config 15 s (Codex, Cursor, Antigravity, Grok, Muse;
+    /// Claude uses 90 s). `HookTimeoutChainTests` checks this.
     public static let budget: Duration = .seconds(7)
 
     /// The deadline of the hookEvaluate this task is serving, if any. Only

@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- Hook timeouts are ordered so rvd always gives up first: host shims now wait 13 s and host hook configs 15 s (Codex, Cursor, Antigravity, Grok, Muse), above the C client's 3 s hello + 8 s evaluate and rvd's 7 s budget. Before, a host could drop a reply while rvd still spent an allow-once grant on it. `rv setup` rewrites hooks written with the old timeouts without `--force`.
 - Analytics honours the documented flat `"analytics.enabled": false` key as well as the nested form; when the two disagree, the opt-out wins. Events now report the product version instead of the IPC protocol version.
 - Workspace publish refuses escaping symlinks; read-only workspace files are copied before their mode is applied. (#445, #490)
 - Clocked vnode syscalls run on a bounded worker pool. (#444)

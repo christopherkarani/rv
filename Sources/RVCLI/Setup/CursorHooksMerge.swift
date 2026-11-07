@@ -17,7 +17,7 @@ enum CursorHooksMerge {
     static let preToolUseKey = "preToolUse"
     static let beforeReadFileKey = "beforeReadFile"
     static let fingerprint = "rv-guard.py"
-    static let timeout = 5
+    static let timeout = 15
     static let schemaVersion = 1
 
     static let wiringDescriptor = HostWiringDescriptor(
