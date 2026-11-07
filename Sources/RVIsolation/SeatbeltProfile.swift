@@ -1300,13 +1300,19 @@ func workspaceControlDenies(workspacePath: String) -> String {
 /// A caged agent that writes a hook into `.claude/settings.json`, a server
 /// into `.mcp.json`, or a task into `.vscode/tasks.json` gets that code run
 /// unsandboxed the next time the developer uses the tool on the host. These
-/// files are therefore treated like `.git/hooks`: the cage cannot create,
+/// paths are therefore treated like `.git/hooks`: the cage cannot create,
 /// rewrite or remove them.
+///
+/// Matching is case-insensitive. The saved tree is usually on a
+/// case-insensitive APFS volume, so a cage that creates `.MCP.json` would
+/// otherwise get past an exact `.mcp.json` rule while host tools still open
+/// it as `.mcp.json`.
 ///
 /// Instruction files (`CLAUDE.md`, `AGENTS.md`) and skill folders are not
 /// listed: agents edit them as normal work, and they carry instructions
 /// rather than code the host runs on its own. Changes to them belong in the
-/// review shown before publish.
+/// review shown before publish. Config in nested directories (for a tool
+/// started in a subfolder) is not covered either.
 enum WorkspaceRunLaterPaths {
     /// Workspace-relative files a host agent, editor or shell executes or
     /// trusts on its own.
@@ -1317,27 +1323,66 @@ enum WorkspaceRunLaterPaths {
         ".codex/config.toml",
         ".cursor/hooks.json",
         ".cursor/mcp.json",
+        ".gemini/settings.json",
         ".vscode/tasks.json",
+        ".vscode/settings.json",
+        "opencode.json",
+        "opencode.jsonc",
         ".envrc",
+    ]
+
+    /// Workspace-relative directories whose whole contents are protected:
+    /// scripts that the settings above call by path.
+    static let trees = [
+        ".claude/hooks",
     ]
 
     /// Parent directories whose own entry the cage may not create or
     /// remove. Without this, a cage could build a replacement directory
     /// under another name and rename it into place, which writes the files
     /// above without touching their paths. Same pattern as `.config`.
-    static let pinnedDirectories = [".claude", ".codex", ".cursor", ".vscode"]
+    static let pinnedDirectories = [".claude", ".codex", ".cursor", ".gemini", ".vscode"]
+}
+
+/// POSIX regex for `relative` under `workspacePath`, ASCII case-insensitive
+/// in the relative part. `tree` also matches everything beneath it. The
+/// workspace prefix is matched exactly (it already exists, so the kernel
+/// reports its on-disk spelling).
+func caseInsensitiveWorkspaceRegex(workspacePath: String, relative: String, tree: Bool = false) -> String {
+    func escapeRegex(_ text: String) -> String {
+        var out = ""
+        for character in text {
+            if "\\.^$|?*+()[]{}".contains(character) { out.append("\\") }
+            out.append(character)
+        }
+        return out
+    }
+    var suffix = ""
+    for character in relative {
+        if character.isASCII, character.isLetter {
+            suffix += "[\(character.lowercased())\(character.uppercased())]"
+        } else {
+            suffix += escapeRegex(String(character))
+        }
+    }
+    let end = tree ? "(/.*)?$" : "$"
+    return "^" + escapeRegex(workspacePath) + "/" + suffix + end
 }
 
 func workspaceRunLaterDenies(workspacePath: String) -> String {
-    let files = WorkspaceRunLaterPaths.files
-        .map { "        (literal \"\(escapeSeatbeltSubpath(workspacePath + "/" + $0))\")" }
+    func regex(_ relative: String, tree: Bool = false) -> String {
+        let pattern = caseInsensitiveWorkspaceRegex(workspacePath: workspacePath, relative: relative, tree: tree)
+        return "        (regex \"\(escapeSeatbeltSubpath(pattern))\")"
+    }
+    let protected = (WorkspaceRunLaterPaths.files.map { regex($0) }
+        + WorkspaceRunLaterPaths.trees.map { regex($0, tree: true) })
         .joined(separator: "\n")
     let directories = WorkspaceRunLaterPaths.pinnedDirectories
-        .map { "        (literal \"\(escapeSeatbeltSubpath(workspacePath + "/" + $0))\")" }
+        .map { regex($0) }
         .joined(separator: "\n")
     return """
     (deny file-write*
-    \(files))
+    \(protected))
     (deny file-write-unlink file-write-create
     \(directories))
     """

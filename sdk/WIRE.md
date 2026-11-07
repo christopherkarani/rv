@@ -186,9 +186,9 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 7 | `doctorSnapshot` | `{}` | `DoctorSnapshotReply` | Health + versions. No separate version RPC exists. |
 | 8 | `pendingList` | `{}` | `PendingListReply` | Read-only projection + generation. |
 | 9 | `pendingWatch` | `PendingWatchParams` | `PendingWatchReply` | **Unary poll**, not a stream: unchanged generation returns `{same generation, items: []}`. |
-| 10 | `pendingResolve` | `PendingResolveParams` | `PendingResolveReply` | **Human-attended only.** Fingerprint+identity echo enforced. |
+| 10 | `pendingResolve` | `PendingResolveParams` | `PendingResolveReply` | **Human-attended only.** Fingerprint+identity echo enforced. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 11 | `rulePreview` | `RulePreviewParams` | `RulePreviewReply` | Never writes. |
-| 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. |
+| 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
 
 ### 4.1 Evaluate family
 

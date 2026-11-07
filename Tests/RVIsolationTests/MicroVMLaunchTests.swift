@@ -385,7 +385,7 @@ struct MacOSGuestLaunchTests {
         let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
         // LaunchServices would start an opened app outside the sandbox, and an
         // Apple event can make a running app (System Events) run a shell command there.
-        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n"))
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n(deny file-link)\n(deny file-clone)\n"))
         #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
     }
 

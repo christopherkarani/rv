@@ -502,7 +502,7 @@ struct IsolationApplyTests {
         for rule in laterRules where rule.contains("file-write") {
             #expect(rule.hasPrefix("deny"), "a file-write rule after the control deny must be a deny: \(rule)")
         }
-        #expect(afterDeny.contains("\(escaped)/.claude/settings.json"))
+        #expect(afterDeny.contains("(regex "))
     }
 
     @Test func compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() throws {
