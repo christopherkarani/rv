@@ -27,7 +27,8 @@ struct PolicyStoreInputs: Sendable {
         let policy = try? EffectiveActionPolicy(
             rules: PolicyWorkspace(home: home, workspace: workspace).loadEffectiveRules(builtin: [])
         )
-        let safety = SafetyStore.loadEffective(home: home, workspace: workspace)
+        // The organization's gate can only raise safety to strict.
+        let safety = ManagedGate.safety(SafetyStore.loadEffective(home: home, workspace: workspace), home: home)
         return PolicyStoreInputs(allowPaths: allowPaths, policy: policy, safety: safety)
     }
 }

@@ -128,6 +128,10 @@ enum ManagedRun {
         }
         if policy.secrets.allowEnvironmentDelivery == false { lines.append("secrets: gateway delivery only") }
         if let forward = policy.auditForward { lines.append("audit forwarded to \(forward.url)") }
+        if policy.gate.requirePacks.isEmpty == false {
+            lines.append("gate: packs required: \(policy.gate.requirePacks.map(\.rawValue).joined(separator: ", "))")
+        }
+        if policy.gate.requireStrictSafety { lines.append("gate: strict safety required") }
         return lines
     }
 
