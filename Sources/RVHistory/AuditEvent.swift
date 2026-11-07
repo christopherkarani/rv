@@ -10,6 +10,9 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     }
 
     public static let commandDenied = AuditEventKind(rawValue: "command.denied")
+    /// A deny the Policy gate overrode (allow-once, allowlist, rebase
+    /// recovery, contained delete).
+    public static let commandOverride = AuditEventKind(rawValue: "command.override")
     public static let egressDenied = AuditEventKind(rawValue: "egress.denied")
     public static let admission = AuditEventKind(rawValue: "admission")
     public static let runtimeSession = AuditEventKind(rawValue: "runtime.session")
