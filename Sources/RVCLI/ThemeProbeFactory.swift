@@ -29,6 +29,8 @@ enum ThemeProbeFactory {
                 termDumb: environment["TERM"] == "dumb"
             )
         )
+        let asked: any TerminalQueryChannel = BackgroundProbe.isRemoteSession(environment: environment)
+            ? UnavailableTerminalChannel() : channel
         return ThemeProbe(
             terminal: terminal,
             forbid: forbid,
@@ -37,7 +39,7 @@ enum ThemeProbeFactory {
                 preference: ThemePreference(environment: environment),
                 terminal: terminal,
                 forbid: forbid,
-                channel: channel
+                channel: asked
             )
         )
     }

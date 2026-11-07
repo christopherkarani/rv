@@ -3,6 +3,7 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
+import Foundation
 import Testing
 @testable import RVTheme
 
@@ -205,6 +206,189 @@ struct TerminalBackgroundTests {
         defer { _ = close(fds[0]); _ = close(fds[1]) }
         let channel = StandardTerminalChannel(input: fds[0], output: fds[1])
         #expect(channel.exchange(BackgroundColorQuery.request, timeout: .milliseconds(10)) { _ in true } == nil)
+    }
+
+    @Test func eightBitStringTerminatorEndsTheReply() throws {
+        let reply: [UInt8] = Array("\u{1B}]11;rgb:ffff/ffff/ffff".utf8) + [0x9C]
+        let color = try #require(BackgroundColorQuery.parseReply(reply))
+        #expect(color.background == .light)
+    }
+
+    // MARK: Remote sessions
+
+    static let sessions: [([String: String], Bool)] = [
+        ([:], false),
+        (["SSH_TTY": "/dev/ttys004"], true),
+        (["SSH_CONNECTION": "10.0.0.2 51234 10.0.0.1 22"], true),
+        (["SSH_AUTH_SOCK": "/tmp/agent"], false),
+    ]
+
+    @Test(arguments: sessions)
+    func sshSessionsAreRemote(environment: [String: String], remote: Bool) {
+        #expect(BackgroundProbe.isRemoteSession(environment: environment) == remote)
+    }
+
+    // MARK: Live channel rules
+
+    /// Scripted terminal device on a virtual clock: bytes arrive at fixed
+    /// offsets from the start, and reads advance time only by what they wait.
+    final class FakeTerminal: TerminalDevice {
+        var foreground = true
+        var pendingInput = false
+        var arrivals: [(at: Duration, byte: UInt8)]
+        let saved: termios
+        private(set) var attributeLog: [termios] = []
+        private(set) var written: [[UInt8]] = []
+        private var elapsed: Duration = .zero
+        private let base = ContinuousClock.now
+
+        init(_ arrivals: [(Duration, String)] = []) {
+            self.arrivals = arrivals.flatMap { at, text in Array(text.utf8).map { (at: at, byte: $0) } }
+            var cooked = termios()
+            cooked.c_lflag = tcflag_t(ICANON | ECHO | ISIG)
+            saved = cooked
+        }
+
+        var unread: [UInt8] { arrivals.map(\.byte) }
+
+        func isTerminal() -> Bool { true }
+        func isForegroundProcessGroup() -> Bool { foreground }
+        func hasPendingInput() -> Bool { pendingInput }
+        func attributes() -> termios? { saved }
+        func setAttributes(_ attributes: termios) -> Bool {
+            attributeLog.append(attributes)
+            return true
+        }
+        func write(_ bytes: [UInt8]) -> Bool {
+            written.append(bytes)
+            return true
+        }
+        func now() -> ContinuousClock.Instant { base + elapsed }
+        func readByte(within timeout: Duration) -> UInt8? {
+            guard let next = arrivals.first, next.at <= elapsed + timeout else {
+                elapsed += timeout
+                return nil
+            }
+            elapsed = max(elapsed, next.at)
+            arrivals.removeFirst()
+            return next.byte
+        }
+    }
+
+    static let white = "\u{1B}]11;rgb:ffff/ffff/ffff\u{1B}\\"
+
+    static func ask(_ terminal: FakeTerminal) -> [UInt8]? {
+        StandardTerminalChannel(device: terminal).exchange(
+            BackgroundColorQuery.request, timeout: BackgroundProbe.timeout, isComplete: BackgroundColorQuery.isComplete)
+    }
+
+    @Test func backgroundJobNeverTouchesTheTerminal() {
+        let terminal = FakeTerminal([(.zero, Self.white + Self.da1)])
+        terminal.foreground = false
+        #expect(Self.ask(terminal) == nil)
+        #expect(terminal.attributeLog.isEmpty)
+        #expect(terminal.written.isEmpty)
+    }
+
+    @Test func pendingTypeaheadIsLeftAlone() {
+        let terminal = FakeTerminal([(.zero, "ls\r")])
+        terminal.pendingInput = true
+        #expect(Self.ask(terminal) == nil)
+        #expect(terminal.written.isEmpty)
+        #expect(terminal.attributeLog.last?.c_lflag == terminal.saved.c_lflag)
+        #expect(terminal.unread == Array("ls\r".utf8))
+    }
+
+    @Test func rawModeAlsoDisablesSignalsAndIsRestored() throws {
+        let terminal = FakeTerminal([(.milliseconds(5), Self.white + Self.da1)])
+        #expect(Self.ask(terminal) == Array((Self.white + Self.da1).utf8))
+        #expect(terminal.written == [BackgroundColorQuery.request])
+        let raw = try #require(terminal.attributeLog.first)
+        #expect(raw.c_lflag & tcflag_t(ICANON | ECHO | ISIG) == 0)
+        #expect(terminal.attributeLog.count == 2)
+        #expect(terminal.attributeLog.last?.c_lflag == terminal.saved.c_lflag)
+    }
+
+    @Test func lateReplyInsideTheGraceWindowIsConsumed() {
+        let late = BackgroundProbe.timeout + .milliseconds(30)
+        let terminal = FakeTerminal([(late, Self.white + Self.da1)])
+        #expect(Self.ask(terminal).flatMap(BackgroundColorQuery.parseReply)?.background == .light)
+        #expect(terminal.unread.isEmpty)
+    }
+
+    @Test func twoHundredMillisecondReplyIsConsumed() {
+        let terminal = FakeTerminal([(.milliseconds(200), Self.white + Self.da1)])
+        #expect(Self.ask(terminal).flatMap(BackgroundColorQuery.parseReply)?.background == .light)
+        #expect(terminal.unread.isEmpty)
+    }
+
+    @Test func replyStartedAtTheDeadlineIsReadToItsEnd() {
+        let deadline = BackgroundProbe.timeout + StandardTerminalChannel.drainGrace
+        let reply = Array((Self.white + Self.da1).utf8)
+        let terminal = FakeTerminal([(deadline - .milliseconds(1), "\u{1B}"),
+            (deadline + .milliseconds(5), String(decoding: reply.dropFirst(), as: UTF8.self))])
+        #expect(Self.ask(terminal) == reply)
+        #expect(terminal.unread.isEmpty)
+    }
+
+    @Test func readingStopsAtTheEndOfTheDeviceAttributesReply() {
+        let terminal = FakeTerminal([(.milliseconds(5), Self.white + Self.da1), (.milliseconds(6), "ls")])
+        #expect(Self.ask(terminal) == Array((Self.white + Self.da1).utf8))
+        #expect(terminal.unread == Array("ls".utf8))
+    }
+
+    @Test func oversizedReplyIsNoAnswer() {
+        let flood = String(repeating: "x", count: StandardTerminalChannel.replyLimit + 100)
+        let terminal = FakeTerminal([(.zero, flood + Self.white + Self.da1)])
+        #expect(Self.ask(terminal) == [])
+        #expect(terminal.attributeLog.count == 2)
+    }
+
+    // MARK: Live device
+
+    /// A fresh pty pair, not this process's controlling terminal.
+    static func openPseudoTerminal() throws -> (controller: Int32, terminal: Int32) {
+        let controller = posix_openpt(O_RDWR | O_NOCTTY)
+        try #require(controller >= 0)
+        try #require(grantpt(controller) == 0 && unlockpt(controller) == 0)
+        let name = try #require(ptsname(controller))
+        let terminal = open(name, O_RDWR | O_NOCTTY)
+        try #require(terminal >= 0)
+        return (controller, terminal)
+    }
+
+    /// macOS `poll` reports a tty ready at once and `read` then blocks, so a
+    /// silent terminal must still time out.
+    @Test func liveDeviceTimesOutOnASilentTerminal() throws {
+        let pair = try Self.openPseudoTerminal()
+        defer { _ = close(pair.terminal); _ = close(pair.controller) }
+        let device = SystemTerminalDevice(input: pair.terminal, output: pair.terminal)
+        // Unblocks a broken read after a second so the test fails, not hangs.
+        let controller = pair.controller
+        Thread.detachNewThread {
+            Thread.sleep(forTimeInterval: 1)
+            _ = Array("z\n".utf8).withUnsafeBytes { write(controller, $0.baseAddress, $0.count) }
+        }
+        let start = ContinuousClock.now
+        #expect(device.readByte(within: .milliseconds(50)) == nil)
+        #expect(ContinuousClock.now - start < .milliseconds(500))
+        #expect(device.hasPendingInput() == false)
+    }
+
+    @Test func liveDeviceReadsAndSeesPendingInput() throws {
+        let pair = try Self.openPseudoTerminal()
+        defer { _ = close(pair.terminal); _ = close(pair.controller) }
+        let device = SystemTerminalDevice(input: pair.terminal, output: pair.terminal)
+        var raw = try #require(device.attributes())
+        raw.c_lflag &= ~tcflag_t(ICANON | ECHO)
+        #expect(device.setAttributes(raw))
+        _ = Array("q".utf8).withUnsafeBytes { write(pair.controller, $0.baseAddress, $0.count) }
+        #expect(device.readByte(within: .seconds(2)) == UInt8(ascii: "q"))
+        _ = Array("r".utf8).withUnsafeBytes { write(pair.controller, $0.baseAddress, $0.count) }
+        let start = ContinuousClock.now
+        while device.hasPendingInput() == false, ContinuousClock.now - start < .seconds(2) {}
+        #expect(device.hasPendingInput())
+        #expect(device.readByte(within: .seconds(2)) == UInt8(ascii: "r"))
     }
 
     // MARK: Palette

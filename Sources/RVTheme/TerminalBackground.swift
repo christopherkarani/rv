@@ -82,7 +82,8 @@ public enum BackgroundColorQuery {
     }
 
     /// The background color in an OSC 11 reply (`ESC ] 11 ; <spec>`
-    /// ended by BEL or ST), or nil when there is none or it does not parse.
+    /// ended by BEL, 7-bit ST, or 8-bit C1 ST), or nil when there is none
+    /// or it does not parse.
     public static func parseReply(_ bytes: [UInt8]) -> TerminalColor? {
         let introducer = Array("\u{1B}]11;".utf8)
         guard bytes.count >= introducer.count,
@@ -94,7 +95,7 @@ public enum BackgroundColorQuery {
         var index = start + introducer.count
         while index < bytes.count {
             let byte = bytes[index]
-            if byte == 0x07 { return parseSpec(payload) }
+            if byte == 0x07 || byte == 0x9C { return parseSpec(payload) }
             if byte == 0x1B {
                 return index + 1 < bytes.count && bytes[index + 1] == UInt8(ascii: "\\") ? parseSpec(payload) : nil
             }

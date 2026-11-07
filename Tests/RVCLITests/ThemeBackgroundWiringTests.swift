@@ -34,6 +34,15 @@ struct ThemeBackgroundWiringTests {
         #expect(Self.probe(tty: true, environment: ["NO_COLOR": "1"], channel: Self.whiteBackground).background == .dark)
     }
 
+    @Test func sshSessionsNeverQueryTheTerminal() {
+        #expect(Self.probe(tty: true, environment: ["SSH_TTY": "/dev/ttys004"], channel: Self.whiteBackground)
+            .background == .dark)
+        #expect(Self.probe(tty: true, environment: ["SSH_CONNECTION": "a 1 b 22"], channel: Self.whiteBackground)
+            .background == .dark)
+        #expect(Self.probe(tty: true, environment: ["SSH_TTY": "/dev/ttys004", "RV_THEME": "light"])
+            .background == .light)
+    }
+
     @Test func rvThemeOverridesDetection() {
         #expect(Self.probe(tty: false, environment: ["RV_THEME": "light"]).background == .light)
         #expect(Self.probe(tty: true, environment: ["RV_THEME": "dark"], channel: Self.whiteBackground).background == .dark)
