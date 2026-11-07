@@ -1736,11 +1736,13 @@ func extractHeredoc(_ text: String) -> (header: String, body: String)? {
 struct HeredocMatch {
     let header: String
     let body: String
-    /// The trimmed body's range in the scanned text. Nil when the body's
-    /// position is ambiguous: no terminator line, a carriage return, a
-    /// delimiter word bash reads differently (partly quoted, escaped), a
-    /// backslash or `#` before the operator, or a header line that holds
-    /// another heredoc or spills quoting or a substitution past its end.
+    /// The trimmed body's range in the scanned text, its lines split on LF
+    /// as bash splits them. Nil when the body's position is ambiguous: no
+    /// terminator line, a CR on the header line or a CR-only terminator, a
+    /// delimiter word bash reads differently (partly quoted, escaped), an
+    /// escape, `#`, ANSI-C quote, open `${`/`$[` or earlier `<<` before the
+    /// operator, or a header line that holds another heredoc or spills
+    /// quoting or a substitution past its end.
     let bodyRange: Range<String.Index>?
 }
 
@@ -1748,18 +1750,28 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
     var quote: Character?
     var parenDepth = 0
     var inBacktick = false
-    // A backslash can escape a quote or the operator itself, and `#` can
-    // start a comment: the scan cannot place the body after either.
+    // Ambiguity never changes which operator is chosen; it only withholds
+    // the body's position. Set by an escape that can hide a quote or the
+    // operator, a `#` that can start a comment, an ANSI-C quote, an open
+    // `${`/`$[` expansion, or an earlier `<<` in any context: its body may
+    // hold the quotes or parens this scan miscounts.
     var ambiguousPrefix = false
+    var openExpansions: [Character] = []
     var index = text.startIndex
 
     while index < text.endIndex {
         let character = text[index]
         let next = text.index(after: index)
-        if character == "\\" {
-            ambiguousPrefix = true
-        }
+        let following = next < text.endIndex ? text[next] : nil
         if let currentQuote = quote {
+            // Inside double quotes only `\"` can move the closing quote: a
+            // `\\` run that ends at a quote ends in `\"` too.
+            if currentQuote == "\"", character == "\\", following == "\"" {
+                ambiguousPrefix = true
+            }
+            if isHeredocOperator(in: text, at: index) {
+                ambiguousPrefix = true
+            }
             if character == currentQuote {
                 quote = nil
             }
@@ -1767,10 +1779,22 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
             continue
         }
         if inBacktick {
+            if character == "\\" || isHeredocOperator(in: text, at: index) {
+                ambiguousPrefix = true
+            }
             if character == "`" {
                 inBacktick = false
             }
             index = next
+            continue
+        }
+        if character == "\\" {
+            // `\<newline>` is a line continuation; any other escape can
+            // hide a quote or the operator itself.
+            if following != "\n" {
+                ambiguousPrefix = true
+            }
+            index = following == "\n" ? text.index(after: next) : next
             continue
         }
         if character == "'" || character == "\"" {
@@ -1783,8 +1807,13 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
             index = next
             continue
         }
-        if character == "#" {
+        if character == "#" || (character == "$" && following == "'") {
             ambiguousPrefix = true
+        }
+        if character == "$", following == "{" || following == "[" {
+            openExpansions.append(following == "{" ? "}" : "]")
+        } else if character == openExpansions.last {
+            openExpansions.removeLast()
         }
         if (character == "<" || character == ">" || character == "$"),
             next < text.endIndex, text[next] == "("
@@ -1805,6 +1834,9 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
             index = next
             continue
         }
+        if parenDepth > 0, isHeredocOperator(in: text, at: index) {
+            ambiguousPrefix = true
+        }
         if parenDepth == 0, character == "<", next < text.endIndex, text[next] == "<" {
             let afterTwo = text.index(after: next)
             if afterTwo < text.endIndex, text[afterTwo] == "<" {
@@ -1812,17 +1844,28 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
                 continue
             }
             if let parsed = parseHeredoc(in: text, operatorStart: index, afterOperator: afterTwo) {
-                guard ambiguousPrefix == false else {
+                guard ambiguousPrefix == false, openExpansions.isEmpty else {
                     return HeredocMatch(header: parsed.header, body: parsed.body, bodyRange: nil)
                 }
                 return parsed
             }
+            ambiguousPrefix = true
             index = afterTwo
             continue
         }
         index = next
     }
     return nil
+}
+
+/// A `<<` that is not part of a `<<<` here-string.
+private func isHeredocOperator(in text: String, at index: String.Index) -> Bool {
+    guard text[index] == "<" else { return false }
+    let next = text.index(after: index)
+    guard next < text.endIndex, text[next] == "<" else { return false }
+    let afterTwo = text.index(after: next)
+    if afterTwo < text.endIndex, text[afterTwo] == "<" { return false }
+    return index == text.startIndex || text[text.index(before: index)] != "<"
 }
 
 private func parseHeredoc(
@@ -1874,7 +1917,7 @@ private func parseHeredoc(
         delimiterIsPlain = true
     }
     if delimiter.isEmpty { return nil }
-    if delimiter.contains(where: { "'\"\\`$\n".contains($0) }) {
+    if delimiter.unicodeScalars.contains(where: { "'\"\\`$\n\r".unicodeScalars.contains($0) }) {
         delimiterIsPlain = false
     }
 
@@ -1885,16 +1928,13 @@ private func parseHeredoc(
     guard lineEnd < text.endIndex else { return nil }
     let header = String(text[text.startIndex..<lineEnd])
     let bodyStart = text.index(after: lineEnd)
-    let scanned = heredocBody(in: text, from: bodyStart, delimiter: delimiter, stripTabs: stripTabs)
+    let body = heredocBody(String(text[bodyStart...]), delimiter: delimiter, stripTabs: stripTabs)
     let placeable = delimiterIsPlain
-        && text.unicodeScalars.contains("\r") == false
         && headerLineEndsCleanly(text, operatorStart: operatorStart, from: cursor, to: lineEnd)
     let bodyRange = placeable
-        ? scanned.terminatorStart.flatMap {
-            trimmedBodyRange(in: text, from: bodyStart, to: $0, body: scanned.body)
-        }
+        ? placeBody(in: text, from: bodyStart, delimiter: delimiter, stripTabs: stripTabs)
         : nil
-    return HeredocMatch(header: header, body: scanned.body, bodyRange: bodyRange)
+    return HeredocMatch(header: header, body: body, bodyRange: bodyRange)
 }
 
 private func isHeredocWordBoundary(_ character: Character) -> Bool {
@@ -1903,9 +1943,10 @@ private func isHeredocWordBoundary(_ character: Character) -> Bool {
         || character == "(" || character == ")"
 }
 
-/// True when the header line holds no second heredoc operator and, after
-/// the delimiter, nothing that could carry the line past its newline: an
-/// open quote, a backslash, a backtick, or a paren.
+/// True when the header line holds no carriage return and no second
+/// heredoc operator and, after the delimiter, nothing that could carry the
+/// line past its newline: an open quote, a backslash outside single
+/// quotes, a backtick, or a paren.
 private func headerLineEndsCleanly(
     _ text: String,
     operatorStart: String.Index,
@@ -1914,11 +1955,15 @@ private func headerLineEndsCleanly(
 ) -> Bool {
     let lineStart = text[..<operatorStart].lastIndex(of: "\n").map { text.index(after: $0) }
         ?? text.startIndex
-    let line = String(text[lineStart..<lineEnd]).replacingOccurrences(of: "<<<", with: "")
-    if line.components(separatedBy: "<<").count > 2 { return false }
+    let line = String(text[lineStart..<lineEnd])
+    if line.unicodeScalars.contains("\r") { return false }
+    if line.replacingOccurrences(of: "<<<", with: "").components(separatedBy: "<<").count > 2 {
+        return false
+    }
     var quote: Character?
     for character in text[delimiterEnd..<lineEnd] {
         if let open = quote {
+            if open == "\"", character == "\\" { return false }
             if character == open { quote = nil }
             continue
         }
@@ -1931,33 +1976,46 @@ private func headerLineEndsCleanly(
     return quote == nil
 }
 
-/// The range of the trimmed `body` inside `text[from..<terminatorStart]`,
-/// or nil when trimming there does not reproduce `body` exactly.
-private func trimmedBodyRange(
-    in text: String,
-    from bodyStart: String.Index,
-    to terminatorStart: String.Index,
-    body: String
-) -> Range<String.Index>? {
-    let raw = text[bodyStart..<terminatorStart]
-    guard let first = raw.firstIndex(where: { $0.isWhitespace == false }),
-        let last = raw.lastIndex(where: { $0.isWhitespace == false })
-    else { return nil }
-    let range = first..<raw.index(after: last)
-    return String(text[range]) == body ? range : nil
-}
-
-/// The trimmed body after `bodyStart`, and where the terminator line
-/// starts (nil when no line matches the delimiter).
-private func heredocBody(
+/// The trimmed body's range, found the way bash finds it: lines split on
+/// LF alone (a CR stays part of its line), ending at the first line equal
+/// to the delimiter. Nil without a terminator line, when a line matches the
+/// delimiter only once its CRs are dropped, or when the trimmed bounds are
+/// not Character boundaries.
+private func placeBody(
     in text: String,
     from bodyStart: String.Index,
     delimiter: String,
     stripTabs: Bool
-) -> (body: String, terminatorStart: String.Index?) {
-    var lines: [String] = []
-    var remaining = text[bodyStart...]
+) -> Range<String.Index>? {
+    let scalars = text.unicodeScalars
+    var lineStart = bodyStart
     var terminatorStart: String.Index?
+    while lineStart < scalars.endIndex {
+        let lineEnd = scalars[lineStart...].firstIndex(of: "\n") ?? scalars.endIndex
+        let line = String(String.UnicodeScalarView(scalars[lineStart..<lineEnd]))
+        let compared = stripTabs ? String(line.drop(while: { $0 == "\t" })) : line
+        if compared == delimiter {
+            terminatorStart = lineStart
+            break
+        }
+        // `EOF\r` ends the body for a shell that drops CRs, not for bash.
+        if compared.replacingOccurrences(of: "\r", with: "") == delimiter { return nil }
+        guard lineEnd < scalars.endIndex else { break }
+        lineStart = scalars.index(after: lineEnd)
+    }
+    guard let terminatorStart else { return nil }
+    let raw = scalars[bodyStart..<terminatorStart]
+    guard let first = raw.firstIndex(where: { $0.properties.isWhitespace == false }),
+        let last = raw.lastIndex(where: { $0.properties.isWhitespace == false })
+    else { return nil }
+    let end = scalars.index(after: last)
+    guard first.samePosition(in: text) != nil, end.samePosition(in: text) != nil else { return nil }
+    return first..<end
+}
+
+private func heredocBody(_ rest: String, delimiter: String, stripTabs: Bool) -> String {
+    var lines: [String] = []
+    var remaining = rest[...]
     while remaining.isEmpty == false {
         let line: Substring
         if let newline = remaining.firstIndex(of: "\n") {
@@ -1969,10 +2027,9 @@ private func heredocBody(
         }
         let compared = stripTabs ? String(line.drop(while: { $0 == "\t" })) : String(line)
         if compared == delimiter {
-            terminatorStart = line.startIndex
             break
         }
         lines.append(String(line))
     }
-    return (lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), terminatorStart)
+    return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
 }

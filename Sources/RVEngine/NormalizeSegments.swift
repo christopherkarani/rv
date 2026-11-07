@@ -20,12 +20,13 @@ func maskNonExecutingHeredocBodiesDetailed(_ text: String) -> (view: String, mas
     guard let range = heredoc.bodyRange else {
         return (text, [])
     }
+    let body = String(text[range])
     return (
         text.replacingCharacters(
             in: range,
-            with: String(repeating: " ", count: heredoc.body.count)
+            with: String(repeating: " ", count: body.count)
         ),
-        [heredoc.body]
+        [body]
     )
 }
 

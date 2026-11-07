@@ -378,3 +378,17 @@ func corpus_heredocBodyRepeatingAnEarlierWord_isNotAllowedOnPinOrDoor(command: S
     #expect(harness.pin(command).decision != .allow, "pin")
     #expect(harness.door(command).decision != .allow, "door")
 }
+
+/// A `<<` the heredoc scan misplaces (inside `${…}` or `$[…]`, or after a
+/// nested heredoc whose body closes a paren) must not mask the lines bash runs.
+@Test(arguments: [
+    "echo ${x:-<<x}\nrm -rf ~\nx}",
+    "echo $[1<<2]\nrm -rf ~\n2]",
+    "( cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+    "x=$(cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+])
+func corpus_misplacedHeredocOperator_isNotAllowedOnPinOrDoor(command: String) throws {
+    let harness = try DayOneHarness.load()
+    #expect(harness.pin(command).decision != .allow, "pin")
+    #expect(harness.door(command).decision != .allow, "door")
+}
