@@ -186,8 +186,13 @@ public final class EgressProxy: @unchecked Sendable {
     private let grants: [EgressProxyCredential: EgressGrant]?
     private let record: @Sendable (EgressProxyDenial) -> Void
     /// Resolves one admitted target to the candidate set `dial` checks and
-    /// connects. Production is `resolveBounded`; tests inject answers.
-    private let resolve: @Sendable (String, Int) -> [EgressDialCandidate]
+    /// connects. Production is `boundedResolver(budget: resolverBudget)`;
+    /// tests inject answers.
+    let resolve: @Sendable (String, Int) -> [EgressDialCandidate]
+    /// This instance's outstanding-lookup budget. Per proxy (one per
+    /// runtime) so one runtime's hung lookups cannot starve another's;
+    /// only `EgressResolverBudget.processCeiling` is shared.
+    let resolverBudget: EgressResolverBudget
     private let lock = NSLock()
     /// Phase 4 live supplement: human-approved exact host/port rules loaded
     /// without restart. Additive to the startup policy; every admission
@@ -214,7 +219,7 @@ public final class EgressProxy: @unchecked Sendable {
     ) {
         self.init(
             policy: policy, grants: nil, binaryPolicy: binaryPolicy, attribution: attribution,
-            pins: pins, record: record, resolve: EgressProxy.resolveBounded
+            pins: pins, record: record
         )
     }
 
@@ -233,12 +238,14 @@ public final class EgressProxy: @unchecked Sendable {
     ) {
         self.init(
             policy: .publicHTTPS, grants: grants, binaryPolicy: binaryPolicy, attribution: attribution,
-            pins: pins, record: record, resolve: EgressProxy.resolveBounded
+            pins: pins, record: record
         )
     }
 
     /// Designated initializer behind both modes. `grants == nil` is open
-    /// mode. Module-internal so tests can inject the resolver.
+    /// mode. Module-internal so tests can inject the resolver or budget;
+    /// a nil `resolve` is production `getaddrinfo` under this instance's
+    /// own budget.
     init(
         policy: EgressHostPolicy,
         grants: [EgressProxyCredential: EgressGrant]?,
@@ -246,7 +253,10 @@ public final class EgressProxy: @unchecked Sendable {
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
         record: (@Sendable (EgressProxyDenial) -> Void)?,
-        resolve: @escaping @Sendable (String, Int) -> [EgressDialCandidate]
+        resolverBudget: EgressResolverBudget = EgressResolverBudget(
+            limit: EgressResolverBudget.perProxyLimit, parent: .processCeiling
+        ),
+        resolve: (@Sendable (String, Int) -> [EgressDialCandidate])? = nil
     ) {
         self.policy = policy
         self.binaryPolicy = binaryPolicy
@@ -254,7 +264,8 @@ public final class EgressProxy: @unchecked Sendable {
         self.pins = pins
         self.grants = grants
         self.record = record ?? EgressProxy.productionDenialLog()
-        self.resolve = resolve
+        self.resolverBudget = resolverBudget
+        self.resolve = resolve ?? EgressProxy.boundedResolver(budget: resolverBudget)
         admitAttributionPin()
     }
 
@@ -1000,19 +1011,24 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     static func dial(host: String, port: Int, external: Bool) -> DialOutcome {
-        dial(host: host, port: port, external: external, resolve: resolveBounded)
+        dial(host: host, port: port, external: external, resolve: boundedResolver(budget: .processCeiling))
     }
 
     /// Longest the proxy waits for one name to resolve. `getaddrinfo` has no
     /// timeout of its own; past this the request is denied `dns-failed`.
     static let resolveTimeout: DispatchTimeInterval = .seconds(10)
 
-    /// Production resolver: `getaddrinfo` under `resolveTimeout` and the
-    /// process-wide lookup budget.
-    @Sendable static func resolveBounded(host: String, port: Int) -> [EgressDialCandidate] {
-        resolveWithDeadline(
-            host: host, port: port, timeout: resolveTimeout, budget: .shared, resolve: resolveDialCandidates
-        )
+    /// Production resolver: `getaddrinfo` under `resolveTimeout` and
+    /// `budget` (a proxy's own budget, which also draws on the process
+    /// ceiling).
+    static func boundedResolver(
+        budget: EgressResolverBudget
+    ) -> @Sendable (String, Int) -> [EgressDialCandidate] {
+        { host, port in
+            resolveWithDeadline(
+                host: host, port: port, timeout: resolveTimeout, budget: budget, resolve: resolveDialCandidates
+            )
+        }
     }
 
     /// Runs `resolve` off the calling thread and waits at most `timeout`.
@@ -1020,7 +1036,9 @@ public final class EgressProxy: @unchecked Sendable {
     /// `dns-failed`) when the lookup is late or the budget is spent. A late
     /// lookup keeps its budget slot until it returns, so a resolver that
     /// hangs every query cannot pile up unbounded blocked threads; its
-    /// answer is dropped, never dialed.
+    /// answer is dropped, never dialed. While the deadline runs a lookup
+    /// costs two threads (this caller waiting, a worker in `getaddrinfo`);
+    /// past it only the worker stays blocked, bounded by the budget.
     static func resolveWithDeadline(
         host: String,
         port: Int,
@@ -1511,26 +1529,39 @@ public final class EgressProxy: @unchecked Sendable {
 /// Caps how many host lookups may be outstanding at once. A lookup that
 /// outlives the proxy's deadline still holds its slot until `getaddrinfo`
 /// returns; once the budget is spent, new requests deny `dns-failed`
-/// without resolving.
+/// without resolving. Each proxy owns a `perProxyLimit` budget whose
+/// `parent` is `processCeiling`, so a runtime that hangs its own lookups
+/// exhausts only its own slots while total blocked threads stay bounded.
 final class EgressResolverBudget: Sendable {
-    static let shared = EgressResolverBudget(limit: 32)
+    static let perProxyLimit = 32
+    static let processCeiling = EgressResolverBudget(limit: 128)
 
     let limit: Int
+    /// Also charged on every acquire; nil for a root budget.
+    let parent: EgressResolverBudget?
     private let inFlight = Mutex(0)
 
-    init(limit: Int) {
+    init(limit: Int, parent: EgressResolverBudget? = nil) {
         self.limit = limit
+        self.parent = parent
     }
 
     func acquire() -> Bool {
-        inFlight.withLock { count in
+        let local = inFlight.withLock { count in
             guard count < limit else { return false }
             count += 1
             return true
         }
+        guard local else { return false }
+        guard parent?.acquire() ?? true else {
+            inFlight.withLock { $0 -= 1 }
+            return false
+        }
+        return true
     }
 
     func release() {
         inFlight.withLock { $0 -= 1 }
+        parent?.release()
     }
 }

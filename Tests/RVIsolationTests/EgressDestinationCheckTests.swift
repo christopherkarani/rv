@@ -215,16 +215,21 @@ import Testing
     @Test func exhaustedResolverBudgetFailsClosedWithoutResolving() throws {
         let budget = EgressResolverBudget(limit: 1)
         let release = DispatchSemaphore(value: 0)
+        let started = DispatchSemaphore(value: 0)
         let calls = Mutex(0)
         // Holds the only slot until released.
         _ = EgressProxy.resolveWithDeadline(
             host: "hung.example", port: 443, timeout: .milliseconds(50), budget: budget,
             resolve: { _, _ in
                 calls.withLock { $0 += 1 }
+                started.signal()
                 _ = release.wait(timeout: .now() + 5)
                 return []
             }
         )
+        // The deadline can pass before the lookup is scheduled; wait until
+        // it actually holds the slot before asserting the call count.
+        try #require(started.wait(timeout: .now() + 5) == .success)
         let second = EgressProxy.resolveWithDeadline(
             host: "next.example", port: 443, timeout: .seconds(1), budget: budget,
             resolve: { _, _ in
@@ -237,11 +242,76 @@ import Testing
         release.signal()
         // The slot frees once the hung lookup returns.
         var freed = false
-        for _ in 0..<100 where freed == false {
+        for _ in 0..<250 where freed == false {
             freed = budget.acquire()
             if freed { budget.release() } else { usleep(20_000) }
         }
         #expect(freed)
+    }
+
+    /// One runtime's hung lookups must not starve another runtime's proxy:
+    /// each proxy owns its budget, and only the process ceiling is shared.
+    @Test func exhaustingOneProxyBudgetDoesNotStarveAnother() throws {
+        let ceiling = EgressResolverBudget(limit: 8)
+        let first = EgressResolverBudget(limit: 2, parent: ceiling)
+        let second = EgressResolverBudget(limit: 2, parent: ceiling)
+        let release = DispatchSemaphore(value: 0)
+        let started = DispatchSemaphore(value: 0)
+        defer { for _ in 0..<2 { release.signal() } }
+        for index in 0..<2 {
+            _ = EgressProxy.resolveWithDeadline(
+                host: "hung\(index).example", port: 443, timeout: .milliseconds(20), budget: first,
+                resolve: { _, _ in
+                    started.signal()
+                    _ = release.wait(timeout: .now() + 5)
+                    return []
+                }
+            )
+        }
+        for _ in 0..<2 { try #require(started.wait(timeout: .now() + 5) == .success) }
+        let candidate = try #require(Self.candidateV4("8.8.8.8", port: 443))
+        let starved = EgressProxy.resolveWithDeadline(
+            host: "next.example", port: 443, timeout: .seconds(5), budget: first,
+            resolve: { _, _ in [candidate] }
+        )
+        let other = EgressProxy.resolveWithDeadline(
+            host: "next.example", port: 443, timeout: .seconds(5), budget: second,
+            resolve: { _, _ in [candidate] }
+        )
+        #expect(starved.isEmpty)
+        #expect(other.count == 1)
+    }
+
+    @Test func processCeilingBoundsLookupsAcrossProxyBudgets() {
+        let ceiling = EgressResolverBudget(limit: 3)
+        let first = EgressResolverBudget(limit: 2, parent: ceiling)
+        let second = EgressResolverBudget(limit: 2, parent: ceiling)
+        #expect(first.acquire())
+        #expect(first.acquire())
+        #expect(second.acquire())
+        // Ceiling spent: the second proxy still has a local slot but is denied,
+        // and the failed attempt must not leak that local slot.
+        #expect(second.acquire() == false)
+        first.release()
+        #expect(second.acquire())
+        #expect(second.acquire() == false)
+    }
+
+    /// Production proxies each get their own budget under the shared
+    /// process ceiling, so spending one proxy's slots leaves the other's
+    /// lookups working.
+    @Test func eachProxyInstanceOwnsItsResolverBudget() throws {
+        let first = EgressProxy(policy: .publicHTTPS, grants: nil, record: { _ in })
+        let second = EgressProxy(policy: .publicHTTPS, grants: nil, record: { _ in })
+        #expect(first.resolverBudget !== second.resolverBudget)
+        #expect(first.resolverBudget.parent === EgressResolverBudget.processCeiling)
+        #expect(EgressResolverBudget.processCeiling.limit > first.resolverBudget.limit)
+        var held = 0
+        while first.resolverBudget.acquire() { held += 1 }
+        defer { for _ in 0..<held { first.resolverBudget.release() } }
+        #expect(held == first.resolverBudget.limit)
+        #expect(first.resolve("localhost", 80).isEmpty)
+        #expect(second.resolve("localhost", 80).isEmpty == false)
     }
 
     // MARK: Proxy wiring
