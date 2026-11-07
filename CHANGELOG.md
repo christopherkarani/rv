@@ -40,6 +40,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `rv` commands guard against root fallback and have a `login` help topic. (#498)
 - Untrusted text is escaped in egress, `secrets describe` and `audit verify` output, and display-hostile scalars are escaped in secrets, MCP and managed robot JSON. (#471, #511)
 - Local test fixes for MCP sandbox creation on Darwin and the judge-unavailable floor. (#514, #525)
+- Heredoc masking blanks the body where it was parsed, not the first copy of its text, so a body repeating an earlier word (`git reset --hard` then `cat <<EOF` / `git` / `EOF`) no longer hides that word from the gate. Bodies whose position is ambiguous (no terminator, CR, oddly quoted delimiter, `\` or `#` before the operator) stay visible.
 
 ### Security
 
