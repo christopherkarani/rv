@@ -88,7 +88,8 @@ enum WorkspaceTUICommand {
             launcher: launcher,
             defaultShellID: defaultShellID,
             restoredView: openedLayout.session.revision == 0 ? nil : openedLayout.session.view,
-            initialViewID: openedLayout.session.viewID
+            initialViewID: openedLayout.session.viewID,
+            review: WorkspaceReviewQueue()
         )
         switch openedLayout.notice {
         case .corrupt:
