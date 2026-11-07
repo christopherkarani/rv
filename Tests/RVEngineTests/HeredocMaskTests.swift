@@ -70,6 +70,11 @@ struct HeredocMaskTests {
         "x=\"$(cat <<'A'\n\" ; cat <<B >f\nA\n)\"\nrm -rf ~\nB",
         // An ANSI-C quote, where `\'` does not close.
         "echo $'\\' <<EOF ''\nrm -rf ~\nEOF",
+        // A substitution inside double quotes, whose own quotes nest.
+        "echo \"$(echo \" <<EOF \")\"\nrm -rf ~\nEOF",
+        "echo \"`echo \" <<EOF \"`\"\nrm -rf ~\nEOF",
+        // A brace inside `${…}`: zsh counts nested braces.
+        "echo ${x:-{} <<EOF }\nrm -rf ~\nEOF",
     ])
     func unplaceableBodyStaysVisible(command: String) {
         #expect(maskNonExecutingHeredocBodies(command) == command)

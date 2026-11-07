@@ -869,6 +869,27 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-dquoted-substitution",
+      "command": "echo \"$(echo \" <<EOF \")\"\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-dquoted-backtick",
+      "command": "echo \"`echo \" <<EOF \"`\"\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-after-brace-in-expansion",
+      "command": "echo ${x:-{} <<EOF }\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
     }
   ]
 }

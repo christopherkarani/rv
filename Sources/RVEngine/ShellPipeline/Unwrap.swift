@@ -1769,6 +1769,11 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
             if currentQuote == "\"", character == "\\", following == "\"" {
                 ambiguousPrefix = true
             }
+            // A substitution inside double quotes nests its own quotes,
+            // which this scan would read as closing the outer one.
+            if currentQuote == "\"", character == "`" || (character == "$" && following == "(") {
+                ambiguousPrefix = true
+            }
             if isHeredocOperator(in: text, at: index) {
                 ambiguousPrefix = true
             }
@@ -1812,7 +1817,14 @@ func locateHeredoc(_ text: String) -> HeredocMatch? {
         }
         if character == "$", following == "{" || following == "[" {
             openExpansions.append(following == "{" ? "}" : "]")
-        } else if character == openExpansions.last {
+            index = text.index(after: next)
+            continue
+        }
+        // zsh counts nested braces inside `${…}`; this scan does not.
+        if character == "{", openExpansions.isEmpty == false {
+            ambiguousPrefix = true
+        }
+        if character == openExpansions.last {
             openExpansions.removeLast()
         }
         if (character == "<" || character == ">" || character == "$"),

@@ -386,6 +386,9 @@ func corpus_heredocBodyRepeatingAnEarlierWord_isNotAllowedOnPinOrDoor(command: S
     "echo $[1<<2]\nrm -rf ~\n2]",
     "( cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
     "x=$(cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+    "echo \"$(echo \" <<EOF \")\"\nrm -rf ~\nEOF",
+    "echo \"`echo \" <<EOF \"`\"\nrm -rf ~\nEOF",
+    "echo ${x:-{} <<EOF }\nrm -rf ~\nEOF",
 ])
 func corpus_misplacedHeredocOperator_isNotAllowedOnPinOrDoor(command: String) throws {
     let harness = try DayOneHarness.load()
