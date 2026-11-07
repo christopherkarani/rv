@@ -45,6 +45,27 @@ struct ManagedGateTests {
         #expect(walked.ids.contains(.coreGit))
     }
 
+    @Test func requiredPackOutsideDayOneIsCompiledAndEnforced() async throws {
+        // The pack is required by the org but not enabled in user config:
+        // the daemon must still compile and walk it.
+        let homeURL = try isolatedHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        var gate = ManagedPolicy.Gate()
+        gate.requirePacks = [PackID(rawValue: "database.sqlite")]
+        let decision = await ManagedGate.$override.withValue(active(gate)) {
+            let runtime = ServiceRuntime(home: home, allowOnceDirectory: try! isolatedAllowOnceDirectory())
+            return await runtime.evaluate(
+                .makeDayOne(command: ShellCommand(rawValue: "DROP TABLE users"))
+            ).result.decision
+        }
+        guard case .deny(let deny) = decision else {
+            Issue.record("an org-required pack must be enforced by rvd, got \(decision)")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "database.sqlite:drop-table")
+    }
+
     @Test func safetyOnlyRises() {
         var strict = ManagedPolicy.Gate()
         strict.requireStrictSafety = true

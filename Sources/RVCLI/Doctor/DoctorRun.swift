@@ -151,7 +151,7 @@ enum DoctorRun {
                 )
             },
             config: configState(path: paths.configDirectory, fileManager: environment.fileManager),
-            safety: SafetyStore.loadEffective(
+            safety: ManagedGate.effectiveSafety(
                 home: environment.home,
                 workspace: URL(
                     fileURLWithPath: environment.fileManager.currentDirectoryPath,

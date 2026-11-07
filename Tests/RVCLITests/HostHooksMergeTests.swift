@@ -104,7 +104,7 @@ private let codexFreshBytes = """
           {
             "command": "python3 /tmp/home/.codex/hooks/rv-guard.py",
             "statusMessage": "RV",
-            "timeout": 15,
+            "timeout": 18,
             "type": "command"
           }
         ],
@@ -123,21 +123,21 @@ private let cursorFreshBytes = """
       {
         "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
-        "timeout": 15
+        "timeout": 18
       }
     ],
     "beforeShellExecution": [
       {
         "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
-        "timeout": 15
+        "timeout": 18
       }
     ],
     "preToolUse": [
       {
         "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
-        "timeout": 15
+        "timeout": 18
       }
     ]
   },

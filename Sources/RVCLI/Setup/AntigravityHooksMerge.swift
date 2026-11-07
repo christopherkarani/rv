@@ -22,7 +22,7 @@ enum AntigravityHooksMerge {
     ]
     static var matchers: [String] { [matcher] + fileMatchers }
     static let hookType = "command"
-    static let timeout = 15
+    static let timeout = 18
 
     static let wiringDescriptor = HostWiringDescriptor(
         layout: .grouped(hookName: hookName, listKey: preToolUseKey),

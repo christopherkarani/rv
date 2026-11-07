@@ -146,7 +146,7 @@ rv is one binary, 25 commands. The rest of the surface:
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review
   (`rv egress`); approving them waits on the owner route above.
-- **Tamper-evident audit** — every deny and every override
+- **Tamper-evident audit** — every hook and file-tool deny, every override
   (allow-once, allowlist, rebase recovery), plus MCP and secret events,
   lands in a SHA-256 hash-chained `audit.jsonl` (rule and host, never
   command text). Verify with `rv audit verify`, export

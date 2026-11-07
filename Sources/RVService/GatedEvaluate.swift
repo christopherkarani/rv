@@ -888,7 +888,8 @@ public struct GatedEvaluate: Sendable {
             AuditEvent(
                 time: row.at, kind: .commandOverride, decision: .allowed,
                 subject: row.ruleID.rawValue, reason: row.override,
-                workspace: row.workspace?.path, agent: row.host == .tty ? nil : row.host.rawValue,
+                workspace: row.workspace.map { DenialPathRedaction.redact($0.path, home: home) },
+                agent: row.host == .tty ? nil : row.host.rawValue,
                 source: AuditLedger.Source.audit.rawValue,
                 detail: ["host": row.host.rawValue, "override": row.override]
             ),

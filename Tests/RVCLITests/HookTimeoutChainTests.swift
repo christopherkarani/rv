@@ -7,7 +7,8 @@ import Testing
 /// ordered so the innermost one expires first: if a host or shim gives up
 /// while rvd still treats the call as live, rvd can spend an allow-once
 /// grant on a reply nobody reads. Order:
-/// daemon budget < C client (hello + evaluate) < shim < host hook config.
+/// rvd (request by the send cutoff + its 7 s budget) and the C client
+/// (send cutoff + evaluate timeout) < shim < host hook config.
 @Suite("Hook timeout chain")
 struct HookTimeoutChainTests {
     private static let repoRoot: URL = URL(fileURLWithPath: #filePath)
@@ -26,12 +27,24 @@ struct HookTimeoutChainTests {
         return Int(text[range])
     }
 
+    /// The C client never sends the evaluate request later than
+    /// `RV_EVALUATE_SEND_CUTOFF_MS` after it started (two macOS hellos and
+    /// a retry could otherwise push it past 12 s). Its worst case is the
+    /// cutoff plus the evaluate timeout.
     private func cClientMaxMilliseconds() throws -> Int {
         let c = try source("Sources/rv-c/rv.c")
-        let hello = try #require(number(#"^#define RV_HELLO_TIMEOUT_MS (\d+)"#, in: c))
+        let cutoff = try #require(number(#"^#define RV_EVALUATE_SEND_CUTOFF_MS (\d+)"#, in: c))
         let evaluate = try #require(number(#"^#define RV_EVALUATE_TIMEOUT_MS (\d+)"#, in: c))
-        let retry = number(#"^#define RV_HOOK_RETRY_DELAY_MS (\d+)"#, in: c) ?? 0
-        return hello + evaluate + retry
+        return cutoff + evaluate
+    }
+
+    /// The latest rvd can still commit a side effect such as a grant spend:
+    /// the request arrives by the send cutoff, then rvd's own budget runs.
+    private func daemonLatestMilliseconds() throws -> Int {
+        let c = try source("Sources/rv-c/rv.c")
+        let cutoff = try #require(number(#"^#define RV_EVALUATE_SEND_CUTOFF_MS (\d+)"#, in: c))
+        let budget = HookDeadline.budget.components
+        return cutoff + Int(budget.seconds) * 1000 + Int(budget.attoseconds / 1_000_000_000_000_000)
     }
 
     private static let shimTemplates = [
@@ -52,11 +65,23 @@ struct HookTimeoutChainTests {
         #expect(HookDeadline.budget < .milliseconds(evaluate))
     }
 
-    @Test func everyShimOutlastsTheCClient() throws {
+    @Test func everyShimOutlastsTheCClientAndTheDaemon() throws {
         let client = try cClientMaxMilliseconds()
+        let daemon = try daemonLatestMilliseconds()
         for template in Self.shimTemplates {
-            #expect(try shimMilliseconds(template) > client, "\(template) kills rv before the C client gives up")
+            let shim = try shimMilliseconds(template)
+            #expect(shim > client, "\(template) kills rv before the C client gives up")
+            #expect(shim > daemon, "\(template) gives up while rvd can still spend a grant")
         }
+    }
+
+    @Test func helloPhasesFitInsideTheSendCutoff() throws {
+        // A cold launchd spawn must still get its request out: one hello
+        // timeout has to fit inside the cutoff.
+        let c = try source("Sources/rv-c/rv.c")
+        let cutoff = try #require(number(#"^#define RV_EVALUATE_SEND_CUTOFF_MS (\d+)"#, in: c))
+        let hello = try #require(number(#"^#define RV_HELLO_TIMEOUT_MS (\d+)"#, in: c))
+        #expect(hello < cutoff)
     }
 
     @Test func hostConfigsOutlastTheShims() throws {

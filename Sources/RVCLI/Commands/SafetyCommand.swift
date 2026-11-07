@@ -2,10 +2,11 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVPolicy
+import RVService
 
 enum SafetyRun {
     static func show(home: HomeDirectory, workspace: URL?) -> String {
-        SafetyStore.loadEffective(home: home, workspace: workspace).rawValue
+        ManagedGate.effectiveSafety(home: home, workspace: workspace).rawValue
     }
 
     static func set(_ level: SafetyLevel, home: HomeDirectory) throws {

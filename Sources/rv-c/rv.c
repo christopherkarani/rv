@@ -42,6 +42,14 @@ extern char **environ;
 #define RV_HELLO_TIMEOUT_MS 3000
 #define RV_EVALUATE_TIMEOUT_MS 8000
 #define RV_HOOK_RETRY_DELAY_MS 200
+/* The evaluate request is never sent later than this after the process
+ * started. rvd's own budget (HookDeadline, 7 s) runs from when the request
+ * arrives, so this cutoff bounds when rvd can still spend a grant:
+ * 5 s + 7 s < the 15 s host shim. Without it, two 3 s hellos plus the one
+ * retry could deliver the request about 12 s in, and rvd could spend an
+ * allow-once grant after the host had already given up. Past the cutoff the
+ * hook fails closed without sending anything. */
+#define RV_EVALUATE_SEND_CUTOFF_MS 5000
 
 struct ByteBuf {
     unsigned char *p;
@@ -285,6 +293,25 @@ static void fail_hook(const char *host, enum RvHookFailure failure) {
     (void)write_all(STDOUT_FILENO, fallback.out, strlen(fallback.out));
     (void)write_all(STDERR_FILENO, fallback.err, strlen(fallback.err));
     _exit(fallback.exit_code);
+}
+
+static long long rv_started_ms = -1;
+
+static long long monotonic_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* True once the evaluate request may no longer be sent (see
+ * RV_EVALUATE_SEND_CUTOFF_MS). A missing start time never blocks. */
+static int past_evaluate_send_cutoff(void) {
+    if (rv_started_ms < 0) {
+        return 0;
+    }
+    return monotonic_ms() - rv_started_ms > RV_EVALUATE_SEND_CUTOFF_MS;
 }
 
 static void sleep_ms(long ms) {
@@ -675,6 +702,12 @@ static int xpc_hook_evaluate(
     xpc_release(reply);
     reply = NULL;
 
+    if (past_evaluate_send_cutoff()) {
+        /* Too late for rvd to finish before the host gives up. */
+        failure = RV_HOOK_FAIL_TIMEOUT;
+        *retryable = 0;
+        goto out;
+    }
     /* Point of no return: from here on nothing is retried. */
     reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len,
                          RV_EVALUATE_TIMEOUT_MS, &failure, retryable);
@@ -854,6 +887,12 @@ static int unix_hook_evaluate(
         return RV_HOOK_FAIL_UNTRUSTED;
     }
 
+    if (past_evaluate_send_cutoff()) {
+        /* Too late for rvd to finish before the host gives up. */
+        close(fd);
+        *retryable = 0;
+        return RV_HOOK_FAIL_TIMEOUT;
+    }
     /* Point of no return: from here on nothing is retried. */
     set_socket_timeouts(fd, RV_EVALUATE_TIMEOUT_MS);
     write_be32(header, (uint32_t)json_len);
@@ -934,6 +973,7 @@ int main(int argc, char **argv) {
     struct RvHookReply reply;
     int failure;
 
+    rv_started_ms = monotonic_ms();
     /* Broken output pipes must not terminate RV before its denial path. */
     signal(SIGPIPE, SIG_IGN);
 

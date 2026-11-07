@@ -11,7 +11,14 @@ import Synchronization
 /// anti-rollback serial) on load. Hooks run on every tool call, so the
 /// verified state is cached briefly; a policy change applies within
 /// `cacheLifetime`.
-enum ManagedGate {
+public enum ManagedGate {
+    /// The safety level evaluation actually uses: the user's and repo's
+    /// setting, raised to strict by the organization gate. For display
+    /// (`rv safety`, `rv doctor`), so they match what hooks enforce.
+    public static func effectiveSafety(home: HomeDirectory?, workspace: URL?) -> SafetyLevel {
+        safety(SafetyStore.loadEffective(home: home, workspace: workspace), home: home)
+    }
+
     static let cacheLifetime: TimeInterval = 5
 
     /// Tests set this to evaluate under a given managed state without a
@@ -28,16 +35,17 @@ enum ManagedGate {
 
     static func state(home: HomeDirectory?, now: Date = Date()) -> ManagedPolicyState {
         if let override { return override }
-        guard let home else { return ManagedPolicyLocation.installed.load() }
-        let configDirectory = RVPolicyPaths.configDirectory(home: home)
+        let configDirectory = home.map { RVPolicyPaths.configDirectory(home: $0) }
+        let key = configDirectory?.path ?? ""
         if let cached = cache.withLock({ $0 }),
-           cached.configDirectory == configDirectory.path,
+           cached.configDirectory == key,
            now.timeIntervalSince(cached.loadedAt) < cacheLifetime,
            now >= cached.loadedAt {
             return cached.state
         }
-        let state = ManagedPolicyLocation.installed.load(serialsIn: configDirectory)
-        cache.withLock { $0 = Cached(state: state, configDirectory: configDirectory.path, loadedAt: now) }
+        let state = configDirectory.map { ManagedPolicyLocation.installed.load(serialsIn: $0) }
+            ?? ManagedPolicyLocation.installed.load()
+        cache.withLock { $0 = Cached(state: state, configDirectory: key, loadedAt: now) }
         return state
     }
 

@@ -184,7 +184,7 @@ private func resetHardEvent() -> [String: Any] {
         confirm: "yes",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.hookTimeoutMs == 28_000)
+    #expect(result.hookTimeoutMs == 30_000)
     #expect(result.block == true)
 }
 

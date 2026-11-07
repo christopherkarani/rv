@@ -77,9 +77,15 @@ package enum EvaluationWorld {
     ) -> PackCoverage {
         let walked: WalkedPackIDs
         if let catalog {
-            let ids = catalog.records.isEmpty
+            var ids = catalog.records.isEmpty
                 ? dayOnePackIDs
                 : catalog.records.filter(\.isEnabled).map(\.id)
+            // Org-required packs are compiled whatever the catalog flags say;
+            // otherwise the walk wants a pack the session never compiled and
+            // the engine skips it.
+            for id in ManagedGate.requiredPacks(home: home) where ids.contains(id) == false {
+                ids.append(id)
+            }
             walked = WalkedPackIDs(ids: ids)
         } else {
             walked = walkedPackIDs(home: home)
