@@ -76,14 +76,10 @@ A crash in gate verdict logic gets a failing regression test first (the
 corpus under `Tests/RVEngineTests/Fixtures/corpus` or a case in the twin
 suite), then a fix in its own PR.
 
-Open finding: heredoc masking blanks the first occurrence of the body text
+Past finding: heredoc masking blanked the first occurrence of the body text
 anywhere in the command, so `git reset --hard` followed by a heredoc whose
-body is `git` is allowed. `NormalizeFuzzTests.heredocBodyRepeatingAnEarlierWordDoesNotHideIt`
-holds it as a known issue. Until it is fixed the twin reports allows of
-that exact shape (a line after a `<<` opener whose text already occurs
-earlier in the command) as a known issue, and `rv-fuzz-normalize` skips
-only those inputs in the fail-closed check; every other heredoc and
-here-string input is still checked.
+body is `git` was allowed. #543 fixed it;
+`NormalizeFuzzTests.heredocBodyRepeatingAnEarlierWordDoesNotHideIt` pins it.
 
 CI runs each harness for 60 seconds on Linux in the `fuzz` workflow. It is
 not a required check.

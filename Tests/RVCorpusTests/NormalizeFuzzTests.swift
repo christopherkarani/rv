@@ -89,96 +89,21 @@ struct NormalizeFuzzTests {
         let budget = FuzzBudget.resolve(defaultSeed: 0x5EED_0002, defaultIterations: 1_500)
         var random = FuzzRandom(seed: budget.seed)
         var allowed: [String] = []
-        var heredocAllowed: [String] = []
         for _ in 0..<budget.iterations {
             let suffix = String(decoding: FuzzMutator.mutate(
                 seeds.randomElement(using: &random)!, seeds: seeds, dictionary: Self.dictionary,
                 maxLength: 1_024, using: &random), as: UTF8.self)
             let command = denied.randomElement(using: &random)! + "\n" + suffix
             guard harness.door(command).decision == .allow else { continue }
-            let described = FuzzMutator.describe(Array(command.utf8))
-            if Self.heredocBodyRepeatsEarlierText(command) {
-                heredocAllowed.append(described)
-            } else {
-                allowed.append(described)
-            }
+            allowed.append(FuzzMutator.describe(Array(command.utf8)))
         }
         #expect(allowed.isEmpty, "seed \(budget.seed): \(allowed.count) allows, first \(allowed.prefix(5))")
-        if heredocAllowed.isEmpty == false {
-            withKnownIssue("heredoc masking blanks an earlier line; see heredocBodyRepeatingAnEarlierWord") {
-                Issue.record("seed \(budget.seed): \(heredocAllowed.count) heredoc allows, first \(heredocAllowed.prefix(3))")
-            }
-        }
     }
 
-    // TODO(fix/heredoc-mask-position): delete this, its twin in
-    // Fuzz/Normalize, and the heredocAllowed split once heredoc masking
-    // blanks the body itself rather than the first match of its text.
-    /// The known heredoc masking bug shape: a line after a heredoc opener
-    /// (`<<`, `<<-`; a `<<<` here-string is not one), other than a
-    /// delimiter line, whose text, leading tabs dropped, already occurs
-    /// earlier in the command. Masking blanks the first match of the body
-    /// text, so only such inputs can hide an earlier line; every other
-    /// allow still fails the property.
-    static func heredocBodyRepeatsEarlierText(_ command: String) -> Bool {
-        let lines = command.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-        guard let opener = lines.firstIndex(where: { heredocDelimiters($0).isEmpty == false }) else { return false }
-        var delimiters = Set<String>()
-        var preceding = ""
-        for (index, line) in lines.enumerated() {
-            let text = line.drop { $0 == "\t" }
-            if index > opener, text.isEmpty == false, delimiters.contains(String(text)) == false,
-                preceding.range(of: text) != nil
-            {
-                return true
-            }
-            delimiters.formUnion(heredocDelimiters(line))
-            preceding += (index == 0 ? "" : "\n") + line
-        }
-        return false
-    }
-
-    /// The delimiter word after each `<<` or `<<-` in `line`, quotes and
-    /// backslashes dropped. A run of three `<` is a here-string, not an opener.
-    static func heredocDelimiters(_ line: Substring) -> [String] {
-        var delimiters: [String] = []
-        var index = line.startIndex
-        while index < line.endIndex {
-            guard line[index] == "<" else {
-                index = line.index(after: index)
-                continue
-            }
-            let run = line[index...].prefix { $0 == "<" }
-            index = run.endIndex
-            guard run.count == 2 || run.count >= 4 else { continue }
-            var rest = line[index...]
-            if rest.first == "-" { rest = rest.dropFirst() }
-            let word = rest.drop { $0 == " " || $0 == "\t" }
-                .prefix { $0.isWhitespace == false && "|<>;&()".contains($0) == false }
-                .filter { $0 != "'" && $0 != "\"" && $0 != "\\" }
-            if word.isEmpty == false { delimiters.append(word) }
-        }
-        return delimiters
-    }
-
-    @Test(arguments: [
-        ("git reset --hard\ncat <<EOF\ngit\nEOF", true),
-        ("rm -rf ~\ncat <<-EOF\n\trm\nEOF", true),
-        ("git reset --hard\ncat <<EOF\nnotes\nEOF", false),
-        ("git reset --hard\ncat <<-'EOF'\n\tnotes\n\tEOF", false),
-        ("git reset --hard\ncat <<< git", false),
-        ("git reset --hard\ngit log", false),
-    ])
-    func heredocExclusionMatchesOnlyTheKnownBugShape(command: String, excluded: Bool) {
-        #expect(Self.heredocBodyRepeatsEarlierText(command) == excluded)
-    }
-
-    /// Fuzz finding (open): heredoc masking blanks the first occurrence of
-    /// the body text anywhere in the command (`text.range(of:
-    /// heredoc.body)` in `maskNonExecutingHeredocBodiesDetailed`), so a
-    /// body that repeats a word of an earlier line erases that word from
-    /// the matching view and the denied line reads as allowed. Drop the
-    /// `withKnownIssue` when the masking is fixed.
+    /// Fuzz finding (fixed in #543): heredoc masking used to blank the first
+    /// occurrence of the body text anywhere in the command, so a body that
+    /// repeated a word of an earlier line erased that word from the
+    /// matching view and the denied line read as allowed.
     @Test(arguments: [
         "git reset --hard\ncat <<EOF\ngit\nEOF",
         "git reset --hard && cat <<EOF > notes.txt\ngit\nEOF",
@@ -187,10 +112,8 @@ struct NormalizeFuzzTests {
     ])
     func heredocBodyRepeatingAnEarlierWordDoesNotHideIt(command: String) throws {
         let harness = try StressHarness.dayOne()
-        withKnownIssue("heredoc masking blanks the first match of the body text, not the body") {
-            #expect(harness.pin(command).decision != .allow)
-            #expect(harness.door(command).decision != .allow)
-        }
+        #expect(harness.pin(command).decision != .allow)
+        #expect(harness.door(command).decision != .allow)
     }
 
     /// Fail closed: past the byte cap nothing is parsed; both doors say

@@ -44,7 +44,7 @@ jobs:
       # Linux-only leak detection; Fuzz/lsan.supp holds only allocations
       # LSan cannot trace (NSRegularExpression internals), so other leaks
       # still fail the run.
-      LSAN_OPTIONS: suppressions=${{ github.workspace }}/Fuzz/lsan.supp
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/Fuzz/lsan.supp:print_suppressions=0
     steps:
       - uses: actions/checkout@v4
 
