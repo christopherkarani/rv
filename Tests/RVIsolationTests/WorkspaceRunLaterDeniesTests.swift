@@ -108,6 +108,23 @@ struct WorkspaceRunLaterDeniesTests {
         }
     }
 
+    @Test func legacyControlPathsAlsoMatchCaseVariants() {
+        let denies = workspaceControlCaseVariantDenies(workspacePath: workspace)
+        #expect(workspaceControlDenies(workspacePath: workspace).contains(denies))
+        let rv = pattern(".rv", tree: true)
+        #expect(denies.contains(escapeSeatbeltSubpath(rv)))
+        #expect(matches(rv, "\(workspace)/.RV/policy.toml"))
+        #expect(matches(rv, "\(workspace)/.rv"))
+        #expect(matches(rv, "\(workspace)/.rvx") == false)
+        let hooks = pattern(".git/hooks", tree: true)
+        #expect(matches(hooks, "\(workspace)/.GIT/Hooks/pre-commit"))
+        #expect(matches(pattern(".git/config"), "\(workspace)/.Git/CONFIG"))
+        #expect(matches(pattern(".git/config"), "\(workspace)/.git/config.lock") == false)
+        // `.git` itself is entry-pinned (data, unlink, create), not a tree:
+        // objects and refs inside must stay writable.
+        #expect(matches(pattern(".git"), "\(workspace)/.git/objects/ab") == false)
+    }
+
     @Test func macOSGuestProfileDeniesLinksAndCarriesRunLaterDenies() {
         let profile = macOSGuestSandboxProfile(workspacePath: workspace)
         #expect(profile.contains("(deny file-link)"))

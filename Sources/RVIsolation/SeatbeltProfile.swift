@@ -1291,7 +1291,31 @@ func workspaceControlDenies(workspacePath: String) -> String {
         (literal "\(git)"))
     (deny file-write-unlink file-write-create
         (literal "\(config)"))
-    """ + "\n" + workspaceRunLaterDenies(workspacePath: workspacePath)
+    """ + "\n" + workspaceControlCaseVariantDenies(workspacePath: workspacePath)
+        + "\n" + workspaceRunLaterDenies(workspacePath: workspacePath)
+}
+
+/// Case-insensitive companions to the exact control-path rules above. The
+/// saved tree is usually on a case-insensitive APFS volume: when `.rv` is
+/// absent, a cage could create `.RV/policy.toml`, which the exact `.rv`
+/// rule does not match but rv on the host reads as `.rv/policy.toml`. The
+/// exact literals stay in place; these regex rules only add coverage.
+func workspaceControlCaseVariantDenies(workspacePath: String) -> String {
+    func regex(_ relative: String, tree: Bool = false) -> String {
+        let pattern = caseInsensitiveWorkspaceRegex(workspacePath: workspacePath, relative: relative, tree: tree)
+        return "        (regex \"\(escapeSeatbeltSubpath(pattern))\")"
+    }
+    return """
+    (deny file-write*
+    \(regex(".git/hooks", tree: true))
+    \(regex(".rv", tree: true))
+    \(regex(".config/rv", tree: true))
+    \(regex(".git/config")))
+    (deny file-write-data file-write-unlink file-write-create
+    \(regex(".git")))
+    (deny file-write-unlink file-write-create
+    \(regex(".config")))
+    """
 }
 
 /// Agent and editor config inside the workspace that a host tool reads and
