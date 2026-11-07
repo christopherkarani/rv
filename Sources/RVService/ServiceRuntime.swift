@@ -46,6 +46,8 @@ public actor ServiceRuntime {
     /// Shared with the XPC host/UI sessions so transport and bridges see
     /// one state. Separate authority from `ceremonies`, always.
     let actionCeremonies: ActionApprovalCeremonyService
+    /// Owner-presence check for owner actions and non-macOS allow-once.
+    let ownerPresence: OwnerPresence
     /// Hook-ask review ceremonies (pending wait → review → allow-once).
     /// Shared with the XPC UI sessions. Resolves through `HookAskResolver`
     /// only: never an `AgentInstance` grant (F3).
@@ -96,8 +98,10 @@ public actor ServiceRuntime {
         pendingApprovals: PendingApprovalsBinding,
         ceremonies: WorkspaceOperatorCeremonyService,
         actionCeremonies: ActionApprovalCeremonyService? = nil,
-        hookCeremonies: HookReviewCeremonyService? = nil
+        hookCeremonies: HookReviewCeremonyService? = nil,
+        ownerPresence: OwnerPresence = OwnerPresence()
     ) {
+        self.ownerPresence = ownerPresence
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
         // Built before the hook ceremony below: the ceremony captures
@@ -298,6 +302,8 @@ public actor ServiceRuntime {
             return nil
         case .attestTTYRedemption(let params):
             return params.clientSemver
+        case .confirmOwnerAction(let params):
+            return params.clientSemver
         }
     }
 
@@ -389,7 +395,9 @@ public actor ServiceRuntime {
         case .launchProposalStatus(let params):
             result = .launchProposalStatus(await ceremonies.proposalStatus(params))
         case .attestTTYRedemption(let params):
-            result = await attestTTYRedemption(params)
+            result = await attestTTYRedemption(params, context: context)
+        case .confirmOwnerAction(let params):
+            result = await confirmOwnerAction(params, context: context)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -404,7 +412,7 @@ public actor ServiceRuntime {
     static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
         guard enabled else { return false }
         switch ServiceMethodAuthorization.requirement(for: method) {
-        case .ttyAttestation, .launchProposal, .ownerMutation:
+        case .ttyAttestation, .launchProposal, .ownerMutation, .ownerConfirm:
             return false
         case .diagnostic, .agent, .hookConsult, .controlRead:
             return true
@@ -451,8 +459,47 @@ public actor ServiceRuntime {
     /// anyway (a buggy caller must plant nothing), then plant one memory
     /// grant. The daemon writes no projection (the attesting CLI flips its
     /// own). Double-attests report planted:false and create no second grant.
-    private func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> IPCResult {
+    /// The device owner approves `params.summary`: rvd verifies presence
+    /// (see `OwnerPresence`), audits the outcome, and answers. The CLI
+    /// performs the action only on `.approved`.
+    private func confirmOwnerAction(
+        _ params: ConfirmOwnerActionParams, context: AuthenticatedRequestContext
+    ) async -> IPCResult {
+        let summary = String(params.summary.unicodeScalars
+            .filter { $0.properties.generalCategory != .control }
+            .prefix(ConfirmOwnerActionParams.maxSummaryBytes)
+            .map(Character.init))
+        guard summary.isEmpty == false else { return .error(.authorizationDenied) }
+        let verdict = await ownerPresence.verify(params.proof, context: context)
+        let reply: ConfirmOwnerActionReply
+        switch verdict {
+        case .approved: reply = ConfirmOwnerActionReply(outcome: .approved)
+        case .denied(let denied): reply = denied
+        }
+        OwnerPresence.audit(
+            summary: summary, approved: reply.outcome == .approved, outcome: reply.outcome.rawValue,
+            context: context, home: configHome)
+        return .confirmOwnerAction(reply)
+    }
+
+    private func attestTTYRedemption(
+        _ params: AttestTTYRedemptionParams, context: AuthenticatedRequestContext = .unauthenticated
+    ) async -> IPCResult {
         func denied() -> IPCResult { .error(.authorizationDenied) }
+        // The genuine macOS CLI ran LocalAuthentication itself (`.cli`).
+        // Other authenticated callers (Linux) prove presence with the
+        // owner's password, which rvd verifies before planting anything.
+        if context.componentRole != .cli {
+            guard case .approved = await ownerPresence.verify(params.ownerProof, context: context) else {
+                OwnerPresence.audit(
+                    summary: "redeem allow-once code", approved: false, outcome: "proofRejected",
+                    context: context, home: configHome)
+                return denied()
+            }
+            OwnerPresence.audit(
+                summary: "redeem allow-once code", approved: true, outcome: "approved",
+                context: context, home: configHome)
+        }
         // Shape re-checks for in-process callers: wire bytes already
         // passed validating decode, but a constructed value can carry
         // any raw string. Same rule, same refusal as before.
@@ -782,6 +829,8 @@ public actor ServiceRuntime {
             method = "launchProposalStatus"
         case .attestTTYRedemption:
             method = "attestTTYRedemption"
+        case .confirmOwnerAction:
+            method = "confirmOwnerAction"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

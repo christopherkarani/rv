@@ -65,9 +65,8 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   databases, Terraform, CI/CD, payments, and more. Safe patterns run
   first; the first blocking hit denies. Three packs are on by default
   (`core.filesystem`, `core.git`, `system.disk`); browse the rest with
-  `rv packs`. Enabling more from the CLI waits on the owner route
-  described below; until then list them under `[packs] enabled = [...]`
-  in `~/.config/rv/config.toml`.
+  `rv packs`; `rv packs enable <id>` turns more on after owner
+  authentication (see below).
 - **Script gate** — `npm test` can't hide a payload: rv evaluates the
   actual `pre`/`post`/body scripts in `package.json`, not just the
   command you see.
@@ -112,15 +111,18 @@ your terminal — the agent can't redeem its own code:
 rv allow-once a1b2c3    # next matching call in this directory runs once
 ```
 
-Redeeming needs owner authentication (Touch ID or your password) through
-the signed CLI, so today it works on macOS only.
+Redeeming needs owner authentication: Touch ID or your password through
+the signed CLI on macOS, your login password on Linux.
 
 Typed rules live in `~/.config/rv/policy.toml` (`rv policy show`).
 Commands that change the gate itself (`rv allowlist add`,
-`rv packs enable`, `rv safety set`, policy edits, `rv egress approve`)
-refuse for now: they wait on an authenticated owner route so an agent
-running as you cannot weaken its own guard. See
-[the design](docs/plans/owner-action-route/SPEC.md).
+`rv packs enable`, `rv safety strict|normal`, `rv policy draft --save`,
+`rv egress approve`, `rv workspace abandon`) ask for the same owner
+authentication first, so an agent running as you cannot weaken its own
+guard. On Linux rv reads your login password from the terminal and
+`rvd` checks it with the system's `unix_chkpwd`; five wrong passwords in
+ten minutes lock checks for ten minutes. Every attempt is recorded as an
+`owner.action` event in the audit log.
 
 ## Beyond the shell
 
@@ -145,7 +147,7 @@ rv is one binary, 25 commands. The rest of the surface:
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review
-  (`rv egress`); approving them waits on the owner route above.
+  (`rv egress`); `rv egress approve` asks for owner authentication.
 - **Tamper-evident audit** — every hook and file-tool deny, every override
   (allow-once, allowlist, rebase recovery), plus MCP and secret events,
   lands in a SHA-256 hash-chained `audit.jsonl` (rule and host, never

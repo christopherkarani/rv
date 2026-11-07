@@ -141,7 +141,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
-                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (not yet available)"),
+                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (asks for owner authentication)"),
                 HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
             ]),
             HelpSection(heading: "Flags", rows: [

@@ -1,0 +1,9 @@
+schema_version = 1
+
+[[rule]]
+id = "typed.git:force-push-main"
+verdict = "deny"
+predicate = "gitPush"
+force = "force"
+branch = "main"
+english = "never allow force-push to main"

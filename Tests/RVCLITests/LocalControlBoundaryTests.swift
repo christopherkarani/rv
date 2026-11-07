@@ -105,7 +105,11 @@ struct LocalControlBoundaryTests {
         }
         let rows = await store.list(now: Date())
         #expect(rows.isEmpty)
-        #expect(throws: ValidationError.self) { try WorkspaceCommandRun.abandon("/tmp/ws") }
+        // Without owner authentication the abandon gate refuses before any
+        // workspace is touched.
+        await #expect(throws: ValidationError.self) {
+            try await withCLIProcess { try await WorkspaceCommandRun.abandon("/tmp/ws") }
+        }
     }
     @Test func abandonBodyBehindGateRefusesUnknownProject() throws {
         // The gate throws first (pinned above); the restored body behind
@@ -122,15 +126,21 @@ struct LocalControlBoundaryTests {
         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])
         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
-        await #expect(throws: ValidationError.self) { try await add.run() }
-        await #expect(throws: ValidationError.self) { try await exact.run() }
-        await #expect(throws: ValidationError.self) { try await remove.run() }
+        // No owner authentication given: every mutation refuses.
+        try await withCLIProcess(home: try isolatedHome()) {
+            await #expect(throws: ValidationError.self) { try await add.run() }
+            await #expect(throws: ValidationError.self) { try await exact.run() }
+            await #expect(throws: ValidationError.self) { try await remove.run() }
+        }
     }
 
-    @Test func safetyMutationRequiresOwnerAuthorization() throws {
+    @Test func safetyMutationRequiresOwnerAuthorization() async throws {
         let home = try isolatedHome()
-        #expect(throws: ValidationError.self) { try SafetyRun.set(.normal, home: home) }
-        #expect(throws: ValidationError.self) { try SafetyRun.set(.strict, home: home) }
+        try await withCLIProcess(home: home) {
+            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.normal, home: home) }
+            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.strict, home: home) }
+        }
+        #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
     }
 
     @Test func setupRunsUnauthenticated_uninstallRequiresDeviceOwnerAuth() async throws {

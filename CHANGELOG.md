@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- Owner authentication for commands that change the gate: `rv packs enable|disable`, `rv safety`, `rv allowlist`, `rv policy draft --save`, `rv policy apply --save`, `rv policy export --output`, `rv egress approve|deny` and `rv workspace abandon` work again after Touch ID or the login password. On Linux `rvd` verifies the password with `unix_chkpwd`, allows one check at a time and locks checks for ten minutes after five wrong passwords. Every attempt is an `owner.action` audit event.
+- `rv allow-once` works on Linux: the login password is the owner proof.
+- The Swift CLI reaches `rvd` over its Unix socket on Linux (`rv hook` included), after checking the peer is the sibling `rvd` running as the same user.
 - Signed organization policy has a restrict-only `gate` section: `requirePacks` lists packs every evaluation door applies whatever the user's pack config says, and `"safety": "strict"` forbids normal safety. A present but untrusted managed bundle now also forces strict safety. `rv managed status`, `rv safety` and `rv doctor` show the enforced level.
 - Secrets gateway: AWS SigV4 request signing from an `awsProfile` source, OAuth access-token minting from Keychain credentials, approve-rule requests held for a human, and binding of gateway secrets to the binaries allowed to spend them. (#483, #484, #485, #486, #487)
 - Secrets gateway controls: per-secret substitution surfaces, method/path allow rules, Basic-auth placeholders, placeholders bound to their runtime, secret expiry with TTL refresh and live rotation, and per-position value encoding. (#452, #454, #455, #456, #459, #460)

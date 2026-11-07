@@ -42,8 +42,9 @@ public struct ServiceClient: Sendable {
         )
     }
 #else
+    /// Linux: rvd's Unix socket (peer-verified as the sibling `rvd`).
     public init(
-        transport: (any ServiceTransport)? = nil,
+        transport: (any ServiceTransport)? = ServiceClient.defaultLinuxTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
@@ -58,6 +59,16 @@ public struct ServiceClient: Sendable {
             home: home,
             clock: clock
         )
+    }
+#endif
+
+#if !canImport(XPC)
+    public static func defaultLinuxTransport() -> (any ServiceTransport)? {
+        #if os(Linux)
+        UnixSocketServiceTransport.live()
+        #else
+        nil
+        #endif
     }
 #endif
 
@@ -284,6 +295,28 @@ public struct ServiceClient: Sendable {
                 AttestTTYRedemptionCall(params: params),
                 using: transport,
                 timeoutMs: transport.oneShotEvaluateTimeoutMs
+            )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    /// Asks rvd to confirm the device owner approves `params.summary`.
+    public func confirmOwnerAction(_ params: ConfirmOwnerActionParams) async -> Result<
+        ConfirmOwnerActionReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                ConfirmOwnerActionCall(params: params),
+                using: transport,
+                // A wrong password costs pam_unix's failure delay (~2 s).
+                timeoutMs: 15_000
             )
             return .success(reply)
         } catch let error as IPCCallError {

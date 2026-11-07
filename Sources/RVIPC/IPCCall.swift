@@ -84,3 +84,17 @@ public struct AttestTTYRedemptionCall: IPCCall {
         return nil
     }
 }
+
+public struct ConfirmOwnerActionCall: IPCCall {
+    public var params: ConfirmOwnerActionParams
+    public var method: IPCMethod { .confirmOwnerAction(params) }
+
+    public init(params: ConfirmOwnerActionParams) {
+        self.params = params
+    }
+
+    public static func extract(_ result: IPCResult) -> ConfirmOwnerActionReply? {
+        if case .confirmOwnerAction(let reply) = result { return reply }
+        return nil
+    }
+}

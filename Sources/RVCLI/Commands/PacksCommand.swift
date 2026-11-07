@@ -115,7 +115,7 @@ struct Packs: AsyncParsableCommand {
         var ids: [String]
 
         func run() async throws {
-            try mutate(ids: ids, enabling: true)
+            try await mutate(ids: ids, enabling: true)
         }
     }
 
@@ -129,7 +129,7 @@ struct Packs: AsyncParsableCommand {
         var ids: [String]
 
         func run() async throws {
-            try mutate(ids: ids, enabling: false)
+            try await mutate(ids: ids, enabling: false)
         }
     }
 
@@ -208,14 +208,12 @@ enum PacksListFilter {
     }
 }
 
-private func mutate(ids: [String], enabling: Bool) throws {
-    try LocalControlBoundary.requireOwnerAuthorization()
+private func mutate(ids: [String], enabling: Bool) async throws {
+    try await OwnerConfirmation.require("\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
     try applyPackMutation(ids: ids, enabling: enabling)
 }
 
-/// Pack enable/disable behind the owner gate. The gate throws until
-/// authenticated service mutation routes exist; without this body an
-/// implemented gate would report success while changing nothing.
+/// Pack enable/disable, run after the owner gate approved it.
 func applyPackMutation(ids: [String], enabling: Bool) throws {
     guard !ids.isEmpty else {
         throw ValidationError("missing pack id")

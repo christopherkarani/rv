@@ -144,8 +144,8 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        try await CLIOwnerAuth.requireAuthenticated(reason: redeemReason(row: peeked.row))
-        let service = client ?? ServiceClient()
+        let ownerProof = try await CLIOwnerAuth.requireAuthenticated(reason: redeemReason(row: peeked.row))
+        let service = client ?? OwnerConfirmation.defaultClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
             Self.redemptionUnchanged(before: peeked, after: rechecked)
         else {
@@ -159,7 +159,9 @@ enum AllowOnceCLI {
             // M-07: the rechecked row's payload digest binds the planted
             // grant to the reviewed hidden payload (digest only — exact
             // segments never cross IPC). Nil rows plant unbound.
-            payloadDigest: rechecked.payloadDigest.map(ContentPayloadDigest.init(rawValue:))
+            payloadDigest: rechecked.payloadDigest.map(ContentPayloadDigest.init(rawValue:)),
+            // Linux: the owner's password, verified by rvd before planting.
+            ownerProof: ownerProof
         ))
         let reply: AttestTTYRedemptionReply
         switch attested {
@@ -350,10 +352,19 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 exitCode: 2
             )
         } catch AllowOnceAttestError.serviceDenied {
+            #if os(Linux)
+            // rvd checks the password; a refusal is a wrong password or a
+            // lockout after repeated wrong ones. The code stays live.
+            try ctx.fail(
+                "rv allow-once: rvd refused approval (wrong password, or too many recent attempts); the code stays live\n",
+                exitCode: 2
+            )
+            #else
             try ctx.fail(
                 "rv allow-once: service refused approval; enroll via `rv setup` or approve in RVOperatorUI\n",
                 exitCode: 2
             )
+            #endif
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
             try ctx.fail("rv allow-once: store unavailable\n", exitCode: 2)
         } catch AllowOnceAuthError.required {

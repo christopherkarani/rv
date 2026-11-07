@@ -29,16 +29,31 @@ enum AllowOnceAuthError: Error, Equatable {
 enum CLIOwnerAuth {
     static let reason = "Authenticate to allow this command once."
 
-    static func requireAuthenticated(reason: String = reason) async throws {
+    /// macOS: runs LocalAuthentication and returns nil (rvd trusts the
+    /// pinned CLI). Linux: reads the owner's login password from the
+    /// terminal and returns it as a proof for rvd to verify; rvd, not this
+    /// process, decides whether it is right.
+    @discardableResult
+    static func requireAuthenticated(reason: String = reason) async throws -> OwnerProof? {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
             }
-            return
+            return nil
         }
+        #if canImport(LocalAuthentication)
         guard await liveOutcome(reason: reason) == .authenticated else {
             throw AllowOnceAuthError.required
         }
+        return nil
+        #else
+        guard let password = OwnerConfirmation.readOwnerPassword(
+            prompt: "\(reason)\nPassword for \(UserName.current ?? "your account"): ")
+        else {
+            throw AllowOnceAuthError.required
+        }
+        return OwnerProof(password: password)
+        #endif
     }
 
     private static func liveOutcome(reason: String) async -> UIAuthenticationOutcome {

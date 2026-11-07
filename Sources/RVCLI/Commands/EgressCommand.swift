@@ -6,12 +6,10 @@ import RVPolicy
 /// Phase 4 review queue surface: blocked network egress becomes scoped
 /// proposals, and the human approves or denies them here.
 ///
-/// Reads (`pending`, `show`, `denials`) work today. Mutations (`approve`,
-/// `deny`) are implemented behind `LocalControlBoundary`: local control
-/// mutations stay refused until authenticated service routes land, so
-/// these commands currently refuse like every other local mutation.
-/// The ceremony (TTY + device-owner authentication + TOCTOU re-read)
-/// mirrors the allow-once redeem tripwire.
+/// Reads (`pending`, `show`, `denials`) need nothing. Mutations
+/// (`approve`, `deny`) run only after rvd confirms the device owner
+/// approved them (`OwnerConfirmation`: Touch ID on macOS, the login
+/// password on Linux).
 struct Egress: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "egress",
@@ -518,7 +516,7 @@ struct EgressShow: AsyncParsableCommand {
 struct EgressApprove: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "approve",
-        abstract: "Approve one network proposal (refused until authenticated service routes land)."
+        abstract: "Approve one network proposal (asks for owner authentication)."
     )
 
     @Argument(help: "Proposal id from rv egress pending.")
@@ -528,7 +526,7 @@ struct EgressApprove: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
+        try await OwnerConfirmation.require("approve network request \(id)")
         let ctx = CommandContext.current(command: "egress approve", format: format)
         do {
             let view = try await EgressReviewRun.approve(
@@ -594,7 +592,7 @@ struct EgressDeny: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
+        try await OwnerConfirmation.require("deny network request \(id)")
         let ctx = CommandContext.current(command: "egress deny", format: format)
         guard let reason, reason.isEmpty == false else {
             try ctx.fail("rv egress deny: --reason is required\n", exitCode: 2)
