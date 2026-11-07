@@ -890,6 +890,24 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.fork-bomb-then-safe-tmp-cleanup-newline",
+      "command": ":(){ :|:& };:\nrm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.fork-bomb-then-safe-tmp-cleanup-and",
+      "command": ":(){ :|:& };: && rm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.safe-tmp-cleanup-then-fork-bomb",
+      "command": "rm -rf /tmp/x && :(){ :|:& };:",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
     }
   ]
 }

@@ -63,7 +63,8 @@ public func evaluate<E: PatternEngine>(
         enabledIDs: request.enabledPacks,
         engine: engine,
         attempts: &attempts,
-        budget: budget
+        budget: budget,
+        segments: segments.count > 1 ? segments : []
     ) {
         let viewed = withMatchingView(result, matchingView)
         if isTerminal(result.outcome) {
@@ -158,7 +159,8 @@ private func evaluateSingle<E: PatternEngine>(
     enabledIDs: [PackID],
     engine: E,
     attempts: inout Int,
-    budget: Int?
+    budget: Int?,
+    segments: [String] = []
 ) -> EvaluationResult? {
     if isDocumentationQuery(view) {
         return nil
@@ -189,7 +191,12 @@ private func evaluateSingle<E: PatternEngine>(
                 break
             }
         }
-        if skippedBySafe {
+        // In the full view of a multi-segment command a safe match vouches only
+        // for segments the segment pass already judged; a destructive match that
+        // spans segments (fork bomb, copy-then-delete) was never seen there, so
+        // the pack still runs and only spanning matches count.
+        let spanningOnly = skippedBySafe && !segments.isEmpty
+        if skippedBySafe && !spanningOnly {
             continue
         }
 
@@ -200,6 +207,9 @@ private func evaluateSingle<E: PatternEngine>(
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
             guard let range = engine.firstMatch(rule.compiled, in: view) else { continue }
+            if spanningOnly, segments.contains(where: { $0.contains(view[range]) }) {
+                continue
+            }
             let span = MatchSpan(
                 start: view.distance(from: view.startIndex, to: range.lowerBound),
                 end: view.distance(from: view.startIndex, to: range.upperBound)

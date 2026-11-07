@@ -276,6 +276,31 @@
       "id": "near.heredoc-crlf-body-lf-header",
       "command": "cat <<'EOF' > f\nline one\r\ngit reset --hard\r\nEOF",
       "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-then-ls",
+      "command": "rm -rf /tmp/build && ls",
+      "expected": "allow"
+    },
+    {
+      "id": "near.cd-then-tmp-cleanup",
+      "command": "cd x && rm -rf /tmp/foo",
+      "expected": "allow"
+    },
+    {
+      "id": "near.make-clean-tmp-cleanup-make",
+      "command": "make clean && rm -rf /tmp/out && make",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-or-true",
+      "command": "rm -rf /tmp/x || true",
+      "expected": "allow"
+    },
+    {
+      "id": "near.sudo-tmp-cleanup-then-ls",
+      "command": "sudo rm -rf /tmp/foo && ls",
+      "expected": "allow"
     }
   ]
 }
