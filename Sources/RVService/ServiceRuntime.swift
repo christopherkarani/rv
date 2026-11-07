@@ -501,19 +501,38 @@ public actor ServiceRuntime {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
     }
 
+    /// `request` evaluated under the owner's configured packs. Every door
+    /// (hook, SDK evaluate, explain, classify, the workspace host bridge)
+    /// resolves packs from the same config, so a caller's list can no longer
+    /// drop a pack the owner enabled. Before this, a caller that sent
+    /// day-one or an empty list skipped packs such as `cloud.aws`, and the
+    /// same command could get different verdicts depending on which door
+    /// asked. Packs a caller lists beyond the config are kept in the request
+    /// but only take effect once the owner enables them.
+    func ownerScoped(_ request: EvaluationRequest) -> EvaluationRequest {
+        var ids = EvaluationWorld.walkedPackIDs(home: configHome).ids
+        for id in request.enabledPacks where ids.contains(id) == false {
+            ids.append(id)
+        }
+        var scoped = request
+        scoped.enabledPacks = ids
+        return scoped
+    }
+
     /// Service-local entry point: only a live host validation can construct the
     /// context. The bridge revalidates after this operation before releasing it.
     func evaluateAgent(
         _ params: EvaluateParams, requestID: UUID, context: ServiceValidatedAgentContext
     ) async -> EvaluateReply {
         let started = DispatchTime.now()
+        let request = ownerScoped(params.request)
         let gated = compileSet.readyDoor(
-            wanted: WalkedPackIDs(ids: params.request.enabledPacks)
+            wanted: WalkedPackIDs(ids: request.enabledPacks)
         )
         let home = configHome
         // Off the actor: the judge path blocks (load wait, inference).
         let reply = EvaluateReply(result: await JudgeOffload.run {
-            gated.evaluateAgent(params.request, cwd: params.cwd, home: home)
+            gated.evaluateAgent(request, cwd: params.cwd, home: home)
         })
         log?.record(ServiceLogEvent(method: "agentEvaluate", elapsedMs:
             Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
@@ -570,8 +589,9 @@ public actor ServiceRuntime {
         cwd: WorkingDirectory?,
         host: LedgerHost = .tty
     ) async -> EvaluationResult {
-        let result = await readyWorld(wanted: WalkedPackIDs(ids: request.enabledPacks))
-            .apply(request, cwd: cwd, host: host)
+        let scoped = ownerScoped(request)
+        let result = await readyWorld(wanted: WalkedPackIDs(ids: scoped.enabledPacks))
+            .apply(scoped, cwd: cwd, host: host)
         recordAnalytics(for: result)
         return result
     }
@@ -632,9 +652,10 @@ public actor ServiceRuntime {
         let cwd = params.cwd
         // Same coverage rule as evaluate: explain must not peek through
         // a door compiled before the request's packs were enabled.
+        let request = ownerScoped(params.request)
         let result = await readyWorld(
-            wanted: WalkedPackIDs(ids: params.request.enabledPacks)
-        ).peek(params.request, cwd: cwd)
+            wanted: WalkedPackIDs(ids: request.enabledPacks)
+        ).peek(request, cwd: cwd)
         let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id, elapsedMs: 0)
@@ -659,9 +680,10 @@ public actor ServiceRuntime {
     private func classify(_ params: ClassifyParams) async -> ClassifyReply {
         let cwd = params.cwd
         // Same coverage rule as evaluate (see `explain`).
+        let request = ownerScoped(params.request)
         let result = await readyWorld(
-            wanted: WalkedPackIDs(ids: params.request.enabledPacks)
-        ).peek(params.request, cwd: cwd)
+            wanted: WalkedPackIDs(ids: request.enabledPacks)
+        ).peek(request, cwd: cwd)
         let suggestions: [String]
         switch result.decision {
         case .deny:

@@ -31,7 +31,7 @@ struct ServiceRuntimeEvaluateTests {
         #expect(fresh.packsEnabled.contains(.coreGit))
     }
 
-    @Test func coveredRequestedPacksStayOnWarmSession() async throws {
+    @Test func dayOneRequestStillCompilesConfiguredPacks() async throws {
         let homeURL = try isolatedHomeDirectory()
         defer { try? FileManager.default.removeItem(at: homeURL) }
         let home = try #require(HomeDirectory(validating: homeURL.path))
@@ -50,7 +50,9 @@ struct ServiceRuntimeEvaluateTests {
         )
 
         #expect(reply.result.decision == .allow)
-        #expect(await runtime.compiledPackIDs == dayOnePackIDs)
+        // The owner enabled database.sqlite, so even a day-one request
+        // compiles it: callers cannot drop configured packs.
+        #expect(await runtime.compiledPackIDs.contains(PackID(rawValue: "database.sqlite")))
     }
 
     @Test func uncoveredRequestedPacksRebuildWarmSessionCoverage() async throws {
@@ -82,7 +84,7 @@ struct ServiceRuntimeEvaluateTests {
         )
     }
 
-    @Test func dispatchEvaluate_emptyEnabledPacksDoesNotRefillDayOne() async throws {
+    @Test func dispatchEvaluate_emptyEnabledPacksStillUsesConfiguredPacks() async throws {
         let runtime = try isolatedRuntime()
         // Generic `.evaluate` stays denied for IPC callers (Step 8); the
         // semantic runs through the in-process entry instead.
@@ -105,10 +107,12 @@ struct ServiceRuntimeEvaluateTests {
                 enabledPacks: []
             )
         )
-        if case .deny = reply.result.decision {
-            Issue.record("empty enabledPacks means none enabled, not day-one refill")
+        // An empty caller list no longer means "no packs": evaluation uses
+        // the owner's configured packs (day-one here), so reset --hard denies.
+        guard case .deny = reply.result.decision else {
+            Issue.record("an empty caller list must not skip the owner's packs, got \(reply.result.decision)")
+            return
         }
-        #expect(reply.result.decision == .allow)
     }
 
     @Test func dispatchEvaluate_disabledCatalogPackStillDeniesResetHard() async throws {

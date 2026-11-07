@@ -288,8 +288,16 @@ struct OperatorCommandRunTests {
             await #expect(throws: ExitCode(1)) {
                 try await ScanSessions.parse([missing]).run()
             }
-            await #expect(throws: ExitCode(1)) {
+            // Unknown pack IDs are rejected up front instead of scanning
+            // with a pack that matches nothing.
+            let unknown = await #expect(throws: ValidationError.self) {
                 try await ScanSessions.parse(["--packs", "zzz.missing"]).run()
+            }
+            #expect(unknown?.message.hasPrefix("unknown pack id: ") == true)
+            await #expect(throws: (any Error).self) {
+                var muse = try ScanSessions.parse(["--host", "muse"])
+                try muse.validate()
+                try await muse.run()
             }
         }
         let notADirectory = FileManager.default.temporaryDirectory

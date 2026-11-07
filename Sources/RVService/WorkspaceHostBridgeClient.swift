@@ -128,6 +128,9 @@ public final class WorkspaceHostBridgeClient: Sendable {
             throw XPCEvaluateClientError.authenticationFailed
         }
         let evaluation = HostBridgeEvaluation(id: UUID(), reference: reference,
+            // rvd scopes every evaluate to the owner's configured packs
+            // (`ServiceRuntime.ownerScoped`), so day-one here is a floor,
+            // not the set the cage is held to.
             params: EvaluateParams(request: .makeDayOne(command: command), cwd: subject.policyWorkspace))
         let message = xpc_dictionary_create_empty()
         Self.set(try IPCJSON.encode(evaluation), key: "rv.host-evaluate", on: message)
