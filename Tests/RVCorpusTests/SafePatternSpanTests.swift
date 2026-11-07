@@ -33,6 +33,12 @@ struct SafePatternSpanTests {
         "copy-then-delete chain behind a safe /tmp cleanup stays denied",
         arguments: [
             "rm -rf /tmp/x && /bin/cp -a /etc /tmp/s && rm -rf /tmp/s",
+            "echo $(cp -a /etc /tmp/s && rm -rf /tmp/s)",
+            "ls $(cp -a /etc /tmp/s; rm -rf /tmp/s)",
+            "x=$(cp -a /etc /tmp/s && rm -rf /tmp/s)",
+            "echo $(ln -s /etc /tmp/e && rm -rf /tmp/e)",
+            "echo $(rsync -a /etc /tmp/s && rm -rf /tmp/s)",
+            "echo `cp -a /etc /tmp/s && rm -rf /tmp/s`",
         ]
     )
     func copyThenDeleteStaysDenied(_ command: String) throws {
