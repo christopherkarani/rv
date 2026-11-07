@@ -694,6 +694,125 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-body-repeats-git",
+      "command": "git reset --hard\ncat <<EOF\ngit\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-write-body-repeats-git",
+      "command": "git reset --hard && cat <<EOF > notes.txt\ngit\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-body-repeats-rm",
+      "command": "rm -rf ~\ncat <<EOF\nrm\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-body-repeats-clean",
+      "command": "git clean -fdx\ncat <<EOF\nclean\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:clean-force",
+      "reason_contains": "removes untracked files"
+    },
+    {
+      "id": "deny.heredoc-tab-strip-body-repeats-git",
+      "command": "git reset --hard\ncat <<-EOF\n\tgit\n\tEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-quoted-delim-body-repeats-rm",
+      "command": "rm -rf ~ && cat <<'EOF'\nrm\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-dquoted-delim-body-repeats-rm",
+      "command": "rm -rf ~ && cat <<\"EOF\"\nrm\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-unterminated-hides-nothing",
+      "command": "cat <<EOF > f\nx\nrm -rf ~",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-cr-terminator-after-body",
+      "command": "cat <<EOF > f\nx\r\nEOF\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-partly-quoted-delim",
+      "command": "cat <<E\"OF\" > f\nx\nEOF\nrm -rf ~\nE\"OF\"",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-escaped-delim",
+      "command": "cat <<\\EOF > f\nx\nEOF\nrm -rf ~\n\\EOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-quoted-delim-suffix",
+      "command": "cat <<'EO'F > f\nx\nEOF\nrm -rf ~\nEO",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-comment",
+      "command": "echo hi # <<EOF\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-escaped-operator",
+      "command": "echo \\<<EOF\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-header-line-continues",
+      "command": "cat <<EOF > f \\\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.herestring-then-reset",
+      "command": "cat <<< git\ngit reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.reset-then-herestring-repeats-git",
+      "command": "git reset --hard\ncat <<< git",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
     }
   ]
 }

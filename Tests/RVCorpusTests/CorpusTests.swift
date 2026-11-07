@@ -363,3 +363,18 @@ private func assertPinAndDoor(
     }
     #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
 }
+
+/// Heredoc masking once blanked the first copy of the body text anywhere in
+/// the command, so a body repeating an earlier word hid it on both paths.
+@Test(arguments: [
+    "git reset --hard\ncat <<EOF\ngit\nEOF",
+    "git reset --hard && cat <<EOF > notes.txt\ngit\nEOF",
+    "rm -rf ~\ncat <<EOF\nrm\nEOF",
+    "git clean -fdx\ncat <<EOF\nclean\nEOF",
+    "git reset --hard\ncat <<-EOF\n\tgit\n\tEOF",
+])
+func corpus_heredocBodyRepeatingAnEarlierWord_isNotAllowedOnPinOrDoor(command: String) throws {
+    let harness = try DayOneHarness.load()
+    #expect(harness.pin(command).decision != .allow, "pin")
+    #expect(harness.door(command).decision != .allow, "door")
+}

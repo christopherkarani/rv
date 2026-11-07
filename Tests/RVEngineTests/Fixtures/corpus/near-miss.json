@@ -226,6 +226,26 @@
       "id": "near.find-name-rm-rf",
       "command": "find . -name '*rm -rf*'",
       "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-write-body-repeats-earlier-word",
+      "command": "git status\ncat <<EOF > x.txt\nstatus\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-tab-strip-write-reset-prose",
+      "command": "cat <<-EOF > notes.md\n\tgit reset --hard\n\tEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-commit-message-file",
+      "command": "git add -A && git commit -F - <<'EOF'\nfix: add\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.herestring-grep-reset-prose",
+      "command": "grep foo <<< 'git reset --hard'",
+      "expected": "allow"
     }
   ]
 }
