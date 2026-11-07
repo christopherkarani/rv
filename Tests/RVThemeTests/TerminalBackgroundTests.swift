@@ -346,6 +346,9 @@ struct TerminalBackgroundTests {
 
     // MARK: Live device
 
+    // Glibc's Swift module hides posix_openpt/grantpt/unlockpt/ptsname
+    // behind _XOPEN_SOURCE, so the real-pty tests run on Darwin only.
+    #if canImport(Darwin)
     /// A fresh pty pair, not this process's controlling terminal.
     static func openPseudoTerminal() throws -> (controller: Int32, terminal: Int32) {
         let controller = posix_openpt(O_RDWR | O_NOCTTY)
@@ -390,6 +393,7 @@ struct TerminalBackgroundTests {
         #expect(device.hasPendingInput())
         #expect(device.readByte(within: .seconds(2)) == UInt8(ascii: "r"))
     }
+    #endif
 
     // MARK: Palette
 
