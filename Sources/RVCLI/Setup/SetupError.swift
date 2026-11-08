@@ -65,6 +65,9 @@ enum SetupError: Error, Equatable, Sendable {
     case notInstalledCopy(running: String, installedRv: String)
     /// The `rvd` the service must run is missing (or not executable).
     case rvdMissing(String)
+    /// Hooks would reject the installed `rvd` (trust manifest or sibling
+    /// pin), so wiring them would deny every tool call.
+    case daemonUntrusted(reason: String, fix: String)
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -151,6 +154,11 @@ func setupFailureOutput(
         phrase = "rvd not found at \(path)"
         exitCode = EX_UNAVAILABLE
         detail.append("fix: \(SetupRun.reinstallHint)")
+    case .daemonUntrusted(let reason, let fix):
+        phrase = "hooks would reject the installed rvd: \(reason)"
+        exitCode = EX_CONFIG
+        detail.append("no hooks were wired: wired hooks would deny every agent tool call")
+        detail.append("fix: \(fix)")
     }
     let lines = ["rv \(command.rawValue) failed: \(phrase)"] + detail
     return (lines.joined(separator: "\n") + "\n", exitCode)

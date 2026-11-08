@@ -80,8 +80,22 @@ enum SetupRun {
         return SetupOutcome(stdout: "", stderr: output.stderr, exitCode: output.exitCode)
     }
 
+    /// Hooks fail closed on an rvd they cannot trust, so wiring them to one
+    /// denies every tool call. Refuse before writing anything; `--force`
+    /// replaces occupied hooks and cannot make the daemon trusted.
+    private static func requireTrustedDaemon(_ env: SetupEnvironment) throws(SetupError) {
+        guard env.fileManager.isExecutableFile(atPath: env.rvdPath),
+            let trust = env.daemonTrust(env.rvdPath),
+            trust.satisfied == false
+        else { return }
+        throw SetupError.daemonUntrusted(
+            reason: trust.reason ?? "untrusted", fix: DaemonTrustProbe.fix(trust)
+        )
+    }
+
     private static func perform(_ env: SetupEnvironment, force: Bool) throws(SetupError) -> SetupReport {
         try requireInstalledCopy(env)
+        try requireTrustedDaemon(env)
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)

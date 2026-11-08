@@ -56,6 +56,8 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
         public var fallbackReady: Bool
         public var launchAgent: String
         public var warning: String?
+        /// Installed-rvd trust verdict; omitted when not evaluated.
+        public var trust: Trust?
 
         enum CodingKeys: String, CodingKey {
             case state
@@ -64,7 +66,15 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
             case fallbackReady = "fallback_ready"
             case launchAgent = "launch_agent"
             case warning
+            case trust
         }
+    }
+
+    /// `DoctorServiceTrust`; `reason` omitted when satisfied.
+    public struct Trust: Equatable, Sendable, Encodable {
+        public var source: String
+        public var satisfied: Bool
+        public var reason: String?
     }
 
     public struct Packs: Equatable, Sendable, Encodable {
@@ -232,7 +242,10 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
             serviceSemver: model.service.serviceSemver,
             fallbackReady: model.service.fallback == .ready,
             launchAgent: model.service.launchAgent.rawValue,
-            warning: model.service.warning
+            warning: model.service.warning,
+            trust: model.service.trust.map {
+                DoctorRobotPayload.Trust(source: $0.source, satisfied: $0.satisfied, reason: $0.reason)
+            }
         ),
         packs: DoctorRobotPayload.Packs(
             registry: model.packs.registry.rawValue,

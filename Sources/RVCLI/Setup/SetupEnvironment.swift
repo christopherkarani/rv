@@ -58,6 +58,9 @@ struct SetupEnvironment {
     /// managed-gate paths of `rv setup` / `rv host mode` are provable
     /// without a root-owned bundle.
     var managedEnforce: (HomeDirectory) -> Bool = { ManagedGate.pinsEnforce(home: $0) }
+    /// Would hooks trust the `rvd` at a path? Nil skips the check (tests,
+    /// Linux). Live: `DaemonTrustProbe.live`.
+    var daemonTrust: (String) -> DoctorServiceTrust? = { _ in nil }
 
     /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
     /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.
