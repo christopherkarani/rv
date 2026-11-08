@@ -63,6 +63,32 @@ struct HostCommandTests {
         }
     }
 
+    /// `mode` is the host's effective mode: a host with no entry follows the
+    /// global `guard.mode`, so under global observe it reads `observe`; an
+    /// explicit `block` reads (and evaluates as) `block`.
+    @Test func listJSON_underGlobalObserve_reportsEffectiveModes() async throws {
+        try await withTempHomeAsync { home, layout, environment in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(environment).exitCode == 0)
+            let config = home.appendingPathComponent(".config/rv/config.json")
+            try Data(#"{"guard":{"mode":"observe"}}"#.utf8).write(to: config)
+            let before = HostModeRun.list(environment, json: true)
+            #expect(before.stdout.contains(#""guard":"observe""#))
+            #expect(before.stdout.contains(#"{"host":"grok","mode":"observe","wiring":"wired"}"#))
+
+            let probe = AuthProbe(allow: false)
+            let block = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
+            #expect(block.exitCode == 0)
+            #expect(block.stdout == #"{"host":"grok","mode":"block","schema":"rv.host-mode.v1","wiring":"wired"}"# + "\n")
+            #expect(probe.calls == 0)
+            #expect(store(home).load() == [.grok: .block])
+            let after = HostModeRun.list(environment, json: true)
+            #expect(after.stdout.contains(#"{"host":"grok","mode":"block","wiring":"wired"}"#))
+            #expect(after.stdout.contains(#"{"host":"claude","mode":"observe","wiring":"missing"}"#))
+        }
+    }
+
     @Test func loosening_withoutOwnerAuth_exits77AndWritesNothing() async throws {
         try await withTempHomeAsync { home, layout, environment in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
@@ -128,7 +154,7 @@ struct HostCommandTests {
             #expect(block.stdout == "grok  block  wired\n")
             #expect(probe.calls == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-            #expect(store(home).load().isEmpty)
+            #expect(store(home).load() == [.grok: .block])
         }
     }
 

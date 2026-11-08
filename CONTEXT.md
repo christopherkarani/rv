@@ -21,6 +21,6 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 
 ## Guard
 
-**Host mode** — how rv guards one hook host: `block` (enforce, the default), `observe` (allow and record what would have been blocked) or `off` (rv's hooks removed from that host). Stored under `guard.hosts` in `config.json`; rvd resolves `RV_GUARD_MODE` > host mode > `guard.mode` > enforce, and an organization gate still pins enforce. `HostMode`, `HostModeStore`.
+**Host mode** — how rv guards one hook host: `block` (enforce, the default), `observe` (allow and record what would have been blocked) or `off` (rv's hooks removed from that host). Stored under `guard.hosts` in `config.json`, `block` included, so an explicit `block` outranks a global `guard.mode: observe`; rvd resolves `RV_GUARD_MODE` > host mode > `guard.mode` > enforce, and an organization gate still pins enforce. `rv host list` reports each host's effective mode: a host with no entry reads as the global mode. `HostMode`, `HostModeStore`.
 
 **Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked.

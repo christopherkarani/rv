@@ -33,16 +33,22 @@ struct HostModeStoreTests {
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
-    @Test func saveBlock_removesTheEntryAndEmptyObjects() throws {
+    /// An explicit `block` must outrank a global `guard.mode: observe`, so it
+    /// is stored rather than removed.
+    @Test func saveBlock_persistsAnExplicitEntry() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        try FileManager.default.createDirectory(at: store.configDirectory, withIntermediateDirectories: true)
+        try Data(#"{"guard":{"mode":"observe"}}"#.utf8).write(to: store.configFile)
         try store.save(.observe, for: .codex)
         try store.save(.block, for: .codex)
-        #expect(store.load().isEmpty)
+        #expect(store.load() == [.codex: .block])
         let root = try #require(
             try JSONSerialization.jsonObject(with: Data(contentsOf: store.configFile)) as? [String: Any])
-        #expect(root["guard"] == nil)
+        let guardObject = try #require(root["guard"] as? [String: Any])
+        #expect(guardObject["mode"] as? String == "observe")
+        #expect((guardObject["hosts"] as? [String: String]) == ["codex": "block"])
     }
 
     @Test func unknownHostsAndValuesAreIgnored() {
@@ -64,6 +70,26 @@ struct HostModeStoreTests {
             try store.save(.observe, for: .claude)
         }
         #expect(try String(contentsOf: store.configFile, encoding: .utf8) == "{not json")
+    }
+
+    @Test(arguments: [
+        #"[1, 2]"#,
+        #""observe""#,
+        #"{"guard":"observe","safety":{"level":"strict"}}"#,
+        #"{"guard":null}"#,
+        #"{"guard":{"mode":"observe","hosts":["claude"]}}"#,
+        #"{"guard":{"hosts":"off"}}"#,
+    ])
+    func save_refusesToReplaceANonObjectGuardOrRoot(json: String) throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let store = HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        try FileManager.default.createDirectory(at: store.configDirectory, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: store.configFile)
+        #expect(throws: HostModeStoreError.unreadableConfig) {
+            try store.save(.block, for: .claude)
+        }
+        #expect(try String(contentsOf: store.configFile, encoding: .utf8) == json)
     }
 
     @Test func looserOrder() {

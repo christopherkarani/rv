@@ -3,7 +3,8 @@ import RVDomain
 
 /// How rv guards one hook host. `block` enforces, `observe` allows and logs
 /// what enforcement would have blocked, `off` leaves the host unwired. A
-/// host with no stored entry is `block`.
+/// host with no stored entry follows the global `guard.mode` (enforce by
+/// default); a stored entry, `block` included, outranks it.
 public enum HostMode: String, Sendable, Equatable, CaseIterable {
     case block
     case observe
@@ -24,8 +25,9 @@ public enum HostMode: String, Sendable, Equatable, CaseIterable {
 }
 
 public enum HostModeStoreError: Error, Sendable, Equatable {
-    /// `config.json` exists but is not a JSON object: writing would drop
-    /// every other key, so nothing is written.
+    /// `config.json` exists but is not a JSON object, or its `guard` /
+    /// `guard.hosts` value is not one: writing would drop or replace keys
+    /// rv cannot read, so nothing is written.
     case unreadableConfig
 }
 
@@ -43,7 +45,7 @@ public struct HostModeStore: Sendable {
         configDirectory.appendingPathComponent("config.json", isDirectory: false)
     }
 
-    /// Stored entries only; a host missing here is `block`.
+    /// Stored entries only; a host missing here follows `guard.mode`.
     public func load() -> [HookHost: HostMode] {
         guard let data = try? Data(contentsOf: configFile),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -51,27 +53,36 @@ public struct HostModeStore: Sendable {
         return Self.modes(inConfig: root)
     }
 
+    /// The stored entry, or `block` when there is none. Callers that ask
+    /// "is this a loosening?" use it: treating a missing entry as `block`
+    /// means pinning `observe` over a global observe still needs the owner.
     public func mode(for host: HookHost) -> HostMode {
         load()[host] ?? .block
     }
 
-    /// Writes one host's entry; `block` removes it. Every other key is kept.
+    /// Writes one host's entry, `block` included: an explicit `block` must
+    /// outrank a global `guard.mode: observe`. Every other key is kept. The
+    /// read, the checks and the write share one lock; a config that is not
+    /// an object, or a non-object `guard` / `guard.hosts`, throws
+    /// `unreadableConfig` and nothing is written.
     public func save(_ mode: HostMode, for host: HookHost) throws {
-        if let data = try? Data(contentsOf: configFile),
-           (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) == nil {
+        do {
+            try MachineConfigJSON.updateExistingObject(file: configFile) { root in
+                var guardObject = try Self.object(root["guard"])
+                var hosts = try Self.object(guardObject["hosts"])
+                hosts[host.rawValue] = .string(mode.rawValue)
+                guardObject["hosts"] = .object(hosts)
+                root["guard"] = .object(guardObject)
+            }
+        } catch MachineConfigJSONError.notAnObject {
             throw HostModeStoreError.unreadableConfig
         }
-        try MachineConfigJSON.update(file: configFile) { root in
-            var guardObject = root["guard"]?.asObject ?? [:]
-            var hosts = guardObject["hosts"]?.asObject ?? [:]
-            if mode == .block {
-                hosts[host.rawValue] = nil
-            } else {
-                hosts[host.rawValue] = .string(mode.rawValue)
-            }
-            guardObject["hosts"] = hosts.isEmpty ? nil : .object(hosts)
-            root["guard"] = guardObject.isEmpty ? nil : .object(guardObject)
-        }
+    }
+
+    private static func object(_ value: JSONValue?) throws(HostModeStoreError) -> [String: JSONValue] {
+        guard let value else { return [:] }
+        guard let object = value.asObject else { throw .unreadableConfig }
+        return object
     }
 
     /// Reads `guard.hosts` from an already-parsed config object (rvd parses

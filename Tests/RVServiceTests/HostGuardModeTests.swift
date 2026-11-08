@@ -83,6 +83,25 @@ struct HostGuardModeTests {
         #expect(events.allSatisfy { $0.source == AuditLedger.Source.audit.rawValue })
     }
 
+    @Test("a stored block outranks a global guard.mode observe")
+    func storedBlockBeatsGlobalObserve() async throws {
+        let home = try hostHome(#"{"guard":{"mode":"observe"}}"#)
+        defer { remove(home) }
+        try HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: home)).save(.block, for: .claude)
+        let mode = EvaluationInputs.gather(home: home, cwd: nil, environment: [:], host: .hook(.claude)).guardMode
+        #expect(mode == .enforce)
+        let result = await GatedEvaluate().apply(
+            command: Self.packDeny, cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        guard case .deny = result.decision else {
+            Issue.record("an explicit block host must deny under global observe, got \(result.decision)")
+            return
+        }
+        #expect(ledgerRows(home).map(\.observed) == [false])
+    }
+
     @Test("observe host: peek records nothing")
     func observeHostPeekRecordsNothing() async throws {
         let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)

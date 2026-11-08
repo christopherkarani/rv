@@ -39,21 +39,32 @@ enum HostModeRun {
         let wiring: String
     }
 
+    /// A row's `mode` is the host's effective mode, not only what is stored:
+    /// a stored entry wins; a host with none follows the global
+    /// `guard.mode`, so under global observe it reads `observe`, never a
+    /// `block` it would not enforce. The organization pin is reported
+    /// separately (`managed_enforce`).
+    static func effectiveMode(stored: HostMode?, guardMode: GuardMode) -> HostMode {
+        if let stored { return stored }
+        return guardMode == .observe ? .observe : .block
+    }
+
     static func list(_ env: SetupEnvironment, json: Bool) -> SetupOutcome {
         do {
             let installations = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
             let modes = store(env).load()
+            let guardMode = JudgeRuntime.guardMode(home: env.home)
             let rows = HookHost.allCases
                 .sorted { $0.rawValue < $1.rawValue }
                 .map { host in
                     Row(
                         host: host.rawValue,
-                        mode: (modes[host] ?? .block).rawValue,
+                        mode: effectiveMode(stored: modes[host], guardMode: guardMode).rawValue,
                         wiring: installations.state(for: host).rawValue
                     )
                 }
             let document = ListDocument(
-                guardMode: JudgeRuntime.guardMode(home: env.home).rawValue,
+                guardMode: guardMode.rawValue,
                 hosts: rows,
                 managedEnforce: env.managedEnforce(env.home)
             )
