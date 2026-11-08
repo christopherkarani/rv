@@ -81,7 +81,7 @@ enum HostModeRun {
                     .sorted()
                 if unwired.isEmpty == false {
                     let names = unwired.joined(separator: ", ")
-                    lines.append("organization gate pins enforce but \(names) is unwired: run rv setup to restore")
+                    lines.append("off and unwired under the organization gate: \(names); run rv setup to restore")
                 }
             }
             return SetupOutcome(stdout: lines.joined(separator: "\n") + "\n", exitCode: 0)

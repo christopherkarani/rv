@@ -275,7 +275,7 @@ struct HostCommandTests {
             #expect(json.contains(#""managed_enforce":true"#))
             let text = HostModeRun.list(gated, json: false).stdout
             #expect(text.contains("grok  off  absent-file\n"))
-            #expect(text.hasSuffix("organization gate pins enforce but grok is unwired: run rv setup to restore\n"))
+            #expect(text.hasSuffix("off and unwired under the organization gate: grok; run rv setup to restore\n"))
         }
     }
 
