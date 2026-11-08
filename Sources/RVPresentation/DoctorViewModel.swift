@@ -59,6 +59,21 @@ public enum DoctorPackRegistryState: String, Equatable, Sendable {
     case broken
 }
 
+/// Would the hooks trust the installed `rvd`? A static check of its bytes
+/// against the active trust source (`manifest`, `sibling-pin`, `invalid`).
+public struct DoctorServiceTrust: Equatable, Sendable {
+    public var source: String
+    public var satisfied: Bool
+    /// Why the hooks would reject the installed rvd; nil when satisfied.
+    public var reason: String?
+
+    public init(source: String, satisfied: Bool, reason: String?) {
+        self.source = source
+        self.satisfied = satisfied
+        self.reason = reason
+    }
+}
+
 /// Service facts rendered by doctor.
 public struct DoctorServiceView: Equatable, Sendable {
     /// Current service reachability and compatibility.
@@ -77,6 +92,8 @@ public struct DoctorServiceView: Equatable, Sendable {
     public var warning: String?
     /// One-line repair hint when the service is not running cleanly.
     public var fix: String?
+    /// Installed-rvd trust verdict; nil when not evaluated.
+    public var trust: DoctorServiceTrust?
 
     /// Creates the service facts for a doctor snapshot.
     public init(
@@ -87,8 +104,10 @@ public struct DoctorServiceView: Equatable, Sendable {
         fallback: DoctorFallbackState,
         launchAgent: DoctorLaunchAgentState,
         warning: String? = nil,
-        fix: String? = nil
+        fix: String? = nil,
+        trust: DoctorServiceTrust? = nil
     ) {
+        self.trust = trust
         self.state = state
         self.protocolName = protocolName
         self.serviceSemver = serviceSemver

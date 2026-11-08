@@ -624,12 +624,17 @@ if [[ "$warm" -ne 1 ]]; then
   # With an admin trust manifest installed, the staged daemon is not the
   # manifest-pinned service and the hook must reject it: warm can never
   # succeed here. Accept exactly that rejection (boundary deny, no
-  # rv-cli exec) and skip the daemon-verdict legs; CI runners without a
-  # manifest run them in full.
+  # rv-cli exec), but the daemon-verdict legs are then SKIPPED, not
+  # passed: say so loudly, and fail where they are required (CI, or
+  # RV_C_HOOK_REQUIRE_DAEMON_LEGS=1).
   if [[ -f "/Library/Application Support/RV/peer-trust.json" ]] \
     && failclosed_deny_ok "$PROOF_ROOT/warm.out" && ! cli_invoked; then
+    if [[ "${RV_C_HOOK_REQUIRE_DAEMON_LEGS:-}" == "1" || "${CI:-}" == "true" ]]; then
+      fail "daemon-verdict legs are required but cannot run: /Library/Application Support/RV/peer-trust.json rejects the staged rvd"
+    fi
     MANIFEST_MODE=1
-    printf 'manifest-rejects-unpinned-daemon ok (daemon-verdict legs skipped: trust manifest installed)\n'
+    printf 'manifest-rejects-unpinned-daemon ok\n'
+    printf 'c-hook-proof: SKIPPED daemon-verdict legs (AC-001, AC-002 and later warm legs): /Library/Application Support/RV/peer-trust.json rejects the staged rvd; this run does NOT prove them\n' >&2
   else
     printf 'c-hook-proof: rvd.err\n' >&2
     cat "$PROOF_ROOT/rvd.err" >&2 || true
@@ -1059,4 +1064,9 @@ grep -q "rv-cli not found" "$PROOF_ROOT/ac013.err" \
   || fail "AC-013 missing-sibling stderr explanation absent: $ac013_err"
 printf 'AC-013 ok\n'
 
-printf 'c-hook-proof: all ACs ok stage=%s\n' "$STAGE"
+if [[ "$MANIFEST_MODE" -eq 1 ]]; then
+  printf 'c-hook-proof: PARTIAL, daemon-verdict legs SKIPPED (trust manifest installed) stage=%s\n' "$STAGE"
+  printf 'c-hook-proof: PARTIAL, daemon-verdict legs SKIPPED (trust manifest installed); not a full pass\n' >&2
+else
+  printf 'c-hook-proof: all ACs ok stage=%s\n' "$STAGE"
+fi
