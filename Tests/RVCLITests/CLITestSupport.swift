@@ -167,6 +167,7 @@ func withCLIProcess<T>(
     stdoutFileDescriptor: Int32? = nil,
     stdinText: String? = nil,
     ownerAuthOutcome: UIAuthenticationOutcome? = nil,
+    englishCompiler: (any EnglishCompiler)? = nil,
     _ body: () async throws -> T
 ) async throws -> T {
     let context = CLIProcess.Context(
@@ -177,7 +178,8 @@ func withCLIProcess<T>(
         stdoutFileDescriptor: stdoutFileDescriptor,
         workspacePath: workspacePath,
         stdinText: stdinText,
-        ownerAuthOutcome: ownerAuthOutcome
+        ownerAuthOutcome: ownerAuthOutcome,
+        englishCompiler: englishCompiler
     )
     return try await CLIProcess.$context.withValue(context, operation: body)
 }

@@ -31,6 +31,7 @@ struct PolicyDraftCommand: AsyncParsableCommand {
             fileURLWithPath: CLIProcess.workspacePath(),
             isDirectory: true
         )
+        let compiler: any EnglishCompiler = CLIProcess.context?.englishCompiler ?? EnglishCompileChain()
         let result: PolicyDraftResult
         do {
             result = try await PolicyDraftRun.execute(
@@ -40,7 +41,7 @@ struct PolicyDraftCommand: AsyncParsableCommand {
                 robot: ctx.explicitRobot,
                 home: home,
                 workspace: workspace,
-                compiler: EnglishCompileChain()
+                compiler: compiler
             )
         } catch {
             try ctx.fail("rv policy draft: failed\n")
