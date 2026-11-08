@@ -60,6 +60,43 @@ struct BlocksCommandTests {
         #expect(json.contains("git reset") == false)
     }
 
+    /// Observed rows (observe mode: the agent was not blocked) say so in the
+    /// text output too, in their own column before the host.
+    @Test func observedRowsAreMarked() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ledger = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        ledger.append(
+            DenialLedgerRecord(
+                timestamp: now.addingTimeInterval(-5),
+                host: .hook(.cursor),
+                tool: .bash,
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                category: .pack(.coreGit),
+                path: "git reset --hard"
+            ),
+            now: now
+        )
+        ledger.append(
+            DenialLedgerRecord(
+                timestamp: now,
+                host: .hook(.claude),
+                tool: .bash,
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                category: .pack(.coreGit),
+                path: "git reset --hard",
+                observed: true
+            ),
+            now: now
+        )
+        let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
+        #expect(lines.count == 2)
+        #expect(lines[0].hasSuffix("Z  observed  claude  Bash  core.git:reset-hard  core.git  git reset --hard"))
+        #expect(lines[1].contains("observed") == false)
+        #expect(lines[1].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
+    }
+
     @Test func fileToolPathEscapesControls() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
