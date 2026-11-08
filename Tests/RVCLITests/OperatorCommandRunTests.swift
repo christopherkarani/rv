@@ -226,13 +226,16 @@ struct OperatorCommandRunTests {
     }
 
     @Test func policyDraft_runEdges() async throws {
-        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+        // The fixture compiler: the live chain reaches Apple Intelligence where
+        // it is enabled, and the model's answer is not these canned edges.
+        let fixture = FakeEnglishCompiler()
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "never allow force-push to main"]).run()
             }
         }
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "", "--save"]).run()
             }
@@ -257,7 +260,7 @@ struct OperatorCommandRunTests {
             }
         }
         try replacePathWithFile(RVPolicyPaths.configDirectory(home: home))
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse([
                     "--english", "never allow force-push to main",
