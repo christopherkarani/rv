@@ -276,17 +276,23 @@ struct EgressReviewTests {
         }
     }
 
-    @Test func approveIsBoundaryRefused() async throws {
+    // No owner authentication (seamed context, no `.authenticated`
+    // override): the command must refuse and never prompt.
+    @Test func approveRefusedWithoutOwnerAuth() async throws {
         let command = try EgressApprove.parse(["some-id"])
-        await #expect(throws: ValidationError.self) {
-            try await command.run()
+        await CLIProcess.$context.withValue(CLIProcess.Context(environment: [:])) {
+            await #expect(throws: (any Error).self) {
+                try await command.run()
+            }
         }
     }
 
-    @Test func denyIsBoundaryRefused() async throws {
+    @Test func denyRefusedWithoutOwnerAuth() async throws {
         let command = try EgressDeny.parse(["some-id", "--reason", "nope"])
-        await #expect(throws: ValidationError.self) {
-            try await command.run()
+        await CLIProcess.$context.withValue(CLIProcess.Context(environment: [:])) {
+            await #expect(throws: (any Error).self) {
+                try await command.run()
+            }
         }
     }
 

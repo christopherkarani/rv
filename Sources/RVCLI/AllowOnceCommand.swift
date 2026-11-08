@@ -144,7 +144,7 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        let ownerProof = try await CLIOwnerAuth.requireAuthenticated(reason: redeemReason(row: peeked.row))
+        let ownerProof = try await CLIOwnerAuth.ownerProofForAttestation(reason: redeemReason(row: peeked.row))
         let service = client ?? OwnerConfirmation.defaultClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
             Self.redemptionUnchanged(before: peeked, after: rechecked)

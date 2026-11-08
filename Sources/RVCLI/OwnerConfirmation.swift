@@ -69,7 +69,7 @@ enum OwnerConfirmation {
                 throw ValidationError(
                     "rv: rvd did not accept this caller for owner actions (on macOS use the installed, signed rv)")
             case .unavailable:
-                throw ValidationError("rv: this system cannot check passwords (unix_chkpwd not found)")
+                throw ValidationError("rv: rvd could not check the password (unix_chkpwd missing or not answering)")
             }
         case .failure(let error):
             switch error {

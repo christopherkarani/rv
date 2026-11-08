@@ -24,9 +24,15 @@ struct UnixChkpwdChecker: OwnerPasswordChecking {
     static let candidates = ["/usr/sbin/unix_chkpwd", "/sbin/unix_chkpwd"]
     /// Longest password passed to the helper (its own limit is 512).
     static let maxPasswordBytes = 511
+    /// Longest wait for the helper. pam_unix delays a failure by ~2 s, and
+    /// the CLI waits 15 s for rvd's answer.
+    static let timeout: DispatchTimeInterval = .seconds(10)
+
+    /// Helper paths tried in order; tests point this at a stand-in.
+    var helpers: [String] = Self.candidates
 
     func check(_ password: String) -> Bool? {
-        guard let helper = Self.candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
+        guard let helper = helpers.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
               let user = Self.userName()
         else { return nil }
         let bytes = Array(password.utf8)
@@ -44,15 +50,37 @@ struct UnixChkpwdChecker: OwnerPasswordChecking {
         process.standardInput = input
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
             return nil
         }
-        // NUL-terminated, as pam_unix writes it.
-        input.fileHandleForWriting.write(Data(bytes + [0]))
-        try? input.fileHandleForWriting.close()
-        process.waitUntilExit()
+        // NUL-terminated, as pam_unix writes it. rvd does not ignore SIGPIPE,
+        // so the write runs on a thread with SIGPIPE blocked: a helper that
+        // exits without reading becomes EPIPE here instead of killing rvd.
+        let writer = input.fileHandleForWriting
+        let payload = Data(bytes + [0])
+        Thread.detachNewThread {
+            var blocked = sigset_t()
+            sigemptyset(&blocked)
+            sigaddset(&blocked, SIGPIPE)
+            pthread_sigmask(SIG_BLOCK, &blocked, nil)
+            try? writer.write(contentsOf: payload)
+            try? writer.close()
+        }
+        // Bounded: a hung helper must not hold the single owner-check slot
+        // (`OwnerPresence.inFlight`) forever. Answers "cannot check", which
+        // does not count toward the lockout.
+        guard exited.wait(timeout: .now() + Self.timeout) == .success else {
+            process.terminate()
+            if exited.wait(timeout: .now() + 2) != .success {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
+            }
+            return nil
+        }
         return process.terminationReason == .exit && process.terminationStatus == 0
     }
 

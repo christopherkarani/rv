@@ -7,9 +7,9 @@ import RVPolicy
 /// proposals, and the human approves or denies them here.
 ///
 /// Reads (`pending`, `show`, `denials`) need nothing. Mutations
-/// (`approve`, `deny`) run only after rvd confirms the device owner
-/// approved them (`OwnerConfirmation`: Touch ID on macOS, the login
-/// password on Linux).
+/// (`approve`, `deny`) run the review ceremony (TTY, prompt throttle,
+/// device-owner authentication, TOCTOU re-read): Touch ID on macOS, the
+/// login password verified by rvd on Linux (`CLIOwnerAuth`).
 struct Egress: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "egress",
@@ -526,7 +526,6 @@ struct EgressApprove: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        try await OwnerConfirmation.require("approve network request \(id)")
         let ctx = CommandContext.current(command: "egress approve", format: format)
         do {
             let view = try await EgressReviewRun.approve(
@@ -592,7 +591,6 @@ struct EgressDeny: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        try await OwnerConfirmation.require("deny network request \(id)")
         let ctx = CommandContext.current(command: "egress deny", format: format)
         guard let reason, reason.isEmpty == false else {
             try ctx.fail("rv egress deny: --reason is required\n", exitCode: 2)

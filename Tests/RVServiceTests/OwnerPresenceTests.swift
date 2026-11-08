@@ -204,4 +204,17 @@ struct OwnerPresenceTests {
         #expect(checker.check("rv-test-\(UUID().uuidString)") == false)
         #expect(checker.check("") == false)
     }
+
+    @Test func helperThatExitsWithoutReadingIsAWrongPasswordNotACrash() {
+        // The password write must not raise SIGPIPE in rvd when the helper
+        // exits before reading its stdin.
+        guard let quitter = ["/bin/false", "/usr/bin/false"].first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else { return }
+        var checker = UnixChkpwdChecker()
+        checker.helpers = [quitter]
+        for _ in 0..<20 {
+            #expect(checker.check(String(repeating: "x", count: 400)) == false)
+        }
+    }
 }
