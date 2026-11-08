@@ -226,6 +226,106 @@
       "id": "near.find-name-rm-rf",
       "command": "find . -name '*rm -rf*'",
       "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-write-body-repeats-earlier-word",
+      "command": "git status\ncat <<EOF > x.txt\nstatus\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-tab-strip-write-reset-prose",
+      "command": "cat <<-EOF > notes.md\n\tgit reset --hard\n\tEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-commit-message-file",
+      "command": "git add -A && git commit -F - <<'EOF'\nfix: add\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.herestring-grep-reset-prose",
+      "command": "grep foo <<< 'git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-gh-pr-continuation-body-file",
+      "command": "gh pr create --title \"fix: x\" \\\n  --body-file - <<'EOF'\nStop rm -rf in setup\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-git-commit-continuation",
+      "command": "git commit \\\n  -F - <<'EOF'\nfix: stop git reset --hard in setup\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-after-printf-escape",
+      "command": "printf '%s\\n' done && cat > notes.md <<'EOF'\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-after-dquote-escape",
+      "command": "echo \"a\\tb\" && cat > f <<'EOF'\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-after-sed-escape",
+      "command": "sed -i '' 's/a\\.b/c/' x && cat <<'EOF' > f\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.heredoc-crlf-body-lf-header",
+      "command": "cat <<'EOF' > f\nline one\r\ngit reset --hard\r\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-then-ls",
+      "command": "rm -rf /tmp/build && ls",
+      "expected": "allow"
+    },
+    {
+      "id": "near.cd-then-tmp-cleanup",
+      "command": "cd x && rm -rf /tmp/foo",
+      "expected": "allow"
+    },
+    {
+      "id": "near.make-clean-tmp-cleanup-make",
+      "command": "make clean && rm -rf /tmp/out && make",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-or-true",
+      "command": "rm -rf /tmp/x || true",
+      "expected": "allow"
+    },
+    {
+      "id": "near.sudo-tmp-cleanup-then-ls",
+      "command": "sudo rm -rf /tmp/foo && ls",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-around-abs-path-brew",
+      "command": "rm -rf /tmp/x\n/opt/homebrew/bin/brew update\nrm -rf /tmp/y",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-around-abs-path-make",
+      "command": "rm -rf /tmp/x\n/usr/bin/make\nrm -rf /tmp/y",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-around-home-script",
+      "command": "rm -rf /tmp/x\n~/bin/build.sh\nrm -rf /tmp/y",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tmp-cleanup-abs-path-and-cleanup",
+      "command": "rm -rf /tmp/x\n/bin/ls && rm -rf /tmp/b",
+      "expected": "allow"
+    },
+    {
+      "id": "near.rm-recursive-then-force-with-lease",
+      "command": "rm --recursive a && git push --force-with-lease && rm -rf /tmp/x",
+      "expected": "allow"
     }
   ]
 }

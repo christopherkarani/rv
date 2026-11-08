@@ -115,6 +115,8 @@ struct WorkspaceTUIState: Equatable, Sendable {
     var reconnectAttempt: Int = 0
     var reconnectInflight: Bool = false
     var reconnectFiresAt: Date? = nil
+    /// Review pane: pending egress plus recent blocks, polled from stores.
+    var review: WorkspaceReviewState
 
     var activePaneID: PaneID? { view.activeTab?.focusedPaneID }
 
@@ -446,7 +448,8 @@ struct WorkspaceTUIState: Equatable, Sendable {
         paneID: PaneID = PaneID(),
         tabID: TabID = TabID(),
         viewID: ViewID = ViewID(),
-        restoredView: WorkspaceView? = nil
+        restoredView: WorkspaceView? = nil,
+        reviewEnabled: Bool = false
     ) {
         self.lifecycle = lifecycle
         self.summary = summary
@@ -472,6 +475,7 @@ struct WorkspaceTUIState: Equatable, Sendable {
         self.presentationRevision = presentationRevision
         self.feedback = nil
         self.feedbackTicks = 0
+        self.review = WorkspaceReviewState(enabled: reviewEnabled)
         // A nil seed must not flow through the clearing setters:
         // `terminal = nil` resolves to the focused pane and would wipe
         // its restored binding before reconcile ever sees it.
@@ -515,6 +519,10 @@ enum WorkspaceTUIReducerEvent: Equatable, Sendable {
     case resizeCompleted(binding: PaneBindingKey, rows: Int, columns: Int, outcome: TUIRPCOutcome, now: Date)
     case attachCompleted(binding: PaneBindingKey, context: TUIAttachContext, outcome: SessionAttachOutcome)
     case detachRequested
+    /// A review-store read finished. Only the newest issued sequence lands.
+    case reviewLoaded(sequence: UInt64, result: ReviewLoadResult)
+    /// An approve or deny ceremony finished. Rows are re-read, never edited.
+    case reviewActionCompleted(id: String, outcome: ReviewActionOutcome)
 }
 
 /// One runtime action for the shell to execute. Effects never dispatch
@@ -554,6 +562,12 @@ enum TUIRuntimeEffect: Equatable, Sendable {
     case feedEmulator(binding: PaneBindingKey, data: Data)
     case resizeEmulator(binding: PaneBindingKey, rows: Int, columns: Int)
     case dropEmulator(binding: PaneBindingKey)
+    /// Read the review stores off the reducing thread; feeds `.reviewLoaded`.
+    case loadReview(sequence: UInt64)
+    /// Start the owner-authenticated approve ceremony for one proposal.
+    case approveEgress(id: String)
+    /// Start the owner-authenticated deny ceremony for one proposal.
+    case denyEgress(id: String, reason: String)
 }
 
 /// Why an attach was issued. Each origin handles attach failure
@@ -751,6 +765,16 @@ enum WorkspaceTUIReducer {
             )
         case .detachRequested:
             reduceDetachRequested(to: &next, effects: &effects, presentationChanged: &presentationChanged)
+        case .reviewLoaded(let sequence, let result):
+            reduceReviewLoaded(
+                sequence: sequence, result: result,
+                to: &next, presentationChanged: &presentationChanged
+            )
+        case .reviewActionCompleted(let id, let outcome):
+            reduceReviewActionCompleted(
+                id: id, outcome: outcome,
+                to: &next, effects: &effects, presentationChanged: &presentationChanged
+            )
         }
         // Every transition ends here: stored lifecycles re-derive from
         // phases, so no observable state can contradict its phase.

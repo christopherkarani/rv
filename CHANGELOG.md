@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `rv allow-once` works on Linux: the login password is the owner proof.
 - The Swift CLI reaches `rvd` over its Unix socket on Linux (`rv hook` included), after checking the peer is the sibling `rvd` running as the same user.
 - Signed organization policy has a restrict-only `gate` section: `requirePacks` lists packs every evaluation door applies whatever the user's pack config says, and `"safety": "strict"` forbids normal safety. A present but untrusted managed bundle now also forces strict safety. `rv managed status`, `rv safety` and `rv doctor` show the enforced level.
+- Pretty output and `rv tui` ask the terminal for its background color (OSC 11) and use a light palette on light backgrounds. `RV_THEME=dark|light|auto` overrides; no answer, SSH sessions, and background jobs keep the dark palette.
+- `rv tui` review pane (Ctrl-B R): pending egress proposals and recent blocks in one live list with a pending badge, details, and approve/deny through the same owner-authenticated ceremony as `rv egress approve`/`deny`.
 - Secrets gateway: AWS SigV4 request signing from an `awsProfile` source, OAuth access-token minting from Keychain credentials, approve-rule requests held for a human, and binding of gateway secrets to the binaries allowed to spend them. (#483, #484, #485, #486, #487)
 - Secrets gateway controls: per-secret substitution surfaces, method/path allow rules, Basic-auth placeholders, placeholders bound to their runtime, secret expiry with TTL refresh and live rotation, and per-position value encoding. (#452, #454, #455, #456, #459, #460)
 - Secrets gateway audit: fail-closed audit, activity records and misuse findings. (#458)
@@ -43,11 +45,13 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `rv scan` defaults to your configured packs instead of the day-one three, rejects `--packs` IDs that name no bundled pack, and refuses `--host` values it has no session reader for (Antigravity, Muse) instead of silently scanning nothing.
 - Hook timeouts are ordered so rvd always gives up first. The C client no longer sends the evaluate request more than 5 s after it starts (it fails closed instead), so rvd is done by 12 s and the client by 13 s; host shims now wait 15 s and host hook configs 18 s (Codex, Cursor, Antigravity, Grok, Muse). Before, a host could drop a reply while rvd still spent an allow-once grant on it. `rv setup` rewrites hooks written with the old timeouts without `--force`.
 - Analytics honours the documented flat `"analytics.enabled": false` key as well as the nested form; when the two disagree, the opt-out wins. Events now report the product version instead of the IPC protocol version.
+- The egress proxy bounds host resolution (10 s; a late or over-budget lookup denies `dns-failed`) and refuses more non-public destinations after resolving: 192.0.0.0/24, 192.88.99.0/24, the Azure WireServer address, IPv4-translated IPv6, 2001::/23, 3fff::/20, anything outside 2000::/3, and NAT64 forms other than 64:ff9b::/96.
 - Workspace publish refuses escaping symlinks; read-only workspace files are copied before their mode is applied. (#445, #490)
 - Clocked vnode syscalls run on a bounded worker pool. (#444)
 - `rv` commands guard against root fallback and have a `login` help topic. (#498)
 - Untrusted text is escaped in egress, `secrets describe` and `audit verify` output, and display-hostile scalars are escaped in secrets, MCP and managed robot JSON. (#471, #511)
 - Local test fixes for MCP sandbox creation on Darwin and the judge-unavailable floor. (#514, #525)
+- Heredoc masking blanks the body where it was parsed, not the first copy of its text, so a body repeating an earlier word (`git reset --hard` then `cat <<EOF` / `git` / `EOF`) no longer hides that word from the gate. Bodies whose position is ambiguous (no terminator, CR, oddly quoted delimiter, `\` or `#` before the operator) stay visible.
 
 ### Security
 
