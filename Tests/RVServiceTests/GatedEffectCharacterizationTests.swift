@@ -34,9 +34,9 @@ struct GatedEffectCharacterizationTests {
         Case(door: .agent, mode: .enforce, audits: 1, judgeRows: 0, ledgerRows: 0),
         Case(door: .file, mode: .enforce, audits: 1, judgeRows: 0, ledgerRows: 1),
         Case(door: .peek, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 0),
-        Case(door: .apply, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 0),
+        Case(door: .apply, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 1),
         Case(door: .agent, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 0),
-        Case(door: .file, mode: .observe, audits: 1, judgeRows: 0, ledgerRows: 0),
+        Case(door: .file, mode: .observe, audits: 1, judgeRows: 0, ledgerRows: 1),
     ]
 
     @Test("rows per file, per door and guard mode", arguments: cases)

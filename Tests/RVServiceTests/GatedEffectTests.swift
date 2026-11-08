@@ -219,7 +219,7 @@ struct GatedEffectTests {
         #expect(stale.hasTripped)
     }
 
-    @Test("observe: every shell door asks for one would-be judge row and no denial row", arguments: [
+    @Test("observe: every shell door asks for one would-be judge row; apply adds an observed denial row", arguments: [
         EvaluationIntent.peek, .apply,
     ])
     func observeShellDoors(_ intent: EvaluationIntent) async throws {
@@ -232,13 +232,23 @@ struct GatedEffectTests {
             Issue.record("pack deny expected, got \(wouldBe.decision)")
             return
         }
-        #expect(decided.effects == [
-            .judgeLog(GatedEffect.JudgeLogRow(
-                at: Self.now, guardMode: .observe, engine: .ft, hash: Self.hash(decided.result),
-                subject: .wouldBe(.deny, rule: deny.ruleID.rawValue), note: "context: partial",
-                isPeek: intent == .peek, score: nil
-            )),
-        ])
+        let judgeLog = GatedEffect.judgeLog(GatedEffect.JudgeLogRow(
+            at: Self.now, guardMode: .observe, engine: .ft, hash: Self.hash(decided.result),
+            subject: .wouldBe(.deny, rule: deny.ruleID.rawValue), note: "context: partial",
+            isPeek: intent == .peek, score: nil
+        ))
+        switch intent {
+        case .peek:
+            #expect(decided.effects == [judgeLog])
+        case .apply:
+            #expect(decided.effects == [
+                judgeLog,
+                .denialRow(GatedEffect.DenialRow(
+                    at: Self.now, host: .hook(.claude), tool: .bash, ruleID: deny.ruleID,
+                    category: .pack(deny.ruleID.pack), path: "", observed: true
+                )),
+            ])
+        }
     }
 
     @Test("agent door never asks for a denial row")
@@ -268,7 +278,7 @@ struct GatedEffectTests {
         #expect(row.isPeek == false)
     }
 
-    @Test("file door: enforce asks for an unredacted secret denial row; observe asks for nothing")
+    @Test("file door: enforce asks for an unredacted secret denial row; observe asks for an observed one")
     func fileDoor() throws {
         let path = "/nonexistent/rv-effects/.env"
         let action = FileToolAction(kind: .read, path: FileToolPath(rawValue: path))
@@ -289,7 +299,12 @@ struct GatedEffectTests {
             action, home: nil, cwd: nil, host: .hook(.claude), now: Self.now, guardMode: .observe
         )
         #expect(observe.result.decision == .allow)
-        #expect(observe.effects.isEmpty)
+        #expect(observe.effects == [
+            .denialRow(GatedEffect.DenialRow(
+                at: Self.now, host: .hook(.claude), tool: .file(.read), ruleID: deny.ruleID,
+                category: .secret(.environment), path: path, observed: true
+            )),
+        ])
     }
 
     /// Parity with the inline writes: an enforced file read checks the hook

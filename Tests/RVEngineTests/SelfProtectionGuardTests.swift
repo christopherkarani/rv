@@ -34,6 +34,20 @@ struct SelfProtectionGuardTests {
         "rv-cli packs disable core.git",
         "~/.local/bin/rv-cli uninstall",
         "rv-cli allow-once redeem 123456",
+        // `rv host mode <host> <mode>`: anything but `block` sheds oversight.
+        "rv host mode claude off",
+        "rv host mode claude observe",
+        "rv host mode claude",
+        "rv host mode",
+        "rv host mode claude loud",
+        "rv host mode claude block off",
+        "rv host mode claude $MODE",
+        "rv host mode $HOST off",
+        "rv host $SUB claude off",
+        "rv host --json mode claude off",
+        "rv host mode --json claude off",
+        "bash -c 'rv host mode cursor off'",
+        "rv-cli host mode codex observe",
     ]
 
     static let harmless: [String] = [
@@ -60,6 +74,13 @@ struct SelfProtectionGuardTests {
         "rv secrets scan .",
         "rv secrets import --varlock .env.schema --dry-run",
         "rv secrets hook install",
+        "rv host",
+        "rv host list",
+        "rv host list --json",
+        "rv host mode claude block",
+        "rv host mode claude block --json",
+        "rv host mode --json claude block",
+        "rv host mode $HOST block",
     ]
 
     @Test("agent-issued rv commands that weaken policy are flagged", arguments: weakening)

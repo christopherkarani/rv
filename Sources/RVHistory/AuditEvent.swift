@@ -10,6 +10,9 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     }
 
     public static let commandDenied = AuditEventKind(rawValue: "command.denied")
+    /// An observe-mode would-be deny: enforcement would have blocked, the
+    /// door allowed.
+    public static let commandObserved = AuditEventKind(rawValue: "command.observed")
     /// A deny the Policy gate overrode (allow-once, allowlist, rebase
     /// recovery, contained delete).
     public static let commandOverride = AuditEventKind(rawValue: "command.override")

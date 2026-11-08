@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - Action fingerprints now use an injective encoding. Pending runtime-HTTP asks, and pending asks for commands containing `:`, `,` or `\`, created before upgrade are re-asked after upgrade. Existing grants are unaffected. (#510)
 - Hooks that cannot reach `rvd` now name the cause. (#441)
+- `rv setup` refuses, before writing any hook, when the hooks would reject the installed `rvd` (an admin trust manifest that does not name it, or an unsigned build), instead of wiring hooks that deny every tool call. `rv doctor` reports `service.trust` with the reason and the fix, and `install.sh` refuses a local stage whose `rvd` cannot satisfy an installed trust manifest unless `RV_INSTALL_ALLOW_UNSIGNED=1`.
 - `rvd` outages no longer block agents: client time budgets, judge warmup, safe idle exit, and setup/doctor repair. (#468)
 - Hook ceremony peek evaluates with the live compile set. (#465)
 - Config and policy layer updates are serialized under file locks. (#463, #464)
@@ -18,6 +19,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- Per-host guard mode: `rv host list` and `rv host mode <host> block|observe|off` (`guard.hosts` in `config.json`). Loosening a host asks for device-owner authentication, and an agent that runs `rv host mode <host> observe|off` is told to run it in Terminal; `off` removes that host's rv hooks and `rv setup` skips it. A stored `block` outranks a global `guard.mode: observe`. An organization gate still pins enforce.
+- Observe mode records what enforcement would have blocked: `rv blocks` rows carry `"observed": true` (an `observed` column in text output) and `rv audit` shows them as `command.observed`. Observe never relaxes rv's own protection: weakening rv commands and access to rv's config dir stay enforced.
+- `rv workspace vms [--json] [--limit N]` lists micro-VM runtime sessions.
 - Owner authentication for commands that change the gate: `rv packs enable|disable`, `rv safety`, `rv allowlist`, `rv policy draft --save`, `rv policy apply --save`, `rv policy export --output`, `rv egress approve|deny` and `rv workspace abandon` work again after Touch ID or the login password. On macOS `rvd` shows the Touch ID prompt itself, so this works on every install, including ones without a peer-trust manifest. On Linux `rvd` verifies the password with `unix_chkpwd`. Either way `rvd` allows one check at a time and locks checks for ten minutes after five wrong passwords or declined prompts. Every attempt is an `owner.action` audit event.
 - `rv allow-once` works on Linux: the login password is the owner proof.
 - The Swift CLI reaches `rvd` over its Unix socket on Linux (`rv hook` included), after checking the peer is the sibling `rvd` running as the same user.

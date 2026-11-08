@@ -86,7 +86,7 @@ struct EvaluationInputsGuardModeTests {
         switch explicit {
         case .observe:
             #expect(result.decision == .allow)
-            #expect(ledgerRows(home).isEmpty)
+            #expect(ledgerRows(home).map(\.observed) == [true])
         case .enforce:
             guard case .deny = result.decision else {
                 Issue.record("explicit enforce must deny, got \(result.decision)")
@@ -460,7 +460,8 @@ struct JudgePortThresholdTests {
             host: .tty, tool: .bash, inputs: inputs(.observe, home: home)
         )
         #expect(result.outcome == .plain)
-        #expect(ledgerRows(home).isEmpty)
+        #expect(ledgerRows(home).map(\.observed) == [true])
+        #expect(ledgerRows(home).first?.ruleID == RuleID(pack: .coreJudge, pattern: "laya-block"))
         let row = try #require(try judgeLog(home).last)
         #expect(row["guard"] as? String == "observe")
         #expect(row["wouldBe"] as? String == "deny")

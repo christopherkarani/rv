@@ -18,10 +18,10 @@ enum GatedEffect: Sendable, Equatable {
     case exemptionAudit(ExemptionAudit)
     /// Row for `judge-log.jsonl`.
     case judgeLog(JudgeLogRow)
-    /// Row for the denial ledger. Apply and file-door enforce only; the
-    /// shell still honours `DenialLedgerPreferences` for the ledger, and
-    /// always appends a `command.denied` event to the hash-chained
-    /// `audit.jsonl`.
+    /// Row for the denial ledger. Apply and the file door only; the shell
+    /// still honours `DenialLedgerPreferences` for the ledger, and always
+    /// appends a `command.denied` event (`command.observed` for an
+    /// observe-mode would-be deny) to the hash-chained `audit.jsonl`.
     case denialRow(DenialRow)
     /// A deny the Policy gate turned into an allow (allow-once, allowlist,
     /// rebase recovery, contained delete). Appended to `audit.jsonl` as
@@ -77,6 +77,8 @@ enum GatedEffect: Sendable, Equatable {
         let category: LedgerCategory
         /// Unredacted; the shell redacts against home when writing.
         let path: String
+        /// Observe mode: enforcement would have denied, the door allowed.
+        var observed = false
     }
 
     struct OverrideRow: Sendable, Equatable {
