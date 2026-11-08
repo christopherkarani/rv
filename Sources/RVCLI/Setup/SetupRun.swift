@@ -83,7 +83,7 @@ enum SetupRun {
     /// Hooks fail closed on an rvd they cannot trust, so wiring them to one
     /// denies every tool call. Refuse before writing anything; `--force`
     /// replaces occupied hooks and cannot make the daemon trusted.
-    private static func requireTrustedDaemon(_ env: SetupEnvironment) throws(SetupError) {
+    static func requireTrustedDaemon(_ env: SetupEnvironment) throws(SetupError) {
         guard env.fileManager.isExecutableFile(atPath: env.rvdPath),
             let trust = env.daemonTrust(env.rvdPath),
             trust.satisfied == false

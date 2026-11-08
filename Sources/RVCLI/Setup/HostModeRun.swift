@@ -131,6 +131,11 @@ enum HostModeRun {
             // `rv setup` repairs).
             if mode == .off {
                 try applyWiring(from: current, to: mode, host: host, env: env)
+            } else if current == .off {
+                // Leaving `off` re-wires the host: refuse, as `rv setup`
+                // does, before storing anything when the fail-closed hook
+                // would reject the installed rvd and deny every tool call.
+                try SetupRun.requireTrustedDaemon(env)
             }
             do {
                 try store.save(mode, for: host)

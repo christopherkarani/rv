@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVPolicy
+import RVPresentation
 @testable import RVCLI
 
 private struct AuthRefused: Error {}
@@ -228,6 +229,35 @@ struct HostCommandTests {
             #expect(store(home).load() == [.grok: .block])
             #expect(SetupRun.setup(base).exitCode == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+        }
+    }
+
+    /// Same incident guard as `rv setup`: re-wiring one host to an rvd the
+    /// fail-closed hook would reject denies every tool call on that host.
+    /// Refuse before storing or writing anything; the host stays off.
+    @Test func leavingOff_whenHooksWouldRejectRvd_refusesAndStaysOff() async throws {
+        try await withTempHomeAsync { home, layout, base in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(base).exitCode == 0)
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: base, json: true, authenticate: AuthProbe(allow: true).authenticate)
+            #expect(off.exitCode == 0)
+            try Data("#!/bin/sh\n".utf8).write(to: URL(fileURLWithPath: base.rvdPath))
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: base.rvdPath)
+            var environment = base
+            environment.daemonTrust = { _ in
+                DoctorServiceTrust(source: "manifest", satisfied: false, reason: "installed rvd is ad-hoc signed")
+            }
+            for mode in [HostMode.block, .observe] {
+                let outcome = await HostModeRun.setMode(
+                    mode, for: .grok, env: environment, json: true,
+                    authenticate: AuthProbe(allow: true).authenticate)
+                #expect(outcome.exitCode != 0)
+                #expect(outcome.stdout.isEmpty)
+                #expect(outcome.stderr.contains("hooks would reject the installed rvd"))
+                #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+                #expect(store(home).load() == [.grok: .off])
+            }
         }
     }
 
