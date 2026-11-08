@@ -93,14 +93,22 @@ struct UnixChkpwdChecker: OwnerPasswordChecking {
 
 /// rvd's owner-presence check for owner actions and non-macOS allow-once.
 ///
-/// - The genuine macOS CLI (`.cli` role, code-pinned) has already run
-///   LocalAuthentication; rvd accepts it without a proof.
-/// - Every other caller must send the owner's login password, which rvd
-///   verifies itself.
+/// Owner actions (`confirm`):
+/// - macOS: rvd shows the LocalAuthentication prompt itself, for every
+///   authenticated caller. No role skips it, so it works on installs with
+///   no peer-trust manifest, and the CLI cannot answer for the owner.
+/// - Linux: the caller sends the owner's login password, which rvd verifies.
+///
+/// Allow-once redeem (`verify`): the genuine macOS CLI (`.cli` role,
+/// code-pinned) ran LocalAuthentication in its own ceremony; every other
+/// caller must send the login password.
+///
+/// Both:
 /// - One check runs at a time, so an agent cannot slip a second request in
 ///   behind a prompt the owner is answering.
-/// - Five wrong passwords within ten minutes lock checks for ten minutes,
-///   so an agent cannot guess the password through rvd.
+/// - Five wrong passwords or declined prompts within ten minutes lock checks
+///   for ten minutes, so an agent can neither guess the password through rvd
+///   nor keep putting prompts in front of the owner.
 actor OwnerPresence {
     enum Verdict: Equatable {
         case approved
@@ -110,30 +118,91 @@ actor OwnerPresence {
     static let maxFailures = 5
     static let failureWindow: TimeInterval = 600
     static let lockout: TimeInterval = 600
+    /// Longest an owner prompt stays open. The CLI waits a little longer
+    /// (`ServiceClient.confirmOwnerActionTimeoutMs`) so rvd answers first.
+    static let defaultPromptTimeout: Duration = .seconds(60)
+
+    /// rvd's own prompt where the platform has one (macOS).
+    static var platformAuthenticator: (any OwnerAuthenticating)? {
+        #if canImport(LocalAuthentication)
+        return LocalOwnerAuthenticator()
+        #else
+        return nil
+        #endif
+    }
 
     private let checker: any OwnerPasswordChecking
+    private let authenticator: (any OwnerAuthenticating)?
+    private let promptTimeout: Duration
     private let clock: @Sendable () -> Date
     private var failures: [Date] = []
     private var lockedUntil: Date?
     private var inFlight = false
 
-    init(checker: any OwnerPasswordChecking = UnixChkpwdChecker(), clock: @escaping @Sendable () -> Date = { Date() }) {
+    init(
+        checker: any OwnerPasswordChecking = UnixChkpwdChecker(),
+        authenticator: (any OwnerAuthenticating)? = OwnerPresence.platformAuthenticator,
+        promptTimeout: Duration = OwnerPresence.defaultPromptTimeout,
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.checker = checker
+        self.authenticator = authenticator
+        self.promptTimeout = promptTimeout
         self.clock = clock
     }
 
+    /// The owner approves the owner action `summary` (already sanitized by
+    /// the caller); the prompt shows exactly that text.
+    func confirm(_ summary: String, proof: OwnerProof?, context: AuthenticatedRequestContext) async -> Verdict {
+        guard let authenticator else {
+            return await verifyPassword(proof, context: context)
+        }
+        guard context.peer != nil else {
+            return .denied(ConfirmOwnerActionReply(outcome: .proofRequired))
+        }
+        if let locked = lockedOutVerdict() { return locked }
+        guard inFlight == false else {
+            return .denied(ConfirmOwnerActionReply(outcome: .busy))
+        }
+        inFlight = true
+        defer { inFlight = false }
+        guard authenticator.isAvailable() else {
+            return .denied(ConfirmOwnerActionReply(outcome: .unavailable))
+        }
+        let timeout = promptTimeout
+        // Bounded: an unanswered prompt must not hold the single slot.
+        // Cancelling the prompt task dismisses the dialog.
+        let approved = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await authenticator.authenticate(reason: summary) }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        if approved {
+            failures.removeAll()
+            return .approved
+        }
+        return recordFailure(.declined)
+    }
+
+    /// Allow-once redeem: the pinned `.cli` ran its own prompt; anyone else
+    /// sends the login password.
     func verify(_ proof: OwnerProof?, context: AuthenticatedRequestContext) async -> Verdict {
         if context.componentRole == .cli, context.peer != nil {
             return .approved
         }
+        return await verifyPassword(proof, context: context)
+    }
+
+    private func verifyPassword(_ proof: OwnerProof?, context: AuthenticatedRequestContext) async -> Verdict {
         guard context.peer != nil, let password = proof?.password, password.isEmpty == false else {
             return .denied(ConfirmOwnerActionReply(outcome: .proofRequired))
         }
-        let now = clock()
-        if let lockedUntil, now < lockedUntil {
-            return .denied(ConfirmOwnerActionReply(
-                outcome: .lockedOut, retryAfterSeconds: Int(lockedUntil.timeIntervalSince(now).rounded(.up))))
-        }
+        if let locked = lockedOutVerdict() { return locked }
         guard inFlight == false else {
             return .denied(ConfirmOwnerActionReply(outcome: .busy))
         }
@@ -149,15 +218,26 @@ actor OwnerPresence {
             failures.removeAll()
             return .approved
         case .some(false):
-            let at = clock()
-            failures = failures.filter { at.timeIntervalSince($0) < Self.failureWindow } + [at]
-            if failures.count >= Self.maxFailures {
-                lockedUntil = at.addingTimeInterval(Self.lockout)
-                failures.removeAll()
-                return .denied(ConfirmOwnerActionReply(outcome: .lockedOut, retryAfterSeconds: Int(Self.lockout)))
-            }
-            return .denied(ConfirmOwnerActionReply(outcome: .wrongPassword))
+            return recordFailure(.wrongPassword)
         }
+    }
+
+    private func lockedOutVerdict() -> Verdict? {
+        let now = clock()
+        guard let lockedUntil, now < lockedUntil else { return nil }
+        return .denied(ConfirmOwnerActionReply(
+            outcome: .lockedOut, retryAfterSeconds: Int(lockedUntil.timeIntervalSince(now).rounded(.up))))
+    }
+
+    private func recordFailure(_ outcome: ConfirmOwnerActionReply.Outcome) -> Verdict {
+        let at = clock()
+        failures = failures.filter { at.timeIntervalSince($0) < Self.failureWindow } + [at]
+        if failures.count >= Self.maxFailures {
+            lockedUntil = at.addingTimeInterval(Self.lockout)
+            failures.removeAll()
+            return .denied(ConfirmOwnerActionReply(outcome: .lockedOut, retryAfterSeconds: Int(Self.lockout)))
+        }
+        return .denied(ConfirmOwnerActionReply(outcome: outcome))
     }
 
     /// Appends one `owner.action` event to the hash-chained audit log.

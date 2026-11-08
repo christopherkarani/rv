@@ -315,8 +315,7 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 ConfirmOwnerActionCall(params: params),
                 using: transport,
-                // A wrong password costs pam_unix's failure delay (~2 s).
-                timeoutMs: 15_000
+                timeoutMs: Self.confirmOwnerActionTimeoutMs
             )
             return .success(reply)
         } catch let error as IPCCallError {
@@ -341,6 +340,11 @@ public struct ServiceClient: Sendable {
     /// a launchd cold spawn) plus hookEvaluate (8000 ms; rvd enforces its
     /// own shorter deadline). Mirrors the C client's per-exchange budgets.
     static let hookEvaluateTimeoutMs = 14_000
+    /// macOS: a person answers rvd's Touch ID prompt, which rvd closes after
+    /// `OwnerPresence.defaultPromptTimeout` (60 s); this waits past that so
+    /// rvd's answer arrives first. Linux: a wrong password costs pam_unix's
+    /// ~2 s failure delay.
+    static let confirmOwnerActionTimeoutMs = 75_000
 
     /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {

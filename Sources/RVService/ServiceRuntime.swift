@@ -470,7 +470,7 @@ public actor ServiceRuntime {
             .prefix(ConfirmOwnerActionParams.maxSummaryBytes)
             .map(Character.init))
         guard summary.isEmpty == false else { return .error(.authorizationDenied) }
-        let verdict = await ownerPresence.verify(params.proof, context: context)
+        let verdict = await ownerPresence.confirm(summary, proof: params.proof, context: context)
         let reply: ConfirmOwnerActionReply
         switch verdict {
         case .approved: reply = ConfirmOwnerActionReply(outcome: .approved)

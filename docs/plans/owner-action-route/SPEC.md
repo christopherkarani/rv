@@ -1,6 +1,6 @@
 # Authenticated owner action route + Linux allow-once
 
-Status: shipped in a narrower form. rvd confirms owner presence (`confirmOwnerAction`, `Sources/RVService/OwnerPresence.swift`) and audits it; the CLI then applies the change itself, rather than rvd applying it. Linux proof is the login password checked by `unix_chkpwd`. Allow-once on Linux carries the same proof in `attestTTYRedemption`. Moving the writes themselves into rvd remains open. Owner decisions are in section 14.
+Status: shipped in a narrower form. rvd confirms owner presence (`confirmOwnerAction`, `Sources/RVService/OwnerPresence.swift`) and audits it; the CLI then applies the change itself, rather than rvd applying it. macOS proof is rvd's own LocalAuthentication prompt showing rvd's sanitized copy of the summary (section 5.5, `daemonLocalAuthentication`), for every authenticated caller, so one-click installs without a manifest work; `cliAttestation` was not kept for owner actions. Linux proof is the login password checked by `unix_chkpwd`. Allow-once on Linux carries the same proof in `attestTTYRedemption`. Moving the writes themselves into rvd remains open. Owner decisions are in section 14.
 Scope: one rvd-side IPC route that applies owner mutations, the presence proofs it accepts on macOS and Linux, and allow-once redemption on Linux.
 Line numbers are against commit `bc52f30`.
 
