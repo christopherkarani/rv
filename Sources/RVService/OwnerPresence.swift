@@ -61,6 +61,11 @@ struct UnixChkpwdChecker: OwnerPasswordChecking {
         // so the write runs on a thread with SIGPIPE blocked: a helper that
         // exits without reading becomes EPIPE here instead of killing rvd.
         let writer = input.fileHandleForWriting
+        #if canImport(Darwin)
+        // Darwin can still raise a thread-blocked SIGPIPE on the process;
+        // this makes the write itself fail with EPIPE instead.
+        _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+        #endif
         let payload = Data(bytes + [0])
         Thread.detachNewThread {
             var blocked = sigset_t()
