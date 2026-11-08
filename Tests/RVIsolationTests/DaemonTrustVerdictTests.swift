@@ -98,6 +98,29 @@ import Testing
         #expect(reason.hasSuffix(" at \(canonical)"))
     }
 
+    /// Mirror of C `has_service_role`: only the service entry decides. An
+    /// earlier entry for another role that also matches must not shadow it.
+    @Test(.enabled(if: Self.hardenedPlatformFixture != nil, "needs a hardened root-owned platform binary"))
+    func onlyTheServiceEntryDecides() throws {
+        let fixture = try #require(Self.hardenedPlatformFixture)
+        let hash = fixture.identity.cdHash.map { String(format: "%02x", $0) }.joined()
+        func pin(_ role: String) -> String {
+            #"{"role":"\#(role)","requirement":"cdhash H\"\#(hash)\"","developmentCDHash":"\#(hash)","developmentExecutablePath":"\#(fixture.path)"}"#
+        }
+        let trust = try ProtectedPeerTrustConfiguration.parse(Data("[\(pin("cli")),\(pin("service"))]".utf8))
+        let verdict = ProtectedPeerTrustConfiguration.HookTrustSource.manifest(trust).evaluateDaemon(atPath: fixture.path)
+        #expect(verdict == DaemonTrustVerdict(source: .manifest, satisfied: true, reason: nil))
+    }
+
+    /// A hardened, entitlement-free platform binary at a root-owned path, so
+    /// a development cdhash pin can genuinely match it.
+    private static let hardenedPlatformFixture: (path: String, identity: PeerCodeIdentity)? = {
+        let path = "/usr/bin/automationmodetool"
+        guard let identity = try? MacOSPeerCodeVerifier.staticIdentity(ofPath: path),
+              identity.hardenedRuntime, identity.injectionExceptions.isEmpty else { return nil }
+        return (path, identity)
+    }()
+
     @Test func siblingPinTrustsAnyValidlySignedRvd() throws {
         let (dir, rvd) = try Self.fixture([])
         defer { try? FileManager.default.removeItem(at: dir) }

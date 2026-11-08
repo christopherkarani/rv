@@ -147,6 +147,11 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
 
     private init(entries: [Entry]) { self.entries = entries }
 
+    /// Only `role`'s entry, as C `has_service_role` evaluates the daemon.
+    func restricted(to role: TrustedRVComponentRole) -> Self {
+        Self(entries: entries.filter { $0.role == role })
+    }
+
     /// Roles this configuration can grant, in manifest order.
     var configuredRoles: [TrustedRVComponentRole] { entries.map(\.role) }
 

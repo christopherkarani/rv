@@ -867,6 +867,32 @@ verify_release_signatures() {
 # exists for tests (as HOME does) and can only skip this check, never add
 # trust: hooks always read the fixed path.
 trust_manifest="${RV_INSTALL_TRUST_MANIFEST:-/Library/Application Support/RV/peer-trust.json}"
+if [ -n "${RV_INSTALL_TRUST_MANIFEST+set}" ]; then
+  echo "rv: WARNING: RV_INSTALL_TRUST_MANIFEST is set: the trust-manifest check uses test override path $trust_manifest, not the path hooks read" >&2
+fi
+
+# present | absent | unknown:<reason>. Mirrors C trust_source: only a
+# missing path (ENOENT) is "no manifest"; anything that hides the answer
+# (an unsearchable or non-directory ancestor) is an invalid manifest there.
+trust_manifest_state() {
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    echo present
+    return 0
+  fi
+  dir=$(dirname "$1")
+  while :; do
+    if [ -d "$dir" ]; then
+      if [ -x "$dir" ]; then echo absent; else echo "unknown:$dir is not searchable"; fi
+      return 0
+    fi
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+      echo "unknown:$dir is not a directory"
+      return 0
+    fi
+    [ "$dir" != "/" ] || { echo absent; return 0; }
+    dir=$(dirname "$dir")
+  done
+}
 
 # The manifest's service-entry value for key $2, or nothing.
 manifest_service_field() {
@@ -910,7 +936,16 @@ staged_rvd_trust_gap() {
 
 refuse_untrusted_rvd_under_manifest() {
   [ "$os" = "Darwin" ] || return 0
-  [ -e "$trust_manifest" ] || [ -L "$trust_manifest" ] || return 0
+  state="$(trust_manifest_state "$trust_manifest")"
+  case "$state" in
+    absent) return 0 ;;
+    unknown:*)
+      echo "rv: refusing to install: cannot tell whether trust manifest $trust_manifest exists (${state#unknown:})" >&2
+      echo "rv: hooks treat that as an invalid manifest and would deny every agent tool call" >&2
+      echo "rv: fix: make that directory searchable, or remove the manifest directory with sudo" >&2
+      exit 1
+      ;;
+  esac
   gap="$(staged_rvd_trust_gap "$1/rvd")"
   [ -n "$gap" ] || return 0
   want_id="$(manifest_service_field "$trust_manifest" requiredIdentifier)"

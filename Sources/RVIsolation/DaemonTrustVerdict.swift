@@ -65,7 +65,9 @@ extension ProtectedPeerTrustConfiguration {
               let identity = try? MacOSPeerCodeVerifier.identity(fromStaticCode: staticCode).identity else {
             return rejected("\(requires); installed rvd has no valid code signature")
         }
-        let role = role(identity: identity) {
+        // Only the service entry decides (C `has_service_role`): another
+        // role's entry that also matches must not shadow it.
+        let role = restricted(to: .service).role(identity: identity) {
             SecStaticCodeCheckValidity(staticCode, [], $0) == errSecSuccess
         }
         if role == .service {

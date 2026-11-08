@@ -706,6 +706,7 @@ private func withUntrustedStageUnderManifest(
         #expect(result.stderr.contains("RV_RELEASE_SIGN=1 Scripts/release.sh"))
         #expect(result.stderr.contains("sudo rm '\(manifest.path)'"))
         #expect(result.stderr.contains("RV_INSTALL_ALLOW_UNSIGNED=1"))
+        #expect(result.stderr.contains("rv: WARNING: RV_INSTALL_TRUST_MANIFEST is set: the trust-manifest check uses test override path \(manifest.path)"))
         if FileManager.default.isExecutableFile(atPath: "/usr/bin/plutil") {
             #expect(result.stderr.contains("requires Developer ID dev.rv.rvd (team 5V273URY46)"))
         }
@@ -732,6 +733,44 @@ private func withUntrustedStageUnderManifest(
         let rvd = home.appendingPathComponent(".local/bin/rvd")
         #expect(try String(contentsOf: rvd, encoding: .utf8).contains("installed-dummy"))
     }
+}
+
+/// C `trust_source` treats any lstat failure other than ENOENT as an invalid
+/// manifest (deny every rvd). A directory install.sh cannot search must not
+/// read as "no manifest".
+@Test(.enabled(if: getuid() != 0, "root can search a mode-000 directory"))
+func installSh_unsearchableManifestDirectory_refusesLikeInvalidManifest() throws {
+    try withUntrustedStageUnderManifest { home, src, shim, manifest in
+        let locked = manifest.deletingLastPathComponent().appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path) }
+        let hidden = locked.appendingPathComponent("peer-trust.json").path
+        let result = try runInstallScript(
+            home: home, src: src, pathPrefix: shim.path,
+            extraEnvironment: ["RV_INSTALL_TRUST_MANIFEST": hidden]
+        )
+        #expect(result.status != 0)
+        #expect(result.stderr.contains("rv: refusing to install: cannot tell whether trust manifest \(hidden) exists (\(locked.path) is not searchable)"))
+        #expect(result.stderr.contains("hooks treat that as an invalid manifest and would deny every agent tool call"))
+        let rvd = home.appendingPathComponent(".local/bin/rvd")
+        #expect(try String(contentsOf: rvd, encoding: .utf8).contains("installed-v1"))
+    }
+}
+
+@Test func installSh_trustManifestOverrideWarnsEvenWhenAbsent() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+    #expect(result.stderr.contains("rv: WARNING: RV_INSTALL_TRUST_MANIFEST is set: the trust-manifest check uses test override path \(absentTrustManifest)"))
 }
 
 @Test func installSh_copyFailureLeavesPreviousInstallIntact() throws {
