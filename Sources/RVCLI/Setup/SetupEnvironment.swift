@@ -9,6 +9,7 @@ import RVDomain
 import RVHooks
 import RVPolicy
 import RVPresentation
+import RVService
 
 struct SetupOutcome: Equatable, Sendable {
     var stdout: String
@@ -53,6 +54,10 @@ struct SetupEnvironment {
     /// The `rv-cli` binary running this setup (nil when unknown). Setup that
     /// touches the real supervisor must run from the installed bin dir.
     var runningExecutable: String? = nil
+    /// True while an organization gate pins enforce. Injected so the
+    /// managed-gate paths of `rv setup` / `rv host mode` are provable
+    /// without a root-owned bundle.
+    var managedEnforce: (HomeDirectory) -> Bool = { ManagedGate.pinsEnforce(home: $0) }
 
     /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
     /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.

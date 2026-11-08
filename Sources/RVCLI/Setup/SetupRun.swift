@@ -60,7 +60,7 @@ enum SetupRun {
     /// Setup that loads the real supervisor must run from the hook's bin dir:
     /// the plist names `rvd` there, and a different build's `rv-cli` would
     /// wire hooks for binaries that were never installed.
-    private static func requireInstalledCopy(_ env: SetupEnvironment) throws(SetupError) {
+    static func requireInstalledCopy(_ env: SetupEnvironment) throws(SetupError) {
         guard env.touchLaunchd || env.touchSystemd, let running = env.runningExecutable else { return }
         let runningDirectory = canonicalDirectory(of: running)
         let installedDirectory = canonicalDirectory(of: env.rvPath)
@@ -85,11 +85,17 @@ enum SetupRun {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
+        // An organization gate keeps every detected host wired: `off` would
+        // drop the hook and with it the org policy.
+        let offHosts: Set<HookHost> = env.managedEnforce(env.home) ? [] : Set(HostModeStore(
+            configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        ).load().filter { $0.value == .off }.keys)
         let plan = SetupWorkPlanBuilder.make(
             installations: installations,
             layout: layout,
             force: force,
-            rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath)
+            rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath),
+            offHosts: offHosts
         )
         return try HostLifecycle.attach(plan, env: env, layout: layout, files: files)
     }

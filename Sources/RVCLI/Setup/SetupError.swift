@@ -8,6 +8,8 @@ enum SetupFailureCommand: String {
     case setup
     case uninstall
     case serviceRestart = "service restart"
+    case hostList = "host list"
+    case hostMode = "host mode"
 }
 
 /// One launchctl step whose refusal setup/uninstall surfaces.
