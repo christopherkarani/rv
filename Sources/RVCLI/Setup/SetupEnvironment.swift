@@ -53,6 +53,9 @@ struct SetupEnvironment {
     /// The `rv-cli` binary running this setup (nil when unknown). Setup that
     /// touches the real supervisor must run from the installed bin dir.
     var runningExecutable: String? = nil
+    /// Would hooks trust the `rvd` at a path? Nil skips the check (tests,
+    /// Linux). Live: `DaemonTrustProbe.live`.
+    var daemonTrust: (String) -> DoctorServiceTrust? = { _ in nil }
 
     /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
     /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.

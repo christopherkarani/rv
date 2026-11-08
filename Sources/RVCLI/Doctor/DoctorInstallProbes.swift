@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVPolicy
 import RVPresentation
 #if os(macOS)
 import RVIsolation
@@ -30,8 +31,11 @@ struct DoctorInstallProbes {
     var userID: uid_t
     var launchd: LaunchdObservation?
     var trustManifest: TrustManifestState
+    /// Would hooks trust the installed `rvd`? Nil when not evaluated.
+    var daemonTrust: DoctorServiceTrust? = nil
 
     static func live(
+        home: HomeDirectory,
         userID: uid_t = getuid(),
         launchctl: any LaunchctlApplying = ProcessLaunchctl()
     ) -> DoctorInstallProbes {
@@ -43,7 +47,8 @@ struct DoctorInstallProbes {
                 userID: userID,
                 launchctl: launchctl
             ),
-            trustManifest: liveTrustManifest()
+            trustManifest: liveTrustManifest(),
+            daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd)
         )
 #else
         DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
@@ -64,6 +69,46 @@ struct DoctorInstallProbes {
 #endif
 }
 
+/// Static trust check of the installed `rvd` with the rule hooks apply to
+/// the live daemon (`DaemonTrustVerdict`). Doctor and setup share it.
+enum DaemonTrustProbe {
+    /// Production evaluator; nil off macOS (Linux hooks trust a same-user socket).
+    static func live(_ rvdPath: String) -> DoctorServiceTrust? {
+#if os(macOS)
+        evaluate(rvdPath: rvdPath, source: ProtectedPeerTrustConfiguration.hookTrustSource())
+#else
+        nil
+#endif
+    }
+
+#if os(macOS)
+    /// Nil when no rvd is installed: `rvd-missing` already covers that.
+    static func evaluate(
+        rvdPath: String,
+        source: ProtectedPeerTrustConfiguration.HookTrustSource
+    ) -> DoctorServiceTrust? {
+        guard FileManager.default.fileExists(atPath: rvdPath) else { return nil }
+        let verdict = source.evaluateDaemon(atPath: rvdPath)
+        return DoctorServiceTrust(
+            source: verdict.source.rawValue, satisfied: verdict.satisfied, reason: verdict.reason
+        )
+    }
+#endif
+
+    /// Repair for an rvd the hooks would reject.
+    static func fix(_ trust: DoctorServiceTrust) -> String {
+        switch trust.source {
+        case "manifest":
+            "sign the build (RV_RELEASE_SIGN=1 Scripts/release.sh) and reinstall it, "
+                + "or remove the admin trust manifest: sudo rm '\(DoctorInstallChecks.trustManifestPath)'"
+        case "invalid":
+            "sudo rm '\(DoctorInstallChecks.trustManifestPath)' (or reinstall a valid manifest)"
+        default:
+            SetupRun.reinstallHint
+        }
+    }
+}
+
 /// Install/runtime problems that make hooks deny even though rv "looks"
 /// installed. Each carries the exact repair command.
 enum DoctorInstallChecks {
@@ -81,6 +126,7 @@ enum DoctorInstallChecks {
     ) -> [DoctorProblem] {
         [
             trustManifest(probes.trustManifest),
+            daemonTrust(probes.daemonTrust),
             installedBinaries(paths: paths, fileManager: fileManager),
             launchAgentProgram(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
@@ -100,6 +146,19 @@ enum DoctorInstallChecks {
             summary: "\(trustManifestPath) is present but rejected (must be a valid, root-owned manifest); "
                 + "hooks fail closed",
             fix: "sudo rm '\(trustManifestPath)' (or reinstall a valid manifest)"
+        )
+    }
+
+    /// The installed rvd fails the trust rule hooks apply, so every hook
+    /// call is denied however healthy the service looks. An invalid
+    /// manifest already has its own row.
+    static func daemonTrust(_ trust: DoctorServiceTrust?) -> DoctorProblem? {
+        guard let trust, trust.satisfied == false, trust.source != "invalid" else { return nil }
+        return DoctorProblem(
+            id: "daemon-trust",
+            severity: .fail,
+            summary: "hooks reject the installed rvd (\(trust.reason ?? "untrusted")); hooks deny every tool call",
+            fix: DaemonTrustProbe.fix(trust)
         )
     }
 

@@ -112,7 +112,7 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
         var developmentCDHash: String?
         var developmentExecutablePath: String?
     }
-    private let entries: [Entry]
+    let entries: [Entry]
     public static let denyAll = ProtectedPeerTrustConfiguration(entries: [])
     public static let installedURL = URL(fileURLWithPath: "/Library/Application Support/RV/peer-trust.json")
 
@@ -226,6 +226,14 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
     }
 
     func role(code: SecCode, identity: PeerCodeIdentity) -> TrustedRVComponentRole? {
+        role(identity: identity) { SecCodeCheckValidity(code, [], $0) == errSecSuccess }
+    }
+
+    /// The role rule, with requirement validation injected: live peers check
+    /// their dynamic code; `evaluateDaemon(atPath:)` checks on-disk bytes.
+    func role(
+        identity: PeerCodeIdentity, satisfies: (SecRequirement) -> Bool
+    ) -> TrustedRVComponentRole? {
         // Protected bytes and a matching signature do not stop same-user
         // DYLD/debugger injection into an unhardened process. Such a process
         // remains factual code evidence but receives no component authority.
@@ -245,12 +253,12 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
                 let expression = "anchor apple generic and identifier \"\(identity.identifier)\" and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
                 guard SecRequirementCreateWithString(expression as CFString, [], &productionRequirement) == errSecSuccess,
                       let productionRequirement,
-                      SecCodeCheckValidity(code, [], productionRequirement) == errSecSuccess else { continue }
+                      satisfies(productionRequirement) else { continue }
             }
             var requirement: SecRequirement?
             guard SecRequirementCreateWithString(entry.requirement as CFString, [], &requirement) == errSecSuccess,
                   let requirement,
-                  SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { continue }
+                  satisfies(requirement) else { continue }
             return entry.role
         }
         return nil
@@ -412,7 +420,7 @@ public enum MacOSPeerCodeVerifier {
             auditToken: auditToken, codeIdentity: identity, componentRole: trust.role(code: code, identity: identity))
     }
 
-    private static func identity(fromStaticCode staticCode: SecStaticCode) throws -> (identity: PeerCodeIdentity, hash: Data) {
+    static func identity(fromStaticCode staticCode: SecStaticCode) throws -> (identity: PeerCodeIdentity, hash: Data) {
         var raw: CFDictionary?
         let result = SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &raw)
         guard result == errSecSuccess, let info = raw as? [String: Any],

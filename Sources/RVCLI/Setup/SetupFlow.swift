@@ -95,7 +95,7 @@ extension SetupEnvironment {
             home: home.rawValue
         )
 #endif
-        return SetupEnvironment(
+        var setup = SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
             rvPath: resolveRv(home: home.rawValue),
@@ -110,5 +110,7 @@ extension SetupEnvironment {
             companionPresence: companionPresence,
             runningExecutable: executable?.path
         )
+        setup.daemonTrust = DaemonTrustProbe.live
+        return setup
     }
 }
