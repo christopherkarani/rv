@@ -74,6 +74,15 @@ enum HostModeRun {
             var lines = rows.map { "\($0.host)  \($0.mode)  \($0.wiring)" }
             if document.managedEnforce {
                 lines.append("organization gate pins enforce: observe and off do not change evaluation")
+                // A gate that arrived after a host went off does not re-wire it.
+                let unwired = HookHost.allCases
+                    .filter { modes[$0] == .off && installations.state(for: $0) != .wired }
+                    .map(\.rawValue)
+                    .sorted()
+                if unwired.isEmpty == false {
+                    let names = unwired.joined(separator: ", ")
+                    lines.append("organization gate pins enforce but \(names) is unwired: run rv setup to restore")
+                }
             }
             return SetupOutcome(stdout: lines.joined(separator: "\n") + "\n", exitCode: 0)
         } catch let error as SetupError {

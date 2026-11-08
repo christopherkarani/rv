@@ -21,7 +21,7 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 
 ## Guard
 
-**Host mode** — how rv guards one hook host: `block` (enforce, the default), `observe` (allow and record what would have been blocked) or `off` (rv's hooks removed from that host). Stored under `guard.hosts` in `config.json`, `block` included, so an explicit `block` outranks a global `guard.mode: observe`; rvd resolves `RV_GUARD_MODE` > host mode > `guard.mode` > enforce, and an organization gate still pins enforce. `rv host list` reports each host's effective mode: a host with no entry reads as the global mode. `HostMode`, `HostModeStore`.
+**Host mode** — how rv guards one hook host: `block` (enforce, the default), `observe` (allow and record what would have been blocked) or `off` (rv's hooks removed from that host). Stored under `guard.hosts` in `config.json`, `block` included, so an explicit `block` outranks a global `guard.mode: observe`; rvd resolves `RV_GUARD_MODE` > host mode > `guard.mode` > enforce, and an organization gate still pins enforce. `rv host list` reports each host's effective mode: a host with no entry reads as the global mode. A host set `off` before an organization gate arrived stays unwired (wiring `absent-file`, `managed_enforce: true`) until `rv setup` restores it. `HostMode`, `HostModeStore`.
 
 **Observe floor** — what observe never relaxes: rv's own self-protection (an agent-issued rv command that weakens rv, `SelfProtectionGuard`) and rv's config dir (`core.secrets:home-rv-config`). On every door those stay enforced, so an observe host cannot loosen another host or the global guard. `ObserveFloor`.
 

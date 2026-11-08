@@ -18,8 +18,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
-- Per-host guard mode: `rv host list` and `rv host mode <host> block|observe|off` (`guard.hosts` in `config.json`). Loosening a host asks for device-owner authentication; `off` removes that host's rv hooks and `rv setup` skips it. An organization gate still pins enforce.
-- Observe mode records what enforcement would have blocked: `rv blocks` rows carry `"observed": true` and `rv audit` shows them as `command.observed`.
+- Per-host guard mode: `rv host list` and `rv host mode <host> block|observe|off` (`guard.hosts` in `config.json`). Loosening a host asks for device-owner authentication, and an agent that runs `rv host mode <host> observe|off` is told to run it in Terminal; `off` removes that host's rv hooks and `rv setup` skips it. A stored `block` outranks a global `guard.mode: observe`. An organization gate still pins enforce.
+- Observe mode records what enforcement would have blocked: `rv blocks` rows carry `"observed": true` (an `observed` column in text output) and `rv audit` shows them as `command.observed`. Observe never relaxes rv's own protection: weakening rv commands and access to rv's config dir stay enforced.
 - `rv workspace vms [--json] [--limit N]` lists micro-VM runtime sessions.
 - Owner authentication for commands that change the gate: `rv packs enable|disable`, `rv safety`, `rv allowlist`, `rv policy draft --save`, `rv policy apply --save`, `rv policy export --output`, `rv egress approve|deny` and `rv workspace abandon` work again after Touch ID or the login password. On Linux `rvd` verifies the password with `unix_chkpwd`, allows one check at a time and locks checks for ten minutes after five wrong passwords. Every attempt is an `owner.action` audit event.
 - `rv allow-once` works on Linux: the login password is the owner proof.

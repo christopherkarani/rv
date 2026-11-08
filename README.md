@@ -77,6 +77,9 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   blocking, so you can measure before you enforce. `rv host mode
   <host> observe` does the same for one host (`off` unwires it); `rv
   blocks` marks what observe would have blocked with `"observed": true`.
+  Observe never relaxes rv's own protection (rv admin commands, rv's
+  config). A host set `off` before an organization gate arrived stays
+  unwired until you run `rv setup`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned
   rules → allowlist → allow-once → contained-delete allowance) with
   `normal`/`strict` safety levels. Indeterminate (too large, budget

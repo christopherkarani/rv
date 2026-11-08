@@ -257,6 +257,28 @@ struct HostCommandTests {
         }
     }
 
+    /// A gate that arrives after a host went `off` leaves it unwired until
+    /// `rv setup`: list shows it (mode off, not wired, managed_enforce) and
+    /// the text form says how to restore it.
+    @Test func list_underALaterOrganizationGate_namesTheUnwiredOffHost() async throws {
+        try await withTempHomeAsync { _, layout, base in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(base).exitCode == 0)
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: base, json: true, authenticate: AuthProbe(allow: true).authenticate)
+            #expect(off.exitCode == 0)
+            #expect(HostModeRun.list(base, json: false).stdout.contains("rv setup") == false)
+            var gated = base
+            gated.managedEnforce = { _ in true }
+            let json = HostModeRun.list(gated, json: true).stdout
+            #expect(json.contains(#"{"host":"grok","mode":"off","wiring":"absent-file"}"#))
+            #expect(json.contains(#""managed_enforce":true"#))
+            let text = HostModeRun.list(gated, json: false).stdout
+            #expect(text.contains("grok  off  absent-file\n"))
+            #expect(text.hasSuffix("organization gate pins enforce but grok is unwired: run rv setup to restore\n"))
+        }
+    }
+
     @Test func setup_underOrganizationGate_wiresHostsStoredOff() async throws {
         try await withTempHomeAsync { home, layout, base in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)

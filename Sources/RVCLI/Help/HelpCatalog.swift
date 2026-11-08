@@ -432,7 +432,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
             ]),
             HelpSection(heading: "Modes", rows: [
-                HelpRow(name: "block", description: "Enforce (default for every host)"),
+                HelpRow(name: "block", description: "Enforce (a host with no mode follows guard.mode)"),
                 HelpRow(name: "observe", description: "Allow, and record what would have been blocked"),
                 HelpRow(name: "off", description: "Remove this host's rv hooks; rv setup skips it"),
             ]),
@@ -444,6 +444,14 @@ enum HelpCatalog {
                 HelpRow(
                     name: "managed",
                     description: "An organization gate keeps enforce for every host"
+                ),
+                HelpRow(
+                    name: "repair",
+                    description: "A host set off stays unwired under a later gate: run rv setup"
+                ),
+                HelpRow(
+                    name: "observe",
+                    description: "Never relaxes rv's own protection (rv admin, rv's config)"
                 ),
             ]),
         ],
