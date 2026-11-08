@@ -249,7 +249,7 @@ private func fixtureLoginHome() throws -> URL {
         let rvHooks = try #require(pre[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks[0]["type"] as? String == "command")
         #expect(rvHooks[0]["command"] as? String == "python3 \(layout.codexHook)")
-        #expect(rvHooks[0]["timeout"] as? Int == 5)
+        #expect(rvHooks[0]["timeout"] as? Int == 18)
         #expect(rvHooks[0]["statusMessage"] as? String == "RV")
         #expect(pre[1]["matcher"] as? String == "Bash")
 
@@ -377,7 +377,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(before.count == 2)
         #expect(before[0]["command"] as? String == "other-guard evaluate")
         #expect(before[1]["command"] as? String == "python3 \(layout.cursorHook)")
-        #expect(before[1]["timeout"] as? Int == 5)
+        #expect(before[1]["timeout"] as? Int == 18)
         #expect(before[1]["failClosed"] as? Bool == true)
         #expect(hooksRoot["PreToolUse"] == nil)
         let preToolUse = try #require(hooksRoot["preToolUse"] as? [[String: Any]])
@@ -455,7 +455,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(pre.map { $0["matcher"] as? String } == AntigravityHooksMerge.matchers)
         let inner = try #require(pre[0]["hooks"] as? [[String: Any]])
         #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv python3 \(adapterPath)")
-        #expect(inner[0]["timeout"] as? Int == 10)
+        #expect(inner[0]["timeout"] as? Int == 18)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
         #expect(uninstall.exitCode == 0)
@@ -1919,5 +1919,22 @@ private func expectedClaudeHookCommand(
         #expect(outcome.exitCode == 0)
         #expect(FileManager.default.fileExists(atPath: layout.claudeSettings))
         #expect(FileManager.default.fileExists(atPath: layout.claudeDirectory))
+    }
+}
+
+@Test func uninstall_removesTheAuditForwardLaunchAgent() throws {
+    // `rv audit forward --install` writes this agent; "remove everything rv
+    // owns" must include it.
+    try withTempHome { home, layout, launchctl in
+        _ = SetupRun.setup(env(home: home, launchctl: launchctl))
+        try FileManager.default.createDirectory(
+            atPath: (layout.auditForwardLaunchAgent as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try "<plist/>".write(toFile: layout.auditForwardLaunchAgent, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.auditForwardLaunchAgent) == false)
+        #expect(launchctl.bootouts.contains(AuditForwardInstall.label))
     }
 }

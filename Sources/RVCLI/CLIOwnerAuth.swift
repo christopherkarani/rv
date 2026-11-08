@@ -29,6 +29,11 @@ enum AllowOnceAuthError: Error, Equatable {
 enum CLIOwnerAuth {
     static let reason = "Authenticate to allow this command once."
 
+    /// The device owner approved this action.
+    ///
+    /// macOS: runs LocalAuthentication. Linux: the owner's login password,
+    /// verified by rvd (`OwnerConfirmation`), never just read and trusted
+    /// here: a password this process merely reads proves nothing.
     static func requireAuthenticated(reason: String = reason) async throws {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
@@ -36,9 +41,45 @@ enum CLIOwnerAuth {
             }
             return
         }
+        #if canImport(LocalAuthentication)
         guard await liveOutcome(reason: reason) == .authenticated else {
             throw AllowOnceAuthError.required
         }
+        #else
+        do {
+            try await OwnerConfirmation.require(reason)
+        } catch {
+            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            throw AllowOnceAuthError.required
+        }
+        #endif
+    }
+
+    /// Owner proof for allow-once redeem, which carries it to rvd inside
+    /// `attestTTYRedemption`. macOS: runs LocalAuthentication and returns nil
+    /// (rvd trusts the pinned `.cli`). Linux: reads the login password from
+    /// the terminal and returns it unverified; rvd verifies it before it
+    /// plants anything, so callers must forward it, never act on it.
+    static func ownerProofForAttestation(reason: String = reason) async throws -> OwnerProof? {
+        if let context = CLIProcess.context {
+            guard context.ownerAuthOutcome == .authenticated else {
+                throw AllowOnceAuthError.required
+            }
+            return nil
+        }
+        #if canImport(LocalAuthentication)
+        guard await liveOutcome(reason: reason) == .authenticated else {
+            throw AllowOnceAuthError.required
+        }
+        return nil
+        #else
+        guard let password = OwnerConfirmation.readOwnerPassword(
+            prompt: "\(reason)\nPassword for \(UserName.current ?? "your account"): ")
+        else {
+            throw AllowOnceAuthError.required
+        }
+        return OwnerProof(password: password)
+        #endif
     }
 
     private static func liveOutcome(reason: String) async -> UIAuthenticationOutcome {

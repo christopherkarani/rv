@@ -396,6 +396,7 @@ public struct GatedEvaluate: Sendable {
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         let finished: EvaluationResult
+        var override: PolicyOverride = .none
         switch candidate.decision {
         case .allow, .indeterminate:
             finished = candidate
@@ -409,7 +410,7 @@ public struct GatedEvaluate: Sendable {
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
-                finished = await Self.applyPolicy(
+                let decision = await Self.applyPolicy(
                     verb,
                     result: candidate,
                     cwd: cwd,
@@ -421,6 +422,8 @@ public struct GatedEvaluate: Sendable {
                     maskedSegments: Normalize.maskedSegments(of: request.command),
                     invocationPrefix: Normalize.invocationPrefix(of: request.command)
                 )
+                finished = decision.result
+                override = decision.override
             }
         }
         // On the task, after the offload (`HookDeadline.current` is
@@ -429,6 +432,11 @@ public struct GatedEvaluate: Sendable {
         // deny, so no denial row is emitted for a reply nobody reads.
         if verb.recordsDenial, HookDeadline.permitsSideEffects(),
            let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
+            effects.append(row)
+        }
+        if verb.recordsDenial,
+           let row = Self.overrideAudit(candidate: candidate, finished: finished, override: override,
+                                        host: host, cwd: cwd, now: now) {
             effects.append(row)
         }
         return (finished, effects)
@@ -579,7 +587,7 @@ public struct GatedEvaluate: Sendable {
         safety: SafetyLevel,
         maskedSegments: [String]?,
         invocationPrefix: [String]
-    ) async -> EvaluationResult {
+    ) async -> PolicyDecision {
         switch verb {
         case .peek:
             return await PolicyGate.preview(
@@ -592,7 +600,7 @@ public struct GatedEvaluate: Sendable {
                 safety: safety,
                 maskedSegments: maskedSegments,
                 invocationPrefix: invocationPrefix
-            ).result
+            )
         case .apply:
             // The claim runs inside the grant table, atomically with the
             // spend: past the deadline the grant stays live for the retry,
@@ -610,7 +618,7 @@ public struct GatedEvaluate: Sendable {
                 maskedSegments: maskedSegments,
                 invocationPrefix: invocationPrefix,
                 claim: { deadline?.claimGrantSpend() ?? true }
-            ).result
+            )
         }
     }
 
@@ -772,6 +780,29 @@ public struct GatedEvaluate: Sendable {
         cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
     }
 
+    /// The audit row for a deny the Policy gate overrode; nil otherwise.
+    private static func overrideAudit(
+        candidate: EvaluationResult,
+        finished: EvaluationResult,
+        override: PolicyOverride,
+        host: LedgerHost,
+        cwd: WorkingDirectory?,
+        now: Date
+    ) -> GatedEffect? {
+        guard case .deny(let deny) = candidate.decision, case .allow = finished.decision else { return nil }
+        let name: String
+        switch override {
+        case .none: return nil
+        case .allowlist: name = "allowlist"
+        case .allowOnce: name = "allowOnce"
+        case .rebaseRecovery: name = "rebaseRecovery"
+        case .containedReversible: name = "containedReversible"
+        }
+        return .overrideAudit(GatedEffect.OverrideRow(
+            at: now, host: host, ruleID: deny.ruleID, override: name, workspace: workspaceURL(cwd: cwd)
+        ))
+    }
+
     /// The denial-ledger row a final deny asks for; nil for anything else.
     private static func denialRow(
         for result: EvaluationResult,
@@ -824,9 +855,48 @@ public struct GatedEvaluate: Sendable {
             case .judgeLog(let row):
                 JudgeRuntime.appendLog(row, home: home)
             case .denialRow(let row):
+                // Chained record first: a forward that runs between the two
+                // writes then sees the chained row and drops the blocks copy.
+                auditDenial(row, home: home)
                 recordDenial(row, home: home)
+            case .overrideAudit(let row):
+                auditOverride(row, home: home)
             }
         }
+    }
+
+    /// Appends a `command.denied` event to the hash-chained `audit.jsonl`
+    /// for every enforced deny, whatever `blocks.enabled` says: the ledger
+    /// is a pruned convenience view, the chain is the record. Carries the
+    /// rule, host, tool and redacted path, never the command text.
+    private static func auditDenial(_ row: GatedEffect.DenialRow, home: HomeDirectory) {
+        var detail = ["host": row.host.rawValue, "tool": row.tool.rawValue, "category": row.category.rawValue]
+        let path = DenialPathRedaction.redact(row.path, home: home)
+        if path.isEmpty == false { detail["path"] = path }
+        AuditLog.append(
+            AuditEvent(
+                time: row.at, kind: .commandDenied, decision: .denied,
+                subject: row.ruleID.rawValue, agent: row.host == .tty ? nil : row.host.rawValue,
+                source: AuditLedger.Source.audit.rawValue, detail: detail
+            ),
+            configDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
+    }
+
+    /// Appends a `command.override` event: a deny a human-granted or policy
+    /// override turned into an allow. The rule and override kind only.
+    private static func auditOverride(_ row: GatedEffect.OverrideRow, home: HomeDirectory) {
+        AuditLog.append(
+            AuditEvent(
+                time: row.at, kind: .commandOverride, decision: .allowed,
+                subject: row.ruleID.rawValue, reason: row.override,
+                workspace: row.workspace.map { DenialPathRedaction.redact($0.path, home: home) },
+                agent: row.host == .tty ? nil : row.host.rawValue,
+                source: AuditLedger.Source.audit.rawValue,
+                detail: ["host": row.host.rawValue, "override": row.override]
+            ),
+            configDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
     }
 
     /// Appends a denial row when the ledger is enabled (`blocks.enabled`,

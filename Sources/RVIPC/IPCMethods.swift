@@ -17,6 +17,7 @@ public enum IPCMethod: Sendable, Equatable {
     case proposeWorkspaceLaunch(ProposeLaunchParams)
     case launchProposalStatus(ProposalStatusParams)
     case attestTTYRedemption(AttestTTYRedemptionParams)
+    case confirmOwnerAction(ConfirmOwnerActionParams)
 }
 
 public enum IPCResult: Sendable, Equatable {
@@ -35,6 +36,7 @@ public enum IPCResult: Sendable, Equatable {
     case proposeWorkspaceLaunch(ProposeLaunchReply)
     case launchProposalStatus(ProposalStatusReply)
     case attestTTYRedemption(AttestTTYRedemptionReply)
+    case confirmOwnerAction(ConfirmOwnerActionReply)
     case uiRegistered(UIRegisteredDTO)
     case uiReviewList(UIReviewListDTO)
     case uiChallengeBundle(UIChallengeBundleDTO)
@@ -68,6 +70,7 @@ extension IPCMethod: Codable {
         case proposeWorkspaceLaunch
         case launchProposalStatus
         case attestTTYRedemption
+        case confirmOwnerAction
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -103,6 +106,8 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .launchProposalStatus)
         case .attestTTYRedemption(let params):
             try container.encode(params, forKey: .attestTTYRedemption)
+        case .confirmOwnerAction(let params):
+            try container.encode(params, forKey: .confirmOwnerAction)
         }
     }
 
@@ -141,6 +146,9 @@ extension IPCMethod: Codable {
         } else if let params = try container.decodeIfPresent(
             AttestTTYRedemptionParams.self, forKey: .attestTTYRedemption) {
             self = .attestTTYRedemption(params)
+        } else if let params = try container.decodeIfPresent(
+            ConfirmOwnerActionParams.self, forKey: .confirmOwnerAction) {
+            self = .confirmOwnerAction(params)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCMethod")
@@ -166,6 +174,7 @@ extension IPCResult: Codable {
         case proposeWorkspaceLaunch
         case launchProposalStatus
         case attestTTYRedemption
+        case confirmOwnerAction
         case uiRegistered
         case uiReviewList
         case uiChallengeBundle
@@ -215,6 +224,8 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .launchProposalStatus)
         case .attestTTYRedemption(let reply):
             try container.encode(reply, forKey: .attestTTYRedemption)
+        case .confirmOwnerAction(let reply):
+            try container.encode(reply, forKey: .confirmOwnerAction)
         case .uiRegistered(let reply):
             try container.encode(reply, forKey: .uiRegistered)
         case .uiReviewList(let reply):
@@ -281,6 +292,9 @@ extension IPCResult: Codable {
         } else if let reply = try container.decodeIfPresent(
             AttestTTYRedemptionReply.self, forKey: .attestTTYRedemption) {
             self = .attestTTYRedemption(reply)
+        } else if let reply = try container.decodeIfPresent(
+            ConfirmOwnerActionReply.self, forKey: .confirmOwnerAction) {
+            self = .confirmOwnerAction(reply)
         } else if let reply = try container.decodeIfPresent(
             UIRegisteredDTO.self, forKey: .uiRegistered) {
             self = .uiRegistered(reply)

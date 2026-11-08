@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Added
 
+- Owner authentication for commands that change the gate: `rv packs enable|disable`, `rv safety`, `rv allowlist`, `rv policy draft --save`, `rv policy apply --save`, `rv policy export --output`, `rv egress approve|deny` and `rv workspace abandon` work again after Touch ID or the login password. On Linux `rvd` verifies the password with `unix_chkpwd`, allows one check at a time and locks checks for ten minutes after five wrong passwords. Every attempt is an `owner.action` audit event.
+- `rv allow-once` works on Linux: the login password is the owner proof.
+- The Swift CLI reaches `rvd` over its Unix socket on Linux (`rv hook` included), after checking the peer is the sibling `rvd` running as the same user.
+- Signed organization policy has a restrict-only `gate` section: `requirePacks` lists packs every evaluation door applies whatever the user's pack config says, and `"safety": "strict"` forbids normal safety. A present but untrusted managed bundle now also forces strict safety. `rv managed status`, `rv safety` and `rv doctor` show the enforced level.
 - Pretty output and `rv tui` ask the terminal for its background color (OSC 11) and use a light palette on light backgrounds. `RV_THEME=dark|light|auto` overrides; no answer, SSH sessions, and background jobs keep the dark palette.
 - `rv tui` review pane (Ctrl-B R): pending egress proposals and recent blocks in one live list with a pending badge, details, and approve/deny through the same owner-authenticated ceremony as `rv egress approve`/`deny`.
 - Secrets gateway: AWS SigV4 request signing from an `awsProfile` source, OAuth access-token minting from Keychain credentials, approve-rule requests held for a human, and binding of gateway secrets to the binaries allowed to spend them. (#483, #484, #485, #486, #487)
@@ -35,6 +39,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- `rv uninstall` also removes the `dev.rv.audit-forward` LaunchAgent that `rv audit forward --install` writes.
+- `rv workspace run` help lists `--microvm`, `--macvm`, `--cpus` and `--memory-mib`.
+- Every evaluation door now uses the owner's configured packs: contained workspaces (`rv workspace`, `rv opencode`), SDK `evaluate`, `explain` and `classify`. Before, the workspace host sent only the three day-one packs and SDK callers could send an empty list, so packs such as `cloud.aws` were skipped there.
+- `rv scan` defaults to your configured packs instead of the day-one three, rejects `--packs` IDs that name no bundled pack, and refuses `--host` values it has no session reader for (Antigravity, Muse) instead of silently scanning nothing.
+- Hook timeouts are ordered so rvd always gives up first. The C client no longer sends the evaluate request more than 5 s after it starts (it fails closed instead), so rvd is done by 12 s and the client by 13 s; host shims now wait 15 s and host hook configs 18 s (Codex, Cursor, Antigravity, Grok, Muse). Before, a host could drop a reply while rvd still spent an allow-once grant on it. `rv setup` rewrites hooks written with the old timeouts without `--force`.
+- Analytics honours the documented flat `"analytics.enabled": false` key as well as the nested form; when the two disagree, the opt-out wins. Events now report the product version instead of the IPC protocol version.
 - The egress proxy bounds host resolution (10 s; a late or over-budget lookup denies `dns-failed`) and refuses more non-public destinations after resolving: 192.0.0.0/24, 192.88.99.0/24, the Azure WireServer address, IPv4-translated IPv6, 2001::/23, 3fff::/20, anything outside 2000::/3, and NAT64 forms other than 64:ff9b::/96.
 - Workspace publish refuses escaping symlinks; read-only workspace files are copied before their mode is applied. (#445, #490)
 - Clocked vnode syscalls run on a bounded worker pool. (#444)
@@ -45,6 +55,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Security
 
+- Every hook and file-tool deny and every Policy-gate override (allow-once, allowlist, rebase recovery, contained delete) is now appended to the hash-chained `audit.jsonl` as `command.denied` or `command.override`, so `rv audit verify` covers the gate itself. Events carry the rule, host, tool and a home-redacted path, never command text. Plain allows and contained-workspace (`evaluateAgent`) decisions are not logged yet. The audit export and `rv audit forward` no longer send a deny twice when it is also in `blocks.jsonl`.
+- A same-user process can no longer enable or disable packs, save rules or resolve approvals over the SDK socket. Owner mutations stay refused on every generic IPC path; the Python SDK's `set_pack_enabled` now raises `AuthorizationDenied`.
+- Contained runtimes (Seatbelt and the macOS guest) can no longer create, rewrite or remove agent and editor config that host tools run later: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json`, `.cursor/mcp.json`, `.gemini/settings.json`, `.vscode/tasks.json`, `.vscode/settings.json`, `opencode.json(c)` and `.envrc`. Matching is case-insensitive, and the cage also cannot create or remove the `.claude`, `.codex`, `.cursor`, `.gemini` and `.vscode` directories at the workspace root. The macOS guest profile now denies hard links and clones, as the host cage already did. The existing `.git/hooks`, `.git/config`, `.rv` and `.config/rv` protections gained case-insensitive companions.
 - Gate bypasses closed: in-place editors, interpreter writes, checkout paths, Cursor Grep/reads, Claude file tools, and a no-judge interpreter bypass. Installer downloads are now verified. (#442, #488, #491)
 - Self-protection matches `rv` and its launchers case-, Unicode- and escape-insensitively. (#499)
 - P0/P1 gaps in secrets handling and the secret-path guard fixed; `SecretValue` is redacted in reflection and gateway-only sources are refused on non-gateway delivery. (#523, #526)

@@ -20,6 +20,30 @@ struct AnalyticsPreferencesTests {
         #expect(prefs.isEnabled == false)
     }
 
+    @Test func flatDottedKeyCanDisable() throws {
+        // The README documents `"analytics.enabled": false`; it must opt out.
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics.enabled":false}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
+    }
+
+    @Test func optOutWinsWhenFormsDisagree() throws {
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics":{"enabled":true},"analytics.enabled":false}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
+        try Data(#"{"analytics":{"enabled":false},"analytics.enabled":true}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == false)
+    }
+
+    @Test func flatNonBoolDefaultsEnabled() throws {
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        try Data(#"{"analytics.enabled":"no"}"#.utf8).write(to: paths.configFile)
+        #expect(AnalyticsPreferences.load(from: paths).isEnabled == true)
+    }
+
     @Test func configCanEnableExplicitly() throws {
         let root = try temporaryConfigRoot()
         let paths = AnalyticsPaths(configDirectory: root)

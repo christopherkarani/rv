@@ -127,6 +127,7 @@ struct GatedEffectTests {
                 case .exemptionAudit: "audit"
                 case .judgeLog: "judgeLog"
                 case .denialRow: "denialRow"
+                case .overrideAudit: "overrideAudit"
                 }
             }
         }
@@ -311,7 +312,7 @@ struct GatedEffectTests {
     }
 
     /// SEC-003: the grant is spent inside `decide`, not by applying effects.
-    @Test("apply spends a grant inside the decision; the redeemed allow asks for no denial row")
+    @Test("apply spends a grant inside the decision; the redeemed allow asks for an override audit, not a denial row")
     func grantSpendIsInline() async throws {
         let grants = EphemeralAllowOnceTable()
         let cwd = wd("/tmp/ws")
@@ -323,7 +324,12 @@ struct GatedEffectTests {
         let command = ShellCommand(rawValue: "git reset --hard")
         let first = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
         #expect(first.result.decision == .allow)
-        #expect(first.effects.isEmpty)
+        // The redeemed allow asks for no denial row, only an override audit.
+        #expect(first.effects == [.overrideAudit(GatedEffect.OverrideRow(
+            at: Self.now, host: .hook(.claude),
+            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            override: "allowOnce", workspace: URL(fileURLWithPath: cwd.rawValue, isDirectory: true)
+        ))])
         let second = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
         #expect(second.effects == [try #require(Self.denialRow(second.result))])
     }

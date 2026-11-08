@@ -85,31 +85,31 @@ struct WorkspaceReviewQueueTests {
     }
 
     /// The pane's approve enters the same door as `rv egress approve`: even
-    /// with a TTY and a scripted successful owner prompt, the local control
-    /// boundary refuses and the proposal stays awaiting a human.
-    @Test func approveGoesThroughTheLocalControlBoundary() async throws {
+    /// with a TTY, no owner authentication means a refusal, and the
+    /// proposal stays awaiting a human.
+    @Test func approveNeedsOwnerAuthentication() async throws {
         let home = try reviewHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let proposal = try await pendingProposal(home: home)
         let outcome = try await withCLIProcess(
-            home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated
+            home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .failed
         ) {
             await WorkspaceReviewQueue().approve(egress: proposal.id.rawValue)
         }
-        #expect(outcome == .refused("approve refused: \(LocalControlBoundary.reason)"))
+        #expect(outcome == .refused("approve refused: device-owner authentication required"))
         #expect(try await stillAwaiting(proposal, home: home))
     }
 
-    @Test func denyGoesThroughTheLocalControlBoundary() async throws {
+    @Test func denyNeedsOwnerAuthentication() async throws {
         let home = try reviewHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let proposal = try await pendingProposal(home: home)
         let outcome = try await withCLIProcess(
-            home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated
+            home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .failed
         ) {
             await WorkspaceReviewQueue().deny(egress: proposal.id.rawValue, reason: "tracker")
         }
-        #expect(outcome == .refused("deny refused: \(LocalControlBoundary.reason)"))
+        #expect(outcome == .refused("deny refused: device-owner authentication required"))
         #expect(try await stillAwaiting(proposal, home: home))
     }
 

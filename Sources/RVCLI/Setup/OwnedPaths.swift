@@ -40,6 +40,8 @@ struct OwnedPaths: Equatable, Sendable {
     var museHooks: String { home.rawValue + "/.config/muse/rv-hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var custodianLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.mcp-custodian.plist" }
+    /// Written by `rv audit forward --install` (`AuditForwardInstall.label`).
+    var auditForwardLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.audit-forward.plist" }
     var custodianAppExecutable: String {
         home.rawValue + "/Applications/RVApprovals.app/Contents/MacOS/rv-mcp-custodian"
     }

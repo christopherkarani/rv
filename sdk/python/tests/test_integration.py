@@ -18,9 +18,9 @@ import time
 import pytest
 
 from rv import (
+    AuthorizationDenied,
     Client,
     HookHost,
-    PackNotFound,
     PendingNotFound,
     RulePolarity,
     Timeout,
@@ -147,21 +147,24 @@ def test_live_forged_ids_fail_closed(live_rvd):
             fingerprint="shell:forged",
             identity=ApprovalIdentity(session="sess", agent=HookHost.PI),
         )
-        with pytest.raises(PendingNotFound):
+        # Resolving is an owner mutation: refused over the SDK socket before
+        # any lookup, so a caller cannot probe which approval IDs exist.
+        with pytest.raises(AuthorizationDenied):
             client.pending_resolve(forged, allow=True)
         with pytest.raises(PendingNotFound):
             client.rule_preview("forged-does-not-exist", RulePolarity.ALLOW)
 
 
-def test_live_set_pack_round_trip(live_rvd):
+def test_live_set_pack_is_owner_only(live_rvd):
+    # Pack changes are owner mutations. A same-user socket peer (the SDK, or
+    # any process an agent starts) must not be able to disable core packs.
     with Client(socket_path=live_rvd["socket"]) as client:
-        disabled = client.set_pack_enabled("core.git", False)
-        assert disabled.id.raw == "core.git"
-        assert disabled.enabled is False
-        enabled = client.set_pack_enabled("core.git", True)
-        assert enabled.enabled is True
-        with pytest.raises(PackNotFound):
+        with pytest.raises(AuthorizationDenied):
+            client.set_pack_enabled("core.git", False)
+        with pytest.raises(AuthorizationDenied):
             client.set_pack_enabled("core.nope", True)
+        packs = {pack.id.raw: pack.enabled for pack in client.list_packs().packs}
+        assert packs.get("core.git") is True
 
 
 def test_live_hook_evaluate_raw_smoke(live_rvd):

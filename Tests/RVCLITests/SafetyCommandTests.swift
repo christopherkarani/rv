@@ -23,12 +23,16 @@ struct SafetyCommandTests {
         #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func set_writesMachineConfig() throws {
+    @Test func set_writesMachineConfig() async throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        try SafetyRun.set(.strict, home: home)
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+            try await SafetyRun.set(.strict, home: home)
+        }
         #expect(SafetyRun.show(home: home, workspace: nil) == "strict")
-        try SafetyRun.set(.normal, home: home)
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+            try await SafetyRun.set(.normal, home: home)
+        }
         #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
     }
 

@@ -178,7 +178,7 @@ struct Policy: AsyncParsableCommand {
         @Option(name: .customLong("output"), help: "Write to this path instead of stdout.")
         var output: String?
 
-        func run() throws {
+        func run() async throws {
             let home = try CommandContext.requireHome(command: "policy export")
             let workspace = URL(
                 fileURLWithPath: CLIProcess.workspacePath(),
@@ -195,7 +195,7 @@ struct Policy: AsyncParsableCommand {
             }
             let text = PolicyDocumentTOML.render(document)
             if let output {
-                try LocalControlBoundary.requireOwnerAuthorization()
+                try await OwnerConfirmation.require("write the \(repo ? "repo" : "machine") policy to \(output)")
                 let url = URL(fileURLWithPath: output)
                 do {
                     try text.write(to: url, atomically: true, encoding: .utf8)
@@ -223,7 +223,7 @@ struct Policy: AsyncParsableCommand {
         @Flag(name: .customLong("repo"), help: "Write the repo layer.")
         var repo = false
 
-        func run() throws {
+        func run() async throws {
             let home = try CommandContext.requireHome(command: "policy apply")
             let workspace = URL(
                 fileURLWithPath: CLIProcess.workspacePath(),
@@ -263,7 +263,7 @@ struct Policy: AsyncParsableCommand {
                 if risk.hasBlockingFindings {
                     try CommandContext.fail("rv policy apply: blocked by policy risk findings\n")
                 }
-                try LocalControlBoundary.requireOwnerAuthorization()
+                try await OwnerConfirmation.require("apply policy from \(path) to the \(repo ? "repo" : "machine") layer")
                 do {
                     _ = try session.mergeIncoming(incoming, layer: layer, save: true)
                 } catch {

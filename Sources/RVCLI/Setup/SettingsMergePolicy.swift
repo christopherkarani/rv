@@ -85,14 +85,25 @@ enum SettingsMergePolicy {
         _ hook: JSONValue,
         descriptor: SettingsMergeDescriptor
     ) -> Bool {
+        matchesCurrentCommand(hook, descriptor: descriptor)
+            && hook["timeout"]?.int == descriptor.timeout
+    }
+
+    /// rv's own current command whatever its timeout. An entry that differs
+    /// from the current hook only in its timeout was written by an older rv
+    /// (timeouts were raised so rvd always gives up before the host): it is
+    /// outdated, not a foreign guard, and setup rewrites it without --force.
+    static func matchesCurrentCommand(
+        _ hook: JSONValue,
+        descriptor: SettingsMergeDescriptor
+    ) -> Bool {
         guard let type = hook["type"]?.string, type == descriptor.hookType,
               let command = hook["command"]?.string,
               let path = bakedRvPath(in: command, descriptor: descriptor),
               path.hasPrefix("/"),
               let adapter = adapterPath(in: command),
               adapter.hasPrefix("/"),
-              adapter.hasSuffix("/hooks/" + descriptor.fingerprint),
-              hook["timeout"]?.int == descriptor.timeout
+              adapter.hasSuffix("/hooks/" + descriptor.fingerprint)
         else {
             return false
         }
@@ -234,7 +245,9 @@ enum SettingsMergePolicy {
                 continue
             }
             allCurrent = false
-            if isStaleLegacyHook(item.hook, descriptor: descriptor) {
+            if isStaleLegacyHook(item.hook, descriptor: descriptor)
+                || matchesCurrentCommand(item.hook, descriptor: descriptor)
+            {
                 hasStaleLegacy = true
             } else {
                 hasNonCurrentGuard = true

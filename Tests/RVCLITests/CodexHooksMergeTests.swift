@@ -15,7 +15,7 @@ import Testing
     #expect(inner.count == 1)
     #expect(inner[0]["type"] as? String == "command")
     #expect(inner[0]["command"] as? String == "python3 \(adapter)")
-    #expect(inner[0]["timeout"] as? Int == 5)
+    #expect(inner[0]["timeout"] as? Int == 18)
     #expect(inner[0]["statusMessage"] as? String == "RV")
 }
 

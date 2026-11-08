@@ -2118,7 +2118,7 @@ private func runAdapter(
     var source = try adapterSource(for: host, rvPath: rvPath)
     if let timeoutMs {
         source = source.replacingOccurrences(
-            of: "const RV_HOOK_TIMEOUT_MS = 5000;",
+            of: "const RV_HOOK_TIMEOUT_MS = 15000;",
             with: "const RV_HOOK_TIMEOUT_MS = \(timeoutMs);"
         )
     }

@@ -27,7 +27,8 @@ struct PolicyStoreInputs: Sendable {
         let policy = try? EffectiveActionPolicy(
             rules: PolicyWorkspace(home: home, workspace: workspace).loadEffectiveRules(builtin: [])
         )
-        let safety = SafetyStore.loadEffective(home: home, workspace: workspace)
+        // The organization's gate can only raise safety to strict.
+        let safety = ManagedGate.safety(SafetyStore.loadEffective(home: home, workspace: workspace), home: home)
         return PolicyStoreInputs(allowPaths: allowPaths, policy: policy, safety: safety)
     }
 }
@@ -52,7 +53,9 @@ struct EvaluationInputs: Sendable {
     ) -> EvaluationInputs {
         let config = JudgeRuntime.loadConfigDict(home: home)
         return EvaluationInputs(
-            guardMode: JudgeRuntime.guardMode(environment: environment, config: config),
+            // The organization's gate pins enforce mode while it applies.
+            guardMode: ManagedGate.guardMode(
+                JudgeRuntime.guardMode(environment: environment, config: config), home: home),
             judge: JudgeRuntime.selection(home: home, environment: environment, config: config),
             store: .gather(home: home, cwd: cwd)
         )

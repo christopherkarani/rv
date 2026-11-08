@@ -77,7 +77,7 @@ enum PolicyDraftRun {
         workspace: URL,
         compiler: some EnglishCompiler
     ) async throws -> PolicyDraftResult {
-        if save { try LocalControlBoundary.requireOwnerAuthorization() }
+        if save { try await OwnerConfirmation.require("save a policy rule drafted from English") }
         let compiled = try await compiler.compile(english)
         switch compiled {
         case .refuse(let reason):

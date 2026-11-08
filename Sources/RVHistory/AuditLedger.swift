@@ -43,11 +43,29 @@ public struct AuditLedger: Sendable {
                 merged.append(event)
             }
         }
+        merged = Self.droppingLedgerDuplicates(merged)
         merged.sort { $0.time < $1.time }
         if let limit = filter.limit, limit >= 0, merged.count > limit {
             return Array(merged.suffix(limit))
         }
         return merged
+    }
+
+    /// rvd writes each enforced deny to both the pruned `blocks.jsonl`
+    /// ledger and the hash-chained `audit.jsonl`. Keep the chained copy and
+    /// drop a blocks row that matches it (same second, rule and host);
+    /// blocks rows from before the chain recorded denies stay.
+    package static func droppingLedgerDuplicates(_ events: [AuditEvent]) -> [AuditEvent] {
+        func key(_ event: AuditEvent) -> String {
+            "\(Int(event.time.timeIntervalSince1970))|\(event.subject)|\(event.detail["host"] ?? "")"
+        }
+        let chained = Set(events
+            .filter { $0.source == Source.audit.rawValue && $0.kind == .commandDenied }
+            .map(key))
+        guard chained.isEmpty == false else { return events }
+        return events.filter { event in
+            !(event.source == Source.blocks.rawValue && event.kind == .commandDenied && chained.contains(key(event)))
+        }
     }
 
     public static func event(fromLine line: Substring, source: Source) -> AuditEvent? {

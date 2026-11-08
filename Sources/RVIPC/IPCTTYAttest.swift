@@ -31,19 +31,25 @@ public struct AttestTTYRedemptionParams: Sendable, Equatable, Codable {
     /// clients omit the key and decode to nil. Decode rejects
     /// non-64-hex bytes.
     public var payloadDigest: ContentPayloadDigest?
+    /// Owner presence proof for callers without the pinned `.cli` role
+    /// (Linux). rvd verifies it before planting; the genuine macOS CLI
+    /// sends none. Optional for wire compatibility.
+    public var ownerProof: OwnerProof?
 
     public init(
         fingerprint: GrantFingerprint,
         cwd: WorkingDirectory,
         codeHash: CodeHash,
         clientSemver: String,
-        payloadDigest: ContentPayloadDigest? = nil
+        payloadDigest: ContentPayloadDigest? = nil,
+        ownerProof: OwnerProof? = nil
     ) {
         self.fingerprint = fingerprint
         self.cwd = cwd
         self.codeHash = codeHash
         self.clientSemver = clientSemver
         self.payloadDigest = payloadDigest
+        self.ownerProof = ownerProof
     }
 }
 

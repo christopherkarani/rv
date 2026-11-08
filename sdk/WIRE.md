@@ -182,13 +182,13 @@ never confer authority (§7 of `sdk/README.md`, identity model).
 | 3 | `explain` | `ExplainParams` | `ExplainReply` | Requires prior Hello. |
 | 4 | `classify` | `ClassifyParams` | `ClassifyReply` | Requires prior Hello. |
 | 5 | `listPacks` | `{}` | `ListPacksReply` | Read-only; refreshes catalog from disk. |
-| 6 | `setPackEnabled` | `SetPackEnabledParams` | `SetPackEnabledReply` | **Operator-only**: mutates config + rebuilds compile set. |
+| 6 | `setPackEnabled` | `SetPackEnabledParams` | `SetPackEnabledReply` | **Operator-only**: mutates config + rebuilds compile set. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 7 | `doctorSnapshot` | `{}` | `DoctorSnapshotReply` | Health + versions. No separate version RPC exists. |
 | 8 | `pendingList` | `{}` | `PendingListReply` | Read-only projection + generation. |
 | 9 | `pendingWatch` | `PendingWatchParams` | `PendingWatchReply` | **Unary poll**, not a stream: unchanged generation returns `{same generation, items: []}`. |
-| 10 | `pendingResolve` | `PendingResolveParams` | `PendingResolveReply` | **Human-attended only.** Fingerprint+identity echo enforced. |
+| 10 | `pendingResolve` | `PendingResolveParams` | `PendingResolveReply` | **Human-attended only.** Fingerprint+identity echo enforced. Refused over the same-UID SDK socket with `authorizationDenied`. |
 | 11 | `rulePreview` | `RulePreviewParams` | `RulePreviewReply` | Never writes. |
-| 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. |
+| 12 | `ruleSave` | `RuleSaveParams` | `RuleSaveReply` | **Operator-only.** Draft must echo the preview. Refused over the same-UID SDK socket with `authorizationDenied`. |
 
 ### 4.1 Evaluate family
 
