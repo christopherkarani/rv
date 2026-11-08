@@ -166,7 +166,7 @@ struct Packs: AsyncParsableCommand {
                 "id: \(row.id.rawValue)",
                 "name: \(row.name)",
                 "category: \(row.category)",
-                "enabled: \(row.enabled)",
+                "enabled: \(row.enabled)\(row.requiredByOrganization ? " (required by organization policy)" : "")",
                 "safe_patterns: \(row.safePatternCount)",
                 "destructive_patterns: \(row.destructivePatternCount)",
             ]
@@ -236,6 +236,14 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     let line =
         "\(verb): \(changed) (\(result.enabledCount)/\(result.totalCount) enabled)\n"
     CommandContext.writeStdout(line)
+    if enabling == false {
+        let required = Set(ManagedGate.requiredPacks(home: home).map(\.rawValue))
+        let stillOn = ids.filter { required.contains($0) }
+        if stillOn.isEmpty == false {
+            CommandContext.writeStdout(
+                "note: \(stillOn.joined(separator: ", ")) stays enforced: required by organization policy\n")
+        }
+    }
 }
 
 enum PacksListFormat {

@@ -98,6 +98,23 @@ import RVService
         #expect(try PacksFacade.effectiveIDs(home: home) == dayOnePackIDs)
     }
 
+    @Test func effectiveIDs_unreadableConfigFailsClosedToEveryPack() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        try PacksConfigStore.save(
+            PacksConfig(enabled: ["cloud.aws"], disabled: []),
+            home: home
+        )
+        // Invalid UTF-8: the store cannot read it. That must not drop the
+        // owner's packs back to day-one.
+        try Data([0xFF, 0xFE, 0x5B, 0x70]).write(to: PacksConfigStore.configURL(home: home))
+        let ids = try PacksFacade.effectiveIDs(home: home)
+        #expect(ids.contains(PackID(rawValue: "cloud.aws")))
+        #expect(ids.count == 95)
+        let snapshot = try PacksFacade.list(home: home)
+        #expect(snapshot.enabledCount == 95)
+    }
+
     @Test func effectiveIDs_configTomlExtraPackIsIncluded() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
