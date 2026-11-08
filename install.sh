@@ -858,6 +858,80 @@ verify_release_signatures() {
   echo "rv: warning: release files are not code-signed:$unsigned" >&2
 }
 
+# An admin trust manifest makes hooks trust only the rvd it names; any other
+# rvd is denied on every agent tool call. An rvd under ~/.local/bin can only
+# meet a manifest's production entry (Developer ID, team, hardened runtime;
+# development pins need a root-owned path), so a staged rvd lacking those
+# can never be trusted: refuse before staging. This is the necessary
+# condition only; rv setup then applies the exact rule. The path override
+# exists for tests (as HOME does) and can only skip this check, never add
+# trust: hooks always read the fixed path.
+trust_manifest="${RV_INSTALL_TRUST_MANIFEST:-/Library/Application Support/RV/peer-trust.json}"
+
+# The manifest's service-entry value for key $2, or nothing.
+manifest_service_field() {
+  plutil=/usr/bin/plutil
+  [ -x "$plutil" ] || return 0
+  i=0
+  while [ "$i" -lt 32 ]; do
+    role="$("$plutil" -extract "$i.role" raw -o - "$1" 2>/dev/null)" || return 0
+    if [ "$role" = "service" ]; then
+      "$plutil" -extract "$i.$2" raw -o - "$1" 2>/dev/null || true
+      return 0
+    fi
+    i=$((i + 1))
+  done
+}
+
+# Why rvd $1 can never satisfy a trust manifest, or nothing.
+staged_rvd_trust_gap() {
+  codesign=/usr/bin/codesign
+  if [ ! -x "$codesign" ]; then
+    echo "cannot be checked (codesign is not available)"
+    return 0
+  fi
+  details="$("$codesign" -dvv "$1" 2>&1 || true)"
+  case "$details" in
+    *"code object is not signed at all"*) echo "is not code-signed"; return 0 ;;
+  esac
+  if ! "$codesign" --verify --strict "$1" >/dev/null 2>&1; then
+    echo "has an invalid code signature"
+    return 0
+  fi
+  case "$details" in
+    *"Signature=adhoc"*) echo "is ad-hoc signed"; return 0 ;;
+    *"TeamIdentifier=not set"*) echo "has no team identifier"; return 0 ;;
+  esac
+  case "$(last_field_prefix "$details" "CodeDirectory ")" in
+    *runtime*) ;;
+    *) echo "lacks hardened runtime" ;;
+  esac
+}
+
+refuse_untrusted_rvd_under_manifest() {
+  [ "$os" = "Darwin" ] || return 0
+  [ -e "$trust_manifest" ] || [ -L "$trust_manifest" ] || return 0
+  gap="$(staged_rvd_trust_gap "$1/rvd")"
+  [ -n "$gap" ] || return 0
+  want_id="$(manifest_service_field "$trust_manifest" requiredIdentifier)"
+  want_team="$(manifest_service_field "$trust_manifest" requiredTeamIdentifier)"
+  if [ -n "$want_id" ] && [ -n "$want_team" ]; then
+    requires="requires Developer ID $want_id (team $want_team)"
+  else
+    requires="requires a Developer ID signed rvd"
+  fi
+  if [ "${RV_INSTALL_ALLOW_UNSIGNED:-}" = "1" ]; then
+    echo "rv: WARNING: trust manifest $trust_manifest $requires; staged rvd $gap" >&2
+    echo "rv: WARNING: RV_INSTALL_ALLOW_UNSIGNED=1, staging it anyway; rv setup will refuse to wire hooks to it" >&2
+    return 0
+  fi
+  echo "rv: refusing to install: trust manifest $trust_manifest $requires; staged rvd $gap" >&2
+  echo "rv: hooks fail closed on an rvd the manifest does not trust, so hooks would deny every agent tool call" >&2
+  echo "rv: fix: sign the build (RV_RELEASE_SIGN=1 Scripts/release.sh), or remove the manifest: sudo rm '$trust_manifest'" >&2
+  echo "rv: set RV_INSTALL_ALLOW_UNSIGNED=1 to stage it anyway (rv setup will still refuse to wire hooks)" >&2
+  exit 1
+}
+
 if [ -n "${RV_INSTALL_BIN:-}" ]; then
   src="$RV_INSTALL_BIN"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
@@ -962,6 +1036,8 @@ if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then
   echo "rv: Linux installation requires executable rv-isolation-exec" >&2
   exit 1
 fi
+
+refuse_untrusted_rvd_under_manifest "$src"
 
 if [ "$os" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
   if otool -L "$src/rv-cli" 2>/dev/null | grep -q 'libswiftCompatibilitySpan.dylib' \
