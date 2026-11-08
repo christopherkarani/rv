@@ -9,14 +9,14 @@ import RVFileStore
 import RVPolicy
 
 /// One persisted start record. The launch path writes this before spawn.
-struct RuntimeSessionRecord: Equatable, Sendable {
-    let id: UUID
-    let host: String?
-    let workspace: String
-    let backend: String
-    let startedAt: Date
+package struct RuntimeSessionRecord: Equatable, Sendable {
+    package let id: UUID
+    package let host: String?
+    package let workspace: String
+    package let backend: String
+    package let startedAt: Date
     /// Parent workspace. Absent on records written before workspace ownership.
-    let workspaceSession: UUID?
+    package let workspaceSession: UUID?
 }
 
 /// Append-only start log for contained launches.
@@ -44,7 +44,7 @@ struct RuntimeSessionStore: Sendable {
     }
 }
 
-enum RuntimeSessionLog {
+package enum RuntimeSessionLog {
     private struct Encoded: Codable {
         var id: UUID
         var host: String?
@@ -86,7 +86,7 @@ enum RuntimeSessionLog {
         return .success(())
     }
 
-    static func records(at url: URL) -> [RuntimeSessionRecord] {
+    package static func records(at url: URL) -> [RuntimeSessionRecord] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             return []
         }

@@ -60,7 +60,7 @@ enum HostLifecycle {
                 case .systemdUser:
                     try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
                 }
-            case .skipUndetected:
+            case .skipUndetected, .skipOff:
                 break
             case .skipOccupied(let host):
                 slots.assign(.occupied, to: host)
@@ -138,11 +138,14 @@ enum HostLifecycle {
         return .wired(wrote: wrote)
     }
 
+    /// Removes rv-owned hook artifacts. `only` scopes it to some hosts
+    /// (`rv host mode <host> off`); nil is every host (`rv uninstall`).
     static func detach(
         installations: HostAdapterInstallationSnapshot,
         env _: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps
+        files: FileOps,
+        only: Set<HookHost>? = nil
     ) throws(SetupError) -> UninstallHostResult {
         var removedHosts: Set<HookHost> = []
         var occupiedHosts: Set<HookHost> = []
@@ -150,7 +153,7 @@ enum HostLifecycle {
         var stripOpenCodeAsk = false
         var emptyDirectories: [String] = []
 
-        for owned in layout.hostAdapters {
+        for owned in layout.hostAdapters where only?.contains(owned.host) ?? true {
             let write = HostArtifacts.detach(host: owned.host, layout: layout)
             emptyDirectories.append(contentsOf: write.alwaysEmptyDirectories)
             switch installations.installation(for: owned.host).uninstallPlan {

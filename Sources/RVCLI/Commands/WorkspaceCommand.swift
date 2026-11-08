@@ -13,7 +13,7 @@ struct Workspace: AsyncParsableCommand {
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
             WorkspaceRun.self, WorkspaceAgent.self, WorkspaceCustom.self,
-            WorkspaceTUI.self, WorkspaceAbandon.self, WorkspaceLeftoversCommand.self,
+            WorkspaceTUI.self, WorkspaceAbandon.self, WorkspaceLeftoversCommand.self, WorkspaceVMsCommand.self,
         ]
     )
 }

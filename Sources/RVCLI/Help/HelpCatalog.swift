@@ -27,6 +27,7 @@ enum HelpCatalog {
         case .allowlist: allowlist
         case .safety: safety
         case .blocks: blocks
+        case .host: host
         case .audit: audit
         case .secrets: secrets
         case .mcp: mcp
@@ -63,6 +64,7 @@ enum HelpCatalog {
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
+                HelpRow(name: "host", description: "Per-host mode: block, observe, or off"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
                 HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
@@ -143,6 +145,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
                 HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (asks for owner authentication)"),
                 HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
+                HelpRow(name: "rv workspace vms [--json] [--limit N]", description: "List micro-VM runtime sessions, newest first"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
@@ -417,6 +420,45 @@ enum HelpCatalog {
         examples: [
             "rv blocks",
             "rv blocks --json",
+        ]
+    )
+
+    static let host = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv host list [--json]"),
+                HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
+            ]),
+            HelpSection(heading: "Modes", rows: [
+                HelpRow(name: "block", description: "Enforce (a host with no mode follows guard.mode)"),
+                HelpRow(name: "observe", description: "Allow, and record what would have been blocked"),
+                HelpRow(name: "off", description: "Remove this host's rv hooks; rv setup skips it"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "owner",
+                    description: "Loosening a host asks for device-owner authentication"
+                ),
+                HelpRow(
+                    name: "managed",
+                    description: "An organization gate keeps enforce for every host"
+                ),
+                HelpRow(
+                    name: "repair",
+                    description: "A host set off stays unwired under a later gate: run rv setup"
+                ),
+                HelpRow(
+                    name: "observe",
+                    description: "Never relaxes rv's own protection (rv admin, rv's config)"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv host list",
+            "rv host mode claude observe",
+            "rv host mode cursor block",
         ]
     )
 

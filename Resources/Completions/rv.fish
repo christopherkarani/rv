@@ -16,6 +16,7 @@ complete -c rv -n "__fish_use_subcommand" -a "uninstall" -d "Remove rv-owned fil
 complete -c rv -n "__fish_use_subcommand" -a "doctor" -d "Read-only health"
 complete -c rv -n "__fish_use_subcommand" -a "safety" -d "Show or set normal or strict"
 complete -c rv -n "__fish_use_subcommand" -a "blocks" -d "List recent denials"
+complete -c rv -n "__fish_use_subcommand" -a "host" -d "Per-host mode: block, observe, or off"
 complete -c rv -n "__fish_use_subcommand" -a "audit" -d "Unified audit trail"
 complete -c rv -n "__fish_use_subcommand" -a "secrets" -d "Secrets agents use through placeholders"
 complete -c rv -n "__fish_use_subcommand" -a "login" -d "App logins agents use through rv"

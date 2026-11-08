@@ -14,7 +14,7 @@ struct GuardModeCharacterizationTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
     private static let packDeny = ShellCommand(rawValue: "rm -rf ~")
 
-    @Test("observe: apply of a pack deny allows, records no denial, logs would-be deny")
+    @Test("observe: apply of a pack deny allows, records an observed denial, logs would-be deny")
     func observeApplyLogsWouldBe() async throws {
         let home = try guardHome(mode: "observe")
         defer { remove(home) }
@@ -25,7 +25,7 @@ struct GuardModeCharacterizationTests {
         )
         #expect(result.decision == .allow)
         #expect(result.outcome == .plain)
-        #expect(ledgerRows(home).isEmpty)
+        #expect(ledgerRows(home).map(\.observed) == [true])
         let rows = try judgeLog(home)
         #expect(rows.count == 1)
         #expect(rows.first?["guard"] as? String == "observe")
@@ -50,7 +50,7 @@ struct GuardModeCharacterizationTests {
         #expect(rows.first?["wouldBe"] as? String == "deny")
     }
 
-    @Test("observe: file door allows a secret read and records nothing")
+    @Test("observe: file door allows a secret read and records only an observed denial")
     func observeFileDoor() throws {
         let home = try guardHome(mode: "observe")
         defer { remove(home) }
@@ -60,7 +60,7 @@ struct GuardModeCharacterizationTests {
         )
         #expect(result.decision == .allow)
         #expect(result.outcome == .plain)
-        #expect(ledgerRows(home).isEmpty)
+        #expect(ledgerRows(home).map(\.observed) == [true])
         #expect(try judgeLog(home).isEmpty)
     }
 

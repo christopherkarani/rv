@@ -1082,6 +1082,12 @@ private func fixtureLoginHome() throws -> URL {
             "rv setup failed: unable to write opencode hook\n"
         ),
         (
+            .hostHookRemoveFailed(.grok),
+            .hostMode,
+            EX_CANTCREAT,
+            "rv host mode failed: unable to remove grok hook\n"
+        ),
+        (
             .launchAgentWriteFailed,
             .setup,
             EX_CANTCREAT,
