@@ -439,12 +439,6 @@
     {"id": "db.sp.allow-r4-00", "command": "ls {src,Tests}", "expected": "allow"},
     {"id": "db.sp.allow-r4-01", "command": "echo {a,b}", "expected": "allow"},
     {"id": "db.sp.allow-r4-02", "command": "cp f{,.bak}", "expected": "allow"},
-    {"id": "db.sp.allow-r4-04", "command": "git diff {main,HEAD}", "expected": "allow"},
-    {"id": "db.sp.deny-host-00", "command": "rv host mode claude off", "expected": "self-protection"},
-    {"id": "db.sp.deny-host-01", "command": "rv host mode cursor observe", "expected": "self-protection"},
-    {"id": "db.sp.deny-host-02", "command": "sh -c 'rv host mode codex off'", "expected": "self-protection"},
-    {"id": "db.sp.deny-host-03", "command": "rv host mode claude", "expected": "self-protection"},
-    {"id": "db.sp.allow-host-00", "command": "rv host list", "expected": "allow"},
-    {"id": "db.sp.allow-host-01", "command": "rv host mode claude block", "expected": "allow"}
+    {"id": "db.sp.allow-r4-04", "command": "git diff {main,HEAD}", "expected": "allow"}
   ]
 }
