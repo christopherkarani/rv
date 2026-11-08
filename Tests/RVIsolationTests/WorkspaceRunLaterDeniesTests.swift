@@ -48,6 +48,24 @@ struct WorkspaceRunLaterDeniesTests {
         #expect(matches(pattern(".envrc"), "\(workspace)/.EnvRC"))
     }
 
+    @Test func nonASCIICaseFoldsAreMatched() {
+        // APFS folds U+017F (long s) to `s` and U+212A (Kelvin) to `k`, so
+        // these spellings open the protected files.
+        #expect(matches(pattern(".mcp.json"), "\(workspace)/.mcp.j\u{017F}on"))
+        #expect(matches(pattern(".claude/settings.local.json"), "\(workspace)/.claude/\u{017F}ettings.local.json"))
+        #expect(matches(pattern(".claude/hooks", tree: true), "\(workspace)/.claude/hoo\u{212A}s/x.sh"))
+        #expect(matches(pattern(".git/hooks", tree: true), "\(workspace)/.git/hoo\u{212A}s/pre-commit"))
+        #expect(matches(pattern(".vscode"), "\(workspace)/.v\u{017F}code"))
+        #expect(matches(pattern(".mcp.json"), "\(workspace)/.mcp.jxon") == false)
+    }
+
+    @Test func otherAgentsHookScriptsAreProtected() {
+        #expect(matches(pattern(".cursor/hooks", tree: true), "\(workspace)/.cursor/hooks/fmt.sh"))
+        #expect(matches(pattern(".codex/hooks", tree: true), "\(workspace)/.codex/hooks/x.sh"))
+        #expect(WorkspaceRunLaterPaths.files.contains(".codex/hooks.json"))
+        #expect(WorkspaceRunLaterPaths.files.contains(".gemini/config/hooks.json"))
+    }
+
     @Test func dotsAreLiteralAndMatchesAreAnchored() {
         #expect(matches(pattern(".mcp.json"), "\(workspace)/xmcpxjson") == false)
         #expect(matches(pattern(".mcp.json"), "\(workspace)/.mcp.json.bak") == false)

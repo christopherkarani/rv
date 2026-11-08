@@ -750,9 +750,30 @@ out:
 #define RV_UNIX_PATH_MAX 108
 #define RV_FRAME_MAX 1048576
 
+/* Milliseconds left before the send cutoff, at least 1 (0 would mean
+ * "no timeout" to SO_SNDTIMEO). */
+static long remaining_send_ms(void) {
+    long long left;
+    if (rv_started_ms < 0) {
+        return RV_EVALUATE_TIMEOUT_MS;
+    }
+    left = RV_EVALUATE_SEND_CUTOFF_MS - (monotonic_ms() - rv_started_ms);
+    if (left < 1) {
+        return 1;
+    }
+    return left > RV_EVALUATE_TIMEOUT_MS ? RV_EVALUATE_TIMEOUT_MS : (long)left;
+}
+
+/* Sends all of `p`, or fails with EAGAIN once the send cutoff passes: the
+ * cutoff bounds when the whole request has arrived, not just when sending
+ * began. A frame cut short is never evaluated by rvd. */
 static int send_nosig(int fd, const void *p, size_t n) {
     const unsigned char *b = (const unsigned char *)p;
     while (n > 0) {
+        if (past_evaluate_send_cutoff()) {
+            errno = EAGAIN;
+            return -1;
+        }
         ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
         if (w < 0) {
             if (errno == EINTR) {
@@ -893,14 +914,17 @@ static int unix_hook_evaluate(
         *retryable = 0;
         return RV_HOOK_FAIL_TIMEOUT;
     }
-    /* Point of no return: from here on nothing is retried. */
-    set_socket_timeouts(fd, RV_EVALUATE_TIMEOUT_MS);
+    /* Point of no return: from here on nothing is retried. Each blocking
+     * send waits at most until the cutoff (send_nosig also checks it
+     * between partial sends); the reply then gets the full budget. */
+    set_socket_timeouts(fd, remaining_send_ms());
     write_be32(header, (uint32_t)json_len);
     if (send_nosig(fd, header, 4) != 0 || send_nosig(fd, json, json_len) != 0) {
         failure = io_failure();
         close(fd);
         return failure;
     }
+    set_socket_timeouts(fd, RV_EVALUATE_TIMEOUT_MS);
     if (recv_exact(fd, header, 4) != 0) {
         failure = io_failure();
         close(fd);

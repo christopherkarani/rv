@@ -1345,9 +1345,11 @@ enum WorkspaceRunLaterPaths {
         ".claude/settings.local.json",
         ".mcp.json",
         ".codex/config.toml",
+        ".codex/hooks.json",
         ".cursor/hooks.json",
         ".cursor/mcp.json",
         ".gemini/settings.json",
+        ".gemini/config/hooks.json",
         ".vscode/tasks.json",
         ".vscode/settings.json",
         "opencode.json",
@@ -1359,6 +1361,8 @@ enum WorkspaceRunLaterPaths {
     /// scripts that the settings above call by path.
     static let trees = [
         ".claude/hooks",
+        ".cursor/hooks",
+        ".codex/hooks",
     ]
 
     /// Parent directories whose own entry the cage may not create or
@@ -1368,10 +1372,16 @@ enum WorkspaceRunLaterPaths {
     static let pinnedDirectories = [".claude", ".codex", ".cursor", ".gemini", ".vscode"]
 }
 
-/// POSIX regex for `relative` under `workspacePath`, ASCII case-insensitive
-/// in the relative part. `tree` also matches everything beneath it. The
+/// POSIX regex for `relative` under `workspacePath`, case-insensitive in
+/// the relative part (ASCII, plus the non-ASCII letters APFS folds onto
+/// ASCII). `tree` also matches everything beneath it. The
 /// workspace prefix is matched exactly (it already exists, so the kernel
 /// reports its on-disk spelling).
+/// Non-ASCII characters whose Unicode case folding is a single ASCII
+/// letter (CaseFolding.txt, status C): U+017F LATIN SMALL LETTER LONG S
+/// folds to `s`, U+212A KELVIN SIGN to `k`.
+let unicodeCaseFolds: [String: String] = ["s": "\u{017F}", "k": "\u{212A}"]
+
 func caseInsensitiveWorkspaceRegex(workspacePath: String, relative: String, tree: Bool = false) -> String {
     func escapeRegex(_ text: String) -> String {
         var out = ""
@@ -1383,7 +1393,13 @@ func caseInsensitiveWorkspaceRegex(workspacePath: String, relative: String, tree
     }
     var suffix = ""
     for character in relative {
-        if character.isASCII, character.isLetter {
+        if let folded = unicodeCaseFolds[character.lowercased()] {
+            // Seatbelt matches the path's raw bytes, but a case-insensitive
+            // APFS volume also folds these non-ASCII letters onto ASCII
+            // (`.mcp.j\u{017F}on` opens `.mcp.json`). A bracket expression
+            // cannot hold a multi-byte character, so alternate instead.
+            suffix += "(\(character.lowercased())|\(character.uppercased())|\(folded))"
+        } else if character.isASCII, character.isLetter {
             suffix += "[\(character.lowercased())\(character.uppercased())]"
         } else {
             suffix += escapeRegex(String(character))

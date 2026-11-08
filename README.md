@@ -119,7 +119,9 @@ Commands that change the gate itself (`rv allowlist add`,
 `rv packs enable`, `rv safety strict|normal`, `rv policy draft --save`,
 `rv egress approve`, `rv workspace abandon`) ask for the same owner
 authentication first, so an agent running as you cannot weaken its own
-guard. On Linux rv reads your login password from the terminal and
+guard through `rv`. The config files themselves are still yours to write:
+rv's hook guard refuses an agent's attempts to edit them, but the CLI,
+not `rvd`, performs the change after approval. On Linux rv reads your login password from the terminal and
 `rvd` checks it with the system's `unix_chkpwd`; five wrong passwords in
 ten minutes lock checks for ten minutes. Every attempt is recorded as an
 `owner.action` event in the audit log.

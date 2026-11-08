@@ -85,4 +85,26 @@ struct ManagedGateTests {
             #expect(ManagedGate.requiredPacks(home: nil).isEmpty)
         }
     }
+
+    @Test func gateRequirementsPinEnforceMode() {
+        var packs = ManagedPolicy.Gate()
+        packs.requirePacks = [PackID(rawValue: "database.sqlite")]
+        var strict = ManagedPolicy.Gate()
+        strict.requireStrictSafety = true
+        for gate in [packs, strict] {
+            ManagedGate.$override.withValue(active(gate)) {
+                #expect(ManagedGate.guardMode(.observe, home: nil) == .enforce)
+            }
+        }
+        ManagedGate.$override.withValue(.invalid("bad signature")) {
+            #expect(ManagedGate.guardMode(.observe, home: nil) == .enforce)
+        }
+        // No gate requirement: the owner's choice stands.
+        ManagedGate.$override.withValue(active(ManagedPolicy.Gate())) {
+            #expect(ManagedGate.guardMode(.observe, home: nil) == .observe)
+        }
+        ManagedGate.$override.withValue(ManagedPolicyState.none) {
+            #expect(ManagedGate.guardMode(.observe, home: nil) == .observe)
+        }
+    }
 }

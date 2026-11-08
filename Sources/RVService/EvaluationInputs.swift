@@ -53,7 +53,9 @@ struct EvaluationInputs: Sendable {
     ) -> EvaluationInputs {
         let config = JudgeRuntime.loadConfigDict(home: home)
         return EvaluationInputs(
-            guardMode: JudgeRuntime.guardMode(environment: environment, config: config),
+            // The organization's gate pins enforce mode while it applies.
+            guardMode: ManagedGate.guardMode(
+                JudgeRuntime.guardMode(environment: environment, config: config), home: home),
             judge: JudgeRuntime.selection(home: home, environment: environment, config: config),
             store: .gather(home: home, cwd: cwd)
         )

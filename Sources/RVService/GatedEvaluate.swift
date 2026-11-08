@@ -855,8 +855,10 @@ public struct GatedEvaluate: Sendable {
             case .judgeLog(let row):
                 JudgeRuntime.appendLog(row, home: home)
             case .denialRow(let row):
-                recordDenial(row, home: home)
+                // Chained record first: a forward that runs between the two
+                // writes then sees the chained row and drops the blocks copy.
                 auditDenial(row, home: home)
+                recordDenial(row, home: home)
             case .overrideAudit(let row):
                 auditOverride(row, home: home)
             }
