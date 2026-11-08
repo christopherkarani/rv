@@ -235,7 +235,14 @@ struct OperatorCommandRunTests {
             }
         }
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
+        // `--save --repo` writes under the workspace, never the checkout.
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-policy-draft-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try await withCLIProcess(
+            home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated, englishCompiler: fixture
+        ) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "", "--save"]).run()
             }
@@ -259,6 +266,7 @@ struct OperatorCommandRunTests {
                 try await PolicyDraftCommand.parse(["--english", "be careful in prod"]).run()
             }
         }
+        #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".rv/policy.toml").path))
         try replacePathWithFile(RVPolicyPaths.configDirectory(home: home))
         try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
