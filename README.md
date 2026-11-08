@@ -74,7 +74,9 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   pack-allowed commands get a local risk score. The judge can only
   raise a verdict, never lower a pack deny. Nothing leaves your
   machine. `"guard.mode": "observe"` logs would-be verdicts without
-  blocking, so you can measure before you enforce.
+  blocking, so you can measure before you enforce. `rv host mode
+  <host> observe` does the same for one host (`off` unwires it); `rv
+  blocks` marks what observe would have blocked with `"observed": true`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned
   rules → allowlist → allow-once → contained-delete allowance) with
   `normal`/`strict` safety levels. Indeterminate (too large, budget
@@ -181,6 +183,8 @@ rv test 'rm -rf /'          # evaluate a command, don't run it
 rv explain 'rm -rf /'       # why would this block?
 rv packs                    # browse the 95 packs
 rv blocks                   # what got denied lately?
+rv host list                # per-host mode (block / observe / off) and wiring
+rv workspace vms            # micro-VM runtime sessions, newest first
 rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health

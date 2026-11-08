@@ -18,3 +18,9 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 **Gateway-only** — a value that is not a lasting token (an AWS credential set, an OAuth access token the gateway keeps fresh). Only a cage's gateway may spend it; stdio servers and headers are refused.
 
 **Lease** — what one launch gets from the launch broker: environment entries plus the gateway placeholders to revoke when the runtime ends. The broker builds a lease from released secrets.
+
+## Guard
+
+**Host mode** — how rv guards one hook host: `block` (enforce, the default), `observe` (allow and record what would have been blocked) or `off` (rv's hooks removed from that host). Stored under `guard.hosts` in `config.json`; rvd resolves `RV_GUARD_MODE` > host mode > `guard.mode` > enforce, and an organization gate still pins enforce. `HostMode`, `HostModeStore`.
+
+**Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked.
