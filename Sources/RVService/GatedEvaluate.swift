@@ -509,6 +509,9 @@ public struct GatedEvaluate: Sendable {
     /// observed denial row. Enforce runs the script
     /// check, then the judge, over a pack-allow; anything else is returned
     /// untouched (a pack deny is a floor neither may lower).
+    ///
+    /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
+    /// result takes the enforce branch, on every door.
     private func posture(
         _ result: EvaluationResult,
         door: Door,
@@ -518,7 +521,9 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         effects: inout [GatedEffect]
     ) -> Posture {
-        switch (guardMode, door) {
+        let mode = guardMode == .observe && observeFloorHolds(result, door: door, cwd: cwd, home: home)
+            ? .enforce : guardMode
+        switch (mode, door) {
         case (.observe, .file):
             return .observed(result.observedAllow, wouldBe: result)
         case (.enforce, .file):
@@ -550,6 +555,20 @@ public struct GatedEvaluate: Sendable {
                 effects.append(.judgeLog(log))
             }
             return .enforced(judged.result)
+        }
+    }
+
+    private func observeFloorHolds(
+        _ result: EvaluationResult,
+        door: Door,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> Bool {
+        switch door {
+        case .file:
+            ObserveFloor.holds(result)
+        case .shell(let request, let inputs, _):
+            ObserveFloor.holds(result, command: request.command, store: inputs.store, home: home, cwd: cwd)
         }
     }
 

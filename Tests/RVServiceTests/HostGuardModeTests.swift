@@ -161,6 +161,81 @@ struct HostGuardModeTests {
         #expect(events.count == 1)
     }
 
+    // Observe never relaxes rv's own protection: an observe host must not
+    // loosen another host (or the global guard) through rv's config or an
+    // rv admin command.
+
+    @Test("observe host: file door still denies writing rv's config.json")
+    func observeHostFileDoorKeepsRVConfig() throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        defer { remove(home) }
+        let config = home.rawValue + "/.config/rv/config.json"
+        for kind in [FileToolKind.write, .edit, .read] {
+            let action = FileToolAction(kind: kind, path: FileToolPath(rawValue: config))
+            let result = GatedEvaluate().runFile(action, home: home, host: .hook(.claude), now: Self.now)
+            guard case .deny(let deny) = result.decision else {
+                Issue.record("\(kind) of config.json must deny under observe, got \(result.decision)")
+                continue
+            }
+            #expect(deny.ruleID == RuleID(pack: .coreSecrets, pattern: "home-rv-config"))
+        }
+        #expect(ledgerRows(home).allSatisfy { $0.observed == false })
+    }
+
+    @Test("observe host: rv self-protection and rv-config writes stay enforced", arguments: [
+        "rv host mode cursor off",
+        "rv host mode claude observe",
+        "rv uninstall",
+        "rv packs disable core.git",
+        "git reset --hard && rv host mode cursor off",
+        "echo '{}' > ~/.config/rv/config.json",
+        "git reset --hard; echo '{}' > ~/.config/rv/config.json",
+    ])
+    func observeHostShellKeepsSelfProtection(command: String) async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision != .allow, "\(command)")
+        #expect(ledgerRows(home).allSatisfy { $0.observed == false }, "\(command)")
+        let agent = GatedEvaluate().evaluateAgent(
+            EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
+            cwd: nil, home: home, now: Self.now,
+            inputs: EvaluationInputs.gather(home: home, cwd: nil, environment: [:], host: .hook(.claude))
+        )
+        #expect(agent.decision != .allow, "agent door: \(command)")
+    }
+
+    @Test("global guard.mode observe keeps the same floor")
+    func globalObserveKeepsSelfProtection() async throws {
+        let home = try hostHome(#"{"guard":{"mode":"observe"}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: "rv host mode cursor off"), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision == .indeterminate(.selfProtection))
+    }
+
+    @Test("observe host: an ordinary pack deny is still observed")
+    func observeHostStillObservesOrdinaryDenies() async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: "git reset --hard"), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision == .allow)
+        let rows = ledgerRows(home)
+        #expect(rows.map(\.observed) == [true])
+        #expect(rows.first?.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+    }
+
     @Test("observe allow with no would-be deny writes no row")
     func observeAllowWritesNoRow() async throws {
         let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
