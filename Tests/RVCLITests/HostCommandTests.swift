@@ -22,6 +22,31 @@ private final class AuthProbe: @unchecked Sendable {
     }
 }
 
+private struct WriterRefused: Error {}
+
+/// A file manager whose removes (and, when asked, directory creates) fail:
+/// the seam for a host hook change that does not happen.
+private final class RefusingFileManager: FileManager, @unchecked Sendable {
+    let refuseCreateDirectory: Bool
+
+    init(refuseCreateDirectory: Bool = false) {
+        self.refuseCreateDirectory = refuseCreateDirectory
+        super.init()
+    }
+
+    override func removeItem(atPath path: String) throws {
+        throw WriterRefused()
+    }
+
+    override func createDirectory(
+        atPath path: String, withIntermediateDirectories: Bool, attributes: [FileAttributeKey: Any]? = nil
+    ) throws {
+        if refuseCreateDirectory { throw WriterRefused() }
+        try super.createDirectory(
+            atPath: path, withIntermediateDirectories: withIntermediateDirectories, attributes: attributes)
+    }
+}
+
 struct HostCommandTests {
     @Test func registeredWithHelpTopic() {
         let names = RV.configuration.subcommands.map { $0.configuration.commandName }
@@ -155,6 +180,54 @@ struct HostCommandTests {
             #expect(probe.calls == 0)
             #expect(FileManager.default.fileExists(atPath: layout.grokHook))
             #expect(store(home).load() == [.grok: .block])
+        }
+    }
+
+    /// The hook change runs before the config write: a detach that leaves
+    /// the hook in place stores nothing, so rvd never observes a host whose
+    /// hooks still fire, and a retry still needs the owner.
+    @Test func off_whenTheHookCannotBeRemoved_exits73AndStoresNothing() async throws {
+        try await withTempHomeAsync { home, layout, base in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(base).exitCode == 0)
+            var environment = base
+            environment.fileManager = RefusingFileManager()
+            let probe = AuthProbe(allow: true)
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: environment, json: true, authenticate: probe.authenticate)
+            #expect(off.exitCode == 73)
+            #expect(off.stdout.isEmpty)
+            #expect(off.stderr.hasPrefix("rv host mode failed: unable to remove grok hook"))
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+            #expect(store(home).load().isEmpty)
+            let retry = AuthProbe(allow: false)
+            let again = await HostModeRun.setMode(
+                .off, for: .grok, env: environment, json: true, authenticate: retry.authenticate)
+            #expect(again.exitCode == 77)
+            #expect(retry.calls == 1)
+        }
+    }
+
+    /// Leaving `off` stores the tighter mode before re-wiring: a re-wire
+    /// that fails leaves the host unwired under `block` (which `rv setup`
+    /// repairs), never wired under `off`.
+    @Test func leavingOff_whenTheHookCannotBeWritten_exits73AndStoresTheTighterMode() async throws {
+        try await withTempHomeAsync { home, layout, base in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(base).exitCode == 0)
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: base, json: true, authenticate: AuthProbe(allow: true).authenticate)
+            #expect(off.exitCode == 0)
+            var environment = base
+            environment.fileManager = RefusingFileManager(refuseCreateDirectory: true)
+            let block = await HostModeRun.setMode(
+                .block, for: .grok, env: environment, json: true, authenticate: AuthProbe(allow: false).authenticate)
+            #expect(block.exitCode == 73)
+            #expect(block.stderr.hasPrefix("rv host mode failed: unable to write grok hook"))
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+            #expect(store(home).load() == [.grok: .block])
+            #expect(SetupRun.setup(base).exitCode == 0)
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook))
         }
     }
 

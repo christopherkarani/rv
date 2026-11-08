@@ -113,6 +113,16 @@ enum HostModeRun {
                     throw SetupError.ownerAuthenticationRequired
                 }
             }
+            // Order keeps every intermediate state no looser than both ends
+            // at rvd: going `off`, the hooks come out before `off` is
+            // stored (a failed detach stores nothing, so wired hooks never
+            // run under `off`, and a retry still needs the owner); leaving
+            // `off`, the tighter mode is stored before re-wiring (a failed
+            // re-wire leaves the host unwired under that mode, which
+            // `rv setup` repairs).
+            if mode == .off {
+                try applyWiring(from: current, to: mode, host: host, env: env)
+            }
             do {
                 try store.save(mode, for: host)
             } catch {
@@ -120,7 +130,9 @@ enum HostModeRun {
                     stdout: "", stderr: "rv host mode failed: unable to write config.json\n",
                     exitCode: EX_CANTCREAT)
             }
-            try applyWiring(from: current, to: mode, host: host, env: env)
+            if mode != .off {
+                try applyWiring(from: current, to: mode, host: host, env: env)
+            }
             let wiring = try SetupRun.inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
                 .state(for: host).rawValue
             if json {
@@ -145,8 +157,13 @@ enum HostModeRun {
         let layout = OwnedPaths(home: env.home)
         let installations = try SetupRun.inspectInstallations(layout: layout, env: env)
         if mode == .off {
-            _ = try HostLifecycle.detach(
+            let detached = try HostLifecycle.detach(
                 installations: installations, env: env, layout: layout, files: files, only: [host])
+            // Detach drops a file it cannot remove silently: check it left.
+            let after = try SetupRun.inspectInstallations(layout: layout, env: env)
+            if detached.removedPaths.contains(where: files.fileExists) || after.state(for: host) == .wired {
+                throw SetupError.hostHookRemoveFailed(host)
+            }
             return
         }
         guard current == .off else { return }

@@ -44,6 +44,8 @@ enum SetupError: Error, Equatable, Sendable {
     case hostHookOccupiedNeedsForce(HookHost)
     /// Could not write an owned hook payload.
     case hostHookWriteFailed(HookHost)
+    /// An owned hook payload survived removal (`rv host mode <host> off`).
+    case hostHookRemoveFailed(HookHost)
     /// Could not write the LaunchAgent plist.
     case launchAgentWriteFailed
     /// launchctl refused or failed the given step.
@@ -106,6 +108,9 @@ func setupFailureOutput(
         exitCode = EX_CANTCREAT
     case .hostHookWriteFailed(let host):
         phrase = "unable to write \(host.rawValue) hook"
+        exitCode = EX_CANTCREAT
+    case .hostHookRemoveFailed(let host):
+        phrase = "unable to remove \(host.rawValue) hook"
         exitCode = EX_CANTCREAT
     case .launchAgentWriteFailed:
         phrase = "unable to write LaunchAgent"
