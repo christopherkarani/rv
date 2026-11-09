@@ -26,8 +26,9 @@ public enum JudgeEngine: String, Sendable {
 
 /// Laya judge wiring for the gated evaluate door.
 ///
-/// One config knob (~/.config/rv/config.json; env wins over file):
-/// `guard.mode` / `RV_GUARD_MODE`: `enforce` (default) | `observe`.
+/// One config knob (~/.config/rv/config.json): `guard.mode`: `enforce`
+/// (default) | `observe`. `RV_GUARD_MODE=enforce` may pin enforce; the
+/// environment never loosens to observe.
 /// Engine knob: `judge.engine` / `RV_JUDGE_ENGINE`: `ft` | `laya`.
 ///
 /// Engine resolution: an explicit engine (env, then config) always wins,
@@ -80,19 +81,25 @@ public enum JudgeRuntime {
             guardMode(environment: environment, config: config, host: hookHost), home: home)
     }
 
-    /// `RV_GUARD_MODE` > `guard.hosts.<host>` > `guard.mode` > enforce. An
-    /// unknown value at any level falls through to the next. A host entry
-    /// of `block` is enforce; `observe` and `off` are observe (an `off`
-    /// host should be unwired, so a stale hook that still fires must never
-    /// block).
+    /// `RV_GUARD_MODE=enforce` > `guard.hosts.<host>` > `guard.mode` >
+    /// enforce. An unknown value at any level falls through to the next. A
+    /// host entry of `block` is enforce; `observe` and `off` are observe (an
+    /// `off` host should be unwired, so a stale hook that still fires must
+    /// never block).
+    ///
+    /// The environment can only tighten: `RV_GUARD_MODE=observe` is
+    /// ignored. rvd inherits its environment from launchd/systemd, which a
+    /// same-user agent can edit (`launchctl setenv`); loosening belongs to
+    /// the owner's config (`rv host mode`, `guard.mode`), never to the
+    /// launch environment. Tests inject `environment` and `config` directly.
     static func guardMode(
         environment: [String: String],
         config: [String: Any]?,
         host: HookHost? = nil
     ) -> GuardMode {
         if let raw = environment["RV_GUARD_MODE"],
-           let mode = GuardMode(rawValue: raw.lowercased()) {
-            return mode
+           GuardMode(rawValue: raw.lowercased()) == .enforce {
+            return .enforce
         }
         if let host, let hostMode = HostModeStore.modes(inConfig: config)[host] {
             return hostMode == .block ? .enforce : .observe

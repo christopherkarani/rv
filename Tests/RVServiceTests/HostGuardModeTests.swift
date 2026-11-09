@@ -16,7 +16,7 @@ struct HostGuardModeTests {
         try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
     }
 
-    @Test("RV_GUARD_MODE > guard.hosts.<host> > guard.mode > enforce")
+    @Test("RV_GUARD_MODE=enforce > guard.hosts.<host> > guard.mode > enforce")
     func precedence() throws {
         let config = try Self.config(
             #"{"guard":{"mode":"observe","hosts":{"claude":"block","cursor":"observe","codex":"off","grok":"loud"}}}"#
@@ -32,7 +32,9 @@ struct HostGuardModeTests {
         #expect(mode([:], .pi) == .observe)
         #expect(mode([:], nil) == .observe)
         #expect(mode(["RV_GUARD_MODE": "enforce"], .cursor) == .enforce)
-        #expect(mode(["RV_GUARD_MODE": "observe"], .claude) == .observe)
+        // The environment only tightens: observe from env is ignored.
+        #expect(mode(["RV_GUARD_MODE": "observe"], .claude) == .enforce)
+        #expect(mode(["RV_GUARD_MODE": "observe"], .cursor) == .observe)
         let bare = try Self.config(#"{"guard":{"hosts":{"cursor":"observe"}}}"#)
         #expect(JudgeRuntime.guardMode(environment: [:], config: bare, host: .claude) == .enforce)
         #expect(JudgeRuntime.guardMode(environment: [:], config: bare, host: nil) == .enforce)
