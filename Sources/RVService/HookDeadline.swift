@@ -29,7 +29,8 @@ public final class HookDeadline: Sendable {
     /// `HookDoor.run` binds it; evaluate paths without it have no budget.
     @TaskLocal static var current: HookDeadline?
 
-    private let expiresAt: ContinuousClock.Instant
+    /// When the budget runs out. `JudgeAdmission` bounds its model wait by it.
+    let expiresAt: ContinuousClock.Instant
     private let now: @Sendable () -> ContinuousClock.Instant
     private struct State {
         var tripped = false

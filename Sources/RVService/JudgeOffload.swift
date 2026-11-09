@@ -11,13 +11,20 @@ import Dispatch
 /// idle watchdog and every other request until the load lands. A queue
 /// gets its own threads; the awaiting task suspends and frees its pool
 /// thread (or its actor) meanwhile.
+///
+/// The calling task's hook deadline is carried into `body` as
+/// `JudgeAdmission.deadline`, so the judge stops waiting for the model once
+/// the client has given up.
 enum JudgeOffload {
     private static let queue = DispatchQueue(
         label: "rv.judge", qos: .userInitiated, attributes: .concurrent)
 
     static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: body()) }
+        let deadline = HookDeadline.current?.expiresAt
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: JudgeAdmission.$deadline.withValue(deadline) { body() })
+            }
         }
     }
 }
