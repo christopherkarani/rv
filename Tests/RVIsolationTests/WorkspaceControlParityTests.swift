@@ -20,14 +20,23 @@ struct WorkspaceControlParityTests {
     /// The string literals of `static let <name> = [ ... ]` in the guest package.
     private func guestList(_ name: String) throws -> [String] {
         let source = try String(contentsOf: Self.mountsSource, encoding: .utf8)
-        guard let start = source.range(of: "static let \(name) = [") else {
+        guard let values = Self.listLiterals(name, in: source) else {
             Issue.record("WorkspaceControlLayout.\(name) not found in \(Self.mountsSource.path)")
             return []
         }
-        guard let end = source[start.upperBound...].firstIndex(of: "]") else { return [] }
-        let body = source[start.upperBound..<end]
+        return values
+    }
+
+    /// The string literals of `static let <name> = [ ... ]` in `source`,
+    /// ignoring `//` line comments (no list entry contains `//`).
+    static func listLiterals(_ name: String, in source: String) -> [String]? {
+        let code = source.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line in line.range(of: "//").map { line[..<$0.lowerBound] } ?? line }
+            .joined(separator: "\n")
+        guard let start = code.range(of: "static let \(name) = [") else { return nil }
+        guard let end = code[start.upperBound...].firstIndex(of: "]") else { return [] }
         var values: [String] = []
-        var rest = body[...]
+        var rest = code[start.upperBound..<end]
         while let open = rest.firstIndex(of: "\"") {
             let after = rest.index(after: open)
             guard let close = rest[after...].firstIndex(of: "\"") else { break }
@@ -35,6 +44,20 @@ struct WorkspaceControlParityTests {
             rest = rest[rest.index(after: close)...]
         }
         return values
+    }
+
+    @Test("the list parser ignores commented-out entries")
+    func parserIgnoresComments() {
+        let source = """
+            // static let files = ["decoy"]
+            static let files = [
+                ".mcp.json", // trailing note "x"
+                // ".envrc",
+                "opencode.json",
+            ]
+            """
+        #expect(Self.listLiterals("files", in: source) == [".mcp.json", "opencode.json"])
+        #expect(Self.listLiterals("missing", in: source) == nil)
     }
 
     @Test("guest run-later lists match the Seatbelt profile's")
