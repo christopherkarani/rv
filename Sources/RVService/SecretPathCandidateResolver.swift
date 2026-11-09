@@ -15,10 +15,10 @@ import RVPolicy
 ///
 /// Expands one typed candidate operand to the path it actually targets
 /// through POSIX `realpath`, normalizing home paths back to `~`-form so
-/// suffix rules still match. Realpath requires the leaf and every ancestor
-/// to exist, which is the point: only spellings that really reach a file on
-/// disk are resolved, and phantom spellings stay right where the typed guard
-/// found them.
+/// suffix rules still match. A missing leaf (or missing tail) resolves
+/// through its deepest existing ancestor, so a file about to be created
+/// under a symlinked secret directory is still seen there; the typed
+/// spelling is always judged as well.
 enum SecretPathCandidateResolver {
     /// Per-request resolution seam wired into `GatedEvaluate`'s engine calls.
     /// Stateless: the returned `SecretPathResolution` is `Sendable`.
@@ -50,7 +50,7 @@ enum SecretPathCandidateResolver {
             guard let cwd else { return nil }
             raw = cwd.rawValue + "/" + candidate
         }
-        guard let target = posixRealpath(raw) else { return nil }
+        guard let target = resolvedPath(raw) else { return nil }
         guard let home else { return target }
         if target == home.rawValue {
             return "~"
@@ -61,8 +61,33 @@ enum SecretPathCandidateResolver {
         return target
     }
 
+    /// `raw` (absolute) as the filesystem resolves it, through its deepest
+    /// existing ancestor when the leaf is missing.
+    static func resolvedPath(_ raw: String) -> String? {
+        posixRealpath(raw) ?? resolvedThroughAncestor(raw)
+    }
+
+    /// A path whose leaf does not exist yet (a Write creating a file) has
+    /// no realpath, but its directory does: resolve the deepest existing
+    /// ancestor and re-append the missing tail, so `~/link/authorized_keys`
+    /// with `~/link -> ~/.ssh` resolves into `~/.ssh`. Nil when no ancestor
+    /// below `/` resolves or nothing is missing.
+    private static func resolvedThroughAncestor(_ path: String) -> String? {
+        var components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var missing: [String] = []
+        while components.isEmpty == false {
+            missing.insert(components.removeLast(), at: 0)
+            guard components.isEmpty == false else { return nil }
+            if let ancestor = posixRealpath("/" + components.joined(separator: "/")) {
+                let base = ancestor == "/" ? "" : ancestor
+                return base + "/" + missing.joined(separator: "/")
+            }
+        }
+        return nil
+    }
+
     /// Nil when the path does not exist or is unreachable.
-    private static func posixRealpath(_ path: String) -> String? {
+    static func posixRealpath(_ path: String) -> String? {
         path.withCString { raw in
             #if canImport(Darwin)
             let target = Darwin.realpath(raw, nil)
