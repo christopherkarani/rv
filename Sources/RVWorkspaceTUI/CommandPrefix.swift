@@ -205,7 +205,9 @@ public enum CommandPrefix {
         case .terminal:
             if directLauncherSelection, case .character(let character) = key {
                 if let index = Int(String(character)), index > 0, index <= launcher.count {
-                    return (.terminal, .launch(launcher[index - 1]))
+                    let choice = launcher[index - 1]
+                    return choice.id == RuntimeLaunchChoice.runPromptID
+                        ? (.runCommand(input: "", error: nil), nil) : (.terminal, .launch(choice))
                 }
             }
             if key == .control("b") { return (.prefix(target), nil) }

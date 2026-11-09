@@ -41,6 +41,12 @@ private let target = PrefixTarget(pane: PaneID(), generation: nil)
         == (.terminal, .launch(opencode)))
     #expect(CommandPrefix.route(.character("1"), mode: .terminal, launcher: choices)
         == (.terminal, .sendKey(.character("1"))))
+
+    // The run-prompt row has no executable yet: its digit opens the prompt.
+    let run = RuntimeLaunchChoice(
+        id: RuntimeLaunchChoice.runPromptID, title: "Run command…", executable: "", arguments: [], hook: nil)
+    #expect(CommandPrefix.route(.character("2"), mode: .terminal, launcher: [shell, run], directLauncherSelection: true)
+        == (.runCommand(input: "", error: nil), nil))
 }
 
 @Test func runOverlayEditsInputAndAcceptsExplicitResourceProfile() {

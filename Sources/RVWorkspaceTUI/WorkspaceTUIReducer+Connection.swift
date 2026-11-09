@@ -148,6 +148,8 @@ extension WorkspaceTUIReducer {
         next.reconnectInflight = false
         if error == .incompatibleHost {
             next.reconnectFiresAt = nil
+            // Spend the budget so the next tick does not re-arm; Enter resets it.
+            next.reconnectAttempt = Self.maxReconnectAttempts
             next.feedback = "Incompatible workspace host — close the workspace and retry"
             next.feedbackTicks = 3600
             presentationChanged = true

@@ -486,10 +486,17 @@ private func modesSplit() -> WorkspaceTUIState {
         var state = modesState()
         state.lifecycle = .disconnected
         state.reconnectInflight = true
-        let transition = WorkspaceTUIReducer.reduce(state, .reconnectFailed(error: .incompatibleHost))
+        var transition = WorkspaceTUIReducer.reduce(state, .reconnectFailed(error: .incompatibleHost))
         #expect(transition.state.feedback == "Incompatible workspace host — close the workspace and retry")
         #expect(transition.state.reconnectFiresAt == nil)
         #expect(transition.state.reconnectInflight == false)
+        // Later ticks must not re-arm the retry or replace the message.
+        for _ in 0..<3 {
+            transition = WorkspaceTUIReducer.reduce(transition.state, .tick(now: Date().addingTimeInterval(3600)))
+        }
+        #expect(transition.state.reconnectFiresAt == nil)
+        #expect(transition.state.reconnectInflight == false)
+        #expect(transition.state.feedback == "Incompatible workspace host — close the workspace and retry")
     }
 
     @Test func reconnectSuccessReattachesAndRestoresLease() {
