@@ -876,6 +876,62 @@ public enum MCPSandbox {
         path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
+    /// Bytes per string literal. `sandbox-exec` rejects any one literal
+    /// longer than 1023 bytes ("Error reading string"), measured on macOS 27,
+    /// and a case-folded path regex is ~7 bytes per letter.
+    static let seatbeltLiteralBytes = 960
+
+    /// `escaped` as one SBPL string: a literal when it fits, otherwise the
+    /// same string built with `string-append`. Chunks end on scalar
+    /// boundaries and never between a backslash and the scalar it escapes.
+    static func seatbeltString(_ escaped: String, raw: Bool) -> String {
+        "\(raw ? "#" : "")\"\(escaped)\""
+    }
+
+    /// The `MCPLaunchError` for a profile `sandbox-exec` would refuse.
+    static func profileFailure(server: String, reason: String) -> MCPLaunchError {
+        .sandbox("could not build the sandbox profile for MCP server \(MCPDisplayedText.field(server)): \(reason)")
+    }
+
+    #if os(macOS)
+    private typealias CompileProfile = @convention(c) (
+        UnsafePointer<CChar>, UnsafeMutableRawPointer?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+    ) -> UnsafeMutableRawPointer?
+    private typealias FreeProfile = @convention(c) (UnsafeMutableRawPointer) -> Void
+
+    private struct ProfileCompiler: @unchecked Sendable {
+        let compile: CompileProfile
+        let free: FreeProfile
+    }
+
+    /// libsandbox's compiler, the one `sandbox-exec -p` runs. Nil when the
+    /// symbols are missing; launch then reports what sandbox-exec prints.
+    private static let profileCompiler: ProfileCompiler? = {
+        guard let library = dlopen("/usr/lib/libsandbox.1.dylib", RTLD_NOW),
+            let compile = dlsym(library, "sandbox_compile_string"),
+            let free = dlsym(library, "sandbox_free_profile")
+        else { return nil }
+        return ProfileCompiler(
+            compile: unsafeBitCast(compile, to: CompileProfile.self), free: unsafeBitCast(free, to: FreeProfile.self))
+    }()
+
+    /// The compiler's first error line for `profile`, or nil when it
+    /// compiles. Nothing is applied or launched.
+    static func profileCompileError(_ profile: String) -> String? {
+        guard let compiler = profileCompiler else { return nil }
+        var error: UnsafeMutablePointer<CChar>?
+        if let compiled = profile.withCString({ compiler.compile($0, nil, &error) }) {
+            compiler.free(compiled)
+            return nil
+        }
+        guard let error else { return "the profile did not compile" }
+        defer { Darwin.free(error) }
+        let text = String(cString: error)
+        let line = text.split(separator: "\n").first.map(String.init) ?? ""
+        return line.isEmpty ? "the profile did not compile" : MCPDisplayedText.field(line)
+    }
+    #endif
+
     /// Each symlink in a credential chain is denied by a regex built from the
     /// path Seatbelt checks, and by its parent. A static regex cannot see a
     /// retarget, so the parent is not left to `(allow default)`. Reviewed
