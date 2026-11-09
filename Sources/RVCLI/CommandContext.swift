@@ -194,10 +194,18 @@ struct CommandContext: Sendable {
     // MARK: - Emission (the single stdout/stderr/exit convention)
 
     static func writeStdout(_ text: String) {
+        if let output = CLIProcess.context?.output {
+            output.appendStdout(text)
+            return
+        }
         FileHandle.standardOutput.write(Data(text.utf8))
     }
 
     static func writeStderr(_ text: String) {
+        if let output = CLIProcess.context?.output {
+            output.appendStderr(text)
+            return
+        }
         FileHandle.standardError.write(Data(text.utf8))
     }
 

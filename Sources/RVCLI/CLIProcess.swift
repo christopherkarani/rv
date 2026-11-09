@@ -8,6 +8,26 @@ import RVDomain
 import RVIPC
 import RVPolicy
 import RVTheme
+import Synchronization
+
+/// In-memory stdout/stderr sink. Installed on `CLIProcess.Context` so command
+/// output lands here instead of the process file descriptors.
+final class CLIOutputCapture: Sendable {
+    private let state = Mutex<(stdout: String, stderr: String)>(("", ""))
+
+    init() {}
+
+    var stdout: String { state.withLock { $0.stdout } }
+    var stderr: String { state.withLock { $0.stderr } }
+
+    func appendStdout(_ text: String) {
+        state.withLock { $0.stdout += text }
+    }
+
+    func appendStderr(_ text: String) {
+        state.withLock { $0.stderr += text }
+    }
+}
 
 /// In-process overrides for operator HOME / TTY / env. Production reads the
 /// process; tests install a `Context` so `run()` never touches live `$HOME`.
@@ -26,6 +46,9 @@ enum CLIProcess: Sendable {
         /// Stand-in for `rv policy draft`'s English compiler. Nil uses the
         /// live chain, which reaches Apple Intelligence where it is enabled.
         var englishCompiler: (any EnglishCompiler)?
+        /// When set, `CommandContext.writeStdout/writeStderr` append here
+        /// instead of writing to the process file descriptors.
+        var output: CLIOutputCapture?
 
         init(
             home: HomeDirectory? = nil,
@@ -37,6 +60,7 @@ enum CLIProcess: Sendable {
             stdinText: String? = nil,
             ownerAuthOutcome: UIAuthenticationOutcome? = nil,
             englishCompiler: (any EnglishCompiler)? = nil,
+            output: CLIOutputCapture? = nil,
             includeProcessEnvironment: Bool = false
         ) {
             self.home = home
@@ -59,6 +83,7 @@ enum CLIProcess: Sendable {
             self.stdinText = stdinText
             self.ownerAuthOutcome = ownerAuthOutcome
             self.englishCompiler = englishCompiler
+            self.output = output
         }
     }
 

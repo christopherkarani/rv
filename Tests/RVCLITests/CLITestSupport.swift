@@ -94,44 +94,6 @@ func wd(_ raw: String) -> WorkingDirectory {
     WorkingDirectory(validating: raw)!
 }
 
-func captureStderr(_ body: () async throws -> Void) async throws -> String {
-    let pipe = Pipe()
-    let saved = dup(STDERR_FILENO)
-    defer {
-        close(saved)
-    }
-    dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
-    do {
-        try await body()
-    } catch {
-        dup2(saved, STDERR_FILENO)
-        pipe.fileHandleForWriting.closeFile()
-        throw error
-    }
-    dup2(saved, STDERR_FILENO)
-    pipe.fileHandleForWriting.closeFile()
-    return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-}
-
-func captureStdout(_ body: () async throws -> Void) async throws -> String {
-    let pipe = Pipe()
-    let saved = dup(STDOUT_FILENO)
-    defer {
-        close(saved)
-    }
-    dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
-    do {
-        try await body()
-    } catch {
-        dup2(saved, STDOUT_FILENO)
-        pipe.fileHandleForWriting.closeFile()
-        throw error
-    }
-    dup2(saved, STDOUT_FILENO)
-    pipe.fileHandleForWriting.closeFile()
-    return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-}
-
 @discardableResult
 func withCLIProcess<T>(
     home: HomeDirectory? = nil,
@@ -142,6 +104,7 @@ func withCLIProcess<T>(
     stdoutFileDescriptor: Int32? = nil,
     stdinText: String? = nil,
     ownerAuthOutcome: UIAuthenticationOutcome? = nil,
+    output: CLIOutputCapture? = nil,
     _ body: () throws -> T
 ) throws -> T {
     let context = CLIProcess.Context(
@@ -152,7 +115,8 @@ func withCLIProcess<T>(
         stdoutFileDescriptor: stdoutFileDescriptor,
         workspacePath: workspacePath,
         stdinText: stdinText,
-        ownerAuthOutcome: ownerAuthOutcome
+        ownerAuthOutcome: ownerAuthOutcome,
+        output: output
     )
     return try CLIProcess.$context.withValue(context, operation: body)
 }
@@ -168,6 +132,7 @@ func withCLIProcess<T>(
     stdinText: String? = nil,
     ownerAuthOutcome: UIAuthenticationOutcome? = nil,
     englishCompiler: (any EnglishCompiler)? = nil,
+    output: CLIOutputCapture? = nil,
     _ body: () async throws -> T
 ) async throws -> T {
     let context = CLIProcess.Context(
@@ -179,7 +144,8 @@ func withCLIProcess<T>(
         workspacePath: workspacePath,
         stdinText: stdinText,
         ownerAuthOutcome: ownerAuthOutcome,
-        englishCompiler: englishCompiler
+        englishCompiler: englishCompiler,
+        output: output
     )
     return try await CLIProcess.$context.withValue(context, operation: body)
 }

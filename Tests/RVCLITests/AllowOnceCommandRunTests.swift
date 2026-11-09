@@ -516,12 +516,12 @@ struct AllowOnceCommandRunTests {
         #expect(json.contains("\\u202e"))
         let parsed = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
         #expect(parsed.contains { $0["cwd"] as? String == raw })
-        let text = try await captureStdout {
-            try await withCLIProcess(home: home) {
-                var command = try AllowOnceList.parse([])
-                try await command.run()
-            }
+        let capture = CLIOutputCapture()
+        try await withCLIProcess(home: home, output: capture) {
+            var command = try AllowOnceList.parse([])
+            try await command.run()
         }
+        let text = capture.stdout
         #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
         #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
@@ -546,12 +546,12 @@ struct AllowOnceCommandRunTests {
         _ = try await store.mint(
             matchingView: MatchingView(word), cwd: wd("/tmp/work"), ruleID: nil, tty: tty, now: now,
             invocationDisplay: tag)
-        let text = try await captureStdout {
-            try await withCLIProcess(home: home) {
-                var command = try AllowOnceList.parse([])
-                try await command.run()
-            }
+        let capture = CLIOutputCapture()
+        try await withCLIProcess(home: home, output: capture) {
+            var command = try AllowOnceList.parse([])
+            try await command.run()
         }
+        let text = capture.stdout
         #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
         #expect(text.contains("\\u001b[2J"))

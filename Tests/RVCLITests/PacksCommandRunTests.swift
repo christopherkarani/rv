@@ -166,21 +166,17 @@ struct PacksCommandRunTests {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let id = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
         var threw = false
-        let text = try await withCLIProcess(home: home) {
-            try await captureStderr {
-                let info = try Packs.Info.parse([id])
-                do {
-                    try await info.run()
-                } catch is ExitCode {
-                    threw = true
-                }
+        let capture = CLIOutputCapture()
+        try await withCLIProcess(home: home, output: capture) {
+            let info = try Packs.Info.parse([id])
+            do {
+                try await info.run()
+            } catch is ExitCode {
+                threw = true
             }
         }
         #expect(threw)
-        // captureStderr is a process-global FD: parallel tests print
-        // their own "unknown pack id:" lines into the same capture.
-        // This test's line is the one whose id starts with `x`.
-        let line = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let line = capture.stderr.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             .first { $0.contains("unknown pack id: x") } ?? ""
         #expect(line.hasPrefix("unknown pack id: "))
         #expect(line.unicodeScalars.contains { $0.value == 0x1B } == false)

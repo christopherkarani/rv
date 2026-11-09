@@ -50,11 +50,14 @@ struct OperatorCommandRunTests {
     }
 
     @Test func safety_missingHomeBadLevelShowAndSet() async throws {
-        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+        let missingHomeOutput = CLIOutputCapture()
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated, output: missingHomeOutput) {
             await #expect(throws: ExitCode(1)) {
                 try await Safety.parse([]).run()
             }
         }
+        #expect(missingHomeOutput.stderr == "rv safety: HOME is not set\n")
+        #expect(missingHomeOutput.stdout.isEmpty)
         let home = try isolatedHome()
         try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
             try await Safety.parse([]).run()
