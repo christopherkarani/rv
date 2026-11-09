@@ -223,7 +223,9 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                 let mutation = try body(loaded)
                 let events = timeoutEvents(before: loaded, after: mutation.records)
                     + [mutation.event].compactMap { $0 }
-                try writeRecords(mutation.records)
+                if mutation.records != loaded {
+                    try writeRecords(mutation.records)
+                }
                 return (mutation.record, events)
             }
         } catch let error as PendingApprovalError {

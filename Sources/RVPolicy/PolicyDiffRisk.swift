@@ -750,7 +750,7 @@ public enum PolicyDiffRisk {
         if let scheme = trimmed.range(of: "://"),
             scheme.upperBound <= at
         {
-            prefix = String(trimmed[...scheme.upperBound])
+            prefix = String(trimmed[..<scheme.upperBound])
         } else {
             prefix = ""
         }

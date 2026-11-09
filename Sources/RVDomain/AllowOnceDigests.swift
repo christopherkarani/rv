@@ -175,5 +175,6 @@ public struct GrantFingerprint: RawRepresentable, Hashable, Sendable, Equatable,
 /// 64-lowercase-hex shape gate shared by the digest newtypes and the
 /// attest handler. Exact port of the former attest guards.
 public func isLowercaseHex64(_ text: String) -> Bool {
-    text.count == 64 && text.allSatisfy(\.isHexDigit) && text == text.lowercased()
+    // Byte-exact ASCII: `Character.isHexDigit` also accepts fullwidth forms.
+    text.utf8.count == 64 && text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
 }

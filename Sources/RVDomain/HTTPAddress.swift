@@ -330,10 +330,14 @@ public struct RVSHA256Digest: Sendable {
     public mutating func update(_ bytes: [UInt8]) {
         buffer.append(contentsOf: bytes)
         bitCount &+= UInt64(bytes.count) &* 8
-        while buffer.count >= 64 {
-            compress(Array(buffer.prefix(64)))
-            buffer.removeFirst(64)
+        // One shift for the whole call: removing 64 bytes per block is
+        // quadratic in the size of `bytes`.
+        var offset = 0
+        while buffer.count - offset >= 64 {
+            compress(Array(buffer[offset..<offset + 64]))
+            offset += 64
         }
+        if offset > 0 { buffer.removeFirst(offset) }
     }
 
     public func digest() -> [UInt8] {
