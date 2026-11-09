@@ -2,9 +2,9 @@
 #define RV_OBSERVE_GATE_H
 
 /*
- * Whether a hook that got no verdict from an absent or slow rvd may step
- * aside because the owner chose observe mode. rvd normally decides observe
- * itself; this is only consulted on the UNREACHABLE / TIMEOUT fallback.
+ * Whether a hook that could not reach rvd may step aside because the owner
+ * chose observe mode. rvd normally decides observe itself; this is only
+ * consulted on the UNREACHABLE fallback.
  *
  * Inputs are paths the caller derives without the environment: rv.c uses
  * the passwd home (never $HOME or XDG vars) and the fixed organization

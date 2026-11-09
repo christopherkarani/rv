@@ -154,9 +154,12 @@ int rv_hook_fallback_render(
     if (failure != RV_HOOK_FAIL_UNREACHABLE && failure != RV_HOOK_FAIL_TIMEOUT) {
         return render_deny(host, msg, out);
     }
-    switch (mode) {
-    case RV_WHEN_DOWN_OBSERVE:
+    /* Observe steps aside only for an absent daemon: a live but slow one
+     * would have applied rv's self-protection, and an agent can make it slow. */
+    if (mode == RV_WHEN_DOWN_OBSERVE && failure == RV_HOOK_FAIL_UNREACHABLE) {
         return render_observe(host, out);
+    }
+    switch (mode) {
     case RV_WHEN_DOWN_DENY:
         return render_deny(host, msg, out);
     case RV_WHEN_DOWN_ASK:

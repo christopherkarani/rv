@@ -87,13 +87,14 @@ enum SetupRun {
 
     /// True when `--observe` would shed oversight: the configured
     /// machine-wide mode (never `RV_GUARD_MODE`) is enforce and some host
-    /// is wired. A fresh install only adds oversight. Throws
+    /// is wired or broken (a broken hook can still fire). A fresh install
+    /// only adds oversight. Throws
     /// `observePinnedByOrganization` under an organization gate.
     static func observeShedsOversight(_ env: SetupEnvironment) throws(SetupError) -> Bool {
         if env.managedEnforce(env.home) { throw .observePinnedByOrganization }
         guard JudgeRuntime.configuredGuardMode(home: env.home) == .enforce else { return false }
         let installations = try inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
-        return HookHost.allCases.contains { installations.state(for: $0) == .wired }
+        return HookHost.allCases.contains { [.wired, .broken].contains(installations.state(for: $0)) }
     }
 
     /// Stores `guard.mode: observe` before any hook is attached, after the

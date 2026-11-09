@@ -49,7 +49,9 @@ enum HookDaemonFallback {
     }
 
     /// `ownerObserves`: the owner's config file puts `host` in observe mode
-    /// (`HookObserveFallback`); an absent or slow daemon then steps aside.
+    /// (`HookObserveFallback`); an unreachable daemon then steps aside. A
+    /// slow one does not: it would still have enforced rv's self-protection,
+    /// and an agent can make rvd slow.
     static func wire(
         host: HookHost,
         failure: HookDaemonFailure,
@@ -62,7 +64,7 @@ enum HookDaemonFallback {
         guard failure == .unreachable || failure == .timeout else {
             return deny(host: host, message: message)
         }
-        if ownerObserves {
+        if ownerObserves, failure == .unreachable {
             let allow = productionHostCodec(host).encodeAllow()
             return HookWire(
                 stdout: allow.stdout, exitCode: allow.exitCode, stderr: HookObserveFallback.message + "\n")
@@ -129,9 +131,8 @@ enum HookDaemonFallback {
     }
 }
 
-/// Swift twin of `Sources/rv-c/observe_gate.c`: whether a hook that got no
-/// verdict from an absent or slow rvd may step aside because the owner chose
-/// observe mode. Reads only `config.json` under the passwd home, never
+/// Swift twin of `Sources/rv-c/observe_gate.c`: whether a hook that could
+/// not reach rvd may step aside because the owner chose observe mode. Reads only `config.json` under the passwd home, never
 /// `$HOME`, `RV_GUARD_MODE` or other environment. True only when no
 /// organization policy directory exists, the config is a regular file (no
 /// symlink) owned by this uid, not group- or world-writable, at most

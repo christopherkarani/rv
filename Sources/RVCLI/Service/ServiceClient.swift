@@ -356,7 +356,7 @@ public struct ServiceClient: Sendable {
     /// Authority-bearing hooks never retry through the local evaluation door,
     /// and the request is never resent. A daemon miss is classified and
     /// rendered per `whenDown` (`HookDaemonFallback`); `ownerObserves` is
-    /// consulted only on an absent or slow daemon.
+    /// consulted only on an unreachable daemon, and only in `.ask` mode.
     public func hookEvaluate(
         host: HookHost,
         stdin: String,
@@ -364,7 +364,8 @@ public struct ServiceClient: Sendable {
         ownerObserves: @Sendable (HookHost) -> Bool = { _ in false }
     ) async -> HookWire {
         func unavailable(_ failure: HookDaemonFailure) -> HookWire {
-            let observes = (failure == .unreachable || failure == .timeout) && ownerObserves(host)
+            // Only an absent daemon; an explicit RV_HOOK_WHEN_DOWN=deny wins.
+            let observes = whenDown == .ask && failure == .unreachable && ownerObserves(host)
             return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: observes)
         }
         guard let transport else {

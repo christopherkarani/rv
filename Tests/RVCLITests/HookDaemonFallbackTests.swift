@@ -81,18 +81,19 @@ struct HookDaemonFallbackTests {
     }
 
     @Test(arguments: HookHost.allCases)
-    func ownerObserveStepsAsideOnlyForAnAbsentOrSlowDaemon(host: HookHost) {
+    func ownerObserveStepsAsideOnlyForAnAbsentDaemon(host: HookHost) {
         let allow = productionHostCodec(host).encodeAllow()
         let stepAside = HookWire(
             stdout: allow.stdout, exitCode: allow.exitCode, stderr: HookObserveFallback.message + "\n")
         for failure in HookDaemonFailure.allCases {
             for mode in [HookWhenDown.ask, .deny] {
                 let wire = HookDaemonFallback.wire(host: host, failure: failure, mode: mode, ownerObserves: true)
-                if failure == .unreachable || failure == .timeout {
+                if failure == .unreachable {
                     #expect(wire == stepAside)
                 } else {
-                    // Observe never softens impersonation or a malformed reply.
-                    #expect(wire == HookDaemonFallback.wire(host: host, failure: failure, mode: .deny))
+                    // A slow daemon (which an agent can cause) keeps the mode's
+                    // render; impersonation and malformed replies still deny.
+                    #expect(wire == HookDaemonFallback.wire(host: host, failure: failure, mode: mode))
                 }
             }
         }
@@ -113,10 +114,15 @@ struct HookDaemonFallbackTests {
         let observes: @Sendable (HookHost) -> Bool = { _ in true }
         let missing = try isolatedClient(transport: nil)
         let unreachable = await missing.hookEvaluate(
-            host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes)
+            host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
         #expect(unreachable == HookDaemonFallback.wire(
-            host: .claude, failure: .unreachable, mode: .deny, ownerObserves: true))
+            host: .claude, failure: .unreachable, mode: .ask, ownerObserves: true))
         #expect(unreachable.stdout.isEmpty && unreachable.exitCode == 0)
+
+        // An explicit RV_HOOK_WHEN_DOWN=deny is the stricter choice and wins.
+        let explicitDeny = await missing.hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes)
+        #expect(explicitDeny == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny))
 
         let slow = ScriptedTransport(
             ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
@@ -124,7 +130,8 @@ struct HookDaemonFallbackTests {
         )
         let timeout = try await isolatedClient(transport: slow).hookEvaluate(
             host: .cursor, stdin: "{}", whenDown: .ask, ownerObserves: observes)
-        #expect(timeout.stdout == "{\"permission\":\"allow\"}\n")
+        #expect(timeout == HookDaemonFallback.wire(host: .cursor, failure: .timeout, mode: .ask),
+                "a slow daemon still asks under observe")
 
         let skewed = ScriptedTransport(
             ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),

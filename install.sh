@@ -18,7 +18,7 @@
 # RV_INSTALL_MODE picks the guard mode setup starts in: unset or `enforce`
 # runs plain `rv setup` (which never changes an existing guard.mode);
 # `observe` runs `rv setup --observe` (log what rv would
-# block, block nothing but rv's own self-protection). Any other value is
+# block; while rvd runs, only rv's own self-protection still blocks). Any other value is
 # refused before anything is downloaded or staged.
 set -eu
 

@@ -21,6 +21,9 @@
  *   RV_WHEN_DOWN_OBSERVE (the host's allow wire, plus a stderr notice) is
  *   never parsed from the environment: rv.c selects it only when the
  *   owner's config.json puts the host in observe mode (observe_gate.h).
+ *   It applies to UNREACHABLE only; TIMEOUT under it renders as ask,
+ *   because a live but slow rvd would have enforced rv's self-protection
+ *   and an agent can make rvd slow.
  * Every case carries a distinct, actionable message. Mirrored by
  * `RVCLI/Service/HookDaemonFallback.swift`.
  */

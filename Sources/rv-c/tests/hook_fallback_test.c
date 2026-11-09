@@ -268,9 +268,17 @@ static void test_observe(void) {
     for (h = 0; h < HOST_COUNT; h++) {
         const char *host = kHosts[h];
         struct RvHookFallback r;
-        for (f = 0; f < DOWN_COUNT; f++) {
-            snprintf(name, sizeof name, "%s_observe_down_%d", host, (int)kDown[f]);
-            expect_exact(name, host, kDown[f], RV_WHEN_DOWN_OBSERVE, observe_allow_out(host), kObserveErr, 0);
+        struct RvHookFallback ask;
+        snprintf(name, sizeof name, "%s_observe_unreachable", host);
+        expect_exact(name, host, RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_OBSERVE,
+                     observe_allow_out(host), kObserveErr, 0);
+        /* A live but slow daemon would have applied rv's self-protection, and
+         * an agent can make it slow: a timeout keeps the default ask render. */
+        snprintf(name, sizeof name, "%s_observe_timeout", host);
+        render(name, host, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_OBSERVE, &r);
+        render(name, host, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_ASK, &ask);
+        if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code) {
+            fail(name, "timeout under observe must render like ask");
         }
         /* Observe never softens impersonation, a malformed reply or bad input. */
         for (f = 0; f < HARD_COUNT; f++) {

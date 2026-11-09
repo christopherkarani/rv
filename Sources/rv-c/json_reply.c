@@ -577,14 +577,28 @@ static int value_is(const char *v, size_t n, const char *want) {
 }
 
 /* A string value is returned in *str (caller frees); any other value is
- * skipped and *str stays NULL. */
+ * skipped and *str stays NULL. A non-ASCII string is an error: rvd
+ * lowercases Unicode, so ASCII matching here could read such a value
+ * differently (KELVIN SIGN lowercases to k). */
 static int string_or_skip(struct Cur *c, int depth, char **str, size_t *len) {
+    size_t i;
     *str = NULL;
     *len = 0;
-    if (peek(c) == '"') {
-        return parse_string(c, str, len);
+    if (peek(c) != '"') {
+        return skip_value(c, depth);
     }
-    return skip_value(c, depth);
+    if (parse_string(c, str, len) != 0) {
+        return -1;
+    }
+    for (i = 0; i < *len; i++) {
+        if ((unsigned char)(*str)[i] >= 0x80) {
+            free(*str);
+            *str = NULL;
+            c->err = 1;
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /* guard.mode, nested or flat: empty or non-string is unset; a non-empty

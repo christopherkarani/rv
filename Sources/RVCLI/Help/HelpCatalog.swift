@@ -453,7 +453,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "observe",
-                    description: "Never relaxes rv's own protection (rv admin, rv's config)"
+                    description: "Keeps rv's own protection (rv admin, rv's config) while rvd runs"
                 ),
             ]),
         ],

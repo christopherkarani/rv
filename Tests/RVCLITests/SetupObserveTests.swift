@@ -83,6 +83,22 @@ struct SetupObserveTests {
         }
     }
 
+    @Test func brokenHook_countsAsEnforcing_soObserveNeedsTheOwner() async throws {
+        try await withObserveHome { home, layout, environment in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(environment).exitCode == 0)
+            // A hook whose baked rv-cli vanished reads broken, but it still fires.
+            try FileManager.default.removeItem(atPath: home.appendingPathComponent("bin/rv-cli").path)
+            let installations = try SetupRun.inspectInstallations(layout: layout, env: environment)
+            try #require(installations.state(for: .grok) == .broken)
+            let probe = ObserveAuthProbe(allow: false)
+            let outcome = await observeSetup(environment, probe: probe)
+            #expect(outcome.exitCode == 77)
+            #expect(probe.calls == 1)
+            #expect(try guardMode(home) == nil)
+        }
+    }
+
     @Test func overEnforcingInstall_ownerAuthenticates_writesObserve() async throws {
         try await withObserveHome { home, layout, environment in
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)

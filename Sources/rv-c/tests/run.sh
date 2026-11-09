@@ -453,17 +453,18 @@ if [[ "$down_ready" -eq 1 ]]; then
   fi
   printf 'rv-c daemon-down fallback: ask/deny rendering passed\n'
 
-  # Observe mode in the owner's config: an absent daemon steps aside with
+  # Observe mode in the owner's config: an unreachable daemon steps aside with
   # the host's allow wire and a stderr notice. RV_GUARD_MODE and
-  # RV_HOOK_WHEN_DOWN never turn it on; a per-host block or an
-  # organization policy directory keeps the normal fallback.
+  # RV_HOOK_WHEN_DOWN never turn it on; an explicit RV_HOOK_WHEN_DOWN=deny,
+  # a per-host block or an organization policy directory keeps the normal
+  # fallback.
   expect_observe() {
     local name="$1" host="$2" want_out="$3"
     local st
     rm -f "$OUT/observe-$name.argv"
     set +e
     printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
-      | env ${DOWN_ENV[@]+"${DOWN_ENV[@]}"} RV_HOOK_WHEN_DOWN=deny \
+      | env ${DOWN_ENV[@]+"${DOWN_ENV[@]}"} \
         RV_C_ARGV_LOG="$OUT/observe-$name.argv" "$PROBE/rv" hook --host "$host" \
         >"$OUT/observe-$name.json" 2>"$OUT/observe-$name.err"
     st=$?
@@ -491,6 +492,7 @@ if [[ "$down_ready" -eq 1 ]]; then
     printf 'rv-c tests: malformed input must deny under observe\n' >&2
     exit 1
   fi
+  expect_down observe-explicit-deny claude deny 0 '"permissionDecision":"deny"'
   printf '{"guard":{"mode":"observe","hosts":{"claude":"block"}}}' > "$OBSERVE_CONFIG"
   expect_down observe-host-block claude "" 0 '"permissionDecision":"ask"'
   printf '{"guard":{"mode":"observe"}}' > "$OBSERVE_CONFIG"

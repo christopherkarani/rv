@@ -74,6 +74,11 @@ static void test_fail_closed(void) {
     expect_config("dup_host",
                   "{\"guard\":{\"hosts\":{\"claude\":\"block\",\"claude\":\"observe\"}}}", "claude", 0);
     expect_config("nul_in_value", nul_value, "claude", 0);
+    /* Swift lowercases Unicode (KELVIN SIGN -> k), so "BLOC\u212A" is block
+     * to rvd; any non-ASCII value byte is enforce here, never a fall-through. */
+    expect_config("non_ascii_host_value",
+                  "{\"guard\":{\"mode\":\"observe\",\"hosts\":{\"claude\":\"BLOC\\u212A\"}}}", "claude", 0);
+    expect_config("non_ascii_mode_value", "{\"guard\":{\"mode\":\"obs\xc3\xa9rve\"}}", "claude", 0);
     if (rv_guard_config_observes(NULL, 0, "claude") != 0) fail("null_json", "observe");
     {
         const char flat[] = "{\"guard.mode\":\"observe\"}";

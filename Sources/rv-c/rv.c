@@ -316,12 +316,15 @@ static int owner_chose_observe(const char *host) {
 /* No CLI replay: neither a transport failure nor malformed input grants
  * authority. Renders the classified fallback (hook_fallback.h): input
  * failures always deny; daemon-unavailable classes follow
- * RV_HOOK_WHEN_DOWN (ask by default), except that an absent or slow daemon
- * steps aside when the owner chose observe mode. */
+ * RV_HOOK_WHEN_DOWN (ask by default), except that an unreachable daemon
+ * steps aside when the owner chose observe mode and RV_HOOK_WHEN_DOWN is
+ * not deny. */
 static void fail_hook(const char *host, enum RvHookFailure failure) {
     struct RvHookFallback fallback;
     enum RvWhenDown mode = rv_when_down_parse(getenv(RV_HOOK_WHEN_DOWN_ENV));
-    if ((failure == RV_HOOK_FAIL_UNREACHABLE || failure == RV_HOOK_FAIL_TIMEOUT)
+    /* Only an absent daemon (a slow one would still enforce rv's
+     * self-protection); an explicit RV_HOOK_WHEN_DOWN=deny is stricter and wins. */
+    if (mode == RV_WHEN_DOWN_ASK && failure == RV_HOOK_FAIL_UNREACHABLE
         && owner_chose_observe(host)) {
         mode = RV_WHEN_DOWN_OBSERVE;
     }

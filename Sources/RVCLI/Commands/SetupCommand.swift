@@ -132,7 +132,7 @@ enum SetupServiceWarning {
         "Warning: the RV background service (rvd) is not answering. Installed hooks will block or prompt on every command until it is up. Run `rv doctor`."
     /// Under observe a missing daemon makes hooks step aside instead.
     static let observeText =
-        "Warning: the RV background service (rvd) is not answering. In observe mode hooks let every command run unchecked and unlogged until it is up. Run `rv doctor`."
+        "Warning: the RV background service (rvd) is not answering. In observe mode hooks let commands run unchecked and unlogged while it is down (a slow rvd still prompts). Run `rv doctor`."
 
     static func needed(hasWiredHosts: Bool, serviceUp: Bool) -> Bool {
         hasWiredHosts && serviceUp == false
