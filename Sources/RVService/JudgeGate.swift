@@ -406,7 +406,7 @@ public enum JudgeRuntime {
         // A bundle that cannot LOAD is unavailable: packs-only plus a
         // note (doctor surfaces it), never an eternal Ask loop.
         guard let bundle = selection.bundle else {
-            return (packsOnlyFloor(result, command: command), logRow(
+            return (packsOnlyFloor(result, command: command, scriptGraphResolved: allowSafeLane), logRow(
                 guardMode: inputs.guardMode, subject: .live(result),
                 verdict: nil, action: nil, engine: selection.engine,
                 note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
@@ -424,7 +424,9 @@ public enum JudgeRuntime {
         )
         // Only enforce floors an unscored allow; the log keeps the pack
         // result, as for engine-missing above.
-        if case .unavailable = run { return (packsOnlyFloor(reading.outcome, command: command), row) }
+        if case .unavailable = run {
+            return (packsOnlyFloor(reading.outcome, command: command, scriptGraphResolved: allowSafeLane), row)
+        }
         return (reading.outcome, row)
     }
 
@@ -505,8 +507,22 @@ public enum JudgeRuntime {
 
     /// Packs-only (no judge could score): an inline interpreter program the
     /// packs masked as data, carrying spawn/eval/delete/secret markers, is
-    /// indeterminate rather than an unreviewed allow.
-    static func packsOnlyFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+    /// indeterminate rather than an unreviewed allow. So is a runner whose
+    /// package-script graph could not be resolved (`scriptGraphResolved`
+    /// false): nobody has read what it executes, so a human decides. A
+    /// runner with no package.json at all resolves clear (it executes
+    /// nothing), so everyday `npm test` outside a package is not floored.
+    static func packsOnlyFloor(
+        _ result: EvaluationResult, command: ShellCommand, scriptGraphResolved: Bool = true
+    ) -> EvaluationResult {
+        guard case .allow = result.decision else { return result }
+        if !scriptGraphResolved {
+            return EvaluationResult(
+                outcome: .indeterminate(.packageScriptUnresolved),
+                matchingView: result.matchingView,
+                analysis: result.analysis
+            )
+        }
         guard InlineProgramGuard.requiresJudge(command) else { return result }
         return EvaluationResult(
             outcome: .indeterminate(.inlineProgramNeedsJudge),

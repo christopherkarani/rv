@@ -10,7 +10,7 @@ import RVDomain
 /// its `commandName`, and `sh`/`bash`/`zsh -c`, `eval` and `env -S` payloads
 /// recurse. Shared by the inline-program and self-protection floors; never
 /// evaluates policy.
-func launchedCommands(_ raw: String) -> [[String]] {
+package func launchedCommands(_ raw: String) -> [[String]] {
     launchedCommandHeads(raw).filter { $0.speculative == false && $0.truncated == false }.map(\.argv)
 }
 

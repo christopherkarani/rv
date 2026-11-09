@@ -305,14 +305,14 @@ struct PackageScriptGateTests {
         }
     }
 
-    @Test("runner with no package.json anywhere is unresolved, not clear")
-    func missingPackageUnresolved() throws {
+    @Test("runner with no package.json anywhere executes nothing: clear")
+    func missingPackageClear() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-scriptgate-empty-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        guard case .unresolved = Self.evaluate("npm test", cwd: dir) else {
-            Issue.record("missing package.json must be unresolved")
+        guard case .clear = Self.evaluate("npm test", cwd: dir) else {
+            Issue.record("missing package.json with nothing earlier must be clear")
             return
         }
     }
