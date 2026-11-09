@@ -631,4 +631,32 @@ import Testing
         }
     }
 }
+
+@Test func sanitizedPATHKeepsDenyingSensitiveFilesAfterImpliedBudgetIsSpent() {
+    // One dense directory spends the shared implied budget; a later PATH
+    // directory's `.env` must still get its deny entry.
+    let dense = (0..<200).map { "tool\($0)" }
+    let probe = ContainedPATHProbe(
+        realpath: { path in
+            guard path.hasPrefix("/opt/dense/bin/tool") else { return path }
+            let name = (path as NSString).lastPathComponent
+            return "/cellar/\(name)/libexec/\(name)"
+        },
+        isDirectory: { ["/opt/dense/bin", "/opt/late/bin"].contains($0) },
+        isExecutable: { $0.hasSuffix("/.env") == false },
+        listDirectory: { directory in
+            switch directory {
+            case "/opt/dense/bin": dense
+            case "/opt/late/bin": ["first", "second", ".env"]
+            default: []
+            }
+        }
+    )
+    let sanitized = ContainedPATH.sanitize(
+        hostPATH: "/opt/dense/bin:/opt/late/bin", hostHome: "/Users/test",
+        agentBin: nil, probe: probe
+    )
+    #expect(sanitized.impliedDirectories.count == ContainedPATH.maxImpliedDirectories)
+    #expect(sanitized.sensitiveFiles.contains("/opt/late/bin/.env"))
+}
 #endif

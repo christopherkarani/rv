@@ -449,7 +449,9 @@ public enum ContainedPATH {
                 {
                     sensitive.append(full)
                 }
-                if implied.count >= maxImpliedDirectories { break }
+                // Keep listing: a spent implied budget must not end the
+                // sensitive-file collection above for this directory.
+                if implied.count >= maxImpliedDirectories { continue }
                 guard let target = probe.realpath(full), target != full else { continue }
                 if probe.isDirectory(target) {
                     if impliedSeen.insert(target).inserted,
