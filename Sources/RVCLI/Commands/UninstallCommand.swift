@@ -23,9 +23,12 @@ struct Uninstall: AsyncParsableCommand {
     func run() async throws {
         // Uninstall sheds oversight (hooks, config, LaunchAgent): a
         // same-user agent must not run it unattended. One fresh
-        // device-owner authentication, then the existing ceremony.
+        // device-owner authentication, then the existing ceremony. With rvd
+        // down, a local TTY-only confirmation stands in so the human is
+        // never locked out of removing rv (DaemonDownOwnerConfirmation).
         do {
-            try await CLIOwnerAuth.requireAuthenticated()
+            try await CLIOwnerAuth.requireAuthenticatedOrLocalWhenDaemonDown(
+                reason: CLIOwnerAuth.reason, action: .uninstall)
         } catch {
             let output = setupFailureOutput(.ownerAuthenticationRequired, command: .uninstall)
             try CeremonyCLI.emit(SetupOutcome(

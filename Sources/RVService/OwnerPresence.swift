@@ -20,8 +20,10 @@ protocol OwnerPasswordChecking: Sendable {
 /// `unix_chkpwd`. The helper refuses to check any other account for a
 /// non-root caller, reads the password from a pipe (never argv), and exits 0
 /// only when it matches. Accounts without a usable password fail.
-struct UnixChkpwdChecker: OwnerPasswordChecking {
-    static let candidates = ["/usr/sbin/unix_chkpwd", "/sbin/unix_chkpwd"]
+/// The CLI also runs it directly for the daemon-down `rv uninstall` /
+/// `rv host mode` fallback, which unlocks only those local actions, never rvd.
+package struct UnixChkpwdChecker: OwnerPasswordChecking {
+    package static let candidates = ["/usr/sbin/unix_chkpwd", "/sbin/unix_chkpwd"]
     /// Longest password passed to the helper (its own limit is 512).
     static let maxPasswordBytes = 511
     /// Longest wait for the helper. pam_unix delays a failure by ~2 s, and
@@ -29,9 +31,11 @@ struct UnixChkpwdChecker: OwnerPasswordChecking {
     static let timeout: DispatchTimeInterval = .seconds(10)
 
     /// Helper paths tried in order; tests point this at a stand-in.
-    var helpers: [String] = Self.candidates
+    package var helpers: [String] = Self.candidates
 
-    func check(_ password: String) -> Bool? {
+    package init() {}
+
+    package func check(_ password: String) -> Bool? {
         guard let helper = helpers.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
               let user = Self.userName()
         else { return nil }
