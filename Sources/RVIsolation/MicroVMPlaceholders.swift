@@ -24,9 +24,12 @@ import Synchronization
 /// anything a host process put there stays.
 ///
 /// If the host process dies mid-run, placeholders can be left in the
-/// project. An empty `.rv`, `.config/rv`, `.git/hooks` or `.vscode`, an
-/// empty `.envrc`, or a `{}` `.mcp.json` changes nothing for the tools that
-/// read them.
+/// project, and some of them change behavior. A leftover empty `.envrc`
+/// makes direnv report it as blocked and hides a `.envrc` in a parent
+/// directory. A leftover empty `.claude` (or other agent directory) is
+/// mounted read-only whole by later micro-VM runs, so the agent cannot
+/// create `.claude/commands` or similar inside it. rv does not clean these
+/// up on its own; remove them by hand.
 final class MicroVMControlPlaceholders: Sendable {
     static let shared = MicroVMControlPlaceholders()
 
@@ -108,11 +111,16 @@ final class MicroVMControlPlaceholders: Sendable {
         func makeFile(_ path: String, _ contents: [UInt8]) -> Bool {
             let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
             guard fd >= 0 else { return false }
-            // Recorded before the write: a short write still leaves a file rv made.
-            created.append(Created(path: path, isDirectory: false, contents: contents))
             let written = contents.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
             close(fd)
-            return written == contents.count
+            guard written == contents.count else {
+                // A partial placeholder would not match `contents`, so removal
+                // would skip it: unlink it now, it is a file rv just made.
+                unlink(path)
+                return false
+            }
+            created.append(Created(path: path, isDirectory: false, contents: contents))
+            return true
         }
         func make(_ node: MicroVMControlLayout.Node, at path: String) -> Bool {
             switch node {
