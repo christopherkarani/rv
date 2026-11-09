@@ -294,7 +294,8 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 AttestTTYRedemptionCall(params: params),
                 using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs
+                // rvd holds the reply until the owner answers its prompt.
+                timeoutMs: Self.confirmOwnerActionTimeoutMs
             )
             return .success(reply)
         } catch let error as IPCCallError {

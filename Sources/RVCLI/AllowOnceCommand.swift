@@ -12,9 +12,16 @@ enum AllowOnceAttestError: Error, Equatable {
     /// Daemon unreachable (down, timeout, transport). Retry later; the
     /// pending code stays live.
     case serviceUnavailable
-    /// Daemon refused (no `.cli` role: unenrolled service/binary).
-    /// Approve in RVOperatorUI or enroll via `rv setup`.
+    /// rvd refused the request itself (an unidentified caller, or a
+    /// malformed or non-redeemable grant).
     case serviceDenied
+    /// rvd has no record of issuing this code: it was pre-armed with
+    /// `rv allow-once mint`, or rvd restarted since the deny. rvd shows its
+    /// owner prompt only for codes it issued.
+    case notIssuedByService
+    /// rvd ran the owner check and it refused (declined, wrong password,
+    /// locked out, another prompt open, no prompt possible).
+    case notApproved(ConfirmOwnerActionReply)
 }
 
 enum AllowOnceCLI {
@@ -53,20 +60,22 @@ enum AllowOnceCLI {
         AllowOnceStore.makeLive(home: home)
     }
 
-    /// Redeems one unlock code into one exact-command grant. Ceremony order
-    /// is load-bearing (Step 8B.1 trust anchor — the pinned genuine CLI
-    /// enforces it; the daemon trusts nothing else about this process):
+    /// Redeems one unlock code into one exact-command grant. The owner's
+    /// approval happens in rvd, not here: on macOS rvd shows its own
+    /// Touch ID or password prompt naming the code it issued; on Linux this
+    /// process reads the login password and rvd verifies it. Nothing about
+    /// this process is trusted by rvd. Order:
     ///
     /// 1. Gates cheapest-first (TTY, robot, code shape).
-    /// 2. Atomically read display row + fingerprint (pre-LA review).
-    /// 3. LocalAuthentication naming the reviewed grant (B-F6).
+    /// 2. Atomically read display row + fingerprint (pre-prompt review).
+    /// 3. Linux: read the login password under the reviewed grant (B-F6).
     /// 4. Re-read + compare fingerprint AND full row AND payload digest
     ///    (TOCTOU bind: a swapped file aborts with redemptionChanged
     ///    instead of attesting a row the human never reviewed; the
     ///    fingerprint covers the action, the row covers cwd/expiry/
     ///    display, the digest covers the hidden payload).
-    /// 5. Attest to the daemon (plants the memory grant; daemon re-checks
-    ///    role + fields + per-epoch code single-use).
+    /// 5. Attest to the daemon (rvd runs the owner check, re-checks the
+    ///    fields and per-epoch code single-use, then plants the grant).
     /// 6. Flip the file row as a display projection (best-effort: a flip
     ///    failure after a planted attestation is a display gap, still
     ///    granted; an attest failure leaves pending intact for retry).
@@ -85,24 +94,41 @@ enum AllowOnceCLI {
             && before.payloadDigest == after.payloadDigest
     }
 
-    /// Device-owner authentication prompt naming the reviewed grant.
-    /// The redacted command plus cwd alone under-specifies the grant (many
-    /// rows share a head token), so a deny-minted row also names its rule.
-    /// B1: the invocation tag names erased wrappers (`sudo`, `FOO=…`) the
-    /// normalized redaction hides, so the prompt describes the approved
-    /// spelling, not just its view.
+    /// The CLI's description of the grant, from the pending file. Linux
+    /// shows it above the password prompt. The file keeps only the
+    /// command's head (a full command can carry a secret), so this names
+    /// the rule and cwd too; on macOS rvd's own prompt names the whole
+    /// command from what rvd issued. B1: the invocation tag names erased
+    /// wrappers (`sudo`, `FOO=…`) the normalized redaction hides.
     static func redeemReason(row: AllowOnceListRow) -> String {
-        let invoked: String
-        if let tag = row.invocationDisplay {
-            invoked = "\(tag) \(row.commandRedacted)"
-        } else {
-            invoked = row.commandRedacted
+        AllowOncePromptText.reason(
+            command: AllowOncePromptText.invoked(
+                view: row.commandRedacted, invocationDisplay: row.invocationDisplay),
+            cwd: row.cwd,
+            ruleID: row.ruleID)
+    }
+
+    /// Why rvd's owner check refused a redeem. The pending code stays live.
+    static func notApprovedMessage(_ refused: ConfirmOwnerActionReply) -> String {
+        switch refused.outcome {
+        case .declined:
+            return "not approved (the Touch ID or password prompt was cancelled, failed or timed out); the code stays live"
+        case .wrongPassword:
+            return "wrong password; nothing was allowed and the code stays live"
+        case .lockedOut:
+            let wait = refused.retryAfterSeconds.map { " Try again in \($0 / 60 + 1) min." } ?? ""
+            return "too many failed owner checks; owner approvals are locked.\(wait)"
+        case .busy:
+            return "another owner approval is in progress; try again when it finishes"
+        case .unavailable:
+            #if canImport(LocalAuthentication)
+            return "rvd cannot show a Touch ID or password prompt here (no passcode set or no login session)"
+            #else
+            return "rvd could not check the password (unix_chkpwd missing or not answering)"
+            #endif
+        case .proofRequired, .approved:
+            return "rvd did not approve this request; nothing was allowed"
         }
-        let base = "Allow once: \(invoked) in \(row.cwd.rawValue)"
-        if let ruleID = row.ruleID {
-            return "\(base) (rule \(ruleID.rawValue))."
-        }
-        return "\(base)."
     }
 
     /// A missing pre-LA read skips LA entirely and reports the precise
@@ -167,6 +193,10 @@ enum AllowOnceCLI {
         switch attested {
         case .success(let response):
             reply = response
+            if let refused = response.ownerCheck {
+                // Nothing planted; the pending code stays live.
+                throw AllowOnceAttestError.notApproved(refused)
+            }
             guard response.planted else {
                 // m1: double-attest — this code already planted this epoch
                 // (a concurrent genuine redeem, or a retry after the success
@@ -186,6 +216,8 @@ enum AllowOnceCLI {
             switch error {
             case .noTransport, .transport:
                 throw AllowOnceAttestError.serviceUnavailable
+            case .service(let refusal) where refusal == String(describing: IPCError.allowOnceNotFound):
+                throw AllowOnceAttestError.notIssuedByService
             case .service:
                 throw AllowOnceAttestError.serviceDenied
             }
@@ -256,7 +288,11 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        try await CLIOwnerAuth.requireAuthenticated()
+        try await CLIOwnerAuth.requireAuthenticated(
+            reason: "Authenticate to pre-arm a code to " + AllowOncePromptText.reason(
+                command: AllowOncePromptText.invoked(
+                    view: view.rawValue, invocationDisplay: Normalize.invocationDisplay(of: command)),
+                cwd: cwd, ruleID: nil))
         return try await store.mint(
             matchingView: view,
             cwd: cwd,
@@ -352,19 +388,17 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 exitCode: 2
             )
         } catch AllowOnceAttestError.serviceDenied {
-            #if os(Linux)
-            // rvd checks the password; a refusal is a wrong password or a
-            // lockout after repeated wrong ones. The code stays live.
             try ctx.fail(
-                "rv allow-once: rvd refused approval (wrong password, or too many recent attempts); the code stays live\n",
+                "rv allow-once: rvd refused this request (it could not identify the caller); nothing was allowed\n",
                 exitCode: 2
             )
-            #else
+        } catch AllowOnceAttestError.notIssuedByService {
             try ctx.fail(
-                "rv allow-once: service refused approval; enroll via `rv setup` or approve in RVOperatorUI\n",
+                "rv allow-once: rvd did not issue this code (pre-armed with `rv allow-once mint`, or rvd restarted since the deny); rerun the command for a fresh code\n",
                 exitCode: 2
             )
-            #endif
+        } catch AllowOnceAttestError.notApproved(let refused) {
+            try ctx.fail("rv allow-once: \(AllowOnceCLI.notApprovedMessage(refused))\n", exitCode: 2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
             try ctx.fail("rv allow-once: store unavailable\n", exitCode: 2)
         } catch AllowOnceAuthError.required {

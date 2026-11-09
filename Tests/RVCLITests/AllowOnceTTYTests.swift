@@ -21,10 +21,10 @@ struct AllowOnceTTYTests {
             )
         }
         #expect(AllowOnceCLI.redeemReason(row: row(ruleID: nil))
-            == "Allow once: git … in /tmp/ws.")
+            == "allow once \"git …\" in /tmp/ws")
         let rule = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
         #expect(AllowOnceCLI.redeemReason(row: row(ruleID: rule))
-            == "Allow once: git … in /tmp/ws (rule core.git:reset-hard).")
+            == "allow once \"git …\" in /tmp/ws (rule core.git:reset-hard)")
     }
 
     @Test func nonTTYMintRefuses() async throws {
@@ -421,7 +421,7 @@ struct AllowOnceTTYTests {
             invocationDisplay: "sudo"
         )
         #expect(AllowOnceCLI.redeemReason(row: row)
-            == "Allow once: sudo git … in /tmp/ws.")
+            == "allow once \"sudo git …\" in /tmp/ws")
     }
 }
 

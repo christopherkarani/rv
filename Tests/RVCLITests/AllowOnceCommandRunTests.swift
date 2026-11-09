@@ -560,4 +560,72 @@ struct AllowOnceCommandRunTests {
         let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
         #expect(lines.contains(sentence) == false)
     }
+
+    // MARK: rvd's owner check
+
+    private func pendingRedeem(
+        result: IPCResult
+    ) async throws -> (store: AllowOnceStore, transport: ScriptedTransport, outcome: Result<Void, any Error>) {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now)
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: result)
+        let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
+        do {
+            _ = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.redeem(
+                    code: code.rawValue, tty: tty, robot: false, store: store, now: now, client: client)
+            }
+            return (store, transport, .success(()))
+        } catch {
+            return (store, transport, .failure(error))
+        }
+    }
+
+    @Test func redeem_ownerCheckRefusalIsReportedAndKeepsThePendingCode() async throws {
+        let refused = ConfirmOwnerActionReply(outcome: .declined)
+        let run = try await pendingRedeem(result: .attestTTYRedemption(
+            AttestTTYRedemptionReply(planted: false, epoch: "e", ownerCheck: refused)))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("a refused owner check must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notApproved(refused))
+        // Not reconciled as an already-planted retry: the code stays live.
+        let rows = await run.store.list(now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(rows.allSatisfy { $0.kind == .pending })
+    }
+
+    @Test func redeem_aCodeRvdDidNotIssueIsReportedAsSuch() async throws {
+        let run = try await pendingRedeem(result: .error(.allowOnceNotFound))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("an unknown code must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notIssuedByService)
+    }
+
+    @Test func redeem_waitsForTheOwnerToAnswerRvdsPrompt() async throws {
+        let run = try await pendingRedeem(result: .attestTTYRedemption(
+            AttestTTYRedemptionReply(planted: true, epoch: "e")))
+        #expect(run.transport.lastSendTimeoutMs == ServiceClient.confirmOwnerActionTimeoutMs)
+    }
+
+    @Test func notApprovedMessagesNameWhatHappened() {
+        func text(_ outcome: ConfirmOwnerActionReply.Outcome, retry: Int? = nil) -> String {
+            AllowOnceCLI.notApprovedMessage(ConfirmOwnerActionReply(outcome: outcome, retryAfterSeconds: retry))
+        }
+        #expect(text(.declined).contains("cancelled, failed or timed out"))
+        #expect(text(.wrongPassword).contains("wrong password"))
+        #expect(text(.lockedOut, retry: 600).contains("Try again in 11 min"))
+        #expect(text(.busy).contains("another owner approval"))
+        for outcome in [ConfirmOwnerActionReply.Outcome.declined, .wrongPassword, .lockedOut, .busy, .unavailable] {
+            #expect(text(outcome).contains("RVOperatorUI") == false)
+            #expect(text(outcome).contains("rv setup") == false)
+        }
+    }
 }

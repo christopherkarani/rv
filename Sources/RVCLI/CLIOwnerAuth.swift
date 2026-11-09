@@ -27,14 +27,13 @@ enum AllowOnceAuthError: Error, Equatable {
 /// explicit `.authenticated` override; any other outcome — or none —
 /// fails closed, and tests never reach the live prompt.
 enum CLIOwnerAuth {
-    static let reason = "Authenticate to allow this command once."
-
-    /// The device owner approved this action.
+    /// The device owner approved this action. `reason` names the action:
+    /// the owner reads it in the prompt.
     ///
     /// macOS: runs LocalAuthentication. Linux: the owner's login password,
     /// verified by rvd (`OwnerConfirmation`), never just read and trusted
     /// here: a password this process merely reads proves nothing.
-    static func requireAuthenticated(reason: String = reason) async throws {
+    static func requireAuthenticated(reason: String) async throws {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
@@ -56,11 +55,12 @@ enum CLIOwnerAuth {
     }
 
     /// Owner proof for allow-once redeem, which carries it to rvd inside
-    /// `attestTTYRedemption`. macOS: runs LocalAuthentication and returns nil
-    /// (rvd trusts the pinned `.cli`). Linux: reads the login password from
-    /// the terminal and returns it unverified; rvd verifies it before it
-    /// plants anything, so callers must forward it, never act on it.
-    static func ownerProofForAttestation(reason: String = reason) async throws -> OwnerProof? {
+    /// `attestTTYRedemption`. macOS: no proof and no prompt here; rvd shows
+    /// its own Touch ID or password prompt, so the owner sees exactly one.
+    /// Linux: reads the login password from the terminal and returns it
+    /// unverified; rvd verifies it before it plants anything, so callers
+    /// must forward it, never act on it.
+    static func ownerProofForAttestation(reason: String) async throws -> OwnerProof? {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
@@ -68,9 +68,8 @@ enum CLIOwnerAuth {
             return nil
         }
         #if canImport(LocalAuthentication)
-        guard await liveOutcome(reason: reason) == .authenticated else {
-            throw AllowOnceAuthError.required
-        }
+        FileHandle.standardError.write(Data(
+            "rv allow-once: approve in the Touch ID or password prompt from rvd, which names the full command\n".utf8))
         return nil
         #else
         guard let password = OwnerConfirmation.readOwnerPassword(

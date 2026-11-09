@@ -25,7 +25,8 @@ struct Uninstall: AsyncParsableCommand {
         // same-user agent must not run it unattended. One fresh
         // device-owner authentication, then the existing ceremony.
         do {
-            try await CLIOwnerAuth.requireAuthenticated()
+            try await CLIOwnerAuth.requireAuthenticated(
+                reason: "Authenticate to uninstall rv (removes its hooks, config and background service).")
         } catch {
             let output = setupFailureOutput(.ownerAuthenticationRequired, command: .uninstall)
             try CeremonyCLI.emit(SetupOutcome(
