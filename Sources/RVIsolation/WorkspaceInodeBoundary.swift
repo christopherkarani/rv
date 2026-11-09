@@ -115,6 +115,11 @@ func workspacePublishDecision(
 private struct BoundaryMutable: Sendable {
     var volumeFD: Int32
     var savedFD: Int32
+    /// The snapshot keyed by the volume's spelling for the current publish.
+    /// A case-only rename on the volume moves a captured name, and its
+    /// subtree, to the new spelling. Equal to the snapshot until a publish
+    /// is planned.
+    var publishStamps: [String: WorkspaceInodeStamp]
     var released = false
     var didDetach = false
     /// Set when a saved file was truncated and the backup restore did not
@@ -182,7 +187,7 @@ final class WorkspaceInodeBoundary: Sendable {
         self.mountSource = mountSource
         self.imageDevice = imageDevice
         self.imageInode = imageInode
-        self.mutable = Mutex(BoundaryMutable(volumeFD: volumeFD, savedFD: savedFD))
+        self.mutable = Mutex(BoundaryMutable(volumeFD: volumeFD, savedFD: savedFD, publishStamps: snapshot))
         self.snapshot = snapshot
     }
 
@@ -664,11 +669,15 @@ final class WorkspaceInodeBoundary: Sendable {
     // MARK: Transactional publish
 
     /// One planned mutation of the saved tree. Steps run in this order:
-    /// new directories, staged new files, in-place updates, installs of
-    /// staged files and new symlinks, retirement of removed names, then
-    /// directory modes deepest first. A directory therefore stays writable
-    /// while its children change.
+    /// case-only renames of captured names (shallowest first), new
+    /// directories, staged new files, in-place updates, installs of staged
+    /// files and new symlinks, retirement of removed names, then directory
+    /// modes deepest first. A directory therefore stays writable while its
+    /// children change.
     private enum PublishStep {
+        /// Respell captured `from` as `to`, its case-only variant in the
+        /// same directory. `relative` is the new spelling.
+        case renameCase(from: String, to: String)
         case makeDirectory(String)
         case stageFile(String, mode_t)
         case updateFile(String, mode_t)
@@ -680,7 +689,7 @@ final class WorkspaceInodeBoundary: Sendable {
 
         var relative: String {
             switch self {
-            case .makeDirectory(let relative), .stageFile(let relative, _),
+            case .renameCase(_, let relative), .makeDirectory(let relative), .stageFile(let relative, _),
                 .updateFile(let relative, _), .replaceSymlink(let relative, _),
                 .installFile(let relative), .createSymlink(let relative, _),
                 .retire(let relative), .setDirectoryMode(let relative, _):
@@ -692,6 +701,8 @@ final class WorkspaceInodeBoundary: Sendable {
     /// How to put one applied step back. Each undo re-verifies the inode it
     /// touches before it mutates anything.
     private enum PublishUndo {
+        /// Put the captured spelling `original` (a last component) back.
+        case restoreCase(String, original: String, stamp: WorkspaceInodeStamp)
         case removeEmptyDirectory(String)
         case discardStage(String)
         case restoreFile(String, backup: String, mode: mode_t, stamp: WorkspaceInodeStamp)
@@ -703,7 +714,7 @@ final class WorkspaceInodeBoundary: Sendable {
 
         var relative: String {
             switch self {
-            case .removeEmptyDirectory(let relative), .discardStage(let relative),
+            case .restoreCase(let relative, _, _), .removeEmptyDirectory(let relative), .discardStage(let relative),
                 .restoreFile(let relative, _, _, _), .restoreMode(let relative, _, _),
                 .restoreSymlink(let relative, _), .removeCreated(let relative, _),
                 .removeLink(let relative, _), .unretire(let relative, _):
@@ -764,17 +775,31 @@ final class WorkspaceInodeBoundary: Sendable {
             links[relative] = target
         }
         let linkTable = WorkspaceLinkTable(links)
+        let present = volumeEntries.keys.sorted { (pathDepth($0), $0) < (pathDepth($1), $1) }
+        guard let caseInsensitive = savedTreeIsCaseInsensitive() else { return .stopped }
+        // Two volume names one case-insensitive directory cannot hold.
+        let collided = caseInsensitive ? caseVariantNames(present) : []
+        for relative in present where collided.contains(relative) {
+            reject(relative, .caseCollision)
+        }
+        guard let renames = planCaseRenames(volumeEntries, present: present, skipping: collided, reject: reject) else {
+            return .stopped
+        }
+        let stamps = publishStamps
         var makes: [PublishStep] = []
         var stages: [PublishStep] = []
         var updates: [PublishStep] = []
         var installs: [PublishStep] = []
         var modes: [PublishStep] = []
-        let present = volumeEntries.keys.sorted { (pathDepth($0), $0) < (pathDepth($1), $1) }
-        for relative in present {
+        // Saved inodes an on-volume name resolves to. None of them may be
+        // retired, whatever the snapshot says about another spelling.
+        var claimed = Set<WorkspaceInodeKey>()
+        for relative in present where collided.contains(relative) == false {
             if cancelClockAllowsTreeCopy() == false { return .stopped }
             guard let entry = volumeEntries[relative] else { continue }
             let saved = savedStamp(relative)
-            switch workspacePublishDecision(snapshot: snapshot[relative], saved: saved, onVolume: true) {
+            if let saved { claimed.insert(WorkspaceInodeKey(saved)) }
+            switch workspacePublishDecision(snapshot: stamps[relative], saved: saved, onVolume: true) {
             case .update:
                 guard let saved, saved.kind == entry.kind else {
                     reject(relative, .kindChanged)
@@ -825,15 +850,17 @@ final class WorkspaceInodeBoundary: Sendable {
             }
         }
         var removed = Set<String>()
-        for relative in snapshot.keys.sorted() where volumeEntries[relative] == nil {
+        for relative in stamps.keys.sorted() where volumeEntries[relative] == nil {
             if cancelClockAllowsTreeCopy() == false { return .stopped }
-            switch workspacePublishDecision(
-                snapshot: snapshot[relative],
-                saved: savedStamp(relative),
-                onVolume: false
-            ) {
+            let saved = savedStamp(relative)
+            switch workspacePublishDecision(snapshot: stamps[relative], saved: saved, onVolume: false) {
             case .remove:
-                removed.insert(relative)
+                if let saved, claimed.contains(WorkspaceInodeKey(saved)) {
+                    // Another spelling on the volume reaches this inode.
+                    reject(relative, .inodeChanged)
+                } else {
+                    removed.insert(relative)
+                }
             case .leave:
                 break
             case .update, .create, .reject:
@@ -842,7 +869,7 @@ final class WorkspaceInodeBoundary: Sendable {
         }
         var retires: [PublishStep] = []
         for relative in removed.sorted() where removed.contains(parentRelative(relative)) == false {
-            if snapshot[relative]?.kind == .directory {
+            if stamps[relative]?.kind == .directory {
                 switch removedSubtreeIsOwned(relative, removed: removed) {
                 case nil:
                     if cancelClockAllowsTreeCopy() == false { return .stopped }
@@ -860,7 +887,84 @@ final class WorkspaceInodeBoundary: Sendable {
         guard rejections.isEmpty else {
             return .rejected(rejections.sorted { $0.relative < $1.relative })
         }
-        return .planned(makes + stages + updates + installs + retires + modes.reversed())
+        return .planned(renames + makes + stages + updates + installs + retires + modes.reversed())
+    }
+
+    /// The snapshot as the current publish spells it.
+    private var publishStamps: [String: WorkspaceInodeStamp] {
+        mutable.withLock { $0.publishStamps }
+    }
+
+    /// Whether the saved tree folds case, as APFS and HFS+ do by default.
+    /// Nil is a clock stop. An unanswered query counts as folding: that
+    /// only adds refusals, never a write.
+    private func savedTreeIsCaseInsensitive() -> Bool? {
+        let fd = mutable.withLock { $0.savedFD }
+        guard fd >= 0 else { return true }
+        let sensitive = diskImagePerformWithinCopyClock(duplicating: fd) { copy in
+            let answer = fpathconf(copy, _PC_CASE_SENSITIVE)
+            close(copy)
+            return answer == 1
+        }
+        guard let sensitive else { return nil }
+        return sensitive == false
+    }
+
+    /// Volume names that share a directory and differ only by case.
+    private func caseVariantNames(_ present: [String]) -> Set<String> {
+        var groups: [String: [String]] = [:]
+        for relative in present {
+            let folded = parentRelative(relative) + "/" + (relative as NSString).lastPathComponent.lowercased()
+            groups[folded, default: []].append(relative)
+        }
+        return Set(groups.values.filter { $0.count > 1 }.joined())
+    }
+
+    /// Find case-only renames of captured names and respell the snapshot to
+    /// match, so the rest of the plan sees one name per inode.
+    ///
+    /// On a case-insensitive saved tree a volume name with no snapshot stamp
+    /// can resolve to a captured inode under another spelling (`README.md`
+    /// reaching `readme.md`). Planning that as an update plus a removal
+    /// would write the inode and then retire it. When the resolved inode is
+    /// the captured one, has one owner, sits in the same directory, and the
+    /// names differ only by case, the saved name is renamed first and every
+    /// later step uses the new spelling. Anything else that aliases a
+    /// captured inode is refused. Nil is a clock stop.
+    private func planCaseRenames(
+        _ volumeEntries: [String: TreeEntry],
+        present: [String],
+        skipping collided: Set<String>,
+        reject: (String, WorkspacePublishRejection.Reason) -> Void
+    ) -> [PublishStep]? {
+        var stamps = snapshot
+        mutable.withLock { $0.publishStamps = stamps }
+        var owners = workspaceUniqueInodeOwners(stamps)
+        var renames: [PublishStep] = []
+        for relative in present where collided.contains(relative) == false {
+            if cancelClockAllowsTreeCopy() == false { return nil }
+            guard stamps[relative] == nil,
+                let saved = savedStamp(relative),
+                let origin = owners[WorkspaceInodeKey(saved)]
+            else { continue }
+            guard parentRelative(origin) == parentRelative(relative),
+                (origin as NSString).lastPathComponent.lowercased()
+                    == (relative as NSString).lastPathComponent.lowercased(),
+                let captured = stamps[origin],
+                workspaceInodeAcceptableForPublish(captured: captured, live: saved)
+            else {
+                reject(relative, .inodeChanged)
+                continue
+            }
+            guard volumeEntries[origin] == nil else {
+                reject(relative, .caseCollision)
+                continue
+            }
+            renames.append(.renameCase(from: origin, to: relative))
+            workspaceRespellStamps(from: origin, to: relative, stamps: &stamps, owners: &owners)
+            mutable.withLock { $0.publishStamps = stamps }
+        }
+        return renames
     }
 
     private func parentRelative(_ relative: String) -> String {
@@ -871,7 +975,7 @@ final class WorkspaceInodeBoundary: Sendable {
         let parent = parentRelative(relative)
         let stage = workspacePublishStageName(for: (relative as NSString).lastPathComponent)
         let staged = parent.isEmpty ? stage : parent + "/" + stage
-        return snapshot[staged] == nil && volumeEntries[staged] == nil
+        return publishStamps[staged] == nil && volumeEntries[staged] == nil
     }
 
     /// Whether every saved name under a removed directory is itself a
@@ -991,6 +1095,8 @@ final class WorkspaceInodeBoundary: Sendable {
 
     private func apply(_ step: PublishStep, index: Int, journal: inout PublishJournal) -> StepResult {
         switch step {
+        case .renameCase(let origin, let relative):
+            return renameSavedCase(from: origin, to: relative)
         case .makeDirectory(let relative):
             guard let parent = savedParent(relative) else { return (false, []) }
             defer { close(parent.fd) }
@@ -1022,7 +1128,7 @@ final class WorkspaceInodeBoundary: Sendable {
             guard let status = fstatWithinCopyClock(fd), let live = stamp(of: status) else {
                 return (false, [])
             }
-            if let captured = snapshot[relative], acceptableSavedInode(captured, status) == false {
+            if let captured = publishStamps[relative], acceptableSavedInode(captured, status) == false {
                 return (false, [])
             }
             let old = modeBits(status.st_mode)
@@ -1032,6 +1138,28 @@ final class WorkspaceInodeBoundary: Sendable {
                 [.restoreMode(relative, mode: old, stamp: live)]
             )
         }
+    }
+
+    /// Respell a captured name in place. The old spelling must still be the
+    /// captured inode and the new spelling must already resolve to that same
+    /// inode (a case alias), so the rename only changes case and can never
+    /// replace another file. A resumed pass that already respelled it
+    /// renames the name onto itself.
+    private func renameSavedCase(from origin: String, to relative: String) -> StepResult {
+        guard let captured = publishStamps[relative], let parent = savedParent(relative) else {
+            return (false, [])
+        }
+        defer { close(parent.fd) }
+        let old = (origin as NSString).lastPathComponent
+        let new = parent.name
+        guard let before = fstatatWithinCopyClock(parent.fd, old), acceptableSavedInode(captured, before),
+            let alias = fstatatWithinCopyClock(parent.fd, new), sameInode(captured, alias)
+        else { return (false, []) }
+        let renamed = renameatWithinCopyClock(parent.fd) { fd in
+            old.withCString { from in new.withCString { to in renameat(fd, from, fd, to) } }
+        }
+        guard savedMutation(renamed) else { return (false, []) }
+        return (true, [.restoreCase(relative, original: old, stamp: captured)])
     }
 
     /// Write a new file under its staging name in the destination's
@@ -1103,7 +1231,7 @@ final class WorkspaceInodeBoundary: Sendable {
     /// Move a removed name into the rollback directory. The captured inode
     /// is re-verified first; the move keeps it intact for undo.
     private func retireSaved(_ relative: String, index: Int, journal: inout PublishJournal) -> StepResult {
-        guard let captured = snapshot[relative] else { return (false, []) }
+        guard let captured = publishStamps[relative] else { return (false, []) }
         if journal.rollbackReady == false {
             guard savedMutation(diskImageMkdirWithinCopyClock(rollbackPath, 0o700)) else {
                 return (false, [])
@@ -1130,7 +1258,7 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     private func replaceSavedSymlink(_ relative: String, target: String) -> StepResult {
-        guard let captured = snapshot[relative] ?? savedStamp(relative) else { return (false, []) }
+        guard let captured = publishStamps[relative] ?? savedStamp(relative) else { return (false, []) }
         guard let parent = savedParent(relative) else { return (false, []) }
         defer { close(parent.fd) }
         guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
@@ -1147,7 +1275,7 @@ final class WorkspaceInodeBoundary: Sendable {
     private func updateSavedFile(_ relative: String, mode: mode_t) -> StepResult {
         // A resumed create has no snapshot stamp. Its authority is the
         // live saved stamp, re-verified against the opened inode below.
-        guard let captured = snapshot[relative] ?? savedStamp(relative) else { return (false, []) }
+        guard let captured = publishStamps[relative] ?? savedStamp(relative) else { return (false, []) }
         guard let source = openVolume(relative, directory: false), source >= 0 else { return (false, []) }
         defer { close(source) }
         guard let dest = openSaved(relative, directory: false, writable: true), dest >= 0 else {
@@ -1243,6 +1371,15 @@ final class WorkspaceInodeBoundary: Sendable {
         guard let parent = savedParent(undo.relative) else { return false }
         defer { close(parent.fd) }
         switch undo {
+        case .restoreCase(_, let original, let stamp):
+            guard let status = fstatatWithinCopyClock(parent.fd, parent.name), sameInode(stamp, status) else {
+                return false
+            }
+            let name = parent.name
+            let renamed = renameatWithinCopyClock(parent.fd) { fd in
+                name.withCString { from in original.withCString { to in renameat(fd, from, fd, to) } }
+            }
+            return savedMutation(renamed)
         case .removeEmptyDirectory:
             return savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, AT_REMOVEDIR))
         case .discardStage:
@@ -1384,7 +1521,9 @@ final class WorkspaceInodeBoundary: Sendable {
     private func savedParent(_ relative: String) -> (fd: Int32, name: String)? {
         let parts = relative.split(separator: "/").map(String.init)
         guard let name = parts.last else { return nil }
-        var current = mutable.withLock { dup($0.savedFD) }
+        let held = mutable.withLock { (fd: dup($0.savedFD), stamps: $0.publishStamps) }
+        var current = held.fd
+        let stamps = held.stamps
         guard current >= 0 else { return nil }
         var walked = ""
         for part in parts.dropLast() {
@@ -1400,7 +1539,7 @@ final class WorkspaceInodeBoundary: Sendable {
                 close(next)
                 return nil
             }
-            if let captured = snapshot[walked] {
+            if let captured = stamps[walked] {
                 guard acceptableSavedInode(captured, status) else {
                     close(next)
                     return nil
@@ -1598,6 +1737,55 @@ final class WorkspaceInodeBoundary: Sendable {
             }
             return .success(())
         }
+    }
+}
+
+/// Device and inode of one stamp, the identity case handling compares.
+struct WorkspaceInodeKey: Hashable, Sendable {
+    var device: UInt64
+    var inode: UInt64
+
+    init(_ stamp: WorkspaceInodeStamp) {
+        device = stamp.device
+        inode = stamp.inode
+    }
+}
+
+/// Snapshot name for every inode exactly one name owns. An inode two names
+/// share is left out, so it can never be taken for a case-only rename.
+func workspaceUniqueInodeOwners(_ stamps: [String: WorkspaceInodeStamp]) -> [WorkspaceInodeKey: String] {
+    var owners: [WorkspaceInodeKey: String] = [:]
+    var shared = Set<WorkspaceInodeKey>()
+    for (relative, stamp) in stamps {
+        let key = WorkspaceInodeKey(stamp)
+        if owners.updateValue(relative, forKey: key) != nil { shared.insert(key) }
+    }
+    for key in shared { owners[key] = nil }
+    return owners
+}
+
+/// Move the stamp at `origin`, and every stamp under it when it is a
+/// directory, to the spelling `relative`. `owners` follows the move.
+func workspaceRespellStamps(
+    from origin: String,
+    to relative: String,
+    stamps: inout [String: WorkspaceInodeStamp],
+    owners: inout [WorkspaceInodeKey: String]
+) {
+    var moves: [(old: String, new: String)] = [(origin, relative)]
+    if stamps[origin]?.kind == .directory {
+        let originParts = origin.split(separator: "/")
+        for key in stamps.keys {
+            let parts = key.split(separator: "/")
+            guard parts.count > originParts.count, parts.starts(with: originParts) else { continue }
+            moves.append((key, relative + "/" + parts.dropFirst(originParts.count).joined(separator: "/")))
+        }
+    }
+    for move in moves {
+        guard let stamp = stamps.removeValue(forKey: move.old) else { continue }
+        stamps[move.new] = stamp
+        let key = WorkspaceInodeKey(stamp)
+        if owners[key] == move.old { owners[key] = move.new }
     }
 }
 

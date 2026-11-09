@@ -4,6 +4,41 @@ import Foundation
 import Testing
 @testable import RVIsolation
 
+@Suite("Workspace publish case respelling")
+struct WorkspacePublishRespellTests {
+    private func stamp(_ inode: UInt64, _ kind: WorkspaceInodeStamp.Kind) -> WorkspaceInodeStamp {
+        WorkspaceInodeStamp(device: 1, inode: inode, linkCount: 1, kind: kind)
+    }
+
+    /// A directory respell moves its whole subtree, and only that subtree.
+    @Test func respellingADirectoryMovesItsSubtree() {
+        var stamps: [String: WorkspaceInodeStamp] = [
+            "Utils": stamp(1, .directory),
+            "Utils/a.swift": stamp(2, .regular),
+            "Utils/Sub": stamp(3, .directory),
+            "Utils/Sub/b.swift": stamp(4, .regular),
+            "UtilsX": stamp(5, .regular),
+        ]
+        var owners = workspaceUniqueInodeOwners(stamps)
+        workspaceRespellStamps(from: "Utils", to: "utils", stamps: &stamps, owners: &owners)
+        #expect(Set(stamps.keys) == ["utils", "utils/a.swift", "utils/Sub", "utils/Sub/b.swift", "UtilsX"])
+        #expect(stamps["utils/Sub/b.swift"]?.inode == 4)
+        #expect(owners[WorkspaceInodeKey(stamp(4, .regular))] == "utils/Sub/b.swift")
+        #expect(owners[WorkspaceInodeKey(stamp(5, .regular))] == "UtilsX")
+    }
+
+    /// An inode two names share is never treated as one owner's.
+    @Test func sharedInodesHaveNoOwner() {
+        let owners = workspaceUniqueInodeOwners([
+            "a": stamp(7, .symlink),
+            "b": stamp(7, .symlink),
+            "c": stamp(8, .regular),
+        ])
+        #expect(owners[WorkspaceInodeKey(stamp(7, .symlink))] == nil)
+        #expect(owners[WorkspaceInodeKey(stamp(8, .regular))] == "c")
+    }
+}
+
 /// The workspace volume is case-sensitive; the saved tree under `/tmp` is
 /// case-insensitive APFS. A case-only rename on the volume must publish as a
 /// rename, never as an update of one inode followed by its retirement.
