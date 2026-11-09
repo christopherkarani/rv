@@ -325,6 +325,13 @@ import RVDomain
     #expect(Normalize.matchingView(of: #"$'\x72m -rf /'"#) == "rm -rf /")
 }
 
+@Test func normalize_ansiCUnicodeEscapes_decode() {
+    // bash and zsh decode \uHHHH / \UHHHHHHHH inside $'…' just like \xHH.
+    #expect(Normalize.matchingView(of: #"$'\u0072m' -rf /"#) == "rm -rf /")
+    #expect(Normalize.matchingView(of: #"$'\U00000072m' -rf /"#) == "rm -rf /")
+    #expect(Normalize.matchingView(of: #"rm $'-\u0072f' /"#) == "rm -rf /")
+}
+
 @Test func normalize_dataRoleAnsiC_staysMasked() {
     let echoed = Normalize.matchingView(of: "echo $'git reset --hard'")
     #expect(!echoed.rawValue.contains("reset"))

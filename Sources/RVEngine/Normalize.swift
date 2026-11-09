@@ -512,6 +512,24 @@ private func decodeAnsiCEscapes(_ inner: String) -> String {
             } else {
                 index = cursor
             }
+        case "u", "U":
+            // bash/zsh: \uHHHH and \UHHHHHHHH name a scalar, like \xHH.
+            let limit = escape == "u" ? 4 : 8
+            var hex = ""
+            var cursor = inner.index(after: next)
+            while hex.count < limit, cursor < inner.endIndex, inner[cursor].isASCII, inner[cursor].isHexDigit {
+                hex.append(inner[cursor])
+                cursor = inner.index(after: cursor)
+            }
+            if hex.isEmpty {
+                result.append(escape)
+                index = inner.index(after: next)
+            } else if let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) {
+                result.append(Character(scalar))
+                index = cursor
+            } else {
+                index = cursor
+            }
         case "0"..."7":
             var octal = String(escape)
             var cursor = inner.index(after: next)
