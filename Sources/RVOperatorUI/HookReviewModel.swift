@@ -38,34 +38,22 @@ extension XPCOperatorUIClient: OperatorHookUIBridge {}
 @Observable
 @MainActor
 public final class OperatorHookReviewModel {
-    public enum Connection: Equatable, Sendable {
-        case disconnected
-        case connecting
-        case connected
-        case failed(String)
-    }
+    public typealias Connection = ReviewConnection
 
-    public private(set) var connection: Connection = .disconnected
-    public private(set) var items: [UIHookReviewItemDTO] = []
-    public private(set) var selectedID: String?
-    public private(set) var bound: UIHookChallengeBundleDTO?
-    public private(set) var lastStatus: HookReviewStatus?
-    public private(set) var notice: String?
-    public private(set) var authenticating = false
-    /// Approval IDs that arrived after the initial baseline and have not
-    /// been opened yet. Drives the view's arrival signal (badge/bounce).
-    public private(set) var unseenApprovalIDs: Set<String> = []
-
+    private var session = ReviewSession<HookReview>()
     private let bridge: any OperatorHookUIBridge
     private let authenticator: OperatorAuthenticator
-    /// Bumped whenever the selection changes or clears. A bind reply is
-    /// applied only if the epoch it started under is still current, so a
-    /// slow reply for an earlier selection can never become `bound`.
-    private var selectionEpoch = 0
-    /// True while `deny()` is in flight: blocks select/authorize/deny so the
-    /// selection cannot move under the cancel it is addressing.
-    private var denying = false
-    private var seenApprovalIDs = Set<String>()
+
+    public var connection: Connection { session.connection }
+    public var items: [UIHookReviewItemDTO] { session.items }
+    public var selectedID: String? { session.selectedID }
+    public var bound: UIHookChallengeBundleDTO? { session.bound }
+    public var lastStatus: HookReviewStatus? { session.lastStatus }
+    public var notice: String? { session.notice }
+    public var authenticating: Bool { session.isAuthorizing }
+    /// Approval IDs that arrived after the initial baseline and have not
+    /// been opened yet. Drives the view's arrival signal (badge/bounce).
+    public var unseenApprovalIDs: Set<String> { session.arrivals.unseen }
 
     public init(
         bridge: any OperatorHookUIBridge,
@@ -75,70 +63,25 @@ public final class OperatorHookReviewModel {
         self.authenticator = authenticator
     }
 
-    public func connect() async {
-        guard connection != .connecting, connection != .connected else { return }
-        connection = .connecting
-        notice = nil
-        do {
-            try await bridge.connect()
-            connection = .connected
-            await refresh()
-            // Baseline: rows already pending when the app opens are not
-            // arrivals, so the arrival signal stays quiet for them.
-            markAllSeen()
-        } catch {
-            connection = .failed(describe(error))
-        }
-    }
+    public func connect() async { await send(.connectRequested) }
 
     /// One poll tick for the view's refresh loop: redial while the bridge
     /// is unreachable (self-heals after an rvd outage), otherwise refresh.
     /// Lists only; never authenticates.
-    public func maintain() async {
-        if connection == .connected {
-            await refresh()
-        } else {
-            await connect()
-        }
-    }
+    public func maintain() async { await send(.maintainTick) }
 
-    public func refresh() async {
-        guard connection == .connected else { return }
-        do {
-            items = try await bridge.hookList().items
-            trackArrivals()
-            if let selectedID, !items.contains(where: { $0.approvalID == selectedID }) {
-                clearSelection()
-            } else if let current = bound,
-                !items.contains(where: { $0.approvalID == current.item.approvalID }) {
-                bound = nil
-            }
-            notice = nil
-        } catch {
-            notice = describe(error)
-        }
-    }
+    public func refresh() async { await send(.refreshRequested) }
 
     /// Selects a hook wait and binds its review challenge. Binding is
     /// server-idempotent: re-selecting returns the same live challenge.
     /// Binding never authenticates: it only opens the review for reading.
-    public func select(_ id: String?) async {
-        guard id != selectedID, !authenticating, !denying else { return }
-        clearSelection()
-        guard let id, connection == .connected else { return }
-        selectedID = id
-        // Opening a request marks it seen: the human is looking at it.
-        unseenApprovalIDs.remove(id)
-        let epoch = selectionEpoch
-        do {
-            let bundle = try await bridge.hookBind(approvalID: id)
-            guard epoch == selectionEpoch else { return }
-            bound = bundle
-            notice = nil
-        } catch {
-            guard epoch == selectionEpoch else { return }
-            notice = describe(error)
-        }
+    public func select(_ id: String?) async { await send(.selectTapped(id)) }
+
+    /// False when the bound wait can never allow-once (file/http
+    /// actions carry no exact command). Nil from older servers means
+    /// available, matching previous behavior.
+    public var allowOnceAvailable: Bool {
+        bound?.item.allowOnceAvailable ?? true
     }
 
     /// Explicit Allow-once tap: one fresh device-owner authentication, then
@@ -148,152 +91,73 @@ public final class OperatorHookReviewModel {
     /// nothing: the server destroys the challenge for an unauthenticated
     /// completion, so reporting the outcome would burn the bound review
     /// the human can still retry. The selection stays bound.
-    /// False when the bound wait can never allow-once (file/http
-    /// actions carry no exact command). Nil from older servers means
-    /// available, matching previous behavior.
-    public var allowOnceAvailable: Bool {
-        bound?.item.allowOnceAvailable ?? true
-    }
-
-    public func allowOnce() async {
-        guard let bound, !authenticating, !denying,
-            bound.item.approvalID == selectedID
-        else { return }
-        guard allowOnceAvailable else {
-            notice = "Allow once is unavailable for this request."
-            return
-        }
-        authenticating = true
-        defer { authenticating = false }
-        let outcome = await authenticator.authenticate(reason: Self.allowReason)
-        guard outcome == .authenticated else {
-            notice = Self.notAuthenticatedNotice(outcome)
-            return
-        }
-        do {
-            let status = try await bridge.hookComplete(UIHookCompletion(
-                challengeID: bound.challenge.challengeID,
-                approvalID: bound.item.approvalID,
-                outcome: outcome))
-            lastStatus = status.status
-            if Self.isTerminal(status.status) {
-                clearSelection()
-            }
-            await refresh()
-        } catch {
-            notice = describe(error)
-        }
-    }
+    public func allowOnce() async { await send(.allowTapped) }
 
     /// Explicit Deny tap: denies the exact bound review without
     /// authenticating (deny grants nothing). Binds first when the review is
     /// selected but not yet bound, since deny addresses the live challenge.
-    public func deny() async {
-        guard let selectedID, !authenticating, !denying,
-            bound == nil || bound?.item.approvalID == selectedID
-        else { return }
-        denying = true
-        defer { denying = false }
-        do {
-            let target: UIHookChallengeBundleDTO
-            if let existing = bound {
-                target = existing
-            } else {
-                let epoch = selectionEpoch
-                let bundle = try await bridge.hookBind(approvalID: selectedID)
-                // The review vanished (refresh) while binding: deny nothing.
-                guard epoch == selectionEpoch else { return }
-                bound = bundle
-                target = bundle
-            }
-            let status = try await bridge.hookDeny(UIHookDeny(
-                challengeID: target.challenge.challengeID,
-                approvalID: target.item.approvalID))
-            lastStatus = status.status
-            clearSelection()
-            await refresh()
-        } catch {
-            notice = describe(error)
-        }
-    }
+    public func deny() async { await send(.denyTapped) }
 
     public func dismissNotice() {
-        notice = nil
+        _ = session.reduce(.dismissNotice)
     }
 
-    private func clearSelection() {
-        selectionEpoch += 1
-        selectedID = nil
-        bound = nil
-    }
-
-    /// Folds the freshly listed rows into the arrival signal: IDs never
-    /// listed before become unseen; IDs that vanished server-side
-    /// (expired, resolved elsewhere) stop being unseen.
-    private func trackArrivals() {
-        let current = Set(items.map(\.approvalID))
-        unseenApprovalIDs = unseenApprovalIDs
-            .intersection(current)
-            .union(current.subtracting(seenApprovalIDs))
-        seenApprovalIDs.formUnion(current)
-    }
-
-    private func markAllSeen() {
-        seenApprovalIDs.formUnion(items.map(\.approvalID))
-        unseenApprovalIDs.removeAll()
-    }
-
-    private static func notAuthenticatedNotice(_ outcome: UIAuthenticationOutcome) -> String {
-        switch outcome {
-        case .authenticated:
-            return "Request failed."
-        case .cancelled:
-            return "Authentication cancelled. The review is still open."
-        case .unavailable:
-            return "Device-owner authentication is unavailable."
-        case .timedOut:
-            return "Authentication timed out. The review is still open."
-        case .invalidated:
-            return "Authentication was invalidated. The review is still open."
-        case .failed:
-            return "Authentication failed. The review is still open."
+    private func send(_ event: ReviewSession<HookReview>.Event) async {
+        var queue = session.reduce(event)
+        while !queue.isEmpty {
+            let reply = await run(queue.removeFirst())
+            queue += session.reduce(reply)
         }
     }
 
-    private static func isTerminal(_ status: HookReviewStatus) -> Bool {
-        // Exhaustive: a new status breaks this switch until classified.
-        switch status {
-        case .allowedOnce, .ruleCreated, .denied, .consumed, .expired, .canceled, .timedOut:
-            return true
-        case .awaitingHuman, .awaitingAuthentication, .unknown:
-            return false
-        }
-    }
-
-    /// Fixed wording: server-supplied display names must not shape the
-    /// authentication prompt. The trusted review window already shows
-    /// exactly what is under review; the prompt proves presence only.
-    /// Distinct from the launch and action prompts so the human can tell
-    /// which type of authority the authentication is for.
-    private static let allowReason = "Authenticate to allow the selected coding-agent command once."
-
-    private func describe(_ error: any Error) -> String {
-        #if canImport(XPC)
-        if let error = error as? XPCOperatorUIClientError {
-            switch error {
-            case .denied:
-                return "Denied: review is no longer valid. Refresh and rebind."
-            case .authenticationFailed:
-                return "Service identity check failed. Is rvd running?"
-            case .connectFailed:
-                return "Lost connection to rvd."
-            case .protocolMismatch:
-                return "Unexpected reply from rvd."
-            case .cancelled:
-                return "Cancelled."
+    private func run(_ command: ReviewSession<HookReview>.Command) async
+        -> ReviewSession<HookReview>.Event
+    {
+        switch command {
+        case .connect:
+            do {
+                try await bridge.connect()
+                return .connectReplied(nil)
+            } catch {
+                return .connectReplied(ReviewFailure(error))
             }
+        case .list(let gen):
+            do {
+                return .listReplied(gen: gen, .success(try await bridge.hookList().items))
+            } catch {
+                return .listReplied(gen: gen, .failure(ReviewFailure(error)))
+            }
+        case .bind(let id, let ticket):
+            do {
+                return .bindReplied(id, ticket: ticket, .success(try await bridge.hookBind(approvalID: id)))
+            } catch {
+                return .bindReplied(id, ticket: ticket, .failure(ReviewFailure(error)))
+            }
+        case .authenticate(let bundle):
+            let outcome = await authenticator.authenticate(reason: HookReview.authenticationReason)
+            return .authenticated(challenge: bundle.challenge.challengeID, outcome)
+        case .complete(let bundle, let outcome):
+            let challenge = bundle.challenge.challengeID
+            do {
+                let status = try await bridge.hookComplete(UIHookCompletion(
+                    challengeID: challenge, approvalID: bundle.item.approvalID,
+                    outcome: outcome))
+                return .completeReplied(challenge: challenge, .success(status.status))
+            } catch {
+                return .completeReplied(challenge: challenge, .failure(ReviewFailure(error)))
+            }
+        case .deny(let bundle):
+            let id = bundle.item.approvalID
+            do {
+                let status = try await bridge.hookDeny(UIHookDeny(
+                    challengeID: bundle.challenge.challengeID, approvalID: id))
+                return .denyReplied(id, .success(status.status))
+            } catch {
+                return .denyReplied(id, .failure(ReviewFailure(error)))
+            }
+        case .cancel(let id):
+            // Unreachable: hook review denies the bound challenge.
+            return .denyReplied(id, .failure(.generic))
         }
-        #endif
-        return "Request failed."
     }
 }
