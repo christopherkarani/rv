@@ -88,9 +88,11 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   blocks` marks what observe would have blocked with `"observed": true`.
   `rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
   starts there. Observe never relaxes rv's own protection (rv admin
-  commands, rv's config). When `rvd` is unreachable or too slow to answer,
-  hooks under observe allow the call instead of prompting; under enforce
-  they still ask or deny. An organization gate pins enforce, and `rv setup
+  commands, rv's config) while `rvd` is answering. When `rvd` is
+  unreachable or too slow to answer, hooks under observe let the call run
+  unchecked and unlogged (with a notice on stderr) instead of prompting;
+  under enforce they still ask or deny. A daemon that fails its identity
+  check, or sends a malformed reply, is still denied in every mode. An organization gate pins enforce, and `rv setup
   --observe` refuses under one. A host set `off` before an organization
   gate arrived stays unwired until you run `rv setup`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned

@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 import RVPolicy
 import RVPresentation
+import RVService
 import RVTheme
 
 struct Setup: AsyncParsableCommand {
@@ -102,7 +103,8 @@ struct Setup: AsyncParsableCommand {
         if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
             outcome.stderr += "\n"
         }
-        outcome.stderr += SetupServiceWarning.text + "\n"
+        let observing = JudgeRuntime.configuredGuardMode(home: home) == .observe
+        outcome.stderr += (observing ? SetupServiceWarning.observeText : SetupServiceWarning.text) + "\n"
     }
 
     private func hasWiredHosts(home: HomeDirectory) -> Bool {
@@ -128,6 +130,9 @@ struct Setup: AsyncParsableCommand {
 enum SetupServiceWarning {
     static let text =
         "Warning: the RV background service (rvd) is not answering. Installed hooks will block or prompt on every command until it is up. Run `rv doctor`."
+    /// Under observe a missing daemon makes hooks step aside instead.
+    static let observeText =
+        "Warning: the RV background service (rvd) is not answering. In observe mode hooks let every command run unchecked and unlogged until it is up. Run `rv doctor`."
 
     static func needed(hasWiredHosts: Bool, serviceUp: Bool) -> Bool {
         hasWiredHosts && serviceUp == false
