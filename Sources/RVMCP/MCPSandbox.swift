@@ -118,6 +118,11 @@ public enum MCPSandbox {
             {
             case .failure(let error): return .failure(error)
             case .success(let text):
+                // A profile sandbox-exec refuses would surface only as the
+                // server's process exiting; name the cause before launch.
+                if let reason = profileCompileError(text) {
+                    return .failure(profileFailure(server: definition.name, reason: reason))
+                }
                 var caged = launch
                 caged.environment = environment
                 caged.executable = sandboxExec
@@ -345,9 +350,9 @@ public enum MCPSandbox {
                 spellings = expanded
             }
             for spelling in spellings where fresh(spelling) {
-                filters.append("(subpath \"\(escape(spelling))\")")
+                filters.append("(subpath \(seatbeltString(escape(spelling), raw: false)))")
                 if denyTargets {
-                    let pattern = "(regex #\"\(seatbeltPathPattern(spelling))\")"
+                    let pattern = "(regex \(seatbeltString(seatbeltPathPattern(spelling), raw: true)))"
                     if fresh(pattern) { filters.append(pattern) }
                 }
             }
@@ -885,7 +890,29 @@ public enum MCPSandbox {
     /// same string built with `string-append`. Chunks end on scalar
     /// boundaries and never between a backslash and the scalar it escapes.
     static func seatbeltString(_ escaped: String, raw: Bool) -> String {
-        "\(raw ? "#" : "")\"\(escaped)\""
+        var chunks: [String] = []
+        var current = ""
+        var bytes = 0
+        var atom = ""
+        for scalar in escaped.unicodeScalars {
+            atom.unicodeScalars.append(scalar)
+            // A backslash and the scalar it escapes are one atom.
+            if scalar == "\\", atom.unicodeScalars.count == 1 { continue }
+            let size = atom.utf8.count
+            if bytes + size > seatbeltLiteralBytes, bytes > 0 {
+                chunks.append(current)
+                current = ""
+                bytes = 0
+            }
+            current += atom
+            bytes += size
+            atom = ""
+        }
+        current += atom
+        chunks.append(current)
+        let open = raw ? "#\"" : "\""
+        let literals = chunks.map { open + $0 + "\"" }
+        return literals.count == 1 ? literals[0] : "(string-append " + literals.joined(separator: " ") + ")"
     }
 
     /// The `MCPLaunchError` for a profile `sandbox-exec` would refuse.
@@ -944,8 +971,8 @@ public enum MCPSandbox {
                 var candidates = [link]
                 candidates += seatbeltSpellings(link)
                 for candidate in candidates {
-                    let exact = "(regex #\"^\(regexEscape(candidate))(/.*)?$\")"
-                    let normalized = "(regex #\"\(seatbeltPathPattern(candidate))\")"
+                    let exact = "(regex \(seatbeltString("^\(regexEscape(candidate))(/.*)?$", raw: true)))"
+                    let normalized = "(regex \(seatbeltString(seatbeltPathPattern(candidate), raw: true)))"
                     for filter in [exact, normalized] where seen.insert(filter).inserted {
                         filters.append(filter)
                     }
@@ -953,7 +980,7 @@ public enum MCPSandbox {
                 let parent = URL(fileURLWithPath: link).deletingLastPathComponent().path
                 guard parent != "/" else { continue }
                 for spelling in seatbeltSpellings(parent) {
-                    let filter = "(subpath \"\(escape(spelling))\")"
+                    let filter = "(subpath \(seatbeltString(escape(spelling), raw: false)))"
                     if seen.insert(filter).inserted { filters.append(filter) }
                 }
             }
@@ -1145,6 +1172,10 @@ public enum MCPSandbox {
             memo[index] = pattern
             return pattern
         }
+        // emit(i) only reads later indices. Filling memo from the end keeps
+        // the recursion one frame deep: a 255-scalar component recursing
+        // index by index overflowed a 512 KiB task stack (SIGBUS).
+        for index in stride(from: folded.count, through: 0, by: -1) { _ = emit(index) }
         return emit(0)
     }
 

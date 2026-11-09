@@ -80,7 +80,8 @@ struct MCPSandboxLongPathTests {
     }
 
     @Test func profileForALetterHeavyHomeKeepsEveryLiteralUnderTheLimit() throws {
-        let root = FileManager.default.temporaryDirectory
+        // The resolved temp root: /var/folders is /private/var/folders.
+        let root = URL(fileURLWithPath: MCPSandbox.realPath(FileManager.default.temporaryDirectory.path))
             .appendingPathComponent("rv-long-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent(Self.letterHeavy).appendingPathComponent("home")
