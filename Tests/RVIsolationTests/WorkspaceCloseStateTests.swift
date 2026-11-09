@@ -231,7 +231,7 @@ extension WorkspaceCloseStateTests {
         .apply(.workspaceInodeBoundaryFailed),
         .notAcceptingRuntime(.closing),
         .cleanupFailed(.workspaceInodeBoundaryFailed),
-        .publishRejected(retainedImage: "/tmp/retained.sparseimage"),
+        .publishRejected(retainedImage: "/tmp/retained.sparseimage", reason: ""),
         .alreadyClosed,
         .unknownRuntime(RuntimeSessionID()),
         .runtimeLimit,

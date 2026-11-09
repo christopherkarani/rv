@@ -874,7 +874,7 @@ enum WorkspaceCommandRun {
         case .recoveryRequired: "workspace recovery is required: run 'rv workspace status' for state; run 'rv workspace abandon' only when that status is publicationConflict or missingVolume"
         case .childTeardownFailed: "runtime teardown failed"
         case .runtimeLimit: "workspace runtime limit reached"
-        case .publishRejected(let image): publishRejectedText(retainedImage: image)
+        case .publishRejected(let image, let reason): publishRejectedText(retainedImage: image, reason: reason)
         case .staleEndpoint: staleEndpointText
         case .terminalUnavailable: "runtime has no terminal"
         case .terminalBusy: "terminal input is owned by another client"
@@ -883,16 +883,21 @@ enum WorkspaceCommandRun {
         }
     }
 
-    /// Close refused an escaping symlink (for example the `.venv/bin/python3`
-    /// that `python3 -m venv` writes). Nothing was published, the project
-    /// directory is unchanged, and the agent's volume is kept as a disk image.
-    static func publishRejectedText(retainedImage: String) -> String {
+    /// Close did not publish (for example an escaping `.venv/bin/python3`
+    /// symlink, or a `.git/index` that a host shell replaced). `reason` is
+    /// the host's summary, saying whether the project directory is
+    /// unchanged; empty from an older host. The agent's volume is kept as a
+    /// disk image whenever `retainedImage` is set.
+    static func publishRejectedText(retainedImage: String, reason: String = "") -> String {
+        let why = reason.isEmpty
+            ? "nothing was published and the project directory is unchanged"
+            : DisplayedText.field(reason)
         guard retainedImage.isEmpty == false else {
-            return "workspace close refused: the agent's tree holds a symlink that points outside the workspace; nothing was published and the project directory is unchanged"
+            return "workspace close refused: \(why)"
         }
         let image = DisplayedText.field(retainedImage)
         return """
-            workspace close refused: the agent's tree holds a symlink that points outside the workspace (for example a virtualenv's .venv/bin/python3); nothing was published and the project directory is unchanged
+            workspace close refused: \(why)
             the agent's work is kept in a disk image that is not mounted: \(image)
             recover: hdiutil attach -readonly -nobrowse \(image), copy out what you need, then hdiutil detach the device it prints
             remove: rm \(image)
