@@ -70,7 +70,9 @@ import Testing
         #expect(result.stderr.contains("rv secrets"))
         #expect(result.stderr.contains("not found"))
         #expect(result.stderr.contains("reinstall rv"))
-        #expect(result.stderr.contains("rv secrets >>>"))
+        #expect(result.stderr.contains("rv secrets markers"))
+        // The notice must not be mistaken for the block's own marker line.
+        #expect(SecretGitHook.missingNotice.contains(SecretGitHook.beginMarker) == false)
     }
 
     @Test func rvOnPathOrAtTheRecordedPathStillBlocksOnFailure() throws {

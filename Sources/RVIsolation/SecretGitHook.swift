@@ -32,7 +32,7 @@ public enum SecretGitHook {
     /// scanner they never installed.
     static let missingNotice =
         "rv secrets: rv not found, so staged files were not scanned; reinstall rv, "
-        + "or run `rv secrets hook uninstall` (or delete the \(beginMarker) block from this hook)"
+        + "or remove this check with `rv secrets hook uninstall` or by deleting the lines between the rv secrets markers in this hook"
 
     /// rv is found on PATH when the hook runs, then at `rvPath` (where
     /// install ran from). `rvPath` nil writes the PATH lookup only, for a
