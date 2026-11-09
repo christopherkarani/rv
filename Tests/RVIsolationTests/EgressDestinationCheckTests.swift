@@ -153,7 +153,7 @@ import Testing
     func ipv4Classifier(_ entry: AddressCase) throws {
         let bytes = try #require(Self.bytes(AF_INET, entry.text))
         let hostOrder = bytes.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
-        #expect(EgressProxy.isPublicIPv4(hostOrder) == entry.isPublic)
+        #expect(EgressWire.isPublicIPv4(hostOrder) == entry.isPublic)
         // The sockaddr entry point agrees with the pure verdict.
         #expect(Self.sockaddrVerdict(AF_INET, bytes) == entry.isPublic)
     }
@@ -161,14 +161,14 @@ import Testing
     @Test(arguments: ipv6Cases)
     func ipv6Classifier(_ entry: AddressCase) throws {
         let bytes = try #require(Self.bytes(AF_INET6, entry.text))
-        #expect(EgressProxy.isPublicIPv6(bytes) == entry.isPublic)
+        #expect(EgressWire.isPublicIPv6(bytes) == entry.isPublic)
         #expect(Self.sockaddrVerdict(AF_INET6, bytes) == entry.isPublic)
     }
 
     @Test func ipv6ClassifierRejectsWrongLengths() {
-        #expect(EgressProxy.isPublicIPv6([]) == false)
-        #expect(EgressProxy.isPublicIPv6([UInt8](repeating: 0x26, count: 15)) == false)
-        #expect(EgressProxy.isPublicIPv6([UInt8](repeating: 0x26, count: 17)) == false)
+        #expect(EgressWire.isPublicIPv6([]) == false)
+        #expect(EgressWire.isPublicIPv6([UInt8](repeating: 0x26, count: 15)) == false)
+        #expect(EgressWire.isPublicIPv6([UInt8](repeating: 0x26, count: 17)) == false)
     }
 
     // MARK: Literal targets through the production resolver
