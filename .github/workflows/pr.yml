@@ -2,13 +2,20 @@ name: pr
 
 on:
   pull_request:
+  # Merged state gets the same gate: a PR can be green on its own base and
+  # still break once combined with another merge.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
+# PR runs supersede each other. Main runs never cancel a running one, so
+# every merge that starts gets a verdict; GitHub keeps only the newest
+# pending main run queued behind it.
 concurrency:
   group: pr-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Extra hygiene only. Not the Swift gate (OPE-263).
