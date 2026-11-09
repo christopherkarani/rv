@@ -26,3 +26,23 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 **Observe floor** — what observe never relaxes: rv's own self-protection (an agent-issued rv command that weakens rv, `SelfProtectionGuard`) and rv's config dir (`core.secrets:home-rv-config`). On every door those stay enforced, so an observe host cannot loosen another host or the global guard. `ObserveFloor`.
 
 **Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked.
+
+## Isolation
+
+The module map is [`Sources/RVIsolation/README.md`](Sources/RVIsolation/README.md).
+
+**Workspace** — one protected project folder while rv has it open. The agent writes to a private copy (on macOS, a disk-image volume mounted over the folder); nothing reaches the real folder until the workspace closes. `WorkspaceSessionID`, `WorkspaceSessionSupervisor`.
+
+**Runtime** — one contained process tree inside a workspace, with its own process group, admission pipes and egress proxy. A workspace can host several; one runtime ending does not close the workspace. `RuntimeSessionID`.
+
+**Backend** — what builds the walls for a runtime: Seatbelt (macOS), Landlock (Linux, compiled but refused before exec), or a VM (`rv-microvm` for Linux guests, `rv-macvm` for macOS guests). `IsolationBackendFamily`.
+
+**Control path** — a workspace path that rv, git or a host agent reads or runs later, outside any cage: `.git/hooks`, `.git/config`, `.rv`, `.config/rv`, and the agent and editor config in `WorkspaceRunLaterPaths`. Every backend must stop a runtime from writing them.
+
+**Publish** — copying the private copy back to the real folder when the workspace closes. All names are checked first; one rejected name publishes nothing. `WorkspacePublishPlan`.
+
+**Recovery** — finishing, on the next start, a close that a crash interrupted: publish, detach the volume, restore the original folder, each step recorded in the lifecycle log. `WorkspaceRecovery`, `WorkspaceRecoveryPlan`.
+
+**Admission** — a runtime asking rv to run one command or one HTTPS GET on its behalf, over pipes only that runtime holds. `RuntimeAdmissionSession`.
+
+**Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission`. `EgressProxy`.
