@@ -41,7 +41,7 @@ The module map is [`Sources/RVIsolation/README.md`](Sources/RVIsolation/README.m
 
 **Run-later path** — agent and editor config in the workspace that a host tool runs or trusts later, outside any cage: `.claude/settings.json`, `.mcp.json`, `.vscode/tasks.json`, `.envrc` and the like. `WorkspaceRunLaterPaths`.
 
-Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all stop a runtime from writing control paths and run-later paths. Seatbelt and the macOS guest also match case variants (`.MCP.json`); the Linux guest matches exact names only.
+Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all stop a runtime from writing control paths and run-later paths. Seatbelt and the macOS guest also match case variants (`.MCP.json`); the Linux guest matches exact names only. Each backend also pins the directories on the way to a protected path (`.claude`, `.gemini/config`), so the cage cannot rename one aside and swap in a replacement.
 
 **Publish** — copying the private copy back to the real folder when the workspace closes. All names are checked first; one rejected name publishes nothing. `WorkspacePublishOutcome`, `WorkspacePublishRejection`.
 
