@@ -168,6 +168,7 @@ class HookHost(str, enum.Enum):
     CODEX = "codex"
     CURSOR = "cursor"
     ANTIGRAVITY = "antigravity"
+    MUSE = "muse"
 
 
 class Severity(str, enum.Enum):
@@ -181,6 +182,8 @@ class IndeterminateReason(str, enum.Enum):
     BUDGET_EXHAUSTED = "budgetExhausted"
     COMMAND_TOO_LARGE = "commandTooLarge"
     CORE_PACKS_UNAVAILABLE = "corePacksUnavailable"
+    INLINE_PROGRAM_NEEDS_JUDGE = "inlineProgramNeedsJudge"
+    SELF_PROTECTION = "selfProtection"
 
 
 class DecisionKind(str, enum.Enum):
@@ -210,11 +213,6 @@ class DoctorCheckStatus(str, enum.Enum):
     WARNING = "warning"
     ERROR = "error"
     SKIPPED = "skipped"
-
-
-KNOWN_DOCTOR_CHECKS = frozenset(
-    {"xpc", "protocol", "packs", "launchd", "lastError", "grok", "pi", "opencode"}
-)
 
 
 class ExplainStageName(str, enum.Enum):

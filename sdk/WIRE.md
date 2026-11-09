@@ -310,7 +310,7 @@ impossible combinations (the Swift side throws `EvaluationResultDecodingError`):
   pin.
 - `Decision` (`Decision.swift`, `Coding.swift`): `{"decision":"allow"}` |
   `{"decision":"deny","ruleID":...,"reason":...}` |
-  `{"decision":"indeterminate","indeterminateReason":"budgetExhausted|commandTooLarge|corePacksUnavailable"}`.
+  `{"decision":"indeterminate","indeterminateReason":"budgetExhausted|commandTooLarge|corePacksUnavailable|inlineProgramNeedsJudge|selfProtection"}`.
   `Decision` is never Ask: a leftover `"ask"` kind decodes to
   `deny{ruleID: "builtin.action:leftover-ask", reason: "Ask is not a permit."}`.
   Any other kind is a decode error.
@@ -334,11 +334,11 @@ impossible combinations (the Swift side throws `EvaluationResultDecodingError`):
 ### 5.4 Closed string enums (unknown values are decode errors unless noted)
 
 - `Severity`: `low|medium|high|critical`.
-- `HookHost`: `grok|pi|opencode|claude|openclaw|hermes|codex|cursor|antigravity`.
+- `HookHost`: `grok|pi|opencode|claude|openclaw|hermes|codex|cursor|antigravity|muse`.
 - `PendingResolveDecision`: `allowOnce|deny`. `RulePolarity`: `allow|block`.
 - `ServiceState`: `running|idleExitArmed|down|skew`. `DoctorCheckStatus`:
   `ok|warning|error|skipped`. `IndeterminateReason`:
-  `budgetExhausted|commandTooLarge|corePacksUnavailable`.
+  `budgetExhausted|commandTooLarge|corePacksUnavailable|inlineProgramNeedsJudge|selfProtection`.
 - `EvaluationPath` (`via`): `"xpc"` only on replies; anything else corrupts.
 - `DoctorCheckID` is the deliberate exception: open for additive checks; decoders
   stay lenient (§4.3).

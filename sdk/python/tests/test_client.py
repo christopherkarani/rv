@@ -841,3 +841,10 @@ def test_approvals_validation():
         models.rule_preview_wire("", models.RulePolarity.ALLOW)
     with pytest.raises(ValueError):
         models.rule_preview_wire("a", "allow")  # type: ignore[arg-type]
+
+
+def test_enums_cover_every_swift_wire_value() -> None:
+    # Sources/RVDomain/Decision.swift and HookHost.swift are the source of truth.
+    assert models.IndeterminateReason("inlineProgramNeedsJudge")
+    assert models.IndeterminateReason("selfProtection")
+    assert models.HookHost("muse") is models.HookHost.MUSE
