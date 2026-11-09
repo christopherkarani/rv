@@ -590,13 +590,23 @@ public enum JudgeRuntime {
         _ run: JudgeRun, over result: EvaluationResult
     ) -> (result: EvaluationResult, note: String) {
         let note: String
+        let reason: String
         switch run {
-        case .warming: note = "judge-warming"
-        case .busy: note = "judge-busy"
-        case .failed, .unavailable, .verdict: note = "prediction-failed"
+        case .warming:
+            note = "judge-warming"
+            reason = "Laya judge is still loading on this device; retry in a few seconds."
+        case .busy:
+            note = "judge-busy"
+            reason = "Laya judge queue is full; retry shortly."
+        case .failed, .unavailable, .verdict:
+            note = "prediction-failed"
+            reason = unavailableReason
         }
-        return (raise(result, verdict: nil, action: .review), note)
+        return (raise(result, verdict: nil, action: .review, unavailable: reason), note)
     }
+
+    /// User-visible reason when the judge could not score this request.
+    static let unavailableReason = "Laya judge unavailable; failing closed. Run `rv doctor`."
 
     /// RVServiceTests seam: the warming outcome over `result`.
     static func warmingOutcomeSeam(over result: EvaluationResult) -> (EvaluationResult, String) {
@@ -634,12 +644,15 @@ public enum JudgeRuntime {
     /// (Ask). `action` is the caller's threshold-resolved action — never
     /// re-derived here at default thresholds.
     static func raise(
-        _ result: EvaluationResult, verdict: LayaVerdict?, action: LayaVerdict.Action
+        _ result: EvaluationResult,
+        verdict: LayaVerdict?,
+        action: LayaVerdict.Action,
+        unavailable: String = unavailableReason
     ) -> EvaluationResult {
         let isBlock = action == .block
         let reason = verdict.map {
             "Laya judge: \($0.choice.rawValue) (risk \(String(format: "%.2f", $0.risk)))"
-        } ?? "Laya judge unavailable; failing closed"
+        } ?? unavailable
         let deny = Deny(
             ruleID: RuleID(pack: .coreJudge, pattern: isBlock ? "laya-block" : "laya-review"),
             reason: reason

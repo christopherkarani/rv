@@ -342,6 +342,55 @@ struct PackageScriptGateTests {
     }
 }
 
+@Suite("Judge fail-closed reasons")
+struct JudgeFailClosedReasonTests {
+    static func failClosedDeny(_ run: JudgeRuntime.JudgeRun) -> (deny: Deny?, note: String) {
+        let allow = EvaluationResult(
+            outcome: .plain, matchingView: "npm install left-pad", analysis: .unknown)
+        let (raised, note) = JudgeRuntime.failClosed(run, over: allow)
+        guard case .deny(let deny) = raised.decision else { return (nil, note) }
+        return (deny, note)
+    }
+
+    @Test("warming tells the user the judge is still loading")
+    func warmingReason() throws {
+        let (deny, note) = Self.failClosedDeny(.warming)
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("still loading"))
+        #expect(reason.contains("retry in a few seconds"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "judge-warming")
+    }
+
+    @Test("busy tells the user the judge queue is full")
+    func busyReason() throws {
+        let (deny, note) = Self.failClosedDeny(.busy)
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("queue is full"))
+        #expect(reason.contains("retry shortly"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "judge-busy")
+    }
+
+    @Test("failed keeps the fail-closed text and points at rv doctor")
+    func failedReason() throws {
+        let (deny, note) = Self.failClosedDeny(.failed)
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("failing closed"))
+        #expect(reason.contains("`rv doctor`"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "prediction-failed")
+    }
+
+    @Test("the three reasons are distinct")
+    func reasonsDistinct() {
+        let reasons = [JudgeRuntime.JudgeRun.warming, .busy, .failed].map {
+            Self.failClosedDeny($0).deny?.reason
+        }
+        #expect(Set(reasons.compactMap { $0 }).count == 3)
+    }
+}
+
 @Suite("Judge raise pins")
 struct JudgeRaisePinTests {
     /// Judge denies as JudgeRuntime.raise builds them, then stripped of
