@@ -91,6 +91,25 @@ struct IdleExitPolicyTests {
         #expect(P.idleTimerReadsStale(.exited, generation: 7) == false)
     }
 
+    @Test func reducerNeverReadsStaleWhereTheWatchdogSkipsSampling() {
+        // A skipped sample is passed as `stale: false`; it must not matter.
+        let phases: [P.Phase] = [
+            serving(0, 7), serving(0, 8), serving(1, 7), serving(2, 7),
+            .draining(inFlight: 1), .draining(inFlight: 2), .exited,
+        ]
+        for phase in phases {
+            for generation: UInt64 in [6, 7, 8]
+            where P.idleTimerReadsStale(phase, generation: generation) == false {
+                #expect(P.reduce(phase, .idleTimer(generation, stale: true))
+                    == P.reduce(phase, .idleTimer(generation, stale: false)))
+            }
+            if P.staleTickReadsStale(phase) == false {
+                #expect(P.reduce(phase, .staleTick(stale: true))
+                    == P.reduce(phase, .staleTick(stale: false)))
+            }
+        }
+    }
+
     // MARK: grants
 
     @Test func liveGrantsRearmWithFreshGeneration() {

@@ -102,8 +102,8 @@ struct IdleExitTests {
         #expect(watchdog.hasFired)
     }
 
-    /// Also the re-entrancy proof: `hasLiveGrants` calls back into the
-    /// watchdog, which would deadlock if effects ran under the lock.
+    /// `hasLiveGrants` calls back into the watchdog (`beginRequest`) while the
+    /// exit check is pending: the decision must see the request and stand down.
     @Test func requestArrivingDuringTheExitCheckCancelsTheExit() async {
         let slot = WatchdogSlot()
         let admitted = Mutex<Bool?>(nil)
@@ -135,6 +135,34 @@ struct IdleExitTests {
         clock.advance(by: .milliseconds(150))
         await clock.runDetached()
         #expect(watchdog.hasFired)
+    }
+
+    /// CON-001: effects run after the lock is released, so `onFire` may call
+    /// back into the watchdog. The callback probes from another thread with a
+    /// deadline: a regression that fires under the lock fails here instead of
+    /// hanging the suite.
+    @Test func onFireRunsOutsideTheLock() async {
+        let slot = WatchdogSlot()
+        let probed = Mutex<Bool?>(nil)
+        let clock = ManualIdleScheduler()
+        let watchdog = IdleWatchdog(
+            interval: .milliseconds(100),
+            onFire: {
+                let done = DispatchSemaphore(value: 0)
+                DispatchQueue.global().async {
+                    _ = slot.watchdog?.hasFired
+                    done.signal()
+                }
+                probed.withLock { $0 = done.wait(timeout: .now() + .seconds(5)) == .success }
+            },
+            scheduler: clock.scheduler
+        )
+        slot.watchdog = watchdog
+        watchdog.start()
+        clock.advance(by: .milliseconds(100))
+        await clock.runDetached()
+        #expect(watchdog.hasFired)
+        #expect(probed.withLock { $0 } == true)
     }
 
     @Test func onceExitIsDecidedNewRequestsAreRefused() async {
