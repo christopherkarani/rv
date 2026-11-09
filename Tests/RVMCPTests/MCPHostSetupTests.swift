@@ -506,6 +506,24 @@ struct MCPHostSetupTests {
         #expect(error.message.contains("symbolic link"))
     }
 
+    @Test func setupWritesNothingWhenALaterFileIsASymlink() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let claude = try box.write(".claude.json", text)
+        let target = try box.write("dotfiles/mcp.json", text)
+        let link = box.home.appendingPathComponent(".cursor/mcp.json")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.setup(
+            files: box.files(.claudeCode) + box.files(.cursor), configuration: configuration, servers: nil,
+            rvPath: "/opt/rv", configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(link.path)))
+        #expect(try String(contentsOf: claude, encoding: .utf8) == text)
+        #expect(MCPHostSetup.loadManifest(box.config).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: MCPHostSetup.backupDirectory(box.config)) == false)
+    }
+
     @Test func undoRefusesASymlinkedHostConfig() throws {
         let box = Sandbox()
         let file = try box.write(".cursor/mcp.json", #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#)
