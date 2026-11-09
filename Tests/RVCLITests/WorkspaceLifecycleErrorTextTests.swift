@@ -152,6 +152,8 @@ import RVIsolation
     #expect(missingAttachment.contains("restore the saved tree"))
     #expect(missingAttachment.contains("rv workspace abandon"))
     #expect(missingAttachment.contains("still present") == false)
+    #expect(missingAttachment.contains("keep that image"))
+    #expect(missingAttachment.contains("hdiutil"))
 
     let conflictAttachment = WorkspaceCommandRun.text(
         WorkspaceAttachment.blocked(WorkspaceRecoveryBlock(workspace: nil, reason: .publicationConflict))

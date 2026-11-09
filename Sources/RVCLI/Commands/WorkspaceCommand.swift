@@ -447,7 +447,7 @@ enum WorkspaceCommandRun {
 
     static func abandon(_ raw: String?) async throws {
         try await OwnerConfirmation.require(
-            "abandon the blocked workspace for \(raw ?? CLIProcess.workspacePath()), discarding its unpublished changes")
+            "abandon the blocked workspace for \(raw ?? CLIProcess.workspacePath()), restoring the saved tree; its unpublished changes leave the project and are kept only in a detached disk image")
         try abandonBlockedWorkspace(raw)
     }
 
@@ -739,7 +739,21 @@ enum WorkspaceCommandRun {
         if report.truncated {
             emitted.append("truncated")
         }
+        if let image = report.retainedImage {
+            emitted.append(contentsOf: retainedImageLines(image))
+        }
         return emitted.joined(separator: "\n")
+    }
+
+    /// Where the unpublished volume's image was kept and how to get files
+    /// out of it. Shared by close and abandon.
+    static func retainedImageLines(_ retainedImage: String) -> [String] {
+        let image = DisplayedText.field(retainedImage)
+        return [
+            "the agent's work is kept in a disk image that is not mounted: \(image)",
+            "recover: hdiutil attach -readonly -nobrowse \(image), copy out what you need, then hdiutil detach the device it prints",
+            "remove: rm \(image)",
+        ]
     }
 
     /// `.failed` from `abandonLocked` can land after `recoveryBegan`, child
@@ -759,10 +773,11 @@ enum WorkspaceCommandRun {
         switch reason {
         case .publicationConflict:
             return "recovery blocked: publicationConflict: run 'rv workspace status' for state,"
-                + " or 'rv workspace abandon' to discard the volume and restore the saved tree"
+                + " or 'rv workspace abandon' to restore the saved tree and keep the volume as a detached disk image"
         case .missingVolume:
-            return "recovery blocked: missingVolume: the volume is already absent and the saved tree is untouched;"
-                + " run 'rv workspace abandon' to restore the saved tree, or 'rv workspace status' for state"
+            return "recovery blocked: missingVolume: the volume is already absent (for example after a logout or reboot) and the saved tree is untouched;"
+                + " its disk image can still hold unpublished work: run 'rv workspace abandon' to restore the saved tree and keep that image"
+                + " (it prints the image path and the hdiutil command to copy files out), or 'rv workspace status' for state"
         case .tornLog, .corrupt, .ambiguousOwnership, .ambiguousSavedTree, .unprovenProcess, .unrelatedMount:
             return "recovery blocked: \(reason.rawValue): abandon will refuse;"
                 + " run 'rv workspace status' and 'rv doctor' for state"
@@ -895,13 +910,7 @@ enum WorkspaceCommandRun {
         guard retainedImage.isEmpty == false else {
             return "workspace close refused: \(why)"
         }
-        let image = DisplayedText.field(retainedImage)
-        return """
-            workspace close refused: \(why)
-            the agent's work is kept in a disk image that is not mounted: \(image)
-            recover: hdiutil attach -readonly -nobrowse \(image), copy out what you need, then hdiutil detach the device it prints
-            remove: rm \(image)
-            """
+        return (["workspace close refused: \(why)"] + retainedImageLines(retainedImage)).joined(separator: "\n")
     }
 
     private static func emit(_ text: String) {
