@@ -73,18 +73,13 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
     /// The `rv egress approve/deny` refusal wording for each ceremony error.
     /// Anything unrecognized still reads as a refusal, never a success.
     static func refusal(_ error: Error) -> String {
+        if let gate = OwnerGateRefusal(error) { return gate.text(subject: .proposal) }
         switch error {
         case let error as ValidationError: return error.message
-        case AllowOnceError.ttyRequired: return "requires an interactive TTY (stdin and stdout)"
-        case AllowOnceError.robotRefused: return "robot output refused"
-        case AllowOnceError.redemptionChanged: return "proposal changed during review; retry"
         case EgressReviewError.unknownProposal: return "unknown proposal"
         case EgressReviewError.notNetworkProposal: return "not a network proposal"
         case EgressReviewError.notAwaiting(let state): return "proposal is \(state)"
         case EgressReviewError.reasonRequired: return "a reason is required (one line, 500 chars)"
-        case EgressReviewError.storeUnavailable: return "store unavailable"
-        case AllowOnceAuthError.required: return "device-owner authentication required"
-        case AllowOnceAuthError.throttled: return "too many authentication prompts; wait and retry"
         default: return "unexpected error"
         }
     }

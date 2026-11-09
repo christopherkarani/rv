@@ -27,17 +27,20 @@ struct AllowOnceCommandRunTests {
 
     @Test func redeem_requiresTTY() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, output: out) {
             var command = try AllowOnceRedeem.parse(["abcdef"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once: requires an interactive TTY (stdin and stdout)\n")
     }
 
     @Test func redeem_robotRefused() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: out) {
             var command = try AllowOnceRedeem.parse(["--json", "abcdef"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -47,6 +50,7 @@ struct AllowOnceCommandRunTests {
                 try await robot.run()
             }
         }
+        #expect(out.stderr == String(repeating: "rv allow-once: --json/--robot refused\n", count: 2))
     }
 
     @Test func redeem_unknownCode() async throws {
@@ -297,18 +301,22 @@ struct AllowOnceCommandRunTests {
 
     @Test func mint_requiresTTYAndRefusesRobot() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        let ttyOut = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, output: ttyOut) {
             var tty = try AllowOnceMint.parse(["git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        #expect(ttyOut.stderr == "rv allow-once mint: requires an interactive TTY (stdin and stdout)\n")
+        let robotOut = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: robotOut) {
             var robot = try AllowOnceMint.parse(["--robot", "git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await robot.run()
             }
         }
+        #expect(robotOut.stderr == "rv allow-once mint: --json/--robot refused\n")
     }
 
     @Test func mint_succeedsOnTTY() async throws {
@@ -377,12 +385,14 @@ struct AllowOnceCommandRunTests {
 
     @Test func clear_requiresTTYThenSucceeds() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, output: out) {
             var tty = try AllowOnceClear.parse([])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
+        #expect(out.stderr == "rv allow-once clear: requires an interactive TTY (stdin and stdout)\n")
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
             var ok = try AllowOnceClear.parse([])
             try await ok.run()

@@ -94,12 +94,10 @@ struct AllowlistAdd: AsyncParsableCommand {
         do {
             try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
             ctx.writeStdout("added \(DisplayedText.field(ruleID.rawValue))\n")
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail("rv allowlist add: requires an interactive TTY\n", exitCode: 2)
-        } catch AllowlistStoreError.lockFailed {
-            try ctx.fail("rv allowlist add: store unavailable\n", exitCode: 2)
         } catch is AllowlistParseError {
             try ctx.fail("rv allowlist add: invalid allowlist.toml\n", exitCode: 2)
+        } catch {
+            try ctx.failOwnerGate(error, command: "allowlist add", subject: .allowlistEntry)
         }
     }
 }
@@ -142,12 +140,10 @@ struct AllowlistAddCommand: AsyncParsableCommand {
         do {
             try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
             ctx.writeStdout("added exact command\n")
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail("rv allowlist add-command: requires an interactive TTY\n", exitCode: 2)
-        } catch AllowlistStoreError.lockFailed {
-            try ctx.fail("rv allowlist add-command: store unavailable\n", exitCode: 2)
         } catch is AllowlistParseError {
             try ctx.fail("rv allowlist add-command: invalid allowlist.toml\n", exitCode: 2)
+        } catch {
+            try ctx.failOwnerGate(error, command: "allowlist add-command", subject: .allowlistEntry)
         }
     }
 }
@@ -180,12 +176,10 @@ struct AllowlistRemove: AsyncParsableCommand {
                 exactCommandAliases: normalized == trimmed ? [] : [normalized]
             )
             ctx.writeStdout("removed \(removed)\n")
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail("rv allowlist remove: requires an interactive TTY\n", exitCode: 2)
-        } catch AllowlistStoreError.lockFailed {
-            try ctx.fail("rv allowlist remove: store unavailable\n", exitCode: 2)
         } catch is AllowlistParseError {
             try ctx.fail("rv allowlist remove: invalid allowlist.toml\n", exitCode: 2)
+        } catch {
+            try ctx.failOwnerGate(error, command: "allowlist remove", subject: .allowlistEntry)
         }
     }
 }

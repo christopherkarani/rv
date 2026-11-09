@@ -61,12 +61,14 @@ struct AllowlistCommandRunTests {
 
     @Test func add_requiresTTY() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated, output: out) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allowlist add: requires an interactive TTY (stdin and stdout)\n")
     }
 
     @Test func add_slashRuleSucceedsOnTTY() async throws {
@@ -121,12 +123,14 @@ struct AllowlistCommandRunTests {
             var ok = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             try await ok.run()
         }
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: out) {
             var tty = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
+        #expect(out.stderr == "rv allowlist add-command: requires an interactive TTY (stdin and stdout)\n")
     }
 
     @Test func addCommand_lockAndParseErrors() async throws {
@@ -163,12 +167,14 @@ struct AllowlistCommandRunTests {
     @Test func remove_ttyLockParseAndSuccess() async throws {
         let home = try isolatedHome()
         try seedAllowlist(home: home)
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated, output: out) {
             var tty = try AllowlistRemove.parse(["core.git:reset-hard"])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
+        #expect(out.stderr == "rv allowlist remove: requires an interactive TTY (stdin and stdout)\n")
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var ok = try AllowlistRemove.parse(["core.git:reset-hard"])
             try await ok.run()
