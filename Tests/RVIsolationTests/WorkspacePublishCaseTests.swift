@@ -129,6 +129,33 @@ struct WorkspacePublishCaseTests {
         }
     }
 
+    /// Publish does not rewrite a writable file the agent left alone: its
+    /// inode and modification time survive, and only the edited file moves.
+    @Test func untouchedWritableFileIsNotRewritten() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let ws = tree.workspaceURL
+        let still = ws.appendingPathComponent("still.txt").path
+        try Data("same\n".utf8).write(to: URL(fileURLWithPath: still))
+        try Data("old\n".utf8).write(to: ws.appendingPathComponent("edited.txt"))
+        var past = [timeval(tv_sec: 1_000_000_000, tv_usec: 0), timeval(tv_sec: 1_000_000_000, tv_usec: 0)]
+        #expect(utimes(still, &past) == 0)
+        var before = stat()
+        #expect(lstat(still, &before) == 0)
+        let boundary = try establishWorkspaceInodeBoundary(at: ws.path).get()
+        defer { _ = boundary.discardAndRestore() }
+        defer { removeRetained(boundary) }
+        try Data("new\n".utf8).write(to: ws.appendingPathComponent("edited.txt"))
+
+        #expect(isSuccess(boundary.publishAndRestore()), "outcome: \(boundary.publishOutcome)")
+        var after = stat()
+        #expect(lstat(still, &after) == 0)
+        #expect(after.st_ino == before.st_ino)
+        #expect(after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec)
+        #expect(try String(contentsOfFile: still, encoding: .utf8) == "same\n")
+        #expect(try String(contentsOf: ws.appendingPathComponent("edited.txt"), encoding: .utf8) == "new\n")
+    }
+
     /// On a case-sensitive saved tree both spellings are representable: a
     /// case-only rename is a create plus a remove, and variants coexist.
     @Test func caseSensitiveSavedTreePublishesVariantsAndRenames() throws {

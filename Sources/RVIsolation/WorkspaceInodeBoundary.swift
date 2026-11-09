@@ -1288,6 +1288,18 @@ final class WorkspaceInodeBoundary: Sendable {
             return (false, [])
         }
         let oldMode = modeBits(status.st_mode)
+        // Untouched content is not rewritten: no staged copy, no backup in
+        // the temp directory, and the saved mtime survives. The inode was
+        // verified above on this same descriptor.
+        guard let same = savedContentsEqual(source, dest) else { return (false, []) }
+        if same {
+            if oldMode == mode { return (true, []) }
+            return (
+                savedMutation(fchmodWithinCopyClock(dest, mode)),
+                [.restoreMode(relative, mode: oldMode, stamp: live)]
+            )
+        }
+        guard lseek(source, 0, SEEK_SET) == 0 else { return (false, []) }
         let outcome = replaceOriginalOnlyAfterStagedCopy(
             source: source,
             original: dest,
