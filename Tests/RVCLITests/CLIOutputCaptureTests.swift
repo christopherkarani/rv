@@ -29,18 +29,42 @@ struct CLIOutputCaptureTests {
         #expect(capture.stdout.isEmpty)
     }
 
-    @Test func sinkIsScopedToTheInstalledContext() async throws {
+    @Test func sinkIsScopedToTheInstalledContext() throws {
         let first = CLIOutputCapture()
         let second = CLIOutputCapture()
-        try await withCLIProcess(output: first) {
+        try withCLIProcess(output: first) {
             CommandContext.writeStdout("a")
-            try await withCLIProcess(output: second) {
+            try withCLIProcess(output: second) {
                 CommandContext.writeStdout("b")
             }
             CommandContext.writeStdout("c")
         }
         #expect(first.stdout == "ac")
         #expect(second.stdout == "b")
+    }
+
+    @Test func sinkFollowsChildTasksAndConcurrentSinksStayApart() async throws {
+        // Commands fan out through task groups (XPCClient) and `Task {}`
+        // (InstallAnalytics); both inherit the task-local context. Sibling
+        // contexts running concurrently must not see each other's output.
+        let sinks = (0..<8).map { _ in CLIOutputCapture() }
+        try await withThrowingTaskGroup(of: Void.self) { outer in
+            for (index, sink) in sinks.enumerated() {
+                outer.addTask {
+                    try await withCLIProcess(output: sink) {
+                        await withTaskGroup(of: Void.self) { group in
+                            group.addTask { CommandContext.writeStderr("g\(index)\n") }
+                        }
+                        await Task { CommandContext.writeStdout("t\(index)") }.value
+                    }
+                }
+            }
+            try await outer.waitForAll()
+        }
+        for (index, sink) in sinks.enumerated() {
+            #expect(sink.stdout == "t\(index)")
+            #expect(sink.stderr == "g\(index)\n")
+        }
     }
 
     @Test func noContextOrNoSinkMeansNoRedirect() throws {

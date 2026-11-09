@@ -11,7 +11,9 @@ import RVTheme
 import Synchronization
 
 /// In-memory stdout/stderr sink. Installed on `CLIProcess.Context` so command
-/// output lands here instead of the process file descriptors.
+/// output lands here instead of the process file descriptors. Reached through
+/// the task-local context, so child tasks inherit it; `Task.detached` work
+/// and direct `FileHandle`/`print` writes bypass it.
 final class CLIOutputCapture: Sendable {
     private let state = Mutex<(stdout: String, stderr: String)>(("", ""))
 
