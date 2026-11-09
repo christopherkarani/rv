@@ -52,14 +52,15 @@ struct open_how {
 #define RESOLVE_NO_MAGICLINKS 0x02
 #define RESOLVE_NO_SYMLINKS 0x04
 #endif
-#ifndef SYS_openat2
-#define SYS_openat2 437
-#endif
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
+#ifndef SYS_openat2
+#define SYS_openat2 437
+#endif
 
 #ifndef SYS_landlock_create_ruleset
 #define SYS_landlock_create_ruleset 444

@@ -89,7 +89,9 @@ enum ProcessGroupRecovery {
             return .success(())
         case .queryFailed:
             return .failure(.queryFailed)
-        case .owned, .refusedIdentity:
+        case .refusedIdentity:
+            return .failure(.refusedIdentity)
+        case .owned:
             return .failure(.queryFailed)
         }
     }

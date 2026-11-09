@@ -95,6 +95,7 @@ struct GuestChild {
             }
         }
         childEnds.forEach { close($0) }
+        childEnds = []  // already closed: `closeAll` must not close them again
         guard status == 0 else {
             closeAll()
             return .failure(AgentError("cannot start \(request.arguments[0]): \(String(cString: strerror(status)))"))
