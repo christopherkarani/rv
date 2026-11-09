@@ -114,11 +114,13 @@ enum PackageScriptGate {
             let unitMutates = launched.contains { argv in
                 isTreeMutating(argv) || (scriptInvocation(in: argv) == nil && touchesPackageManifest(argv))
             }
-            if launched.contains(where: { $0.first.map(movesDirectory) ?? false }) {
+            if changesDirectory(launched, unitTokens) {
                 // A cd inside a group, subshell, payload or launcher: its
                 // scope is not modelled, so the cwd is now unknown.
                 effectiveCwd = nil
             }
+            // Input the launcher parser stopped following may hide a runner.
+            if launchIsTruncated(unit.text) { unresolved = true }
             for argv in launched {
                 guard let invocation = scriptInvocation(in: argv) else { continue }
                 if invocation.unresolvable || hasConfigOverrideAssignment(unitTokens)
@@ -400,6 +402,16 @@ enum PackageScriptGate {
         return .some(args.first)
     }
 
+    private static let groupOpeners = CharacterSet(charactersIn: "({$`!")
+
+    /// Whether a unit or body changes directory anywhere: a launched `cd`,
+    /// or a cd word the launcher parser could not attach to a command
+    /// (`(cd sub`, `{ cd sub`). Over-claims (`echo cd`), never under-claims.
+    static func changesDirectory(_ launched: [[String]], _ unitTokens: [String]) -> Bool {
+        launched.contains(where: { $0.first.map(movesDirectory) ?? false })
+            || unitTokens.contains(where: { movesDirectory($0.trimmingCharacters(in: groupOpeners)) })
+    }
+
     private static func movesDirectory(_ head: String) -> Bool {
         ["cd", "pushd", "popd", "chdir"].contains(basename(head))
     }
@@ -460,10 +472,11 @@ enum PackageScriptGate {
         /// nested runner may read another package: unresolved.
         private mutating func nested(_ body: String, depth: Int) -> Verdict {
             let launched = launchedCommands(body)
-            let movesCwd = launched.contains { $0.first.map(PackageScriptGate.movesDirectory) ?? false }
-            let overrides = PackageScriptGate.hasConfigOverrideAssignment(PackageScriptGate.tokens(in: body))
-                || PackageScriptGate.wrapperChangesDirectory(PackageScriptGate.tokens(in: body))
-            var unresolved = false
+            let bodyTokens = PackageScriptGate.tokens(in: body)
+            let movesCwd = PackageScriptGate.changesDirectory(launched, bodyTokens)
+            let overrides = PackageScriptGate.hasConfigOverrideAssignment(bodyTokens)
+                || PackageScriptGate.wrapperChangesDirectory(bodyTokens)
+            var unresolved = launchIsTruncated(body)
             for argv in launched {
                 guard let invocation = PackageScriptGate.scriptInvocation(in: argv) else { continue }
                 if invocation.unresolvable || invocation.prefixDir != nil || movesCwd || overrides

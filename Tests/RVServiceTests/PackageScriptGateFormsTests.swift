@@ -215,6 +215,13 @@ struct PackageScriptGateFormsTests {
         #expect(Self.isUnresolved(Self.evaluate("npm test", cwd: dir)))
     }
 
+    @Test("input the launcher parser stops following is not clear")
+    func truncatedLaunchNotClear() throws {
+        let dir = try Self.makeDir(["test": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isClear(Self.evaluate(#"{sh,bash} -c "npm test""#, cwd: dir)) == false)
+    }
+
     @Test("an earlier write to package.json makes the graph unresolved")
     func earlierPackageWriteUnresolved() throws {
         let dir = try Self.makeDir(["build": "node ok.js"])
@@ -227,6 +234,8 @@ struct PackageScriptGateFormsTests {
         "cd sub & npm test",
         "cd sub | npm test",
         "(cd sub && true); npm test",
+        "{ cd sub; }; npm test",
+        "if cd sub; then npm test; fi",
         "builtin cd sub && npm test",
         "pushd sub && npm test",
         "env -C sub npm test",
