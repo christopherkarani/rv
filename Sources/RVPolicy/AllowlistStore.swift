@@ -136,6 +136,18 @@ public struct AllowlistStore: Sendable {
     }
 
     private func writeAllUnlocked(_ entries: [AllowlistEntry]) throws {
+        // The file is parsed line by line and strings are not newline-escaped:
+        // a line break in a value would corrupt it or forge another block.
+        for entry in entries {
+            let selector: String
+            switch entry.selector {
+            case .rule(let rule): selector = rule.rawValue
+            case .exactCommand(let view): selector = view.rawValue
+            }
+            guard tomlValueFitsOneLine(selector), tomlValueFitsOneLine(entry.reason) else {
+                throw AllowlistParseError.invalidTOML
+            }
+        }
         try prepareDirectory()
         let body = AllowlistTOML.render(entries)
         try body.write(to: fileURL, atomically: true, encoding: .utf8)

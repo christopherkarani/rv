@@ -79,6 +79,12 @@ public struct DenylistStore: Sendable {
     }
 
     private func writeAllUnlocked(_ entries: [DenylistEntry]) throws {
+        // Same line-based format as allowlist.toml: no line breaks in values.
+        for entry in entries {
+            guard tomlValueFitsOneLine(entry.matchingView.rawValue), tomlValueFitsOneLine(entry.reason) else {
+                throw DenylistParseError.invalidTOML
+            }
+        }
         try prepareDirectory()
         let body = DenylistTOML.render(entries)
         try body.write(to: fileURL, atomically: true, encoding: .utf8)

@@ -276,6 +276,12 @@ func parseTOMLString(_ raw: String) -> String {
     return text
 }
 
+/// True when `text` can be written as one quoted value in rv's line-based
+/// TOML stores (`escapeTOMLString` does not escape line breaks).
+func tomlValueFitsOneLine(_ text: String) -> Bool {
+    text.unicodeScalars.contains { CharacterSet.newlines.contains($0) } == false
+}
+
 func escapeTOMLString(_ text: String) -> String {
     text
         .replacingOccurrences(of: "\\", with: "\\\\")

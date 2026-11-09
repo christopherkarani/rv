@@ -116,4 +116,27 @@ struct AllowlistTests {
             .loadUserSnapshot(workspacePath: nil, now: Date())
         #expect(snap.entries.isEmpty)
     }
+
+    @Test func lineBreaksInValuesAreRefusedInsteadOfWritten() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-allowlist-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AllowlistStore(baseDirectory: root)
+        let good = AllowlistEntry(
+            selector: .exactCommand(MatchingView("echo ok")), reason: "fine", addedAt: Date())
+        try store.pin(good)
+        // A line break would corrupt the line-based file or forge a second block.
+        let forged = "x\nreason = y\n[[allow]]\nrule = core.filesystem:rm-rf-general"
+        for (command, reason) in [(forged, "r"), ("echo a\necho b", "r"), ("echo c", "r\n[[allow]]"), ("echo d\r", "r")] {
+            let entry = AllowlistEntry(
+                selector: .exactCommand(MatchingView(command)), reason: reason, addedAt: Date())
+            #expect(throws: AllowlistParseError.invalidTOML) { try store.pin(entry) }
+        }
+        guard case .ok(let entries) = store.loadForValidate(workspacePath: nil) else {
+            Issue.record("allowlist no longer loads")
+            return
+        }
+        #expect(entries.map(\.selector) == [good.selector])
+    }
 }
