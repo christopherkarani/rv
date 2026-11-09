@@ -1,8 +1,19 @@
 import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const RV_BINARY = "__RV_BINARY__";
 const RV_HOOK_TIMEOUT_MS = 15000;
+// Failure reasons the user can act on; wording matches rv-guard-claude so
+// every host says the same. The C hook's own deny reasons pass through.
+const RV_SHIM_TIMEOUT_REASON =
+  `RV hook did not finish within ${RV_HOOK_TIMEOUT_MS / 1000} s (rvd busy or hung?). ` +
+  "Retry; if it persists run `rv doctor`.";
+const RV_BAD_REPLY_REASON =
+  "RV hook sent an unreadable reply (version skew after an upgrade?). " +
+  "Run `rv doctor`; `rv setup` repairs the install.";
+const RV_SPAWN_FAILED_REASON =
+  "RV hook could not be started. Run `rv doctor`; `rv setup` repairs the install.";
 
 export default definePluginEntry({
   id: "rv-guard",
@@ -124,11 +135,12 @@ function spawnRvHook(host, stdin) {
       done({ timedOut: true });
     }, RV_HOOK_TIMEOUT_MS);
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
       done({
         stdout: Buffer.concat(chunks).toString("utf8"),
         exitCode: code,
+        signal,
       });
     });
 
@@ -144,8 +156,11 @@ function mapRvHookResult(value) {
   if (value.error && value.error.code === "ENOENT") {
     return { action: "block", reason: "rv missing" };
   }
-  if (value.error || value.timedOut) {
-    return { action: "block", reason: "rv failed" };
+  if (value.timedOut) {
+    return { action: "block", reason: RV_SHIM_TIMEOUT_REASON };
+  }
+  if (value.error) {
+    return { action: "block", reason: RV_SPAWN_FAILED_REASON };
   }
   const stdout = value.stdout ?? "";
   const trimmed = stdout.trim();
@@ -167,10 +182,19 @@ function mapRvHookResult(value) {
     } catch {
       // non-JSON from a started rv is a failure, not allow
     }
-    return { action: "block", reason: "rv failed" };
+    return { action: "block", reason: RV_BAD_REPLY_REASON };
   }
   if (value.exitCode === 0) {
     return { action: "allow" };
   }
-  return { action: "block", reason: "rv failed" };
+  return { action: "block", reason: exitReason(value) };
+}
+
+function exitReason(value) {
+  const status =
+    typeof value.signal === "string"
+      ? `was killed by signal ${osConstants.signals[value.signal] ?? value.signal}`
+      : `exited with status ${value.exitCode}`;
+  return `RV hook ${status} without a decision. ` +
+    "Run `rv doctor`; `rv setup` repairs the install.";
 }

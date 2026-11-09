@@ -16,6 +16,20 @@ import subprocess
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
+# Failure reasons the user can act on; wording matches rv-guard-claude so
+# every host says the same. The C hook's own deny reasons pass through.
+RV_SHIM_TIMEOUT_REASON = (
+    f"RV hook did not finish within {RV_HOOK_TIMEOUT_S} s (rvd busy or hung?). "
+    "Retry; if it persists run `rv doctor`."
+)
+RV_BAD_REPLY_REASON = (
+    "RV hook sent an unreadable reply (version skew after an upgrade?). "
+    "Run `rv doctor`; `rv setup` repairs the install."
+)
+RV_SPAWN_FAILED_REASON = (
+    "RV hook could not be started. Run `rv doctor`; `rv setup` repairs the install."
+)
+
 
 def register(ctx):
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
@@ -90,8 +104,10 @@ def _spawn_rv_hook(host, stdin):
         )
     except FileNotFoundError:
         return {"action": "block", "reason": "rv missing"}
-    except (OSError, subprocess.TimeoutExpired):
-        return {"action": "block", "reason": "rv failed"}
+    except subprocess.TimeoutExpired:
+        return {"action": "block", "reason": RV_SHIM_TIMEOUT_REASON}
+    except OSError:
+        return {"action": "block", "reason": RV_SPAWN_FAILED_REASON}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
 
 
@@ -114,7 +130,18 @@ def _map_rv_hook_result(stdout, exit_code):
                 }
         except (ValueError, TypeError):
             pass
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": RV_BAD_REPLY_REASON}
     if exit_code == 0:
         return {"action": "allow"}
-    return {"action": "block", "reason": "rv failed"}
+    return {"action": "block", "reason": _exit_reason(exit_code)}
+
+
+def _exit_reason(exit_code):
+    if exit_code < 0:
+        status = f"was killed by signal {-exit_code}"
+    else:
+        status = f"exited with status {exit_code}"
+    return (
+        f"RV hook {status} without a decision. "
+        "Run `rv doctor`; `rv setup` repairs the install."
+    )
