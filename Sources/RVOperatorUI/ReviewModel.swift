@@ -45,6 +45,13 @@ public final class OperatorReviewModel {
 
     private let bridge: any OperatorUIBridge
     private let authenticator: OperatorAuthenticator
+    /// Bumped whenever the selection changes or clears. A bind reply is
+    /// applied only if the epoch it started under is still current, so a
+    /// slow reply for an earlier selection can never become `bound`.
+    private var selectionEpoch = 0
+    /// True while `deny()` is in flight: blocks select/authorize/deny so the
+    /// selection cannot move under the cancel it is addressing.
+    private var denying = false
 
     public init(
         bridge: any OperatorUIBridge,
@@ -86,14 +93,18 @@ public final class OperatorReviewModel {
     /// Selects an operation and binds its review challenge. Binding is
     /// server-idempotent: re-selecting returns the same live challenge.
     public func select(_ id: UUID?) async {
-        guard id != selectedID, !authenticating else { return }
+        guard id != selectedID, !authenticating, !denying else { return }
         clearSelection()
         guard let id, connection == .connected else { return }
         selectedID = id
+        let epoch = selectionEpoch
         do {
-            bound = try await bridge.bind(operationID: id)
+            let bundle = try await bridge.bind(operationID: id)
+            guard epoch == selectionEpoch else { return }
+            bound = bundle
             notice = nil
         } catch {
+            guard epoch == selectionEpoch else { return }
             notice = describe(error)
         }
     }
@@ -102,7 +113,9 @@ public final class OperatorReviewModel {
     /// completion echoes the EXACT retained challenge and operation IDs.
     /// Anything else (mismatch, tamper, replay) fails closed in rvd.
     public func authorize() async {
-        guard let bound, !authenticating else { return }
+        guard let bound, !authenticating, !denying,
+            bound.item.operationID == selectedID
+        else { return }
         authenticating = true
         defer { authenticating = false }
         let outcome = await authenticator.authenticate(reason: reason(for: bound.item))
@@ -127,7 +140,11 @@ public final class OperatorReviewModel {
 
     /// Explicit Deny tap: cancels the selected review. Works bound or not.
     public func deny() async {
-        guard let selectedID, !authenticating else { return }
+        guard let selectedID, !authenticating, !denying,
+            bound == nil || bound?.item.operationID == selectedID
+        else { return }
+        denying = true
+        defer { denying = false }
         do {
             let status = try await bridge.cancel(operationID: selectedID)
             lastStatus = status.status
@@ -139,6 +156,7 @@ public final class OperatorReviewModel {
     }
 
     private func clearSelection() {
+        selectionEpoch += 1
         selectedID = nil
         bound = nil
     }

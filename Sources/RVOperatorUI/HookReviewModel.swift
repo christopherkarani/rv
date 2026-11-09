@@ -58,6 +58,13 @@ public final class OperatorHookReviewModel {
 
     private let bridge: any OperatorHookUIBridge
     private let authenticator: OperatorAuthenticator
+    /// Bumped whenever the selection changes or clears. A bind reply is
+    /// applied only if the epoch it started under is still current, so a
+    /// slow reply for an earlier selection can never become `bound`.
+    private var selectionEpoch = 0
+    /// True while `deny()` is in flight: blocks select/authorize/deny so the
+    /// selection cannot move under the cancel it is addressing.
+    private var denying = false
     private var seenApprovalIDs = Set<String>()
 
     public init(
@@ -116,16 +123,20 @@ public final class OperatorHookReviewModel {
     /// server-idempotent: re-selecting returns the same live challenge.
     /// Binding never authenticates: it only opens the review for reading.
     public func select(_ id: String?) async {
-        guard id != selectedID, !authenticating else { return }
+        guard id != selectedID, !authenticating, !denying else { return }
         clearSelection()
         guard let id, connection == .connected else { return }
         selectedID = id
         // Opening a request marks it seen: the human is looking at it.
         unseenApprovalIDs.remove(id)
+        let epoch = selectionEpoch
         do {
-            bound = try await bridge.hookBind(approvalID: id)
+            let bundle = try await bridge.hookBind(approvalID: id)
+            guard epoch == selectionEpoch else { return }
+            bound = bundle
             notice = nil
         } catch {
+            guard epoch == selectionEpoch else { return }
             notice = describe(error)
         }
     }
@@ -145,7 +156,9 @@ public final class OperatorHookReviewModel {
     }
 
     public func allowOnce() async {
-        guard let bound, !authenticating else { return }
+        guard let bound, !authenticating, !denying,
+            bound.item.approvalID == selectedID
+        else { return }
         guard allowOnceAvailable else {
             notice = "Allow once is unavailable for this request."
             return
@@ -176,18 +189,26 @@ public final class OperatorHookReviewModel {
     /// authenticating (deny grants nothing). Binds first when the review is
     /// selected but not yet bound, since deny addresses the live challenge.
     public func deny() async {
-        guard let selectedID, !authenticating else { return }
+        guard let selectedID, !authenticating, !denying,
+            bound == nil || bound?.item.approvalID == selectedID
+        else { return }
+        denying = true
+        defer { denying = false }
         do {
-            if bound == nil {
-                bound = try await bridge.hookBind(approvalID: selectedID)
-            }
-            guard let bound else {
-                notice = "Request failed."
-                return
+            let target: UIHookChallengeBundleDTO
+            if let existing = bound {
+                target = existing
+            } else {
+                let epoch = selectionEpoch
+                let bundle = try await bridge.hookBind(approvalID: selectedID)
+                // The review vanished (refresh) while binding: deny nothing.
+                guard epoch == selectionEpoch else { return }
+                bound = bundle
+                target = bundle
             }
             let status = try await bridge.hookDeny(UIHookDeny(
-                challengeID: bound.challenge.challengeID,
-                approvalID: bound.item.approvalID))
+                challengeID: target.challenge.challengeID,
+                approvalID: target.item.approvalID))
             lastStatus = status.status
             clearSelection()
             await refresh()
@@ -201,6 +222,7 @@ public final class OperatorHookReviewModel {
     }
 
     private func clearSelection() {
+        selectionEpoch += 1
         selectedID = nil
         bound = nil
     }
