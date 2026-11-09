@@ -15,9 +15,17 @@ import Synchronization
 /// never runs the model; the caller fails it closed (`JudgeRun.busy`).
 final class JudgeAdmission: Sendable {
     /// Requests admitted at once (one on the model, the rest waiting).
-    /// Inference is typically well under a second, so a full queue clears
-    /// inside the daemon's 7 s `HookDeadline.budget`.
-    static let liveLimit = 4
+    /// The deadline-bounded wait is what stops a backlog from piling up;
+    /// this count only caps the Dispatch threads blocked on the model. It
+    /// is sized so an ordinary parallel burst (parallel tool calls, several
+    /// agents sharing one rvd) is still judged: ~12 requests at ~0.5 s each
+    /// plus `inferenceHeadroom` fit inside `HookDeadline.budget`.
+    static let liveLimit = 12
+
+    /// Time kept back for the inference itself: a request waits for the
+    /// model only until `deadline - inferenceHeadroom`, so work it admits
+    /// can finish before the client gives up.
+    static let inferenceHeadroom: Duration = .seconds(1)
 
     /// The admission every live judge call goes through.
     static let live = JudgeAdmission(limit: liveLimit)
@@ -41,10 +49,12 @@ final class JudgeAdmission: Sendable {
     var admitted: Int { count.withLock { $0 } }
 
     /// Runs `body` with the model to itself, or returns nil without running
-    /// it when the queue is full or `deadline` passes first. A nil deadline
-    /// waits for the model as long as it takes (still bounded by `limit`).
+    /// it when the queue is full or `deadline - inferenceHeadroom` passes
+    /// first. A nil deadline waits for the model as long as it takes (still
+    /// bounded by `limit`).
     func run<T>(until deadline: ContinuousClock.Instant?, _ body: () -> T) -> T? {
-        if let deadline, deadline <= ContinuousClock.now { return nil }
+        let cutoff = deadline.map { $0 - Self.inferenceHeadroom }
+        if let cutoff, cutoff <= ContinuousClock.now { return nil }
         let entered = count.withLock { count in
             guard count < limit else { return false }
             count += 1
@@ -52,7 +62,7 @@ final class JudgeAdmission: Sendable {
         }
         guard entered else { return nil }
         defer { count.withLock { $0 -= 1 } }
-        guard model.wait(timeout: Self.dispatchTime(until: deadline)) == .success else { return nil }
+        guard model.wait(timeout: Self.dispatchTime(until: cutoff)) == .success else { return nil }
         defer { model.signal() }
         return body()
     }
@@ -76,13 +86,6 @@ final class JudgeAdmission: Sendable {
         guard let deadline else { return .distantFuture }
         let remaining = deadline - ContinuousClock.now
         guard remaining > .zero else { return .now() }
-        let (seconds, attoseconds) = remaining.components
-        let whole = seconds.multipliedReportingOverflow(by: 1_000_000_000)
-        guard whole.overflow == false else { return .distantFuture }
-        let total = whole.partialValue.addingReportingOverflow(attoseconds / 1_000_000_000)
-        guard total.overflow == false, let nanoseconds = Int(exactly: total.partialValue) else {
-            return .distantFuture
-        }
-        return .now() + .nanoseconds(nanoseconds)
+        return .now() + dispatchInterval(remaining)
     }
 }

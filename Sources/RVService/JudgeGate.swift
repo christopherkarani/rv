@@ -576,8 +576,12 @@ public enum JudgeRuntime {
     /// Inference through the live admission, bounded by this request's hook
     /// deadline. The model load is not admitted: it is single-flight and
     /// has its own bounded wait (`loadWait`).
-    private static func admitted(_ inference: () -> JudgeRun) -> JudgeRun {
-        JudgeAdmission.live.run(until: JudgeAdmission.deadline, inference) ?? .busy
+    static func admitted(
+        through admission: JudgeAdmission = .live,
+        until deadline: ContinuousClock.Instant? = JudgeAdmission.deadline,
+        _ inference: () -> JudgeRun
+    ) -> JudgeRun {
+        admission.run(until: deadline, inference) ?? .busy
     }
 
     /// A judge that cannot answer this request (prediction failed, still

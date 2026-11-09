@@ -19,7 +19,10 @@ struct JudgeAdmissionTests {
                 release.wait()
             }
         }
-        started.wait()
+        if started.wait(timeout: .now() + 5) == .timedOut {
+            Issue.record("the occupying request never reached the model")
+            release.signal()
+        }
     }
 
     @Test func requestsBeyondTheLimitAreRefusedWithoutWaiting() {
@@ -65,7 +68,8 @@ struct JudgeAdmissionTests {
 
         let begin = ContinuousClock.now
         let ran = Mutex(false)
-        let waited = admission.run(until: begin.advanced(by: .milliseconds(200))) {
+        let deadline = begin.advanced(by: .milliseconds(200) + JudgeAdmission.inferenceHeadroom)
+        let waited = admission.run(until: deadline) {
             ran.withLock { $0 = true }; return true
         }
         let elapsed = ContinuousClock.now - begin
@@ -73,6 +77,19 @@ struct JudgeAdmissionTests {
         #expect(ran.withLock { $0 } == false)
         #expect(elapsed >= .milliseconds(150))
         #expect(elapsed < .seconds(2))
+    }
+
+    @Test func aDeadlineInsideTheHeadroomNeverRunsTheModel() {
+        let admission = JudgeAdmission(limit: 4)
+        let ran = Mutex(false)
+        let begin = ContinuousClock.now
+        let tight = admission.run(
+            until: begin.advanced(by: JudgeAdmission.inferenceHeadroom / 2)
+        ) { ran.withLock { $0 = true }; return true }
+        #expect(tight == nil)
+        #expect(ran.withLock { $0 } == false)
+        #expect(ContinuousClock.now - begin < .milliseconds(200))
+        #expect(admission.admitted == 0)
     }
 
     @Test func aSpentDeadlineNeverRunsTheModel() {
@@ -122,10 +139,49 @@ struct JudgeAdmissionTests {
         #expect(JudgeAdmission.loadWait(.seconds(5), until: spent, now: now) == .zero)
     }
 
-    @Test func liveLimitStaysWithinOneHookBudget() {
-        // Typical inference is well under a second; a full queue must still
-        // clear inside the daemon's 7 s budget instead of piling up.
-        #expect(JudgeAdmission.liveLimit >= 2)
-        #expect(JudgeAdmission.liveLimit <= 6)
+    @Test func aFullLiveQueueClearsInsideOneHookBudget() {
+        // Nominal inference per request; the last admitted one must still
+        // finish before the daemon's budget runs out.
+        let nominalInference: Duration = .milliseconds(500)
+        #expect(
+            nominalInference * JudgeAdmission.liveLimit + JudgeAdmission.inferenceHeadroom
+                <= HookDeadline.budget)
+    }
+
+    @Test func liveInferenceGoesThroughTheAdmission() {
+        // A full admission turns inference away without running it.
+        let full = JudgeAdmission(limit: 1)
+        let release = DispatchSemaphore(value: 0)
+        let started = DispatchSemaphore(value: 0)
+        occupy(full, release: release, started: started)
+        defer { release.signal() }
+        let ran = Mutex(false)
+        let refused = JudgeRuntime.admitted(through: full, until: nil) {
+            ran.withLock { $0 = true }
+            return .failed
+        }
+        guard case .busy = refused else {
+            Issue.record("a full admission must answer busy, got \(refused)")
+            return
+        }
+        #expect(ran.withLock { $0 } == false)
+
+        // A deadline inside the headroom is busy too, even when free.
+        let free = JudgeAdmission(limit: 1)
+        let late = JudgeRuntime.admitted(
+            through: free, until: ContinuousClock.now.advanced(by: .milliseconds(10))
+        ) { ran.withLock { $0 = true }; return .failed }
+        guard case .busy = late else {
+            Issue.record("a spent budget must answer busy, got \(late)")
+            return
+        }
+        #expect(ran.withLock { $0 } == false)
+
+        // A free admission returns the inference's own result.
+        let answered = JudgeRuntime.admitted(through: free, until: nil) { .warming }
+        guard case .warming = answered else {
+            Issue.record("a free admission must return the inference result, got \(answered)")
+            return
+        }
     }
 }
