@@ -17,6 +17,21 @@ import sys
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
+# Failure reasons the user can act on. A slow rvd and a dead one must not
+# read the same; the C hook's own down/timeout reasons pass through.
+RV_DOWN_REASON = "RV daemon is not reachable or did not answer in time. Run `rv doctor`."
+RV_SHIM_TIMEOUT_REASON = (
+    f"RV hook did not finish within {RV_HOOK_TIMEOUT_S} s (rvd busy or hung?). "
+    "Retry; if it persists run `rv doctor`."
+)
+RV_BAD_REPLY_REASON = (
+    "RV hook sent an unreadable reply (version skew after an upgrade?). "
+    "Run `rv doctor`; `rv setup` repairs the install."
+)
+RV_SPAWN_FAILED_REASON = (
+    "RV hook could not be started. Run `rv doctor`; `rv setup` repairs the install."
+)
+
 
 def main():
     try:
@@ -97,8 +112,10 @@ def _spawn_rv_hook(host, stdin):
         )
     except FileNotFoundError:
         return {"action": "block", "reason": "rv missing"}
-    except (OSError, subprocess.TimeoutExpired):
-        return {"action": "block", "reason": "rv failed"}
+    except subprocess.TimeoutExpired:
+        return {"action": "block", "reason": RV_SHIM_TIMEOUT_REASON}
+    except OSError:
+        return {"action": "block", "reason": RV_SPAWN_FAILED_REASON}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
 
 
@@ -108,17 +125,25 @@ def _map_rv_hook_result(stdout, exit_code):
         try:
             parsed = json.loads(trimmed)
         except (ValueError, TypeError):
-            return {"action": "block", "reason": "rv failed"}
+            return {"action": "block", "reason": RV_BAD_REPLY_REASON}
         if not isinstance(parsed, dict):
-            return {"action": "block", "reason": "rv failed"}
+            return {"action": "block", "reason": RV_BAD_REPLY_REASON}
         if parsed.get("decision") == "ask":
             return {
                 "action": "ask",
                 "reason": parsed.get("reason") if isinstance(parsed.get("reason"), str) else "",
             }
         hook = parsed.get("hookSpecificOutput")
+        # The C hook's RV_HOOK_WHEN_DOWN=ask fallback (rvd unreachable or
+        # slow). Blocks like a deny with its reason; never forwarded as ask.
         if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
-            return {"action": "block", "reason": "rv failed"}
+            return {
+                "action": "block",
+                "reason": _blocking_reason(
+                    hook.get("permissionDecisionReason") or parsed.get("systemMessage"),
+                    RV_DOWN_REASON,
+                ),
+            }
         if isinstance(hook, dict) and hook.get("permissionDecision") == "deny":
             return {
                 "action": "block",
@@ -131,18 +156,26 @@ def _map_rv_hook_result(stdout, exit_code):
                 "action": "block",
                 "reason": _blocking_reason(parsed.get("reason")),
             }
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": RV_BAD_REPLY_REASON}
     if exit_code == 0:
         return {"action": "allow"}
-    return {"action": "block", "reason": "rv failed"}
+    if exit_code < 0:
+        status = f"was killed by signal {-exit_code}"
+    else:
+        status = f"exited with status {exit_code}"
+    return {
+        "action": "block",
+        "reason": f"RV hook {status} without a decision. "
+        "Run `rv doctor`; `rv setup` repairs the install.",
+    }
 
 
-def _blocking_reason(reason):
+def _blocking_reason(reason, fallback="rv failed"):
     if isinstance(reason, str):
         text = reason.strip()
         if text:
             return text
-    return "rv failed"
+    return fallback
 
 
 def _emit_deny(mapped):
