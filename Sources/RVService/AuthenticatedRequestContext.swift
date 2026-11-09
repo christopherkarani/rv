@@ -136,27 +136,24 @@ public enum ServiceMethodAuthorization {
                 return false
             }
         case .ttyAttestation:
-            // Pinned genuine CLI only (manifest identity + hardened
-            // runtime, assigned by the peer authenticator). The role proves
-            // WHICH code attests; the in-binary ceremony (display → LA →
-            // attest) proves a human reviewed and authenticated. Every
-            // other role — including unauthenticated same-user peers —
-            // fails closed here. Linux SO_PEERCRED peers carry no code
-            // identity and never receive .cli, so TTY attestation stays a
-            // macOS-only ceremony; launch proposals are likewise denied
-            // for socket peers until Linux gains an equivalent pinning.
+            // Allow-once redeem. The matrix only admits the caller; the
+            // owner approves in the handler (`attestTTYRedemption`), so no
+            // role here is authority. Admitted: the pinned CLI and role-less
+            // peers. Other pinned components have no business redeeming and
+            // unauthenticated peers never get in.
+            guard let peer = context.peer else { return false }
             switch context.componentRole {
             case .cli:
-                return context.peer != nil
+                return true
             case .service, .workspaceHost, .operatorUI, .mcpCustodian:
                 return false
             case nil:
-                // A role-less authenticated peer (Linux socket) may attest
-                // only with an owner proof; the handler verifies it.
-                if case .attestTTYRedemption(let params) = method, params.ownerProof != nil {
-                    return context.peer != nil
-                }
-                return false
+                // A kernel-attested XPC peer (macOS one-click install, no
+                // peer-trust manifest): rvd shows its own owner prompt. A
+                // bare socket peer (Linux) must carry the owner's password,
+                // which the handler verifies.
+                guard case .attestTTYRedemption(let params) = method else { return false }
+                return peer.evidence.auditToken != nil || params.ownerProof != nil
             }
         case .ownerConfirm:
             return context.peer != nil

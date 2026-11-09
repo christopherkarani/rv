@@ -7,10 +7,9 @@ import RVPolicy
 @testable import RVService
 
 /// Step 8B.1 TTY attestation: the ONLY generic-IPC path that plants
-/// authority, and only for the pinned genuine CLI after its in-binary
-/// ceremony (display → LocalAuthentication → attest). Same-user IPC
-/// callers, other roles, malformed fields, replays, substitutions, and
-/// restarts must all fail closed.
+/// authority, and only after the owner check. Callers without one, other
+/// roles, malformed fields, replays, substitutions, and restarts must all
+/// fail closed.
 @Suite("TTY attestation authority")
 struct TTYAttestationTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -283,13 +282,7 @@ struct TTYAttestationTests {
 
     @Test func expiredAttestedGrantDenies() async throws {
         let box = AttestClockBox(now)
-        let homeURL = try isolatedHomeDirectory()
-        let home = try #require(HomeDirectory(validating: homeURL.path))
-        let runtime = ServiceRuntime(
-            home: home,
-            allowOnceDirectory: try isolatedAllowOnceDirectory(),
-            clock: { box.now }
-        )
+        let runtime = try makeRuntime(clock: { box.now })
         let planted = await runtime.dispatch(
             IPCRequest(method: .attestTTYRedemption(
                 attestParams(command: "git reset --hard", code: "abcdef")
@@ -314,13 +307,21 @@ struct TTYAttestationTests {
         }
     }
 
-    private func makeRuntime() throws -> ServiceRuntime {
+    /// Plant mechanics only: the owner check runs without rvd's prompt
+    /// (the password path, where the pinned `.cli` is accepted as before),
+    /// so no test reaches LocalAuthentication. rvd's own prompt for every
+    /// caller is covered by `AllowOnceOwnerPromptTests`.
+    private func makeRuntime(clock: (@Sendable () -> Date)? = nil) throws -> ServiceRuntime {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
+        let now = self.now
         return ServiceRuntime(
-            home: home,
+            snapshots: nil, catalog: nil, home: home, allowOnce: nil,
             allowOnceDirectory: try isolatedAllowOnceDirectory(),
-            clock: { self.now }
+            idleExitSeconds: IdleWatchdog.defaultSeconds, log: nil, analytics: nil,
+            clock: clock ?? { now }, pendingApprovals: .automatic,
+            ceremonies: WorkspaceOperatorCeremonyService(),
+            ownerPresence: OwnerPresence(authenticator: nil)
         )
     }
 

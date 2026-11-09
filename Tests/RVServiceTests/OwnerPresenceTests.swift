@@ -348,7 +348,12 @@ struct OwnerPresenceTests {
         #expect(none.result == .error(.authorizationDenied))
         let wrong = await runtime.dispatch(
             IPCRequest(method: attest(OwnerProof(password: "nope"))), context: context, sameUIDSocket: true)
-        #expect(wrong.result == .error(.authorizationDenied))
+        guard case .attestTTYRedemption(let refused) = wrong.result else {
+            Issue.record("a wrong password must answer with the owner check, got \(wrong.result)")
+            return
+        }
+        #expect(refused.planted == false)
+        #expect(refused.ownerCheck == ConfirmOwnerActionReply(outcome: .wrongPassword))
         let right = await runtime.dispatch(
             IPCRequest(method: attest(OwnerProof(password: "secret"))), context: context, sameUIDSocket: true)
         guard case .attestTTYRedemption(let reply) = right.result else {

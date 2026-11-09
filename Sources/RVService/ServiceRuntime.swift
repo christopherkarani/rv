@@ -454,11 +454,6 @@ public actor ServiceRuntime {
         )
     }
 
-    /// Genuine-CLI TTY attestation handler. The matrix already restricted
-    /// this method to the pinned `.cli` role; re-validate every field
-    /// anyway (a buggy caller must plant nothing), then plant one memory
-    /// grant. The daemon writes no projection (the attesting CLI flips its
-    /// own). Double-attests report planted:false and create no second grant.
     /// The device owner approves `params.summary`: rvd verifies presence
     /// (see `OwnerPresence`), audits the outcome, and answers. The CLI
     /// performs the action only on `.approved`.
@@ -482,27 +477,40 @@ public actor ServiceRuntime {
         return .confirmOwnerAction(reply)
     }
 
+    /// Allow-once redeem: plants one memory grant once the device owner
+    /// approves. The daemon writes no projection (the redeeming CLI flips
+    /// its own row). Double-attests report planted:false and create no
+    /// second grant.
+    ///
+    /// Who approves. The caller is an authenticated same-user peer and its
+    /// role confers nothing: on macOS rvd shows the LocalAuthentication
+    /// prompt itself (Touch ID or the login password), for the pinned `.cli`
+    /// and for the unsigned CLI of a one-click install alike; on Linux rvd
+    /// checks the login password the CLI read from its terminal.
+    ///
+    /// Why a coding agent cannot redeem its own code. It sees the code in
+    /// the hook deny and runs as the same user, so it can reach rvd without
+    /// the CLI and without a TTY, and send this request itself (running
+    /// `rv allow-once` through its hook is already denied by the
+    /// self-protection guard). It still has to get past the prompt, and it
+    /// cannot: LocalAuthentication is answered at the console by the owner's
+    /// finger or login password, which a process cannot synthesise; with no
+    /// login session (headless, ssh) no prompt can be shown and the answer
+    /// is `unavailable`. The prompt names only what rvd itself issued and
+    /// matched against this request (command, cwd, payload digest, code), so
+    /// the agent cannot dress a dangerous grant up as a harmless one through
+    /// the same-user pending file, and a code rvd never issued raises no
+    /// prompt at all. One prompt at a time, closed after 60 s, and five
+    /// declines in ten minutes lock owner checks for ten minutes, shared
+    /// with owner actions, so it cannot wear the owner down with prompts.
     private func attestTTYRedemption(
         _ params: AttestTTYRedemptionParams, context: AuthenticatedRequestContext = .unauthenticated
     ) async -> IPCResult {
         func denied() -> IPCResult { .error(.authorizationDenied) }
-        // The genuine macOS CLI ran LocalAuthentication itself (`.cli`).
-        // Other authenticated callers (Linux) prove presence with the
-        // owner's password, which rvd verifies before planting anything.
-        if context.componentRole != .cli {
-            guard case .approved = await ownerPresence.verify(params.ownerProof, context: context) else {
-                OwnerPresence.audit(
-                    summary: "redeem allow-once code", approved: false, outcome: "proofRejected",
-                    context: context, home: configHome)
-                return denied()
-            }
-            OwnerPresence.audit(
-                summary: "redeem allow-once code", approved: true, outcome: "approved",
-                context: context, home: configHome)
-        }
         // Shape re-checks for in-process callers: wire bytes already
         // passed validating decode, but a constructed value can carry
-        // any raw string. Same rule, same refusal as before.
+        // any raw string. Same rule, same refusal as before. They run
+        // before the owner check so garbage never reaches a prompt.
         guard GrantFingerprint(validatingHex: params.fingerprint.rawValue) != nil else {
             return denied()
         }
@@ -513,12 +521,44 @@ public actor ServiceRuntime {
             return denied()
         }
         // M-07: the attested payload digest binds the planted grant. Shape
-        // only — the daemon never sees exact text, so the genuine-CLI
-        // ceremony (same trust as the fingerprint) vouches the value.
+        // only here; on macOS it must also equal the digest rvd issued.
         if let digest = params.payloadDigest {
             guard ContentPayloadDigest(validatingHex: digest.rawValue) != nil else {
                 return denied()
             }
+        }
+        var description = ""
+        if ownerPresence.promptsInRvd {
+            guard let found = await redemptionDescription(params, context: context) else {
+                return .error(.allowOnceNotFound)
+            }
+            if found.redeemed {
+                // Already planted in this rvd lifetime: answer the retry
+                // without a second prompt.
+                return .attestTTYRedemption(AttestTTYRedemptionReply(
+                    planted: false, epoch: grants.epoch.uuidString))
+            }
+            description = found.text
+        }
+        let verdict = await ownerPresence.confirmRedemption(
+            description, proof: params.ownerProof, context: context)
+        let approved = verdict == .approved
+        let outcome: String
+        switch verdict {
+        case .approved: outcome = ConfirmOwnerActionReply.Outcome.approved.rawValue
+        case .denied(let reply): outcome = reply.outcome.rawValue
+        }
+        // The audit names the redeem, never the command: the audit log is a
+        // same-user file, like the pending file that keeps only its head.
+        OwnerPresence.audit(
+            summary: "redeem allow-once code", approved: approved, outcome: outcome,
+            context: context, home: configHome)
+        if case .denied(let reply) = verdict {
+            // No proof at all stays a plain refusal; an owner check that
+            // ran and refused tells the CLI why.
+            guard reply.outcome != .proofRequired else { return denied() }
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString, ownerCheck: reply))
         }
         let now = clock()
         switch await grants.plant(
@@ -529,6 +569,7 @@ public actor ServiceRuntime {
             payloadContentDigest: params.payloadDigest
         ) {
         case .planted:
+            await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)
             // Memory only. The attesting CLI flips its own display
             // projection after planted:true; the daemon never writes the
             // shared projection file (no cross-process append race).
@@ -536,12 +577,46 @@ public actor ServiceRuntime {
                 planted: true, epoch: grants.epoch.uuidString
             ))
         case .alreadyRedeemed:
+            await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)
             return .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: false, epoch: grants.epoch.uuidString
             ))
         case .refused:
             return denied()
         }
+    }
+
+    /// rvd's own prompt text for this redeem, or nil when rvd has nothing it
+    /// can vouch for (no prompt is shown then).
+    ///
+    /// The code rvd issued on a hook deny is the source: rvd kept the whole
+    /// command in memory, and every field of the request must match it.
+    /// A row pre-armed with `rv allow-once mint` was never seen by rvd; its
+    /// only record is the same-user pending file, whose text the agent can
+    /// rewrite. The pinned `.cli` keeps that path (its trust is unchanged);
+    /// for anyone else such a code is not found.
+    private func redemptionDescription(
+        _ params: AttestTTYRedemptionParams, context: AuthenticatedRequestContext
+    ) async -> (text: String, redeemed: Bool)? {
+        let now = clock()
+        let hash = params.codeHash.rawValue
+        if let issued = await allowOnce.issued(codeHash: hash, now: now) {
+            guard issued.fingerprint == params.fingerprint, issued.cwd == params.cwd,
+                issued.payloadDigest == params.payloadDigest
+            else { return nil }
+            return (
+                AllowOncePromptText.reason(command: issued.command, cwd: issued.cwd, ruleID: issued.ruleID),
+                issued.redeemed
+            )
+        }
+        guard context.componentRole == .cli, context.peer != nil,
+            let pending = await allowOnce.pendingRow(codeHash: hash, now: now),
+            pending.fingerprint == params.fingerprint.rawValue, pending.row.cwd == params.cwd,
+            pending.payloadDigest == params.payloadDigest?.rawValue
+        else { return nil }
+        let command = AllowOncePromptText.invoked(
+            view: pending.row.commandRedacted, invocationDisplay: pending.row.invocationDisplay)
+        return (AllowOncePromptText.reason(command: command, cwd: pending.row.cwd, ruleID: pending.row.ruleID), false)
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {

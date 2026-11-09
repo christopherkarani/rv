@@ -104,9 +104,8 @@ struct UnixChkpwdChecker: OwnerPasswordChecking {
 ///   no peer-trust manifest, and the CLI cannot answer for the owner.
 /// - Linux: the caller sends the owner's login password, which rvd verifies.
 ///
-/// Allow-once redeem (`verify`): the genuine macOS CLI (`.cli` role,
-/// code-pinned) ran LocalAuthentication in its own ceremony; every other
-/// caller must send the login password.
+/// Allow-once redeem (`confirmRedemption`): the same as owner actions, with
+/// rvd's own description of the code it issued as the prompt text.
 ///
 /// Both:
 /// - One check runs at a time, so an agent cannot slip a second request in
@@ -194,8 +193,24 @@ actor OwnerPresence {
         return recordFailure(.declined)
     }
 
-    /// Allow-once redeem: the pinned `.cli` ran its own prompt; anyone else
-    /// sends the login password.
+    /// True when rvd shows its own owner prompt (macOS). Then the caller's
+    /// role never stands in for the owner.
+    nonisolated var promptsInRvd: Bool { authenticator != nil }
+
+    /// Allow-once redeem. `description` is rvd's own text for the code it
+    /// issued (never the caller's). With rvd's prompt (macOS) every
+    /// authenticated caller goes through `confirm`; without one (Linux), the
+    /// caller sends the login password.
+    func confirmRedemption(
+        _ description: String, proof: OwnerProof?, context: AuthenticatedRequestContext
+    ) async -> Verdict {
+        guard authenticator != nil else { return await verify(proof, context: context) }
+        return await confirm(description, proof: proof, context: context)
+    }
+
+    /// Password check for a platform without rvd's prompt (Linux). A pinned
+    /// `.cli` (macOS only, so reached only without a prompt provider, as in
+    /// tests) is accepted as before.
     func verify(_ proof: OwnerProof?, context: AuthenticatedRequestContext) async -> Verdict {
         if context.componentRole == .cli, context.peer != nil {
             return .approved
