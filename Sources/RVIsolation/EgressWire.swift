@@ -3,7 +3,7 @@ import Foundation
 /// Pure parsing and classification for the egress proxy: request-line
 /// targets, TLS ClientHello SNI, DNS name comparison, and public-unicast
 /// address checks. No sockets, no clocks, no state, so each function is
-/// tested and fuzzed on its own (`EgressProxyTests`, `EgressDestinationCheck`,
+/// tested and fuzzed on its own (`EgressProxyTests`, `EgressDestinationCheckTests`,
 /// `Fuzz/TLSClientHello`). `EgressProxy` does the I/O around them;
 /// `EgressAdmission` decides with their results.
 enum EgressWire {
