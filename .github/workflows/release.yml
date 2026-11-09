@@ -15,7 +15,6 @@ concurrency:
 
 jobs:
   gate:
-    if: github.event_name != 'pull_request'
     runs-on: macos-26
     timeout-minutes: 120
     outputs:
@@ -214,7 +213,6 @@ jobs:
 
   linux:
     name: linux ${{ matrix.target }}
-    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:

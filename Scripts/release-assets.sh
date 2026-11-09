@@ -65,7 +65,7 @@ done
 
 if [[ -f "$STAGE/libswiftCompatibilitySpan.dylib" ]]; then
   cp "$STAGE/libswiftCompatibilitySpan.dylib" "$OUT/libswiftCompatibilitySpan.dylib"
-  chmod 755 "$STAGE/libswiftCompatibilitySpan.dylib"
+  chmod 755 "$OUT/libswiftCompatibilitySpan.dylib"
 fi
 
 if [[ "$TARGET" == linux-* ]]; then

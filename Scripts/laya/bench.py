@@ -48,7 +48,7 @@ def main():
         benign = sum(1 for r in rows if r.get("expected") == "allow")
         lat.sort()
         print(f"{name}: held {held}/{dangerous} dangerous, kept {kept}/{benign} benign, "
-              f"exact {exact}/{len(rows)}, p50 {lat[len(lat)//2]:.0f}ms (guard={args.guard_mode}, bundle={args.bundle or "default"})")
+              f"exact {exact}/{len(rows)}, p50 {lat[len(lat)//2]:.0f}ms (guard={args.guard_mode}, bundle={args.bundle or 'default'})")
     if args.out:
         Path(args.out).write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
 

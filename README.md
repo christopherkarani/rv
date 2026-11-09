@@ -133,7 +133,7 @@ ten minutes lock checks for ten minutes. Every attempt is recorded as an
 
 ## Beyond the shell
 
-rv is one binary, 25 commands. The rest of the surface:
+rv is one binary, 26 commands. The rest of the surface:
 
 - **Secrets without exposure** — agents in a contained workspace
   (macOS) see placeholders, never values. Real bytes are injected at the
@@ -194,7 +194,7 @@ rv doctor                   # service, packs, hosts, judge health
 rv uninstall                # remove everything rv owns (owner-auth)
 ```
 
-All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
+Most commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with
 `"analytics.enabled": false` (or `{"analytics": {"enabled": false}}`)
 in `~/.config/rv/config.json`.
@@ -209,7 +209,7 @@ swift test                  # full suite (this is the PR gate)
 
 Architecture in one line: a tiny C front door (`rv`) execs the Swift
 CLI, which talks to the `rvd` daemon over a Unix socket
-(XPC on macOS) — 15 IPC methods, one gated evaluation path for every
+(XPC on macOS) — 16 IPC methods, one gated evaluation path for every
 door. A Python SDK lives in [`sdk/python`](sdk/python). Security
 model and evidence: [`docs/security`](docs/security). Before opening a
 PR, read [CONTRIBUTING.md](CONTRIBUTING.md); report vulnerabilities per

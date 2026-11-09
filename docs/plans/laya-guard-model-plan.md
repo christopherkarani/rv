@@ -87,7 +87,7 @@ silent token drift = silently wrong probabilities.
   semantic analyzers, chain split with worst-wins), `SecretPathGuard`.
   Pack deny is a floor; semantics only tighten. This is part 1 of 2.
 - Verdict plumbing exists: pack-door `Decision` is never Ask
-  ([Decision.swift](/Users/chriskarani/CodingProjects/rv/Sources/RVDomain/Decision.swift));
+  ([Decision.swift](../../Sources/RVDomain/Decision.swift));
   Ask is minted at the hook door by `HookAuthorization`
   (`allow`/`ask`/`denyPinned`) plus `PolicyGate` (allowlist, allow-once,
   rebase recovery). Laya's `review` maps to rv's `ask`. No new verdict type.
@@ -95,7 +95,7 @@ silent token drift = silently wrong probabilities.
   `mandatoryHuman` / `reviewEligible(fallback:)`. The Laya judge runs in
   `reviewEligible` and in the review-floor cases below.
 - The current model adds zero live protection:
-  [FoundationModelsActionReviewer.swift](/Users/chriskarani/CodingProjects/rv/Sources/RVPolicy/FoundationModelsActionReviewer.swift)
+  [FoundationModelsActionReviewer.swift](../../Sources/RVPolicy/FoundationModelsActionReviewer.swift)
   is shadow-only via `ShadowReviewRunner`, referenced only inside `RVPolicy`,
   categorical (`allow/deny/abstain` + `RiskLevel` + self-reported
   confidence), macOS 26+ only, 3 s timeout, no probabilities. Under this
