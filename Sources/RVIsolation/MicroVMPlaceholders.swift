@@ -201,8 +201,8 @@ enum MicroVMControlLayout {
     static let controlPinnedDirectories = [".git", ".config"]
 
     static let roots: [Node] = tree(
-        files: controlFiles + WorkspaceRunLaterPaths.files,
-        trees: controlTrees + WorkspaceRunLaterPaths.trees,
+        protected: controlTrees + controlFiles + WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees,
+        trees: Set(controlTrees + WorkspaceRunLaterPaths.trees),
         pinnedRoots: controlPinnedDirectories + WorkspaceRunLaterPaths.pinnedDirectories,
         order: [".git", ".rv", ".config"] + WorkspaceRunLaterPaths.pinnedDirectories
     )
@@ -213,11 +213,11 @@ enum MicroVMControlLayout {
         name.hasSuffix(".json") || name.hasSuffix(".jsonc") ? Array("{}\n".utf8) : []
     }
 
-    /// Same shape as `WorkspaceControlLayout.tree` in the guest package: a
-    /// path under a pinned root goes inside it, and an intermediate
-    /// directory on the way to a deeper path is pinned too.
-    static func tree(files: [String], trees: [String], pinnedRoots: [String], order: [String]) -> [Node] {
-        let protected = trees + files
+    /// Same shape and order as `WorkspaceControlLayout.tree` in the guest
+    /// package: a path under a pinned root goes inside it, and an
+    /// intermediate directory on the way to a deeper path is pinned too.
+    /// `trees` marks which leaves are directories.
+    static func tree(protected: [String], trees: Set<String>, pinnedRoots: [String], order: [String]) -> [Node] {
         func leaf(_ path: String) -> Node {
             let name = String(path.split(separator: "/").last ?? Substring(path))
             return trees.contains(path) ? .tree(name) : .file(name)

@@ -67,6 +67,7 @@ struct WorkspaceControlParityTests {
             ".git", ".rv", ".config", ".claude", ".codex", ".cursor", ".gemini", ".vscode",
             ".mcp.json", "opencode.json", "opencode.jsonc", ".envrc",
         ])
+        // Same child order as the guest's mounts: control trees, then files.
         #expect(roots.first == .pinned(".git", [.tree("hooks"), .file("config")]))
         #expect(roots.contains(.pinned(".claude", [.file("settings.json"), .file("settings.local.json"), .tree("hooks")])))
         #expect(roots.contains(.pinned(".gemini", [.file("settings.json"), .pinned("config", [.file("hooks.json")])])))
