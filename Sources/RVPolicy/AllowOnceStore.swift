@@ -18,6 +18,10 @@ public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
     private let store: FileLockedJSONLStore<AllowOnceRecord>
     private var liveUnlockCodes: [UnlockCacheKey: AllowOnceUnlockCode] = [:]
+    /// Deny codes this instance issued, by code hash. Memory only: rvd's
+    /// instance is the one that issues them, and it reads them back to name
+    /// the whole command in the owner's redeem prompt. See `IssuedAllowOnce`.
+    private var issuedCodes: [String: IssuedAllowOnce] = [:]
 
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
@@ -159,6 +163,16 @@ public actor AllowOnceStore {
                     case let .appended(records):
                         let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        issuedCodes[hash] = IssuedAllowOnce(
+                            fingerprint: fingerprint,
+                            cwd: cwd,
+                            payloadDigest: payloadDigest,
+                            command: AllowOncePromptText.invoked(
+                                view: view.rawValue, invocationDisplay: invocationDisplay),
+                            ruleID: ruleID,
+                            expiresAt: now.addingTimeInterval(ttl),
+                            redeemed: false
+                        )
                         pruneLiveUnlockCodes(against: written, now: now)
                         return .code(code)
                     }
@@ -234,6 +248,36 @@ public actor AllowOnceStore {
                 )
             }
         }
+    }
+
+    /// The live pending row whose code hashes to `codeHash`, read the way
+    /// `validatePending` reads it. rvd holds only the hash.
+    package func pendingRow(
+        codeHash: String,
+        now: Date
+    ) async -> (row: AllowOnceListRow, fingerprint: String, payloadDigest: String?)? {
+        (try? withFileLock {
+            AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: codeHash, now: now)
+        }).flatMap { record in
+            AllowOnceLedger.rows(records: [record], now: now).first.map {
+                (
+                    row: $0,
+                    fingerprint: record.commandFingerprint.rawValue,
+                    payloadDigest: record.payloadDigest?.rawValue
+                )
+            }
+        }
+    }
+
+    /// The deny code this instance issued for `codeHash`, while it is live.
+    package func issued(codeHash: String, now: Date) -> IssuedAllowOnce? {
+        guard let entry = issuedCodes[codeHash], entry.expiresAt > now else { return nil }
+        return entry
+    }
+
+    /// rvd planted the grant for this issued code.
+    package func markIssuedRedeemed(codeHash: String) {
+        issuedCodes[codeHash]?.redeemed = true
     }
 
     /// Daemon projection write: records a memory-table plant/consume as a
@@ -333,6 +377,7 @@ public actor AllowOnceStore {
             ))
         }
         liveUnlockCodes = liveUnlockCodes.filter { liveKeys.contains($0.key) }
+        pruneIssuedCodes(against: written, now: now)
         guard liveUnlockCodes.count > Self.maxLiveUnlockCodes else { return }
         let victims = liveUnlockCodes.keys
             .sorted {
@@ -342,6 +387,27 @@ public actor AllowOnceStore {
             .dropFirst(Self.maxLiveUnlockCodes)
         for key in victims {
             liveUnlockCodes.removeValue(forKey: key)
+        }
+    }
+
+    /// Keeps issued codes whose pending row is still live, plus redeemed
+    /// ones until they expire (a retried redeem then answers "already
+    /// planted" without a second prompt). Capped like the live-code cache,
+    /// soonest expiry first out.
+    private func pruneIssuedCodes(against written: [AllowOnceRecord], now: Date) {
+        let livePending = Set(written.compactMap { record -> String? in
+            guard case .pending = record.lifecycle, record.expiresAt > now else { return nil }
+            return record.codeHash.rawValue
+        })
+        issuedCodes = issuedCodes.filter { hash, entry in
+            entry.expiresAt > now && (entry.redeemed || livePending.contains(hash))
+        }
+        guard issuedCodes.count > Self.maxLiveUnlockCodes else { return }
+        let victims = issuedCodes
+            .sorted { ($0.value.expiresAt, $0.key) < ($1.value.expiresAt, $1.key) }
+            .prefix(issuedCodes.count - Self.maxLiveUnlockCodes)
+        for (hash, _) in victims {
+            issuedCodes.removeValue(forKey: hash)
         }
     }
 
