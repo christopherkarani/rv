@@ -124,7 +124,7 @@ public struct GatedEvaluate: Sendable {
         if let audit = Self.exemptionAudit(detailed.droppedRepoLiterals, workspace: workspace, now: now) {
             effects.append(audit)
         }
-        let result = evaluateFileTool(
+        var result = evaluateFileTool(
             action,
             secretPaths: SecretPathDecider(
                 allowPaths: detailed.effective,
@@ -135,6 +135,12 @@ public struct GatedEvaluate: Sendable {
                 )
             )
         )
+        // Edit/Write to rv's own hook, service or binary files: the agent
+        // must not unhook the guard watching it. Reads stay allowed.
+        if case .allow = result.decision, action.kind != .read,
+           WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
+            result = WiringPathGuard.deny(path: action.path.rawValue)
+        }
         switch posture(result, door: .file, guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
             if let row = Self.denialRow(

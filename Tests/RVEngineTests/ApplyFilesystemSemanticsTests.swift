@@ -778,3 +778,44 @@ private func runFilesystemDoor(
         filesystemProbe: filesystemProbe
     )
 }
+
+/// rv's wiring (`RVWiringPaths`) is a protected path for shell writes even
+/// inside a repository rooted at `$HOME`, where the outside-repo boundary
+/// does not apply. Reads are untouched.
+@Suite("ApplyFilesystemSemantics: rv wiring")
+struct ApplyFilesystemWiringTests {
+    private let homeRepo = FilesystemAnalysisWorld.probed(
+        FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/Users/me"),
+            repositoryRoot: RepositoryRoot(validating: "/Users/me"),
+            homeDirectory: HomePath(validating: "/Users/me")
+        )
+    )
+
+    private func composed(_ command: String) throws -> EvaluationResult {
+        applyFilesystemSemantics(
+            pack: try runFilesystemPack(command),
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: homeRepo
+        )
+    }
+
+    @Test("writes to wiring deny as protected paths", arguments: [
+        "echo '{}' > .claude/settings.json",
+        "echo x > ~/.local/bin/rvd",
+        "touch Library/LaunchAgents/dev.rv.evaluate.plist",
+    ])
+    func wiringWriteDenies(command: String) throws {
+        let result = try composed(command)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("\(command) must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID, "\(command)")
+    }
+
+    @Test("ordinary home-repo writes stay allowed")
+    func ordinaryWriteAllowed() throws {
+        #expect(try composed("echo hi > notes.txt").decision == .allow)
+    }
+}

@@ -6,13 +6,14 @@ import RVPolicy
 ///
 /// An observe host allows and records what enforcement would deny, but it
 /// must not be able to loosen another host or the global guard. So an rv
-/// admin command that weakens rv (`SelfProtectionGuard`) or a touch of rv's
+/// admin command that weakens rv (`SelfProtectionGuard`), a touch of rv's
 /// config dir (`core.secrets:home-rv-config`, the only catalog rule that
-/// guards rv's own state) stays enforced. `GatedEvaluate.posture` is the
+/// guards rv's own state) or of rv's wiring files (`RVWiringPaths`) stays
+/// enforced. `GatedEvaluate.posture` is the
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
 enum ObserveFloor {
-    static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config")]
+    static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config"), RVWiringPaths.ruleID]
 
     private static let catalog = SecretPathCatalog(
         rules: SecretPathCatalog.dayOne.rules.filter { ruleIDs.contains(SecretPathMatch($0).ruleID) }
@@ -55,7 +56,19 @@ enum ObserveFloor {
         let words = Set([command.rawValue, result.matchingView.rawValue].flatMap { text in
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
-        return words.contains { rvConfig.filePathHit($0) != nil }
+        return words.contains { rvConfig.filePathHit($0) != nil || namesWiring($0, home: home, cwd: cwd) }
+    }
+
+    /// A word naming one of rv's wiring files (`RVWiringPaths`): the shell
+    /// door enforces writes there, so an observe host must too. Reads are
+    /// allowed under enforce anyway.
+    private static func namesWiring(_ word: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        guard let home else { return false }
+        if word.hasPrefix("/") || isHomeAliasPath(word) {
+            return RVWiringPaths.matches(word, home: home.rawValue)
+        }
+        guard let cwd else { return false }
+        return RVWiringPaths.matches(cwd.rawValue + "/" + word, home: home.rawValue)
     }
 
     private static let wordBreaks: Set<Character> = [
