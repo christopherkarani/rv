@@ -155,7 +155,7 @@ struct Packs: AsyncParsableCommand {
                 }
                 row = try PacksFacade.info(home: home, id: packID)
             } catch PacksCommandError.packNotFound {
-                throw ExitCode(1)
+                try ctx.fail("unknown pack id: \(DisplayedText.field(id))\n")
             }
             if ctx.explicitRobot {
                 let text = try RobotDocument.packsInfo(packsRobotRow(row)).render()

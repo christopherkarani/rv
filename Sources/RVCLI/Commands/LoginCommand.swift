@@ -289,7 +289,6 @@ struct LoginCheck: AsyncParsableCommand {
         for raw in providers {
             guard let provider = LoginProvider.named(raw) else {
                 try ctx.fail("rv login check: \(LoginRun.unknownProvider(raw))\n")
-                return
             }
             names.append(provider.secretName)
         }
@@ -345,7 +344,6 @@ struct LoginConnect: AsyncParsableCommand {
         let environment = SecretsEnvironment.live(home: home)
         guard let known = LoginProvider.named(provider) else {
             try ctx.fail("rv login connect: \(LoginRun.unknownProvider(provider))\n")
-            return
         }
         if let profile {
             switch RuntimeResourcePolicyStore.load(from: environment.configDirectory) {
@@ -372,7 +370,6 @@ struct LoginConnect: AsyncParsableCommand {
         }
         guard let acquired, acquired.value.isEmpty == false else {
             try ctx.fail("rv login connect: no token found for \(known.displayName); log in with its CLI first, or paste one\n")
-            return
         }
         switch LoginRun.connect(
             provider: provider, value: acquired.value, origin: acquired.origin, environment: environment)

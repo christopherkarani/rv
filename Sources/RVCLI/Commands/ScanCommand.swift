@@ -21,7 +21,7 @@ struct ScanSessionsFlags: ParsableArguments {
     @Option(
         name: .customLong("packs"),
         parsing: .upToNextOption,
-        help: "Pack IDs to evaluate (default: day-one packs)."
+        help: "Pack IDs to evaluate (default: your enabled packs)."
     )
     var packs: [String] = []
 

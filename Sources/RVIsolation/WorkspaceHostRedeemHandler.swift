@@ -93,16 +93,10 @@ struct HostRedemptionCommit: Sendable, Equatable {
     }
 
     private static func isLowerHex64(_ value: String) -> Bool {
-        value.count == 64
-            && value.allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) }
+        // Byte-exact ASCII: `Character.isHexDigit` also accepts fullwidth forms.
+        value.utf8.count == 64
+            && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
-}
-
-/// Fresh runtime identity established by one accepted redemption.
-/// Identifiers for audit attribution only.
-struct RedeemedIdentityLaunch: Sendable, Equatable {
-    let runtime: RuntimeSessionID
-    let instance: AgentInstanceID
 }
 
 /// Terminal outcome of one redemption attempt.

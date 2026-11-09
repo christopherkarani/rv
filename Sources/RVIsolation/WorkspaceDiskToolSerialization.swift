@@ -232,10 +232,6 @@ private struct DiskImagePriority: Sendable {
     var urgent = false
 }
 
-private func diskDevice(in text: String) -> String? {
-    text.split(whereSeparator: \.isWhitespace).map(String.init).first { $0.hasPrefix("/dev/disk") }
-}
-
 /// The mountable HFS slice from a `-nomount` attach plist: the entity
 /// whose content hint is Apple_HFS, or the sole partition when hints are
 /// absent (images rv creates carry exactly one volume).

@@ -149,7 +149,7 @@ enum InitRun {
     }
 
     /// Appends `secret` to profile `profileID`'s staged secrets. Used by
-    /// `rv secrets set --profile` after the value is stored.
+    /// `rv secrets set --resource-profile` after the value is stored.
     static func attachSecret(
         _ secret: String, profileID: String, configDirectory: URL
     ) -> Result<Bool, CommandFailure> {

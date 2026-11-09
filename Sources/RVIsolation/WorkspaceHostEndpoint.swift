@@ -63,13 +63,6 @@ enum WorkspaceHostLocation {
     }
 }
 
-struct WorkspaceEndpointDraft: Equatable {
-    var record: WorkspaceEndpointRecord
-    var socketDirectory: String
-    var removeSocketDirectory: Bool
-    var endpointFile: URL
-}
-
 struct WorkspaceEndpointRecord: Codable, Equatable {
     var v: Int
     var host: UUID

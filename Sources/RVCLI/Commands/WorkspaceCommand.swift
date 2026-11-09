@@ -296,8 +296,9 @@ enum WorkspaceCommandRun {
         throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
-        guard case .live(let endpoint) = WorkspaceHosts.inspect(project: project) else {
-            throw ValidationError(text(WorkspaceHosts.inspect(project: project)))
+        let attachment = WorkspaceHosts.inspect(project: project)
+        guard case .live(let endpoint) = attachment else {
+            throw ValidationError(text(attachment))
         }
         guard let client = connected(endpoint) else {
             throw ValidationError(hostNotReachablePreservedText)
@@ -429,8 +430,9 @@ enum WorkspaceCommandRun {
         throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
-        guard case .live(let endpoint) = WorkspaceHosts.inspect(project: project) else {
-            throw ValidationError(text(WorkspaceHosts.inspect(project: project)))
+        let attachment = WorkspaceHosts.inspect(project: project)
+        guard case .live(let endpoint) = attachment else {
+            throw ValidationError(text(attachment))
         }
         guard let client = connected(endpoint) else {
             throw ValidationError(hostNotReachablePreservedText)

@@ -804,7 +804,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "mutations",
-                    description: "approve and deny refuse until authenticated service routes land"
+                    description: "approve and deny need an interactive terminal and owner authentication"
                 ),
             ]),
         ],
@@ -931,8 +931,8 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv allowlist list"),
-                HelpRow(name: "rv allowlist add <rule>"),
-                HelpRow(name: "rv allowlist add-command <command>"),
+                HelpRow(name: "rv allowlist add <rule> --reason <text>"),
+                HelpRow(name: "rv allowlist add-command <command> --reason <text>"),
                 HelpRow(name: "rv allowlist remove <rule>"),
                 HelpRow(name: "rv allowlist validate"),
             ]),

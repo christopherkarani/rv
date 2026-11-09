@@ -239,9 +239,6 @@ public struct ServiceClient: Sendable {
         case transport(String)
     }
 
-    @available(*, deprecated, renamed: "ServiceCommandError")
-    public typealias OperatorCommandError = ServiceCommandError
-
     /// Untrusted launch proposal. Returns the correlation-only operation ID;
     /// authority arrives only via the host bridge and operator review.
     public func proposeLaunch(_ params: ProposeLaunchParams) async -> Result<

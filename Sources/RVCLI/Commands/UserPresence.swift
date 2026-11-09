@@ -174,7 +174,3 @@ struct UserPresence: Sendable {
         return String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-
-enum MCPCodeAlphabet {
-    static let symbols = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-}
