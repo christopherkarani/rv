@@ -3,6 +3,11 @@ import RVDomain
 
 public let commandByteCap = 65_536
 
+/// Wall-clock bound on all pattern matching for one evaluation. Ordinary
+/// commands finish in milliseconds; past the bound the verdict is
+/// indeterminate (`budgetExhausted`), never allow.
+public let patternTimeBudget: Duration = .seconds(2)
+
 /// Returns the pack-only evaluation of `request`; semantic policy is `evaluateWithSemantics`.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
@@ -39,6 +44,7 @@ public func evaluate<E: PatternEngine>(
 
     var attempts = 0
     let budget = request.budget?.maxPatternAttempts
+    let deadline = ContinuousClock.now + patternTimeBudget
 
     let segments = splitSegments(matchingView.rawValue)
     var judged: [JudgedSegment] = []
@@ -52,6 +58,7 @@ public func evaluate<E: PatternEngine>(
                 engine: engine,
                 attempts: &attempts,
                 budget: budget,
+                deadline: deadline,
                 ranPacks: &ranPacks
             )
             if let result, isTerminal(result.outcome) {
@@ -69,6 +76,7 @@ public func evaluate<E: PatternEngine>(
         engine: engine,
         attempts: &attempts,
         budget: budget,
+        deadline: deadline,
         ranPacks: &fullViewRanPacks,
         segments: judged
     ) {
@@ -173,6 +181,7 @@ private func evaluateSingle<E: PatternEngine>(
     engine: E,
     attempts: inout Int,
     budget: Int?,
+    deadline: ContinuousClock.Instant,
     ranPacks: inout Set<PackID>,
     segments: [JudgedSegment] = []
 ) -> EvaluationResult? {
@@ -199,11 +208,16 @@ private func evaluateSingle<E: PatternEngine>(
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
-            if engine.matches(named.compiled, in: view) {
+            switch engine.search(named.compiled, in: view, deadline: deadline) {
+            case .exhausted:
+                return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
+            case .noMatch:
+                continue
+            case .match:
                 lastSafe = SafeMatch(packID: pack.snapshot.id, patternName: named.name)
                 skippedBySafe = true
-                break
             }
+            break
         }
         // In the full view of a multi-segment command a safe match vouches only
         // for segments the segment pass already judged. A rule written to match
@@ -227,7 +241,15 @@ private func evaluateSingle<E: PatternEngine>(
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
-            guard let range = engine.firstMatch(rule.compiled, in: view) else { continue }
+            let range: Range<String.Index>
+            switch engine.search(rule.compiled, in: view, deadline: deadline) {
+            case .exhausted:
+                return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
+            case .noMatch:
+                continue
+            case .match(let found):
+                range = found
+            }
             // Exempt only a match some segment already judged with this pack's
             // rules; a segment whose own safe match skipped the pack (`echo
             // $(cp -a /etc /tmp/s && rm -rf /tmp/s)`) judged nothing.
