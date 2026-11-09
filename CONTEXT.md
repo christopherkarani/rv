@@ -35,14 +35,18 @@ The module map is [`Sources/RVIsolation/README.md`](Sources/RVIsolation/README.m
 
 **Runtime** — one contained process tree inside a workspace, with its own process group, admission pipes and egress proxy. A workspace can host several; one runtime ending does not close the workspace. `RuntimeSessionID`.
 
-**Backend** — what builds the walls for a runtime: Seatbelt (macOS), Landlock (Linux, compiled but refused before exec), or a VM (`rv-microvm` for Linux guests, `rv-macvm` for macOS guests). `IsolationBackendFamily`.
+**Backend** — what builds the walls for a runtime. `IsolationBackendFamily` has `.none`, `.seatbelt` (macOS), `.landlock` (Linux, compiled but refused before exec) and `.microvm`. Both VM guests are `.microvm`; `MicroVMGuest` picks `.linux` (`rv-microvm`) or `.macOS` (`rv-macvm`).
 
-**Control path** — a workspace path that rv, git or a host agent reads or runs later, outside any cage: `.git/hooks`, `.git/config`, `.rv`, `.config/rv`, and the agent and editor config in `WorkspaceRunLaterPaths`. Every backend must stop a runtime from writing them.
+**Control path** — a workspace path that rv or git reads or runs later, outside any cage: `.git/hooks`, `.git/config`, `.rv`, `.config/rv`. `workspaceControlDenies`.
 
-**Publish** — copying the private copy back to the real folder when the workspace closes. All names are checked first; one rejected name publishes nothing. `WorkspacePublishPlan`.
+**Run-later path** — agent and editor config in the workspace that a host tool runs or trusts later, outside any cage: `.claude/settings.json`, `.mcp.json`, `.vscode/tasks.json`, `.envrc` and the like. `WorkspaceRunLaterPaths`.
+
+Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all stop a runtime from writing control paths and run-later paths. Seatbelt and the macOS guest also match case variants (`.MCP.json`); the Linux guest matches exact names only.
+
+**Publish** — copying the private copy back to the real folder when the workspace closes. All names are checked first; one rejected name publishes nothing. `WorkspacePublishOutcome`, `WorkspacePublishRejection`.
 
 **Recovery** — finishing, on the next start, a close that a crash interrupted: publish, detach the volume, restore the original folder, each step recorded in the lifecycle log. `WorkspaceRecovery`, `WorkspaceRecoveryPlan`.
 
 **Admission** — a runtime asking rv to run one command or one HTTPS GET on its behalf, over pipes only that runtime holds. `RuntimeAdmissionSession`.
 
-**Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission`. `EgressProxy`.
+**Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission` against `EgressHostPolicy`. `EgressProxy`, `EgressWire`.
