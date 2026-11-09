@@ -43,6 +43,19 @@ struct SetupObserveTests {
         }
     }
 
+    @Test func missingRvd_underObserve_saysCallsRunUnchecked() async throws {
+        try await withObserveHome { home, layout, environment in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            var environment = environment
+            environment.rvdPath = home.appendingPathComponent("missing/rvd").path
+            let outcome = await observeSetup(environment, probe: ObserveAuthProbe(allow: false))
+            #expect(outcome.exitCode == 0)
+            #expect(outcome.stderr.contains("rvd not found"))
+            #expect(outcome.stderr.contains("hooks will let tool calls run unchecked"))
+            #expect(outcome.stderr.contains("hooks will deny tool calls") == false)
+        }
+    }
+
     @Test func observe_keepsEveryOtherConfigKey() async throws {
         try await withObserveHome { home, _, environment in
             try writeConfig(home, #"{"analytics.enabled":false,"guard":{"hosts":{"cursor":"off"}}}"#)

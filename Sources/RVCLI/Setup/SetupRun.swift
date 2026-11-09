@@ -49,7 +49,8 @@ enum SetupRun {
             )
             return SetupOutcome(
                 stdout: formatted.text,
-                stderr: observeNotice(guardRequest, env: env) + serviceWarning(report),
+                stderr: observeNotice(guardRequest, env: env)
+                    + serviceWarning(report, observing: JudgeRuntime.configuredGuardMode(home: env.home) == .observe),
                 exitCode: 0,
                 emitted: formatted.emitted
             )
@@ -58,11 +59,13 @@ enum SetupRun {
         }
     }
 
-    /// Hooks wired with no service behind them deny every tool call; say so.
-    private static func serviceWarning(_ report: SetupReport) -> String {
+    /// Hooks wired with no service behind them deny every tool call (under
+    /// observe they let every call run unchecked); say so.
+    private static func serviceWarning(_ report: SetupReport, observing: Bool) -> String {
         guard let missing = report.serviceSkippedMissingRvd else { return "" }
+        let effect = observing ? "hooks will let tool calls run unchecked" : "hooks will deny tool calls"
         return """
-            rv setup: rvd not found at \(missing); the service was not installed, so hooks will deny tool calls
+            rv setup: rvd not found at \(missing); the service was not installed, so \(effect)
             fix: \(reinstallHint)
 
             """
