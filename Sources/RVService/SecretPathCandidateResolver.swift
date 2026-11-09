@@ -52,11 +52,16 @@ enum SecretPathCandidateResolver {
         }
         guard let target = resolvedPath(raw) else { return nil }
         guard let home else { return target }
-        if target == home.rawValue {
-            return "~"
-        }
-        if target.hasPrefix(home.rawValue + "/") {
-            return "~/" + String(target.dropFirst(home.rawValue.count + 1))
+        // Judge against the home as typed and as resolved (a home under a
+        // symlinked prefix, like `/var` -> `/private/var`, resolves away
+        // from its own spelling).
+        for homePath in [home.rawValue, posixRealpath(home.rawValue) ?? home.rawValue] {
+            if target == homePath {
+                return "~"
+            }
+            if target.hasPrefix(homePath + "/") {
+                return "~/" + String(target.dropFirst(homePath.count + 1))
+            }
         }
         return target
     }
