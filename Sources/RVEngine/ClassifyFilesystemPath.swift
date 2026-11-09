@@ -82,11 +82,28 @@ func classifyFilesystemScope(
     if let rule = catalog.firstMatch(of: canonical) {
         return .protectedPath(SecretPathMatch(rule))
     }
+    if isGitInternalPath(canonical) {
+        return .protectedPath(gitInternalsMatch)
+    }
     guard let repositoryRoot else { return .unknown }
     if isInsideRepository(canonical, root: repositoryRoot.rawValue) {
         return .insideRepository
     }
     return .outsideRepository
+}
+
+/// Git's own state: hooks and config run code, `rebase-merge` alone is the
+/// proof the rebase-recovery override trusts, and deleting `.git` destroys
+/// history. Git commands maintain it; an agent's direct writes, creates,
+/// moves, and deletes there are a protected-path mutation. Reads stay
+/// allowed (a protected scope only denies write-like effects).
+let gitInternalsMatch = SecretPathMatch(pattern: "git-internals", category: .host)
+
+/// True when `canonical` is a `.git` directory (or gitdir file) or lies
+/// inside one, in any repository or nested checkout. Case-folded: on a
+/// case-insensitive volume `.GIT/hooks` is the same directory.
+func isGitInternalPath(_ canonical: String) -> Bool {
+    canonical.split(separator: "/", omittingEmptySubsequences: true).contains { $0.lowercased() == ".git" }
 }
 
 func classifyFilesystemKind(_ canonical: String) -> FilesystemResourceKind {
