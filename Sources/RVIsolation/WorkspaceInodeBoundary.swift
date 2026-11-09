@@ -122,8 +122,8 @@ private struct BoundaryMutable: Sendable {
     /// the workspace.
     var blockWorkspaceRename = false
     var publishOutcome: WorkspacePublishOutcome = .notRun
-    /// Where a content-policy rejection moved the volume's disk image
-    /// instead of unlinking it. Nil for every other outcome.
+    /// Where a refused or failed publish moved the volume's disk image
+    /// instead of unlinking it. Nil when nothing was retained.
     var retainedRejectedImage: String?
 }
 
@@ -323,21 +323,24 @@ final class WorkspaceInodeBoundary: Sendable {
         } else {
             published = .failure(.workspaceInodeBoundaryFailed)
         }
-        // A symlink-policy rejection wrote nothing, so the volume is the only
-        // copy of the agent's work: keep its image instead of unlinking it.
-        // Tamper, inode, and unreadable rejections keep the discard.
-        let restored = restoreOriginalDirectory(
-            retainingImage: rejected && publishOutcome.isContentPolicyRejection
-        )
+        // Whatever stopped the publish (a rejection of any kind, a rolled
+        // back step, an unreadable volume, a cancel), the saved tree does
+        // not hold the agent's work, so the volume is its only copy. Keep
+        // the image instead of unlinking it; the operator is told where.
+        let failed: Bool
+        if case .failure = published { failed = true } else { failed = false }
+        let restored = restoreOriginalDirectory(retainingImage: failed)
         // The copy budget is already the detach reserve. Publish did not
         // write and did not reject, and the original directory is back.
-        // The volume's unpublished names are gone with it. That is a
-        // finished cancel, not a boundary failure. A real reject still fails.
+        // That is a finished cancel, not a boundary failure, unless the
+        // volume's unpublished names were kept: then the caller must report
+        // the retained image. A real reject still fails.
         let cancelledWithoutWrite = blockingWorkIsCancelled()
             && wrote == false
             && rejected == false
             && cancelClockAllowsTreeCopy() == false
             && mutable.withLock { $0.blockWorkspaceRename } == false
+            && retainedRejectedImagePath == nil
         switch (published, restored) {
         case (.success, .success):
             return .success(())
@@ -457,12 +460,12 @@ final class WorkspaceInodeBoundary: Sendable {
         guard fds.1 >= 0 else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        guard let volumeEntries = collectTree(root: fds.0, checkDevice: volumeDevice) else {
+        guard let walked = collectPublishTree(root: fds.0, checkDevice: volumeDevice) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
         // Every entry is validated before anything is written, so one
         // rejected name leaves the saved tree untouched.
-        switch planPublish(volumeEntries) {
+        switch planPublish(walked.entries, special: walked.special) {
         case .stopped:
             return .failure(.workspaceInodeBoundaryFailed)
         case .rejected(let rejections):
@@ -720,9 +723,9 @@ final class WorkspaceInodeBoundary: Sendable {
         var rollbackReady = false
     }
 
-    /// What the last publish left in the saved tree.
-    /// Path of the detached disk image kept after a symlink-policy rejection,
-    /// holding every edit the agent made. Nil when no image was retained.
+    /// Path of the detached disk image kept after a refused or failed
+    /// publish, holding every edit the agent made. Nil when no image was
+    /// retained.
     var retainedRejectedImagePath: String? {
         mutable.withLock { $0.retainedRejectedImage }
     }
@@ -741,11 +744,15 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     /// Decide every name without writing. Inode checks, kind checks, the
-    /// symlink policy, and the removed-subtree check all run here.
-    private func planPublish(_ volumeEntries: [String: TreeEntry]) -> PublishPlan {
+    /// symlink policy, case handling, and the removed-subtree check all run
+    /// here. `special` names volume entries publish cannot copy.
+    private func planPublish(_ volumeEntries: [String: TreeEntry], special: [String]) -> PublishPlan {
         var rejections: [WorkspacePublishRejection] = []
         func reject(_ relative: String, _ reason: WorkspacePublishRejection.Reason) {
             rejections.append(WorkspacePublishRejection(relative: relative, reason: reason))
+        }
+        for relative in special {
+            reject(relative, .unsupportedFileType)
         }
         var links: [String: String] = [:]
         for (relative, entry) in volumeEntries where entry.kind == .symlink {

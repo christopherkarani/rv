@@ -6,8 +6,23 @@ import Synchronization
 
 func collectTree(root: Int32, checkDevice: UInt64) -> [String: TreeEntry]? {
     var entries: [String: TreeEntry] = [:]
-    guard readTree(fd: root, prefix: "", expectedDevice: checkDevice, into: &entries) else { return nil }
+    var special: [String]?
+    guard readTree(fd: root, prefix: "", expectedDevice: checkDevice, into: &entries, special: &special) else {
+        return nil
+    }
     return entries
+}
+
+/// The volume walk for publish. A FIFO, socket, or device node is listed in
+/// `special` (relative names) instead of failing the walk, so publish can
+/// refuse that one entry by name.
+func collectPublishTree(root: Int32, checkDevice: UInt64) -> (entries: [String: TreeEntry], special: [String])? {
+    var entries: [String: TreeEntry] = [:]
+    var special: [String]? = []
+    guard readTree(fd: root, prefix: "", expectedDevice: checkDevice, into: &entries, special: &special) else {
+        return nil
+    }
+    return (entries, special ?? [])
 }
 
 private final class TreeStatBox: @unchecked Sendable {
@@ -240,7 +255,8 @@ private func readTree(
     fd: Int32,
     prefix: String,
     expectedDevice: UInt64,
-    into entries: inout [String: TreeEntry]
+    into entries: inout [String: TreeEntry],
+    special: inout [String]?
 ) -> Bool {
     if directoryReadMayContinue(cancelClockAllowsTreeCopy()) == false { return false }
     guard let names = directoryNames(fd, isWorkspaceRoot: prefix.isEmpty) else { return false }
@@ -248,10 +264,16 @@ private func readTree(
         if directoryReadMayContinue(cancelClockAllowsTreeCopy()) == false { return false }
         let relative = prefix.isEmpty ? name : prefix + "/" + name
         guard let status = fstatatWithinCopyClock(fd, name),
-            device(of: status) == expectedDevice,
-            let stamp = stamp(of: status)
+            device(of: status) == expectedDevice
         else {
             return false
+        }
+        guard let stamp = stamp(of: status) else {
+            // Not a file, directory, or symlink. Only the publish walk
+            // collects it; every other walk fails closed as before.
+            guard special != nil else { return false }
+            special?.append(relative)
+            continue
         }
         let bytes = stamp.kind == .regular ? UInt64(status.st_size) : 0
         entries[relative] = TreeEntry(stamp: stamp, mode: modeBits(status.st_mode), bytes: bytes)
@@ -262,7 +284,13 @@ private func readTree(
                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
             )
             guard child >= 0 else { return false }
-            let ok = readTree(fd: child, prefix: relative, expectedDevice: expectedDevice, into: &entries)
+            let ok = readTree(
+                fd: child,
+                prefix: relative,
+                expectedDevice: expectedDevice,
+                into: &entries,
+                special: &special
+            )
             close(child)
             if ok == false { return false }
         }
