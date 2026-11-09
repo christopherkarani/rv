@@ -1,5 +1,27 @@
 import Foundation
 
+/// sudo short options whose value is the next word (`-u root`, `-p prompt`).
+/// A superset of what any one sudo build accepts: consuming a word that was
+/// really argv0 only moves argv0 later, which never hides an operand.
+private let sudoValueLetters: Set<Character> = [
+    "u", "g", "h", "p", "C", "U", "T", "r", "t", "D", "R", "c",
+]
+
+/// True when a short sudo option (or cluster ending in one) takes the next
+/// word as its value.
+func sudoFlagTakesValue(_ option: String) -> Bool {
+    shortClusterConsumesValue(option, valueLetters: sudoValueLetters)
+}
+
+/// env options whose value is the next word (`-u NAME`, `-C DIR`, `-S STR`).
+private let envValueLetters: Set<Character> = ["u", "C", "S", "P"]
+private let envValueLongFlags: Set<String> = ["--unset", "--chdir", "--split-string", "--argv0"]
+
+/// True when an env option takes the next word as its value.
+func envFlagTakesValue(_ option: String) -> Bool {
+    envValueLongFlags.contains(option) || shortClusterConsumesValue(option, valueLetters: envValueLetters)
+}
+
 func stripSudo(_ text: String) -> String? {
     let (word, rest) = firstWord(text)
     guard basename(word) == "sudo" else { return nil }
@@ -15,6 +37,10 @@ func stripSudo(_ text: String) -> String? {
             return nil
         }
         remaining = after
+        if sudoFlagTakesValue(option) {
+            guard remaining.isEmpty == false else { return nil }
+            remaining = firstWord(remaining).rest
+        }
     }
     return remaining.isEmpty ? nil : remaining
 }
@@ -25,6 +51,13 @@ func stripEnv(_ text: String) -> String? {
     var remaining = rest
     while !remaining.isEmpty {
         let (option, after) = firstWord(remaining)
+        // `-S STR` is the command itself, split by env: the view shows its
+        // words, so skipping one would hide the real argv0.
+        if envFlagTakesValue(option), option.contains("S") == false, option != "--split-string" {
+            guard after.isEmpty == false else { return nil }
+            remaining = firstWord(after).rest
+            continue
+        }
         if option.contains("=") {
             remaining = after
             continue

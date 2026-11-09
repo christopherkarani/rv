@@ -355,25 +355,45 @@ func applyRoleAwareQuotesDetailed(
 private enum WrapperSeek {
     case none
     case sudoFlags
+    case sudoFlagValue
     case envAssignments
+    case envFlagValue
     case commandOpt
 }
 
 /// Returns `nil` when `decoded` is the real argv0. Otherwise returns the command
 /// basename if this token settles argv0 (e.g. `command -v`), or `.some(nil)` if
 /// the token is still a wrapper/flag/assignment.
+///
+/// A value-taking wrapper flag consumes the next word (`env -u echo rm …`,
+/// `sudo -p echo mkfs …`): taking that value for argv0 masked the real
+/// command's operands as data. Over-consuming only moves argv0 later, onto
+/// a word that is not a data command, so the operands stay visible.
 private func consumeWrapper(decoded: String, seek: inout WrapperSeek) -> String?? {
     switch seek {
+    case .sudoFlagValue:
+        seek = .sudoFlags
+        return .some(nil)
+    case .envFlagValue:
+        seek = .envAssignments
+        return .some(nil)
     case .sudoFlags:
         if decoded == "--" {
             return .some(nil)
         }
         if decoded.hasPrefix("-"), !decoded.hasPrefix("--") {
+            if sudoFlagTakesValue(decoded) {
+                seek = .sudoFlagValue
+            }
             return .some(nil)
         }
         seek = .none
         return nil
     case .envAssignments:
+        if envFlagTakesValue(decoded) {
+            seek = .envFlagValue
+            return .some(nil)
+        }
         if decoded.contains("=") || decoded.hasPrefix("-") {
             return .some(nil)
         }
