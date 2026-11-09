@@ -10,6 +10,16 @@ import RVHistory
 import RVHooks
 import RVPolicy
 import RVPresentation
+import RVService
+
+/// What setup does with the machine-wide `guard.mode`.
+enum SetupGuardRequest: Equatable {
+    /// Plain `rv setup`: `guard.mode` is never touched.
+    case keep
+    /// `rv setup --observe`. `ownerAuthenticated` records whether the owner
+    /// was checked; it must be true when `observeShedsOversight` holds.
+    case observe(ownerAuthenticated: Bool)
+}
 
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
@@ -22,12 +32,13 @@ enum SetupRun {
         appearance: CLIAppearance = .robot,
         ceremonyKind: SetupCeremonyKind = .setup,
         force: Bool = false,
+        guardRequest: SetupGuardRequest = .keep,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
         write: ((String) -> Void)? = nil
     ) -> SetupOutcome {
         do {
-            let report = try perform(env, force: force)
+            let report = try perform(env, force: force, guardRequest: guardRequest)
             let formatted = SetupFormat.stdout(
                 report: report,
                 appearance: appearance,
@@ -38,7 +49,7 @@ enum SetupRun {
             )
             return SetupOutcome(
                 stdout: formatted.text,
-                stderr: serviceWarning(report),
+                stderr: observeNotice(guardRequest, env: env) + serviceWarning(report),
                 exitCode: 0,
                 emitted: formatted.emitted
             )
@@ -55,6 +66,49 @@ enum SetupRun {
             fix: \(reinstallHint)
 
             """
+    }
+
+    /// Confirms observe mode and names hosts whose stored `block` entry
+    /// still outranks it.
+    private static func observeNotice(_ request: SetupGuardRequest, env: SetupEnvironment) -> String {
+        guard case .observe = request else { return "" }
+        let pinned = hostModeStore(env).load()
+            .filter { $0.value == .block }
+            .keys.map(\.rawValue).sorted()
+        var line = "rv setup: observe mode on: rv logs what it would block instead of blocking (rv blocks lists them)"
+        for host in pinned {
+            line += "; \(host) stays block (rv host mode \(host) observe to change)"
+        }
+        return line + "\n"
+    }
+
+    /// True when `--observe` would shed oversight: the configured
+    /// machine-wide mode (never `RV_GUARD_MODE`) is enforce and some host
+    /// is wired. A fresh install only adds oversight. Throws
+    /// `observePinnedByOrganization` under an organization gate.
+    static func observeShedsOversight(_ env: SetupEnvironment) throws(SetupError) -> Bool {
+        if env.managedEnforce(env.home) { throw .observePinnedByOrganization }
+        guard JudgeRuntime.configuredGuardMode(home: env.home) == .enforce else { return false }
+        let installations = try inspectInstallations(layout: OwnedPaths(home: env.home), env: env)
+        return HookHost.allCases.contains { installations.state(for: $0) == .wired }
+    }
+
+    /// Stores `guard.mode: observe` before any hook is attached, after the
+    /// owner check when the change sheds oversight.
+    private static func applyGuardRequest(_ request: SetupGuardRequest, env: SetupEnvironment) throws(SetupError) {
+        guard case .observe(let ownerAuthenticated) = request else { return }
+        if try observeShedsOversight(env), ownerAuthenticated == false {
+            throw .ownerAuthenticationRequired
+        }
+        do {
+            try hostModeStore(env).saveGlobalObserve()
+        } catch {
+            throw .guardModeWriteFailed
+        }
+    }
+
+    private static func hostModeStore(_ env: SetupEnvironment) -> HostModeStore {
+        HostModeStore(configDirectory: RVPolicyPaths.configDirectory(home: env.home))
     }
 
     /// Setup that loads the real supervisor must run from the hook's bin dir:
@@ -93,9 +147,14 @@ enum SetupRun {
         )
     }
 
-    private static func perform(_ env: SetupEnvironment, force: Bool) throws(SetupError) -> SetupReport {
+    private static func perform(
+        _ env: SetupEnvironment,
+        force: Bool,
+        guardRequest: SetupGuardRequest
+    ) throws(SetupError) -> SetupReport {
         try requireInstalledCopy(env)
         try requireTrustedDaemon(env)
+        try applyGuardRequest(guardRequest, env: env)
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)

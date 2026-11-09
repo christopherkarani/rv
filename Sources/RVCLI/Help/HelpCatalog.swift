@@ -287,10 +287,11 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv setup [--force] [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv setup [--force] [--observe] [--json] [--robot] [--plain] [--no-color]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--force", description: "Replace occupied owned hooks (backup *.bak)"),
+                HelpRow(name: "--observe", description: "Log what rv would block instead of blocking"),
                 HelpRow(name: "--json", description: "One line, no circles (same as --robot)"),
                 HelpRow(name: "--robot", description: "One line, no circles"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
@@ -300,6 +301,7 @@ enum HelpCatalog {
         examples: [
             "rv setup",
             "rv setup --force",
+            "rv setup --observe",
             "rv setup --robot",
         ],
         nextHeading: "After setup",

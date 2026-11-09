@@ -40,6 +40,15 @@ rv setup    # auto-detects your agents and wires their hooks
 rv doctor   # verify everything is live
 ```
 
+Want to watch before you enforce? Install in observe mode: rv logs what it
+would block and lets everything run.
+
+```sh
+curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
+rv setup --observe   # same thing for an existing install (asks Touch ID if rv is already enforcing)
+rv blocks            # what observe would have blocked
+```
+
 On macOS the installer also fetches the on-device judge weights (~649 MB,
 verified by SHA-256, fully offline after) so the neural judge binds on first
 run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
@@ -77,9 +86,13 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   blocking, so you can measure before you enforce. `rv host mode
   <host> observe` does the same for one host (`off` unwires it); `rv
   blocks` marks what observe would have blocked with `"observed": true`.
-  Observe never relaxes rv's own protection (rv admin commands, rv's
-  config). A host set `off` before an organization gate arrived stays
-  unwired until you run `rv setup`.
+  `rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
+  starts there. Observe never relaxes rv's own protection (rv admin
+  commands, rv's config). When `rvd` is unreachable or too slow to answer,
+  hooks under observe allow the call instead of prompting; under enforce
+  they still ask or deny. An organization gate pins enforce, and `rv setup
+  --observe` refuses under one. A host set `off` before an organization
+  gate arrived stays unwired until you run `rv setup`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned
   rules → allowlist → allow-once → contained-delete allowance) with
   `normal`/`strict` safety levels. Indeterminate (too large, budget
