@@ -61,6 +61,13 @@ public enum JudgeRuntime {
         guardMode(environment: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home))
     }
 
+    /// Machine-wide `guard.mode` from `config.json` alone. `RV_GUARD_MODE`
+    /// is ignored: a caller deciding whether a change sheds oversight must
+    /// not let a same-user environment make enforce look like observe.
+    public static func configuredGuardMode(home: HomeDirectory?) -> GuardMode {
+        guardMode(environment: [:], config: loadConfigDict(home: home))
+    }
+
     /// The mode one evaluation from `host` runs under: per-host resolution,
     /// then the organization pin (`ManagedGate.guardMode`). The file door
     /// reads it once per evaluation; the shell doors read it through
