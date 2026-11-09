@@ -156,7 +156,11 @@ struct IdleExitPolicyTests {
                     #expect(phase != .exited, "exit after exited on \(event)")
                     #expect(emitted == 1 && exits == 0, "second exit on \(event)")
                     switch phase {
-                    case .serving(let n, _): #expect(n <= 1, "exit with \(n) in flight on \(event)")
+                    case .serving(0, _): break
+                    case .serving(let n, _):
+                        // Only the request that brings inFlight to 0 may exit.
+                        if case .end = event {} else { Issue.record("exit with \(n) in flight on \(event)") }
+                        #expect(n == 1, "exit with \(n) in flight on \(event)")
                     case .draining(let n): #expect(n == 1, "exit while draining with \(n) in flight")
                     case .exited: break
                     }

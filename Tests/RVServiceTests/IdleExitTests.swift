@@ -227,6 +227,7 @@ struct IdleExitTests {
         // The check stops rearming once the daemon is exiting.
         clock.advance(by: .seconds(1))
         #expect(fired.count == 1)
+        #expect(clock.pendingTimers == 1)  // only the idle timer
     }
 
     @Test func staleCheckDrainsAnInFlightRequestBeforeExit() async {
@@ -254,13 +255,18 @@ struct IdleExitTests {
         var watchdog: IdleWatchdog? = IdleWatchdog(
             interval: .seconds(3600),
             staleCheckInterval: .milliseconds(50),
-            executableChanged: { true },
             scheduler: clock.scheduler
         )
+        // In flight, so `start` arms only the stale check: no idle timer
+        // (which owns its watchdog) keeps it alive.
+        #expect(watchdog?.beginRequest() == true)
         watchdog?.start()
+        weak let probe = watchdog
         watchdog = nil
+        #expect(probe == nil)
+        // An unchanged binary would rearm forever if the check held the watchdog.
         clock.advance(by: .seconds(1))
-        #expect(clock.pendingTimers == 1)  // only the idle timer, which owns its watchdog
+        #expect(clock.pendingTimers == 0)
     }
 
     @Test func defaultStaleCheckIsShort() {
