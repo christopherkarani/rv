@@ -2,6 +2,11 @@ import Testing
 import RVDomain
 import RVEngine
 
+private func isDenied(_ result: EvaluationResult) -> Bool {
+    if case .deny = result.decision { return true }
+    return false
+}
+
 /// Verified gate bypasses (prod-readiness pass, 2026-11-10). Every deny row
 /// here was allowed on main by both the pack floor and the door.
 @Suite("Gate masking bypasses")
@@ -24,7 +29,7 @@ struct GateMaskingBypassTests {
     func wrapperFlagValueDoesNotMask(_ command: String) throws {
         let harness = try StressHarness.dayOne()
         for result in [harness.pin(command), harness.door(command)] {
-            #expect(result.decision.isDeny, "\(command): \(describeDecision(result))")
+            #expect(isDenied(result), "\(command): \(describeDecision(result))")
         }
     }
 
@@ -57,7 +62,7 @@ struct GateMaskingBypassTests {
     func gluedInputRedirectIsASecretRead(_ command: String) throws {
         let harness = try StressHarness.dayOne()
         for result in [harness.pin(command), harness.door(command)] {
-            #expect(result.decision.isDeny, "\(command): \(describeDecision(result))")
+            #expect(isDenied(result), "\(command): \(describeDecision(result))")
         }
     }
 
