@@ -80,6 +80,14 @@ public enum JudgeRuntime {
             guardMode(environment: environment, config: config, host: hookHost), home: home)
     }
 
+    /// The mode the config file alone selects for `host`, ignoring
+    /// `RV_GUARD_MODE` and the organization pin. The hook's daemon-down
+    /// fallback reads it: hook environment can come from project-scoped
+    /// host config an agent writes.
+    public static func configuredGuardMode(config: [String: Any]?, host: HookHost) -> GuardMode {
+        guardMode(environment: [:], config: config, host: host)
+    }
+
     /// `RV_GUARD_MODE` > `guard.hosts.<host>` > `guard.mode` > enforce. An
     /// unknown value at any level falls through to the next. A host entry
     /// of `block` is enforce; `observe` and `off` are observe (an `off`

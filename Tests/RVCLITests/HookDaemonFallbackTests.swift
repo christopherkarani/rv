@@ -80,6 +80,61 @@ struct HookDaemonFallbackTests {
         }
     }
 
+    @Test(arguments: HookHost.allCases)
+    func ownerObserveStepsAsideOnlyForAnAbsentOrSlowDaemon(host: HookHost) {
+        let allow = productionHostCodec(host).encodeAllow()
+        let stepAside = HookWire(
+            stdout: allow.stdout, exitCode: allow.exitCode, stderr: HookObserveFallback.message + "\n")
+        for failure in HookDaemonFailure.allCases {
+            for mode in [HookWhenDown.ask, .deny] {
+                let wire = HookDaemonFallback.wire(host: host, failure: failure, mode: mode, ownerObserves: true)
+                if failure == .unreachable || failure == .timeout {
+                    #expect(wire == stepAside)
+                } else {
+                    // Observe never softens impersonation or a malformed reply.
+                    #expect(wire == HookDaemonFallback.wire(host: host, failure: failure, mode: .deny))
+                }
+            }
+        }
+    }
+
+    @Test func observeMessageMatchesTheCClient() throws {
+        let cSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/rv-c/hook_fallback.c"),
+            encoding: .utf8
+        )
+        #expect(cSource.contains("\"\(HookObserveFallback.message)\""), "C/Swift observe message drift")
+        #expect(HookObserveFallback.message.contains("rv doctor"))
+    }
+
+    @Test func clientStepsAsideOnAMissWhenTheOwnerObserves() async throws {
+        let observes: @Sendable (HookHost) -> Bool = { _ in true }
+        let missing = try isolatedClient(transport: nil)
+        let unreachable = await missing.hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes)
+        #expect(unreachable == HookDaemonFallback.wire(
+            host: .claude, failure: .unreachable, mode: .deny, ownerObserves: true))
+        #expect(unreachable.stdout.isEmpty && unreachable.exitCode == 0)
+
+        let slow = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: .timeout
+        )
+        let timeout = try await isolatedClient(transport: slow).hookEvaluate(
+            host: .cursor, stdin: "{}", whenDown: .ask, ownerObserves: observes)
+        #expect(timeout.stdout == "{\"permission\":\"allow\"}\n")
+
+        let skewed = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            responseResult: .error(.protocolSkew(.protocolSkew))
+        )
+        let protocolMiss = try await isolatedClient(transport: skewed).hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
+        #expect(protocolMiss == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .deny))
+    }
+
     @Test func classifiesTransportErrors() {
         #expect(HookDaemonFallback.classify(ServiceTransportError.timeout) == .timeout)
         #expect(HookDaemonFallback.classify(ServiceTransportError.connectFailed) == .unreachable)

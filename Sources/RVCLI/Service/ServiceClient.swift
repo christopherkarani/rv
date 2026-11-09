@@ -342,21 +342,30 @@ public struct ServiceClient: Sendable {
     /// own shorter deadline). Mirrors the C client's per-exchange budgets.
     static let hookEvaluateTimeoutMs = 14_000
 
-    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`.
+    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`
+    /// and the owner's observe choice from their config file.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
         await hookEvaluate(
             host: host,
             stdin: stdin,
-            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey])
+            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey]),
+            ownerObserves: HookObserveFallback.live
         )
     }
 
     /// Authority-bearing hooks never retry through the local evaluation door,
     /// and the request is never resent. A daemon miss is classified and
-    /// rendered per `whenDown` (`HookDaemonFallback`).
-    public func hookEvaluate(host: HookHost, stdin: String, whenDown: HookWhenDown) async -> HookWire {
+    /// rendered per `whenDown` (`HookDaemonFallback`); `ownerObserves` is
+    /// consulted only on an absent or slow daemon.
+    public func hookEvaluate(
+        host: HookHost,
+        stdin: String,
+        whenDown: HookWhenDown,
+        ownerObserves: @Sendable (HookHost) -> Bool = { _ in false }
+    ) async -> HookWire {
         func unavailable(_ failure: HookDaemonFailure) -> HookWire {
-            HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
+            let observes = (failure == .unreachable || failure == .timeout) && ownerObserves(host)
+            return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: observes)
         }
         guard let transport else {
             return unavailable(.unreachable)

@@ -18,6 +18,9 @@
  *     deny: the host's deny shape.
  *   There is deliberately no allow/bypass value: the variable can reach
  *   the hook from project-scoped host config an agent can write.
+ *   RV_WHEN_DOWN_OBSERVE (the host's allow wire, plus a stderr notice) is
+ *   never parsed from the environment: rv.c selects it only when the
+ *   owner's config.json puts the host in observe mode (observe_gate.h).
  * Every case carries a distinct, actionable message. Mirrored by
  * `RVCLI/Service/HookDaemonFallback.swift`.
  */
@@ -34,7 +37,8 @@ enum RvHookFailure {
 
 enum RvWhenDown {
     RV_WHEN_DOWN_ASK = 0,
-    RV_WHEN_DOWN_DENY = 1
+    RV_WHEN_DOWN_DENY = 1,
+    RV_WHEN_DOWN_OBSERVE = 2
 };
 
 #define RV_HOOK_FALLBACK_OUT_MAX 1024

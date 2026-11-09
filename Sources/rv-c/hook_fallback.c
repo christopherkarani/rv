@@ -17,6 +17,9 @@ static const char kUntrustedMessage[] =
 static const char kProtocolMessage[] =
     "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
 
+static const char kObserveMessage[] =
+    "RV observe mode: daemon unavailable, so this call was allowed without being checked or logged. Run `rv doctor`.";
+
 /* Cursor deny `agent_message`; mirrors `cursorAgentStopLine` (RVHooks).
  * Down-case asks never use it. */
 static const char kCursorDenyAgentLine[] =
@@ -112,6 +115,25 @@ static int render_ask(const char *host, const char *msg, struct RvHookFallback *
     return fits(n, sizeof out->out) ? 1 : -1;
 }
 
+/* The host's own allow wire (HostCodec.encodeAllow): Cursor and
+ * Antigravity need explicit allow JSON; every other host allows on empty
+ * stdout and exit 0. The notice goes to stderr, never into host JSON. */
+static int render_observe(const char *host, struct RvHookFallback *out) {
+    int n;
+    const char *allow = "";
+    if (strcmp(host, "cursor") == 0) {
+        allow = "{\"permission\":\"allow\"}\n";
+    } else if (strcmp(host, "antigravity") == 0) {
+        allow = "{\"decision\":\"allow\"}\n";
+    }
+    n = snprintf(out->out, sizeof out->out, "%s", allow);
+    if (!fits(n, sizeof out->out)) {
+        return -1;
+    }
+    n = snprintf(out->err, sizeof out->err, "%s\n", kObserveMessage);
+    return fits(n, sizeof out->err) ? 0 : -1;
+}
+
 int rv_hook_fallback_render(
     const char *host,
     enum RvHookFailure failure,
@@ -133,6 +155,8 @@ int rv_hook_fallback_render(
         return render_deny(host, msg, out);
     }
     switch (mode) {
+    case RV_WHEN_DOWN_OBSERVE:
+        return render_observe(host, out);
     case RV_WHEN_DOWN_DENY:
         return render_deny(host, msg, out);
     case RV_WHEN_DOWN_ASK:

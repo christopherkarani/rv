@@ -94,6 +94,8 @@ static void test_mode_parse(void) {
     if (rv_when_down_parse("ALLOW") != RV_WHEN_DOWN_ASK) fail("parse_upper", "not ask");
     if (rv_when_down_parse("allow ") != RV_WHEN_DOWN_ASK) fail("parse_space", "not ask");
     if (rv_when_down_parse("1") != RV_WHEN_DOWN_ASK) fail("parse_junk", "not ask");
+    /* Observe comes only from the owner's config file, never the environment. */
+    if (rv_when_down_parse("observe") != RV_WHEN_DOWN_ASK) fail("parse_observe", "not ask");
 }
 
 static void test_messages(void) {
@@ -245,6 +247,44 @@ static void test_matrix(void) {
     }
 }
 
+static const char kObserveErr[] =
+    "RV observe mode: daemon unavailable, so this call was allowed without being checked or logged. Run `rv doctor`.\n";
+
+/* The host's own allow wire (HostCodec.encodeAllow): rv steps aside. */
+static const char *observe_allow_out(const char *host) {
+    if (strcmp(host, "cursor") == 0) {
+        return "{\"permission\":\"allow\"}\n";
+    }
+    if (strcmp(host, "antigravity") == 0) {
+        return "{\"decision\":\"allow\"}\n";
+    }
+    return "";
+}
+
+static void test_observe(void) {
+    size_t h;
+    size_t f;
+    char name[96];
+    for (h = 0; h < HOST_COUNT; h++) {
+        const char *host = kHosts[h];
+        struct RvHookFallback r;
+        for (f = 0; f < DOWN_COUNT; f++) {
+            snprintf(name, sizeof name, "%s_observe_down_%d", host, (int)kDown[f]);
+            expect_exact(name, host, kDown[f], RV_WHEN_DOWN_OBSERVE, observe_allow_out(host), kObserveErr, 0);
+        }
+        /* Observe never softens impersonation, a malformed reply or bad input. */
+        for (f = 0; f < HARD_COUNT; f++) {
+            snprintf(name, sizeof name, "%s_observe_hard_%d", host, (int)kHard[f]);
+            render(name, host, kHard[f], RV_WHEN_DOWN_OBSERVE, &r);
+            if (r.exit_code != deny_exit(host) || r.out[0] == '\0'
+                || strstr(r.out, rv_hook_failure_message(kHard[f])) == NULL
+                || strstr(r.out, "allow") != NULL) {
+                fail(name, "hard failure must deny under observe");
+            }
+        }
+    }
+}
+
 static void test_bad_args(void) {
     struct RvHookFallback r;
     if (rv_hook_fallback_render(NULL, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_ASK, &r) == 0) {
@@ -265,6 +305,7 @@ int main(void) {
     test_messages();
     test_exact_wires();
     test_matrix();
+    test_observe();
     test_bad_args();
     if (g_fails != 0) {
         fprintf(stderr, "%d failure(s)\n", g_fails);

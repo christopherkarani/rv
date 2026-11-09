@@ -59,6 +59,15 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/hook_fallback.c"
 "$OUT/hook_fallback_test"
 
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+  -I "$SRC" \
+  -o "$OUT/observe_gate_test" \
+  "$SRC/tests/observe_gate_test.c" \
+  "$SRC/json_escape.c" \
+  "$SRC/json_reply.c" \
+  "$SRC/observe_gate.c"
+"$OUT/observe_gate_test"
+
 if [[ "$OS" == "Darwin" ]]; then
   # Trust manifest parsing is Darwin-only (Linux pins the sibling rvd).
   clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
@@ -91,13 +100,23 @@ if [[ "$overlong_st" -eq 0 ]] || ! grep -q "overlong" "$OUT/overlong.err"; then
   exit 1
 fi
 
+# Observe fallback inputs are pinned to fixtures at compile time so the
+# operator's own ~/.config/rv/config.json and managed policy never leak in.
+OBSERVE_CONFIG_DIR="$OUT/observe-config"
+OBSERVE_CONFIG="$OBSERVE_CONFIG_DIR/config.json"
+OBSERVE_MANAGED="$OUT/observe-managed"
+rm -rf "$OBSERVE_CONFIG_DIR" "$OBSERVE_MANAGED"
+mkdir -p "$OBSERVE_CONFIG_DIR"
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
+  -DRV_HOOK_OBSERVE_CONFIG_PATH="\"$OBSERVE_CONFIG\"" \
+  -DRV_HOOK_MANAGED_POLICY_DIR="\"$OBSERVE_MANAGED\"" \
   -o "$OUT/rv" \
   "$SRC/json_escape.c" \
   "$SRC/json_reply.c" \
   "$SRC/daemon_trust.c" \
   "$SRC/hook_fallback.c" \
+  "$SRC/observe_gate.c" \
   "$SRC/rv.c"
 
 # Pipe hosts must match the Swift HookHost enum exactly. Invalid hosts exec
@@ -433,6 +452,63 @@ if [[ "$down_ready" -eq 1 ]]; then
     exit 1
   fi
   printf 'rv-c daemon-down fallback: ask/deny rendering passed\n'
+
+  # Observe mode in the owner's config: an absent daemon steps aside with
+  # the host's allow wire and a stderr notice. RV_GUARD_MODE and
+  # RV_HOOK_WHEN_DOWN never turn it on; a per-host block or an
+  # organization policy directory keeps the normal fallback.
+  expect_observe() {
+    local name="$1" host="$2" want_out="$3"
+    local st
+    rm -f "$OUT/observe-$name.argv"
+    set +e
+    printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
+      | env ${DOWN_ENV[@]+"${DOWN_ENV[@]}"} RV_HOOK_WHEN_DOWN=deny \
+        RV_C_ARGV_LOG="$OUT/observe-$name.argv" "$PROBE/rv" hook --host "$host" \
+        >"$OUT/observe-$name.json" 2>"$OUT/observe-$name.err"
+    st=$?
+    set -e
+    if [[ "$st" -ne 0 || -e "$OUT/observe-$name.argv" ]] \
+      || [[ "$(cat "$OUT/observe-$name.json")" != "$want_out" ]] \
+      || ! grep -q 'RV observe mode: daemon unavailable' "$OUT/observe-$name.err"; then
+      printf 'rv-c tests: observe %s expected allow wire %s, got exit %s\n' "$name" "$want_out" "$st" >&2
+      cat "$OUT/observe-$name.json" "$OUT/observe-$name.err" >&2
+      exit 1
+    fi
+  }
+  printf '{"guard":{"mode":"observe"}}' > "$OBSERVE_CONFIG"
+  chmod 600 "$OBSERVE_CONFIG"
+  expect_observe claude claude ''
+  expect_observe codex codex ''
+  expect_observe opencode opencode ''
+  expect_observe cursor cursor '{"permission":"allow"}'
+  expect_observe antigravity antigravity '{"decision":"allow"}'
+  # Malformed input still denies under observe.
+  set +e
+  printf 'a\0b' | "$PROBE/rv" hook --host claude >"$OUT/observe-input.json" 2>/dev/null
+  set -e
+  if ! grep -q '"permissionDecision":"deny"' "$OUT/observe-input.json"; then
+    printf 'rv-c tests: malformed input must deny under observe\n' >&2
+    exit 1
+  fi
+  printf '{"guard":{"mode":"observe","hosts":{"claude":"block"}}}' > "$OBSERVE_CONFIG"
+  expect_down observe-host-block claude "" 0 '"permissionDecision":"ask"'
+  printf '{"guard":{"mode":"observe"}}' > "$OBSERVE_CONFIG"
+  mkdir -p "$OBSERVE_MANAGED"
+  expect_down observe-managed claude "" 0 '"permissionDecision":"ask"'
+  rmdir "$OBSERVE_MANAGED"
+  printf '{"guard":{"mode":"enforce"}}' > "$OBSERVE_CONFIG"
+  set +e
+  printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
+    | env ${DOWN_ENV[@]+"${DOWN_ENV[@]}"} RV_GUARD_MODE=observe RV_HOOK_WHEN_DOWN=observe \
+      "$PROBE/rv" hook --host claude >"$OUT/observe-env.json" 2>/dev/null
+  set -e
+  if ! grep -q '"permissionDecision":"ask"' "$OUT/observe-env.json"; then
+    printf 'rv-c tests: RV_GUARD_MODE / RV_HOOK_WHEN_DOWN must not enable observe fallback\n' >&2
+    exit 1
+  fi
+  rm -f "$OBSERVE_CONFIG"
+  printf 'rv-c daemon-down fallback: observe rendering passed\n'
 fi
 
 printf 'rv-c hook fallback boundary: %s host denial cases, no-daemon causes, and oversized input passed\n' "$host_count"

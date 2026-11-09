@@ -7,10 +7,12 @@
 #include "evaluation_route.h"
 #include "daemon_trust.h"
 #include "hook_fallback.h"
+#include "observe_gate.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +33,17 @@
 #endif
 
 extern char **environ;
+
+/* ManagedPolicyLocation.installedDirectory. Test builds may pin this and
+ * the config path to fixtures at compile time; release builds never do,
+ * and neither is ever read from the environment. */
+#ifndef RV_HOOK_MANAGED_POLICY_DIR
+#ifdef __APPLE__
+#define RV_HOOK_MANAGED_POLICY_DIR "/Library/Application Support/RV/managed"
+#else
+#define RV_HOOK_MANAGED_POLICY_DIR "/etc/rv/managed"
+#endif
+#endif
 
 #define RV_MACH_SERVICE "dev.rv.evaluate"
 #define RV_IPC_KEY "rv.ipc"
@@ -279,13 +292,39 @@ static void exec_same_argv(char **argv) {
     _exit(2);
 }
 
+/* The owner's config.json puts this host in observe mode (observe_gate.h).
+ * The home comes from the passwd entry, never $HOME: hook environment can
+ * come from project-scoped host config an agent writes. */
+static int owner_chose_observe(const char *host) {
+#ifdef RV_HOOK_OBSERVE_CONFIG_PATH
+    return rv_observe_gate_applies(RV_HOOK_OBSERVE_CONFIG_PATH, RV_HOOK_MANAGED_POLICY_DIR, host);
+#else
+    char path[PATH_MAX];
+    struct passwd *pw = getpwuid(getuid());
+    int n;
+    if (pw == NULL || pw->pw_dir == NULL || pw->pw_dir[0] != '/') {
+        return 0;
+    }
+    n = snprintf(path, sizeof path, "%s/.config/rv/config.json", pw->pw_dir);
+    if (n <= 0 || (size_t)n >= sizeof path) {
+        return 0;
+    }
+    return rv_observe_gate_applies(path, RV_HOOK_MANAGED_POLICY_DIR, host);
+#endif
+}
+
 /* No CLI replay: neither a transport failure nor malformed input grants
  * authority. Renders the classified fallback (hook_fallback.h): input
  * failures always deny; daemon-unavailable classes follow
- * RV_HOOK_WHEN_DOWN (ask by default). */
+ * RV_HOOK_WHEN_DOWN (ask by default), except that an absent or slow daemon
+ * steps aside when the owner chose observe mode. */
 static void fail_hook(const char *host, enum RvHookFailure failure) {
     struct RvHookFallback fallback;
     enum RvWhenDown mode = rv_when_down_parse(getenv(RV_HOOK_WHEN_DOWN_ENV));
+    if ((failure == RV_HOOK_FAIL_UNREACHABLE || failure == RV_HOOK_FAIL_TIMEOUT)
+        && owner_chose_observe(host)) {
+        mode = RV_WHEN_DOWN_OBSERVE;
+    }
     if (rv_hook_fallback_render(host, failure, mode, &fallback) != 0) {
         /* Unreachable for valid hosts; exit 2 blocks on Claude and Codex. */
         _exit(2);
