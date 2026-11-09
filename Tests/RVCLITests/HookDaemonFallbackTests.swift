@@ -86,6 +86,9 @@ struct HookDaemonFallbackTests {
         #expect(HookDaemonFallback.classify(ServiceTransportError.interrupted) == .unreachable)
         #expect(HookDaemonFallback.classify(ServiceTransportError.decodeFailed) == .protocol)
         #expect(HookDaemonFallback.classify(CocoaError(.coderReadCorrupt)) == .unreachable)
+        // A reply that does not decode is malformed, never an absent daemon.
+        let undecodable = DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "bad reply"))
+        #expect(HookDaemonFallback.classify(undecodable) == .protocol)
 #if canImport(XPC)
         #expect(HookDaemonFallback.classify(XPCEvaluateClientError.authenticationFailed) == .untrusted)
         #expect(HookDaemonFallback.classify(XPCEvaluateClientError.connectFailed) == .unreachable)

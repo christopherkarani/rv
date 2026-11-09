@@ -74,6 +74,11 @@ enum HookDaemonFallback {
             }
         }
 #endif
+        // A reply that arrived but does not decode is a malformed reply, not
+        // an absent daemon: it must deny whatever `RV_HOOK_WHEN_DOWN` says.
+        if error is DecodingError || error is EncodingError {
+            return .protocol
+        }
         // Unrecognized transport failure: treat as an absent daemon (ask by
         // default). Identity failures are typed above and always deny.
         return .unreachable
