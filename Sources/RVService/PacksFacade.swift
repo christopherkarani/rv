@@ -43,6 +43,9 @@ public enum PacksCommandError: Error, Equatable, Sendable {
     case unknownID(SelectionToken)
     case packNotFound(PackID)
     case configUnwritable
+    /// `config.toml` exists but cannot be read: refuse to rewrite it from an
+    /// empty config, which would discard the owner's pack choices.
+    case configUnreadable
     case criticalPatternUncompilable(RuleID)
 }
 
@@ -114,8 +117,9 @@ public enum PacksFacade {
     }
 
     public static func effectiveIDs(home: HomeDirectory) throws -> [PackID] {
-        let configURL = PacksConfigStore.configURL(home: home)
-        if FileManager.default.fileExists(atPath: configURL.path) == false {
+        // Only a definitely-absent file means day-one; a stat failure such as
+        // EACCES on a parent directory takes the fail-closed branch below.
+        if PacksConfigStore.isAbsent(home: home) {
             return dayOnePackIDs
         }
         let index = try PackRegistry.loadIndex()
@@ -127,7 +131,8 @@ public enum PacksFacade {
             // UTF-8). Falling back to the day-one defaults would silently
             // drop every pack the owner enabled, at every door, without an
             // owner action. Fail closed: every bundled pack, until the owner
-            // repairs the file (`rv doctor` reports it).
+            // repairs the file (`rv doctor` reports the packs as broken, and
+            // `rv packs enable/disable` refuse to overwrite it).
             return PackSet.order(Set(index.packIDs), index: index)
         }
         return try PackSet.effectiveOrdered(
@@ -175,7 +180,12 @@ public enum PacksFacade {
             throw PacksCommandError.unknownID(token)
         }
 
-        var config = (try? PacksConfigStore.load(home: home)) ?? .empty
+        var config: PacksConfig
+        do {
+            config = try PacksConfigStore.load(home: home)
+        } catch {
+            throw PacksCommandError.configUnreadable
+        }
         let before = Set(
             try PackSet.effectiveOrdered(
                 enabled: selectionTokens(config.enabled, index: index),
