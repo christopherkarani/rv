@@ -399,6 +399,11 @@ public struct ServiceClient: Sendable {
         } catch is IPCCallError {
             transport.invalidate()
             return unavailable(.protocol)
+        } catch is DecodingError, is EncodingError {
+            // No trustworthy verdict: deny and drop the connection, like every
+            // other protocol failure. Never `.connection` (a native ask).
+            transport.invalidate()
+            return unavailable(.protocol)
         } catch {
             return unavailable(HookDaemonFallback.classify(error))
         }
