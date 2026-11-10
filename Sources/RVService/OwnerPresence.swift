@@ -183,21 +183,27 @@ actor OwnerPresence {
         let timeout = promptTimeout
         // Bounded: an unanswered prompt must not hold the single slot.
         // Cancelling the prompt task dismisses the dialog.
-        let approved = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await authenticator.authenticate(reason: summary) }
+        let outcome = await withTaskGroup(of: OwnerPromptOutcome.self) { group in
+            group.addTask { await authenticator.prompt(reason: summary) }
             group.addTask {
                 try? await Task.sleep(for: timeout)
-                return false
+                return .declined
             }
-            let first = await group.next() ?? false
+            let first = await group.next() ?? .declined
             group.cancelAll()
             return first
         }
-        if approved {
+        switch outcome {
+        case .approved:
             failures.removeAll()
             return .approved
+        case .declined:
+            return recordFailure(.declined)
+        case .unavailable:
+            // No answer from the owner: no strike, or an agent could lock
+            // the owner out through prompts that never appeared.
+            return .denied(ConfirmOwnerActionReply(outcome: .unavailable))
         }
-        return recordFailure(.declined)
     }
 
     /// Allow-once redeem. `description` is rvd's own text for the code it

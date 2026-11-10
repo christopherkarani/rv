@@ -1,6 +1,9 @@
 import Foundation
 import Synchronization
 import Testing
+#if canImport(LocalAuthentication)
+import LocalAuthentication
+#endif
 import RVDomain
 import RVHistory
 import RVIPC
@@ -226,6 +229,47 @@ struct OwnerPresenceTests {
         #expect(still.outcome == .lockedOut)
         #expect(prompt.promptCount == OwnerPresence.maxFailures)
     }
+
+    /// A prompt LocalAuthentication could not show or that the system
+    /// cancelled (rvd in a background session, biometry locked out) is not
+    /// the owner saying no: it must never count toward the lockout.
+    final class EnvironmentFailingAuthenticator: OwnerAuthenticating, @unchecked Sendable {
+        let prompts = Mutex(0)
+        func authenticate(reason: String) async -> Bool { false }
+        func prompt(reason: String) async -> OwnerPromptOutcome {
+            prompts.withLock { $0 += 1 }
+            return .unavailable
+        }
+    }
+
+    @Test func promptsThatCouldNotBeShownNeverLockTheOwnerOut() async {
+        let prompt = EnvironmentFailingAuthenticator()
+        let presence = OwnerPresence(checker: FakeChecker(accepted: "secret"), authenticator: prompt)
+        let context = Self.unroledXPCContext()
+        for _ in 0..<(OwnerPresence.maxFailures * 2) {
+            #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .unavailable)))
+        }
+        #expect(prompt.prompts.withLock { $0 } == OwnerPresence.maxFailures * 2)
+    }
+
+    #if canImport(LocalAuthentication)
+    @Test("LocalAuthentication errors: the owner's no counts, the environment's does not", arguments: [
+        (LAError.Code.userCancel, OwnerPromptOutcome.declined),
+        (.userFallback, .declined),
+        (.authenticationFailed, .declined),
+        (.appCancel, .declined),
+        (.systemCancel, .unavailable),
+        (.notInteractive, .unavailable),
+        (.passcodeNotSet, .unavailable),
+        (.biometryLockout, .unavailable),
+        (.biometryNotAvailable, .unavailable),
+        (.biometryNotEnrolled, .unavailable),
+        (.invalidContext, .unavailable),
+    ])
+    func laErrorMapping(code: LAError.Code, expected: OwnerPromptOutcome) {
+        #expect(LocalOwnerAuthenticator.outcome(for: code) == expected)
+    }
+    #endif
 
     @Test func aSecondPromptWhileOneIsOpenIsRefused() async throws {
         let prompt = FakeAuthenticator(approve: false, hangs: true)
