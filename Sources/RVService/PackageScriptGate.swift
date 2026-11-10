@@ -119,24 +119,25 @@ enum PackageScriptGate {
                 // A mutation earlier in this chain (or in this unit) runs
                 // before the runner reads its manifest (TOCTOU).
                 let mutatedBefore = treeMutated || unitMutates
-                // Work that may swap in another manifest (`git checkout x`,
-                // `tar xf`, `cp -r`) leaves today's manifest saying nothing
-                // about the scripts that will run, even absent ones. Only a
-                // pure bin run reads no script.
-                let manifestChangedBefore = (manifestMayChange || unitMayChangeManifest) && !invocation.onlyBin
-                if invocation.unresolvable || overridden || manifestChangedBefore
-                    || (mutatedBefore && (configNamed || unitNamesConfig)) {
+                if invocation.unresolvable || overridden || (mutatedBefore && (configNamed || unitNamesConfig)) {
                     unresolved = true
                     continue
                 }
+                // Work that may swap in another manifest (`git checkout x`,
+                // `tar xf`, `cp -r`) leaves today's manifest saying nothing
+                // about the scripts that will run, even absent ones: today's
+                // bodies are still read (a deny stands), but nothing else
+                // is decided from them. Only a pure bin run reads no script.
+                let manifestChangedBefore = (manifestMayChange || unitMayChangeManifest) && !invocation.onlyBin
                 switch check(
                     invocation, cwd: wrapperMovesCwd ? nil : effectiveCwd, home: home,
                     priorWork: priorWork || launched.count > 1, mutatedBefore: mutatedBefore,
                     evalBody: evalBody
                 ) {
+                case .deny(let hit): return .deny(hit)
+                case _ where manifestChangedBefore: unresolved = true
                 case .clear(let safe): allBodiesSafe = allBodiesSafe && safe
                 case .needsJudge: needsJudge = true
-                case .deny(let hit): return .deny(hit)
                 case .unresolved: unresolved = true
                 }
             }
@@ -399,11 +400,12 @@ enum PackageScriptGate {
         isReadOnly(argv) || isBenignMutation(argv)
     }
 
-    /// Build output a cleanup removes; deleting one never exposes another
-    /// manifest.
+    /// Build output and lockfiles a cleanup removes; deleting one never
+    /// exposes another manifest or changes a script.
     static let buildOutputNames: Set<String> = [
         "node_modules", "dist", "build", "out", ".next", ".nuxt", ".turbo", ".cache", "coverage",
-        ".parcel-cache", ".svelte-kit", ".vite", ".output",
+        ".parcel-cache", ".svelte-kit", ".vite", ".output", "package-lock.json", "yarn.lock",
+        "pnpm-lock.yaml", "bun.lockb", "bun.lock",
     ]
 
     /// A mutation that cannot put another manifest or scripts in front of a

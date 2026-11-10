@@ -187,6 +187,7 @@ struct PackageScriptGateRegressionCorpusTests {
         ("rm -rf node_modules && npm install", Fixture.benignNoPwn),
         ("mkdir -p dist && npm ci", Fixture.benignNoPwn),
         ("rm -rf node_modules && npx tsc", Fixture.benignNoPwn),
+        ("rm -rf node_modules package-lock.json && npm install", Fixture.benignNoPwn),
         ("docker run node:20 npm test", Fixture.poisoned),
         ("ssh host npm test", Fixture.poisoned),
     ])
@@ -195,6 +196,19 @@ struct PackageScriptGateRegressionCorpusTests {
         defer { try? FileManager.default.removeItem(at: world.root) }
         let verdict = PackageScriptGateFormsTests.evaluate(command, cwd: world.cwd)
         #expect(PackageScriptGateFormsTests.needsJudge(verdict), "\(command) -> \(verdict)")
+    }
+
+    /// Work that may swap in another manifest floors later runs, but the
+    /// bodies in today's manifest are still read: a poisoned one still
+    /// denies rather than only asking.
+    @Test("a poisoned script after manifest-swapping work still denies", arguments: [
+        "git pull && npm test", "git checkout main && npm install", "make && npm start",
+    ])
+    func poisonAfterSwapStillDenies(command: String) throws {
+        let world = try Self.make(.poisoned)
+        defer { try? FileManager.default.removeItem(at: world.root) }
+        let verdict = PackageScriptGateFormsTests.evaluate(command, cwd: world.cwd)
+        #expect(PackageScriptGateFormsTests.isDeny(verdict), "\(command) -> \(verdict)")
     }
 
     @Test("a symlinked cwd whose physical parent holds a manifest reads that manifest")
