@@ -26,6 +26,10 @@ enum CLIProcess: Sendable {
         /// Stand-in for `rv policy draft`'s English compiler. Nil uses the
         /// live chain, which reaches Apple Intelligence where it is enabled.
         var englishCompiler: (any EnglishCompiler)?
+        /// Seams for the daemon-down owner fallback (`rv uninstall`, loosening
+        /// `rv host mode`). Nil assumes rvd reachable, so `ownerAuthOutcome`
+        /// alone decides and tests never probe rvd or read a terminal.
+        var daemonDownConfirmation: DaemonDownOwnerConfirmation.Seams?
 
         init(
             home: HomeDirectory? = nil,

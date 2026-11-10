@@ -80,7 +80,12 @@ import Testing
             )
         )
         #expect(outcome.stdout.isEmpty)
-        #expect(outcome.stderr == "rv setup failed: unable to enable systemd unit\n")
+        #expect(outcome.stderr == "rv setup failed: unable to enable systemd unit\n"
+            + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
+            + "fix: systemctl --user enable --now dev.rv.evaluate.service "
+            + "from a login session with a user systemd manager; "
+            + "journalctl --user -u dev.rv.evaluate.service and rv doctor show the cause\n"
+            + "then rerun rv setup to wire agent hooks\n")
         #expect(outcome.exitCode == EX_UNAVAILABLE)
         #expect(launchctl.bootstraps.isEmpty)
     }

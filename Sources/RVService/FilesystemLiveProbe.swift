@@ -114,13 +114,20 @@ enum FilesystemLiveProbe {
             workingDirectory: workingDirectory.flatMap(WorkingDirectory.init(validating:)),
             homeDirectory: homeDirectory
         )
-        return follow(
+        let fact = follow(
             path: started,
             apparent: apparent,
             hops: 0,
             visited: [],
             followedSymlink: false
         )
+        // A hard link to a wiring file is that file: classify the inode's
+        // wiring spelling, not the innocent-looking name.
+        if let home = homeDirectory?.rawValue,
+           let wiring = RVWiringPaths.wiringFileSharingInode(fact.canonical, home: home) {
+            return FilesystemPathFact(apparent: apparent, canonical: wiring, followedSymlink: true, resolution: .resolved)
+        }
+        return fact
     }
 }
 

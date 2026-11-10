@@ -14,38 +14,52 @@ import RVDomain
 ///   rv's, or a verb that stops every unit (`isolate`, `exit`, …);
 /// - runs `pkill`/`killall` with a pattern or name that may match rvd, or a
 ///   selection (`-u`, `-v`) with no name;
-/// - runs `kill` on pid `-1`, or with pids read from a lookup that names
-///   rvd (`kill $(pgrep rvd)`, `pgrep rvd | xargs kill`);
+/// - runs `kill` on pid `-1`, with pids read from a lookup that names
+///   rvd (`kill $(pgrep rvd)`, `pgrep rvd | xargs kill`), or on a literal
+///   pid that is rvd's now (`rvdPIDs`);
+/// - retunes rv's service: `launchctl setenv|unsetenv` (or `config …
+///   setenv`) of an `RV_*` name, or `launchctl debug|attach|submit` on an
+///   rv label;
 /// - launches `rvd` (a second rvd unlinks the live socket).
 ///
 /// A dynamic head is judged as each of these programs, and the words after
 /// any of their names in the raw text are judged too, so a launcher the
 /// parser does not model (`find -exec`, `xargs`, an inline program) still
-/// counts. Unmodelled words (`$`, backticks, globs) fail closed. `kill`
-/// with a numeric pid, or a pid in a variable or file, cannot be resolved
-/// and is not flagged.
+/// counts. Unmodelled words (`$`, backticks, globs) fail closed. A pid in
+/// a variable or file cannot be resolved and is not flagged.
+///
+/// This is the one rvd-stop detector. `ObserveFloor` applies it on observe
+/// hosts only: in enforce a stopped rvd fails closed on its own.
 public enum RVDStopGuard {
+    /// No process table: a literal-pid `kill` is not judged.
     public static func stopsRVD(_ raw: String) -> Bool {
-        stopsRVD(raw, depth: 0)
+        stopsRVD(raw, rvdPIDs: { [] })
     }
 
-    private static func stopsRVD(_ raw: String, depth: Int) -> Bool {
+    /// `rvdPIDs` names rvd's running pids, read only when a literal-pid
+    /// `kill` is judged. nil (the table could not be read) flags any
+    /// literal pid: fail closed.
+    public static func stopsRVD(_ raw: String, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
+        stopsRVD(raw, depth: 0, rvdPIDs: rvdPIDs)
+    }
+
+    private static func stopsRVD(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
         guard depth < maxDepth else { return true }
         let launched = launchedCommandHeads(raw)
-        let context = StopContext(raw: raw, launched: launched, depth: depth)
+        let context = StopContext(raw: raw, launched: launched, depth: depth, rvdPIDs: rvdPIDs)
         if launched.contains(where: { stops($0, context) }) { return true }
         if speculativeTails(raw).contains(where: { stops(argv: $0, context) }) { return true }
-        return echoFedShellStops(raw, depth: depth)
+        return echoFedShellStops(raw, depth: depth, rvdPIDs: rvdPIDs)
     }
 
     private static let maxDepth = 4
 
     fileprivate static func nested(_ raw: String, _ context: StopContext) -> Bool {
-        stopsRVD(raw, depth: context.depth + 1)
+        stopsRVD(raw, depth: context.depth + 1, rvdPIDs: context.rvdPIDs)
     }
 
-    fileprivate static func nestedText(_ raw: String, depth: Int) -> Bool {
-        stopsRVD(raw, depth: depth + 1)
+    fileprivate static func nestedText(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
+        stopsRVD(raw, depth: depth + 1, rvdPIDs: rvdPIDs)
     }
 }
 
@@ -55,12 +69,12 @@ public enum RVDStopGuard {
 /// `echo "pkill rvd" | sh`, `… echo '* * * * * pkill rvd' … | crontab -`.
 private let shellConsumers: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "at", "batch", "crontab"]
 
-private func echoFedShellStops(_ raw: String, depth: Int) -> Bool {
+private func echoFedShellStops(_ raw: String, depth: Int, rvdPIDs: @escaping () -> Set<Int32>?) -> Bool {
     let segments = rawSegments(raw).filter { $0.isEmpty == false }
     guard segments.contains(where: { shellConsumers.contains(commandName($0[0])) }) else { return false }
     for segment in segments where ["echo", "printf"].contains(commandName(segment[0])) {
         let text = segment.dropFirst().filter { $0.hasPrefix("-") == false }.joined(separator: " ")
-        if text.isEmpty == false, RVDStopGuard.nestedText(text, depth: depth) { return true }
+        if text.isEmpty == false, RVDStopGuard.nestedText(text, depth: depth, rvdPIDs: rvdPIDs) { return true }
     }
     return false
 }
@@ -70,6 +84,15 @@ private struct StopContext {
     let raw: String
     let launched: [LaunchedCommand]
     let depth: Int
+    let rvdPIDs: () -> Set<Int32>?
+
+    /// A literal pid that is rvd's now; an unreadable process table fails
+    /// closed on any positive pid.
+    func killsRVDPid(_ operand: String) -> Bool {
+        guard let pid = Int32(operand), pid > 0 else { return false }
+        guard let running = rvdPIDs() else { return true }
+        return running.contains(pid)
+    }
 
     /// Whether the command looks up rvd's pid: it names rvd, rv's label or
     /// its socket, or runs a `pgrep`/`pidof` that may select rvd. The text
@@ -230,6 +253,7 @@ private func verbScanOverflows(_ folded: [String]) -> Bool {
 
 private let launchctlStopVerbs: Set<String> = ["bootout", "unload", "remove", "kill", "disable", "stop"]
 private let launchdDomains: Set<String> = ["gui", "user", "login", "session", "pid"]
+private let launchctlTamperVerbs: Set<String> = ["debug", "attach", "submit"]
 
 private func launchctlStops(_ args: [String], _ context: StopContext) -> Bool {
     let folded = args.map(foldedWord)
@@ -241,8 +265,17 @@ private func launchctlStops(_ args: [String], _ context: StopContext) -> Bool {
             let rest = args.dropFirst(index + 2)
             return rest.contains(where: isDynamic) || RVDStopGuard.nested(rest.joined(separator: " "), context)
         }
-        // `kickstart -k` restarts the job, killing the running instance.
-        if verb == "kickstart", args.contains(where: { foldedWord($0) == "-k" }) {
+        // The launch environment rvd would start with (`RV_*`).
+        if verb == "setenv" || verb == "unsetenv" || verb == "config" {
+            return folded[(index + 1)...].contains { $0.hasPrefix("rv_") || isUnmodelled($0) }
+        }
+        // A debugger or a replacement job on rv's own label.
+        if launchctlTamperVerbs.contains(verb) {
+            return folded[(index + 1)...].contains { isUnmodelled($0) || $0.contains("dev.rv") }
+        }
+        // `kickstart -k` (alone or in a cluster, `-kp`) restarts the job,
+        // killing the running instance.
+        if verb == "kickstart", folded.contains(where: { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains("k") }) {
             let targets = folded[(index + 1)...].filter { $0.hasPrefix("-") == false }
             return targets.contains(where: launchdTargetMayBeRV)
         }
@@ -547,7 +580,7 @@ private func killStops(_ args: [String], _ context: StopContext) -> Bool {
         // A non-numeric operand is an `xargs -I` placeholder (`{}`, `%`)
         // filled from stdin, not a literal pid.
         if operand.allSatisfy(\.isNumber) == false { return context.looksUpRVD }
-        return false
+        return context.killsRVDPid(operand)
     }
 }
 

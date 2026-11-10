@@ -45,7 +45,8 @@ struct EvaluationInputs: Sendable {
     let store: PolicyStoreInputs
 
     /// `environment` is explicit; the door's public entry points pass
-    /// `ProcessInfo.processInfo.environment`. `config.json` is parsed once
+    /// `ProcessInfo.processInfo.environment`. It can only tighten the guard
+    /// mode; engine selection never reads it. `config.json` is parsed once
     /// and shared by guard mode and engine selection. `host` selects the
     /// per-host guard entry (`tty` has none).
     static func gather(
@@ -59,7 +60,7 @@ struct EvaluationInputs: Sendable {
             // The organization's gate pins enforce mode while it applies.
             guardMode: JudgeRuntime.effectiveGuardMode(
                 home: home, host: host, environment: environment, config: config),
-            judge: JudgeRuntime.selection(home: home, environment: environment, config: config),
+            judge: JudgeRuntime.selection(home: home, config: config),
             store: .gather(home: home, cwd: cwd)
         )
     }

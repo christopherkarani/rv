@@ -76,6 +76,10 @@ public struct WorkspaceAbandonReport: Equatable, Sendable {
     public var retainedCount: Int
     public var uncomparedCount: Int
     public var truncated: Bool
+    /// The detached disk image that still holds the unpublished volume,
+    /// moved to a name nothing sweeps. Nil when no image was left to keep
+    /// (for example the publish had already completed).
+    public var retainedImage: String?
 
     public init(
         workspace: UUID,
@@ -86,8 +90,10 @@ public struct WorkspaceAbandonReport: Equatable, Sendable {
         retained: [String],
         retainedCount: Int,
         uncomparedCount: Int,
-        truncated: Bool
+        truncated: Bool,
+        retainedImage: String? = nil
     ) {
+        self.retainedImage = retainedImage
         self.workspace = workspace
         self.originalPath = originalPath
         self.volumePresent = volumePresent
@@ -334,6 +340,21 @@ extension WorkspaceRecovery {
         case .failed:
             return .failed(nil)
         }
+        // The volume was never published, so its image (still present after
+        // a logout, reboot, or host SIGTERM) is the only copy of the agent's
+        // work. Keep it under a name nothing sweeps before restore and
+        // cleanup would unlink it.
+        var retainedImage: String?
+        if WorkspaceSessionLifecycle.isComplete(.publish, progress: progress) == false {
+            switch retainUnpublishedImage(identity) {
+            case .kept(let path):
+                retainedImage = path
+            case .nothingToKeep:
+                break
+            case .failed:
+                return .failed(nil)
+            }
+        }
         switch advance(.restore, workspace, identity: identity, log: lifecycleLog, progress: &progress) {
         case .done:
             break
@@ -356,9 +377,32 @@ extension WorkspaceRecovery {
                 retained: diff.retained,
                 retainedCount: diff.retainedCount,
                 uncomparedCount: diff.uncomparedCount,
-                truncated: diff.truncated
+                truncated: diff.truncated,
+                retainedImage: retainedImage
             )
         )
+    }
+
+    private enum UnpublishedImage {
+        case kept(String)
+        case nothingToKeep
+        case failed
+    }
+
+    /// Move the recorded image aside so restore and cleanup cannot unlink
+    /// it. A missing or replaced image has nothing to keep. A move that
+    /// could not finish fails the abandon, which never falls back to
+    /// deleting the work.
+    private static func retainUnpublishedImage(_ identity: WorkspaceDurableIdentity) -> UnpublishedImage {
+        guard let imagePath = identity.imagePath else { return .nothingToKeep }
+        switch retainRejectedImage(imagePath, device: identity.imageDevice, inode: identity.imageInode) {
+        case .retained(let path):
+            return .kept(path)
+        case .notOurs:
+            return .nothingToKeep
+        case .stopped, .left:
+            return .failed
+        }
     }
 
     /// Serialize creation for `canonicalPath` and recover an orphan first.

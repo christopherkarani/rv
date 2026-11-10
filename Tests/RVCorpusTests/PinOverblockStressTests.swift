@@ -58,8 +58,8 @@ struct PinOverblockStressTests {
             "git for-each-ref --format='git reset --hard'",
             "git commit --trailer 'Made-with: git reset --hard'",
             "git interpret-trailers --trailer 'Made-with: git reset --hard'",
-            "git config alias.oops 'reset --hard'",
-            "git config --global alias.rh 'reset --hard'",
+            // `git config alias.X 'reset --hard'` arms the body for every
+            // later `git X`, so it now denies deliberately: GitAliasBypassTests.
             "git log -S 'rm -rf'",
             "git log -G 'git reset --hard'",
             "git diff -S 'rm -rf'",

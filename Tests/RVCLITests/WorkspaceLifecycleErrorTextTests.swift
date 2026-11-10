@@ -152,6 +152,8 @@ import RVIsolation
     #expect(missingAttachment.contains("restore the saved tree"))
     #expect(missingAttachment.contains("rv workspace abandon"))
     #expect(missingAttachment.contains("still present") == false)
+    #expect(missingAttachment.contains("keep that image"))
+    #expect(missingAttachment.contains("hdiutil"))
 
     let conflictAttachment = WorkspaceCommandRun.text(
         WorkspaceAttachment.blocked(WorkspaceRecoveryBlock(workspace: nil, reason: .publicationConflict))
@@ -220,15 +222,20 @@ import RVIsolation
 
 @Test func publishRejectedTextNamesTheRetainedImageAndHowToRecoverOrRemoveIt() {
     let image = "/var/folders/ab/T/rv-rejected-abc-20261102T101500Z.sparseimage"
-    let text = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: image))
+    let text = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: image, reason: ""))
     #expect(text.contains(image))
     #expect(text.contains("nothing was published"))
     #expect(text.contains("project directory is unchanged"))
     #expect(text.contains("hdiutil attach -readonly -nobrowse"))
     #expect(text.contains("rm \(image)"))
-    let missing = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: ""))
+    let missing = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: "", reason: ""))
     #expect(missing.contains("nothing was published"))
     #expect(missing.contains("hdiutil") == false)
+    // The host's reason names the path that stopped the publish.
+    let reason = "nothing was published and the project directory is unchanged: .git/index was replaced in the hidden original"
+    let named = WorkspaceCommandRun.text(WorkspaceClientFailure.publishRejected(retainedImage: image, reason: reason))
+    #expect(named.contains(".git/index was replaced"))
+    #expect(named.contains("hdiutil attach -readonly -nobrowse \(image)"))
 }
 
 @Test func abandonFailedTextDoesNotClaimTheWorkspaceWasLeftAsIs() {

@@ -66,6 +66,9 @@ public struct WorkspaceReviewState: Equatable, Sendable {
     /// A proposal this pane just resolved: its disappearance is expected,
     /// so the next landing keeps the action's notice.
     var settled: ReviewItemID?
+    /// Content area the open pane last rendered into; nil until measured.
+    /// Approve is refused while it is nil or too small to show the review.
+    var paneSize: WorkspaceTUIState.ViewSize?
 
     init(enabled: Bool) {
         self.enabled = enabled

@@ -55,8 +55,39 @@ struct HookDeadlineTests {
         #expect(late.requiresTimeoutReply == false)
     }
 
+    /// rvd's runtime gives every hookEvaluate the real budget.
+    @Test func runtimeHookBudgetDefaultsToTheDeadlineBudget() async throws {
+        let homeURL = try isolatedHomeDirectory()
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        let runtime = ServiceRuntime(home: home, allowOnceDirectory: allowOnceDirectory)
+        #expect(await runtime.hookBudget == HookDeadline.budget)
+    }
+
+    /// A runtime whose budget is spent on arrival answers the timeout deny
+    /// for a frame received just now, and commits nothing.
+    @Test func aSpentRuntimeBudgetTimesOutAndCommitsNothing() async throws {
+        let env = try DeadlineEnv(hookBudget: .zero)
+        defer { env.tearDown() }
+
+        let wire = await env.runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: Self.askStdin))),
+            context: peerHookContext(),
+            receivedAt: .now
+        )
+        try assertDeny(wire)
+        #expect(try await env.pending.list(now: Self.now).isEmpty)
+        #expect(env.allowOnceRows().isEmpty)
+        #expect(env.denialRecords().isEmpty)
+    }
+
+    /// The real budget, through dispatch: a frame received 30 s ago.
     @Test func lateHookEvaluateDoesNotConsumeTheAllowOnceGrant() async throws {
-        let env = try DeadlineEnv()
+        let env = try DeadlineEnv(hookBudget: HookDeadline.budget)
         defer { env.tearDown() }
         #expect(await env.plantResetHardGrant() == .planted)
 
@@ -77,7 +108,7 @@ struct HookDeadlineTests {
         let wire = await env.runtime.dispatch(
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: Self.askStdin))),
             context: peerHookContext(),
-            receivedAt: .now - .seconds(30)
+            receivedAt: env.lateReceipt
         )
         try assertDeny(wire)
         #expect(try await env.pending.list(now: Self.now).isEmpty)
@@ -207,20 +238,26 @@ private struct DeadlineEnv {
     let grants = EphemeralAllowOnceTable()
     let runtime: ServiceRuntime
     let pending: PendingApprovalStore
+    let hookBudget: Duration
 
-    init() throws {
+    init(hookBudget: Duration = testHookBudget) throws {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         home = try #require(HomeDirectory(validating: homeURL.path))
-        runtime = ServiceRuntime(
+        self.hookBudget = hookBudget
+        runtime = hookTestRuntime(
             home: home,
             allowOnceDirectory: allowOnceDirectory,
             grants: grants,
             clock: { Date(timeIntervalSince1970: 1_700_000_000) },
-            pendingApprovals: .automatic
+            pendingApprovals: .automatic,
+            hookBudget: hookBudget
         )
         pending = PendingApprovalStore.makeLive(home: home)
     }
+
+    /// A frame received long enough ago that this runtime's budget is spent.
+    var lateReceipt: ContinuousClock.Instant { .now - hookBudget - .seconds(30) }
 
     func plantResetHardGrant() async -> EphemeralAllowOnceTable.PlantResult {
         await grants.plant(

@@ -58,6 +58,7 @@ import Testing
 
     #expect(plan.steps == [
         .createConfigDirectory,
+        .writeLaunchAgent,
         .skipOccupied(.grok),
         .write(HostArtifacts.attach(host: .pi, layout: layout, existingData: nil, forceClear: false)),
         .skipUndetected(.opencode),
@@ -68,7 +69,6 @@ import Testing
         .skipUndetected(.cursor),
         .skipUndetected(.antigravity),
         .skipUndetected(.muse),
-        .writeLaunchAgent,
     ])
     #expect(
         FileManager.default.fileExists(atPath: homePath) == false,
@@ -103,6 +103,7 @@ import Testing
     #expect(plan.steps.contains(.writeLaunchAgent) == false)
     #expect(plan.steps == [
         .createConfigDirectory,
+        .skipLaunchAgent,
         .skipUndetected(.grok),
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
@@ -113,7 +114,6 @@ import Testing
         .skipUndetected(.cursor),
         .skipUndetected(.antigravity),
         .skipUndetected(.muse),
-        .skipLaunchAgent,
     ])
     #expect(
         FileManager.default.fileExists(atPath: homePath) == false,
@@ -153,6 +153,7 @@ import Testing
     #expect(plan.steps.contains(.skipOccupied(.grok)) == false)
     #expect(plan.steps == [
         .createConfigDirectory,
+        .writeLaunchAgent,
         .forceClearThenWrite(grokForce),
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
@@ -163,7 +164,6 @@ import Testing
         .skipUndetected(.cursor),
         .skipUndetected(.antigravity),
         .skipUndetected(.muse),
-        .writeLaunchAgent,
     ])
 }
 

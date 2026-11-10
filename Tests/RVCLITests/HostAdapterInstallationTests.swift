@@ -28,6 +28,7 @@ private func writeWiredAdapter(
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: rvPath,
+            interpreter: "/usr/bin/python3",
             adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: destination),
             force: false
         )
@@ -36,6 +37,7 @@ private func writeWiredAdapter(
         let merged = try AntigravityHooksMerge.merge(
             existingData: nil,
             rvPath: rvPath,
+            interpreter: "/usr/bin/python3",
             adapterPath: AntigravityHooksMerge.adapterPath(hooksPath: destination),
             force: false
         )
@@ -794,6 +796,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     let bytes = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/rv-t1/.claude/hooks/rv-guard.py",
         force: false
     ).data
@@ -834,6 +837,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
 @Test func hostInstallation_wiredCursorCompanionWithFileToolEntryIsWired() throws {
     let companion = try CursorHooksMerge.merge(
         existingData: nil,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
     ).data
     let snapshot = cursorFileToolsSnapshot(
@@ -866,6 +870,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
         )
         let merged = try CursorHooksMerge.merge(
             existingData: nil,
+            interpreter: "/usr/bin/python3",
             adapterPath: paths.cursorHook
         )
         try merged.data.write(to: URL(fileURLWithPath: paths.cursorHooksJSON))
@@ -935,7 +940,7 @@ private func cursorCompanionWithoutFileToolEntry() throws -> Data {
     let root = JSONValue.object([
         CursorHooksMerge.versionKey: .number(Double(CursorHooksMerge.schemaVersion)),
         CursorHooksMerge.hooksRootKey: .object([
-            CursorHooksMerge.beforeShellKey: .array([CursorHooksMerge.rvEntry(adapterPath: adapterPath)]),
+            CursorHooksMerge.beforeShellKey: .array([CursorHooksMerge.rvEntry(interpreter: "/usr/bin/python3", adapterPath: adapterPath)]),
         ]),
     ])
     return try JSONEncoder().encode(root)

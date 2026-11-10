@@ -24,6 +24,8 @@ struct SetupIntent {
     var appearance: CLIAppearance = .robot
     var animate: Bool = false
     var ceremonyKind: SetupCeremonyKind = .setup
+    /// Uninstall only: also delete the downloaded judge weights.
+    var removeModels: Bool = false
     /// `rv setup --observe`: store `guard.mode: observe` before wiring.
     var observe: Bool = false
 }
@@ -58,7 +60,10 @@ struct SetupFlow {
 
     /// The door for `rv setup`: when `--observe` would shed oversight (rv
     /// already enforces a wired host), `authenticate` runs first and a
-    /// refusal changes nothing.
+    /// refusal changes nothing. The flow itself then runs on its own
+    /// thread: it proves rvd answers before wiring hooks and that wait
+    /// blocks (`ServiceReadiness.live`), so it must never park a
+    /// cooperative-pool thread the readiness probe itself needs.
     func run(
         _ intent: SetupIntent,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
@@ -90,7 +95,30 @@ struct SetupFlow {
                 return SetupOutcome(stdout: "", stderr: "rv setup failed: \(error)\n", exitCode: EX_SOFTWARE)
             }
         }
-        return run(intent, env: env, ownerAuthenticated: ownerAuthenticated, clock: clock, write: write)
+        return await runOffPool(intent, env: env, ownerAuthenticated: ownerAuthenticated, clock: clock, write: write)
+    }
+
+    private func runOffPool(
+        _ intent: SetupIntent,
+        env: SetupEnvironment,
+        ownerAuthenticated: Bool,
+        clock: any SetupCeremonyClock,
+        write: ((String) -> Void)?
+    ) async -> SetupOutcome {
+        nonisolated(unsafe) let flow = self
+        nonisolated(unsafe) let env = env
+        nonisolated(unsafe) let clock = clock
+        nonisolated(unsafe) let write = write
+        // A task-local does not cross into a Thread: carry the test seam over.
+        let context = CLIProcess.context
+        return await withCheckedContinuation { continuation in
+            Thread {
+                let outcome = CLIProcess.$context.withValue(context) {
+                    flow.run(intent, env: env, ownerAuthenticated: ownerAuthenticated, clock: clock, write: write)
+                }
+                continuation.resume(returning: outcome)
+            }.start()
+        }
     }
 
     private func run(
@@ -115,6 +143,7 @@ struct SetupFlow {
         case .uninstall:
             return SetupRun.uninstall(
                 env,
+                removeModels: intent.removeModels,
                 appearance: intent.appearance,
                 clock: clock,
                 animate: intent.animate,
@@ -163,6 +192,8 @@ extension SetupEnvironment {
             runningExecutable: executable?.path
         )
         setup.daemonTrust = DaemonTrustProbe.live
+        setup.serviceAnswers = ServiceReadiness.live(home: home)
+        setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
         return setup
     }
 }
