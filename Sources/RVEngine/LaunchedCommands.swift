@@ -21,6 +21,22 @@ package func launchIsTruncated(_ raw: String) -> Bool {
     launchedCommandHeads(raw).contains { $0.truncated }
 }
 
+/// Launched commands whose head may resolve to any program (`$NPM test`,
+/// `"$(which npm)" test`): the head as written, then its operands.
+package func dynamicHeadLaunches(_ raw: String) -> [[String]] {
+    launchedCommandHeads(raw)
+        .filter { $0.headIsDynamic && $0.speculative == false && $0.truncated == false }
+        .map { [$0.head] + Array($0.guardArgv.dropFirst()) }
+}
+
+/// Launched commands as written: the head before `commandName` (`./ls`
+/// stays a path) and operands without structural redirects.
+package func launchedCommandsAsWritten(_ raw: String) -> [[String]] {
+    launchedCommandHeads(raw)
+        .filter { $0.speculative == false && $0.truncated == false }
+        .map { [$0.head] + Array($0.guardArgv.dropFirst()) }
+}
+
 /// A launched command with the head word as written (before `commandName`).
 /// `headIsDynamic` marks a head that may resolve to any program (`$RV`,
 /// `$'rv'`, `r?`, `$(which rv)`). `speculative` entries are fail-closed

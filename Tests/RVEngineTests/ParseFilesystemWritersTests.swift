@@ -91,7 +91,10 @@ struct ParseFilesystemWritersTests {
     @Test func ln_destinationAndSingleOperandCwd() {
         expectWriterParsed(parseLn(["-s", "a", "/tmp/x"]), "create", paths: ["/tmp/x"])
         expectWriterParsed(parseLn(["-s", "a"]), "create", paths: ["."])
-        expectWriterParsed(parseLn(["-t", "/tmp/x", "a"]), "create", paths: ["/tmp/x"])
+        // A hard link (no `-s`) also writes its sources (same inode).
+        expectWriterParsed(parseLn(["-t", "/tmp/x", "a"]), "create", paths: ["/tmp/x", "a"])
+        expectWriterParsed(parseLn(["a", "b"]), "create", paths: ["b", "a"])
+        expectWriterParsed(parseLn(["--symbolic", "a", "b"]), "create", paths: ["b"])
         #expect(parseLn([]) == nil)
         #expect(parseLn(["--help"]) == nil)
         #expect(parseLn(["-z", "a", "b"]) == nil)
@@ -433,20 +436,20 @@ struct ParseFilesystemWritersTests {
     }
 
     @Test func ln_targetShortAndNewFlags() {
-        expectWriterParsed(parseLn(["-T", "a", "b"]), "create", paths: ["b"])
+        expectWriterParsed(parseLn(["-T", "a", "b"]), "create", paths: ["b", "a"])
         expectWriterParsed(
             parseLn(["--strip-trailing-slashes", "a", "b"]),
             "create",
-            paths: ["b"]
+            paths: ["b", "a"]
         )
         expectWriterParsed(
             parseLn(["--targ", "/tmp/t", "a", "b"]),
             "create",
-            paths: ["/tmp/t"]
+            paths: ["/tmp/t", "a", "b"]
         )
         // `ln -S` is purely GNU-value: `-StDIR` reads suffix `tDIR`.
-        expectWriterParsed(parseLn(["-StDIR", "a", "b"]), "create", paths: ["b"])
-        expectWriterParsed(parseLn(["-S", "suf", "a", "b"]), "create", paths: ["b"])
+        expectWriterParsed(parseLn(["-StDIR", "a", "b"]), "create", paths: ["b", "a"])
+        expectWriterParsed(parseLn(["-S", "suf", "a", "b"]), "create", paths: ["b", "a"])
     }
 
     @Test func install_bsdValuesAndDPreScan() {

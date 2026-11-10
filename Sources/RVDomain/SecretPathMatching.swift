@@ -26,6 +26,29 @@ public func isHomeAliasPath(_ path: String) -> Bool {
         || path == "${HOME}" || path.hasPrefix("${HOME}/")
 }
 
+/// How a shell expands a `~name` / `~name/...` word.
+public enum TildeUserExpansion: Sendable, Equatable {
+    /// Not a `~name` word (`~`, `~/x` and `a/~b` are not).
+    case notTildeUser
+    /// `name`'s home directory joined with the rest.
+    case expanded(String)
+    /// No such user: the shell leaves the word literal, but the target is
+    /// not one the guard can place, so callers treat it as outside.
+    case unknownUser
+}
+
+/// Expand `~name/...` through the user database, as the shell does.
+public func expandTildeUser(_ path: String) -> TildeUserExpansion {
+    guard path.hasPrefix("~"), isHomeAliasPath(path) == false else { return .notTildeUser }
+    let body = path.dropFirst()
+    let name = String(body.prefix { $0 != "/" })
+    let rest = body.dropFirst(name.count)
+    guard let entry = getpwnam(name), let dir = entry.pointee.pw_dir else { return .unknownUser }
+    let home = String(cString: dir)
+    if rest.isEmpty || rest == "/" { return .expanded(home) }
+    return .expanded((home.hasSuffix("/") ? String(home.dropLast()) : home) + rest)
+}
+
 // MARK: - Kind matching (Sendable pure)
 
 extension SecretPathKind {

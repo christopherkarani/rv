@@ -18,6 +18,8 @@ struct HookEntry: Equatable, Sendable {
 struct HookCommandContext: Equatable, Sendable {
     /// Claude/Antigravity bake `RV_BINARY=<rvPath>`; other hosts leave this nil.
     var rvPath: String?
+    /// The absolute interpreter setup probed (`AdapterCommand`).
+    var interpreter: String
     var adapterPath: String
 }
 

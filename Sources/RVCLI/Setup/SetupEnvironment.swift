@@ -65,10 +65,12 @@ struct SetupEnvironment {
     /// is started. Setup wires no hook until it returns true. Blocking.
     /// Default true for isolated test HOMEs; live: `ServiceReadiness.live`.
     var serviceAnswers: () -> Bool = { true }
-    /// Does this interpreter (`python3`) run? Setup will not wire a host
-    /// whose hook command needs one that does not. Default true for tests;
-    /// live: `AdapterRuntime.liveRunnable` on this PATH.
-    var interpreterRunnable: (String) -> Bool = { _ in true }
+    /// The absolute path of a runnable interpreter (`python3`), baked into
+    /// the hook command; nil when none runs. Setup will not wire a host
+    /// whose hook command needs one that does not. Default
+    /// `/usr/bin/<name>` for tests; live: `AdapterRuntime.resolveRunnable`
+    /// on this PATH.
+    var resolveInterpreter: (String) -> String? = { "/usr/bin/" + $0 }
 
     /// This run loads the real launchd/systemd service, so it can (and
     /// must) prove rvd answers before wiring hooks.

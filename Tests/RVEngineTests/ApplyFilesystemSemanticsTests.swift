@@ -832,4 +832,87 @@ struct ApplyFilesystemWiringTests {
     func ordinaryWriteAllowed() throws {
         #expect(try composed("echo hi > notes.txt").decision == .allow)
     }
+
+    private func isProtectedDeny(_ result: EvaluationResult) -> Bool {
+        if case .deny(let deny) = result.decision { return deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID }
+        return false
+    }
+
+    @Test("a hard link whose source is wiring or a secret is a write to the source", arguments: [
+        "ln ~/.claude/settings.json evil.json",
+        "ln .claude/settings.json evil.json",
+        "ln -f .local/bin/rvd x",
+        "ln ~/.ssh/id_ed25519 key",
+        "ln -t links .claude/settings.json",
+    ])
+    func hardLinkSourceDenies(command: String) throws {
+        guard case .deny = try composed(command).decision else {
+            Issue.record("\(command) must deny")
+            return
+        }
+    }
+
+    @Test("moving, deleting or chmod-ing an ancestor of wiring denies", arguments: [
+        "mv .claude claude-old",
+        "mv ~/.claude /tmp/x",
+        "rm -r ~/.local/bin",
+        "rm -r .local",
+        "mv Library/LaunchAgents la",
+        "rm -r .config/systemd/user",
+        "rm -r .config",
+        "chmod 000 .claude",
+        "chmod -R a-r .codex",
+    ])
+    func ancestorMutationDenies(command: String) throws {
+        #expect(isProtectedDeny(try composed(command)), "\(command)")
+    }
+
+    @Test("project and local host settings files are protected", arguments: [
+        "echo '{}' > src/app/.claude/settings.json",
+        "cp x src/app/.claude/settings.local.json",
+        "echo x > src/app/.codex/config.toml",
+        "tee src/app/.cursor/hooks.json < x",
+        "echo x > src/app/.gemini/settings.json",
+        "echo x > .claude/settings.local.json",
+    ])
+    func hostSettingsDeny(command: String) throws {
+        #expect(isProtectedDeny(try composed(command)), "\(command)")
+    }
+
+    @Test("ordinary links, moves, deletes and host-dir files stay allowed", arguments: [
+        "rm notes.txt",
+        "rmdir src/empty",
+        "mv notes.txt notes2.txt",
+        "echo x > src/app/.claude/commands/foo.md",
+        "ln -s notes.txt link.txt",
+        "ln notes.txt notes-link.txt",
+        "touch .claude/CLAUDE.md",
+    ])
+    func ordinaryAllowed(command: String) throws {
+        #expect(try composed(command).decision == .allow, "\(command)")
+    }
+
+    @Test("~user expands through the user database; an unknown user is outside the repo")
+    func tildeUser() throws {
+        let user = NSUserName()
+        let home = try #require(FileManager.default.homeDirectory(forUser: user)).path
+        let world = FilesystemAnalysisWorld.probed(
+            FilesystemAnalysisContext(
+                workingDirectory: WorkingDirectory(validating: home + "/src"),
+                repositoryRoot: RepositoryRoot(validating: home),
+                homeDirectory: HomePath(validating: home)
+            )
+        )
+        func run(_ command: String) throws -> EvaluationResult {
+            applyFilesystemSemantics(
+                pack: try runFilesystemPack(command), command: ShellCommand(rawValue: command), filesystemWorld: world
+            )
+        }
+        #expect(isProtectedDeny(try run("echo x > ~\(user)/.claude/settings.json")))
+        #expect(try run("echo x > ~\(user)/notes.txt").decision == .allow)
+        guard case .deny = try run("echo x > ~no-such-user-rv-test/notes.txt").decision else {
+            Issue.record("~unknown must not classify inside the repository")
+            return
+        }
+    }
 }

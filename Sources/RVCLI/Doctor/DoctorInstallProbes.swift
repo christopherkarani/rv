@@ -33,9 +33,13 @@ struct DoctorInstallProbes {
     var trustManifest: TrustManifestState
     /// Would hooks trust the installed `rvd`? Nil when not evaluated.
     var daemonTrust: DoctorServiceTrust? = nil
-    /// Does a hook interpreter (`python3`) run? Asked only for an
+    /// Does a hook interpreter run: the absolute path a hook command bakes,
+    /// or `python3` on PATH for an earlier rv's command? Asked only for an
     /// interpreter some hooked host needs. Default true (tests).
     var interpreterRunnable: (String) -> Bool = { _ in true }
+    /// Can this user replace a baked interpreter (its file or a directory
+    /// above it, through symlinks)? Default false (tests).
+    var interpreterReplaceable: (String) -> Bool = { _ in false }
 
     static func live(
         home: HomeDirectory,
@@ -58,6 +62,7 @@ struct DoctorInstallProbes {
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
 #endif
         probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
+        probes.interpreterReplaceable = AdapterRuntime.userCanReplace
         return probes
     }
 
@@ -141,24 +146,44 @@ enum DoctorInstallChecks {
     }
 
     /// One failing row per hooked host whose hook interpreter does not run:
-    /// that hook exits 127 and the host lets the tool call through.
+    /// that hook exits 127 and the host lets the tool call through. The
+    /// interpreter is the one the host's hook commands bake; an earlier
+    /// rv's `python3` command (or one doctor cannot read) is probed on PATH.
     static func adapterRuntime(
         hosts: HostAdapterInstallationSnapshot,
+        paths: OwnedPaths,
+        fileManager: FileManager,
         probes: DoctorInstallProbes
     ) -> [DoctorProblem] {
         var runnable: [String: Bool] = [:]
         return AdapterRuntime.hooked(hosts).compactMap { host in
-            guard let interpreter = AdapterRuntime.interpreter(for: host) else { return nil }
-            if runnable[interpreter] == nil {
-                runnable[interpreter] = probes.interpreterRunnable(interpreter)
+            guard let name = AdapterRuntime.interpreter(for: host) else { return nil }
+            let baked = AdapterRuntime.bakedInterpreters(host: host, paths: paths, fileManager: fileManager)
+            let missing = (baked.isEmpty ? [name] : baked).first { interpreter in
+                if runnable[interpreter] == nil {
+                    runnable[interpreter] = probes.interpreterRunnable(interpreter)
+                }
+                return runnable[interpreter] == false
             }
-            guard runnable[interpreter] == false else { return nil }
+            guard let interpreter = missing else {
+                // Outside a system directory the interpreter is not in rv's
+                // wiring table: the agent rv guards could swap it.
+                guard let replaceable = baked.first(where: { $0.hasPrefix("/") && probes.interpreterReplaceable($0) })
+                else { return nil }
+                return DoctorProblem(
+                    id: "adapter-runtime-replaceable-\(host.rawValue)",
+                    severity: .warn,
+                    summary: "\(host.rawValue) hook runs \(replaceable), which this user can replace, "
+                        + "so an agent could swap the interpreter to skip the guard",
+                    fix: "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+                )
+            }
             return DoctorProblem(
                 id: "adapter-runtime-\(host.rawValue)",
                 severity: .fail,
                 summary: "\(host.rawValue) hook runs \(interpreter), which is not runnable; "
                     + "\(host.rawValue) treats the failed hook as non-blocking, so its tool calls run unguarded",
-                fix: "\(AdapterRuntime.installHint(interpreter)), then rv setup"
+                fix: "\(AdapterRuntime.installHint(name)), then rv setup"
             )
         }
     }

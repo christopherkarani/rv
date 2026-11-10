@@ -115,7 +115,7 @@ extension SetupEnvironment {
         )
         setup.daemonTrust = DaemonTrustProbe.live
         setup.serviceAnswers = ServiceReadiness.live(home: home)
-        setup.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
+        setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
         return setup
     }
 }

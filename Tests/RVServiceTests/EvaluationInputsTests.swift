@@ -295,25 +295,32 @@ struct EvaluationInputsReadOnceTests {
 
 @Suite("Evaluation inputs: judge selection")
 struct EvaluationInputsJudgeSelectionTests {
-    @Test("explicit engine wins even without its bundle; RV_FT_BUNDLE selects FT")
-    func selection() throws {
+    /// rvd inherits its environment from launchd/systemd, which a same-user
+    /// agent can edit; the judge engine and bundle come from the owner's
+    /// config and install only.
+    @Test("the launch environment cannot pick the judge engine or bundle")
+    func environmentIgnored() throws {
         let home = try guardHome(mode: nil)
         defer { remove(home) }
-        let ftDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent("ft", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: ftDir.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true
-        )
-        try Data().write(to: ftDir.appendingPathComponent("tokenizer.json"))
+        let installed = RVPolicyPaths.configDirectory(home: home)
+            .appendingPathComponent("models/laya-ft-v2-coreml", isDirectory: true)
+        let foreign = URL(fileURLWithPath: home.rawValue).appendingPathComponent("foreign", isDirectory: true)
+        for dir in [installed, foreign] {
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent("model.mlpackage"), withIntermediateDirectories: true
+            )
+            try Data().write(to: dir.appendingPathComponent("tokenizer.json"))
+        }
         func pick(_ env: [String: String]) -> JudgeSelection {
             EvaluationInputs.gather(home: home, cwd: nil, environment: env).judge
         }
-        #expect(pick([:]) == JudgeSelection(engine: .laya, bundle: nil))
-        #expect(pick(["RV_FT_BUNDLE": ftDir.path]).engine == .ft)
-        #expect(pick(["RV_FT_BUNDLE": ftDir.path]).bundle?.path == ftDir.path)
-        #expect(
-            pick(["RV_FT_BUNDLE": ftDir.path, "RV_JUDGE_ENGINE": "laya"])
-                == JudgeSelection(engine: .laya, bundle: nil)
-        )
+        let baseline = pick([:])
+        #expect(baseline.engine == .ft)
+        #expect(baseline.bundle?.standardizedFileURL.path == installed.standardizedFileURL.path)
+        #expect(pick(["RV_FT_BUNDLE": foreign.path]) == baseline)
+        #expect(pick(["RV_FT_BUNDLE": "/nonexistent"]) == baseline)
+        #expect(pick(["RV_JUDGE_ENGINE": "laya"]) == baseline)
+        #expect(pick(["RV_LAYA_BUNDLE": foreign.path, "RV_JUDGE_ENGINE": "laya"]) == baseline)
     }
 }
 

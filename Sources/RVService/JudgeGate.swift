@@ -150,53 +150,54 @@ public enum JudgeRuntime {
         return nil
     }
 
-    /// Testable engine resolution. `env` and `config` are injected (only
-    /// `RV_JUDGE_ENGINE` / `judge.engine` are read); `bundleExists` probes
-    /// whether an engine's bundle validates on disk, so tests need no HOME.
+    /// Testable engine resolution. `config` is injected (only
+    /// `judge.engine` is read); `bundleExists` probes whether an engine's
+    /// bundle validates on disk, so tests need no HOME.
     ///
-    /// Precedence: `RV_JUDGE_ENGINE` > `judge.engine` > FT-if-installed >
-    /// stock. An explicit engine whose bundle is missing still wins
-    /// (`bundlePresent` false): the gate goes packs-only with an
-    /// `engine-missing` note rather than failing closed or silently
-    /// switching engines.
-    static func explicitEngine(env: [String: String], config: [String: Any]?) -> JudgeEngine? {
-        env["RV_JUDGE_ENGINE"].flatMap { JudgeEngine(rawValue: $0.lowercased()) }
-            ?? configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+    /// Precedence: `judge.engine` > FT-if-installed > stock. An explicit
+    /// engine whose bundle is missing still wins (`bundlePresent` false):
+    /// the gate goes packs-only with an `engine-missing` note rather than
+    /// failing closed or silently switching engines.
+    ///
+    /// The launch environment is never read here (`RV_JUDGE_ENGINE`,
+    /// `RV_FT_BUNDLE`, `RV_LAYA_BUNDLE`): rvd inherits it from
+    /// launchd/systemd, which a same-user agent can edit, and picking a
+    /// missing or foreign bundle disables or replaces the judge. Engine and
+    /// bundle belong to the owner's config and install, like `guard.mode`.
+    static func explicitEngine(config: [String: Any]?) -> JudgeEngine? {
+        configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
     }
 
     static func resolveEngine(
-        env: [String: String],
         config: [String: Any]?,
         bundleExists: (JudgeEngine) -> Bool
     ) -> (engine: JudgeEngine, bundlePresent: Bool) {
-        let resolved = resolveEngine(env: env, config: config) { bundleExists($0) ? () : nil }
+        let resolved = resolveEngine(config: config) { bundleExists($0) ? () : nil }
         return (resolved.engine, resolved.bundle != nil)
     }
 
     /// The one precedence ladder. `bundle` probes each engine at most once.
     static func resolveEngine<Bundle>(
-        env: [String: String],
         config: [String: Any]?,
         bundle: (JudgeEngine) -> Bundle?
     ) -> (engine: JudgeEngine, bundle: Bundle?) {
-        if let explicit = explicitEngine(env: env, config: config) {
+        if let explicit = explicitEngine(config: config) {
             return (explicit, bundle(explicit))
         }
         if let ft = bundle(.ft) { return (.ft, ft) }
         return (.laya, bundle(.laya))
     }
 
-    /// Engine and validated bundle from already-read env and config. Only
-    /// the bundle directories are probed.
+    /// Engine and validated bundle from already-read config. Only the
+    /// bundle directories are probed.
     static func selection(
         home: HomeDirectory?,
-        environment: [String: String],
         config: [String: Any]?
     ) -> JudgeSelection {
-        let resolved = resolveEngine(env: environment, config: config) { engine -> URL? in
+        let resolved = resolveEngine(config: config) { engine -> URL? in
             switch engine {
-            case .ft: return ftBundleDir(home: home, environment: environment)
-            case .laya: return bundleDir(home: home, environment: environment)
+            case .ft: return ftBundleDir(home: home)
+            case .laya: return bundleDir(home: home)
             }
         }
         return JudgeSelection(engine: resolved.engine, bundle: resolved.bundle)
@@ -206,11 +207,7 @@ public enum JudgeRuntime {
     /// Nil when the selected engine's bundle is missing — the caller goes
     /// packs-only (never fail-closed; see `apply`).
     static func resolvedJudge(home: HomeDirectory?) -> (engine: JudgeEngine, bundle: URL)? {
-        let selected = selection(
-            home: home,
-            environment: ProcessInfo.processInfo.environment,
-            config: loadConfigDict(home: home)
-        )
+        let selected = selection(home: home, config: loadConfigDict(home: home))
         guard let bundle = selected.bundle else { return nil }
         return (selected.engine, bundle)
     }
@@ -235,9 +232,7 @@ public enum JudgeRuntime {
         // broken install, not an absence. Check the explicit engine,
         // else FT (production default) before stock — the resolver
         // falls back to stock precisely because FT did not validate.
-        let explicitChoice = explicitEngine(
-            env: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home)
-        )
+        let explicitChoice = explicitEngine(config: loadConfigDict(home: home))
         for engine in explicitChoice.map { [$0] } ?? [JudgeEngine.ft, .laya] {
             if let expected = expectedBundleDir(engine: engine, home: home),
                FileManager.default.fileExists(atPath: expected.path) {
@@ -249,9 +244,7 @@ public enum JudgeRuntime {
         }
         // Nothing installed: point at the production (FT) bundle unless
         // another engine was explicitly selected.
-        let explicit = explicitEngine(
-            env: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home)
-        )
+        let explicit = explicitEngine(config: loadConfigDict(home: home))
         let installEngine = explicit ?? .ft
         return .missing(
             engine: installEngine,
@@ -297,10 +290,9 @@ public enum JudgeRuntime {
             .appendingPathComponent("models/\(name)", isDirectory: true)
     }
 
-    /// Fine-tuned bundle: `RV_FT_BUNDLE` when set and valid, else the
-    /// installed `models/laya-ft-v2-coreml`. A directory only counts when
-    /// `model.mlpackage` is in it.
-    static func ftBundleDir(home: HomeDirectory?, environment: [String: String]) -> URL? {
+    /// Fine-tuned bundle: the installed `models/laya-ft-v2-coreml`. A
+    /// directory only counts when `model.mlpackage` is in it.
+    static func ftBundleDir(home: HomeDirectory?) -> URL? {
         func valid(_ dir: URL) -> URL? {
             let fm = FileManager.default
             let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
@@ -308,16 +300,13 @@ public enum JudgeRuntime {
                 || fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
             return hasModel && hasTokenizer ? dir : nil
         }
-        if let raw = environment["RV_FT_BUNDLE"], !raw.isEmpty {
-            return valid(URL(fileURLWithPath: raw))
-        }
         guard let expected = expectedBundleDir(engine: .ft, home: home) else { return nil }
         return valid(expected)
     }
 
     /// A directory only counts as a bundle when a model artifact is in it;
     /// anything else (unset, empty, wrong path) means packs-only.
-    static func bundleDir(home: HomeDirectory?, environment: [String: String]) -> URL? {
+    static func bundleDir(home: HomeDirectory?) -> URL? {
         func valid(_ dir: URL) -> URL? {
             // Only the CoreML judge is wired; an ONNX-only directory is
             // not a runnable bundle and must not read as judge-on.
@@ -325,9 +314,6 @@ public enum JudgeRuntime {
             let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
             let hasTokenizer = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
             return hasModel && hasTokenizer ? dir : nil
-        }
-        if let raw = environment["RV_LAYA_BUNDLE"], !raw.isEmpty {
-            return valid(URL(fileURLWithPath: raw))
         }
         guard let home else { return nil }
         return valid(
@@ -380,9 +366,10 @@ public enum JudgeRuntime {
 
     /// Enforce path: judge may raise a pack-allow. Deny untouched.
     ///
-    /// `allowSafeLane` is false when the package-script graph could not
-    /// be resolved: such a command must reach the judge (or a human),
-    /// never the judge-skipping lane. `isPeek` only tags the log row.
+    /// `allowSafeLane` is false when a package script the command runs is
+    /// not itself safe-lane: the command then reaches the judge (or the
+    /// packs-only floor). An unresolved script graph never gets here: the
+    /// door floors it to indeterminate first. `isPeek` only tags the log row.
     /// The log row is returned, not written; nil when the judge is not
     /// consulted (a pack deny).
     static func apply(
@@ -413,7 +400,7 @@ public enum JudgeRuntime {
         // A bundle that cannot LOAD is unavailable: packs-only plus a
         // note (doctor surfaces it), never an eternal Ask loop.
         guard let bundle = selection.bundle else {
-            return (packsOnlyFloor(result, command: command, scriptGraphResolved: allowSafeLane), logRow(
+            return (packsOnlyFloor(result, command: command), logRow(
                 guardMode: inputs.guardMode, subject: .live(result),
                 verdict: nil, action: nil, engine: selection.engine,
                 note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
@@ -432,7 +419,7 @@ public enum JudgeRuntime {
         // Only enforce floors an unscored allow; the log keeps the pack
         // result, as for engine-missing above.
         if case .unavailable = run {
-            return (packsOnlyFloor(reading.outcome, command: command, scriptGraphResolved: allowSafeLane), row)
+            return (packsOnlyFloor(reading.outcome, command: command), row)
         }
         return (reading.outcome, row)
     }
@@ -514,22 +501,10 @@ public enum JudgeRuntime {
 
     /// Packs-only (no judge could score): an inline interpreter program the
     /// packs masked as data, carrying spawn/eval/delete/secret markers, is
-    /// indeterminate rather than an unreviewed allow. So is a runner whose
-    /// package-script graph could not be resolved (`scriptGraphResolved`
-    /// false): nobody has read what it executes, so a human decides. A
-    /// runner with no package.json at all resolves clear (it executes
-    /// nothing), so everyday `npm test` outside a package is not floored.
-    static func packsOnlyFloor(
-        _ result: EvaluationResult, command: ShellCommand, scriptGraphResolved: Bool = true
-    ) -> EvaluationResult {
+    /// indeterminate rather than an unreviewed allow. (An unresolved
+    /// package-script graph is floored earlier, by the door, judge or not.)
+    static func packsOnlyFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
         guard case .allow = result.decision else { return result }
-        if !scriptGraphResolved {
-            return EvaluationResult(
-                outcome: .indeterminate(.packageScriptUnresolved),
-                matchingView: result.matchingView,
-                analysis: result.analysis
-            )
-        }
         guard InlineProgramGuard.requiresJudge(command) else { return result }
         return EvaluationResult(
             outcome: .indeterminate(.inlineProgramNeedsJudge),

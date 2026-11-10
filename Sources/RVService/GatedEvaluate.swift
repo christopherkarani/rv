@@ -579,7 +579,8 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Package-script check over a pack-allow. A script deny is projected
-    /// over the pack result; an unresolved graph closes the safe lane.
+    /// over the pack result; an unresolved graph is indeterminate before
+    /// any judge runs. `scriptDenied` means the screen's result is final.
     private struct ScriptScreen {
         let result: EvaluationResult
         let allowSafeLane: Bool
@@ -604,9 +605,22 @@ public struct GatedEvaluate: Sendable {
                 result: Self.projectScriptHit(hit, over: result), allowSafeLane: true, scriptDenied: true
             )
         case .unresolved:
-            return ScriptScreen(result: result, allowSafeLane: false, scriptDenied: false)
-        case .clear:
-            return ScriptScreen(result: result, allowSafeLane: true, scriptDenied: false)
+            // Nobody has read what this runner executes. The judge only
+            // ever sees the top-level string (`npm test`), so it cannot
+            // vouch for the graph either: a human decides, judge or not.
+            // Depth, cycle and evaluation caps all land here.
+            return ScriptScreen(
+                result: EvaluationResult(
+                    outcome: .indeterminate(.packageScriptUnresolved),
+                    matchingView: result.matchingView,
+                    analysis: result.analysis
+                ),
+                allowSafeLane: false, scriptDenied: true
+            )
+        case .clear(let allBodiesSafe):
+            // A body that is not itself safe-lane (`jest`, `node x.js`)
+            // keeps the command in front of the judge.
+            return ScriptScreen(result: result, allowSafeLane: allBodiesSafe, scriptDenied: false)
         }
     }
 

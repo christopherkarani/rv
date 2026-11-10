@@ -98,6 +98,7 @@ enum SetupRun {
     }
 
     private static func perform(_ env: SetupEnvironment, force: Bool) throws(SetupError) -> SetupReport {
+        var env = env
         try requireInstalledCopy(env)
         try requireTrustedDaemon(env)
         let files = FileOps(fileManager: env.fileManager)
@@ -114,25 +115,36 @@ enum SetupRun {
             force: force,
             rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath),
             offHosts: offHosts,
-            missingInterpreters: missingInterpreters(installations: installations, offHosts: offHosts, env: env)
+            missingInterpreters: pinInterpreters(
+                installations: installations, offHosts: offHosts, force: force, env: &env)
         )
         return try HostLifecycle.attach(plan, env: env, layout: layout, files: files)
     }
 
-    /// Interpreters a detected host's hook needs that do not run. Each is
-    /// probed once, and only when some detected host needs it.
-    private static func missingInterpreters(
+    /// Interpreters a host's hook this run writes needs that do not run.
+    /// Each is probed once, and only when some such host needs it; the hook
+    /// writes then bake the path that probe found.
+    private static func pinInterpreters(
         installations: HostAdapterInstallationSnapshot,
         offHosts: Set<HookHost>,
-        env: SetupEnvironment
+        force: Bool,
+        env: inout SetupEnvironment
     ) -> Set<String> {
         let needed = Set(HookHost.setupSlotOrder.compactMap { host -> String? in
-            guard offHosts.contains(host) == false, installations.installation(for: host).wouldWire else {
+            guard offHosts.contains(host) == false,
+                  installations.installation(for: host).wouldWrite(force: force)
+            else {
                 return nil
             }
             return AdapterRuntime.interpreter(for: host)
         })
-        return needed.filter { env.interpreterRunnable($0) == false }
+        var resolved: [String: String] = [:]
+        for name in needed {
+            resolved[name] = env.resolveInterpreter(name)
+        }
+        let pinned = resolved
+        env.resolveInterpreter = { pinned[$0] }
+        return needed.filter { pinned[$0] == nil }
     }
 
     static func inspectInstallations(
