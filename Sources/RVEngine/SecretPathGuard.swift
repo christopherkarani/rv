@@ -127,6 +127,8 @@ enum SecretPathGuard {
             plain[plain.index(after: index)...].first.map({ $0 != "<" && $0 != "(" }) ?? false
         {
             plain = String(plain[plain.index(after: index)...])
+            // `<>FILE` opens FILE read-write.
+            if plain.hasPrefix(">") { plain.removeFirst() }
         }
         while plain.hasPrefix("@") { plain.removeFirst() }
         add(plain)
