@@ -357,6 +357,8 @@ public struct ServiceClient: Sendable {
     /// and the request is never resent. A daemon miss is classified and
     /// rendered per `whenDown` (`HookDaemonFallback`); `ownerObserves` is
     /// consulted only on an unreachable daemon, and only in `.ask` mode.
+    /// A missing transport (Linux: XDG_RUNTIME_DIR set but empty or too long)
+    /// never reached rvd, so it is `.connection`, not `.unreachable`.
     public func hookEvaluate(
         host: HookHost,
         stdin: String,
@@ -369,7 +371,7 @@ public struct ServiceClient: Sendable {
             return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: observes)
         }
         guard let transport else {
-            return unavailable(.unreachable)
+            return unavailable(.connection)
         }
         do {
             let reply = try await send(
@@ -539,11 +541,11 @@ public struct ServiceClient: Sendable {
     private static func xpcClientFailure(_ error: Error) -> XPCClientFailure? {
 #if canImport(XPC)
         switch error as? XPCEvaluateClientError {
-        case .connectFailed, .cancelled:
+        case .connectFailed, .connectionLost, .cancelled:
             return .down
         case .authenticationFailed:
             return .daemonRejected
-        case nil:
+        case .malformedReply, nil:
             return nil
         }
 #else

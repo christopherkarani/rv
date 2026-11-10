@@ -13,7 +13,7 @@ struct LocalControlBoundaryTests {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
             let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
-            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .connection, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)

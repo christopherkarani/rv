@@ -112,7 +112,13 @@ struct HookDaemonFallbackTests {
 
     @Test func clientStepsAsideOnAMissWhenTheOwnerObserves() async throws {
         let observes: @Sendable (HookHost) -> Bool = { _ in true }
-        let missing = try isolatedClient(transport: nil)
+        // `.connectFailed` is the transports' positive-absence signal: connect
+        // failed before any request byte was sent.
+        let absent = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: .connectFailed
+        )
+        let missing = try isolatedClient(transport: absent)
         let unreachable = await missing.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
         #expect(unreachable == HookDaemonFallback.wire(
@@ -123,6 +129,20 @@ struct HookDaemonFallbackTests {
         let explicitDeny = await missing.hookEvaluate(
             host: .claude, stdin: "{}", whenDown: .deny, ownerObserves: observes)
         #expect(explicitDeny == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny))
+
+        // No transport resolved (Linux: XDG_RUNTIME_DIR empty or over-long) and
+        // a dropped connection prove nothing about rvd: they keep asking.
+        let unresolved = try await isolatedClient(transport: nil).hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
+        #expect(unresolved == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask))
+        let dropped = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendError: .interrupted
+        )
+        let drop = try await isolatedClient(transport: dropped).hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: observes)
+        #expect(drop == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask),
+                "a dropped connection still asks under observe")
 
         let slow = ScriptedTransport(
             ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
@@ -142,27 +162,76 @@ struct HookDaemonFallbackTests {
         #expect(protocolMiss == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .deny))
     }
 
+    /// `.unreachable` is the only class observe mode allows on, so it is
+    /// reserved for a connect that failed before anything was sent. Every
+    /// other failure, including errors this classifier does not recognize,
+    /// keeps ask/deny (`.connection` / `.timeout`) or always denies.
     @Test func classifiesTransportErrors() {
         #expect(HookDaemonFallback.classify(ServiceTransportError.timeout) == .timeout)
         #expect(HookDaemonFallback.classify(ServiceTransportError.connectFailed) == .unreachable)
-        #expect(HookDaemonFallback.classify(ServiceTransportError.interrupted) == .unreachable)
+        #expect(HookDaemonFallback.classify(ServiceTransportError.interrupted) == .connection)
         #expect(HookDaemonFallback.classify(ServiceTransportError.decodeFailed) == .protocol)
-        #expect(HookDaemonFallback.classify(CocoaError(.coderReadCorrupt)) == .unreachable)
+        #expect(HookDaemonFallback.classify(ServiceTransportError.unexpected) == .protocol)
+        #expect(HookDaemonFallback.classify(
+            DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "bad reply"))) == .protocol)
+        // Unrecognized errors used to read as an absent daemon, which observe
+        // mode now turns into an allow; they must not.
+        #expect(HookDaemonFallback.classify(CocoaError(.coderReadCorrupt)) == .connection)
+        #expect(HookDaemonFallback.classify(CancellationError()) == .connection)
 #if canImport(XPC)
         #expect(HookDaemonFallback.classify(XPCEvaluateClientError.authenticationFailed) == .untrusted)
         #expect(HookDaemonFallback.classify(XPCEvaluateClientError.connectFailed) == .unreachable)
+        #expect(HookDaemonFallback.classify(XPCEvaluateClientError.connectionLost) == .connection)
+        #expect(HookDaemonFallback.classify(XPCEvaluateClientError.malformedReply) == .protocol)
+        #expect(HookDaemonFallback.classify(XPCEvaluateClientError.cancelled) == .connection)
+#endif
+#if os(Linux)
+        typealias Failure = UnixServiceConnection.TransportFailure
+        #expect(HookDaemonFallback.classify(Failure.untrustedDaemon) == .untrusted)
+        #expect(HookDaemonFallback.classify(Failure.frameTooLarge) == .protocol)
+        #expect(HookDaemonFallback.classify(Failure.io(EAGAIN)) == .timeout)
+        #expect(HookDaemonFallback.classify(Failure.io(EWOULDBLOCK)) == .timeout)
+        #expect(HookDaemonFallback.classify(Failure.io(ECONNRESET)) == .connection)
+        #expect(HookDaemonFallback.classify(Failure.io(EPIPE)) == .connection)
+        #expect(HookDaemonFallback.classify(Failure.connect(EAGAIN)) == .timeout)
+        #expect(HookDaemonFallback.classify(Failure.connect(ETIMEDOUT)) == .timeout)
+        // A raw connect miss is not proof: only the transport, which knows the
+        // socket is the uid-derived one, turns it into `.connectFailed`.
+        #expect(HookDaemonFallback.classify(Failure.connect(ENOENT)) == .connection)
+        #expect(HookDaemonFallback.classify(Failure.connect(ECONNREFUSED)) == .connection)
+        #expect(HookDaemonFallback.classify(Failure.connect(EACCES)) == .connection)
+        #expect(HookDaemonFallback.classify(Failure.noSocketPath) == .connection)
 #endif
     }
 
-    @Test func missingTransportIsUnreachableAndFollowsMode() async throws {
+#if os(Linux)
+    /// Mirrors run.sh's XDG cases for the C hook: a connect miss steps aside
+    /// only on the uid-derived socket, never under an agent-chosen
+    /// XDG_RUNTIME_DIR.
+    @Test func linuxConnectMissIsAbsentOnlyOnTheOwnerRuntimeSocket() async throws {
+        let missing = "/tmp/rv-miss-\(UUID().uuidString.prefix(8))/rv/evaluate.sock"
+        for (ownerRuntime, want) in [(true, HookDaemonFailure.unreachable), (false, .connection)] {
+            let transport = UnixSocketServiceTransport(socketPath: missing, ownerRuntimeSocket: ownerRuntime)
+            do {
+                _ = try await transport.sendHookConsult(Data("{}".utf8), timeoutMs: 100)
+                Issue.record("connect to a missing socket succeeded")
+            } catch {
+                #expect(HookDaemonFallback.classify(error) == want, "ownerRuntime=\(ownerRuntime): \(error)")
+            }
+        }
+    }
+#endif
+
+    @Test func missingTransportIsAConnectionFailureAndFollowsMode() async throws {
         let client = try isolatedClient(transport: nil)
+        let connection = HookDaemonFallback.message(for: .connection)
         let ask = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
-        #expect(ask == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask))
+        #expect(ask == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask))
         let deny = await client.hookEvaluate(host: .codex, stdin: "{}", whenDown: .deny)
         #expect(deny.exitCode == 2)
-        #expect(deny.stderr.contains(Self.unreachable))
+        #expect(deny.stderr.contains(connection))
         let grok = await client.hookEvaluate(host: .grok, stdin: "{}", whenDown: .ask)
-        #expect(grok == HookDaemonFallback.wire(host: .grok, failure: .unreachable, mode: .deny),
+        #expect(grok == HookDaemonFallback.wire(host: .grok, failure: .connection, mode: .deny),
                 "hosts without an ask primitive deny")
     }
 
@@ -171,13 +240,13 @@ struct HookDaemonFallbackTests {
         let unset = await CLIProcess.$context.withValue(CLIProcess.Context(environment: [:])) {
             await client.hookEvaluate(host: .claude, stdin: "{}")
         }
-        #expect(unset == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .ask))
+        #expect(unset == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .ask))
         let deny = await CLIProcess.$context.withValue(
             CLIProcess.Context(environment: [HookWhenDown.environmentKey: "deny"])
         ) {
             await client.hookEvaluate(host: .claude, stdin: "{}")
         }
-        #expect(deny == HookDaemonFallback.wire(host: .claude, failure: .unreachable, mode: .deny))
+        #expect(deny == HookDaemonFallback.wire(host: .claude, failure: .connection, mode: .deny))
     }
 
     @Test func transportTimeoutIsClassifiedAndUsesTheHookBudget() async throws {

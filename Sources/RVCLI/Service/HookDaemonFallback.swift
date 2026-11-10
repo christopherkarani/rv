@@ -9,8 +9,9 @@ import RVHooks
 import RVPolicy
 import RVService
 
-/// `RV_HOOK_WHEN_DOWN`: how a hook renders when rvd is absent or slow
-/// (`.unreachable` / `.timeout`). Exactly `deny` is `.deny`; unset or any
+/// `RV_HOOK_WHEN_DOWN`: how a hook renders when rvd is absent, slow or the
+/// connection failed (`.unreachable` / `.timeout` / `.connection`). Exactly
+/// `deny` is `.deny`; unset or any
 /// other value is `.ask`. There is deliberately no allow/bypass value: the
 /// variable can reach the hook from project-scoped host config an agent
 /// can write. Identity and protocol failures always deny.
@@ -26,8 +27,17 @@ public enum HookWhenDown: String, Sendable, Equatable {
 
 /// Why the Swift hook path got no verdict from rvd. Mirrors the
 /// daemon-unavailable classes of `Sources/rv-c/hook_fallback.h`.
+///
+/// `.unreachable` is the only class owner observe mode steps aside for, so
+/// it means rvd was positively absent before any request byte was sent: a
+/// Linux connect that failed with ENOENT/ECONNREFUSED on the uid-derived
+/// socket, or a Darwin discovery connection launchd refused as invalid.
+/// `.connection` is every other connection failure (dropped after send or
+/// after the daemon was verified, an agent-chosen XDG_RUNTIME_DIR, an
+/// unresolvable socket path, unrecognized errors): rvd drops in-flight
+/// requests while draining, and an agent can trigger that.
 enum HookDaemonFailure: Sendable, Equatable, CaseIterable {
-    case unreachable, timeout, untrusted, `protocol`
+    case unreachable, timeout, untrusted, `protocol`, connection
 }
 
 /// Swift twin of `Sources/rv-c/hook_fallback.c` for daemon-unavailable
@@ -45,13 +55,15 @@ enum HookDaemonFallback {
             "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
         case .protocol:
             "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`."
+        case .connection:
+            "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
         }
     }
 
     /// `ownerObserves`: the owner's config file puts `host` in observe mode
     /// (`HookObserveFallback`); an unreachable daemon then steps aside. A
-    /// slow one does not: it would still have enforced rv's self-protection,
-    /// and an agent can make rvd slow.
+    /// slow or dropped one does not: it may be live and would still have
+    /// enforced rv's self-protection, and an agent can cause either.
     static func wire(
         host: HookHost,
         failure: HookDaemonFailure,
@@ -61,7 +73,7 @@ enum HookDaemonFallback {
         let message = message(for: failure)
         // A daemon that fails identity verification may be an impostor, and a
         // malformed reply carries no trustworthy verdict: never soften those.
-        guard failure == .unreachable || failure == .timeout else {
+        guard failure == .unreachable || failure == .timeout || failure == .connection else {
             return deny(host: host, message: message)
         }
         if ownerObserves, failure == .unreachable {
@@ -77,26 +89,49 @@ enum HookDaemonFallback {
         }
     }
 
-    /// Classifies a transport-level error from the hook consult send.
+    /// Classifies a transport-level error from the hook consult send. Same
+    /// resolution as the C hook (`Sources/rv-c/rv.c`): only a typed
+    /// positive-absence error is `.unreachable`.
     static func classify(_ error: any Error) -> HookDaemonFailure {
         if let error = error as? ServiceTransportError {
             switch error {
             case .timeout: return .timeout
-            case .connectFailed, .interrupted: return .unreachable
+            case .connectFailed: return .unreachable
+            case .interrupted: return .connection
             case .decodeFailed, .unexpected: return .protocol
             }
+        }
+        if error is DecodingError {
+            return .protocol
         }
 #if canImport(XPC)
         if let error = error as? XPCEvaluateClientError {
             switch error {
             case .authenticationFailed: return .untrusted
-            case .connectFailed, .cancelled: return .unreachable
+            case .connectFailed: return .unreachable
+            case .connectionLost, .cancelled: return .connection
+            case .malformedReply: return .protocol
             }
         }
 #endif
-        // Unrecognized transport failure: treat as an absent daemon (ask by
-        // default). Identity failures are typed above and always deny.
-        return .unreachable
+#if os(Linux)
+        if let error = error as? UnixServiceConnection.TransportFailure {
+            switch error {
+            case .untrustedDaemon: return .untrusted
+            case .frameTooLarge: return .protocol
+            case .connect(let code):
+                // A raw miss is not proof of absence: the transport maps a miss
+                // on the uid-derived socket to `.connectFailed` itself.
+                return [EAGAIN, EWOULDBLOCK, ETIMEDOUT, EINPROGRESS].contains(code) ? .timeout : .connection
+            case .io(let code):
+                return code == EAGAIN || code == EWOULDBLOCK ? .timeout : .connection
+            case .noSocketPath: return .connection
+            }
+        }
+#endif
+        // Unrecognized failure: not proof rvd is absent, so never the observe
+        // step-aside. Ask/deny per RV_HOOK_WHEN_DOWN.
+        return .connection
     }
 
     private static func deny(host: HookHost, message: String) -> HookWire {

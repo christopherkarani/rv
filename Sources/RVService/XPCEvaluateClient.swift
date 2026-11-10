@@ -134,6 +134,12 @@ public final class XPCEvaluateClient: Sendable {
         let endpoint: XPCHeld?
     }
 
+    /// `requireEndpoint` marks the discovery Hello on the Mach service, the
+    /// only exchange whose connection error can mean rvd is absent: launchd
+    /// refusing it as invalid (not registered) is `.connectFailed`. Any other
+    /// connection error is `.connectionLost` (a live rvd went away, or a
+    /// verified one dropped the request), mirroring `xpc_exchange` in
+    /// Sources/rv-c/rv.c.
     private func exchange(_ body: Data, on connection: xpc_connection_t, requireEndpoint: Bool = false) async throws -> VerifiedExchange {
         let once = OnceResume<VerifiedExchange>()
         let held = XPCHeld(connection)
@@ -151,8 +157,11 @@ public final class XPCEvaluateClient: Sendable {
                 xpc_connection_send_message_with_reply(held.object, message, nil) { reply in
                     let type = xpc_get_type(reply)
                     if type == XPC_TYPE_ERROR {
+                        let absent = requireEndpoint && reply === XPC_ERROR_CONNECTION_INVALID
                         xpc_connection_cancel(held.object)
-                        once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        once.resume(throwing: absent
+                            ? XPCEvaluateClientError.connectFailed
+                            : XPCEvaluateClientError.connectionLost)
                         return
                     }
                     // A Mach service name is not server identity. Do not consume
@@ -164,7 +173,7 @@ public final class XPCEvaluateClient: Sendable {
                         return
                     }
                     guard let data = XPCIPCWire.body(from: reply) else {
-                        once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        once.resume(throwing: XPCEvaluateClientError.malformedReply)
                         return
                     }
                     let endpoint: XPCHeld?
@@ -172,7 +181,7 @@ public final class XPCEvaluateClient: Sendable {
                         guard let object = xpc_dictionary_get_value(reply, XPCIPCWire.actionEndpointKey),
                             xpc_get_type(object) == XPC_TYPE_ENDPOINT else {
                             xpc_connection_cancel(held.object)
-                            once.resume(throwing: XPCEvaluateClientError.authenticationFailed)
+                            once.resume(throwing: XPCEvaluateClientError.malformedReply)
                             return
                         }
                         endpoint = XPCHeld(object)
@@ -230,7 +239,14 @@ public final class XPCEvaluateClient: Sendable {
 
 public enum XPCEvaluateClientError: Error, Sendable, Equatable {
     case authenticationFailed
+    /// launchd refused the discovery connection (service not registered):
+    /// nothing reached rvd.
     case connectFailed
+    /// The connection failed after it may have reached rvd: an interrupted
+    /// discovery, or any error once the daemon was verified.
+    case connectionLost
+    /// A verified reply without the expected IPC body or action endpoint.
+    case malformedReply
     case cancelled
 }
 #endif
