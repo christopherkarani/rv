@@ -115,6 +115,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: executable.path,
+            interpreter: "/usr/bin/python3",
             adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: paths.claudeSettings),
             force: false
         )
@@ -144,6 +145,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try AntigravityHooksMerge.merge(
             existingData: nil,
             rvPath: executable.path,
+            interpreter: "/usr/bin/python3",
             adapterPath: AntigravityHooksMerge.adapterPath(hooksPath: paths.antigravityHooksJSON),
             force: false
         )
@@ -218,6 +220,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         try body.write(toFile: paths.cursorHook, atomically: true, encoding: .utf8)
         let merged = try CursorHooksMerge.merge(
             existingData: nil,
+            interpreter: "/usr/bin/python3",
             adapterPath: paths.cursorHook
         )
         try merged.data.write(to: URL(fileURLWithPath: paths.cursorHooksJSON))
@@ -349,6 +352,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: "/nonexistent/rv",
+            interpreter: "/usr/bin/python3",
             adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: paths.claudeSettings),
             force: false
         )
@@ -616,6 +620,30 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("disabled core.git"))
         #expect(outcome.stdout.contains("→  rv packs enable core.git"))
         #expect(outcome.stdout.contains("missing core.git") == false)
+    }
+}
+
+@Test func doctor_unreadablePacksConfigReportsBrokenAndExitsOne() throws {
+    try withDoctorHome { _, _, environment in
+        let url = PacksConfigStore.configURL(home: environment.home)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        // Invalid UTF-8: the doors fail closed to every pack; doctor must
+        // say the config is broken instead of reporting a healthy registry.
+        try Data([0xFF, 0xFE, 0x5B, 0x70]).write(to: url)
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: .xpc(
+                snapshot: runningDoctorSnapshot(),
+                localCorePacksReady: true
+            ),
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 1)
+        #expect(outcome.stdout.contains("broken"))
     }
 }
 

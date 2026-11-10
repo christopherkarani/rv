@@ -18,10 +18,11 @@ enum WorkspaceSessionError: Error, Sendable, Equatable {
     /// A child process group was still alive. The workspace was not published.
     case childTeardownFailed
     case cleanupFailed(IsolationApplyError)
-    /// Publish refused an escaping symlink and wrote nothing. The original
-    /// directory is restored; the agent's volume was not discarded but kept
-    /// as the detached disk image at `retainedImage`.
-    case publishRejected(retainedImage: String)
+    /// Publish was refused or failed. The original directory is restored
+    /// (see `reason`); the agent's volume was not discarded but kept as the
+    /// detached disk image at `retainedImage`. `reason` is the operator
+    /// summary of `WorkspacePublishOutcome`.
+    case publishRejected(retainedImage: String, reason: String)
     case alreadyClosed
     case unknownRuntime(RuntimeSessionID)
     /// The workspace is active, and the concurrent running-runtime cap is full.
@@ -1962,7 +1963,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         switch restored {
         case .failure(let error):
             if let image = boundary.retainedRejectedImagePath {
-                return .failure(.publishRejected(retainedImage: image))
+                return .failure(.publishRejected(
+                    retainedImage: image,
+                    reason: boundary.publishOutcome.operatorSummary
+                ))
             }
             return .failure(.cleanupFailed(error))
         case .success:

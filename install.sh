@@ -15,7 +15,20 @@
 # below. A mix of signed and unsigned never installs.
 # TTY download UI matches SetupRenderer: "Downloading" + 24× ━/─ bar, driven by
 # real Content-Length weights (and mid-file byte growth while each curl runs).
+# RV_INSTALL_MODE picks the guard mode setup starts in: unset or `enforce`
+# runs plain `rv setup` (which never changes an existing guard.mode);
+# `observe` runs `rv setup --observe` (log what rv would
+# block; while rvd runs, only rv's own self-protection still blocks). Any other value is
+# refused before anything is downloaded or staged.
 set -eu
+
+case "${RV_INSTALL_MODE:-}" in
+  ''|enforce|observe) ;;
+  *)
+    echo "rv: RV_INSTALL_MODE must be observe or enforce (got: $RV_INSTALL_MODE)" >&2
+    exit 1
+    ;;
+esac
 
 refuse() {
   echo "rv: macOS 15 Apple Silicon, or Linux aarch64/x86_64" >&2
@@ -1177,14 +1190,21 @@ for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
 done
 
 # Linux Swift runtime libraries ship in rv-swiftlibs-<target>.tar.gz and
-# land beside the binaries, where their $ORIGIN RUNPATH finds them.
+# land beside the binaries, where their $ORIGIN RUNPATH finds them. Their
+# names are generic, so each is recorded in $bin/.rv-swiftlibs: `rv
+# uninstall` removes only recorded names (InstallManifest.swiftLibsListName).
 for lib in "$src"/*.so; do
   [ -f "$lib" ] && [ ! -L "$lib" ] || continue
   name="$(basename "$lib")"
   rm -f "$bin/$name"
   cp "$lib" "$bin/$name"
   chmod 755 "$bin/$name"
+  printf '%s\n' "$name" >> "$bin/.rv-swiftlibs"
 done
+if [ -f "$bin/.rv-swiftlibs" ]; then
+  sort -u "$bin/.rv-swiftlibs" > "$bin/.rv-swiftlibs.installing" \
+    && mv -f "$bin/.rv-swiftlibs.installing" "$bin/.rv-swiftlibs"
+fi
 
 # The approvals custodian bundle lands in ~/Applications with the same
 # stage-then-swap discipline as the binaries: setup registers it only when
@@ -1199,4 +1219,7 @@ if [ "$os" = "Darwin" ] && [ -d "$src/RVApprovals.app" ]; then
   mv -f "$tmp_app" "$apps_dir/RVApprovals.app"
 fi
 
+if [ "${RV_INSTALL_MODE:-}" = "observe" ]; then
+  RV_FROM_INSTALL=1 exec "$bin/rv" setup --observe
+fi
 RV_FROM_INSTALL=1 exec "$bin/rv" setup

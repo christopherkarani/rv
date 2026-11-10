@@ -17,14 +17,55 @@ public func evaluateWithSemantics<E: PatternEngine>(
     workingDirectory: WorkingDirectory? = nil,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
-    policy: EffectiveActionPolicy = .empty
+    policy: EffectiveActionPolicy = .empty,
+    patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
-    let pack = evaluate(
+    var budget = patternBudget
+    func judge(_ request: EvaluationRequest) -> EvaluationResult {
+        evaluateSemanticsOnce(
+            request,
+            packs: packs,
+            secretPaths: secretPaths,
+            engine: engine,
+            compiled: compiled,
+            workingDirectory: workingDirectory,
+            gitProbe: gitProbe,
+            filesystemProbe: filesystemProbe,
+            policy: policy,
+            patternBudget: &budget
+        )
+    }
+    // An alias body is judged by the same door: `git -c alias.p=push p`
+    // is a remote push only the semantic stage can see.
+    return gateAliases(judge(request), command: request.command, packs: packs, enabledPacks: request.enabledPacks) { expansion in
+        var inner = request
+        inner.command = expansion
+        return judge(inner)
+    }
+}
+
+private func evaluateSemanticsOnce<E: PatternEngine>(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    secretPaths: SecretPathDecider,
+    engine: E,
+    compiled: CompiledPacks<E.Compiled>,
+    workingDirectory: WorkingDirectory?,
+    gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
+    policy: EffectiveActionPolicy,
+    patternBudget: inout PatternBudget
+) -> EvaluationResult {
+    // The unresolved-invocation ask waits for the door's own gate, so a
+    // semantic deny below still wins over it.
+    let pack = evaluateGated(
         request,
         packs: packs,
         secretPaths: secretPaths,
         engine: engine,
-        compiled: compiled
+        compiled: compiled,
+        patternBudget: &patternBudget,
+        floorUnresolved: false
     )
     let unwrapped = unwrapCommand(
         request.command,

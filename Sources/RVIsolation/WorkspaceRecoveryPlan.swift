@@ -1,5 +1,14 @@
-#if os(macOS)
 import Foundation
+
+/// Mount observation shared by recovery and the inode boundary.
+enum WorkspaceMountObservation: CaseIterable, Equatable, Sendable {
+    case ownedMount
+    case missingMount
+    case originalRestored
+    case unrelatedMount
+    case savedTreeMismatch
+    case ambiguous
+}
 
 /// The effect a recovery step performs once its mount observation admits it.
 enum RecoveryAction: Equatable, Sendable {
@@ -85,4 +94,3 @@ enum WorkspaceRecoveryPlan {
         }
     }
 }
-#endif

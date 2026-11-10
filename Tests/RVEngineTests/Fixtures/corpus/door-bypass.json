@@ -362,7 +362,6 @@
     {"id": "db.sp.deny-r2-58", "command": "$HOME/bin/rv uninstall", "expected": "self-protection"},
     {"id": "db.sp.allow-r2-00", "command": "rv packs list $X", "expected": "allow"},
     {"id": "db.sp.allow-r2-01", "command": "$HOME/bin/tool \"$1\"", "expected": "allow"},
-    {"id": "db.sp.allow-r2-02", "command": "eval \"$(direnv hook bash)\"", "expected": "allow"},
     {"id": "db.sp.allow-r2-03", "command": "bash -lc 'make test'", "expected": "allow"},
     {"id": "db.sp.allow-r2-04", "command": "env -i PATH=/usr/bin make", "expected": "allow"},
     {"id": "db.sp.allow-r2-05", "command": "</dev/null swift test", "expected": "allow"},

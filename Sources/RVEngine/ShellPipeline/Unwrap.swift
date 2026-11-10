@@ -360,7 +360,9 @@ private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: Working
                 index += 2
                 continue
             }
-            if shortClusterConsumesValue(token, valueLetters: ["D"]) {
+            // A chroot (`-R`) or a cluster ending in a directory changes
+            // what every path means.
+            if shortClusterConsumesValue(token, valueLetters: ["D", "R"]) {
                 return .limited(.sudo)
             }
             if shortClusterConsumesValue(token, valueLetters: sudoShortArgLetters) {
@@ -378,7 +380,7 @@ private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: Working
     return .next(renderCommand(rest), .sudo, cwd)
 }
 
-private let sudoShortArgLetters: Set<Character> = ["u", "g", "h", "p", "C", "U", "T", "r", "t"]
+private let sudoShortArgLetters: Set<Character> = ["u", "g", "h", "p", "C", "U", "T", "r", "t", "c", "a"]
 private let sudoLongArgFlags: Set<String> = [
     "--user", "--group", "--host", "--prompt", "--close-from", "--chdir",
     "--other-user", "--command-timeout",
@@ -394,35 +396,22 @@ private func peelEnv(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingD
     var cwd = workingDirectory
     while index < tokens.count {
         let token = tokens[index].lexeme
-        if token == "-" {
-            index += 1
-            continue
-        }
-        if token == "-S" || token == "--split-string" {
-            return .limited(.env)
-        }
-        if token == "-C" || token == "--chdir" {
-            guard index + 1 < tokens.count else { return .limited(.env) }
-            cwd = resolveWorkingDirectory(tokens[index + 1].lexeme, current: cwd)
-            index += 2
-            continue
-        }
-        if let value = attachedOptionValue(token, long: "--chdir") {
-            cwd = resolveWorkingDirectory(value, current: cwd)
-            index += 1
-            continue
-        }
-        if token == "-u" || token == "--unset" {
-            guard index + 1 < tokens.count else { return .limited(.env) }
-            index += 2
-            continue
-        }
-        if token.hasPrefix("--unset=") {
-            index += 1
-            continue
-        }
         if token.hasPrefix("-") {
-            index += 1
+            switch envOptionShape(token) {
+            case .unknown, .splitString:
+                return .limited(.env)
+            case .flag:
+                index += 1
+            case .chdirAttached(let value):
+                cwd = resolveWorkingDirectory(value, current: cwd)
+                index += 1
+            case .valueNext(let chdir):
+                guard index + 1 < tokens.count else { return .limited(.env) }
+                if chdir {
+                    cwd = resolveWorkingDirectory(tokens[index + 1].lexeme, current: cwd)
+                }
+                index += 2
+            }
             continue
         }
         if token.contains("=") {

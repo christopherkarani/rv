@@ -40,6 +40,15 @@ rv setup    # auto-detects your agents and wires their hooks
 rv doctor   # verify everything is live
 ```
 
+Want to watch before you enforce? Install in observe mode: rv logs what it
+would block and lets everything run.
+
+```sh
+curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
+rv setup --observe   # same thing for an existing install (asks Touch ID if rv is already enforcing)
+rv blocks            # what observe would have blocked
+```
+
 On macOS the installer also fetches the on-device judge weights (~649 MB,
 verified by SHA-256, fully offline after) so the neural judge binds on first
 run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
@@ -77,9 +86,32 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   blocking, so you can measure before you enforce. `rv host mode
   <host> observe` does the same for one host (`off` unwires it); `rv
   blocks` marks what observe would have blocked with `"observed": true`.
-  Observe never relaxes rv's own protection (rv admin commands, rv's
-  config). A host set `off` before an organization gate arrived stays
-  unwired until you run `rv setup`.
+  `rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
+  starts there. Observe never relaxes rv's own protection (rv admin
+  commands, rv's config) while `rvd` is running. Because an idle observe
+  host lets a call through when `rvd` is absent, observe also raises the
+  bar on the common ways to stop or replace `rvd`: `launchctl`/`systemctl`
+  stops of rv's job, `pkill`/`killall` of `rvd`, `kill` of a pid looked up
+  from `rvd`, launching a second `rvd`, Linux D-Bus stops, and writes to
+  rv's binaries, LaunchAgent, systemd unit or socket dir become "run it in
+  Terminal". This check is **lexical, not a boundary** — it reads the
+  command text, so it raises the bar but a determined agent can still get
+  past it. It is observe-only; enforce already fails such a call closed.
+  Residual (not caught): `kill` by a numeric pid, or a pid or path held in
+  a variable or file; interpreter or script forms (a `python`/`node`
+  subprocess, `bash -c "$(… | base64 -d)"`, a script file, a make/npm
+  script); and a renamed or symlinked `launchctl`. When `rvd` is *absent*,
+  hooks under observe let the call run unchecked and
+  unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
+  daemon that fails its identity check, or a malformed reply still asks or
+  denies, and `RV_HOOK_WHEN_DOWN=deny` keeps denying. "Absent" is
+  platform-specific: on **macOS**, rv's launchd service is not registered
+  (discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
+  is *not* absent; on **Linux**, the connect to
+  `/run/user/<uid>/rv/evaluate.sock` fails with `ENOENT`/`ECONNREFUSED` and
+  `XDG_RUNTIME_DIR` is unset or equals `/run/user/<uid>`. An organization gate pins enforce, and `rv setup
+  --observe` refuses under one. A host set `off` before an organization
+  gate arrived stays unwired until you run `rv setup`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned
   rules → allowlist → allow-once → contained-delete allowance) with
   `normal`/`strict` safety levels. Indeterminate (too large, budget
@@ -130,6 +162,37 @@ not `rvd`, performs the change after approval. On Linux rv reads your login pass
 `rvd` checks it with the system's `unix_chkpwd`; five wrong passwords in
 ten minutes lock checks for ten minutes. Every attempt is recorded as an
 `owner.action` event in the audit log.
+
+## Locked out?
+
+When rv can't decide (the daemon `rvd` is down or slow, or the `rv` binary
+is gone), every hook fails closed: the agent's tool call is blocked, never
+quietly allowed. The block message says which of these it was:
+
+| Message starts with | What it means | What to do |
+| --- | --- | --- |
+| `RV daemon is not reachable` | `rvd` isn't running | `rv doctor`; `rv setup` repairs the service |
+| `RV daemon did not answer in time`, `rv did not answer within 15s` | `rvd` is busy or hung | Retry; then `rv service status`, `rv service restart` |
+| `RV daemon identity check failed`, `RV daemon sent an unexpected reply` | a stale `rvd` after an upgrade | `rv service restart`; if that doesn't fix it, `rv setup` |
+| `rv is not installed at <path>` | the hook points at a binary that's gone | Reinstall rv, then `rv setup` |
+| `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
+| `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |
+| `Laya judge queue is full` | too many commands are waiting for the judge | Retry shortly |
+| `Laya judge unavailable; failing closed` | the judge couldn't score this command | `rv doctor` |
+
+Run these from your own terminal, not through the agent:
+
+```sh
+rv doctor                 # what's broken and how to fix it
+rv service status         # is rvd running, down, or skewed?
+rv service restart        # restart rvd
+rv setup                  # repair the rvd service and host hooks
+rv host list              # each host's mode and hook wiring
+rv host mode claude off   # stop guarding one host (asks for owner authentication)
+rv uninstall              # remove rv's hooks, config, and rvd (asks for owner authentication)
+```
+
+`rv host mode <host> block` turns guarding back on.
 
 ## Beyond the shell
 
@@ -192,7 +255,14 @@ rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health
 rv uninstall                # remove everything rv owns (owner-auth)
+rv uninstall --remove-models  # ...and the judge weights in ~/.config/rv/models
 ```
+
+`rv uninstall` removes rv's hooks, stops the service, then deletes every
+file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`.
+If rvd is not running, you confirm at the terminal with your login password
+(or Touch ID) instead; without a local owner check it refuses and says how
+to start rvd.
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with

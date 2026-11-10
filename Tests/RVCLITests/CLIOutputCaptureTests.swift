@@ -67,14 +67,19 @@ struct CLIOutputCaptureTests {
         }
     }
 
-    @Test func noContextOrNoSinkMeansNoRedirect() throws {
-        // By construction: the sink is reachable only through the installed
-        // context, so production (no context) and a context without a sink
-        // both resolve to nil and take the FileHandle path.
+    @Test func contextWithoutSinkDoesNotRedirect() throws {
+        // Production installs no context, and a context without a sink
+        // replaces any outer one wholesale, so writes there take the
+        // FileHandle path rather than an enclosing sink.
         #expect(CLIProcess.context == nil)
-        try withCLIProcess {
-            #expect(CLIProcess.context != nil)
-            #expect(CLIProcess.context?.output == nil)
+        let outer = CLIOutputCapture()
+        try withCLIProcess(output: outer) {
+            try withCLIProcess {
+                #expect(CLIProcess.context != nil)
+                #expect(CLIProcess.context?.output == nil)
+                CommandContext.writeStderr("[CLIOutputCaptureTests] no-sink fall-through\n")
+            }
         }
+        #expect(outer.stderr.isEmpty)
     }
 }

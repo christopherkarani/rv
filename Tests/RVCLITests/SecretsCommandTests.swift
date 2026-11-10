@@ -644,13 +644,13 @@ struct SecretsCommandTests {
         #expect(installed.contains("installed"))
         let hook = try String(contentsOf: foreign, encoding: .utf8)
         #expect(hook.hasPrefix("#!/bin/sh\n# >>> rv secrets >>>\n"))
-        #expect(hook.contains("'/usr/bin/true' secrets hook run"))
+        #expect(hook.contains("[ -x '/usr/bin/true' ]"))
         #expect(hook.hasSuffix("# <<< rv secrets <<<\necho foreign\n"))
         #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved").path) == false)
         _ = try SecretGitHook.install(workTree: work, rvPath: "/opt/rv/bin/rv").get()
         let reinstalled = try String(contentsOf: foreign, encoding: .utf8)
         #expect(reinstalled.components(separatedBy: SecretGitHook.beginMarker).count == 2)
-        #expect(reinstalled.contains("'/opt/rv/bin/rv' secrets hook run"))
+        #expect(reinstalled.contains("[ -x '/opt/rv/bin/rv' ]"))
         #expect(reinstalled.contains("/usr/bin/true") == false)
 
         let value = "hook-secret-value-xyz"
@@ -704,6 +704,8 @@ struct SecretsCommandTests {
         let oversizedOnly = try SecretsRun.hookRun(workTree: work, environment: fixture.environment()).get()
         #expect(oversizedOnly.failed == false)
         #expect(oversizedOnly.text.contains("not scanned (over 8 MiB): huge.bin"))
+        #expect(oversizedOnly.text.contains("No secrets in the staged files that were scanned."))
+        #expect(oversizedOnly.text.contains("warning: 1 file not scanned; the commit is not blocked for these"))
     }
 
     @Test func hookKillSwitchSkipsTheScanWithANotice() throws {
@@ -721,6 +723,8 @@ struct SecretsCommandTests {
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             process.arguments = [work.appendingPathComponent(".git/hooks/pre-commit").path]
             process.currentDirectoryURL = work
+            // No rv on PATH: the block falls back to the recorded stand-in.
+            process.environment = ["PATH": "/usr/bin:/bin", "HOME": fixture.directory.path]
             let err = Pipe()
             process.standardError = err
             process.standardOutput = FileHandle.nullDevice
@@ -761,6 +765,7 @@ struct SecretsCommandTests {
         #expect(report.skipped == ["HOST_TOKEN: \(reason)"])
         let hook = try SecretsRun.hookRun(workTree: work, environment: environment).get()
         #expect(hook.text.contains("could not check HOST_TOKEN: \(reason)"))
+        #expect(hook.text.contains("warning: 1 secret not checked; the commit is not blocked for these"))
         #expect(resolved.withLock { $0 } == 0, "a disallowed source must not be resolved")
 
         environment.managed = .invalid("policy.json.sig does not verify")

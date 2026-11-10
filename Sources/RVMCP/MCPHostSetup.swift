@@ -260,12 +260,14 @@ public struct MCPSetupResult: Sendable, Equatable {
     public var backups: [String] = []
 }
 
-public enum MCPSetupError: Error, Sendable, Equatable {
+public indirect enum MCPSetupError: Error, Sendable, Equatable {
     case unreadable(String)
     case hasComments(String)
     case writeFailed(String)
     case manifest(String)
     case symbolicLink(String)
+    /// Something was already written when `cause` stopped the run; `applied` is what landed.
+    case partial(applied: MCPSetupResult, cause: MCPSetupError)
 
     public var message: String {
         switch self {
@@ -275,6 +277,7 @@ public enum MCPSetupError: Error, Sendable, Equatable {
         case .manifest(let reason): "setup manifest: \(reason)"
         case .symbolicLink(let path):
             "\(MCPDisplayedText.field(path)) is a symbolic link; rv will not replace a symlinked config, so edit its target by hand"
+        case .partial(_, let cause): cause.message
         }
     }
 }
@@ -310,68 +313,17 @@ public enum MCPHostSetup {
         configDirectory: URL,
         read: (URL) -> MCPInventory.HostFile = MCPInventory.readFile
     ) -> Result<MCPSetupResult, MCPSetupError> {
-        var result = MCPSetupResult()
-        var records = loadManifest(configDirectory)
-        for file in files {
-            guard case .data(let data) = read(file.path) else { continue }
-            switch file.format {
-            case .codexTOML:
-                let entries = (try? MCPInventory.entries(in: data, file: file).get()) ?? []
-                for entry in entries where wanted(entry.name, filter) && entry.governedServer == nil
-                    && configuration.server(named: entry.name) != nil
-                {
-                    let name = shellQuote(entry.name)
-                    let rv = shellQuote(MCPDisplayedText.field(rvPath))
-                    result.manualSteps.append(
-                        "codex mcp remove \(name) && codex mcp add \(name) -- \(rv) mcp serve --server \(name)")
-                }
-            case .json(let keyPath, _, let opencode):
-                guard let root = try? JSONValue.parse(data, maximumDepth: 128, lenient: true) else {
-                    return .failure(.unreadable(file.path.path))
-                }
-                guard var servers = value(at: keyPath, in: root)?.objectValue else { continue }
-                var changed = false
-                for (name, entry) in servers.entries where wanted(name, filter) {
-                    guard let object = entry.objectValue,
-                        let hostEntry = opencode
-                            ? MCPInventory.opencodeEntry(name: name, object: object, file: file)
-                            : MCPInventory.standardEntry(name: name, object: object, file: file)
-                    else { continue }
-                    let shown = MCPDisplayedText.field(name)
-                    guard hostEntry.governedServer == nil else {
-                        result.skipped.append("\(shown) (\(file.host.rawValue)): already routed through rv")
-                        continue
-                    }
-                    guard configuration.server(named: name) != nil else {
-                        result.skipped.append("\(shown) (\(file.host.rawValue)): not in mcp.json; `rv mcp import` it first")
-                        continue
-                    }
-                    let written = gatewayEntry(rvPath: rvPath, server: name, original: object, opencode: opencode)
-                    servers[name] = written
-                    records.append(MCPSetupRecord(
-                        host: file.host.rawValue, configPath: file.path.path, keyPath: keyPath, name: name,
-                        original: entry, written: written))
-                    result.changed.append("\(shown) (\(file.host.rawValue), \(MCPDisplayedText.field(file.path.path)))")
-                    changed = true
-                }
-                guard changed else { continue }
-                // Replacing a link would drop it and copy its target's bytes here.
-                guard isSymbolicLink(file.path) == false else { return .failure(.symbolicLink(file.path.path)) }
-                guard (try? JSONValue.parse(data, maximumDepth: 128)) != nil else {
-                    return .failure(.hasComments(file.path.path))
-                }
-                guard let updated = replacing(keyPath, in: root, with: .object(servers)) else {
-                    return .failure(.writeFailed(file.path.path))
-                }
-                guard saveManifest(records, configDirectory) else { return .failure(.manifest("could not save")) }
-                guard writePreservingMode(
-                    Data(updated.prettyText.utf8), to: file.path, backupDirectory: backupDirectory(configDirectory),
-                    backups: &result.backups) else {
-                    return .failure(.writeFailed(file.path.path))
-                }
-            }
+        let snapshots = files.map {
+            MCPHostSnapshot(file: $0, state: MCPFileState(contents: read($0.path), isSymbolicLink: isSymbolicLink($0.path)))
         }
-        return .success(result)
+        let plan = plan(
+            snapshots: snapshots, manifest: loadManifest(configDirectory), configuration: configuration,
+            servers: filter, rvPath: rvPath)
+        switch plan {
+        case .failure(let error): return .failure(error)
+        case .success(let plan):
+            return apply(plan, write: diskWriter(configDirectory), saveManifest: { saveManifest($0, configDirectory) })
+        }
     }
 
     public static func undo(
@@ -380,51 +332,28 @@ public enum MCPHostSetup {
         configDirectory: URL,
         read: (URL) -> MCPInventory.HostFile = MCPInventory.readFile
     ) -> Result<MCPSetupResult, MCPSetupError> {
-        var result = MCPSetupResult()
-        var records = loadManifest(configDirectory)
-        let selected = records.indices.filter { index in
-            (host == nil || records[index].host == host?.rawValue) && wanted(records[index].name, filter)
+        let records = loadManifest(configDirectory)
+        var states: [String: MCPFileState] = [:]
+        for record in records where (host == nil || record.host == host?.rawValue) && wanted(record.name, filter) {
+            let url = URL(fileURLWithPath: record.configPath)
+            states[record.configPath] = states[record.configPath]
+                ?? MCPFileState(contents: read(url), isSymbolicLink: isSymbolicLink(url))
         }
-        var done = Set<Int>()
-        let paths = Set(selected.map { records[$0].configPath }).sorted()
-        // Refuse up front so a later linked file cannot strand earlier restores outside the manifest.
-        if let linked = paths.first(where: { isSymbolicLink(URL(fileURLWithPath: $0)) }) {
-            return .failure(.symbolicLink(linked))
+        switch planUndo(manifest: records, snapshots: states, host: host, servers: filter) {
+        case .failure(let error): return .failure(error)
+        case .success(let plan):
+            return apply(plan, write: diskWriter(configDirectory), saveManifest: { saveManifest($0, configDirectory) })
         }
-        for path in paths {
-            let url = URL(fileURLWithPath: path)
-            let mine = selected.filter { records[$0].configPath == path }
-            guard case .data(let data) = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
-                let shownPath = MCPDisplayedText.field(path)
-                result.skipped += mine.map { "\(MCPDisplayedText.field(records[$0].name)): \(shownPath) is missing or unreadable" }
-                done.formUnion(mine)
-                continue
-            }
-            var changed = false
-            for index in mine.reversed() {
-                let record = records[index]
-                done.insert(index)
-                guard var servers = value(at: record.keyPath, in: root)?.objectValue,
-                    servers[record.name] == record.written
-                else {
-                    result.skipped.append("\(MCPDisplayedText.field(record.name)) (\(record.host)): changed since setup; left as is")
-                    continue
-                }
-                servers[record.name] = record.original
-                guard let updated = replacing(record.keyPath, in: root, with: .object(servers)) else { continue }
-                root = updated
-                changed = true
-                result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
-            }
-            if changed, writePreservingMode(
-                Data(root.prettyText.utf8), to: url, backupDirectory: backupDirectory(configDirectory),
-                backups: &result.backups) == false {
-                return .failure(.writeFailed(path))
-            }
+    }
+
+    static func diskWriter(_ configDirectory: URL) -> HostWriter {
+        { url, data in
+            var backups: [String] = []
+            guard writePreservingMode(
+                data, to: url, backupDirectory: backupDirectory(configDirectory), backups: &backups)
+            else { return nil }
+            return backups
         }
-        records = records.indices.filter { done.contains($0) == false }.map { records[$0] }
-        guard saveManifest(records, configDirectory) else { return .failure(.manifest("could not save")) }
-        return .success(result)
     }
 
     /// Single quotes, with an embedded `'` written as `'\''`.

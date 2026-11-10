@@ -202,6 +202,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         drain(.viewportNoted(rows: rows, columns: columns), route: { _ in .inline })
     }
 
+    /// Records the review pane's content area as rendered. Approve stays
+    /// refused until the pane has been measured large enough.
+    public func noteReviewPane(rows: Int, columns: Int) {
+        drain(.reviewPaneNoted(rows: rows, columns: columns), route: { _ in .inline })
+    }
+
     /// Called by the app's single coalescing timer. Equal dimensions never
     /// produce another RPC; changed dimensions wait for the debounce window.
     public func processPendingWork(now: Date = Date()) {
@@ -354,10 +360,20 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         commandQueue.sync {}
     }
 
-    /// Test seam: returns once every review read and ceremony started
-    /// before this call, and any re-read it chained, has landed.
-    func waitForReviewWork() {
-        reviewWork.wait()
+    /// Test seam: true once every review read and ceremony started before
+    /// this call, and any re-read it chained, has landed; false after
+    /// `timeout` seconds. The review work runs on the cooperative pool, so
+    /// the caller suspends instead of blocking a pool thread (a blocked
+    /// pool thread can starve that very work on a small runner); the
+    /// bounded wait parks a GCD thread.
+    func waitForReviewWork(timeout: TimeInterval = 10) async -> Bool {
+        let group = reviewWork
+        let deadline = DispatchTime.now() + timeout
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: group.wait(timeout: deadline) == .success)
+            }
+        }
     }
 
     // MARK: - Runtime effect boundary

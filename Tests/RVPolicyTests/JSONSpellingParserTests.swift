@@ -83,8 +83,12 @@ struct JSONSpellingParserTests {
     }
 
     @Test func duplicateTableFailsClosed() {
-        for dup in [#"{"a":1,"a":2}"#, #"{"a":{"b":1,"b":2}}"#, #"{"a":1,"a":}"#, #"[{"k":1,"k":2}]"#] {
-            #expect(parseError(dup) == .duplicateKey, "\(dup)")
+        let table: [(String, String)] = [
+            (#"{"a":1,"a":2}"#, "a"), (#"{"a":{"b":1,"b":2}}"#, "b"), (#"{"a":1,"a":}"#, "a"),
+            (#"[{"k":1,"k":2}]"#, "k"), (#"{"a":1,"\u0061":2}"#, "a"), (#"{"x\"y":1,"x\u0022y":2}"#, "x\"y"),
+        ]
+        for (dup, key) in table {
+            #expect(parseError(dup) == .duplicateKey(key), "\(dup)")
         }
     }
 

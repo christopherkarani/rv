@@ -124,7 +124,7 @@ public struct GatedEvaluate: Sendable {
         if let audit = Self.exemptionAudit(detailed.droppedRepoLiterals, workspace: workspace, now: now) {
             effects.append(audit)
         }
-        let result = evaluateFileTool(
+        var result = evaluateFileTool(
             action,
             secretPaths: SecretPathDecider(
                 allowPaths: detailed.effective,
@@ -135,7 +135,13 @@ public struct GatedEvaluate: Sendable {
                 )
             )
         )
-        switch posture(result, door: .file, guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
+        // Edit/Write to rv's own hook, service or binary files: the agent
+        // must not unhook the guard watching it. Reads stay allowed.
+        if case .allow = result.decision, action.kind != .read,
+           WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
+            result = WiringPathGuard.deny(path: action.path.rawValue)
+        }
+        switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
             if let row = Self.denialRow(
                 for: wouldBe, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now,
@@ -489,7 +495,7 @@ public struct GatedEvaluate: Sendable {
 
     /// Which door is asking. Shell doors run the script check and judge.
     private enum Door {
-        case file
+        case file(FileToolAction)
         case shell(EvaluationRequest, inputs: EvaluationInputs, isPeek: Bool)
     }
 
@@ -511,9 +517,11 @@ public struct GatedEvaluate: Sendable {
     /// untouched (a pack deny is a floor neither may lower).
     ///
     /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
-    /// result takes the enforce branch, on every door.
+    /// result takes the enforce branch, on every door. Stopping rvd or
+    /// writing its install is also floored at "run it in Terminal" there
+    /// (an allow becomes indeterminate; a deny stays the deny).
     private func posture(
-        _ result: EvaluationResult,
+        _ evaluated: EvaluationResult,
         door: Door,
         guardMode: GuardMode,
         cwd: WorkingDirectory?,
@@ -521,8 +529,16 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         effects: inout [GatedEffect]
     ) -> Posture {
-        let mode = guardMode == .observe && observeFloorHolds(result, door: door, cwd: cwd, home: home)
-            ? .enforce : guardMode
+        var result = evaluated
+        var mode = guardMode
+        if guardMode == .observe {
+            if let floored = lifecycleFloor(evaluated, door: door, cwd: cwd, home: home) {
+                result = floored
+                mode = .enforce
+            } else if observeFloorHolds(evaluated, door: door, cwd: cwd, home: home) {
+                mode = .enforce
+            }
+        }
         switch (mode, door) {
         case (.observe, .file):
             return .observed(result.observedAllow, wouldBe: result)
@@ -558,6 +574,20 @@ public struct GatedEvaluate: Sendable {
         }
     }
 
+    private func lifecycleFloor(
+        _ result: EvaluationResult,
+        door: Door,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> EvaluationResult? {
+        switch door {
+        case .file(let action):
+            ObserveFloor.lifecycleFloor(result, action: action, home: home, cwd: cwd)
+        case .shell(let request, _, _):
+            ObserveFloor.lifecycleFloor(result, command: request.command, home: home, cwd: cwd)
+        }
+    }
+
     private func observeFloorHolds(
         _ result: EvaluationResult,
         door: Door,
@@ -573,7 +603,8 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Package-script check over a pack-allow. A script deny is projected
-    /// over the pack result; an unresolved graph closes the safe lane.
+    /// over the pack result; an unresolved graph is indeterminate before
+    /// any judge runs. `scriptDenied` means the screen's result is final.
     private struct ScriptScreen {
         let result: EvaluationResult
         let allowSafeLane: Bool
@@ -598,9 +629,27 @@ public struct GatedEvaluate: Sendable {
                 result: Self.projectScriptHit(hit, over: result), allowSafeLane: true, scriptDenied: true
             )
         case .unresolved:
+            // Nobody has read what this runner executes. The judge only
+            // ever sees the top-level string (`npm test`), so it cannot
+            // vouch for the graph either: a human decides, judge or not.
+            // Depth, cycle and evaluation caps all land here.
+            return ScriptScreen(
+                result: EvaluationResult(
+                    outcome: .indeterminate(.packageScriptUnresolved),
+                    matchingView: result.matchingView,
+                    analysis: result.analysis
+                ),
+                allowSafeLane: false, scriptDenied: true
+            )
+        case .needsJudge:
+            // A package bin, a remote runner, or a run after earlier work
+            // with no script to run: no body the judge cannot see, so the
+            // judge decides from the whole command, never the safe lane.
             return ScriptScreen(result: result, allowSafeLane: false, scriptDenied: false)
-        case .clear:
-            return ScriptScreen(result: result, allowSafeLane: true, scriptDenied: false)
+        case .clear(let allBodiesSafe):
+            // A body that is not itself safe-lane (`jest`, `node x.js`)
+            // keeps the command in front of the judge.
+            return ScriptScreen(result: result, allowSafeLane: allBodiesSafe, scriptDenied: false)
         }
     }
 
@@ -768,10 +817,7 @@ public struct GatedEvaluate: Sendable {
             return EvaluationResult(
                 outcome: .deny(
                     Deny(
-                        ruleID: RuleID(
-                            pack: ActionPolicyEngine.Builtin.pack,
-                            pattern: "typed-rules-invalid"
-                        ),
+                        ruleID: BuiltinRule.typedRulesInvalid.ruleID,
                         reason: "Typed rules could not be loaded."
                     ),
                     matched: nil
@@ -824,7 +870,8 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?,
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
-        invocationDisplay: String? = nil
+        invocationDisplay: String? = nil,
+        rawCommand: String? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -838,7 +885,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             maskedSegments: maskedSegments,
             invocationPrefix: invocationPrefix,
-            invocationDisplay: invocationDisplay
+            invocationDisplay: invocationDisplay,
+            rawCommand: rawCommand
         )
     }
 

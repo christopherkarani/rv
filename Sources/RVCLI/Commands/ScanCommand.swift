@@ -48,7 +48,9 @@ struct ScanSessionsFlags: ParsableArguments {
     func resolvedPackIDs(home: HomeDirectory? = nil) throws -> [PackID] {
         guard packs.isEmpty == false else {
             guard let home else { return dayOnePackIDs }
-            return (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
+            // Exactly what the evaluation doors walk: the owner's packs
+            // plus the organization's required packs.
+            return EvaluationWorld.walkedPackIDs(home: home).ids
         }
         let known: Set<PackID>? = home.flatMap { home in
             (try? PacksFacade.makeCatalog(home: home)).map { Set($0.records.map(\.id)) }

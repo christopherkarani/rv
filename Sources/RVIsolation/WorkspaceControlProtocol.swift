@@ -54,8 +54,8 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case recoveryRequired
     case childTeardownFailed
     case runtimeLimit
-    /// Close refused an escaping symlink and published nothing. The
-    /// `detail` is the path of the retained disk image.
+    /// Close did not publish. The `detail` is the path of the retained disk
+    /// image, then `workspacePublishRejectedSeparator` and the reason.
     case publishRejected
     case terminalUnavailable
     case terminalBusy
@@ -1032,6 +1032,21 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
 
 /// The operator-facing detail that travels with `workspaceControlCode`.
 func workspaceControlDetail(_ error: WorkspaceSessionError) -> String? {
-    if case .publishRejected(let image) = error { return image }
+    if case .publishRejected(let image, let reason) = error {
+        return reason.isEmpty ? image : image + workspacePublishRejectedSeparator + reason
+    }
     return nil
+}
+
+/// Joins the retained image path and the reason in a `publishRejected`
+/// detail. Control characters are stripped on the wire, so it is printable;
+/// the image path is generated under the temp directory and never holds it.
+/// The image comes first so the wire bound truncates only the reason.
+let workspacePublishRejectedSeparator = " :: "
+
+/// Splits a `publishRejected` detail into the image path and the reason.
+func workspacePublishRejectedDetail(_ detail: String?) -> (image: String, reason: String) {
+    guard let detail else { return ("", "") }
+    guard let range = detail.range(of: workspacePublishRejectedSeparator) else { return (detail, "") }
+    return (String(detail[..<range.lowerBound]), String(detail[range.upperBound...]))
 }

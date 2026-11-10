@@ -248,7 +248,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
         let rvHooks = try #require(pre[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks[0]["type"] as? String == "command")
-        #expect(rvHooks[0]["command"] as? String == "python3 \(layout.codexHook)")
+        #expect(rvHooks[0]["command"] as? String == "/usr/bin/python3 -I -S \(layout.codexHook)")
         #expect(rvHooks[0]["timeout"] as? Int == 18)
         #expect(rvHooks[0]["statusMessage"] as? String == "RV")
         #expect(pre[1]["matcher"] as? String == "Bash")
@@ -376,17 +376,17 @@ private func fixtureLoginHome() throws -> URL {
         let before = try #require(hooksRoot["beforeShellExecution"] as? [[String: Any]])
         #expect(before.count == 2)
         #expect(before[0]["command"] as? String == "other-guard evaluate")
-        #expect(before[1]["command"] as? String == "python3 \(layout.cursorHook)")
+        #expect(before[1]["command"] as? String == "/usr/bin/python3 -I -S \(layout.cursorHook)")
         #expect(before[1]["timeout"] as? Int == 18)
         #expect(before[1]["failClosed"] as? Bool == true)
         #expect(hooksRoot["PreToolUse"] == nil)
         let preToolUse = try #require(hooksRoot["preToolUse"] as? [[String: Any]])
         #expect(preToolUse.count == 1)
-        #expect(preToolUse[0]["command"] as? String == "python3 \(layout.cursorHook)")
+        #expect(preToolUse[0]["command"] as? String == "/usr/bin/python3 -I -S \(layout.cursorHook)")
         #expect(preToolUse[0]["failClosed"] as? Bool == true)
         let reads = try #require(hooksRoot["beforeReadFile"] as? [[String: Any]])
         #expect(reads.count == 1)
-        #expect(reads[0]["command"] as? String == "python3 \(layout.cursorHook)")
+        #expect(reads[0]["command"] as? String == "/usr/bin/python3 -I -S \(layout.cursorHook)")
         #expect(reads[0]["failClosed"] as? Bool == true)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
@@ -454,7 +454,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(pre.count == 5)
         #expect(pre.map { $0["matcher"] as? String } == AntigravityHooksMerge.matchers)
         let inner = try #require(pre[0]["hooks"] as? [[String: Any]])
-        #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv python3 \(adapterPath)")
+        #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv /usr/bin/python3 -I -S \(adapterPath)")
         #expect(inner[0]["timeout"] as? Int == 18)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
@@ -937,11 +937,27 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
-@Test func setup_skipsLaunchAgentWhenRvdIsNotExecutable_stillWritesHosts() throws {
+@Test func setup_rvdMissingWhileOwningTheService_wiresNoHosts() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
         let missing = home.appendingPathComponent("missing-rvd").path
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, rvdPath: missing))
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stderr == "rv setup failed: rvd not found at \(missing)\n"
+            + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
+            + "fix: \(SetupRun.reinstallHint)\n"
+            + "then rerun rv setup to wire agent hooks\n")
+        #expect(launchctl.bootstraps.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+    }
+}
+
+@Test func setup_isolatedHomeWithoutRvd_stillWritesHostsWithWarning() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let missing = home.appendingPathComponent("missing-rvd").path
+        let outcome = SetupRun.setup(
+            env(home: home, launchctl: launchctl, rvdPath: missing, touchLaunchd: false))
         #expect(outcome.exitCode == 0)
         #expect(launchctl.bootstraps.isEmpty)
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
@@ -1098,7 +1114,6 @@ private func fixtureLoginHome() throws -> URL {
             .setup,
             EX_UNAVAILABLE,
             "rv setup failed: unable to load LaunchAgent\n"
-                + "hooks are wired but rvd is not loaded, so agent tool calls will be denied\n"
                 + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
         ),
         (
@@ -1140,12 +1155,26 @@ private func fixtureLoginHome() throws -> URL {
             .setup,
             EX_UNAVAILABLE,
             "rv setup failed: unable to enable systemd unit\n"
+                + "fix: systemctl --user enable --now dev.rv.evaluate.service "
+                + "from a login session with a user systemd manager; "
+                + "journalctl --user -u dev.rv.evaluate.service and rv doctor show the cause\n"
         ),
         (
             .systemdApplyFailed(.disable),
             .uninstall,
             EX_UNAVAILABLE,
             "rv uninstall failed: unable to disable systemd unit\n"
+        ),
+        (
+            .serviceDown(.serviceNotAnswering(.systemdUser), alreadyWired: [.claude, .codex]),
+            .setup,
+            EX_UNAVAILABLE,
+            "rv setup failed: rvd did not answer within 10 seconds of starting the service\n"
+                + "no new hooks were wired; hooks already wired before this run (claude, codex) were left in place, "
+                + "so those agents are blocked until rvd answers\n"
+                + "fix: systemctl --user restart dev.rv.evaluate.service; "
+                + "journalctl --user -u dev.rv.evaluate.service and rv doctor show the cause\n"
+                + "then rerun rv setup to wire agent hooks\n"
         ),
         (
             .ownedPathStillExists,
@@ -1215,7 +1244,8 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.stderr == "rv setup failed: unable to clear occupied grok hook\n")
         #expect(outcome.exitCode == EX_CANTCREAT)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-        #expect(launchctl.bootstraps.isEmpty)
+        // The service is proven up before any host is touched.
+        #expect(launchctl.bootstraps.isEmpty == false)
     }
 }
 
@@ -1251,7 +1281,9 @@ private func fixtureLoginHome() throws -> URL {
 
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
 
-        #expect(outcome.stderr == "rv setup failed: unable to write LaunchAgent\n")
+        #expect(outcome.stderr == "rv setup failed: unable to write LaunchAgent\n"
+            + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
+            + "then rerun rv setup to wire agent hooks\n")
         #expect(outcome.exitCode == EX_CANTCREAT)
         #expect(launchctl.bootstraps.isEmpty)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
@@ -1311,18 +1343,116 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
     }
 }
 
-@Test func setup_launchctlBootstrapFails_stillWiresDetectedHosts() throws {
+@Test func setup_launchctlBootstrapFails_wiresNoHosts() throws {
     try withTempHome { home, layout, _ in
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
         let outcome = SetupRun.setup(env(home: home, launchctl: FailingLaunchctl()))
         #expect(outcome.stdout.isEmpty)
-        #expect(outcome.stderr.hasPrefix("rv setup failed: unable to load LaunchAgent\n"))
-        #expect(outcome.stderr.contains("hooks are wired but rvd is not loaded"))
-        #expect(outcome.stderr.contains("fix: rv service restart"))
+        #expect(outcome.stderr == "rv setup failed: unable to load LaunchAgent\n"
+            + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
+            + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
+            + "then rerun rv setup to wire agent hooks\n")
         #expect(outcome.exitCode == EX_UNAVAILABLE)
-        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-        #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
+}
+
+@Test func setup_rvdNeverAnswers_wiresNoHostsAndNamesTheFix() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        var environment = env(home: home, launchctl: launchctl)
+        environment.serviceAnswers = { false }
+        let outcome = SetupRun.setup(environment)
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr == "rv setup failed: rvd did not answer within 10 seconds of starting the service\n"
+            + "no hooks were wired: rv wires agent hooks only once rvd answers\n"
+            + "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause\n"
+            + "then rerun rv setup to wire agent hooks\n")
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+        #expect(launchctl.bootstraps.isEmpty == false, "the service was started before the probe")
+    }
+}
+
+@Test func setup_provesRvdAnswersBeforeWritingAnyHook() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        var environment = env(home: home, launchctl: launchctl)
+        nonisolated(unsafe) var hookExistedAtProbe: Bool?
+        environment.serviceAnswers = {
+            hookExistedAtProbe = FileManager.default.fileExists(atPath: layout.grokHook)
+            return true
+        }
+        let outcome = SetupRun.setup(environment)
+        #expect(outcome.exitCode == 0)
+        #expect(hookExistedAtProbe == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+    }
+}
+
+@Test func setup_rvdDownLeavesEarlierHooksAndSaysAgentsAreBlocked() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        // Hooks only read as wired when the baked rv path is executable.
+        let rv = home.appendingPathComponent(".local/bin/rv")
+        try makeExecutable(rv, contents: "#!/bin/sh\n")
+        try makeExecutable(home.appendingPathComponent(".local/bin/rv-cli"), contents: "#!/bin/sh\n")
+        #expect(SetupRun.setup(env(home: home, launchctl: launchctl, rvPath: rv.path)).exitCode == 0)
+        let before = try Data(contentsOf: URL(fileURLWithPath: layout.grokHook))
+
+        var environment = env(home: home, launchctl: launchctl, rvPath: rv.path)
+        environment.serviceAnswers = { false }
+        let outcome = SetupRun.setup(environment)
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stderr.contains(
+            "no new hooks were wired; hooks already wired before this run (grok) were left in place, "
+                + "so those agents are blocked until rvd answers"))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: layout.grokHook)) == before)
+    }
+}
+
+@Test func setup_rvdDownUnderObserveSaysEarlierHooksRunUnchecked() throws {
+    // An observe hook steps aside while rvd is unreachable, so "blocked"
+    // would be false: the already-wired agents run unchecked instead.
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let rv = home.appendingPathComponent(".local/bin/rv")
+        try makeExecutable(rv, contents: "#!/bin/sh\n")
+        try makeExecutable(home.appendingPathComponent(".local/bin/rv-cli"), contents: "#!/bin/sh\n")
+        #expect(SetupRun.setup(env(home: home, launchctl: launchctl, rvPath: rv.path)).exitCode == 0)
+        try HostModeStore(configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true))
+            .saveGlobalObserve()
+
+        var environment = env(home: home, launchctl: launchctl, rvPath: rv.path)
+        environment.serviceAnswers = { false }
+        let outcome = SetupRun.setup(environment)
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stderr.contains(
+            "hooks already wired before this run (grok) were left in place, "
+                + "so in observe mode those agents' tool calls run unchecked until rvd answers"))
+        #expect(!outcome.stderr.contains("blocked until rvd answers"))
+    }
+}
+
+@Test func serviceReadiness_pollsUntilTheProbeAnswers() {
+    var probes = 0
+    var slept: [TimeInterval] = []
+    let answered = ServiceReadiness.wait(
+        deadline: 10, pollInterval: 0.5, now: { Date(timeIntervalSince1970: 0) },
+        sleep: { slept.append($0) }, probe: { probes += 1; return probes == 3 })
+    #expect(answered)
+    #expect(probes == 3)
+    #expect(slept == [0.5, 0.5])
+}
+
+@Test func serviceReadiness_givesUpAtTheDeadline() {
+    var clock = Date(timeIntervalSince1970: 0)
+    var probes = 0
+    let answered = ServiceReadiness.wait(
+        deadline: 2, pollInterval: 0.5, now: { clock },
+        sleep: { clock = clock.addingTimeInterval($0) }, probe: { probes += 1; return false })
+    #expect(answered == false)
+    #expect(probes == 5)
 }
 
 final class DomainRecordingLaunchctl: LaunchctlApplying {
@@ -1445,7 +1575,7 @@ private func expectedClaudeHookCommand(
     rvPath: String = "/tmp/rv-bin/rv",
     layout: OwnedPaths
 ) -> String {
-    "RV_BINARY=\(rvPath) python3 \(claudeAdapterPath(layout))"
+    "RV_BINARY=\(rvPath) /usr/bin/python3 -I -S \(claudeAdapterPath(layout))"
 }
 
 @Test func setup_claudeOnly_mergesFingerprintAndPreservesForeignEntry() throws {
@@ -1517,7 +1647,7 @@ private func expectedClaudeHookCommand(
             (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
                 .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
         )
-        #expect(command == "RV_BINARY=/tmp/rv-bin/rv python3 \(adapter)")
+        #expect(command == "RV_BINARY=/tmp/rv-bin/rv /usr/bin/python3 -I -S \(adapter)")
         let timeout = try #require(
             (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
                 .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int
@@ -1616,6 +1746,7 @@ private func expectedClaudeHookCommand(
             _ = try SetupRun.writeClaudeSettings(
                 path: layout.claudeSettings,
                 rvPath: setupEnv.rvPath,
+                interpreter: "/usr/bin/python3",
                 existingData: occupied,
                 force: false,
                 files: files

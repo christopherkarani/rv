@@ -10,6 +10,7 @@ import RVIPC
 import RVService
 import RVTheme
 import RVPolicy
+import Synchronization
 @testable import RVCLI
 
 func denyPayload(from decision: Decision) -> Deny? {
@@ -94,6 +95,23 @@ func wd(_ raw: String) -> WorkingDirectory {
     WorkingDirectory(validating: raw)!
 }
 
+/// Mutex-backed in-memory capture for `CLIProcess.Context.output`. Pass it to
+/// `withCLIProcess(output:)`; it installs `sink` and keeps stdout and stderr
+/// in separate buffers.
+final class CLIOutputCapture: Sendable {
+    private let state = Mutex<(stdout: String, stderr: String)>(("", ""))
+
+    var stdout: String { state.withLock { $0.stdout } }
+    var stderr: String { state.withLock { $0.stderr } }
+
+    var sink: CLIOutputSink {
+        CLIOutputSink(
+            stdout: { text in self.state.withLock { $0.stdout += text } },
+            stderr: { text in self.state.withLock { $0.stderr += text } }
+        )
+    }
+}
+
 @discardableResult
 func withCLIProcess<T>(
     home: HomeDirectory? = nil,
@@ -116,7 +134,7 @@ func withCLIProcess<T>(
         workspacePath: workspacePath,
         stdinText: stdinText,
         ownerAuthOutcome: ownerAuthOutcome,
-        output: output
+        output: output?.sink
     )
     return try CLIProcess.$context.withValue(context, operation: body)
 }
@@ -145,7 +163,7 @@ func withCLIProcess<T>(
         stdinText: stdinText,
         ownerAuthOutcome: ownerAuthOutcome,
         englishCompiler: englishCompiler,
-        output: output
+        output: output?.sink
     )
     return try await CLIProcess.$context.withValue(context, operation: body)
 }
