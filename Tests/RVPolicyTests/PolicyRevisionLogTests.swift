@@ -66,64 +66,8 @@ struct PolicyRevisionLogTests {
         #expect(onDisk.contains("attacker-allow") == false)
     }
 
-    @Test func forgedMACFailsClosed() throws {
-        let root = try isolatedRevisionLogDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = TypedRuleStore(baseDirectory: root)
-        try store.saveMachine(PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")]))
-
-        var lines = try readLogLines(config: root)
-        lines[0] = try reencodeLogLine(lines[0], mutate: { json in
-            let mac = try #require(json["mac"] as? String)
-            json["mac"] = flipFirstHexChar(mac)
-        })
-        try writeLogLines(lines, config: root)
-
-        #expect(throws: TypedRuleStoreError.logCorrupted) {
-            try store.machineHistory()
-        }
-    }
-
-    @Test func reorderedLogFailsClosed() throws {
-        let root = try isolatedRevisionLogDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = TypedRuleStore(baseDirectory: root)
-        try store.saveMachine(PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")]))
-        try store.saveMachine(PolicyDocument(rules: [denyRule(pattern: "v2", branch: "develop")]))
-
-        var lines = try readLogLines(config: root)
-        #expect(lines.count == 2)
-        lines.swapAt(0, 1)
-        try writeLogLines(lines, config: root)
-
-        #expect(throws: TypedRuleStoreError.logCorrupted) {
-            try store.machineHistory()
-        }
-        #expect(throws: TypedRuleStoreError.logCorrupted) {
-            try store.rollbackMachine(toRevision: 1)
-        }
-    }
-
-    @Test func truncatedLogFailsClosed() throws {
-        let root = try isolatedRevisionLogDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = TypedRuleStore(baseDirectory: root)
-        try store.saveMachine(PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")]))
-        try store.saveMachine(PolicyDocument(rules: [denyRule(pattern: "v2", branch: "develop")]))
-
-        // A bare prefix still chains, so only the sealed tip catches this.
-        var lines = try readLogLines(config: root)
-        #expect(lines.count == 2)
-        lines.removeLast()
-        try writeLogLines(lines, config: root)
-
-        #expect(throws: TypedRuleStoreError.logCorrupted) {
-            try store.machineHistory()
-        }
-        #expect(throws: TypedRuleStoreError.logCorrupted) {
-            try store.rollbackMachine(toRevision: 1)
-        }
-    }
+    // Forged-MAC, reordered, and truncated sealed logs are byte-level
+    // cases in MachineRevisionLogPure; the wiring below keeps one on disk.
 
     @Test func saveRefusesToBuildOnForgedHistory() throws {
         let root = try isolatedRevisionLogDirectory()
