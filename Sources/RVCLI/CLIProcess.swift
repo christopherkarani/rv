@@ -23,6 +23,9 @@ enum CLIProcess: Sendable {
         /// Scripted device-owner outcome for `rv allow-once`. Nil fails
         /// closed (tests never reach live LocalAuthentication).
         var ownerAuthOutcome: UIAuthenticationOutcome?
+        /// Stand-in for `rv policy draft`'s English compiler. Nil uses the
+        /// live chain, which reaches Apple Intelligence where it is enabled.
+        var englishCompiler: (any EnglishCompiler)?
 
         init(
             home: HomeDirectory? = nil,
@@ -33,6 +36,7 @@ enum CLIProcess: Sendable {
             workspacePath: String? = nil,
             stdinText: String? = nil,
             ownerAuthOutcome: UIAuthenticationOutcome? = nil,
+            englishCompiler: (any EnglishCompiler)? = nil,
             includeProcessEnvironment: Bool = false
         ) {
             self.home = home
@@ -54,6 +58,7 @@ enum CLIProcess: Sendable {
             self.workspacePath = workspacePath
             self.stdinText = stdinText
             self.ownerAuthOutcome = ownerAuthOutcome
+            self.englishCompiler = englishCompiler
         }
     }
 

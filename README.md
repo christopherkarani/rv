@@ -40,6 +40,15 @@ rv setup    # auto-detects your agents and wires their hooks
 rv doctor   # verify everything is live
 ```
 
+Want to watch before you enforce? Install in observe mode: rv logs what it
+would block and lets everything run.
+
+```sh
+curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
+rv setup --observe   # same thing for an existing install (asks Touch ID if rv is already enforcing)
+rv blocks            # what observe would have blocked
+```
+
 On macOS the installer also fetches the on-device judge weights (~649 MB,
 verified by SHA-256, fully offline after) so the neural judge binds on first
 run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
@@ -74,7 +83,35 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   pack-allowed commands get a local risk score. The judge can only
   raise a verdict, never lower a pack deny. Nothing leaves your
   machine. `"guard.mode": "observe"` logs would-be verdicts without
-  blocking, so you can measure before you enforce.
+  blocking, so you can measure before you enforce. `rv host mode
+  <host> observe` does the same for one host (`off` unwires it); `rv
+  blocks` marks what observe would have blocked with `"observed": true`.
+  `rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
+  starts there. Observe never relaxes rv's own protection (rv admin
+  commands, rv's config) while `rvd` is running. Because an idle observe
+  host lets a call through when `rvd` is absent, observe also raises the
+  bar on the common ways to stop or replace `rvd`: `launchctl`/`systemctl`
+  stops of rv's job, `pkill`/`killall` of `rvd`, `kill` of a pid looked up
+  from `rvd`, launching a second `rvd`, Linux D-Bus stops, and writes to
+  rv's binaries, LaunchAgent, systemd unit or socket dir become "run it in
+  Terminal". This check is **lexical, not a boundary** — it reads the
+  command text, so it raises the bar but a determined agent can still get
+  past it. It is observe-only; enforce already fails such a call closed.
+  Residual (not caught): `kill` by a numeric pid, or a pid or path held in
+  a variable or file; interpreter or script forms (a `python`/`node`
+  subprocess, `bash -c "$(… | base64 -d)"`, a script file, a make/npm
+  script); and a renamed or symlinked `launchctl`. When `rvd` is *absent*,
+  hooks under observe let the call run unchecked and
+  unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
+  daemon that fails its identity check, or a malformed reply still asks or
+  denies, and `RV_HOOK_WHEN_DOWN=deny` keeps denying. "Absent" is
+  platform-specific: on **macOS**, rv's launchd service is not registered
+  (discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
+  is *not* absent; on **Linux**, the connect to
+  `/run/user/<uid>/rv/evaluate.sock` fails with `ENOENT`/`ECONNREFUSED` and
+  `XDG_RUNTIME_DIR` is unset or equals `/run/user/<uid>`. An organization gate pins enforce, and `rv setup
+  --observe` refuses under one. A host set `off` before an organization
+  gate arrived stays unwired until you run `rv setup`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned
   rules → allowlist → allow-once → contained-delete allowance) with
   `normal`/`strict` safety levels. Indeterminate (too large, budget
@@ -181,6 +218,8 @@ rv test 'rm -rf /'          # evaluate a command, don't run it
 rv explain 'rm -rf /'       # why would this block?
 rv packs                    # browse the 95 packs
 rv blocks                   # what got denied lately?
+rv host list                # per-host mode (block / observe / off) and wiring
+rv workspace vms            # micro-VM runtime sessions, newest first
 rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health

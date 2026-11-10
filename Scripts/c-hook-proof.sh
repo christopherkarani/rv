@@ -53,13 +53,17 @@ clang_c_hook() {
     "$ROOT/Sources/rv-c/json_reply.c" \
     "$ROOT/Sources/rv-c/daemon_trust.c" \
     "$ROOT/Sources/rv-c/hook_fallback.c" \
+    "$ROOT/Sources/rv-c/observe_gate.c" \
     "$ROOT/Sources/rv-c/rv.c"
   chmod 755 "$dest"
 }
 
 linux_c_hook_proof() {
   # Verified-daemon contract: with no daemon socket every hook call denies
-  # with the unreachable reason and never execs rv-cli; with a fake daemon on
+  # and never execs rv-cli. The socket dir here is an explicit
+  # XDG_RUNTIME_DIR, not the uid-derived /run/user/<uid>, so the miss is the
+  # connection-failed class (never the observe-eligible unreachable one:
+  # agents can set XDG_RUNTIME_DIR); with a fake daemon on
   # the socket the hook verifies the peer before sending (SO_PEERCRED +
   # sibling rvd) and denies without sending a single byte.
   local out home bin st
@@ -83,8 +87,8 @@ linux_c_hook_proof() {
   if ! grep -q '"decision":"deny"' "$out/deny.out"; then
     fail "no-daemon deny missing decision JSON"
   fi
-  if ! grep -q 'RV daemon is not reachable' "$out/deny.out"; then
-    fail "no-daemon deny missing unreachable reason"
+  if ! grep -q 'RV daemon connection failed' "$out/deny.out"; then
+    fail "no-daemon deny missing connection-failed reason"
   fi
   if grep -q 'git reset --hard' "$out/deny.out"; then
     fail "no-daemon deny echoes the command"
@@ -624,12 +628,17 @@ if [[ "$warm" -ne 1 ]]; then
   # With an admin trust manifest installed, the staged daemon is not the
   # manifest-pinned service and the hook must reject it: warm can never
   # succeed here. Accept exactly that rejection (boundary deny, no
-  # rv-cli exec) and skip the daemon-verdict legs; CI runners without a
-  # manifest run them in full.
+  # rv-cli exec), but the daemon-verdict legs are then SKIPPED, not
+  # passed: say so loudly, and fail where they are required (CI, or
+  # RV_C_HOOK_REQUIRE_DAEMON_LEGS=1).
   if [[ -f "/Library/Application Support/RV/peer-trust.json" ]] \
     && failclosed_deny_ok "$PROOF_ROOT/warm.out" && ! cli_invoked; then
+    if [[ "${RV_C_HOOK_REQUIRE_DAEMON_LEGS:-}" == "1" || "${CI:-}" == "true" ]]; then
+      fail "daemon-verdict legs are required but cannot run: /Library/Application Support/RV/peer-trust.json rejects the staged rvd"
+    fi
     MANIFEST_MODE=1
-    printf 'manifest-rejects-unpinned-daemon ok (daemon-verdict legs skipped: trust manifest installed)\n'
+    printf 'manifest-rejects-unpinned-daemon ok\n'
+    printf 'c-hook-proof: SKIPPED daemon-verdict legs (AC-001, AC-002 and later warm legs): /Library/Application Support/RV/peer-trust.json rejects the staged rvd; this run does NOT prove them\n' >&2
   else
     printf 'c-hook-proof: rvd.err\n' >&2
     cat "$PROOF_ROOT/rvd.err" >&2 || true
@@ -1059,4 +1068,9 @@ grep -q "rv-cli not found" "$PROOF_ROOT/ac013.err" \
   || fail "AC-013 missing-sibling stderr explanation absent: $ac013_err"
 printf 'AC-013 ok\n'
 
-printf 'c-hook-proof: all ACs ok stage=%s\n' "$STAGE"
+if [[ "$MANIFEST_MODE" -eq 1 ]]; then
+  printf 'c-hook-proof: PARTIAL, daemon-verdict legs SKIPPED (trust manifest installed) stage=%s\n' "$STAGE"
+  printf 'c-hook-proof: PARTIAL, daemon-verdict legs SKIPPED (trust manifest installed); not a full pass\n' >&2
+else
+  printf 'c-hook-proof: all ACs ok stage=%s\n' "$STAGE"
+fi

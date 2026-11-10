@@ -20,6 +20,7 @@ _rv() {
     'doctor:Read-only health'
     'safety:Show or set normal or strict'
     'blocks:List recent denials'
+    'host:Per-host mode: block, observe, or off'
     'audit:Unified audit trail'
     'secrets:Secrets agents use through placeholders'
     'login:App logins agents use through rv'

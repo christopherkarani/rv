@@ -51,20 +51,24 @@ public struct AuditLedger: Sendable {
         return merged
     }
 
-    /// rvd writes each enforced deny to both the pruned `blocks.jsonl`
-    /// ledger and the hash-chained `audit.jsonl`. Keep the chained copy and
-    /// drop a blocks row that matches it (same second, rule and host);
-    /// blocks rows from before the chain recorded denies stay.
+    /// rvd writes each enforced deny (and each observed would-be deny) to
+    /// both the pruned `blocks.jsonl` ledger and the hash-chained
+    /// `audit.jsonl`. Keep the chained copy and drop a blocks row that
+    /// matches it (same kind, second, rule and host); blocks rows from
+    /// before the chain recorded denies stay.
     package static func droppingLedgerDuplicates(_ events: [AuditEvent]) -> [AuditEvent] {
+        func isDenyRow(_ event: AuditEvent) -> Bool {
+            event.kind == .commandDenied || event.kind == .commandObserved
+        }
         func key(_ event: AuditEvent) -> String {
-            "\(Int(event.time.timeIntervalSince1970))|\(event.subject)|\(event.detail["host"] ?? "")"
+            "\(event.kind.rawValue)|\(Int(event.time.timeIntervalSince1970))|\(event.subject)|\(event.detail["host"] ?? "")"
         }
         let chained = Set(events
-            .filter { $0.source == Source.audit.rawValue && $0.kind == .commandDenied }
+            .filter { $0.source == Source.audit.rawValue && isDenyRow($0) }
             .map(key))
         guard chained.isEmpty == false else { return events }
         return events.filter { event in
-            !(event.source == Source.blocks.rawValue && event.kind == .commandDenied && chained.contains(key(event)))
+            !(event.source == Source.blocks.rawValue && isDenyRow(event) && chained.contains(key(event)))
         }
     }
 
@@ -102,10 +106,11 @@ public struct AuditLedger: Sendable {
     private static func blocks(_ f: Fields, source: Source) -> AuditEvent? {
         guard let time = f.isoDate("timestamp"), let rule = f.string("rule_id") else { return nil }
         let host = f.string("host")
+        let observed = f.string("observed") == "true"
         return AuditEvent(
             time: time,
-            kind: .commandDenied,
-            decision: .denied,
+            kind: observed ? .commandObserved : .commandDenied,
+            decision: observed ? .info : .denied,
             subject: rule,
             agent: host == "tty" ? nil : host,
             source: source.rawValue,

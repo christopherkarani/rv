@@ -13,6 +13,9 @@ import Testing
 #if canImport(XPC)
 import RVService
 #endif
+#if os(macOS)
+import RVIsolation
+#endif
 
 // MARK: - Fixtures
 
@@ -25,6 +28,7 @@ private struct InstallHome {
 private func withInstallHome(
     launchd: LaunchdObservation? = LaunchdObservation(guiDomainExists: true, loadedInGui: true, loadedInUser: false),
     trustManifest: TrustManifestState = .absent,
+    daemonTrust: DoctorServiceTrust? = nil,
     userID: uid_t = getuid(),
     _ body: (inout InstallHome) throws -> Void
 ) throws {
@@ -44,7 +48,9 @@ private func withInstallHome(
             pathEntries: [],
             fileManager: .default,
             launchAgentLoaded: launchd.map { $0.loadedInGui || $0.loadedInUser } ?? false,
-            install: DoctorInstallProbes(userID: userID, launchd: launchd, trustManifest: trustManifest)
+            install: DoctorInstallProbes(
+                userID: userID, launchd: launchd, trustManifest: trustManifest, daemonTrust: daemonTrust
+            )
         )
     )
     try body(&fixture)
@@ -211,6 +217,108 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
     }
 }
 
+/// The incident: a valid admin manifest pins a Developer ID rvd, the
+/// installed rvd is a local ad-hoc build, every hook call is denied.
+private let adHocUnderManifest = DoctorServiceTrust(
+    source: "manifest",
+    satisfied: false,
+    reason: "manifest requires Developer ID dev.rv.rvd (team 5V273URY46); installed rvd is ad-hoc signed"
+)
+
+@Test func doctorInstall_untrustedRvdUnderManifest_namesReasonAndBothRemediations() throws {
+    try withInstallHome(trustManifest: .valid, daemonTrust: adHocUnderManifest) { fixture in
+        try stageHealthyInstall(fixture)
+        let problem = try #require(problems(fixture).first { $0.id == "daemon-trust" })
+        #expect(problem.severity == .fail)
+        #expect(problem.summary.contains("ad-hoc signed"))
+        #expect(problem.summary.contains("hooks deny every tool call"))
+        #expect(problem.fix.contains("RV_RELEASE_SIGN=1 Scripts/release.sh"))
+        #expect(problem.fix.contains("sudo rm '/Library/Application Support/RV/peer-trust.json'"))
+        let outcome = doctorPretty(fixture)
+        #expect(outcome.stdout.contains(problem.summary))
+        #expect(outcome.stdout.contains("fix: \(problem.fix)"))
+        #expect(outcome.exitCode == 1)
+    }
+}
+
+@Test func doctorInstall_untrustedRvdUnderSiblingPin_pointsAtReinstall() throws {
+    let unsigned = DoctorServiceTrust(
+        source: "sibling-pin", satisfied: false,
+        reason: "installed rvd has no valid code signature, so hooks cannot pin it"
+    )
+    try withInstallHome(daemonTrust: unsigned) { fixture in
+        try stageHealthyInstall(fixture)
+        let problem = try #require(problems(fixture).first { $0.id == "daemon-trust" })
+        #expect(problem.fix.contains("reinstall rv"))
+        #expect(problem.fix.contains("sudo") == false)
+    }
+}
+
+/// An invalid manifest already has its own row; do not report it twice.
+@Test func doctorInstall_invalidManifestIsReportedOnce() throws {
+    let invalid = DoctorServiceTrust(
+        source: "invalid", satisfied: false,
+        reason: "trust manifest is present but rejected, so hooks reject every rvd"
+    )
+    try withInstallHome(trustManifest: .invalid, daemonTrust: invalid) { fixture in
+        try stageHealthyInstall(fixture)
+        let ids = problems(fixture).map(\.id)
+        #expect(ids.contains("trust-manifest"))
+        #expect(ids.contains("daemon-trust") == false)
+    }
+}
+
+@Test func doctorInstall_trustedRvdAddsNoProblem() throws {
+    let trusted = DoctorServiceTrust(source: "sibling-pin", satisfied: true, reason: nil)
+    try withInstallHome(daemonTrust: trusted) { fixture in
+        try stageHealthyInstall(fixture)
+        #expect(problems(fixture).isEmpty)
+        #expect(doctorPretty(fixture).exitCode == 0)
+    }
+}
+
+@Test func doctorRobot_serviceTrustIsAdditive() throws {
+    let rejected = ServiceDiagnosticResult.local(
+        ServiceFallbackDiagnostic(cause: .requestFailed(.daemonRejected), corePacksReady: true)
+    )
+    try withInstallHome(trustManifest: .valid, daemonTrust: adHocUnderManifest) { fixture in
+        try stageHealthyInstall(fixture)
+        let outcome = DoctorRun.run(environment: fixture.environment, diagnostics: rejected, appearance: .robot)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any])
+        let service = try #require(json["service"] as? [String: Any])
+        #expect(service["state"] as? String == "down")
+        #expect(service["warning"] as? String == "daemon identity rejected")
+        let trust = try #require(service["trust"] as? [String: Any])
+        #expect(trust["source"] as? String == "manifest")
+        #expect(trust["satisfied"] as? Bool == false)
+        #expect(trust["reason"] as? String == adHocUnderManifest.reason)
+    }
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let outcome = DoctorRun.run(environment: fixture.environment, diagnostics: runningDiagnostics, appearance: .robot)
+        #expect(outcome.stdout.contains("\"trust\"") == false)
+    }
+}
+
+#if os(macOS)
+/// Live probe wiring: the installed rvd is judged against the active trust
+/// source, and a missing rvd is left to the `rvd-missing` row.
+@Test func daemonTrustProbe_mapsVerdictAndSkipsMissingRvd() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-trust-probe-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let rvd = root.appendingPathComponent("rvd").path
+    #expect(DaemonTrustProbe.evaluate(rvdPath: rvd, source: .siblingPin) == nil)
+    try makeExecutable(URL(fileURLWithPath: rvd))
+    #expect(DaemonTrustProbe.evaluate(rvdPath: rvd, source: .siblingPin) == DoctorServiceTrust(
+        source: "sibling-pin", satisfied: false,
+        reason: "installed rvd has no valid code signature, so hooks cannot pin it"
+    ))
+    #expect(DaemonTrustProbe.evaluate(rvdPath: rvd, source: .invalid)?.source == "invalid")
+}
+#endif
+
 // MARK: - Rendering
 
 @Test func doctorRender_everyProblemRowPrintsAFixLine() throws {
@@ -355,5 +463,16 @@ private struct ThrowingHelloTransport: ServiceTransport {
     ).diagnostics()
     #expect(result == .local(.init(cause: .requestFailed(.daemonRejected), corePacksReady: true)))
     #expect(ServiceDiagnosticFailure.daemonRejected.statusMessage == "daemon identity rejected")
+}
+#endif
+
+#if os(Linux)
+/// With XDG_RUNTIME_DIR unset the CLI dials the uid-derived socket; a miss
+/// there is rvd being down, not a failed request.
+@Test func diagnostics_ownerRuntimeSocketMissIsDown_notRequestFailed() async throws {
+    let missing = "/tmp/rv-miss-\(UUID().uuidString.prefix(8))/rv/evaluate.sock"
+    let transport = UnixSocketServiceTransport(socketPath: missing, ownerRuntimeSocket: true)
+    let result = try await isolatedClient(transport: transport).diagnostics()
+    #expect(result == .local(.init(cause: .down, corePacksReady: true)))
 }
 #endif

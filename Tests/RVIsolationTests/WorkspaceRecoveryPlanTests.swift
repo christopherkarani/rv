@@ -1,7 +1,6 @@
 import Testing
 @testable import RVIsolation
 
-#if os(macOS)
 /// Characterization of the per-step mount decision table that
 /// `WorkspaceRecovery` executed inline before the plan was extracted.
 @Suite("Workspace recovery plan")
@@ -126,4 +125,3 @@ struct WorkspaceRecoveryPlanTests {
         #expect(WorkspaceSessionLifecycle.isComplete(step, progress: [kind]))
     }
 }
-#endif

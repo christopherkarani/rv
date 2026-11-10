@@ -105,6 +105,12 @@ public enum ManagedGate {
         }
     }
 
+    /// True while the organization pins enforce: observe mode, global or
+    /// per host, has no effect on evaluation then (`rv host list`).
+    public static func pinsEnforce(home: HomeDirectory?) -> Bool {
+        guardMode(.observe, home: home) == .enforce
+    }
+
     /// `level` raised to strict when the organization requires it, or when
     /// a managed bundle is present but cannot be trusted (fail closed).
     static func safety(_ level: SafetyLevel, home: HomeDirectory?) -> SafetyLevel {

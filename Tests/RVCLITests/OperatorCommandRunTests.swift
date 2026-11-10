@@ -226,13 +226,23 @@ struct OperatorCommandRunTests {
     }
 
     @Test func policyDraft_runEdges() async throws {
-        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+        // The fixture compiler: the live chain reaches Apple Intelligence where
+        // it is enabled, and the model's answer is not these canned edges.
+        let fixture = FakeEnglishCompiler()
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "never allow force-push to main"]).run()
             }
         }
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        // `--save --repo` writes under the workspace, never the checkout.
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-policy-draft-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try await withCLIProcess(
+            home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated, englishCompiler: fixture
+        ) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "", "--save"]).run()
             }
@@ -256,8 +266,9 @@ struct OperatorCommandRunTests {
                 try await PolicyDraftCommand.parse(["--english", "be careful in prod"]).run()
             }
         }
+        #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".rv/policy.toml").path))
         try replacePathWithFile(RVPolicyPaths.configDirectory(home: home))
-        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse([
                     "--english", "never allow force-push to main",

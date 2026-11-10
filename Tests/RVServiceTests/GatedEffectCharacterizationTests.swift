@@ -34,9 +34,9 @@ struct GatedEffectCharacterizationTests {
         Case(door: .agent, mode: .enforce, audits: 1, judgeRows: 0, ledgerRows: 0),
         Case(door: .file, mode: .enforce, audits: 1, judgeRows: 0, ledgerRows: 1),
         Case(door: .peek, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 0),
-        Case(door: .apply, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 0),
+        Case(door: .apply, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 1),
         Case(door: .agent, mode: .observe, audits: 1, judgeRows: 1, ledgerRows: 0),
-        Case(door: .file, mode: .observe, audits: 1, judgeRows: 0, ledgerRows: 0),
+        Case(door: .file, mode: .observe, audits: 1, judgeRows: 0, ledgerRows: 1),
     ]
 
     @Test("rows per file, per door and guard mode", arguments: cases)
@@ -45,7 +45,8 @@ struct GatedEffectCharacterizationTests {
         defer { remove(home) }
         let repo = try effectRepo(in: home, named: "repo", dropping: ["dropped.env"])
         let cwd = try #require(WorkingDirectory(validating: repo.path))
-        let packDeny = ShellCommand(rawValue: "rm -rf ~")
+        // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
+        let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
         switch c.door {
         case .peek:
             _ = await GatedEvaluate().peek(
@@ -125,7 +126,7 @@ struct GatedEffectCharacterizationTests {
         let home = try guardHome(mode: "observe")
         defer { remove(home) }
         let result = await GatedEvaluate().peek(
-            command: ShellCommand(rawValue: "rm -rf ~"), cwd: nil, home: home,
+            command: ShellCommand(rawValue: "rm -rf ~/Documents"), cwd: nil, home: home,
             grants: EphemeralAllowOnceTable(), now: Self.now, allowlist: { .empty }
         )
         #expect(result.decision == .allow)

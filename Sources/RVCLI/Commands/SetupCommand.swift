@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 import RVPolicy
 import RVPresentation
+import RVService
 import RVTheme
 
 struct Setup: AsyncParsableCommand {
@@ -26,12 +27,17 @@ struct Setup: AsyncParsableCommand {
     @Flag(name: .customLong("force"), help: "Replace occupied owned hooks (backs up to *.bak).")
     var force = false
 
+    @Flag(name: .customLong("observe"), help: "Log what rv would block instead of blocking (guard.mode observe).")
+    var observe = false
+
     func run() async throws {
         // Step 8B P9: one-click install. `rv setup` only writes rv-owned
         // hooks, the LaunchAgent, and config — it adds oversight and cannot
         // manufacture ALLOW — so it runs without device-owner
         // authentication. The dangerous direction is `rv uninstall` (sheds
-        // oversight), which is LA-gated in UninstallCommand.
+        // oversight), which is LA-gated in UninstallCommand. `--observe`
+        // over an install that already enforces a wired host sheds
+        // oversight too, so that one case asks for the owner first.
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,
@@ -44,7 +50,8 @@ struct Setup: AsyncParsableCommand {
                 force: force,
                 appearance: resolved.appearance,
                 animate: resolved.animate,
-                ceremonyKind: .fromInstallEnvironment()
+                ceremonyKind: .fromInstallEnvironment(),
+                observe: observe
             ),
             clock: LiveSetupCeremonyClock(),
             write: CeremonyCLI.stdoutWriter()
@@ -59,9 +66,12 @@ struct Setup: AsyncParsableCommand {
         intent: SetupIntent,
         clock: LiveSetupCeremonyClock,
         write: @escaping (String) -> Void,
-        probeService: (HomeDirectory) async -> Bool = Setup.liveServiceProbe
+        probeService: (HomeDirectory) async -> Bool = Setup.liveServiceProbe,
+        authenticate: () async throws -> Void = {
+            try await CLIOwnerAuth.requireAuthenticated(reason: "Authenticate to switch rv to observe mode.")
+        }
     ) async -> SetupOutcome {
-        var outcome = SetupFlow.live().run(intent, clock: clock, write: write)
+        var outcome = await SetupFlow.live().run(intent, clock: clock, write: write, authenticate: authenticate)
         await appendHookServiceWarningIfNeeded(to: &outcome, probeService: probeService)
         return outcome
     }
@@ -93,7 +103,8 @@ struct Setup: AsyncParsableCommand {
         if outcome.stderr.isEmpty == false, outcome.stderr.hasSuffix("\n") == false {
             outcome.stderr += "\n"
         }
-        outcome.stderr += SetupServiceWarning.text + "\n"
+        let observing = JudgeRuntime.configuredGuardMode(home: home) == .observe
+        outcome.stderr += (observing ? SetupServiceWarning.observeText : SetupServiceWarning.text) + "\n"
     }
 
     private func hasWiredHosts(home: HomeDirectory) -> Bool {
@@ -119,6 +130,9 @@ struct Setup: AsyncParsableCommand {
 enum SetupServiceWarning {
     static let text =
         "Warning: the RV background service (rvd) is not answering. Installed hooks will block or prompt on every command until it is up. Run `rv doctor`."
+    /// Under observe a missing daemon makes hooks step aside instead.
+    static let observeText =
+        "Warning: the RV background service (rvd) is not answering. In observe mode hooks let commands run unchecked and unlogged while it is down (a slow rvd still prompts). Run `rv doctor`."
 
     static func needed(hasWiredHosts: Bool, serviceUp: Bool) -> Bool {
         hasWiredHosts && serviceUp == false
