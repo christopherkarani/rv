@@ -195,7 +195,7 @@ struct CommandContext: Sendable {
 
     static func writeStdout(_ text: String) {
         if let output = CLIProcess.context?.output {
-            output.appendStdout(text)
+            output.stdout(text)
             return
         }
         FileHandle.standardOutput.write(Data(text.utf8))
@@ -203,7 +203,7 @@ struct CommandContext: Sendable {
 
     static func writeStderr(_ text: String) {
         if let output = CLIProcess.context?.output {
-            output.appendStderr(text)
+            output.stderr(text)
             return
         }
         FileHandle.standardError.write(Data(text.utf8))
