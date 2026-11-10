@@ -8,6 +8,8 @@ import RVService
 @main
 enum RVD {
     static func main() {
+        // launchd hands rvd /dev/null; keep failures visible in the log.
+        RVDLogFile.captureDiscardedStderr()
         do {
             let configuration = try RVDLaunch.parse(arguments: ProcessInfo.processInfo.arguments)
             if configuration.printVersion {
@@ -29,7 +31,9 @@ enum RVD {
             FileHandle.standardError.write(Data(message.utf8))
             Foundation.exit(1)
         } catch {
-            FileHandle.standardError.write(Data("rvd: launch failed\n".utf8))
+            FileHandle.standardError.write(
+                Data(RVDLogFile.line("rvd: launch failed: \(RVDLogFile.describe(error))").utf8)
+            )
             Foundation.exit(1)
         }
     }

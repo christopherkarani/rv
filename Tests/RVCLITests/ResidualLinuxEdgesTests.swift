@@ -699,6 +699,7 @@ struct ResidualLinuxEdgesTests {
                 try SetupRun.writeClaudeSettings(
                     path: layout.claudeSettings,
                     rvPath: setupEnv.rvPath,
+                    interpreter: "/usr/bin/python3",
                     existingData: nil,
                     force: true,
                     files: files
@@ -719,6 +720,7 @@ struct ResidualLinuxEdgesTests {
                 _ = try SetupRun.writeClaudeSettings(
                     path: layout.claudeSettings,
                     rvPath: setupEnv.rvPath,
+                    interpreter: "/usr/bin/python3",
                     existingData: nil,
                     force: true,
                     files: files
@@ -891,6 +893,7 @@ struct ResidualLinuxEdgesTests {
                 _ = try SetupRun.writeClaudeSettings(
                     path: layout.claudeSettings,
                     rvPath: setupEnv.rvPath,
+                    interpreter: "/usr/bin/python3",
                     existingData: Data("[]".utf8),
                     force: true,
                     files: files
@@ -901,6 +904,7 @@ struct ResidualLinuxEdgesTests {
                 try SetupRun.writeClaudeSettings(
                     path: layout.claudeSettings,
                     rvPath: setupEnv.rvPath,
+                    interpreter: "/usr/bin/python3",
                     existingData: nil,
                     force: true,
                     files: files
@@ -910,6 +914,7 @@ struct ResidualLinuxEdgesTests {
                 try SetupRun.writeClaudeSettings(
                     path: layout.claudeSettings,
                     rvPath: setupEnv.rvPath,
+                    interpreter: "/usr/bin/python3",
                     existingData: files.readData(layout.claudeSettings),
                     force: true,
                     files: files
@@ -925,6 +930,7 @@ struct ResidualLinuxEdgesTests {
                 _ = try SetupRun.writeClaudeSettings(
                     path: layout.claudeSettings,
                     rvPath: setupEnv.rvPath,
+                    interpreter: "/usr/bin/python3",
                     existingData: nil,
                     force: true,
                     files: files

@@ -27,14 +27,13 @@ enum AllowOnceAuthError: Error, Equatable {
 /// explicit `.authenticated` override; any other outcome — or none —
 /// fails closed, and tests never reach the live prompt.
 enum CLIOwnerAuth {
-    static let reason = "Authenticate to allow this command once."
-
-    /// The device owner approved this action.
+    /// The device owner approved this action. `reason` names the action:
+    /// the owner reads it in the prompt.
     ///
     /// macOS: runs LocalAuthentication. Linux: the owner's login password,
     /// verified by rvd (`OwnerConfirmation`), never just read and trusted
     /// here: a password this process merely reads proves nothing.
-    static func requireAuthenticated(reason: String = reason) async throws {
+    static func requireAuthenticated(reason: String) async throws {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
@@ -55,12 +54,46 @@ enum CLIOwnerAuth {
         #endif
     }
 
-    /// Owner proof for allow-once redeem, which carries it to rvd inside
-    /// `attestTTYRedemption`. macOS: runs LocalAuthentication and returns nil
-    /// (rvd trusts the pinned `.cli`). Linux: reads the login password from
-    /// the terminal and returns it unverified; rvd verifies it before it
-    /// plants anything, so callers must forward it, never act on it.
-    static func ownerProofForAttestation(reason: String = reason) async throws -> OwnerProof? {
+    /// Before allow-once redeem asks rvd. macOS: no prompt here; rvd shows
+    /// its own Touch ID or password prompt, so the owner sees exactly one.
+    static func beginRedeem(code: String) throws {
+        try beginRvdPrompt(notice: redeemPromptNotice(code: code))
+    }
+
+    /// `rv allow-once mint`: the same gate as `beginRedeem`.
+    static func beginMint() throws {
+        try beginRvdPrompt(notice: mintPromptNotice)
+    }
+
+    private static func beginRvdPrompt(notice: String) throws {
+        if let context = CLIProcess.context {
+            guard context.ownerAuthOutcome == .authenticated else {
+                throw AllowOnceAuthError.required
+            }
+            return
+        }
+        #if canImport(LocalAuthentication)
+        FileHandle.standardError.write(Data((notice + "\n").utf8))
+        #endif
+    }
+
+    static let mintPromptNotice =
+        "rv allow-once mint: approve only the Touch ID or password prompt that names this exact command "
+        + "(\"pre-arm a code to allow once …\"); decline any other"
+
+    /// The agent holds the code too and can raise rvd's prompt itself, so
+    /// the owner is told which prompt is theirs.
+    static func redeemPromptNotice(code: String) -> String {
+        "rv allow-once: approve only the Touch ID or password prompt for code \(code) "
+            + "(it names the full command); decline any other"
+    }
+
+    /// Owner proof for allow-once redeem on Linux, asked for once rvd has
+    /// answered with `reason`, its own description of the code it issued.
+    /// Reads the login password from the terminal and returns it
+    /// unverified; rvd verifies it before it plants anything, so callers
+    /// must forward it, never act on it. macOS: none (rvd prompts itself).
+    static func ownerProofForAttestation(reason: String) async throws -> OwnerProof? {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
@@ -68,9 +101,6 @@ enum CLIOwnerAuth {
             return nil
         }
         #if canImport(LocalAuthentication)
-        guard await liveOutcome(reason: reason) == .authenticated else {
-            throw AllowOnceAuthError.required
-        }
         return nil
         #else
         guard let password = OwnerConfirmation.readOwnerPassword(
@@ -122,5 +152,13 @@ enum CLIOwnerAuth {
         // Piping a scraped code through redeem must not become authority.
         return .unavailable
         #endif
+    }
+}
+
+extension CLIOwnerAuth {
+    /// The live LocalAuthentication outcome, which needs no rvd. Used by
+    /// `DaemonDownOwnerConfirmation` when rvd is down. `.unavailable` off macOS.
+    static func localDeviceOwnerOutcome(reason: String) async -> UIAuthenticationOutcome {
+        await liveOutcome(reason: reason)
     }
 }

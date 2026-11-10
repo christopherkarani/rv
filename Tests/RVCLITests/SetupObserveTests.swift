@@ -48,6 +48,10 @@ struct SetupObserveTests {
             try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
             var environment = environment
             environment.rvdPath = home.appendingPathComponent("missing/rvd").path
+            // A run that owns the real supervisor refuses to wire without an
+            // answering rvd (`serviceDown`); an isolated HOME warns instead.
+            environment.touchLaunchd = false
+            environment.touchSystemd = false
             let outcome = await observeSetup(environment, probe: ObserveAuthProbe(allow: false))
             #expect(outcome.exitCode == 0)
             #expect(outcome.stderr.contains("rvd not found"))

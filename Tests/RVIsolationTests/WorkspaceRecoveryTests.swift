@@ -459,6 +459,8 @@ struct WorkspaceRecoveryTests {
             Issue.record("abandon must succeed, got \(outcome)")
             return
         }
+        defer { if let image = report.retainedImage { unlink(image) } }
+        #expect(report.retainedImage?.contains("rv-rejected-") == true)
         #expect(report.workspace == id)
         #expect(report.volumePresent)
         #expect(report.discardedCount == 2)
@@ -506,6 +508,7 @@ struct WorkspaceRecoveryTests {
             Issue.record("abandon must succeed, got \(outcome)")
             return
         }
+        defer { if let image = report.retainedImage { unlink(image) } }
         #expect(report.workspace == id)
         #expect(report.volumePresent)
         #expect(report.discardedCount == 0)
@@ -525,6 +528,9 @@ struct WorkspaceRecoveryTests {
         let id = opened.supervisor.id.rawValue
         let created = try createdRecord(logs.life, workspace: id)
         let identity = try #require(created.identity)
+        // Unpublished work on the volume, then the mount goes away (logout,
+        // reboot) while the image file stays.
+        try Data("unpublished".utf8).write(to: tree.workspaceURL.appendingPathComponent("agent.txt"))
         opened.supervisor.abandonForCrashSimulation()
         detach(identity.disk, mountPoint: tree.workspaceURL.path)
         #expect(waitUntil(seconds: 5) {
@@ -543,6 +549,11 @@ struct WorkspaceRecoveryTests {
         #expect(report.workspace == id)
         #expect(report.volumePresent == false)
         #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("keep.txt"), encoding: .utf8) == "keep")
+        // The image was kept, not unlinked, and still holds the agent's file.
+        let image = try #require(report.retainedImage)
+        defer { unlink(image) }
+        #expect(identity.imagePath.map { FileManager.default.fileExists(atPath: $0) } == false)
+        #expect(salvagedFile(image: image, relative: "agent.txt", root: tree.rootURL) == "unpublished")
         #expect(workspacePathIdentity(tree.workspaceURL.path)?.device != identity.volumeDevice)
         #expect(WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .clean)
     }
@@ -784,6 +795,29 @@ private func tamper(_ source: URL, into destination: URL, _ mutate: (inout [Stri
         output.append(UInt8(ascii: "\n"))
     }
     try output.write(to: destination)
+}
+
+/// Attach `image` read-only at a test-owned mount point, as the operator's
+/// salvage command does, read one file, and detach.
+private func salvagedFile(image: String, relative: String, root: URL) -> String? {
+    let mount = root.appendingPathComponent("salvage-\(UUID().uuidString)")
+    guard (try? FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)) != nil else {
+        return nil
+    }
+    defer { rmdir(mount.path) }
+    // hdiutil can take well over runHelper's 5s on a loaded machine.
+    func hdiutil(_ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        process.waitUntilExit()
+    }
+    hdiutil(["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, image])
+    defer { hdiutil(["detach", "-force", "-quiet", mount.path]) }
+    return try? String(contentsOf: mount.appendingPathComponent(relative), encoding: .utf8)
 }
 
 private func detach(_ disk: String, mountPoint: String? = nil) {

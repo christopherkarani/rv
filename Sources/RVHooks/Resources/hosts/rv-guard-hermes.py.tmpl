@@ -16,6 +16,29 @@ import subprocess
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
+# Every block says what broke and what to run; never a bare "rv failed".
+_ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
+
+
+def _missing_reason():
+    return "rv is not installed at %s. Reinstall rv or run `rv setup`." % RV_BINARY
+
+
+def _spawn_failed_reason(error):
+    why = getattr(error, "strerror", None) or error.__class__.__name__
+    return "rv at %s could not be started: %s. Run `rv doctor`." % (RV_BINARY, why)
+
+
+def _timeout_reason():
+    return (
+        "rv did not answer within %gs; the daemon may be busy or stopped. Run `rv doctor`."
+        % RV_HOOK_TIMEOUT_S
+    )
+
+
+def _bad_output_reason(exit_code):
+    return "rv exited with code %s without a usable decision. Run `rv doctor`." % exit_code
+
 
 def register(ctx):
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
@@ -25,7 +48,7 @@ def _on_pre_tool_call(tool_name="", args=None, **kwargs):
     try:
         return _guard(tool_name, args, kwargs)
     except Exception:
-        return {"action": "block", "message": "rv failed"}
+        return {"action": "block", "message": _ADAPTER_ERROR}
 
 
 def _guard(tool_name, args, kwargs):
@@ -89,9 +112,11 @@ def _spawn_rv_hook(host, stdin):
             timeout=RV_HOOK_TIMEOUT_S,
         )
     except FileNotFoundError:
-        return {"action": "block", "reason": "rv missing"}
-    except (OSError, subprocess.TimeoutExpired):
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": _missing_reason()}
+    except subprocess.TimeoutExpired:
+        return {"action": "block", "reason": _timeout_reason()}
+    except OSError as error:
+        return {"action": "block", "reason": _spawn_failed_reason(error)}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
 
 
@@ -114,7 +139,7 @@ def _map_rv_hook_result(stdout, exit_code):
                 }
         except (ValueError, TypeError):
             pass
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": _bad_output_reason(exit_code)}
     if exit_code == 0:
         return {"action": "allow"}
-    return {"action": "block", "reason": "rv failed"}
+    return {"action": "block", "reason": _bad_output_reason(exit_code)}

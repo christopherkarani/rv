@@ -509,6 +509,16 @@ private func substitutionInners(_ segment: String) -> [String] {
             index += 1
             continue
         }
+        // Process substitution `<(cmd)` / `>(cmd)` runs `cmd` too; as its
+        // own segment it is judged alone, never vouched for by a safe
+        // match on the outer command.
+        if char == "<" || char == ">", index + 1 < chars.count, chars[index + 1] == "(" {
+            if let (inner, next) = matchDollarParen(chars, open: index + 1) {
+                inners.append(inner)
+                index = next
+                continue
+            }
+        }
         if char == "`" {
             if let (inner, next) = matchBacktick(chars, open: index) {
                 inners.append(inner)

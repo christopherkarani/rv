@@ -9,6 +9,7 @@ import RVPresentation
 extension SetupRun {
     static func uninstallPerform(
         _ env: SetupEnvironment,
+        removeModels: Bool = false,
         appearance: CLIAppearance,
         clock: any SetupCeremonyClock,
         animate: Bool,
@@ -31,15 +32,30 @@ extension SetupRun {
         let launchAgentExisted = files.fileExists(servicePath)
         let custodianAgentExisted = files.fileExists(layout.custodianLaunchAgent)
         let auditForwardAgentExisted = files.fileExists(layout.auditForwardLaunchAgent)
-        let binariesExisted = files.fileExists(layout.localRv)
-            || files.fileExists(layout.localRvCli)
-            || files.fileExists(layout.localRvd)
-        removedPaths.append(
-            contentsOf: [
-                servicePath, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent,
-                layout.localRv, layout.localRvCli, layout.localRvd,
-            ]
+
+        // Stop the service before deleting anything it runs from: a failed
+        // bootout must leave a whole install (rv, rvd, packs) behind, never
+        // a running rvd whose binaries are half gone.
+        try stopServices(
+            env: env,
+            custodianAgentExisted: custodianAgentExisted,
+            auditForwardAgentExisted: auditForwardAgentExisted
         )
+
+        let bin = layout.localBinDirectory
+        let binPaths = InstallManifest.ownedBinPaths(
+            binDirectory: bin,
+            recordedLibraries: InstallManifest.recordedLibraries(binDirectory: bin, fileManager: env.fileManager)
+        )
+        let binariesExisted = binPaths.contains { files.fileExists($0) } || files.fileExists(layout.approvalsApp)
+        removedPaths.append(
+            contentsOf: [servicePath, layout.custodianLaunchAgent, layout.auditForwardLaunchAgent]
+        )
+        removedPaths.append(contentsOf: binPaths)
+        removedPaths.append(layout.approvalsApp)
+        if removeModels {
+            removedPaths.append(layout.modelsDirectory)
+        }
 
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
         let analytics = AnalyticsPaths(configDirectory: configDir)
@@ -58,6 +74,34 @@ extension SetupRun {
         }
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
+        if removedPaths.contains(where: { files.fileExists($0) }) {
+            throw SetupError.ownedPathStillExists
+        }
+
+        let report = UninstallReport(
+            removedHosts: removedHosts,
+            occupiedHosts: occupiedHosts,
+            removedLaunchAgent: launchAgentExisted,
+            removedBinaries: binariesExisted,
+            removedConfigArtifacts: configExisted
+        )
+        return SetupFormat.uninstallStdout(
+            report: report,
+            appearance: appearance,
+            clock: clock,
+            animate: animate,
+            write: write
+        )
+    }
+
+    /// Boots out every rv job this HOME's real supervisor runs. Only the
+    /// evaluate service's bootout is fatal: it is the one that must be gone
+    /// before its binaries are.
+    private static func stopServices(
+        env: SetupEnvironment,
+        custodianAgentExisted: Bool,
+        auditForwardAgentExisted: Bool
+    ) throws(SetupError) {
         if env.supervisor == .launchd, env.touchLaunchd {
             let uid = env.uid()
             if custodianAgentExisted {
@@ -86,25 +130,14 @@ extension SetupRun {
                 throw SetupError.systemdApplyFailed(.disable)
             }
         }
+    }
 
-        if removedPaths.contains(where: { files.fileExists($0) }) {
-            throw SetupError.ownedPathStillExists
-        }
-
-        let report = UninstallReport(
-            removedHosts: removedHosts,
-            occupiedHosts: occupiedHosts,
-            removedLaunchAgent: launchAgentExisted,
-            removedBinaries: binariesExisted,
-            removedConfigArtifacts: configExisted
-        )
-        return SetupFormat.uninstallStdout(
-            report: report,
-            appearance: appearance,
-            clock: clock,
-            animate: animate,
-            write: write
-        )
+    /// Judge weights survive a default uninstall (they are large and slow
+    /// to fetch again); say where they are and how to drop them.
+    static func keptModelsNote(layout: OwnedPaths, files: FileOps) -> String {
+        guard files.fileExists(layout.modelsDirectory) else { return "" }
+        return "rv uninstall: kept judge weights at \(layout.modelsDirectory); "
+            + "run rv uninstall --remove-models to delete them\n"
     }
 
     /// Removes rv-fingerprinted Cursor handlers only. Returns whether anything changed.

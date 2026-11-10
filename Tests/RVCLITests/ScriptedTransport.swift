@@ -12,10 +12,13 @@ final class ScriptedTransport: ServiceTransport {
     let responseID: UUID?
     let responseProtocolName: String?
 
+    /// Replies served in order before `responseResult`.
+    private let queuedResults: Mutex<[IPCResult]>
     private let sentBodies = Mutex<[Data]>([])
     private let sendTimeouts = Mutex<[Int]>([])
     private let helloCalls = Mutex(0)
     private let invalidations = Mutex(0)
+    private let hookConsults = Mutex(0)
 
     init(
         ack: HelloAckView,
@@ -24,8 +27,10 @@ final class ScriptedTransport: ServiceTransport {
         sendReply: Data? = nil,
         responseResult: IPCResult? = nil,
         responseID: UUID? = nil,
-        responseProtocolName: String? = nil
+        responseProtocolName: String? = nil,
+        responseResults: [IPCResult] = []
     ) {
+        self.queuedResults = Mutex(responseResults)
         self.ack = ack
         self.helloError = helloError
         self.sendError = sendError
@@ -45,6 +50,10 @@ final class ScriptedTransport: ServiceTransport {
 
     var invalidationCount: Int { invalidations.withLock { $0 } }
 
+    /// Sends that went over the hook-consult session (daemon verified the
+    /// way hooks verify it: manifest when installed, else the sibling pin).
+    var hookConsultCount: Int { hookConsults.withLock { $0 } }
+
     func hello(clientSemver: String) async throws -> HelloAckView {
         helloCalls.withLock { $0 += 1 }
         if let helloError {
@@ -58,7 +67,8 @@ final class ScriptedTransport: ServiceTransport {
         if let sendError {
             throw sendError
         }
-        if let responseResult {
+        let queued = queuedResults.withLock { $0.isEmpty ? nil : $0.removeFirst() }
+        if let responseResult = queued ?? responseResult {
             let request = try IPCJSON.decode(IPCRequest.self, from: body)
             return try IPCJSON.encode(
                 IPCResponse(
@@ -74,6 +84,11 @@ final class ScriptedTransport: ServiceTransport {
     func send(_ body: Data, timeoutMs: Int) async throws -> Data {
         sendTimeouts.withLock { $0.append(timeoutMs) }
         return try await send(body)
+    }
+
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        hookConsults.withLock { $0 += 1 }
+        return try await send(body, timeoutMs: timeoutMs)
     }
 
     func invalidate() {

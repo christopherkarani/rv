@@ -17,6 +17,18 @@ func classifyFilesystemTarget(
             resolution: .lexical
         )
     }
+    if expandTildeUser(apparent) == .unknownUser {
+        // `~nosuchuser/x`: the shell leaves it literal, but the guard
+        // cannot place it, so it never classifies inside the repository
+        // (matches `cd ~x` being untracked).
+        return FilesystemTarget(
+            apparent: apparent,
+            canonical: apparent,
+            scope: .outsideRepository,
+            kind: .unknown,
+            resolution: .lexical
+        )
+    }
     if let fact = context.fact(for: apparent) {
         return classifiedTarget(
             apparent: apparent,
@@ -45,7 +57,8 @@ func filesystemScopeForResolution(
     _ resolution: FilesystemResolution,
     canonical: String,
     repositoryRoot: RepositoryRoot?,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    homeDirectory: HomePath? = nil
 ) -> FilesystemScope {
     if resolution == .uncertain {
         return .unknown
@@ -53,7 +66,8 @@ func filesystemScopeForResolution(
     return classifyFilesystemScope(
         canonical: canonical,
         repositoryRoot: repositoryRoot,
-        catalog: catalog
+        catalog: catalog,
+        homeDirectory: homeDirectory
     )
 }
 
@@ -77,16 +91,49 @@ public func lexicalFilesystemPath(
 func classifyFilesystemScope(
     canonical: String,
     repositoryRoot: RepositoryRoot?,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    homeDirectory: HomePath? = nil
 ) -> FilesystemScope {
     if let rule = catalog.firstMatch(of: canonical) {
         return .protectedPath(SecretPathMatch(rule))
+    }
+    // rv's own wiring (hook configs, binaries, service units) is protected
+    // even inside a repository rooted at `$HOME`: same table as the
+    // file-tool door, so the two doors cannot drift. Only writes act on it.
+    // Host settings files that can disable hooks are protected at every
+    // scope, project and local included.
+    if let homeDirectory, RVWiringPaths.matches(canonical, home: homeDirectory.rawValue) {
+        return .protectedPath(rvWiringMatch)
+    }
+    if RVWiringPaths.isHostSettingsFile(canonical) {
+        return .protectedPath(rvWiringMatch)
+    }
+    if isGitInternalPath(canonical) {
+        return .protectedPath(gitInternalsMatch)
     }
     guard let repositoryRoot else { return .unknown }
     if isInsideRepository(canonical, root: repositoryRoot.rawValue) {
         return .insideRepository
     }
     return .outsideRepository
+}
+
+/// Git's own state: hooks and config run code, `rebase-merge` alone is the
+/// proof the rebase-recovery override trusts, and deleting `.git` destroys
+/// history. Git commands maintain it; an agent's direct writes, creates,
+/// moves, and deletes there are a protected-path mutation. Reads stay
+/// allowed (a protected scope only denies write-like effects).
+let gitInternalsMatch = SecretPathMatch(pattern: "git-internals", category: .host)
+
+/// rv's wiring (`RVWiringPaths`): its rule id is the file door's, so the
+/// observe floor recognises a shell-door hit.
+let rvWiringMatch = SecretPathMatch(pattern: RVWiringPaths.pattern, category: .host)
+
+/// True when `canonical` is a `.git` directory (or gitdir file) or lies
+/// inside one, in any repository or nested checkout. Case-folded: on a
+/// case-insensitive volume `.GIT/hooks` is the same directory.
+func isGitInternalPath(_ canonical: String) -> Bool {
+    canonical.split(separator: "/", omittingEmptySubsequences: true).contains { $0.lowercased() == ".git" }
 }
 
 func classifyFilesystemKind(_ canonical: String) -> FilesystemResourceKind {
@@ -122,7 +169,8 @@ private func classifiedTarget(
             resolution,
             canonical: canonical,
             repositoryRoot: context.repositoryRoot,
-            catalog: context.catalog
+            catalog: context.catalog,
+            homeDirectory: context.homeDirectory
         ),
         kind: classifyFilesystemKind(canonical),
         followedSymlink: followedSymlink,
@@ -131,6 +179,9 @@ private func classifiedTarget(
 }
 
 private func expandHomeAlias(_ path: String, homeDirectory: HomePath?) -> String {
+    if case .expanded(let expanded) = expandTildeUser(path) {
+        return expanded
+    }
     guard let homeDirectory, isHomeAliasPath(path) else {
         return path
     }

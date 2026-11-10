@@ -16,9 +16,9 @@ import RVDomain
 
 @Test func invocationPrefix_recordsSudoWithFlags() {
     #expect(Normalize.invocationPrefix(of: "sudo git reset --hard") == ["sudo"])
-    // Flag-skipping stops at the first non-flag (`root` stays in the
-    // view); the recorded head is exactly the erased span.
-    #expect(Normalize.invocationPrefix(of: "sudo -u root git reset --hard") == ["sudo -u"])
+    // A value-taking flag erases its value too; the recorded head is
+    // exactly the erased span.
+    #expect(Normalize.invocationPrefix(of: "sudo -u root git reset --hard") == ["sudo -u root"])
     #expect(Normalize.invocationPrefix(of: "sudo -- git reset --hard") == ["sudo --"])
     // Long flags are not stripped from the view, so nothing is erased.
     #expect(Normalize.invocationPrefix(of: "sudo --user=root git reset --hard") == [])

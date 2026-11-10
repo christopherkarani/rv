@@ -124,7 +124,7 @@ public struct GatedEvaluate: Sendable {
         if let audit = Self.exemptionAudit(detailed.droppedRepoLiterals, workspace: workspace, now: now) {
             effects.append(audit)
         }
-        let result = evaluateFileTool(
+        var result = evaluateFileTool(
             action,
             secretPaths: SecretPathDecider(
                 allowPaths: detailed.effective,
@@ -135,6 +135,12 @@ public struct GatedEvaluate: Sendable {
                 )
             )
         )
+        // Edit/Write to rv's own hook, service or binary files: the agent
+        // must not unhook the guard watching it. Reads stay allowed.
+        if case .allow = result.decision, action.kind != .read,
+           WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
+            result = WiringPathGuard.deny(path: action.path.rawValue)
+        }
         switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
             if let row = Self.denialRow(
@@ -597,7 +603,8 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Package-script check over a pack-allow. A script deny is projected
-    /// over the pack result; an unresolved graph closes the safe lane.
+    /// over the pack result; an unresolved graph is indeterminate before
+    /// any judge runs. `scriptDenied` means the screen's result is final.
     private struct ScriptScreen {
         let result: EvaluationResult
         let allowSafeLane: Bool
@@ -622,9 +629,27 @@ public struct GatedEvaluate: Sendable {
                 result: Self.projectScriptHit(hit, over: result), allowSafeLane: true, scriptDenied: true
             )
         case .unresolved:
+            // Nobody has read what this runner executes. The judge only
+            // ever sees the top-level string (`npm test`), so it cannot
+            // vouch for the graph either: a human decides, judge or not.
+            // Depth, cycle and evaluation caps all land here.
+            return ScriptScreen(
+                result: EvaluationResult(
+                    outcome: .indeterminate(.packageScriptUnresolved),
+                    matchingView: result.matchingView,
+                    analysis: result.analysis
+                ),
+                allowSafeLane: false, scriptDenied: true
+            )
+        case .needsJudge:
+            // A package bin, a remote runner, or a run after earlier work
+            // with no script to run: no body the judge cannot see, so the
+            // judge decides from the whole command, never the safe lane.
             return ScriptScreen(result: result, allowSafeLane: false, scriptDenied: false)
-        case .clear:
-            return ScriptScreen(result: result, allowSafeLane: true, scriptDenied: false)
+        case .clear(let allBodiesSafe):
+            // A body that is not itself safe-lane (`jest`, `node x.js`)
+            // keeps the command in front of the judge.
+            return ScriptScreen(result: result, allowSafeLane: allBodiesSafe, scriptDenied: false)
         }
     }
 
@@ -845,7 +870,8 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?,
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
-        invocationDisplay: String? = nil
+        invocationDisplay: String? = nil,
+        rawCommand: String? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -859,7 +885,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             maskedSegments: maskedSegments,
             invocationPrefix: invocationPrefix,
-            invocationDisplay: invocationDisplay
+            invocationDisplay: invocationDisplay,
+            rawCommand: rawCommand
         )
     }
 

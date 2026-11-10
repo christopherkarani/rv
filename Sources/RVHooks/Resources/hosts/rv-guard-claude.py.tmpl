@@ -17,6 +17,31 @@ import sys
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
+# Every block says what broke and what to run; never a bare "rv failed".
+_NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
+_BAD_REQUEST = "rv could not read the hook request from the host. Run `rv doctor`."
+_ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
+
+
+def _missing_reason():
+    return "rv is not installed at %s. Reinstall rv or run `rv setup`." % RV_BINARY
+
+
+def _spawn_failed_reason(error):
+    why = getattr(error, "strerror", None) or error.__class__.__name__
+    return "rv at %s could not be started: %s. Run `rv doctor`." % (RV_BINARY, why)
+
+
+def _timeout_reason():
+    return (
+        "rv did not answer within %gs; the daemon may be busy or stopped. Run `rv doctor`."
+        % RV_HOOK_TIMEOUT_S
+    )
+
+
+def _bad_output_reason(exit_code):
+    return "rv exited with code %s without a usable decision. Run `rv doctor`." % exit_code
+
 
 def main():
     try:
@@ -27,7 +52,7 @@ def main():
         _emit_deny(mapped)
         return
     except Exception:
-        _emit_deny({"action": "block", "reason": "rv failed"})
+        _emit_deny({"action": "block", "reason": _ADAPTER_ERROR})
 
 
 _FILE_TOOLS = (
@@ -47,7 +72,7 @@ _FILE_TOOLS = (
 def _guard(raw):
     envelope = _parse(raw)
     if envelope is None:
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": _BAD_REQUEST}
     if envelope.get("hook_event_name") != "PreToolUse":
         return {"action": "allow"}
     tool = envelope.get("tool_name")
@@ -96,9 +121,11 @@ def _spawn_rv_hook(host, stdin):
             timeout=RV_HOOK_TIMEOUT_S,
         )
     except FileNotFoundError:
-        return {"action": "block", "reason": "rv missing"}
-    except (OSError, subprocess.TimeoutExpired):
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": _missing_reason()}
+    except subprocess.TimeoutExpired:
+        return {"action": "block", "reason": _timeout_reason()}
+    except OSError as error:
+        return {"action": "block", "reason": _spawn_failed_reason(error)}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
 
 
@@ -108,17 +135,24 @@ def _map_rv_hook_result(stdout, exit_code):
         try:
             parsed = json.loads(trimmed)
         except (ValueError, TypeError):
-            return {"action": "block", "reason": "rv failed"}
+            return {"action": "block", "reason": _bad_output_reason(exit_code)}
         if not isinstance(parsed, dict):
-            return {"action": "block", "reason": "rv failed"}
+            return {"action": "block", "reason": _bad_output_reason(exit_code)}
         if parsed.get("decision") == "ask":
             return {
                 "action": "ask",
                 "reason": parsed.get("reason") if isinstance(parsed.get("reason"), str) else "",
             }
         hook = parsed.get("hookSpecificOutput")
+        # rv's own native ask (daemon down or slow) blocks like a deny, but
+        # carries rv's message: it says what broke and how to repair it.
         if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
-            return {"action": "block", "reason": "rv failed"}
+            return {
+                "action": "block",
+                "reason": _blocking_reason(
+                    hook.get("permissionDecisionReason") or parsed.get("systemMessage")
+                ),
+            }
         if isinstance(hook, dict) and hook.get("permissionDecision") == "deny":
             return {
                 "action": "block",
@@ -131,10 +165,10 @@ def _map_rv_hook_result(stdout, exit_code):
                 "action": "block",
                 "reason": _blocking_reason(parsed.get("reason")),
             }
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": _bad_output_reason(exit_code)}
     if exit_code == 0:
         return {"action": "allow"}
-    return {"action": "block", "reason": "rv failed"}
+    return {"action": "block", "reason": _bad_output_reason(exit_code)}
 
 
 def _blocking_reason(reason):
@@ -142,7 +176,7 @@ def _blocking_reason(reason):
         text = reason.strip()
         if text:
             return text
-    return "rv failed"
+    return _NO_REASON
 
 
 def _emit_deny(mapped):

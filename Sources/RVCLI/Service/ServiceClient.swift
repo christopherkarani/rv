@@ -294,7 +294,32 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 AttestTTYRedemptionCall(params: params),
                 using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs
+                // rvd holds the reply until the owner answers its prompt.
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
+            )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    /// `rv allow-once mint`: asks rvd to pre-arm a code after its owner check.
+    public func mintAllowOnce(_ params: MintAllowOnceParams) async -> Result<
+        MintAllowOnceReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                MintAllowOnceCall(params: params),
+                using: transport,
+                // rvd holds the reply until the owner answers its prompt.
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
             )
             return .success(reply)
         } catch let error as IPCCallError {
@@ -305,6 +330,12 @@ public struct ServiceClient: Sendable {
     }
 
     /// Asks rvd to confirm the device owner approves `params.summary`.
+    ///
+    /// Owner calls (this, `mintAllowOnce`, `attestTTYRedemption`) verify
+    /// rvd over the hook-consult session, as hooks do: the peer-trust
+    /// manifest when one is installed (a tampered one fails closed),
+    /// otherwise the pinned sibling `rvd`. The manifest-only session would
+    /// refuse every manifest-free install before the owner saw a prompt.
     public func confirmOwnerAction(_ params: ConfirmOwnerActionParams) async -> Result<
         ConfirmOwnerActionReply, ServiceCommandError
     > {
@@ -315,8 +346,8 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 ConfirmOwnerActionCall(params: params),
                 using: transport,
-                // A wrong password costs pam_unix's failure delay (~2 s).
-                timeoutMs: 15_000
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
             )
             return .success(reply)
         } catch let error as IPCCallError {
@@ -341,6 +372,11 @@ public struct ServiceClient: Sendable {
     /// a launchd cold spawn) plus hookEvaluate (8000 ms; rvd enforces its
     /// own shorter deadline). Mirrors the C client's per-exchange budgets.
     static let hookEvaluateTimeoutMs = 14_000
+    /// macOS: a person answers rvd's Touch ID prompt, which rvd closes after
+    /// `OwnerPresence.defaultPromptTimeout` (60 s); this waits past that so
+    /// rvd's answer arrives first. Linux: a wrong password costs pam_unix's
+    /// ~2 s failure delay.
+    static let confirmOwnerActionTimeoutMs = 75_000
 
     /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`
     /// and the owner's observe choice from their config file.
@@ -443,6 +479,26 @@ public struct ServiceClient: Sendable {
             }
         }
         return false
+    }
+
+    /// One hook-door liveness probe, with a miss classified exactly as a
+    /// hook classifies it (`HookDaemonFallback.classify`). nil: rvd
+    /// answered. Only `.unreachable` means rvd is positively absent.
+    func probeHookService() async -> HookDaemonFailure? {
+        guard let transport else { return .connection }
+        do {
+            _ = try await send(
+                DoctorSnapshotCall(),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                hookConsult: true
+            )
+            return nil
+        } catch is IPCCallError {
+            return .protocol
+        } catch {
+            return HookDaemonFallback.classify(error)
+        }
     }
 
     public func status() async -> ServiceStatusReport {

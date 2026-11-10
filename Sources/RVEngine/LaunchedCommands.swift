@@ -10,8 +10,31 @@ import RVDomain
 /// its `commandName`, and `sh`/`bash`/`zsh -c`, `eval` and `env -S` payloads
 /// recurse. Shared by the inline-program and self-protection floors; never
 /// evaluates policy.
-func launchedCommands(_ raw: String) -> [[String]] {
+package func launchedCommands(_ raw: String) -> [[String]] {
     launchedCommandHeads(raw).filter { $0.speculative == false && $0.truncated == false }.map(\.argv)
+}
+
+/// Whether `raw` holds input the launcher parser stopped following (depth
+/// cap, sensitive brace expansion): `launchedCommands` omits it, so a
+/// caller that must see every command treats it as unknown.
+package func launchIsTruncated(_ raw: String) -> Bool {
+    launchedCommandHeads(raw).contains { $0.truncated }
+}
+
+/// Launched commands whose head may resolve to any program (`$NPM test`,
+/// `"$(which npm)" test`): the head as written, then its operands.
+package func dynamicHeadLaunches(_ raw: String) -> [[String]] {
+    launchedCommandHeads(raw)
+        .filter { $0.headIsDynamic && $0.speculative == false && $0.truncated == false }
+        .map { [$0.head] + Array($0.guardArgv.dropFirst()) }
+}
+
+/// Launched commands as written: the head before `commandName` (`./ls`
+/// stays a path) and operands without structural redirects.
+package func launchedCommandsAsWritten(_ raw: String) -> [[String]] {
+    launchedCommandHeads(raw)
+        .filter { $0.speculative == false && $0.truncated == false }
+        .map { [$0.head] + Array($0.guardArgv.dropFirst()) }
 }
 
 /// A launched command with the head word as written (before `commandName`).

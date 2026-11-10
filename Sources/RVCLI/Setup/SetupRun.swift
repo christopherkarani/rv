@@ -47,11 +47,16 @@ enum SetupRun {
                 animate: animate,
                 write: write
             )
+            let refusals = report.unwiredForMissingInterpreter.keys.sorted().map { interpreter in
+                AdapterRuntime.setupRefusal(
+                    hosts: report.unwiredForMissingInterpreter[interpreter] ?? [], interpreter: interpreter)
+            }
             return SetupOutcome(
                 stdout: formatted.text,
                 stderr: observeNotice(guardRequest, env: env)
-                    + serviceWarning(report, observing: JudgeRuntime.configuredGuardMode(home: env.home) == .observe),
-                exitCode: 0,
+                    + serviceWarning(report, observing: JudgeRuntime.configuredGuardMode(home: env.home) == .observe)
+                    + refusals.joined(),
+                exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
                 emitted: formatted.emitted
             )
         } catch {
@@ -156,6 +161,7 @@ enum SetupRun {
         force: Bool,
         guardRequest: SetupGuardRequest
     ) throws(SetupError) -> SetupReport {
+        var env = env
         try requireInstalledCopy(env)
         try requireTrustedDaemon(env)
         try applyGuardRequest(guardRequest, env: env)
@@ -172,9 +178,37 @@ enum SetupRun {
             layout: layout,
             force: force,
             rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath),
-            offHosts: offHosts
+            offHosts: offHosts,
+            missingInterpreters: pinInterpreters(
+                installations: installations, offHosts: offHosts, force: force, env: &env)
         )
         return try HostLifecycle.attach(plan, env: env, layout: layout, files: files)
+    }
+
+    /// Interpreters a host's hook this run writes needs that do not run.
+    /// Each is probed once, and only when some such host needs it; the hook
+    /// writes then bake the path that probe found.
+    private static func pinInterpreters(
+        installations: HostAdapterInstallationSnapshot,
+        offHosts: Set<HookHost>,
+        force: Bool,
+        env: inout SetupEnvironment
+    ) -> Set<String> {
+        let needed = Set(HookHost.setupSlotOrder.compactMap { host -> String? in
+            guard offHosts.contains(host) == false,
+                  installations.installation(for: host).wouldWrite(force: force)
+            else {
+                return nil
+            }
+            return AdapterRuntime.interpreter(for: host)
+        })
+        var resolved: [String: String] = [:]
+        for name in needed {
+            resolved[name] = env.resolveInterpreter(name)
+        }
+        let pinned = resolved
+        env.resolveInterpreter = { pinned[$0] }
+        return needed.filter { pinned[$0] == nil }
     }
 
     static func inspectInstallations(
@@ -196,6 +230,7 @@ enum SetupRun {
 
     static func uninstall(
         _ env: SetupEnvironment,
+        removeModels: Bool = false,
         appearance: CLIAppearance = .robot,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
@@ -204,6 +239,7 @@ enum SetupRun {
         do {
             let formatted = try uninstallPerform(
                 env,
+                removeModels: removeModels,
                 appearance: appearance,
                 clock: clock,
                 animate: animate,
@@ -211,6 +247,8 @@ enum SetupRun {
             )
             return SetupOutcome(
                 stdout: formatted.text,
+                stderr: keptModelsNote(
+                    layout: OwnedPaths(home: env.home), files: FileOps(fileManager: env.fileManager)),
                 exitCode: 0,
                 emitted: formatted.emitted
             )

@@ -15,6 +15,12 @@ struct WorkspacePublishRejection: Equatable, Sendable {
         case unexpectedNameInRemovedDirectory
         /// The entry could not be read, or its staging name is taken.
         case unreadable
+        /// The volume holds two names that differ only by case (`a.txt` and
+        /// `A.txt`), and the case-insensitive saved tree can hold only one.
+        case caseCollision
+        /// The volume entry is a FIFO, socket, or device node, which publish
+        /// does not copy.
+        case unsupportedFileType
     }
 
     var relative: String
@@ -49,6 +55,49 @@ extension WorkspacePublishOutcome {
             return false
         }
         return rejections.allSatisfy { $0.reason == .symlinkEscapesWorkspace }
+    }
+}
+
+extension WorkspacePublishRejection.Reason {
+    /// Operator-facing phrase completing "<path> ...".
+    var operatorPhrase: String {
+        switch self {
+        case .inodeChanged:
+            "was replaced in the hidden original while the workspace was open (for example by git in a shell still inside the old directory)"
+        case .kindChanged:
+            "changed between file, directory, and symlink"
+        case .symlinkEscapesWorkspace:
+            "is a symlink that points outside the workspace"
+        case .unexpectedNameInRemovedDirectory:
+            "was removed by the agent but holds names added outside the workspace"
+        case .unreadable:
+            "could not be read"
+        case .caseCollision:
+            "differs from another name only by case, which the project's filesystem cannot hold"
+        case .unsupportedFileType:
+            "is a FIFO, socket, or device file, which publish does not copy"
+        }
+    }
+}
+
+extension WorkspacePublishOutcome {
+    /// One sentence for the operator: what the saved tree holds now and the
+    /// first name that stopped the publish.
+    var operatorSummary: String {
+        switch self {
+        case .rejected(let rejections) where rejections.isEmpty == false:
+            let first = rejections[0]
+            let more = rejections.count > 1 ? " (and \(rejections.count - 1) more)" : ""
+            return "nothing was published and the project directory is unchanged: \(first.relative) \(first.reason.operatorPhrase)\(more)"
+        case .rolledBack(let failedAt):
+            return "nothing was published and the project directory is unchanged: writing \(failedAt) failed and every change was rolled back"
+        case .residual(let failedAt, let unrestored):
+            return "writing \(failedAt) failed and \(unrestored.count) name(s) in the project directory could not be rolled back, first \(unrestored.first ?? "")"
+        case .interrupted(let at):
+            return "the publish stopped at \(at) and will resume on the next start"
+        case .notRun, .rejected, .committed:
+            return "nothing was published and the project directory is unchanged: the workspace volume could not be read"
+        }
     }
 }
 
