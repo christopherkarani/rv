@@ -273,4 +273,43 @@ struct HookDaemonFallbackTests {
         #expect(wire.stdout.contains("\"deny\""))
         #expect(transport.invalidationCount == 1)
     }
+
+    /// A reply that does not decode is no trustworthy verdict: deny (never a
+    /// native ask) and drop the connection, like every other protocol failure.
+    @Test func undecodableReplyDeniesUnderWhenDownAskAndInvalidates() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendReply: Data("{not json".utf8)
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire.stdout.contains("\"deny\""))
+        #expect(transport.invalidationCount == 1)
+    }
+
+    @Test func emptyReplyDeniesUnderWhenDownAsk() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(host: .claude, stdin: "{}", whenDown: .ask)
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire.stdout.contains("\"deny\""))
+    }
+
+    /// Observe mode steps aside only on a positively absent daemon; a daemon
+    /// that answered with garbage is present, so the hook still denies.
+    @Test func undecodableReplyDeniesEvenWhenTheOwnerObserves() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok),
+            sendReply: Data("{not json".utf8)
+        )
+        let client = try isolatedClient(transport: transport)
+        let wire = await client.hookEvaluate(
+            host: .claude, stdin: "{}", whenDown: .ask, ownerObserves: { _ in true })
+        #expect(wire == HookDaemonFallback.wire(host: .claude, failure: .protocol, mode: .ask))
+        #expect(wire.stdout.contains("\"deny\""))
+        #expect(transport.invalidationCount == 1)
+    }
 }
