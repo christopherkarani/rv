@@ -18,15 +18,18 @@ enum BlocksRun {
         return records.map(prettyLine).joined(separator: "\n") + "\n"
     }
 
+    /// Observe-mode rows (the agent was not blocked) carry an `observed`
+    /// column after the timestamp; a host name is never that word.
     private static func prettyLine(_ record: DenialLedgerRecord) -> String {
         [
             iso8601(record.timestamp),
+            record.observed ? "observed" : nil,
             record.host.rawValue,
             record.tool.rawValue,
             DisplayedText.field(record.ruleID.rawValue),
             record.category.rawValue,
             DisplayedText.field(record.path),
-        ].joined(separator: "  ")
+        ].compactMap { $0 }.joined(separator: "  ")
     }
 
     // REQ-T7 named divergence: slashes are no longer spelled `\/`.

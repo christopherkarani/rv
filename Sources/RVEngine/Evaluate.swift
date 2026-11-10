@@ -41,29 +41,36 @@ public func evaluate<E: PatternEngine>(
     let budget = request.budget?.maxPatternAttempts
 
     let segments = splitSegments(matchingView.rawValue)
+    var judged: [JudgedSegment] = []
     if segments.count > 1 {
         for segment in segments {
+            var ranPacks = Set<PackID>()
             let result = evaluateSingle(
                 segment,
                 compiled: compiled,
                 enabledIDs: request.enabledPacks,
                 engine: engine,
                 attempts: &attempts,
-                budget: budget
+                budget: budget,
+                ranPacks: &ranPacks
             )
             if let result, isTerminal(result.outcome) {
                 return withMatchingView(result, matchingView)
             }
+            judged.append(JudgedSegment(text: segment, ranPacks: ranPacks))
         }
     }
 
+    var fullViewRanPacks = Set<PackID>()
     if let result = evaluateSingle(
         matchingView.rawValue,
         compiled: compiled,
         enabledIDs: request.enabledPacks,
         engine: engine,
         attempts: &attempts,
-        budget: budget
+        budget: budget,
+        ranPacks: &fullViewRanPacks,
+        segments: judged
     ) {
         let viewed = withMatchingView(result, matchingView)
         if isTerminal(result.outcome) {
@@ -152,13 +159,22 @@ private func isTerminal(_ outcome: EvaluationOutcome) -> Bool {
     }
 }
 
+/// A segment the segment pass evaluated, with the packs whose destructive
+/// rules ran on it (keyword hit, not skipped by a safe match).
+private struct JudgedSegment {
+    var text: String
+    var ranPacks: Set<PackID>
+}
+
 private func evaluateSingle<E: PatternEngine>(
     _ view: String,
     compiled: CompiledPacks<E.Compiled>,
     enabledIDs: [PackID],
     engine: E,
     attempts: inout Int,
-    budget: Int?
+    budget: Int?,
+    ranPacks: inout Set<PackID>,
+    segments: [JudgedSegment] = []
 ) -> EvaluationResult? {
     if isDocumentationQuery(view) {
         return nil
@@ -189,17 +205,37 @@ private func evaluateSingle<E: PatternEngine>(
                 break
             }
         }
-        if skippedBySafe {
+        // In the full view of a multi-segment command a safe match vouches only
+        // for segments the segment pass already judged. A rule written to match
+        // across segments (fork bomb, copy-then-delete) was never seen there, so
+        // it still runs and its spanning matches count. Other rules stay
+        // suppressed: their `.*`/`\s` crossing a separator is incidental.
+        let spanningOnly = skippedBySafe && !segments.isEmpty
+        if skippedBySafe && !spanningOnly {
             continue
+        }
+        if !skippedBySafe {
+            ranPacks.insert(pack.snapshot.id)
         }
 
         for rule in pack.destructive {
+            if spanningOnly && !rule.spansSegments {
+                continue
+            }
             attempts += 1
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
             guard let range = engine.firstMatch(rule.compiled, in: view) else { continue }
+            // Exempt only a match some segment already judged with this pack's
+            // rules; a segment whose own safe match skipped the pack (`echo
+            // $(cp -a /etc /tmp/s && rm -rf /tmp/s)`) judged nothing.
+            if spanningOnly, segments.contains(where: {
+                $0.ranPacks.contains(pack.snapshot.id) && $0.text.contains(view[range])
+            }) {
+                continue
+            }
             let span = MatchSpan(
                 start: view.distance(from: view.startIndex, to: range.lowerBound),
                 end: view.distance(from: view.startIndex, to: range.upperBound)

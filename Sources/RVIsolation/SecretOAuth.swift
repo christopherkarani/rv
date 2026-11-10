@@ -392,11 +392,13 @@ struct OAuthRefreshState: Equatable {
         return OAuthRefreshState(recovery: recovery, token: token)
     }
 
+    /// Owner-only (0600) and atomic: the file names a refresh token's
+    /// fingerprint, so it is kept as private as the rest of rv's config.
     func save(_ url: URL) -> Bool {
         guard let data = try? JSONSerialization.data(
             withJSONObject: ["recovery": recovery.rawValue, "token": token], options: [.sortedKeys])
         else { return false }
-        return (try? data.write(to: url, options: [.atomic])) != nil
+        return OwnerOnlyFile.write(data, to: url)
     }
 }
 

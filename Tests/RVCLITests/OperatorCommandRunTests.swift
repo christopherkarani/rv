@@ -49,25 +49,25 @@ struct OperatorCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func safety_missingHomeBadLevelShowAndSet() throws {
-        try withCLIProcess(environment: [:]) {
-            #expect(throws: ExitCode(1)) {
-                try Safety.parse([]).run()
+    @Test func safety_missingHomeBadLevelShowAndSet() async throws {
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
+                try await Safety.parse([]).run()
             }
         }
         let home = try isolatedHome()
-        try withCLIProcess(home: home) {
-            try Safety.parse([]).run()
-            #expect(throws: ExitCode(1)) {
-                try Safety.parse(["loud"]).run()
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+            try await Safety.parse([]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Safety.parse(["loud"]).run()
             }
-            try Safety.parse(["strict"]).run()
-            try Safety.parse(["normal"]).run()
+            try await Safety.parse(["strict"]).run()
+            try await Safety.parse(["normal"]).run()
         }
         try replacePathWithFile(RVPolicyPaths.configDirectory(home: home))
-        try withCLIProcess(home: home) {
-            #expect(throws: ExitCode(1)) {
-                try Safety.parse(["strict"]).run()
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
+                try await Safety.parse(["strict"]).run()
             }
         }
     }
@@ -125,16 +125,16 @@ struct OperatorCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func policyValidateExportApply_edges() throws {
-        try withCLIProcess(environment: [:]) {
-            #expect(throws: ExitCode(1)) {
+    @Test func policyValidateExportApply_edges() async throws {
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
                 try Policy.Validate.parse([]).run()
             }
-            #expect(throws: ExitCode(1)) {
-                try Policy.Export.parse([]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Export.parse([]).run()
             }
-            #expect(throws: ExitCode(1)) {
-                try Policy.Apply.parse(["/tmp/missing-policy.toml"]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Apply.parse(["/tmp/missing-policy.toml"]).run()
             }
         }
         let home = try isolatedHome()
@@ -143,18 +143,18 @@ struct OperatorCommandRunTests {
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workspace) }
         let out = workspace.appendingPathComponent("machine.toml")
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
             try Policy.Validate.parse([]).run()
             let missingFile = workspace.appendingPathComponent("absent.toml")
             try Policy.Validate.parse([missingFile.path]).run()
-            try Policy.Export.parse([]).run()
-            try Policy.Export.parse(["--output", out.path]).run()
+            try await Policy.Export.parse([]).run()
+            try await Policy.Export.parse(["--output", out.path]).run()
             #expect(FileManager.default.fileExists(atPath: out.path))
-            try Policy.Apply.parse([out.path]).run()
-            try Policy.Apply.parse([out.path, "--save"]).run()
-            try Policy.Apply.parse([out.path, "--repo"]).run()
-            try Policy.Apply.parse([out.path, "--save", "--repo"]).run()
-            try Policy.Export.parse(["--repo"]).run()
+            try await Policy.Apply.parse([out.path]).run()
+            try await Policy.Apply.parse([out.path, "--save"]).run()
+            try await Policy.Apply.parse([out.path, "--repo"]).run()
+            try await Policy.Apply.parse([out.path, "--save", "--repo"]).run()
+            try await Policy.Export.parse(["--repo"]).run()
         }
         let machineLock = TypedRuleStore(
             baseDirectory: RVPolicyPaths.configDirectory(home: home)
@@ -165,74 +165,84 @@ struct OperatorCommandRunTests {
             try FileManager.default.removeItem(at: machineLock)
         }
         try FileManager.default.createDirectory(at: machineLock, withIntermediateDirectories: true)
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
-            #expect(throws: ExitCode(1)) {
-                try Policy.Apply.parse([out.path, "--save"]).run()
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Apply.parse([out.path, "--save"]).run()
             }
         }
         try FileManager.default.removeItem(at: machineLock)
         try "not-toml".write(to: workspace.appendingPathComponent("bad.toml"), atomically: true, encoding: .utf8)
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
-            #expect(throws: ExitCode(2)) {
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(2)) {
                 try Policy.Validate.parse([workspace.appendingPathComponent("bad.toml").path]).run()
             }
-            #expect(throws: ExitCode(1)) {
-                try Policy.Apply.parse([workspace.appendingPathComponent("bad.toml").path]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Apply.parse([workspace.appendingPathComponent("bad.toml").path]).run()
             }
         }
         let machine = TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home)).machineFileURL
         try "not-json".write(to: machine, atomically: true, encoding: .utf8)
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
-            #expect(throws: ExitCode(2)) {
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(2)) {
                 try Policy.Validate.parse([]).run()
             }
-            #expect(throws: ExitCode(1)) {
-                try Policy.Export.parse([]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Export.parse([]).run()
             }
-            #expect(throws: ExitCode(1)) {
-                try Policy.Apply.parse([out.path]).run()
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Apply.parse([out.path]).run()
             }
         }
         try FileManager.default.removeItem(at: machine)
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
-            try Policy.Export.parse([]).run()
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+            try await Policy.Export.parse([]).run()
         }
         try replacePathWithDirectory(machine)
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
-            #expect(throws: ExitCode(1)) {
-                try Policy.Apply.parse([out.path, "--save"]).run()
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Apply.parse([out.path, "--save"]).run()
             }
         }
         let repoFile = TypedRuleStore.repoFileURL(workspace: workspace)
         try replacePathWithDirectory(repoFile)
-        try withCLIProcess(home: home, workspacePath: workspace.path) {
-            #expect(throws: ExitCode(1)) {
-                try Policy.Apply.parse([out.path, "--save", "--repo"]).run()
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Apply.parse([out.path, "--save", "--repo"]).run()
             }
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func policyExport_writeFailure() throws {
+    @Test func policyExport_writeFailure() async throws {
         let home = try isolatedHome()
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-policy-out-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: output) }
-        try withCLIProcess(home: home) {
-            #expect(throws: ExitCode(1)) {
-                try Policy.Export.parse(["--output", output.path]).run()
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+            await #expect(throws: ExitCode(1)) {
+                try await Policy.Export.parse(["--output", output.path]).run()
             }
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func policyDraft_runEdges() async throws {
-        try await withCLIProcess(environment: [:]) {
+    @Test func policyDraft_runEdges() async throws {
+        // The fixture compiler: the live chain reaches Apple Intelligence where
+        // it is enabled, and the model's answer is not these canned edges.
+        let fixture = FakeEnglishCompiler()
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "never allow force-push to main"]).run()
             }
         }
         let home = try isolatedHome()
-        try await withCLIProcess(home: home) {
+        // `--save --repo` writes under the workspace, never the checkout.
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-policy-draft-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try await withCLIProcess(
+            home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated, englishCompiler: fixture
+        ) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse(["--english", "", "--save"]).run()
             }
@@ -256,8 +266,9 @@ struct OperatorCommandRunTests {
                 try await PolicyDraftCommand.parse(["--english", "be careful in prod"]).run()
             }
         }
+        #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".rv/policy.toml").path))
         try replacePathWithFile(RVPolicyPaths.configDirectory(home: home))
-        try await withCLIProcess(home: home) {
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated, englishCompiler: fixture) {
             await #expect(throws: ExitCode(1)) {
                 try await PolicyDraftCommand.parse([
                     "--english", "never allow force-push to main",
@@ -288,8 +299,16 @@ struct OperatorCommandRunTests {
             await #expect(throws: ExitCode(1)) {
                 try await ScanSessions.parse([missing]).run()
             }
-            await #expect(throws: ExitCode(1)) {
+            // Unknown pack IDs are rejected up front instead of scanning
+            // with a pack that matches nothing.
+            let unknown = await #expect(throws: ValidationError.self) {
                 try await ScanSessions.parse(["--packs", "zzz.missing"]).run()
+            }
+            #expect(unknown?.message.hasPrefix("unknown pack id: ") == true)
+            await #expect(throws: (any Error).self) {
+                var muse = try ScanSessions.parse(["--host", "muse"])
+                try muse.validate()
+                try await muse.run()
             }
         }
         let notADirectory = FileManager.default.temporaryDirectory

@@ -6,12 +6,10 @@ import RVPolicy
 /// Phase 4 review queue surface: blocked network egress becomes scoped
 /// proposals, and the human approves or denies them here.
 ///
-/// Reads (`pending`, `show`, `denials`) work today. Mutations (`approve`,
-/// `deny`) are implemented behind `LocalControlBoundary`: local control
-/// mutations stay refused until authenticated service routes land, so
-/// these commands currently refuse like every other local mutation.
-/// The ceremony (TTY + device-owner authentication + TOCTOU re-read)
-/// mirrors the allow-once redeem tripwire.
+/// Reads (`pending`, `show`, `denials`) need nothing. Mutations
+/// (`approve`, `deny`) run the review ceremony (TTY, prompt throttle,
+/// device-owner authentication, TOCTOU re-read): Touch ID on macOS, the
+/// login password verified by rvd on Linux (`CLIOwnerAuth`).
 struct Egress: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "egress",
@@ -412,6 +410,32 @@ enum EgressReviewRun {
         return view
     }
 
+    /// The one human approve door. `rv egress approve` and the `rv tui`
+    /// review pane both enter here, so neither can skip any gate of
+    /// `approve` (TTY, robot, throttle, device-owner authentication, which
+    /// rvd verifies on Linux, and the re-read).
+    static func ownerApprove(id: ApprovalID, ctx: CommandContext) async throws -> EgressProposalView {
+        try await approve(
+            id: id,
+            tty: ctx.tty,
+            robot: ctx.explicitRobot,
+            store: store(home: try ctx.requireHome()),
+            now: Date()
+        )
+    }
+
+    /// The one human deny door; see `ownerApprove`.
+    static func ownerDeny(id: ApprovalID, reason: String, ctx: CommandContext) async throws -> EgressProposalView {
+        try await deny(
+            id: id,
+            reason: reason,
+            tty: ctx.tty,
+            robot: ctx.explicitRobot,
+            store: store(home: try ctx.requireHome()),
+            now: Date()
+        )
+    }
+
     static func loadAwaitingNetworkProposal(
         id: ApprovalID,
         store: PendingApprovalStore,
@@ -518,7 +542,7 @@ struct EgressShow: AsyncParsableCommand {
 struct EgressApprove: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "approve",
-        abstract: "Approve one network proposal (refused until authenticated service routes land)."
+        abstract: "Approve one network proposal (asks for owner authentication)."
     )
 
     @Argument(help: "Proposal id from rv egress pending.")
@@ -528,16 +552,9 @@ struct EgressApprove: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
         let ctx = CommandContext.current(command: "egress approve", format: format)
         do {
-            let view = try await EgressReviewRun.approve(
-                id: ApprovalID(rawValue: id),
-                tty: ctx.tty,
-                robot: ctx.explicitRobot,
-                store: EgressReviewRun.store(home: try ctx.requireHome()),
-                now: Date()
-            )
+            let view = try await EgressReviewRun.ownerApprove(id: ApprovalID(rawValue: id), ctx: ctx)
             ctx.writeStdout(
                 "approved \(DisplayedText.field(view.host)):\(view.port) (live within seconds; no restart)\n"
             )
@@ -594,19 +611,13 @@ struct EgressDeny: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
         let ctx = CommandContext.current(command: "egress deny", format: format)
         guard let reason, reason.isEmpty == false else {
             try ctx.fail("rv egress deny: --reason is required\n", exitCode: 2)
         }
         do {
-            let view = try await EgressReviewRun.deny(
-                id: ApprovalID(rawValue: id),
-                reason: reason,
-                tty: ctx.tty,
-                robot: ctx.explicitRobot,
-                store: EgressReviewRun.store(home: try ctx.requireHome()),
-                now: Date()
+            let view = try await EgressReviewRun.ownerDeny(
+                id: ApprovalID(rawValue: id), reason: reason, ctx: ctx
             )
             ctx.writeStdout("denied \(DisplayedText.field(view.host)):\(view.port)\n")
         } catch AllowOnceError.ttyRequired {

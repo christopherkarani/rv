@@ -545,7 +545,10 @@ struct OperatorRedemptionTests {
             .proposeWorkspaceLaunch, .launchProposalStatus,
             // Step 8B.1: plants a memory grant (genuine-CLI attestation),
             // never consumes a permit.
-            .attestTTYRedemption:
+            .attestTTYRedemption,
+            // Answers whether the device owner approved an action; it
+            // touches no workspace permit.
+            .confirmOwnerAction:
             return false
         }
     }

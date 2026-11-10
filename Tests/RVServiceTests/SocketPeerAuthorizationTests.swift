@@ -74,4 +74,36 @@ struct SocketPeerAuthorizationTests {
         #expect(ServiceMethodAuthorization.permits(.listPacks, context: context))
         #expect(ServiceMethodAuthorization.permits(.doctorSnapshot, context: context))
     }
+
+    // The same-UID SDK socket session widens the matrix for evaluate, hook
+    // consult and control reads. It must never widen owner mutations: a
+    // same-user process reaching the socket could otherwise disable core packs.
+    @Test func sameUIDSocketSessionNeverAdmitsOwnerMutations() {
+        #expect(ServiceMethodAuthorization.requirement(for: packMethod()) == .ownerMutation)
+        #expect(ServiceRuntime.sameUIDSocketSession(packMethod(), enabled: true) == false)
+        #expect(ServiceRuntime.sameUIDSocketSession(attestMethod(), enabled: true) == false)
+        #expect(ServiceRuntime.sameUIDSocketSession(proposeMethod(), enabled: true) == false)
+    }
+
+    @Test func sameUIDSocketSessionKeepsSDKReads() {
+        #expect(ServiceRuntime.sameUIDSocketSession(evaluateMethod(), enabled: true))
+        #expect(ServiceRuntime.sameUIDSocketSession(hookMethod(), enabled: true))
+        #expect(ServiceRuntime.sameUIDSocketSession(.pendingList, enabled: true))
+        #expect(ServiceRuntime.sameUIDSocketSession(.listPacks, enabled: true))
+        #expect(ServiceRuntime.sameUIDSocketSession(evaluateMethod(), enabled: false) == false)
+    }
+
+    @Test func sameUIDSocketCannotDisableCorePack() async throws {
+        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        let reply = await runtime.dispatch(
+            IPCRequest(method: .setPackEnabled(
+                SetPackEnabledParams(id: PackID(rawValue: "core.git"), enabled: false))),
+            context: socketContext(),
+            sameUIDSocket: true
+        )
+        guard case .error(.authorizationDenied) = reply.result else {
+            Issue.record("same-UID socket must not disable core.git, got \(reply.result)")
+            return
+        }
+    }
 }

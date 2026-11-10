@@ -1,5 +1,6 @@
 import Foundation
 import RVAnalytics
+import RVDomain
 import RVIPC
 import RVPolicy
 import RVPresentation
@@ -27,7 +28,7 @@ struct BlockingInstallAnalytics: InstallAnalyticsCapturing {
     static func live(
         home: HomeDirectory,
         environment: [String: String],
-        productVersion: String = ProtocolVersion.serviceSemver
+        productVersion: String = ProductVersion.semver
     ) -> BlockingInstallAnalytics {
         var environment = environment
         environment["HOME"] = home.rawValue

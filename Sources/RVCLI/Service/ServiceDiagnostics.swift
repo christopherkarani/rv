@@ -2,7 +2,7 @@ import RVIPC
 
 /// Typed failure while talking to a reachable evaluation service.
 enum ServiceDiagnosticFailure: Sendable, Equatable {
-    case transport(ServiceTransportFailure)
+    case transport(ServiceTransportError)
     case invalidResponse
     case unexpectedResponse
     case service(IPCError)

@@ -5,8 +5,8 @@ import Synchronization
 
 final class ScriptedTransport: ServiceTransport {
     let ack: HelloAckView
-    let helloError: ServiceTransportFailure?
-    let sendError: ServiceTransportFailure?
+    let helloError: ServiceTransportError?
+    let sendError: ServiceTransportError?
     let sendReply: Data?
     let responseResult: IPCResult?
     let responseID: UUID?
@@ -19,8 +19,8 @@ final class ScriptedTransport: ServiceTransport {
 
     init(
         ack: HelloAckView,
-        helloError: ServiceTransportFailure? = nil,
-        sendError: ServiceTransportFailure? = nil,
+        helloError: ServiceTransportError? = nil,
+        sendError: ServiceTransportError? = nil,
         sendReply: Data? = nil,
         responseResult: IPCResult? = nil,
         responseID: UUID? = nil,
@@ -45,7 +45,7 @@ final class ScriptedTransport: ServiceTransport {
 
     var invalidationCount: Int { invalidations.withLock { $0 } }
 
-    func hello(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView {
+    func hello(clientSemver: String) async throws -> HelloAckView {
         helloCalls.withLock { $0 += 1 }
         if let helloError {
             throw helloError
@@ -53,29 +53,25 @@ final class ScriptedTransport: ServiceTransport {
         return ack
     }
 
-    func send(_ body: Data) async throws(ServiceTransportFailure) -> Data {
+    func send(_ body: Data) async throws -> Data {
         sentBodies.withLock { $0.append(body) }
         if let sendError {
             throw sendError
         }
         if let responseResult {
-            do {
-                let request = try IPCJSON.decode(IPCRequest.self, from: body)
-                return try IPCJSON.encode(
-                    IPCResponse(
-                        id: responseID ?? request.id,
-                        protocolName: responseProtocolName ?? request.protocolName,
-                        result: responseResult
-                    )
+            let request = try IPCJSON.decode(IPCRequest.self, from: body)
+            return try IPCJSON.encode(
+                IPCResponse(
+                    id: responseID ?? request.id,
+                    protocolName: responseProtocolName ?? request.protocolName,
+                    result: responseResult
                 )
-            } catch {
-                throw .malformedReply
-            }
+            )
         }
         return sendReply ?? Data()
     }
 
-    func send(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
+    func send(_ body: Data, timeoutMs: Int) async throws -> Data {
         sendTimeouts.withLock { $0.append(timeoutMs) }
         return try await send(body)
     }

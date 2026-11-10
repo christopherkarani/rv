@@ -37,6 +37,25 @@ struct ManagedPolicyTests {
         #expect(empty.allowsSecretSource(.hostEnvironment))
     }
 
+    @Test func gateRequiresPacksAndStrictSafety() throws {
+        let policy = try ManagedPolicy.decode(Data(
+            #"{"version":1,"gate":{"requirePacks":["cloud.aws","database.sqlite"],"safety":"strict"}}"#.utf8)).get()
+        #expect(policy.gate.requirePacks == [PackID(rawValue: "cloud.aws"), PackID(rawValue: "database.sqlite")])
+        #expect(policy.gate.requireStrictSafety)
+        let empty = try ManagedPolicy.decode(Data(#"{"version":1}"#.utf8)).get()
+        #expect(empty.gate.requirePacks.isEmpty)
+        #expect(empty.gate.requireStrictSafety == false)
+        func message(_ json: String) -> String? {
+            if case .failure(let error) = ManagedPolicy.decode(Data(json.utf8)) { return error.message }
+            return nil
+        }
+        // Restrict-only: "normal" is not a requirement an org can set.
+        #expect(message(#"{"version":1,"gate":{"safety":"normal"}}"#) == "\"gate.safety\" may only be \"strict\"")
+        #expect(message(#"{"version":1,"gate":{"disablePacks":["core.git"]}}"#) == "unknown key \"disablePacks\" in gate")
+        #expect(message(#"{"version":1,"gate":{"requirePacks":["Not A Pack!"]}}"#) != nil)
+        #expect(message(#"{"version":1,"gate":[]}"#) == "\"gate\" must be an object")
+    }
+
     @Test func allowedSourcesAcceptsEveryKindAndRejectsUnknownOnes() throws {
         let kinds = [
             "keychain", "hostEnvironment", "onePassword", "vault", "awsSecretsManager", "infisical", "bitwarden",

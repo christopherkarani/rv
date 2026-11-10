@@ -27,6 +27,11 @@ public final class XPCEvaluateClient: Sendable {
     private struct ClientState {
         var connection: xpc_connection_t?
         var opened = 0
+        /// Cleared, never reset, once any reply arrives or this client cancels
+        /// its discovery connection itself: a client that heard from rvd has
+        /// no later failure that proves rvd absent, and our own cancel also
+        /// surfaces on pending replies as INVALID.
+        var absenceProvable = true
     }
 
     public init(
@@ -91,6 +96,9 @@ public final class XPCEvaluateClient: Sendable {
         let existing = state.withLock { state -> xpc_connection_t? in
             let current = state.connection
             state.connection = nil
+            if current != nil {
+                state.absenceProvable = false
+            }
             return current
         }
         if let existing {
@@ -134,6 +142,32 @@ public final class XPCEvaluateClient: Sendable {
         let endpoint: XPCHeld?
     }
 
+    /// The error a failed reply maps to. Only launchd refusing the discovery
+    /// Hello as invalid (not registered), while absence is still provable
+    /// (see `ClientState.absenceProvable`), is `.connectFailed`. Any other connection error is
+    /// `.connectionLost` (a live rvd went away, or a verified one dropped the
+    /// request), mirroring `xpc_exchange` in Sources/rv-c/rv.c.
+    static func replyFailure(
+        _ error: xpc_object_t, discovery: Bool, absenceProvable: Bool
+    ) -> XPCEvaluateClientError {
+        discovery && absenceProvable && error === XPC_ERROR_CONNECTION_INVALID
+            ? .connectFailed
+            : .connectionLost
+    }
+
+    /// Whether a discovery connection event retires the cached connection.
+    /// Only INVALID does (the connection is already dead, so cancel is a
+    /// no-op). INTERRUPTED keeps it: launchd relaunches rvd on the next send,
+    /// and cancelling here would turn pending replies into INVALID, which
+    /// `replyFailure` would read as "never registered" for an rvd that died
+    /// mid-request.
+    static func dropsCachedConnection(on event: xpc_object_t) -> Bool {
+        event === XPC_ERROR_CONNECTION_INVALID
+    }
+
+    /// `requireEndpoint` marks the discovery Hello on the Mach service, the
+    /// only exchange whose connection error can mean rvd is absent; see
+    /// `replyFailure`.
     private func exchange(_ body: Data, on connection: xpc_connection_t, requireEndpoint: Bool = false) async throws -> VerifiedExchange {
         let once = OnceResume<VerifiedExchange>()
         let held = XPCHeld(connection)
@@ -151,10 +185,15 @@ public final class XPCEvaluateClient: Sendable {
                 xpc_connection_send_message_with_reply(held.object, message, nil) { reply in
                     let type = xpc_get_type(reply)
                     if type == XPC_TYPE_ERROR {
-                        xpc_connection_cancel(held.object)
-                        once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        // No cancel: INVALID is already dead, INTERRUPTED must
+                        // not poison concurrent replies on the shared discovery
+                        // connection, and perform() cancels action connections.
+                        let provable = self.state.withLock { $0.absenceProvable }
+                        once.resume(throwing: Self.replyFailure(
+                            reply, discovery: requireEndpoint, absenceProvable: provable))
                         return
                     }
+                    self.state.withLock { $0.absenceProvable = false }
                     // A Mach service name is not server identity. Do not consume
                     // authority-bearing results from an unverified daemon.
                     guard self.verifyDaemon(reply: reply) else {
@@ -172,7 +211,7 @@ public final class XPCEvaluateClient: Sendable {
                         guard let object = xpc_dictionary_get_value(reply, XPCIPCWire.actionEndpointKey),
                             xpc_get_type(object) == XPC_TYPE_ENDPOINT else {
                             xpc_connection_cancel(held.object)
-                            once.resume(throwing: XPCEvaluateClientError.authenticationFailed)
+                            once.resume(throwing: XPCEvaluateClientError.malformedReply)
                             return
                         }
                         endpoint = XPCHeld(object)
@@ -197,7 +236,7 @@ public final class XPCEvaluateClient: Sendable {
         let created = xpc_connection_create_mach_service(serviceName, nil, 0)
         let heldCreated = XPCHeld(created)
         xpc_connection_set_event_handler(created) { [weak self] event in
-            if xpc_get_type(event) == XPC_TYPE_ERROR {
+            if Self.dropsCachedConnection(on: event) {
                 self?.forget(heldCreated.object)
             }
         }
@@ -230,9 +269,14 @@ public final class XPCEvaluateClient: Sendable {
 
 public enum XPCEvaluateClientError: Error, Sendable, Equatable {
     case authenticationFailed
+    /// launchd refused the discovery connection (service not registered):
+    /// nothing reached rvd.
     case connectFailed
-    case cancelled
-    /// An authenticated peer answered with no body.
+    /// The connection failed after it may have reached rvd: an interrupted
+    /// discovery, or any error once the daemon was verified.
+    case connectionLost
+    /// A verified reply without the expected IPC body or action endpoint.
     case malformedReply
+    case cancelled
 }
 #endif

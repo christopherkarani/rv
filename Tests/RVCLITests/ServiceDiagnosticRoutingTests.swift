@@ -39,7 +39,7 @@ struct ServiceDiagnosticRoutingTests {
     @Test func unavailableServiceReturnsLocalReadinessWithoutSending() async throws {
         let transport = ScriptedTransport(
             ack: validAck,
-            helloError: .unreachable
+            helloError: .connectFailed
         )
 
         let result = try await isolatedClient(transport: transport).diagnostics()
@@ -55,7 +55,7 @@ struct ServiceDiagnosticRoutingTests {
     @Test func malformedHelloIsTypedFailureNotMissingService() async throws {
         let transport = ScriptedTransport(
             ack: validAck,
-            helloError: .malformedReply
+            helloError: .decodeFailed
         )
 
         let result = try await isolatedClient(transport: transport).diagnostics()
@@ -63,7 +63,7 @@ struct ServiceDiagnosticRoutingTests {
         #expect(
             result == .local(
                 .init(
-                    cause: .requestFailed(.transport(.malformedReply)),
+                    cause: .requestFailed(.transport(.decodeFailed)),
                     corePacksReady: true
                 )
             )
@@ -186,7 +186,7 @@ struct ServiceDiagnosticRoutingTests {
     @Test func requestInterruptionReturnsTypedLocalFallback() async throws {
         let transport = ScriptedTransport(
             ack: validAck,
-            sendError: .unreachable
+            sendError: .interrupted
         )
 
         let result = try await isolatedClient(transport: transport).diagnostics()
@@ -194,7 +194,7 @@ struct ServiceDiagnosticRoutingTests {
         #expect(
             result == .local(
                 .init(
-                    cause: .requestFailed(.transport(.unreachable)),
+                    cause: .requestFailed(.transport(.interrupted)),
                     corePacksReady: true,
                     serviceSemver: "1.0.0"
                 )
@@ -204,7 +204,7 @@ struct ServiceDiagnosticRoutingTests {
         #expect(
             ServiceHealth.inspect(result)
                 == .requestFailed(
-                    failure: .transport(.unreachable),
+                    failure: .transport(.interrupted),
                     local: .init(
                         corePacksReady: true,
                         serviceSemver: "1.0.0",

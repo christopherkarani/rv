@@ -55,18 +55,62 @@ public enum JudgeRuntime {
         provenance.isUntrusted ? (0.6, 0.30) : (0.8, 0.45)
     }
 
-    /// Live guard mode (doctor, and the file door once per evaluation). The
-    /// shell doors read it once per evaluation through `EvaluationInputs`.
+    /// Machine-wide guard mode, ignoring per-host entries and the
+    /// organization pin (doctor, `rv host list`).
     public static func guardMode(home: HomeDirectory?) -> GuardMode {
         guardMode(environment: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home))
     }
 
-    /// `RV_GUARD_MODE` > `guard.mode` > enforce. An unknown value at either
-    /// level falls through to the next.
-    static func guardMode(environment: [String: String], config: [String: Any]?) -> GuardMode {
+    /// Machine-wide `guard.mode` from `config.json` alone. `RV_GUARD_MODE`
+    /// is ignored: a caller deciding whether a change sheds oversight must
+    /// not let a same-user environment make enforce look like observe.
+    public static func configuredGuardMode(home: HomeDirectory?) -> GuardMode {
+        guardMode(environment: [:], config: loadConfigDict(home: home))
+    }
+
+    /// The mode one evaluation from `host` runs under: per-host resolution,
+    /// then the organization pin (`ManagedGate.guardMode`). The file door
+    /// reads it once per evaluation; the shell doors read it through
+    /// `EvaluationInputs`.
+    static func effectiveGuardMode(
+        home: HomeDirectory?,
+        host: LedgerHost,
+        environment: [String: String],
+        config: [String: Any]?
+    ) -> GuardMode {
+        let hookHost: HookHost?
+        switch host {
+        case .tty: hookHost = nil
+        case .hook(let hook): hookHost = hook
+        }
+        return ManagedGate.guardMode(
+            guardMode(environment: environment, config: config, host: hookHost), home: home)
+    }
+
+    /// The mode the config file alone selects for `host`, ignoring
+    /// `RV_GUARD_MODE` and the organization pin. The hook's daemon-down
+    /// fallback reads it: hook environment can come from project-scoped
+    /// host config an agent writes.
+    public static func configuredGuardMode(config: [String: Any]?, host: HookHost) -> GuardMode {
+        guardMode(environment: [:], config: config, host: host)
+    }
+
+    /// `RV_GUARD_MODE` > `guard.hosts.<host>` > `guard.mode` > enforce. An
+    /// unknown value at any level falls through to the next. A host entry
+    /// of `block` is enforce; `observe` and `off` are observe (an `off`
+    /// host should be unwired, so a stale hook that still fires must never
+    /// block).
+    static func guardMode(
+        environment: [String: String],
+        config: [String: Any]?,
+        host: HookHost? = nil
+    ) -> GuardMode {
         if let raw = environment["RV_GUARD_MODE"],
            let mode = GuardMode(rawValue: raw.lowercased()) {
             return mode
+        }
+        if let host, let hostMode = HostModeStore.modes(inConfig: config)[host] {
+            return hostMode == .block ? .enforce : .observe
         }
         if let raw = configGuardMode(config),
            let mode = GuardMode(rawValue: raw.lowercased()) {
@@ -400,6 +444,8 @@ public enum JudgeRuntime {
     }
 
     /// Observe path: the would-be verdict as a log row, always allow.
+    /// `wouldBe` is what enforcement would have returned before the Policy
+    /// gate (the door records an observed denial row from it).
     static func observe(
         wouldBe result: EvaluationResult,
         command: ShellCommand,
@@ -410,7 +456,7 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool
-    ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow) {
+    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, log: GatedEffect.JudgeLogRow) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -428,7 +474,7 @@ public enum JudgeRuntime {
                 provenance: provenance
             )
         }
-        return (result.observedAllow, logRow(
+        return (result.observedAllow, reading.outcome, logRow(
             guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
@@ -456,7 +502,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming:
+        case .failed, .warming, .busy:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -491,11 +537,16 @@ public enum JudgeRuntime {
     /// `warming` is a load still in progress past the bounded wait. It goes
     /// to a human (review), never packs-only: a same-user agent could
     /// otherwise kill rvd to buy an unjudged window.
+    ///
+    /// `busy` is a request `JudgeAdmission` turned away (queue full, or its
+    /// hook deadline passed while waiting for the model). Review for the
+    /// same reason: flooding the judge must not buy an unjudged allow.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
         case failed
         case warming
+        case busy
     }
 
     static func runJudge(
@@ -506,16 +557,21 @@ public enum JudgeRuntime {
         wait: Duration? = loadWait
     ) -> JudgeRun {
         #if canImport(CoreML)
+        let wait = JudgeAdmission.loadWait(wait, until: JudgeAdmission.deadline)
         do {
             switch engine {
             case .laya:
                 let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
-                do { return .verdict(try judge.judge(command)) }
-                catch { return .failed }
+                return admitted {
+                    do { return .verdict(try judge.judge(command)) }
+                    catch { return .failed }
+                }
             case .ft:
                 let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
-                do { return .verdict(try judge.judge(command, context: context)) }
-                catch { return .failed }
+                return admitted {
+                    do { return .verdict(try judge.judge(command, context: context)) }
+                    catch { return .failed }
+                }
             }
         } catch JudgeLoadError.warming {
             return .warming
@@ -532,14 +588,26 @@ public enum JudgeRuntime {
         #endif
     }
 
-    /// A judge that cannot answer this request (prediction failed, or still
-    /// warming past the bounded wait) fails closed to human review.
+    /// Inference through the live admission, bounded by this request's hook
+    /// deadline. The model load is not admitted: it is single-flight and
+    /// has its own bounded wait (`loadWait`).
+    static func admitted(
+        through admission: JudgeAdmission = .live,
+        until deadline: ContinuousClock.Instant? = JudgeAdmission.deadline,
+        _ inference: () -> JudgeRun
+    ) -> JudgeRun {
+        admission.run(until: deadline, inference) ?? .busy
+    }
+
+    /// A judge that cannot answer this request (prediction failed, still
+    /// warming past the bounded wait, or busy) fails closed to human review.
     static func failClosed(
         _ run: JudgeRun, over result: EvaluationResult
     ) -> (result: EvaluationResult, note: String) {
         let note: String
         switch run {
         case .warming: note = "judge-warming"
+        case .busy: note = "judge-busy"
         case .failed, .unavailable, .verdict: note = "prediction-failed"
         }
         return (raise(result, verdict: nil, action: .review), note)

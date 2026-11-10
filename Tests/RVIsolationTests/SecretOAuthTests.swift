@@ -281,6 +281,8 @@ struct SecretOAuthTests {
         #expect(issuer.sent.withLock { $0.count } == 1)
         let file = OAuthRefreshBlock.stateFile(Self.refreshItem, configDirectory: issuer.directory)
         #expect(FileManager.default.fileExists(atPath: file.path))
+        let mode = try #require(FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int)
+        #expect(mode & 0o777 == 0o600, "the refresh-token state file is owner-only")
         #expect(OAuthRefreshBlock.clear(Self.refreshItem, configDirectory: issuer.directory) == true)
         #expect(FileManager.default.fileExists(atPath: file.path) == false)
         #expect(token(issuer.minter.mint(Self.source)) != nil)

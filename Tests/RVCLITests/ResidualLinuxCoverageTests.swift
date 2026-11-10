@@ -171,7 +171,7 @@ struct ResidualLinuxCoverageTests {
             CursorHooksMerge.matchesCurrentHook(
                 .object([
                     "command": .string(CursorHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
-                    "timeout": .number(5),
+                    "timeout": .number(18),
                     "failClosed": .bool(true),
                 ]),
                 adapterPath: "/tmp/rv-guard.py"
@@ -261,11 +261,11 @@ struct ResidualLinuxCoverageTests {
 }
 
 private struct EchoServiceTransport: ServiceTransport {
-    func hello(clientSemver _: String) async throws(ServiceTransportFailure) -> HelloAckView {
+    func hello(clientSemver _: String) async throws -> HelloAckView {
         HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: ProtocolVersion.serviceSemver, status: .ok)
     }
 
-    func send(_ body: Data) async throws(ServiceTransportFailure) -> Data { body }
+    func send(_ body: Data) async throws -> Data { body }
 
     func invalidate() {}
 }

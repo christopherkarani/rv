@@ -13,7 +13,7 @@ struct LocalControlBoundaryTests {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
             let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
-            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .connection, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
@@ -105,7 +105,11 @@ struct LocalControlBoundaryTests {
         }
         let rows = await store.list(now: Date())
         #expect(rows.isEmpty)
-        #expect(throws: ValidationError.self) { try WorkspaceCommandRun.abandon("/tmp/ws") }
+        // Without owner authentication the abandon gate refuses before any
+        // workspace is touched.
+        await #expect(throws: ValidationError.self) {
+            try await withCLIProcess { try await WorkspaceCommandRun.abandon("/tmp/ws") }
+        }
     }
     @Test func abandonBodyBehindGateRefusesUnknownProject() throws {
         // The gate throws first (pinned above); the restored body behind
@@ -122,15 +126,21 @@ struct LocalControlBoundaryTests {
         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])
         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
-        await #expect(throws: ValidationError.self) { try await add.run() }
-        await #expect(throws: ValidationError.self) { try await exact.run() }
-        await #expect(throws: ValidationError.self) { try await remove.run() }
+        // No owner authentication given: every mutation refuses.
+        try await withCLIProcess(home: try isolatedHome()) {
+            await #expect(throws: ValidationError.self) { try await add.run() }
+            await #expect(throws: ValidationError.self) { try await exact.run() }
+            await #expect(throws: ValidationError.self) { try await remove.run() }
+        }
     }
 
-    @Test func safetyMutationRequiresOwnerAuthorization() throws {
+    @Test func safetyMutationRequiresOwnerAuthorization() async throws {
         let home = try isolatedHome()
-        #expect(throws: ValidationError.self) { try SafetyRun.set(.normal, home: home) }
-        #expect(throws: ValidationError.self) { try SafetyRun.set(.strict, home: home) }
+        try await withCLIProcess(home: home) {
+            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.normal, home: home) }
+            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.strict, home: home) }
+        }
+        #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
     }
 
     @Test func setupRunsUnauthenticated_uninstallRequiresDeviceOwnerAuth() async throws {
@@ -220,6 +230,16 @@ struct LocalControlBoundaryTests {
         #expect(outcome.stderr.contains("rv doctor"))
     }
 
+    @Test func observeSetupWarnsThatADownServiceLeavesCommandsUnchecked() async throws {
+        // Under observe a dead rvd no longer blocks: hooks step aside, so the
+        // warning must say commands run unchecked, not that they block.
+        let outcome = try await wiredSetupOutcome(serviceUp: false, observe: true)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.contains(SetupServiceWarning.observeText))
+        #expect(!outcome.stderr.contains(SetupServiceWarning.text))
+        #expect(SetupServiceWarning.observeText.contains("rv doctor"))
+    }
+
     @Test func setupStaysQuietWhenWiredHostsHaveALiveService() async throws {
         let outcome = try await wiredSetupOutcome(serviceUp: true)
         #expect(outcome.exitCode == 0)
@@ -238,7 +258,7 @@ struct LocalControlBoundaryTests {
     /// Runs setup against a home with one wired host and a stubbed probe.
     /// Asserted on the outcome, not a captured fd: fd capture deadlocks
     /// under parallel test execution.
-    private func wiredSetupOutcome(serviceUp: Bool) async throws -> SetupOutcome {
+    private func wiredSetupOutcome(serviceUp: Bool, observe: Bool = false) async throws -> SetupOutcome {
         let home = try isolatedHome()
         let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
         try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
@@ -258,11 +278,13 @@ struct LocalControlBoundaryTests {
                     force: false,
                     appearance: .robot,
                     animate: false,
-                    ceremonyKind: .setup
+                    ceremonyKind: .setup,
+                    observe: observe
                 ),
                 clock: LiveSetupCeremonyClock(),
                 write: CeremonyCLI.stdoutWriter(),
-                probeService: { _ in serviceUp }
+                probeService: { _ in serviceUp },
+                authenticate: {}
             )
         }
     }
@@ -272,16 +294,16 @@ struct LocalControlBoundaryTests {
 #if canImport(XPC)
 /// Hook consult connects, then the daemon fails verification.
 private struct DaemonAuthFailingTransport: ServiceTransport {
-    func hello(clientSemver: String) async throws(ServiceTransportFailure) -> HelloAckView {
+    func hello(clientSemver: String) async throws -> HelloAckView {
         HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
     }
 
-    func send(_ body: Data) async throws(ServiceTransportFailure) -> Data {
+    func send(_ body: Data) async throws -> Data {
         Data()
     }
 
-    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws(ServiceTransportFailure) -> Data {
-        throw .untrusted
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        throw XPCEvaluateClientError.authenticationFailed
     }
 
     func invalidate() {}

@@ -13,7 +13,7 @@ struct Workspace: AsyncParsableCommand {
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
             WorkspaceRun.self, WorkspaceAgent.self, WorkspaceCustom.self,
-            WorkspaceTUI.self, WorkspaceAbandon.self, WorkspaceLeftoversCommand.self,
+            WorkspaceTUI.self, WorkspaceAbandon.self, WorkspaceLeftoversCommand.self, WorkspaceVMsCommand.self,
         ]
     )
 }
@@ -192,13 +192,13 @@ struct WorkspaceClose: AsyncParsableCommand {
 struct WorkspaceAbandon: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "abandon",
-        abstract: "Abandon a blocked workspace, discarding its unpublished volume and restoring the saved tree (not yet available)."
+        abstract: "Abandon a blocked workspace, discarding its unpublished volume and restoring the saved tree (asks for owner authentication)."
     )
 
     @OptionGroup var path: WorkspacePath
 
-    func run() throws {
-        try WorkspaceCommandRun.abandon(path.workspace)
+    func run() async throws {
+        try await WorkspaceCommandRun.abandon(path.workspace)
     }
 }
 
@@ -445,18 +445,13 @@ enum WorkspaceCommandRun {
         #endif
     }
 
-    static func abandon(_ raw: String?) throws {
-        do {
-            try LocalControlBoundary.requireOwnerAuthorization()
-        } catch {
-            throw ValidationError("'rv workspace abandon' is not yet available: it needs owner authorization over an authenticated service route, which does not exist yet; use 'rv workspace status' to inspect the blocked workspace")
-        }
+    static func abandon(_ raw: String?) async throws {
+        try await OwnerConfirmation.require(
+            "abandon the blocked workspace for \(raw ?? CLIProcess.workspacePath()), discarding its unpublished changes")
         try abandonBlockedWorkspace(raw)
     }
 
-    /// Abandon behind the owner gate. The gate throws until
-    /// authenticated service mutation routes exist; without this body an
-    /// implemented gate would report success while abandoning nothing.
+    /// Abandon, run after the owner gate approved it.
     static func abandonBlockedWorkspace(_ raw: String?) throws {
         #if !os(macOS)
         throw ValidationError(ContainedRuntimeRefusal.message)

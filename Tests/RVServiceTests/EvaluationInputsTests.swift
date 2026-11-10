@@ -27,7 +27,8 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
 private let fakeBundle = JudgeSelection(
     engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
 )
-private let packDeny = ShellCommand(rawValue: "rm -rf ~")
+// Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
+private let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
 /// Pack-allowed and outside the safe lane, so it reaches the judge.
 private let judged = ShellCommand(rawValue: "python3 deploy.py --prod")
 
@@ -86,7 +87,7 @@ struct EvaluationInputsGuardModeTests {
         switch explicit {
         case .observe:
             #expect(result.decision == .allow)
-            #expect(ledgerRows(home).isEmpty)
+            #expect(ledgerRows(home).map(\.observed) == [true])
         case .enforce:
             guard case .deny = result.decision else {
                 Issue.record("explicit enforce must deny, got \(result.decision)")
@@ -427,6 +428,27 @@ struct JudgePortThresholdTests {
         #expect(observeRow["note"] as? String == "judge-warming; context: partial")
     }
 
+    @Test("a busy judge fails closed to review at once, never packs-only")
+    func busyFailsClosedToReview() async throws {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let door = GatedEvaluate(EvaluateSession(), judge: FixedJudge(run: .busy))
+        let enforced = await door.gated(
+            .apply, request(judged), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: now,
+            allowlist: { AllowlistSnapshot(entries: []) },
+            host: .tty, tool: .bash, inputs: inputs(.enforce, home: home)
+        )
+        guard case .deny(let deny) = enforced.decision else {
+            Issue.record("busy judge must fail closed on apply, got \(enforced.decision)")
+            return
+        }
+        #expect(deny.ruleID == RuleID(pack: .coreJudge, pattern: "laya-review"))
+        let row = try #require(try judgeLog(home).last)
+        #expect(row["live"] as? String == "deny")
+        #expect(row["note"] as? String == "judge-busy; context: partial")
+    }
+
     @Test("safe lane and missing bundle never consult the judge")
     func judgeSkipped() throws {
         let home = try guardHome(mode: nil)
@@ -460,7 +482,8 @@ struct JudgePortThresholdTests {
             host: .tty, tool: .bash, inputs: inputs(.observe, home: home)
         )
         #expect(result.outcome == .plain)
-        #expect(ledgerRows(home).isEmpty)
+        #expect(ledgerRows(home).map(\.observed) == [true])
+        #expect(ledgerRows(home).first?.ruleID == RuleID(pack: .coreJudge, pattern: "laya-block"))
         let row = try #require(try judgeLog(home).last)
         #expect(row["guard"] as? String == "observe")
         #expect(row["wouldBe"] as? String == "deny")

@@ -83,7 +83,7 @@ struct FallbackDownTests {
     @Test func midCallInterruptFallsBackAndStillDenies() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
-            sendError: .unreachable
+            sendError: .interrupted
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: resetHard)

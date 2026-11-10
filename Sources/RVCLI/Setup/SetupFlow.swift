@@ -24,6 +24,8 @@ struct SetupIntent {
     var appearance: CLIAppearance = .robot
     var animate: Bool = false
     var ceremonyKind: SetupCeremonyKind = .setup
+    /// `rv setup --observe`: store `guard.mode: observe` before wiring.
+    var observe: Bool = false
 }
 
 /// The single deep entry into setup/uninstall. Owns environment construction;
@@ -49,6 +51,55 @@ struct SetupFlow {
                 exitCode: 1
             )
         }
+        // No owner prompt on this door: an observe install that would shed
+        // oversight fails closed (`ownerAuthenticationRequired`).
+        return run(intent, env: env, ownerAuthenticated: false, clock: clock, write: write)
+    }
+
+    /// The door for `rv setup`: when `--observe` would shed oversight (rv
+    /// already enforces a wired host), `authenticate` runs first and a
+    /// refusal changes nothing.
+    func run(
+        _ intent: SetupIntent,
+        clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
+        write: ((String) -> Void)? = nil,
+        authenticate: () async throws -> Void
+    ) async -> SetupOutcome {
+        guard let env = makeEnvironment() else {
+            return SetupOutcome(
+                stdout: "",
+                stderr: CommandContext.homeMissingText(command: intent.kind.failureCommand.rawValue),
+                exitCode: 1
+            )
+        }
+        var ownerAuthenticated = false
+        if intent.kind == .install, intent.observe {
+            do {
+                if try SetupRun.observeShedsOversight(env) {
+                    do {
+                        try await authenticate()
+                    } catch {
+                        throw SetupError.ownerAuthenticationRequired
+                    }
+                    ownerAuthenticated = true
+                }
+            } catch let error as SetupError {
+                let output = setupFailureOutput(error, command: .setup)
+                return SetupOutcome(stdout: "", stderr: output.stderr, exitCode: output.exitCode)
+            } catch {
+                return SetupOutcome(stdout: "", stderr: "rv setup failed: \(error)\n", exitCode: EX_SOFTWARE)
+            }
+        }
+        return run(intent, env: env, ownerAuthenticated: ownerAuthenticated, clock: clock, write: write)
+    }
+
+    private func run(
+        _ intent: SetupIntent,
+        env: SetupEnvironment,
+        ownerAuthenticated: Bool,
+        clock: any SetupCeremonyClock,
+        write: ((String) -> Void)?
+    ) -> SetupOutcome {
         switch intent.kind {
         case .install:
             return SetupRun.setup(
@@ -56,6 +107,7 @@ struct SetupFlow {
                 appearance: intent.appearance,
                 ceremonyKind: intent.ceremonyKind,
                 force: intent.force,
+                guardRequest: intent.observe ? .observe(ownerAuthenticated: ownerAuthenticated) : .keep,
                 clock: clock,
                 animate: intent.animate,
                 write: write
@@ -95,7 +147,7 @@ extension SetupEnvironment {
             home: home.rawValue
         )
 #endif
-        return SetupEnvironment(
+        var setup = SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
             rvPath: resolveRv(home: home.rawValue),
@@ -110,5 +162,7 @@ extension SetupEnvironment {
             companionPresence: companionPresence,
             runningExecutable: executable?.path
         )
+        setup.daemonTrust = DaemonTrustProbe.live
+        return setup
     }
 }

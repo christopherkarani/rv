@@ -77,6 +77,16 @@ public struct ManagedPolicy: Sendable, Equatable {
         }
     }
 
+    /// Shell and file-tool gate requirements. Restrict-only: packs listed
+    /// here are applied by every evaluation door whatever the user's pack
+    /// config says, and strict safety cannot be relaxed to normal.
+    public struct Gate: Sendable, Equatable {
+        public var requirePacks: [PackID] = []
+        public var requireStrictSafety = false
+
+        public init() {}
+    }
+
     public static let secretSourceKinds = SecretSourceKind.allCases.map(\.rawValue)
 
     public var organization: String?
@@ -84,6 +94,7 @@ public struct ManagedPolicy: Sendable, Equatable {
     public var mcp = MCP()
     public var secrets = Secrets()
     public var auditForward: AuditForward?
+    public var gate = Gate()
 
     public init() {}
 
@@ -173,7 +184,7 @@ extension ManagedPolicy {
     }
 
     static func policy(_ object: [String: JSONValue]) throws -> ManagedPolicy {
-        try keys(object, allowed: ["version", "organization", "serial", "mcp", "secrets", "audit"], context: "policy")
+        try keys(object, allowed: ["version", "organization", "serial", "mcp", "secrets", "audit", "gate"], context: "policy")
         guard case .number(let version)? = object["version"], version == 1 else {
             throw ManagedPolicyError("policy \"version\" must be 1")
         }
@@ -222,6 +233,23 @@ extension ManagedPolicy {
             }
             policy.secrets.allowEnvironmentDelivery =
                 try bool(secrets["allowEnvironmentDelivery"], "secrets.allowEnvironmentDelivery") ?? true
+        }
+        if let raw = object["gate"] {
+            guard case .object(let gate) = raw else { throw ManagedPolicyError("\"gate\" must be an object") }
+            try keys(gate, allowed: ["requirePacks", "safety"], context: "gate")
+            policy.gate.requirePacks = try strings(gate["requirePacks"], "gate.requirePacks").map { token in
+                guard let id = PackID(validating: token) else {
+                    throw ManagedPolicyError("invalid pack id \"\(DisplayedText.field(token))\" in gate.requirePacks")
+                }
+                return id
+            }
+            if let level = try optionalString(gate["safety"], "gate.safety") {
+                // Restrict-only: the only meaningful requirement is strict.
+                guard level == "strict" else {
+                    throw ManagedPolicyError("\"gate.safety\" may only be \"strict\"")
+                }
+                policy.gate.requireStrictSafety = true
+            }
         }
         if let raw = object["audit"] {
             guard case .object(let audit) = raw else { throw ManagedPolicyError("\"audit\" must be an object") }

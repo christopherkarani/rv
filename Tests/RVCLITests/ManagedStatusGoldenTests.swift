@@ -44,7 +44,7 @@ struct ManagedStatusGoldenTests {
             """)
         #expect(ManagedRun.statusText(status)
             == "organization policy INVALID: bad signature\n"
-            + "MCP and secret staging are disabled until it is fixed (/managed)\n")
+            + "MCP and secret staging are disabled and safety is forced to strict until it is fixed (/managed)\n")
     }
 
     @Test func activeSignedGolden() throws {

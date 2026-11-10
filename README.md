@@ -40,6 +40,15 @@ rv setup    # auto-detects your agents and wires their hooks
 rv doctor   # verify everything is live
 ```
 
+Want to watch before you enforce? Install in observe mode: rv logs what it
+would block and lets everything run.
+
+```sh
+curl -fsSL https://rykanv.com/install | RV_INSTALL_MODE=observe sh
+rv setup --observe   # same thing for an existing install (asks Touch ID if rv is already enforcing)
+rv blocks            # what observe would have blocked
+```
+
 On macOS the installer also fetches the on-device judge weights (~649 MB,
 verified by SHA-256, fully offline after) so the neural judge binds on first
 run; Linux installs run packs-only until the ONNX runtime lands. Re-run the
@@ -64,8 +73,9 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
 - **95 rule packs** — git, filesystem, disks, cloud CLIs, Kubernetes,
   databases, Terraform, CI/CD, payments, and more. Safe patterns run
   first; the first blocking hit denies. Three packs are on by default
-  (`core.filesystem`, `core.git`, `system.disk`); enable the rest by
-  pack, category, or preset with `rv packs enable`.
+  (`core.filesystem`, `core.git`, `system.disk`); browse the rest with
+  `rv packs`; `rv packs enable <id>` turns more on after owner
+  authentication (see below).
 - **Script gate** — `npm test` can't hide a payload: rv evaluates the
   actual `pre`/`post`/body scripts in `package.json`, not just the
   command you see.
@@ -73,7 +83,35 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   pack-allowed commands get a local risk score. The judge can only
   raise a verdict, never lower a pack deny. Nothing leaves your
   machine. `"guard.mode": "observe"` logs would-be verdicts without
-  blocking, so you can measure before you enforce.
+  blocking, so you can measure before you enforce. `rv host mode
+  <host> observe` does the same for one host (`off` unwires it); `rv
+  blocks` marks what observe would have blocked with `"observed": true`.
+  `rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
+  starts there. Observe never relaxes rv's own protection (rv admin
+  commands, rv's config) while `rvd` is running. Because an idle observe
+  host lets a call through when `rvd` is absent, observe also raises the
+  bar on the common ways to stop or replace `rvd`: `launchctl`/`systemctl`
+  stops of rv's job, `pkill`/`killall` of `rvd`, `kill` of a pid looked up
+  from `rvd`, launching a second `rvd`, Linux D-Bus stops, and writes to
+  rv's binaries, LaunchAgent, systemd unit or socket dir become "run it in
+  Terminal". This check is **lexical, not a boundary** — it reads the
+  command text, so it raises the bar but a determined agent can still get
+  past it. It is observe-only; enforce already fails such a call closed.
+  Residual (not caught): `kill` by a numeric pid, or a pid or path held in
+  a variable or file; interpreter or script forms (a `python`/`node`
+  subprocess, `bash -c "$(… | base64 -d)"`, a script file, a make/npm
+  script); and a renamed or symlinked `launchctl`. When `rvd` is *absent*,
+  hooks under observe let the call run unchecked and
+  unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
+  daemon that fails its identity check, or a malformed reply still asks or
+  denies, and `RV_HOOK_WHEN_DOWN=deny` keeps denying. "Absent" is
+  platform-specific: on **macOS**, rv's launchd service is not registered
+  (discovery XPC returns INVALID) — the job is on-demand, so an idle `rvd`
+  is *not* absent; on **Linux**, the connect to
+  `/run/user/<uid>/rv/evaluate.sock` fails with `ENOENT`/`ECONNREFUSED` and
+  `XDG_RUNTIME_DIR` is unset or equals `/run/user/<uid>`. An organization gate pins enforce, and `rv setup
+  --observe` refuses under one. A host set `off` before an organization
+  gate arrived stays unwired until you run `rv setup`.
 - **Policy gate** — a fixed override ladder (rebase recovery → pinned
   rules → allowlist → allow-once → contained-delete allowance) with
   `normal`/`strict` safety levels. Indeterminate (too large, budget
@@ -110,18 +148,31 @@ your terminal — the agent can't redeem its own code:
 rv allow-once a1b2c3    # next matching call in this directory runs once
 ```
 
-Need it permanently? `rv allowlist add <rule-id>`. Typed rules live in
-`~/.config/rv/policy.toml` (`rv policy show`); `rv safety set strict`
-tightens everything to deny-by-default for generated-output deletes.
+Redeeming needs owner authentication: Touch ID or your password through
+the signed CLI on macOS, your login password on Linux.
+
+Typed rules live in `~/.config/rv/policy.toml` (`rv policy show`).
+Commands that change the gate itself (`rv allowlist add`,
+`rv packs enable`, `rv safety strict|normal`, `rv policy draft --save`,
+`rv egress approve`, `rv workspace abandon`) ask for the same owner
+authentication first, so an agent running as you cannot weaken its own
+guard through `rv`. The config files themselves are still yours to write:
+rv's hook guard refuses an agent's attempts to edit them, but the CLI,
+not `rvd`, performs the change after approval. On Linux rv reads your login password from the terminal and
+`rvd` checks it with the system's `unix_chkpwd`; five wrong passwords in
+ten minutes lock checks for ten minutes. Every attempt is recorded as an
+`owner.action` event in the audit log.
 
 ## Beyond the shell
 
 rv is one binary, 25 commands. The rest of the surface:
 
-- **Secrets without exposure** — agents see placeholders, never values.
-  Real bytes are injected at the boundary from Keychain, 1Password,
-  Vault, AWS/GCP/Azure, Infisical, or Bitwarden, then scrubbed from
-  everything that comes back. `rv secrets scan` + a git pre-commit hook
+- **Secrets without exposure** — agents in a contained workspace
+  (macOS) see placeholders, never values. Real bytes are injected at the
+  boundary from Keychain, 1Password, Vault, AWS/GCP/Azure, Infisical, or
+  Bitwarden, then scrubbed from everything that comes back.
+  Hook-guarded agents get secret-path blocking instead; stdio MCP servers
+  receive the real value. `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
 - **App logins, once** — `rv login connect vercel` imports the Vercel or
   GitHub login you already have (CLI auth file, token variable, or
@@ -134,21 +185,30 @@ rv is one binary, 25 commands. The rest of the surface:
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
-  tunnels, binary pinning, and a human review queue (`rv egress`).
-- **Tamper-evident audit** — every decision lands in a SHA-256
-  hash-chained `audit.jsonl`. Verify with `rv audit verify`, export
+  tunnels and binary pinning. Blocked hosts are queued for review
+  (`rv egress`); `rv egress approve` asks for owner authentication.
+- **Tamper-evident audit** — every hook and file-tool deny, every override
+  (allow-once, allowlist, rebase recovery), plus MCP and secret events,
+  lands in a SHA-256 hash-chained `audit.jsonl` (rule and host, never
+  command text). Verify with `rv audit verify`, export
   as OCSF 1.3.0 to your SIEM.
 - **Session forensics** — `rv scan` replays past agent sessions
   (Claude, Codex, Cursor, Grok, Hermes, OpenClaw, OpenCode, Pi)
-  offline and reports what *would* have been denied.
+  offline and reports which commands your enabled packs would have
+  denied.
 - **Signed org policy** — fleet-wide, restrict-only rules signed with
-  Ed25519 and pinned root-owned on disk. User config can never loosen
-  them. `rv report` emits posture for MDM/fleet collection.
+  Ed25519 and pinned root-owned on disk: MCP tool rules, secret
+  sources, audit forwarding, and gate requirements (packs every agent
+  must run under, strict safety). User config can never loosen them.
+  `rv report` emits posture for MDM/fleet collection.
 - **Contained workspaces (macOS)** — `rv opencode` / `rv workspace`
   run agents on a persistent per-project host under a deny-default
   Seatbelt profile: workspace-only writes, proxied HTTPS, no Keychain,
-  no host signals. Linux refuses rather than downgrade. This is a
-  hardening layer, not a finished isolation boundary — see the
+  no host signals, and the same packs you enabled for your agents.
+  `rv workspace run --microvm <image>` runs the command in a
+  network-less Linux micro-VM instead (macOS 26+). Linux hosts refuse
+  rather than downgrade. This is a hardening layer, not a finished
+  isolation boundary — see the
   [acceptance audit](docs/security/runtime-acceptance.md).
 
 ## Everyday commands
@@ -157,8 +217,9 @@ rv is one binary, 25 commands. The rest of the surface:
 rv test 'rm -rf /'          # evaluate a command, don't run it
 rv explain 'rm -rf /'       # why would this block?
 rv packs                    # browse the 95 packs
-rv packs enable cloud.aws   # turn on more coverage
 rv blocks                   # what got denied lately?
+rv host list                # per-host mode (block / observe / off) and wiring
+rv workspace vms            # micro-VM runtime sessions, newest first
 rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health
@@ -167,7 +228,8 @@ rv uninstall                # remove everything rv owns (owner-auth)
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with
-`"analytics.enabled": false` in `~/.config/rv/config.json`.
+`"analytics.enabled": false` (or `{"analytics": {"enabled": false}}`)
+in `~/.config/rv/config.json`.
 
 ## For developers
 

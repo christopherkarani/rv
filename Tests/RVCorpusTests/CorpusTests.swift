@@ -363,3 +363,35 @@ private func assertPinAndDoor(
     }
     #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
 }
+
+/// Heredoc masking once blanked the first copy of the body text anywhere in
+/// the command, so a body repeating an earlier word hid it on both paths.
+@Test(arguments: [
+    "git reset --hard\ncat <<EOF\ngit\nEOF",
+    "git reset --hard && cat <<EOF > notes.txt\ngit\nEOF",
+    "rm -rf ~\ncat <<EOF\nrm\nEOF",
+    "git clean -fdx\ncat <<EOF\nclean\nEOF",
+    "git reset --hard\ncat <<-EOF\n\tgit\n\tEOF",
+])
+func corpus_heredocBodyRepeatingAnEarlierWord_isNotAllowedOnPinOrDoor(command: String) throws {
+    let harness = try DayOneHarness.load()
+    #expect(harness.pin(command).decision != .allow, "pin")
+    #expect(harness.door(command).decision != .allow, "door")
+}
+
+/// A `<<` the heredoc scan misplaces (inside `${…}` or `$[…]`, or after a
+/// nested heredoc whose body closes a paren) must not mask the lines bash runs.
+@Test(arguments: [
+    "echo ${x:-<<x}\nrm -rf ~\nx}",
+    "echo $[1<<2]\nrm -rf ~\n2]",
+    "( cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+    "x=$(cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+    "echo \"$(echo \" <<EOF \")\"\nrm -rf ~\nEOF",
+    "echo \"`echo \" <<EOF \"`\"\nrm -rf ~\nEOF",
+    "echo ${x:-{} <<EOF }\nrm -rf ~\nEOF",
+])
+func corpus_misplacedHeredocOperator_isNotAllowedOnPinOrDoor(command: String) throws {
+    let harness = try DayOneHarness.load()
+    #expect(harness.pin(command).decision != .allow, "pin")
+    #expect(harness.door(command).decision != .allow, "door")
+}

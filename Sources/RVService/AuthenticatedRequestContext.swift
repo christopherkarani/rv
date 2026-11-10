@@ -72,6 +72,10 @@ public enum ServiceMethodAuthorization {
         /// still re-validates every field and enforces per-epoch code
         /// single-use, so a buggy caller cannot plant garbage or doubles.
         case ttyAttestation
+        /// Owner-action confirmation. Any authenticated local peer may ask;
+        /// authority comes only from the presence proof rvd verifies in the
+        /// handler (`OwnerPresence`), never from the caller's identity alone.
+        case ownerConfirm
     }
 
     public static func requirement(for method: IPCMethod) -> Requirement {
@@ -90,6 +94,8 @@ public enum ServiceMethodAuthorization {
             return .launchProposal
         case .attestTTYRedemption:
             return .ttyAttestation
+        case .confirmOwnerAction:
+            return .ownerConfirm
         }
     }
 
@@ -142,9 +148,18 @@ public enum ServiceMethodAuthorization {
             switch context.componentRole {
             case .cli:
                 return context.peer != nil
-            case .service, .workspaceHost, .operatorUI, .mcpCustodian, nil:
+            case .service, .workspaceHost, .operatorUI, .mcpCustodian:
+                return false
+            case nil:
+                // A role-less authenticated peer (Linux socket) may attest
+                // only with an owner proof; the handler verifies it.
+                if case .attestTTYRedemption(let params) = method, params.ownerProof != nil {
+                    return context.peer != nil
+                }
                 return false
             }
+        case .ownerConfirm:
+            return context.peer != nil
         }
     }
 }

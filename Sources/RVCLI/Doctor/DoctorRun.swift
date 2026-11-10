@@ -24,7 +24,7 @@ struct DoctorEnvironment {
         environment: [String: String] = CLIProcess.environment()
     ) -> DoctorEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
-        let install = DoctorInstallProbes.live()
+        let install = DoctorInstallProbes.live(home: home)
         return DoctorEnvironment(
             home: home,
             pathEntries: (environment["PATH"] ?? "").split(separator: ":").map(String.init),
@@ -136,6 +136,7 @@ enum DoctorRun {
         )
         var service = snapshot.health.service
         service.fix = serviceFix(snapshot.health, paths: paths)
+        service.trust = environment.install?.daemonTrust
         return DoctorViewModel(
             service: service,
             packs: packsView(
@@ -151,7 +152,7 @@ enum DoctorRun {
                 )
             },
             config: configState(path: paths.configDirectory, fileManager: environment.fileManager),
-            safety: SafetyStore.loadEffective(
+            safety: ManagedGate.effectiveSafety(
                 home: environment.home,
                 workspace: URL(
                     fileURLWithPath: environment.fileManager.currentDirectoryPath,

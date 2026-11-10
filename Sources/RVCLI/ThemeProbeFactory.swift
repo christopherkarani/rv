@@ -14,22 +14,33 @@ enum ThemeProbeFactory {
         noColorFlag: Bool,
         stdinIsTTY: Bool,
         stdoutIsTTY: Bool,
-        environment: [String: String]
+        environment: [String: String],
+        terminal channel: any TerminalQueryChannel = UnavailableTerminalChannel()
     ) -> ThemeProbe {
-        ThemeProbe(
-            terminal: TTYPair(stdinIsTTY: stdinIsTTY, stdoutIsTTY: stdoutIsTTY),
-            forbid: OutputForbid(
-                json: jsonFlag,
-                robot: robotFlag,
-                plain: plainFlag,
-                ci: environment["CI"] != nil,
-                noColor: OutputForbid.NoColor(
-                    flag: noColorFlag,
-                    env: environment["NO_COLOR"] != nil,
-                    termDumb: environment["TERM"] == "dumb"
-                )
-            ),
-            columns: stdoutColumns(stdoutIsTTY: stdoutIsTTY)
+        let terminal = TTYPair(stdinIsTTY: stdinIsTTY, stdoutIsTTY: stdoutIsTTY)
+        let forbid = OutputForbid(
+            json: jsonFlag,
+            robot: robotFlag,
+            plain: plainFlag,
+            ci: environment["CI"] != nil,
+            noColor: OutputForbid.NoColor(
+                flag: noColorFlag,
+                env: environment["NO_COLOR"] != nil,
+                termDumb: environment["TERM"] == "dumb"
+            )
+        )
+        let asked: any TerminalQueryChannel = BackgroundProbe.isRemoteSession(environment: environment)
+            ? UnavailableTerminalChannel() : channel
+        return ThemeProbe(
+            terminal: terminal,
+            forbid: forbid,
+            columns: stdoutColumns(stdoutIsTTY: stdoutIsTTY),
+            background: BackgroundProbe.detect(
+                preference: ThemePreference(environment: environment),
+                terminal: terminal,
+                forbid: forbid,
+                channel: asked
+            )
         )
     }
 
@@ -46,7 +57,8 @@ enum ThemeProbeFactory {
             noColorFlag: noColorFlag,
             stdinIsTTY: CLIProcess.stdinIsTTY(),
             stdoutIsTTY: CLIProcess.stdoutIsTTY(),
-            environment: CLIProcess.environment()
+            environment: CLIProcess.environment(),
+            terminal: CLIProcess.terminalQueryChannel()
         )
     }
 }

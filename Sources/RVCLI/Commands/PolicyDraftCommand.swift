@@ -31,6 +31,7 @@ struct PolicyDraftCommand: AsyncParsableCommand {
             fileURLWithPath: CLIProcess.workspacePath(),
             isDirectory: true
         )
+        let compiler: any EnglishCompiler = CLIProcess.context?.englishCompiler ?? EnglishCompileChain()
         let result: PolicyDraftResult
         do {
             result = try await PolicyDraftRun.execute(
@@ -40,7 +41,7 @@ struct PolicyDraftCommand: AsyncParsableCommand {
                 robot: ctx.explicitRobot,
                 home: home,
                 workspace: workspace,
-                compiler: EnglishCompileChain()
+                compiler: compiler
             )
         } catch {
             try ctx.fail("rv policy draft: failed\n")
@@ -77,7 +78,7 @@ enum PolicyDraftRun {
         workspace: URL,
         compiler: some EnglishCompiler
     ) async throws -> PolicyDraftResult {
-        if save { try LocalControlBoundary.requireOwnerAuthorization() }
+        if save { try await OwnerConfirmation.require("save a policy rule drafted from English") }
         let compiled = try await compiler.compile(english)
         switch compiled {
         case .refuse(let reason):

@@ -694,6 +694,250 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-body-repeats-git",
+      "command": "git reset --hard\ncat <<EOF\ngit\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-write-body-repeats-git",
+      "command": "git reset --hard && cat <<EOF > notes.txt\ngit\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-body-repeats-rm",
+      "command": "rm -rf ~\ncat <<EOF\nrm\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-body-repeats-clean",
+      "command": "git clean -fdx\ncat <<EOF\nclean\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:clean-force",
+      "reason_contains": "removes untracked files"
+    },
+    {
+      "id": "deny.heredoc-tab-strip-body-repeats-git",
+      "command": "git reset --hard\ncat <<-EOF\n\tgit\n\tEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-quoted-delim-body-repeats-rm",
+      "command": "rm -rf ~ && cat <<'EOF'\nrm\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-dquoted-delim-body-repeats-rm",
+      "command": "rm -rf ~ && cat <<\"EOF\"\nrm\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-unterminated-hides-nothing",
+      "command": "cat <<EOF > f\nx\nrm -rf ~",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-cr-terminator-after-body",
+      "command": "cat <<EOF > f\nx\r\nEOF\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-partly-quoted-delim",
+      "command": "cat <<E\"OF\" > f\nx\nEOF\nrm -rf ~\nE\"OF\"",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-escaped-delim",
+      "command": "cat <<\\EOF > f\nx\nEOF\nrm -rf ~\n\\EOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-quoted-delim-suffix",
+      "command": "cat <<'EO'F > f\nx\nEOF\nrm -rf ~\nEO",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-comment",
+      "command": "echo hi # <<EOF\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-escaped-operator",
+      "command": "echo \\<<EOF\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-header-line-continues",
+      "command": "cat <<EOF > f \\\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.herestring-then-reset",
+      "command": "cat <<< git\ngit reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.reset-then-herestring-repeats-git",
+      "command": "git reset --hard\ncat <<< git",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.heredoc-operator-in-param-expansion",
+      "command": "echo ${x:-<<x}\nrm -rf ~\nx}",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-legacy-arith",
+      "command": "echo $[1<<2]\nrm -rf ~\n2]",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-nested-body-closes-subshell",
+      "command": "( cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-nested-body-closes-substitution",
+      "command": "x=$(cat <<'A'\n)\ncat <<B\nA\n)\nrm -rf ~\nB",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-nested-body-closes-dquote",
+      "command": "x=\"$(cat <<'A'\n\" ; cat <<B >f\nA\n)\"\nrm -rf ~\nB",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-after-ansi-c-escaped-quote",
+      "command": "echo $'\\' <<EOF ''\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-header-escaped-dquote",
+      "command": "cat <<EOF > f \"\\\"\" \"\n\"; rm -rf ~\nx\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-cr-only-terminator",
+      "command": "cat <<EOF > f\nx\nEOF\r\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-dquoted-substitution",
+      "command": "echo \"$(echo \" <<EOF \")\"\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-in-dquoted-backtick",
+      "command": "echo \"`echo \" <<EOF \"`\"\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.heredoc-operator-after-brace-in-expansion",
+      "command": "echo ${x:-{} <<EOF }\nrm -rf ~\nEOF",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.fork-bomb-then-safe-tmp-cleanup-newline",
+      "command": ":(){ :|:& };:\nrm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.fork-bomb-then-safe-tmp-cleanup-and",
+      "command": ":(){ :|:& };: && rm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.safe-tmp-cleanup-then-fork-bomb",
+      "command": "rm -rf /tmp/x && :(){ :|:& };:",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb"
+    },
+    {
+      "id": "deny.subst-echo-cp-then-delete",
+      "command": "echo $(cp -a /etc /tmp/s && rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-ls-cp-then-delete",
+      "command": "ls $(cp -a /etc /tmp/s; rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-assign-cp-then-delete",
+      "command": "x=$(cp -a /etc /tmp/s && rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-echo-ln-then-delete",
+      "command": "echo $(ln -s /etc /tmp/e && rm -rf /tmp/e)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:ln-symlink-sensitive-then-delete"
+    },
+    {
+      "id": "deny.subst-echo-rsync-then-delete",
+      "command": "echo $(rsync -a /etc /tmp/s && rm -rf /tmp/s)",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rsync-sensitive-then-delete"
     }
   ]
 }

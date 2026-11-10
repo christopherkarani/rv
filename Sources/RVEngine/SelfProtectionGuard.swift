@@ -7,8 +7,10 @@ import RVDomain
 /// adding allowlist entries, redeeming or minting allow-once permits,
 /// applying or saving policy, approving egress/MCP calls, trusting an
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
-/// removing the secrets pre-commit hook, or signing
-/// managed policy. `evaluate` floors such a command at indeterminate
+/// removing the secrets pre-commit hook, signing
+/// managed policy, setting a host to anything but `block`
+/// (`rv host mode <host> observe|off`), or switching rv to observe
+/// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
 public enum SelfProtectionGuard {
@@ -26,7 +28,7 @@ public enum SelfProtectionGuard {
 private let rvProgramNames: Set<String> = ["rv", "rv-cli"]
 
 private let subcommandVerbs: Set<String> = [
-    "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed",
+    "packs", "safety", "allowlist", "allow-once", "policy", "egress", "mcp", "secrets", "managed", "host",
 ]
 
 /// A word whose runtime value is not its text (`$X`, `$'..'`, backticks) or
@@ -53,6 +55,10 @@ private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bo
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
+    // `setup --observe` sheds oversight; a variable or glob may carry the flag.
+    if verb == "setup" {
+        return args[(verbIndex + 1)...].contains { $0 == "--observe" || isUnmodelledWord($0) }
+    }
     guard subcommandVerbs.contains(verb) else { return false }
     let rest = Array(args[(verbIndex + 1)...])
     let flags = Set(rest.filter { $0.hasPrefix("-") })
@@ -99,9 +105,21 @@ private func isWeakeningSub(
         }
     case "managed":
         return sub == "sign"
+    case "host":
+        // `mode <host> block` is the one tightening form; a missing, extra,
+        // unknown or unmodelled word fails closed. `--json`/`--robot` take
+        // no value, so flags are skipped.
+        guard sub == "mode" else { return false }
+        let positionals = tail.filter { $0.hasPrefix("-") == false }
+        return positionals.count != 2 || positionals.last != HostModeWord.block
     default:
         return false
     }
+}
+
+/// `HostMode.block` lives in RVPolicy, which RVEngine does not import.
+private enum HostModeWord {
+    static let block = "block"
 }
 
 private func isUnlockCode(_ word: String) -> Bool {

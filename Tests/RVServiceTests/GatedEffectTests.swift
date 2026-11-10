@@ -12,7 +12,8 @@ import RVPolicy
 @Suite("Gated effects as values")
 struct GatedEffectTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
-    private static let packDeny = ShellCommand(rawValue: "rm -rf ~")
+    // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
+    private static let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
     /// Pack-allowed and outside the safe lane, so it reaches the judge.
     private static let judged = ShellCommand(rawValue: "python3 deploy.py --prod")
     private static let fakeBundle = URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
@@ -127,6 +128,7 @@ struct GatedEffectTests {
                 case .exemptionAudit: "audit"
                 case .judgeLog: "judgeLog"
                 case .denialRow: "denialRow"
+                case .overrideAudit: "overrideAudit"
                 }
             }
         }
@@ -218,7 +220,7 @@ struct GatedEffectTests {
         #expect(stale.hasTripped)
     }
 
-    @Test("observe: every shell door asks for one would-be judge row and no denial row", arguments: [
+    @Test("observe: every shell door asks for one would-be judge row; apply adds an observed denial row", arguments: [
         EvaluationIntent.peek, .apply,
     ])
     func observeShellDoors(_ intent: EvaluationIntent) async throws {
@@ -231,13 +233,23 @@ struct GatedEffectTests {
             Issue.record("pack deny expected, got \(wouldBe.decision)")
             return
         }
-        #expect(decided.effects == [
-            .judgeLog(GatedEffect.JudgeLogRow(
-                at: Self.now, guardMode: .observe, engine: .ft, hash: Self.hash(decided.result),
-                subject: .wouldBe(.deny, rule: deny.ruleID.rawValue), note: "context: partial",
-                isPeek: intent == .peek, score: nil
-            )),
-        ])
+        let judgeLog = GatedEffect.judgeLog(GatedEffect.JudgeLogRow(
+            at: Self.now, guardMode: .observe, engine: .ft, hash: Self.hash(decided.result),
+            subject: .wouldBe(.deny, rule: deny.ruleID.rawValue), note: "context: partial",
+            isPeek: intent == .peek, score: nil
+        ))
+        switch intent {
+        case .peek:
+            #expect(decided.effects == [judgeLog])
+        case .apply:
+            #expect(decided.effects == [
+                judgeLog,
+                .denialRow(GatedEffect.DenialRow(
+                    at: Self.now, host: .hook(.claude), tool: .bash, ruleID: deny.ruleID,
+                    category: .pack(deny.ruleID.pack), path: "", observed: true
+                )),
+            ])
+        }
     }
 
     @Test("agent door never asks for a denial row")
@@ -267,7 +279,7 @@ struct GatedEffectTests {
         #expect(row.isPeek == false)
     }
 
-    @Test("file door: enforce asks for an unredacted secret denial row; observe asks for nothing")
+    @Test("file door: enforce asks for an unredacted secret denial row; observe asks for an observed one")
     func fileDoor() throws {
         let path = "/nonexistent/rv-effects/.env"
         let action = FileToolAction(kind: .read, path: FileToolPath(rawValue: path))
@@ -288,7 +300,12 @@ struct GatedEffectTests {
             action, home: nil, cwd: nil, host: .hook(.claude), now: Self.now, guardMode: .observe
         )
         #expect(observe.result.decision == .allow)
-        #expect(observe.effects.isEmpty)
+        #expect(observe.effects == [
+            .denialRow(GatedEffect.DenialRow(
+                at: Self.now, host: .hook(.claude), tool: .file(.read), ruleID: deny.ruleID,
+                category: .secret(.environment), path: path, observed: true
+            )),
+        ])
     }
 
     /// Parity with the inline writes: an enforced file read checks the hook
@@ -311,7 +328,7 @@ struct GatedEffectTests {
     }
 
     /// SEC-003: the grant is spent inside `decide`, not by applying effects.
-    @Test("apply spends a grant inside the decision; the redeemed allow asks for no denial row")
+    @Test("apply spends a grant inside the decision; the redeemed allow asks for an override audit, not a denial row")
     func grantSpendIsInline() async throws {
         let grants = EphemeralAllowOnceTable()
         let cwd = wd("/tmp/ws")
@@ -323,7 +340,12 @@ struct GatedEffectTests {
         let command = ShellCommand(rawValue: "git reset --hard")
         let first = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
         #expect(first.result.decision == .allow)
-        #expect(first.effects.isEmpty)
+        // The redeemed allow asks for no denial row, only an override audit.
+        #expect(first.effects == [.overrideAudit(GatedEffect.OverrideRow(
+            at: Self.now, host: .hook(.claude),
+            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            override: "allowOnce", workspace: URL(fileURLWithPath: cwd.rawValue, isDirectory: true)
+        ))])
         let second = await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
         #expect(second.effects == [try #require(Self.denialRow(second.result))])
     }

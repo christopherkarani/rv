@@ -39,7 +39,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         #expect(inner.count == 1)
         #expect(inner[0]["type"] as? String == "command")
         #expect(inner[0]["command"] as? String == "RV_BINARY=\(antigravityRvPath) python3 \(antigravityAdapter)")
-        #expect(inner[0]["timeout"] as? Int == 10)
+        #expect(inner[0]["timeout"] as? Int == 18)
     }
 }
 

@@ -87,7 +87,7 @@ enum ManagedRun {
             return "no organization policy installed (\(directory))\n"
         case .invalid(let directory, let reason):
             return "organization policy INVALID: \(reason)\n"
-                + "MCP and secret staging are disabled until it is fixed (\(directory))\n"
+                + "MCP and secret staging are disabled and safety is forced to strict until it is fixed (\(directory))\n"
         case .active(let active):
             let signature = switch (active.signed, active.signingKey) {
             case (true, let key?): "signed by key \(key) in \(ManagedPolicyLocation.publicKeyFile)"
@@ -128,6 +128,10 @@ enum ManagedRun {
         }
         if policy.secrets.allowEnvironmentDelivery == false { lines.append("secrets: gateway delivery only") }
         if let forward = policy.auditForward { lines.append("audit forwarded to \(forward.url)") }
+        if policy.gate.requirePacks.isEmpty == false {
+            lines.append("gate: packs required: \(policy.gate.requirePacks.map(\.rawValue).joined(separator: ", "))")
+        }
+        if policy.gate.requireStrictSafety { lines.append("gate: strict safety required") }
         return lines
     }
 

@@ -148,6 +148,9 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     public var ruleID: RuleID
     public var category: LedgerCategory
     public var path: String
+    /// Observe mode: enforcement would have denied, the door allowed.
+    /// Encoded only when true, so enforced rows keep their bytes.
+    public var observed: Bool
 
     public init(
         timestamp: Date,
@@ -155,7 +158,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         tool: LedgerTool,
         ruleID: RuleID,
         category: LedgerCategory,
-        path: String
+        path: String,
+        observed: Bool = false
     ) {
         self.timestamp = timestamp
         self.host = host
@@ -163,6 +167,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         self.ruleID = ruleID
         self.category = category
         self.path = path
+        self.observed = observed
     }
 
     enum CodingKeys: String, CodingKey {
@@ -172,6 +177,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         case ruleID = "rule_id"
         case category
         case path
+        case observed
     }
 
     public init(from decoder: Decoder) throws {
@@ -190,6 +196,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         ruleID = decodedRule
         category = try container.decode(LedgerCategory.self, forKey: .category)
         path = try container.decode(String.self, forKey: .path)
+        observed = try container.decodeIfPresent(Bool.self, forKey: .observed) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -200,5 +207,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         try container.encode(ruleID.rawValue, forKey: .ruleID)
         try container.encode(category, forKey: .category)
         try container.encode(path, forKey: .path)
+        if observed {
+            try container.encode(true, forKey: .observed)
+        }
     }
 }

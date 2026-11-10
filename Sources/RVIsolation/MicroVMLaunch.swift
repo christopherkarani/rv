@@ -148,8 +148,11 @@ public enum MicroVMHelper {
 /// host later executes or trusts. Everything else in the guest is allowed:
 /// the VM is the boundary. LaunchServices is denied because it starts an
 /// opened app outside the caller's sandbox, where it could write them.
+/// Hard links and clones are denied as in the host cage: `file-write*` does
+/// not cover them, so `ln x .mcp.json` would otherwise plant a control path.
 func macOSGuestSandboxProfile(workspacePath: String) -> String {
-    "(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n" + workspaceControlDenies(workspacePath: workspacePath)
+    "(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n(deny file-link)\n(deny file-clone)\n"
+        + workspaceControlDenies(workspacePath: workspacePath)
 }
 
 /// envp of the helper: a macOS guest also gets its sandbox profile, by

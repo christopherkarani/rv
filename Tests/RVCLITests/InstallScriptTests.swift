@@ -17,6 +17,10 @@ private func installScriptURL() -> URL {
     repoRootURL().appendingPathComponent("install.sh")
 }
 
+/// Every run points install.sh's trust-manifest probe at a path that cannot
+/// exist, so a manifest on the host (`/Library/...`) never changes a test.
+private let absentTrustManifest = "/var/empty/rv-install-tests/no-peer-trust.json"
+
 @Test func installSh_linuxStagesRequiredIsolationHelper() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-helper-install-\(UUID())")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -172,16 +176,18 @@ private func writeLinuxSetupTrio(in src: URL, swiftRV: URL) throws {
 private func runInstallScript(
     home: URL,
     src: URL,
-    pathPrefix: String
+    pathPrefix: String,
+    extraEnvironment: [String: String] = [:]
 ) throws -> (status: Int32, stderr: String) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = [installScriptURL().path]
     process.environment = [
         "HOME": home.path,
+        "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
         "PATH": pathPrefix + ":/usr/bin:/bin",
         "RV_INSTALL_BIN": src.path,
-    ]
+    ].merging(extraEnvironment) { _, extra in extra }
     let stderr = Pipe()
     process.standardError = stderr
     process.standardOutput = Pipe()
@@ -440,6 +446,7 @@ func installSh_refusesOlderMacOS(_ productVersion: String) throws {
     process.arguments = [installScriptURL().path]
     process.environment = [
         "HOME": home.path,
+        "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
         "PATH": shim.path + ":/usr/bin:/bin",
         "TAR_OPTIONS": "--no-same-owner",
     ]
@@ -658,6 +665,163 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(ran.contains("rv-ran"))
     #expect(marker.contains("from_install=1"))
     #expect(marker.contains("setup"))
+}
+
+/// `RV_INSTALL_MODE` picks the argv the installer hands `rv setup`.
+@Test(arguments: [
+    ("", "argv=setup\n"),
+    ("enforce", "argv=setup\n"),
+    ("observe", "argv=setup --observe\n"),
+])
+func installSh_installModeSelectsSetupArgv(mode: String, argv: String) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-mode-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    try writeExecutable(
+        src.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        printf 'argv=%s\\n' "$*" > "$HOME/.rv-setup-argv"
+        exit 0
+        """
+    )
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(
+        home: home, src: src, pathPrefix: shim.path, extraEnvironment: ["RV_INSTALL_MODE": mode])
+    #expect(result.status == 0)
+    #expect(try String(contentsOfFile: home.path + "/.rv-setup-argv", encoding: .utf8) == argv)
+}
+
+@Test func installSh_unknownInstallModeRefusesBeforeStaging() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-mode-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(
+        home: home, src: src, pathPrefix: shim.path, extraEnvironment: ["RV_INSTALL_MODE": "loud"])
+    #expect(result.status == 1)
+    #expect(result.stderr.contains("RV_INSTALL_MODE must be observe or enforce (got: loud)"))
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
+}
+
+/// Incident regression: an admin trust manifest pins a Developer ID rvd; a
+/// local unsigned/ad-hoc stage must be refused before anything is staged,
+/// or rv setup wires hooks that deny every tool call.
+private func withUntrustedStageUnderManifest(
+    _ body: (_ home: URL, _ src: URL, _ shim: URL, _ manifest: URL) throws -> Void
+) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let destBin = home.appendingPathComponent(".local/bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: destBin, withIntermediateDirectories: true)
+    for name in ["rv", "rv-cli", "rvd"] {
+        try writeExecutable(destBin.appendingPathComponent(name), contents: "#!/bin/sh\n# installed-v1\n")
+    }
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    let manifest = root.appendingPathComponent("peer-trust.json")
+    let requirement = #"anchor apple generic and identifier \"dev.rv.rvd\" and certificate leaf[subject.OU] = \"5V273URY46\""#
+    try Data(#"[{"role":"service","requirement":"\#(requirement)","requiredIdentifier":"dev.rv.rvd","requiredTeamIdentifier":"5V273URY46"}]"#.utf8)
+        .write(to: manifest)
+    try body(home, src, shim, manifest)
+}
+
+@Test func installSh_localStageUnderTrustManifest_refusesUntrustedRvdBeforeStaging() throws {
+    try withUntrustedStageUnderManifest { home, src, shim, manifest in
+        let result = try runInstallScript(
+            home: home, src: src, pathPrefix: shim.path,
+            extraEnvironment: ["RV_INSTALL_TRUST_MANIFEST": manifest.path]
+        )
+        #expect(result.status != 0)
+        #expect(result.stderr.contains("rv: refusing to install: trust manifest \(manifest.path) requires"))
+        #expect(result.stderr.contains("hooks would deny every agent tool call"))
+        #expect(result.stderr.contains("RV_RELEASE_SIGN=1 Scripts/release.sh"))
+        #expect(result.stderr.contains("sudo rm '\(manifest.path)'"))
+        #expect(result.stderr.contains("RV_INSTALL_ALLOW_UNSIGNED=1"))
+        #expect(result.stderr.contains("rv: WARNING: RV_INSTALL_TRUST_MANIFEST is set: the trust-manifest check uses test override path \(manifest.path)"))
+        if FileManager.default.isExecutableFile(atPath: "/usr/bin/plutil") {
+            #expect(result.stderr.contains("requires Developer ID dev.rv.rvd (team 5V273URY46)"))
+        }
+        if FileManager.default.isExecutableFile(atPath: "/usr/bin/codesign") {
+            #expect(result.stderr.contains("staged rvd is not code-signed"))
+        }
+        let destBin = home.appendingPathComponent(".local/bin")
+        for name in ["rv", "rv-cli", "rvd"] {
+            #expect(try String(contentsOf: destBin.appendingPathComponent(name), encoding: .utf8).contains("installed-v1"))
+        }
+        #expect(FileManager.default.fileExists(atPath: destBin.appendingPathComponent(".rvd.installing").path) == false)
+    }
+}
+
+@Test func installSh_localStageUnderTrustManifest_allowUnsignedStagesLoudly() throws {
+    try withUntrustedStageUnderManifest { home, src, shim, manifest in
+        let result = try runInstallScript(
+            home: home, src: src, pathPrefix: shim.path,
+            extraEnvironment: ["RV_INSTALL_TRUST_MANIFEST": manifest.path, "RV_INSTALL_ALLOW_UNSIGNED": "1"]
+        )
+        #expect(result.status == 0)
+        #expect(result.stderr.contains("rv: WARNING: trust manifest \(manifest.path) requires"))
+        #expect(result.stderr.contains("rv setup will refuse to wire hooks"))
+        let rvd = home.appendingPathComponent(".local/bin/rvd")
+        #expect(try String(contentsOf: rvd, encoding: .utf8).contains("installed-dummy"))
+    }
+}
+
+/// C `trust_source` treats any lstat failure other than ENOENT as an invalid
+/// manifest (deny every rvd). A directory install.sh cannot search must not
+/// read as "no manifest".
+@Test(.enabled(if: getuid() != 0, "root can search a mode-000 directory"))
+func installSh_unsearchableManifestDirectory_refusesLikeInvalidManifest() throws {
+    try withUntrustedStageUnderManifest { home, src, shim, manifest in
+        let locked = manifest.deletingLastPathComponent().appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path) }
+        let hidden = locked.appendingPathComponent("peer-trust.json").path
+        let result = try runInstallScript(
+            home: home, src: src, pathPrefix: shim.path,
+            extraEnvironment: ["RV_INSTALL_TRUST_MANIFEST": hidden]
+        )
+        #expect(result.status != 0)
+        #expect(result.stderr.contains("rv: refusing to install: cannot tell whether trust manifest \(hidden) exists (\(locked.path) is not searchable)"))
+        #expect(result.stderr.contains("hooks treat that as an invalid manifest and would deny every agent tool call"))
+        let rvd = home.appendingPathComponent(".local/bin/rvd")
+        #expect(try String(contentsOf: rvd, encoding: .utf8).contains("installed-v1"))
+    }
+}
+
+@Test func installSh_trustManifestOverrideWarnsEvenWhenAbsent() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+    #expect(result.stderr.contains("rv: WARNING: RV_INSTALL_TRUST_MANIFEST is set: the trust-manifest check uses test override path \(absentTrustManifest)"))
 }
 
 @Test func installSh_copyFailureLeavesPreviousInstallIntact() throws {
@@ -969,6 +1133,7 @@ private func writeCurlShim(
         script: installScriptURL(),
         environment: [
             "HOME": home.path,
+            "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
             "PATH": shim.path + ":/usr/bin:/bin",
             "RV_TEST_CODESIGN": "unsigned",
             "TAR_OPTIONS": "--no-same-owner",
@@ -1038,6 +1203,7 @@ private func writeCurlShim(
         script: installScriptURL(),
         environment: [
             "HOME": home.path,
+            "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
             "PATH": shim.path + ":/usr/bin:/bin",
             "RV_TEST_CODESIGN": "unsigned",
             "TAR_OPTIONS": "--no-same-owner",
@@ -1082,6 +1248,7 @@ private func writeCurlShim(
     process.arguments = [installScriptURL().path]
     process.environment = [
         "HOME": home.path,
+        "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
         "PATH": shim.path + ":/usr/bin:/bin",
     ]
     let stderr = Pipe()
@@ -1344,6 +1511,7 @@ private func runSignedDownloadInstall(
 
     var processEnvironment = [
         "HOME": home.path,
+        "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
         "PATH": shim.path + ":/usr/bin:/bin",
         "RV_TEST_TOOL_LOG": log.path,
         // Signature tests never exercise model fetching: the sandbox has no
@@ -1992,6 +2160,7 @@ private func flippedSignedReleasesScript() throws -> URL {
     process.arguments = [installScriptURL().path]
     process.environment = [
         "HOME": home.path,
+        "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
         "PATH": shim.path + ":/usr/bin:/bin",
         "RV_INSTALL_BIN": src.path,
         "RV_TEST_TOOL_LOG": root.appendingPathComponent("tools.log").path,
@@ -2058,6 +2227,7 @@ private func runChecksumInstall(
 
     var env = [
         "HOME": home.path,
+        "RV_INSTALL_TRUST_MANIFEST": absentTrustManifest,
         "PATH": shim.path + ":/usr/bin:/bin",
         "TAR_OPTIONS": "--no-same-owner",
         "RV_INSTALL_NO_MODELS": "1",
