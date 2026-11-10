@@ -26,8 +26,19 @@ import RVEngine
 /// indeterminate whether or not a judge is loaded: the judge would only
 /// see the top-level string, never the bodies.
 ///
-/// A missing package.json with nothing earlier in the chain is `.clear`:
-/// every runner errors out before executing any script.
+/// `.needsJudge` is for runs with no script body the judge cannot see: a
+/// package bin (`npx tsc`, `yarn eslint .`, a global install of named
+/// packages), a run behind a container or remote launcher, and a run
+/// after earlier chain work when the current manifest runs no script
+/// (`rm -rf node_modules && npm install` with no lifecycle scripts). The
+/// judge, which reads the whole chain, decides with the safe lane closed.
+/// Earlier work that names a manifest or runner config, or a script that
+/// will run after a mutation (TOCTOU), stays `.unresolved`.
+///
+/// A missing package.json with nothing earlier in the chain is `.clear`
+/// only when the cwd is absolute and every directory up to `/` was read
+/// and holds no manifest of any kind: every runner then errors out
+/// before executing any script.
 enum PackageScriptGate {
     enum Verdict {
         /// Every body the command runs was read and allowed.
@@ -35,6 +46,9 @@ enum PackageScriptGate {
         /// only then may the top-level command skip the judge.
         case clear(allBodiesSafe: Bool)
         case deny(EvaluationResult)
+        /// No body the judge cannot see runs: the judge decides, with the
+        /// safe lane closed.
+        case needsJudge
         case unresolved
     }
 
@@ -60,8 +74,10 @@ enum PackageScriptGate {
         var treeMutated = false
         var priorWork = false
         var unresolved = false
+        var needsJudge = false
         var allBodiesSafe = true
         var chainOverride = false
+        var configNamed = false
         for unit in chainUnits(command.rawValue) {
             let launched = launchedCommands(unit.text)
             let unitTokens = tokens(in: unit.text)
@@ -87,32 +103,55 @@ enum PackageScriptGate {
             // Input the launcher parser stopped following may hide a runner,
             // and so may a dynamic head or a launcher the parser does not
             // unwrap (`xargs npm test`, `watch npm test`).
-            if launchIsTruncated(unit.text) || hidesRunner(unit.text, launched) { unresolved = true }
+            if launchIsTruncated(unit.text) { unresolved = true }
+            switch hiddenRunner(unit.text, launched) {
+            case .none: break
+            case .remote: needsJudge = true
+            case .hidden: unresolved = true
+            }
             let overridden = chainOverride || hasConfigOverrideAssignment(unitTokens)
+            let unitNamesConfig = namesRunnerConfig(unit.text)
             for argv in launched {
                 guard let invocation = scriptInvocation(in: argv) else { continue }
                 if invocation.runsNothing { continue }
-                if invocation.unresolvable || overridden || treeMutated || unitMutates {
-                    // A mutation earlier in this chain runs before the script
-                    // does; the package.json read now may not describe what
-                    // executes (TOCTOU).
+                // A mutation earlier in this chain (or in this unit) runs
+                // before the runner reads its manifest (TOCTOU).
+                let mutatedBefore = treeMutated || unitMutates
+                if invocation.unresolvable || overridden || (mutatedBefore && (configNamed || unitNamesConfig)) {
                     unresolved = true
                     continue
                 }
                 switch check(
                     invocation, cwd: wrapperMovesCwd ? nil : effectiveCwd, home: home,
-                    priorWork: priorWork || launched.count > 1, evalBody: evalBody
+                    priorWork: priorWork || launched.count > 1, mutatedBefore: mutatedBefore,
+                    evalBody: evalBody
                 ) {
                 case .clear(let safe): allBodiesSafe = allBodiesSafe && safe
+                case .needsJudge: needsJudge = true
                 case .deny(let hit): return .deny(hit)
                 case .unresolved: unresolved = true
                 }
             }
             if unitMutates || !unitIsReadOnly(unit.text) { treeMutated = true }
             if setsOverride(unitTokens, launched) { chainOverride = true }
+            if unitNamesConfig { configNamed = true }
             priorWork = true
         }
-        return unresolved ? .unresolved : .clear(allBodiesSafe: allBodiesSafe)
+        if unresolved { return .unresolved }
+        return needsJudge ? .needsJudge : .clear(allBodiesSafe: allBodiesSafe)
+    }
+
+    /// Files that decide what a runner executes: the manifests and the
+    /// runner configs (`RunnerConfigScan`). Earlier work naming one may
+    /// rewrite what the runner then reads.
+    static let runnerConfigNames = [
+        "package.json", "package.yaml", "package.json5", ".npmrc", ".yarnrc", "bunfig.toml", ".pnpmfile",
+        "pnpm-workspace.yaml", "deno.json",
+    ]
+
+    static func namesRunnerConfig(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return runnerConfigNames.contains { lowered.contains($0) }
     }
 
     /// Compatibility shim for pack-only tests: deny maps to the result,
@@ -142,37 +181,61 @@ enum PackageScriptGate {
 
     // MARK: - One invocation
 
+    /// `mutatedBefore`: earlier work in the chain (or this unit) may have
+    /// changed the tree. A script that will run then is TOCTOU
+    /// (unresolved); a run with no script to run goes to the judge, which
+    /// reads the earlier work in the same command.
     private static func check(
         _ invocation: Invocation,
         cwd: String?,
         home: HomePath?,
         priorWork: Bool,
+        mutatedBefore: Bool,
         evalBody: (ShellCommand, WorkingDirectory?) -> EvaluationResult
     ) -> Verdict {
         let base = invocation.prefixDir.map { resolvePath($0, from: cwd, home: home) } ?? cwd
         guard let base else { return .unresolved }
-        guard let packageDir = nearestPackageJSON(from: base) else {
-            // No package.json: the runner errors and executes nothing,
-            // unless earlier work in the chain may create one first.
-            return priorWork ? .unresolved : .clear(allBodiesSafe: true)
+        let packageDir: URL
+        switch locateManifest(from: base) {
+        case .unknown:
+            return .unresolved
+        case .none:
+            // No manifest anywhere up to `/`: a script runner errors and
+            // executes nothing, unless earlier work may create one first
+            // (the judge reads that work). A bin still runs.
+            if RunnerConfigScan.swapsShellOrPreloads(
+                packageDir: URL(fileURLWithPath: base, isDirectory: true), home: home) {
+                return .unresolved
+            }
+            if invocation.runsBin || !invocation.implicit.isEmpty || priorWork || mutatedBefore {
+                return .needsJudge
+            }
+            return .clear(allBodiesSafe: true)
+        case .found(let dir):
+            packageDir = dir
         }
+        guard !RunnerConfigScan.swapsShellOrPreloads(packageDir: packageDir, home: home) else { return .unresolved }
+        if invocation.onlyBin { return .needsJudge }
         guard let scripts = loadScripts(packageDir),
-              let packageCwd = WorkingDirectory(rawValue: packageDir.path),
-              let names = invocation.names(in: scripts),
-              !RunnerConfigScan.swapsShellOrPreloads(packageDir: packageDir, home: home)
+              let packageCwd = WorkingDirectory(rawValue: packageDir.path)
         else { return .unresolved }
+        let names = invocation.scriptNames(in: scripts)
+        let runsBin = invocation.runsBin(in: scripts)
         // The graph never outlives this call.
         return withoutActuallyEscaping(evalBody) { evalBody in
             var graph = ScriptGraph(scripts: scripts, packageCwd: packageCwd, evalBody: evalBody)
             var unresolved = false
             for name in names {
                 switch graph.check(name, depth: 0) {
-                case .clear: continue
+                case .clear, .needsJudge: continue
                 case .deny(let hit): return .deny(hit)
                 case .unresolved: unresolved = true
                 }
             }
-            return unresolved ? .unresolved : .clear(allBodiesSafe: graph.allBodiesSafe)
+            if unresolved { return .unresolved }
+            if mutatedBefore, graph.evaluations > 0 { return .unresolved }
+            if mutatedBefore || runsBin { return .needsJudge }
+            return .clear(allBodiesSafe: graph.allBodiesSafe)
         }
     }
 
@@ -212,6 +275,8 @@ enum PackageScriptGate {
         "echo", "printf", "git", "gh", "grep", "egrep", "fgrep", "rg", "ag", "ack", "man", "which", "type",
         "whereis", "whatis", "apropos", "cat", "less", "more", "head", "tail", "wc", "sort", "uniq", "cut",
         "tr", "brew", "apt", "apt-get", "dnf", "yum", "pacman", "port", "winget", "choco", "scoop", "jq",
+        // Process patterns and names: matched, never launched.
+        "pkill", "pgrep", "killall", "ps",
     ]
     /// Operand words that make a dynamic head look like a runner call.
     static let runnerVerbWords: Set<String> = [
@@ -220,17 +285,26 @@ enum PackageScriptGate {
         "create", "init", "update", "up", "upgrade",
     ]
 
+    /// Heads that run their operand command somewhere else (a container
+    /// or another host): a runner there reads that place's manifest, not
+    /// the cwd's as the gate would. Its words go to the judge.
+    static let remoteHeads: Set<String> = ["docker", "podman", "nerdctl", "ssh"]
+
+    enum HiddenRunner { case none, remote, hidden }
+
     /// A runner the launcher parser did not surface as a command of its
     /// own: behind a dynamic head (`$NPM test`, `"$(which npm)" test`) or
     /// an unmodelled launcher (`xargs`, `find -exec`, `watch`, `script`,
-    /// `caffeinate`, `arch`). Over-claims (`docker run node npm test`),
-    /// never under-claims a modelled spelling.
-    static func hidesRunner(_ unitText: String, _ launched: [[String]]) -> Bool {
+    /// `caffeinate`, `arch`), which is `.hidden`. One behind a container or
+    /// remote head (`docker run node npm test`, `ssh host npm test`) is
+    /// `.remote`. Over-claims, never under-claims a modelled spelling.
+    static func hiddenRunner(_ unitText: String, _ launched: [[String]]) -> HiddenRunner {
         for argv in dynamicHeadLaunches(unitText) {
             let head = argv[0].lowercased()
-            if runnerHeads.contains(where: { head.contains($0) }) || head.contains("node") { return true }
-            if argv.dropFirst().contains(where: { runnerVerbWords.contains($0.lowercased()) }) { return true }
+            if runnerHeads.contains(where: { head.contains($0) }) || head.contains("node") { return .hidden }
+            if argv.dropFirst().contains(where: { runnerVerbWords.contains($0.lowercased()) }) { return .hidden }
         }
+        var found = HiddenRunner.none
         for argv in launched {
             guard let head = argv.first.map(basename)?.lowercased(),
                   scriptInvocation(in: argv) == nil, !textOnlyHeads.contains(head)
@@ -238,11 +312,16 @@ enum PackageScriptGate {
             let words = argv.dropFirst().flatMap { tokens(in: $0) }.map { basename($0).lowercased() }
             for (index, word) in words.enumerated() where index + 1 < words.count {
                 if runnerHeads.contains(word) || (word == "node" && words[index + 1].hasPrefix("--run")) {
-                    return true
+                    guard remoteHeads.contains(head) else { return .hidden }
+                    found = .remote
                 }
             }
         }
-        return false
+        return found
+    }
+
+    static func hidesRunner(_ unitText: String, _ launched: [[String]]) -> Bool {
+        hiddenRunner(unitText, launched) != .none
     }
 
     /// Environment names that change what a script runs: the runner's
@@ -515,7 +594,7 @@ enum PackageScriptGate {
                 switch nested(body, depth: depth) {
                 case .clear: break
                 case .deny(let hit): return .deny(hit)
-                case .unresolved: unresolved = true
+                case .unresolved, .needsJudge: unresolved = true
                 }
             }
             let verdict: Verdict = unresolved ? .unresolved : .clear(allBodiesSafe: true)
@@ -544,18 +623,19 @@ enum PackageScriptGate {
                 for argv in unitLaunched {
                     guard let invocation = PackageScriptGate.scriptInvocation(in: argv) else { continue }
                     if invocation.runsNothing { continue }
-                    guard !invocation.unresolvable, invocation.prefixDir == nil, !movesCwd, !overrides,
-                          !treeMutated, !unitMutates, depth < PackageScriptGate.maxDepth,
-                          let names = invocation.names(in: scripts)
+                    // Nested runs stay strict: a bin run inside a body is
+                    // hidden from the judge, which never sees bodies.
+                    guard !invocation.unresolvable, !invocation.runsBin(in: scripts), invocation.prefixDir == nil,
+                          !movesCwd, !overrides, !treeMutated, !unitMutates, depth < PackageScriptGate.maxDepth
                     else {
                         unresolved = true
                         continue
                     }
-                    for name in names {
+                    for name in invocation.scriptNames(in: scripts) {
                         switch check(name, depth: depth + 1) {
                         case .clear: continue
                         case .deny(let hit): return .deny(hit)
-                        case .unresolved: unresolved = true
+                        case .unresolved, .needsJudge: unresolved = true
                         }
                     }
                 }
@@ -589,16 +669,43 @@ enum PackageScriptGate {
         return (cwd as NSString).appendingPathComponent(value)
     }
 
+    enum ManifestLookup: Equatable {
+        case found(URL)
+        /// Absolute cwd, every directory up to `/` read, no manifest.
+        case none
+        /// A relative cwd (rvd's own cwd is not the agent's), a directory
+        /// that could not be read, or another manifest format (pnpm's
+        /// `package.yaml`/`package.json5`) the gate does not parse.
+        case unknown
+    }
+
+    static let alternateManifests = ["package.yaml", "package.json5"]
+
     /// Walks up to the filesystem root, as the runners do.
-    private static func nearestPackageJSON(from cwd: String) -> URL? {
+    static func locateManifest(from cwd: String) -> ManifestLookup {
+        guard cwd.hasPrefix("/") else { return .unknown }
         var dir = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
         while true {
-            let candidate = dir.appendingPathComponent("package.json")
-            if FileManager.default.fileExists(atPath: candidate.path) { return dir }
+            let manifest = entry(dir.appendingPathComponent("package.json").path)
+            if manifest == .unknown { return .unknown }
+            for alternate in alternateManifests where entry(dir.appendingPathComponent(alternate).path) != .absent {
+                return .unknown
+            }
+            if manifest == .present { return .found(dir) }
             let parent = dir.deletingLastPathComponent()
-            if parent.path == dir.path { return nil }
+            if parent.path == dir.path { return .none }
             dir = parent
         }
+    }
+
+    private enum Entry { case present, absent, unknown }
+
+    /// Present, positively absent (ENOENT), or unknown (no permission, a
+    /// path component that is not a directory, any other error).
+    private static func entry(_ path: String) -> Entry {
+        var info = stat()
+        if stat(path, &info) == 0 { return .present }
+        return errno == ENOENT ? .absent : .unknown
     }
 
     /// nil only when package.json exists but cannot be parsed (or its

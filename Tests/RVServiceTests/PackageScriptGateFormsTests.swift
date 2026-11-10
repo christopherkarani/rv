@@ -45,6 +45,18 @@ struct PackageScriptGateFormsTests {
         return false
     }
 
+    static func needsJudge(_ verdict: PackageScriptGate.Verdict) -> Bool {
+        if case .needsJudge = verdict { return true }
+        return false
+    }
+
+    static func emptyDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-scriptforms-empty-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     @Test("every script-running spelling reads the poisoned body", arguments: [
         "npm --loglevel silent run evil",
         "npm --silent run evil",
@@ -123,18 +135,71 @@ struct PackageScriptGateFormsTests {
     }
 
     @Test("verbs, flags and runners outside the exact grammar are unresolved", arguments: [
-        "npm tes", "npm runScript test", "npm exec foo", "npm x foo", "npx foo", "pnpx foo",
-        "pnpm dlx foo", "pnpm exec foo", "yarn dlx foo", "bunx foo", "bun x foo",
-        "corepack yarn test", "deno task build", "npm init vite",
+        "npm tes", "npm runScript test",
+        "corepack yarn test", "corepack pnpm run build",
         "npm --pre /tmp test", "npm --scri=/x test", "npm test --script-sh=/x", "npm --frobnicate test",
         "npm -X test", "npm config set script-shell /x", "npm set script-shell /x",
         "npm pkg set scripts.test=x", "yarn config set x y", "pnpm config set x y",
-        "yarn eslint .", "pnpm tsc", "bun eslint", "yarn notascript",
+        // A bin runner that runs a shell string or preloads code is not a bin run.
+        "npx -c 'rm -rf ~'", "npx --call='rm -rf ~'", "npm exec -c 'rm -rf ~'", "npm exec foo --call=x",
+        "pnpm dlx -c 'rm -rf ~'", "pnpm exec -c 'rm -rf ~'", "npx --node-options=--require=/x tsc",
+        // Global flags that are not a plain global install of named packages.
+        "npm install -g .", "npm i -g ./tool", "npm install --global ../x", "npm -g run evil",
+        "npm test -g", "npm i -g --prefix /tmp x", "npm install -g",
     ])
     func outsideGrammarUnresolved(command: String) throws {
         let dir = try Self.makeDir(["test": "node ok.js", "build": "node ok.js"])
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(Self.isUnresolved(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    /// Package bins, not package scripts: the gate has no script graph to
+    /// read, so the judge decides with the safe lane closed (as before the
+    /// script floor existed). Never clear, never the human-only floor.
+    @Test("package-bin runs go to the judge, not the floor", arguments: [
+        "npm exec foo", "npm x foo", "npm exec tsc -- --noEmit", "npx foo", "npx tsc --noEmit",
+        "npx --yes prettier --check .", "npx -p typescript tsc", "npx eslint -c .eslintrc.json src",
+        "pnpx foo", "pnpm dlx foo", "pnpm dlx create-vite", "pnpm exec foo", "yarn dlx foo",
+        "bunx foo", "bun x foo", "corepack enable", "deno task build", "npm init vite",
+        "yarn eslint .", "pnpm tsc", "pnpm vitest", "bun eslint", "yarn notascript",
+        "npm i -g typescript", "npm install -g @anthropic-ai/claude-code", "sudo npm install -g pnpm",
+        "npm install --global typescript", "npm i --location=global typescript",
+        "docker run -v $(pwd):/app node:20 npm test", "ssh host npm test",
+    ])
+    func binRunsNeedTheJudge(command: String) throws {
+        let dir = try Self.makeDir([
+            "test": "node ok.js", "build": "node ok.js",
+            "postinstall": Self.poison, "prepare": Self.poison,
+        ])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.needsJudge(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("a bare word that is a script key is still read as the script")
+    func bareScriptWordStillRead() throws {
+        let dir = try Self.makeDir(["vitest": Self.poison])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isDeny(Self.evaluate("pnpm vitest", cwd: dir)))
+        #expect(Self.isDeny(Self.evaluate("yarn vitest && yarn eslint .", cwd: dir)))
+    }
+
+    @Test("a bin run under config that preloads code is unresolved")
+    func binRunUnderPreloadConfigUnresolved() throws {
+        let dir = try Self.makeDir(["test": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "node-options=--require=/tmp/x.js\n"
+            .write(to: dir.appendingPathComponent(".npmrc"), atomically: true, encoding: .utf8)
+        #expect(Self.isUnresolved(Self.evaluate("npx tsc", cwd: dir)))
+        #expect(Self.isUnresolved(Self.evaluate("NODE_OPTIONS=--require=/x npx tsc", cwd: dir)))
+    }
+
+    @Test("a process pattern naming a runner launches nothing", arguments: [
+        "pkill -f 'npm run dev'", "pgrep -f 'npm test'", "killall npm", "ps aux | grep 'npm run dev'",
+    ])
+    func processPatternsClear(command: String) throws {
+        let dir = try Self.makeDir(["dev": Self.poison, "test": Self.poison])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isClear(Self.evaluate(command, cwd: dir)), "\(command)")
     }
 
     @Test("read-only runner forms execute no script", arguments: [
@@ -269,15 +334,89 @@ struct PackageScriptGateFormsTests {
 
     @Test("no package.json and nothing earlier in the chain: nothing executes, clear")
     func missingPackageAloneIsClear() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-scriptforms-empty-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = try Self.emptyDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(Self.isClear(Self.evaluate("npm test", cwd: dir)))
-        #expect(Self.isClear(Self.evaluate("yarn evil", cwd: dir)))
-        // An earlier segment may create package.json before the runner reads it.
-        #expect(Self.isUnresolved(Self.evaluate("make && npm test", cwd: dir)))
+        // A bare word with no manifest may still run a bin: the judge decides.
+        #expect(Self.needsJudge(Self.evaluate("yarn evil", cwd: dir)))
+        // An earlier segment may create package.json before the runner
+        // reads it: no script runs now, so the judge (which reads the whole
+        // chain) decides; one that names a manifest is the floor.
+        #expect(Self.needsJudge(Self.evaluate("make && npm test", cwd: dir)))
+        #expect(Self.needsJudge(Self.evaluate("npm test && npm run lint", cwd: dir)))
+        #expect(Self.needsJudge(Self.evaluate("npm install && npm run build && npm test", cwd: dir)))
         #expect(Self.isUnresolved(Self.evaluate("npm test $(touch package.json)", cwd: dir)))
+        #expect(Self.isUnresolved(Self.evaluate(
+            #"echo '{"scripts":{"test":"rm -rf ~"}}' > package.json; npm test"#, cwd: dir)))
+    }
+
+    @Test("a cwd rvd cannot place is unresolved, never clear")
+    func relativeCwdUnresolved() {
+        // rvd's own cwd is not the agent's: a relative workdir from a host
+        // would be resolved against it and find nothing.
+        let verdict = PackageScriptGate.evaluate(
+            command: ShellCommand(rawValue: "npm test"),
+            cwd: WorkingDirectory(rawValue: "web-\(UUID().uuidString)"),
+            home: nil
+        ) { body, _ in
+            EvaluateSession().evaluate(EvaluationRequest(command: body, enabledPacks: dayOnePackIDs))
+        }
+        #expect(Self.isUnresolved(verdict))
+    }
+
+    @Test("another manifest format with no package.json is unresolved", arguments: [
+        "package.yaml", "package.json5",
+    ])
+    func otherManifestUnresolved(file: String) throws {
+        let dir = try Self.emptyDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "scripts:\n  test: rm -rf ~\n".write(
+            to: dir.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        #expect(Self.isUnresolved(Self.evaluate("pnpm test", cwd: dir)), "\(file)")
+        #expect(Self.isUnresolved(Self.evaluate("npm test", cwd: dir)), "\(file)")
+        let sub = dir.appendingPathComponent("src", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        #expect(Self.isUnresolved(Self.evaluate("pnpm test", cwd: sub)), "\(file) above cwd")
+    }
+
+    @Test("a directory rvd cannot read on the way up is unresolved")
+    func unreadableAncestorUnresolved() throws {
+        let dir = try Self.emptyDir()
+        let locked = dir.appendingPathComponent("locked", isDirectory: true)
+        let inner = locked.appendingPathComponent("inner", isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        #expect(Self.isUnresolved(Self.evaluate("npm test", cwd: inner)))
+    }
+
+    @Test("an earlier mutation before a run that executes no script goes to the judge")
+    func mutationBeforeScriptlessRunNeedsJudge() throws {
+        let plain = try Self.makeDir(["test": "node ok.js", "build": "node ok.js"])
+        let hooked = try Self.makeDir(["test": "node ok.js", "prepare": "husky install"])
+        defer { [plain, hooked].forEach { try? FileManager.default.removeItem(at: $0) } }
+        for command in [
+            "rm -rf node_modules && npm install", "git pull && npm install", "rm -rf node_modules && npx tsc",
+            "mkdir -p dist && npm ci",
+        ] {
+            #expect(Self.needsJudge(Self.evaluate(command, cwd: plain)), "\(command)")
+            // A script that will run after the mutation: TOCTOU, the floor.
+            if command.contains("npx") == false {
+                #expect(Self.isUnresolved(Self.evaluate(command, cwd: hooked)), "\(command) hooked")
+            }
+        }
+        // A mutation that names a manifest or runner config is the floor
+        // even when nothing would run today.
+        for command in [
+            #"echo '{"scripts":{"install":"rm -rf ~"}}' > package.json && npm install"#,
+            "cp /tmp/x .npmrc && npx tsc",
+            "rm package.json && npm install",
+        ] {
+            #expect(Self.isUnresolved(Self.evaluate(command, cwd: plain)), "\(command)")
+        }
     }
 
     @Test("malformed package.json stays unresolved")
@@ -418,10 +557,13 @@ struct PackageScriptGateFormsTests {
 
 /// A judge that allows everything: an unresolved graph must not reach it.
 private struct AllowingJudge: JudgePort {
+    var choice = "allow"
+    var risk = 0.0
+
     func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
         let json = """
-        {"choice":"allow","probabilities":{},"riskScore":0,"malicious":0,
-         "risk":0,"checkpoint":"fake","latencyMilliseconds":1,"truncated":false}
+        {"choice":"\(choice)","probabilities":{},"riskScore":\(risk),"malicious":0,
+         "risk":\(risk),"checkpoint":"fake","latencyMilliseconds":1,"truncated":false}
         """
         // swiftlint:disable:next force_try
         return .verdict(try! JSONDecoder().decode(LayaVerdict.self, from: Data(json.utf8)))
@@ -434,13 +576,16 @@ struct PackageScriptGateFloorTests {
         engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
     )
 
-    static func gated(_ command: String, scripts: [String: String], judge: JudgeSelection) throws -> EvaluationResult {
+    fileprivate static func gated(
+        _ command: String, scripts: [String: String], judge: JudgeSelection,
+        port: AllowingJudge = AllowingJudge()
+    ) throws -> EvaluationResult {
         let home = try guardHome(mode: nil)
         defer { remove(home) }
         let dir = try PackageScriptGateFormsTests.makeDir(scripts)
         defer { try? FileManager.default.removeItem(at: dir) }
         let cwd = WorkingDirectory(rawValue: dir.path)
-        return GatedEvaluate(EvaluateSession(), judge: AllowingJudge()).evaluateAgent(
+        return GatedEvaluate(EvaluateSession(), judge: port).evaluateAgent(
             EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
             cwd: cwd, home: home, now: Date(),
             inputs: EvaluationInputs(guardMode: .enforce, judge: judge, store: .gather(home: home, cwd: cwd))
@@ -453,6 +598,22 @@ struct PackageScriptGateFloorTests {
             let result = try Self.gated(#"cd "$D" && npm test"#, scripts: ["test": "node ok.js"], judge: judge)
             #expect(result.decision == .indeterminate(.packageScriptUnresolved), "\(judge)")
         }
+    }
+
+    /// A package bin is not a script graph: it reaches the judge with the
+    /// safe lane closed, exactly as before the floor existed. The judge's
+    /// verdict decides; without a judge bundle it is packs-only.
+    @Test("a package-bin run is decided by the judge, not floored", arguments: [
+        "npx tsc --noEmit", "yarn eslint .", "pnpm vitest", "npx prettier --check .",
+    ])
+    func binRunReachesTheJudge(command: String) throws {
+        let scripts = ["test": "node ok.js"]
+        let blocked = try Self.gated(
+            command, scripts: scripts, judge: Self.fakeBundle, port: AllowingJudge(choice: "block", risk: 0.99))
+        #expect(blocked.decision != .allow, "\(command): the judge must be consulted")
+        #expect(blocked.decision != .indeterminate(.packageScriptUnresolved), "\(command)")
+        let allowed = try Self.gated(command, scripts: scripts, judge: Self.fakeBundle)
+        #expect(allowed.decision == .allow, "\(command): \(allowed.decision)")
     }
 
     @Test("a resolved, clean script graph stays allowed without a judge")

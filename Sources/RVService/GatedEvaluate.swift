@@ -641,6 +641,11 @@ public struct GatedEvaluate: Sendable {
                 ),
                 allowSafeLane: false, scriptDenied: true
             )
+        case .needsJudge:
+            // A package bin, a remote runner, or a run after earlier work
+            // with no script to run: no body the judge cannot see, so the
+            // judge decides from the whole command, never the safe lane.
+            return ScriptScreen(result: result, allowSafeLane: false, scriptDenied: false)
         case .clear(let allBodiesSafe):
             // A body that is not itself safe-lane (`jest`, `node x.js`)
             // keeps the command in front of the judge.
