@@ -246,10 +246,38 @@ struct GatedEffectTests {
                 judgeLog,
                 .denialRow(GatedEffect.DenialRow(
                     at: Self.now, host: .hook(.claude), tool: .bash, ruleID: deny.ruleID,
-                    category: .pack(deny.ruleID.pack), path: "", observed: true
+                    category: .pack(deny.ruleID.pack), path: "", observed: true, wouldBe: .deny
                 )),
             ])
         }
+    }
+
+    /// `would_be` is what the enforced hook would have surfaced: the same
+    /// `HookAuthorization.project` the hook door runs over the enforced
+    /// apply result. An unlockable deny asks; a pinned one (secret) denies.
+    @Test("observe apply: the observed row's would_be matches the enforced hook projection", arguments: [
+        ("git reset --hard", LedgerWouldBe.ask),
+        ("cat ~/.aws/credentials", LedgerWouldBe.deny),
+    ])
+    func observeWouldBeMatchesEnforcedProjection(_ command: String, _ expected: LedgerWouldBe) async throws {
+        let cwd = try #require(WorkingDirectory(validating: "/nonexistent/rv-effects-ws"))
+        let shell = ShellCommand(rawValue: command)
+        let enforced = await Self.decide(.apply, shell, mode: .enforce, cwd: cwd)
+        guard case .deny = enforced.result.decision else {
+            Issue.record("\(command) must deny under enforce, got \(enforced.result.decision)")
+            return
+        }
+        let projected = HookAuthorization.project(result: enforced.result, cwd: cwd)
+        #expect(projected == (expected == .ask ? .ask : .denyPinned), "\(command)")
+        let observed = await Self.decide(.apply, shell, mode: .observe, cwd: cwd)
+        #expect(observed.result.decision == .allow)
+        let rows = observed.effects.compactMap { effect -> GatedEffect.DenialRow? in
+            if case .denialRow(let row) = effect { return row }
+            return nil
+        }
+        #expect(rows.count == 1, "\(command)")
+        #expect(rows.first?.observed == true)
+        #expect(rows.first?.wouldBe == expected, "\(command)")
     }
 
     @Test("agent door never asks for a denial row")
@@ -303,7 +331,7 @@ struct GatedEffectTests {
         #expect(observe.effects == [
             .denialRow(GatedEffect.DenialRow(
                 at: Self.now, host: .hook(.claude), tool: .file(.read), ruleID: deny.ruleID,
-                category: .secret(.environment), path: path, observed: true
+                category: .secret(.environment), path: path, observed: true, wouldBe: .deny
             )),
         ])
     }
