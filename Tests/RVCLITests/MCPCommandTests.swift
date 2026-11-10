@@ -120,6 +120,31 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
     }
 
+    @Test func setupReportsWhatLandedBeforeALaterWriteFails() throws {
+        guard geteuid() != 0 else { return }
+        let fixture = Fixture()
+        try fixture.write(".config/rv/mcp.json", #"{"version":1,"servers":[{"name":"wax","command":"wax-mcp"}]}"#)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let user = try fixture.write(".cursor/mcp.json", text)
+        let project = fixture.home.appendingPathComponent("proj", isDirectory: true)
+        let projectFile = try fixture.write("proj/.cursor/mcp.json", text)
+        // The project directory cannot take the temp file, so its write fails after the user file landed.
+        chmod(projectFile.deletingLastPathComponent().path, 0o555)
+        defer { chmod(projectFile.deletingLastPathComponent().path, 0o755) }
+
+        let message = try #require(MCPRun.setup(
+            host: .cursor, names: [], project: project, undo: false, rvPath: "/opt/rv", environment: fixture.environment()
+        ).failureMessage)
+        let lines = message.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(lines.count == 3)
+        #expect(lines.first == "routed through rv: wax (cursor, \(user.path))")
+        #expect(lines.dropFirst().first?.hasPrefix("previous version kept at \(fixture.config.appendingPathComponent("backups").path)/") == true)
+        #expect(lines.last == "could not write \(projectFile.path)")
+        #expect(fixture.text("proj/.cursor/mcp.json") == text)
+    }
+
     @Test func sandboxProblemsFollowThePlatformCage() {
         let configuration = MCPConfiguration(servers: [
             MCPServerDefinition(name: "bare", command: "b"),
