@@ -140,7 +140,7 @@ enum OpenSSLChain {
         """
 }
 
-func hexData(_ hex: String) -> Data {
+private func hexData(_ hex: String) -> Data {
     Data(stride(from: 0, to: hex.count, by: 2).map { offset in
         let start = hex.index(hex.startIndex, offsetBy: offset)
         return UInt8(hex[start..<hex.index(start, offsetBy: 2)], radix: 16)!
@@ -190,7 +190,7 @@ private func opensslChainDirectory() throws -> URL {
     return root
 }
 
-func temporaryConfigDirectory() throws -> URL {
+private func temporaryConfigDirectory() throws -> URL {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-machine-log-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -429,6 +429,36 @@ struct MachineRevisionLogPureTests {
         }
     }
 
+    @Test func verifyRejectsValidlySealedRecordWithBrokenPrevLinkage() {
+        // Record 2 carries a correct MAC over the wrong `prev`, and the tip
+        // seals it honestly, so only the prev-linkage check can refuse it.
+        let key = Self.key
+        let wrongPrev = String(repeating: "a", count: 64)
+        let mac2 = Log.recordMAC(
+            revision: 2, prev: wrongPrev, recordedAtMs: OpenSSLChain.ms2,
+            toml: Data(OpenSSLChain.toml2.utf8), keyBytes: key
+        )
+        let b64 = { (toml: String) in Data(toml.utf8).base64EncodedString() }
+        let log = [
+            #"{"mac":"\#(OpenSSLChain.mac1)","prev":"genesis","recorded_at_ms":\#(OpenSSLChain.ms1),"revision":1,"toml_base64":"\#(b64(OpenSSLChain.toml1))"}"#,
+            #"{"mac":"\#(mac2)","prev":"\#(wrongPrev)","recorded_at_ms":\#(OpenSSLChain.ms2),"revision":2,"toml_base64":"\#(b64(OpenSSLChain.toml2))"}"#,
+        ].joined(separator: "\n") + "\n"
+        let tip = #"{"mac":"\#(Log.tipMAC(revision: 2, tip: mac2, keyBytes: key))","revision":2,"tip":"\#(mac2)"}"#
+        #expect(throws: TypedRuleStoreError.logCorrupted) {
+            try Log.verify(logBytes: Data(log.utf8), tipBytes: Data(tip.utf8), keyBytes: key)
+        }
+    }
+
+    @Test func verifyRejectsHonestlySealedTipForAnEarlierRecord() {
+        // The tip MAC is valid but pins record 1's MAC while the log ends at
+        // record 2, so only the tip-equals-head check can refuse it.
+        let key = Self.key
+        let tip = #"{"mac":"\#(Log.tipMAC(revision: 2, tip: OpenSSLChain.mac1, keyBytes: key))","revision":2,"tip":"\#(OpenSSLChain.mac1)"}"#
+        #expect(throws: TypedRuleStoreError.logCorrupted) {
+            try Log.verify(logBytes: opensslLogBytes(), tipBytes: Data(tip.utf8), keyBytes: key)
+        }
+    }
+
     // MARK: Missing log
 
     @Test func classifyAbsentTable() throws {
@@ -574,7 +604,7 @@ struct MachineRevisionLogPureTests {
     }
 }
 
-func opensslLog() -> String {
+private func opensslLog() -> String {
     func line(_ revision: Int, prev: String, ms: Int64, toml: String, mac: String) -> String {
         let b64 = Data(toml.utf8).base64EncodedString()
         return #"{"mac":"\#(mac)","prev":"\#(prev)","recorded_at_ms":\#(ms),"revision":\#(revision),"toml_base64":"\#(b64)"}"#
@@ -585,6 +615,6 @@ func opensslLog() -> String {
     ].joined(separator: "\n") + "\n"
 }
 
-func opensslTip() -> String {
+private func opensslTip() -> String {
     #"{"mac":"\#(OpenSSLChain.tipMAC)","revision":2,"tip":"\#(OpenSSLChain.mac2)"}"#
 }
