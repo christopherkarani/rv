@@ -97,6 +97,46 @@ struct BlocksCommandTests {
         #expect(lines[1].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  git reset --hard"))
     }
 
+    /// Observed would-ask rows (enforcement would have asked a human) say
+    /// `observed ask`; would-deny rows keep printing `observed`. JSON
+    /// carries `would_be` on observed rows only.
+    @Test func observedWouldAskRowsAreDistinct() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ledger = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        func record(_ offset: TimeInterval, _ host: HookHost, observed: Bool, wouldBe: LedgerWouldBe) -> DenialLedgerRecord {
+            DenialLedgerRecord(
+                timestamp: now.addingTimeInterval(offset),
+                host: .hook(host),
+                tool: .bash,
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                category: .pack(.coreGit),
+                path: "",
+                observed: observed,
+                wouldBe: wouldBe
+            )
+        }
+        ledger.append(record(-10, .cursor, observed: false, wouldBe: .deny), now: now)
+        ledger.append(record(-5, .codex, observed: true, wouldBe: .deny), now: now)
+        ledger.append(record(0, .claude, observed: true, wouldBe: .ask), now: now)
+        let lines = try BlocksRun.list(home: home, json: false, now: now).split(separator: "\n").map(String.init)
+        #expect(lines.count == 3)
+        #expect(lines[0].hasSuffix("Z  observed ask  claude  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[1].hasSuffix("Z  observed  codex  Bash  core.git:reset-hard  core.git  "))
+        #expect(lines[2].hasSuffix("Z  cursor  Bash  core.git:reset-hard  core.git  "))
+        let json = try BlocksRun.list(home: home, json: true, now: now)
+        let rows = try #require(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
+        )
+        #expect(rows.count == 3)
+        #expect(rows[0]["would_be"] as? String == "ask")
+        #expect(rows[0]["observed"] as? Bool == true)
+        #expect(rows[1]["would_be"] as? String == "deny")
+        #expect(rows[2]["would_be"] == nil)
+        #expect(rows[2]["observed"] == nil)
+    }
+
     @Test func fileToolPathEscapesControls() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
