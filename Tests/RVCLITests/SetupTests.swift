@@ -1155,6 +1155,9 @@ private func fixtureLoginHome() throws -> URL {
             .setup,
             EX_UNAVAILABLE,
             "rv setup failed: unable to enable systemd unit\n"
+                + "fix: systemctl --user enable --now dev.rv.evaluate.service "
+                + "from a login session with a user systemd manager; "
+                + "journalctl --user -u dev.rv.evaluate.service and rv doctor show the cause\n"
         ),
         (
             .systemdApplyFailed(.disable),

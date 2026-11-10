@@ -149,6 +149,11 @@ private func setupFailureParts(
     case .systemdApplyFailed(.enable):
         phrase = "unable to enable systemd unit"
         exitCode = EX_UNAVAILABLE
+        detail.append(
+            "fix: systemctl --user enable --now \(SystemdUserTemplate.unitName) "
+                + "from a login session with a user systemd manager; "
+                + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
+        )
     case .systemdApplyFailed(.disable):
         phrase = "unable to disable systemd unit"
         exitCode = EX_UNAVAILABLE
