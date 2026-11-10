@@ -330,13 +330,3 @@ struct ReviewSession<Mode: ReviewMode>: Equatable, Sendable {
         if !items.contains(where: { Mode.id(of: $0) == id }) { selection = .none }
     }
 }
-
-extension ReviewSession {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.connection == rhs.connection && lhs.items == rhs.items
-            && lhs.selection == rhs.selection && lhs.lastStatus == rhs.lastStatus
-            && lhs.notice == rhs.notice && lhs.arrivals == rhs.arrivals
-            && lhs.listTicket == rhs.listTicket && lhs.appliedList == rhs.appliedList
-            && lhs.bindTicket == rhs.bindTicket && lhs.baselinePending == rhs.baselinePending
-    }
-}
