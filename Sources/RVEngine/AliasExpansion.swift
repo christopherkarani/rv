@@ -231,8 +231,12 @@ private struct AliasResolver {
         return (commands, true)
     }
 
-    /// `alias g=git ll='ls -la'`. False when a name or value is dynamic.
+    /// `alias g=git ll='ls -la'`. False when a name or value is dynamic, or
+    /// for zsh global/suffix aliases (`-g`, `-s`), which expand outside
+    /// command position where this resolver does not look.
     private mutating func recordShellAliases(_ words: [String]) -> Bool {
+        let flags = words.filter { $0.hasPrefix("-") && $0 != "--" }
+        if flags.contains(where: { $0.contains("g") || $0.contains("s") }) { return false }
         for word in words where word.hasPrefix("-") == false {
             guard let eq = word.firstIndex(of: "="), eq > word.startIndex else { continue }
             let name = String(word[..<eq])
@@ -325,6 +329,8 @@ private func parseGitAliasGlobals(_ words: [String]) -> GitAliasGlobals? {
         if word.hasPrefix("--config-env=") {
             if hidesConfig(String(word.dropFirst("--config-env=".count)), fromEnvironment: true) { return nil }
         }
+        // Like GIT_EXEC_PATH: git runs its subcommands from that directory.
+        if word.hasPrefix("--exec-path=") { return nil }
         guard gitValueGlobals.contains(word) else {
             globals.words.append(word)
             index += 1

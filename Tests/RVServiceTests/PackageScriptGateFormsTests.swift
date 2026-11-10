@@ -251,6 +251,7 @@ struct PackageScriptGateFormsTests {
         "npm -w pkg run evil",
         "npm --workspace=pkg test",
         "npm test --workspaces",
+        "npm test --ws",
         "pnpm -r test",
         "pnpm --filter app test",
         "yarn workspace app run evil",

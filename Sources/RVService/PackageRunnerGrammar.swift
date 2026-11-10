@@ -375,7 +375,7 @@ enum PackageRunnerGrammar {
     /// packages, swaps the shell, preloads code, or moves the config.
     static let dangerousLongNames = [
         "prefix", "dir", "cwd", "script-shell", "node-options", "userconfig", "globalconfig", "npmrc",
-        "preload", "workspace", "workspaces", "include-workspace-root", "workspace-root", "recursive",
+        "preload", "workspace", "workspaces", "ws", "include-workspace-root", "workspace-root", "recursive",
         "filter", "filter-prod", "global", "location", "shell-emulator", "shell", "require", "config",
         "call", "eval", "print", "loader", "import", "experimental-loader", "env-file", "conditions",
         "use-node-version", "node-linker", "package-import-method",

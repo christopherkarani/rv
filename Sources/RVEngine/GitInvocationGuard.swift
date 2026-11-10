@@ -83,10 +83,18 @@ private func assignmentValue(_ word: String) -> String {
 /// known no-op or plain viewer, so the setting hides nothing.
 func isInertProgramSetting(_ name: String, value: String) -> Bool {
     let name = name.lowercased()
+    if isSubmoduleUpdateKey(name) { return inertSubmoduleUpdateValues.contains(value.lowercased()) }
     let pagerOrEditor = ["core.pager", "core.editor", "sequence.editor", "git_pager", "git_editor", "git_sequence_editor"]
         .contains(name) || name.hasPrefix("pager.")
     return pagerOrEditor && inertProgramValues.contains(value)
 }
+
+/// `submodule.<name>.update`: `!cmd` runs a command on `submodule update`.
+private func isSubmoduleUpdateKey(_ key: String) -> Bool {
+    key.hasPrefix("submodule.") && key.hasSuffix(".update")
+}
+
+private let inertSubmoduleUpdateValues: Set<String> = ["checkout", "rebase", "merge", "none"]
 
 private let inertProgramValues: Set<String> = ["", "cat", "less", "less -R", "less -FRX", "more", "true", ":"]
 
@@ -95,7 +103,7 @@ private let inertProgramValues: Set<String> = ["", "cat", "less", "less -R", "le
 /// command text, so the gate cannot judge what runs.
 func isProgramOrIncludeConfigKey(_ key: String) -> Bool {
     let key = key.lowercased()
-    if programConfigKeys.contains(key) { return true }
+    if programConfigKeys.contains(key) || isSubmoduleUpdateKey(key) { return true }
     if programConfigPrefixes.contains(where: { key.hasPrefix($0) }) { return true }
     guard let last = key.split(separator: ".").last, key.contains(".") else { return false }
     return programConfigLastComponents.contains(String(last))
@@ -108,6 +116,7 @@ private let programConfigKeys: Set<String> = [
     "gpg.program", "uploadpack.packobjectshook", "interactive.difffilter",
     "protocol.allow", "init.templatedir", "receive.procreceiverefs", "ssh.variant",
     "sendemail.sendmailcmd", "sendemail.smtpserver", "web.browser", "instaweb.httpd",
+    "sendemail.tocmd", "sendemail.cccmd", "sendemail.headercmd", "imap.tunnel", "gpg.ssh.defaultkeycommand",
 ]
 
 /// `includeIf.<cond>.path`, `pager.<cmd>`, `protocol.<name>.allow`, ...

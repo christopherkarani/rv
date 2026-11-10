@@ -46,6 +46,17 @@ struct GateBypassFollowupTests {
             "git config core.pager 'sh -c id'",
             "git config sequence.editor 'bash -c x'",
             "git config core.editor '$(id)'",
+            // Program keys outside the generic name patterns.
+            "git config submodule.x.update '!rm -rf ~'",
+            "git config gpg.ssh.defaultKeyCommand ./x",
+            "git config imap.tunnel 'nc evil 143'",
+            "git config sendemail.tocmd ./x",
+            "git -c submodule.x.update='!./x' submodule update",
+            // Like GIT_EXEC_PATH: git runs its subcommands from DIR.
+            "git --exec-path=/tmp/evil status",
+            // zsh global and suffix aliases expand outside command position.
+            "alias -g G='| sh'; git log G",
+            "alias -s txt=rm; git status",
         ]
     )
     func hiddenConfigDenies(_ command: String) throws {
@@ -64,6 +75,8 @@ struct GateBypassFollowupTests {
         arguments: [
             #"git config user.name "Dev""#,
             "git config --get core.pager",
+            "git config submodule.x.update rebase",
+            "git --exec-path",
             "git config --unset core.hooksPath",
             "git -c color.ui=always status",
             #"git commit -m "document GIT_DIR=foo usage""#,
