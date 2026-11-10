@@ -85,6 +85,49 @@ struct OwnerGateRefusalTests {
         }
     }
 
+    /// `changedDuringReview` words itself by subject (redeem reads "grant",
+    /// egress approve/deny read "proposal", allowlist reads "allowlist entry").
+    /// No CLI seam can change a row between the pre-auth read and the re-read,
+    /// so a run test cannot reach that text. The site-to-subject wiring is
+    /// pinned at the source instead, the way `WorkspaceOwnershipTests` pins
+    /// ownership: adding, dropping or re-subjecting a site fails here.
+    @Test func everyCeremonySitePassesItsSubject() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/RVCLI", isDirectory: true)
+        let call = try NSRegularExpression(
+            pattern: #"failOwnerGate\(\s*error,\s*command:\s*"([^"]+)",\s*subject:\s*\.(\w+)\s*\)"#
+        )
+        var wired: [String] = []
+        var calls = 0
+        let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        while let url = files.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let body = try String(contentsOf: url, encoding: .utf8)
+            calls += body.components(separatedBy: ".failOwnerGate(").count - 1
+            let whole = NSRange(body.startIndex..., in: body)
+            for match in call.matches(in: body, range: whole) {
+                let command = try #require(Range(match.range(at: 1), in: body))
+                let subject = try #require(Range(match.range(at: 2), in: body))
+                wired.append("\(body[command]) -> \(body[subject])")
+            }
+        }
+        #expect(calls == wired.count, "a failOwnerGate call does not use the literal (error, command:, subject:) shape")
+        #expect(wired.sorted() == [
+            "allow-once -> grant",
+            "allow-once clear -> grant",
+            "allow-once mint -> grant",
+            "allowlist add -> allowlistEntry",
+            "allowlist add-command -> allowlistEntry",
+            "allowlist remove -> allowlistEntry",
+            "egress approve -> proposal",
+            "egress deny -> proposal",
+            "egress pending -> proposal",
+        ])
+    }
+
     @Test func failOwnerGateMapsGateErrorToExit2WithText() throws {
         let out = CLIOutputCapture()
         try withCLIProcess(output: out) {
