@@ -20,7 +20,7 @@ struct JudgeGateTests {
         #expect(PackageScriptGate.scriptNames(in: "npm test") == ["test"])
         #expect(PackageScriptGate.scriptNames(in: "pnpm run build") == ["build"])
         #expect(PackageScriptGate.scriptNames(in: "bun lint") == ["lint"])
-        #expect(PackageScriptGate.scriptNames(in: "npm install left-pad") == nil)
+        #expect(PackageScriptGate.scriptNames(in: "npm install left-pad") == PackageRunnerGrammar.installLifecycle)
         #expect(PackageScriptGate.scriptNames(in: "ls -la") == nil)
     }
 

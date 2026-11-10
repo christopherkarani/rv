@@ -88,7 +88,6 @@ struct PackageScriptGateFormsTests {
 
     @Test("builtins and non-script verbs never read scripts", arguments: [
         "npm install left-pad",
-        "npm exec foo",
         "yarn add left-pad",
         "yarn install",
         "pnpm install",
@@ -96,7 +95,6 @@ struct PackageScriptGateFormsTests {
         "bun test",
         "bun build ./x.ts",
         "bun install",
-        "yarn notascript",
         "npm run",
         "yarn",
     ])
@@ -106,6 +104,82 @@ struct PackageScriptGateFormsTests {
         ])
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(Self.isClear(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("lifecycle verbs run their lifecycle scripts", arguments: [
+        "npm install", "npm i", "npm ci", "npm install lodash", "npm it", "npm rebuild", "npm update",
+        "npm audit fix", "npm pack", "npm publish", "npm version patch",
+        "yarn", "yarn install", "yarn add lodash", "pnpm install", "pnpm i", "pnpm add lodash",
+        "bun install", "bun add lodash", "node --run evil",
+    ])
+    func lifecycleVerbsDeny(command: String) throws {
+        let dir = try Self.makeDir([
+            "preinstall": Self.poison, "postinstall": Self.poison, "prepare": Self.poison,
+            "prepack": Self.poison, "preversion": Self.poison, "prepublishOnly": Self.poison,
+            "evil": Self.poison,
+        ])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isDeny(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("verbs, flags and runners outside the exact grammar are unresolved", arguments: [
+        "npm tes", "npm runScript test", "npm exec foo", "npm x foo", "npx foo", "pnpx foo",
+        "pnpm dlx foo", "pnpm exec foo", "yarn dlx foo", "bunx foo", "bun x foo",
+        "corepack yarn test", "deno task build", "npm init vite",
+        "npm --pre /tmp test", "npm --scri=/x test", "npm test --script-sh=/x", "npm --frobnicate test",
+        "npm -X test", "npm config set script-shell /x", "npm set script-shell /x",
+        "npm pkg set scripts.test=x", "yarn config set x y", "pnpm config set x y",
+        "yarn eslint .", "pnpm tsc", "bun eslint", "yarn notascript",
+    ])
+    func outsideGrammarUnresolved(command: String) throws {
+        let dir = try Self.makeDir(["test": "node ok.js", "build": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isUnresolved(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("read-only runner forms execute no script", arguments: [
+        "npm", "npm --version", "npm -v", "npm help", "npm ls", "npm view react", "npm outdated",
+        "npm config get prefix", "yarn --version", "yarn why left-pad", "pnpm ls", "pnpm --version",
+        "bun --version", "bun test", "bun run ./x.ts",
+    ])
+    func readOnlyFormsClear(command: String) throws {
+        let dir = try Self.makeDir(["test": Self.poison, "install": Self.poison, "prepare": Self.poison])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isClear(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("dynamic, launcher-wrapped and env-overridden runners are never clear", arguments: [
+        "$NPM test", #""$(which npm)" test"#, "xargs npm test", "watch npm test",
+        #"find . -name x -exec npm test \;"#, "caffeinate npm test", "script -q /dev/null npm test",
+        "export npm_config_script_shell=/x; npm test", "export NODE_OPTIONS=--require=/x && npm test",
+        "PATH=/tmp/evil:$PATH npm test", "source ./env.sh && npm test",
+    ])
+    func wrappedRunnersNotClear(command: String) throws {
+        let dir = try Self.makeDir(["test": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isClear(Self.evaluate(command, cwd: dir)) == false, "\(command)")
+    }
+
+    @Test("persistent runner config that swaps the shell or preloads code is unresolved", arguments: [
+        (".npmrc", "script-shell=/tmp/evil.sh\n", "npm test"),
+        (".npmrc", "node-options=--require=/tmp/x.js\n", "npm test"),
+        (".yarnrc.yml", "shell: /tmp/evil.sh\n", "yarn test"),
+        ("bunfig.toml", "preload = [\"./x.ts\"]\n", "bun run test"),
+    ])
+    func persistentConfigUnresolved(file: String, content: String, command: String) throws {
+        let dir = try Self.makeDir(["test": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try content.write(to: dir.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        #expect(Self.isUnresolved(Self.evaluate(command, cwd: dir)), "\(file)")
+    }
+
+    @Test("an ordinary .npmrc keeps the graph resolvable")
+    func ordinaryNpmrcClear() throws {
+        let dir = try Self.makeDir(["test": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "registry=https://registry.npmjs.org/\nsave-exact=true\n"
+            .write(to: dir.appendingPathComponent(".npmrc"), atomically: true, encoding: .utf8)
+        #expect(Self.isClear(Self.evaluate("npm test", cwd: dir)))
     }
 
     @Test("workspace and recursive runs target other packages: unresolved", arguments: [

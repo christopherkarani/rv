@@ -8,15 +8,17 @@ import RVEngine
 ///
 /// Runner spellings are read from launched argv (`launchedCommands`), so
 /// launchers (`time`, `nohup`, `sudo`, `env`, `timeout`) and shell payloads
-/// (`sh -c "npm test"`) are seen through. Recognised: global flags before
-/// the verb (any flag may take a value, so every later word is a verb
-/// candidate), `run`/`run-script`/`rum`/`urn`, `test`/`t`/`tst`, `start`,
-/// `stop`, `restart`, `build`, `lint`, and yarn/pnpm/bun implicit names
-/// (`yarn evil`) when the name is a `scripts` key.
+/// (`sh -c "npm test"`) are seen through. What each argv runs is read by
+/// the exact grammar in `PackageRunnerGrammar`: script verbs, lifecycle
+/// verbs (their lifecycle scripts), read-only verbs, and everything else
+/// unresolved. A runner behind a dynamic head or an unmodelled launcher
+/// (`xargs npm test`) is unresolved too.
 ///
 /// Tri-state, fail-closed: a runner invocation whose script graph cannot
 /// be fully resolved (no cwd, a `cd` that cannot be tracked, a workspace
-/// or recursive run, a script-shell/node-options override, a malformed
+/// or recursive run, a script-shell/node-options/PATH override in the
+/// unit or exported earlier in the chain, persistent runner config that
+/// swaps the shell (`RunnerConfigScan`), a malformed
 /// package.json, a missing one after earlier chain work, nesting past the
 /// depth cap, a cycle, the evaluation bound, a tree-mutating or
 /// package.json-touching segment earlier in the same chain) is
@@ -36,57 +38,14 @@ enum PackageScriptGate {
         case unresolved
     }
 
-    static let runners: Set<String> = ["npm", "pnpm", "yarn", "bun"]
-    /// Verbs that name scripts for every runner (npm aliases included).
-    static let scriptVerbs: [String: [String]] = [
-        "test": ["test"], "start": ["start"], "stop": ["stop"],
-        "restart": ["restart", "stop", "start"], "build": ["build"], "lint": ["lint"],
+    /// Heads that may run package scripts or package bins.
+    static let runnerHeads: Set<String> = [
+        "npm", "pnpm", "yarn", "yarnpkg", "bun", "npx", "pnpx", "bunx", "corepack", "deno",
     ]
-    static let npmAliases: [String: String] = ["t": "test", "tst": "test"]
-    static let runVerbs: Set<String> = ["run", "run-script", "rum", "urn"]
-    /// `bun test` / `bun build` are bun builtins (test runner, bundler),
-    /// not package-script invocations; only `bun run <name>` and non-
-    /// builtin verbs like `bun lint` execute `scripts.*`.
-    static let bunBuiltinVerbs: Set<String> = ["test", "build"]
-    /// yarn/pnpm/bun subcommands that never name a package script; any
-    /// other first word is an implicit script name when it is a key.
-    static let builtins: [String: Set<String>] = [
-        "yarn": [
-            "add", "audit", "autoclean", "bin", "cache", "check", "config", "create", "dedupe",
-            "dlx", "exec", "explain", "generate-lock-entry", "global", "help", "import", "info",
-            "init", "install", "licenses", "link", "list", "login", "logout", "node", "npm",
-            "outdated", "owner", "pack", "patch", "plugin", "policies", "publish", "rebuild",
-            "remove", "search", "set", "tag", "team", "unlink", "unplug", "up", "upgrade",
-            "upgrade-interactive", "version", "versions", "why",
-        ],
-        "pnpm": [
-            "add", "audit", "bin", "config", "create", "dedupe", "deploy", "dlx", "doctor", "env",
-            "exec", "fetch", "i", "import", "init", "install", "install-test", "licenses", "link",
-            "list", "ls", "outdated", "pack", "patch", "patch-commit", "prune", "publish",
-            "rebuild", "remove", "rm", "root", "server", "setup", "store", "un", "uninstall",
-            "unlink", "up", "update", "why",
-        ],
-        "bun": [
-            "a", "add", "audit", "build", "c", "create", "exec", "i", "info", "init", "install",
-            "link", "outdated", "patch", "pm", "publish", "remove", "repl", "rm", "test", "unlink",
-            "update", "upgrade", "why", "x",
-        ],
-    ]
-    /// Flags that run scripts in other packages than the one found here.
-    static let crossPackageFlags: Set<String> = [
-        "-w", "--workspace", "--workspaces", "-ws", "--include-workspace-root",
-        "-r", "--recursive", "--filter", "-F", "--filter-prod", "--workspace-root",
-    ]
-    /// Flags that swap the shell or preload code for every script.
-    static let configOverrideFlags: Set<String> = [
-        "--script-shell", "--node-options", "--userconfig", "--globalconfig", "--preload",
-    ]
-    static let prefixFlags = ["--prefix", "--dir", "--cwd", "-C"]
 
     static let maxDepth = 3
     /// Script bodies evaluated per top-level invocation; past it, unresolved.
     static let maxBodyEvaluations = 64
-    private static let maxVerbCandidates = 16
 
     /// Evaluate every runner invocation in the command. `evalBody` runs the
     /// product evaluation (semantics + probes) for one script body in
@@ -102,6 +61,7 @@ enum PackageScriptGate {
         var priorWork = false
         var unresolved = false
         var allBodiesSafe = true
+        var chainOverride = false
         for unit in chainUnits(command.rawValue) {
             let launched = launchedCommands(unit.text)
             let unitTokens = tokens(in: unit.text)
@@ -125,12 +85,15 @@ enum PackageScriptGate {
                 // scope is not modelled, so the cwd is now unknown.
                 effectiveCwd = nil
             }
-            // Input the launcher parser stopped following may hide a runner.
-            if launchIsTruncated(unit.text) { unresolved = true }
+            // Input the launcher parser stopped following may hide a runner,
+            // and so may a dynamic head or a launcher the parser does not
+            // unwrap (`xargs npm test`, `watch npm test`).
+            if launchIsTruncated(unit.text) || hidesRunner(unit.text, launched) { unresolved = true }
+            let overridden = chainOverride || hasConfigOverrideAssignment(unitTokens)
             for argv in launched {
                 guard let invocation = scriptInvocation(in: argv) else { continue }
-                if invocation.unresolvable || hasConfigOverrideAssignment(unitTokens)
-                    || treeMutated || unitMutates {
+                if invocation.runsNothing { continue }
+                if invocation.unresolvable || overridden || treeMutated || unitMutates {
                     // A mutation earlier in this chain runs before the script
                     // does; the package.json read now may not describe what
                     // executes (TOCTOU).
@@ -147,6 +110,7 @@ enum PackageScriptGate {
                 }
             }
             if unitMutates { treeMutated = true }
+            if setsOverride(unitTokens, launched) { chainOverride = true }
             priorWork = true
         }
         return unresolved ? .unresolved : .clear(allBodiesSafe: allBodiesSafe)
@@ -194,13 +158,15 @@ enum PackageScriptGate {
             return priorWork ? .unresolved : .clear(allBodiesSafe: true)
         }
         guard let scripts = loadScripts(packageDir),
-              let packageCwd = WorkingDirectory(rawValue: packageDir.path)
+              let packageCwd = WorkingDirectory(rawValue: packageDir.path),
+              let names = invocation.names(in: scripts),
+              !RunnerConfigScan.swapsShellOrPreloads(packageDir: packageDir, home: home)
         else { return .unresolved }
         // The graph never outlives this call.
         return withoutActuallyEscaping(evalBody) { evalBody in
             var graph = ScriptGraph(scripts: scripts, packageCwd: packageCwd, evalBody: evalBody)
             var unresolved = false
-            for name in invocation.names(in: scripts) {
+            for name in names {
                 switch graph.check(name, depth: 0) {
                 case .clear: continue
                 case .deny(let hit): return .deny(hit)
@@ -213,21 +179,7 @@ enum PackageScriptGate {
 
     // MARK: - Parsing
 
-    struct Invocation {
-        /// Names the runner runs whether or not they are keys.
-        var explicit: [String] = []
-        /// yarn/pnpm/bun bare words: a script only when `scripts` has it.
-        var implicit: [String] = []
-        var prefixDir: String?
-        /// Workspace/recursive run, config override, or an unbounded parse.
-        var unresolvable = false
-
-        var isEmpty: Bool { explicit.isEmpty && implicit.isEmpty && !unresolvable }
-
-        func names(in scripts: [String: String]) -> [String] {
-            explicit + implicit.filter { scripts[$0] != nil }
-        }
-    }
+    typealias Invocation = PackageRunnerGrammar.Reading
 
     /// Parse one plain segment into dequoted whitespace tokens.
     static func tokens(in raw: String) -> [String] {
@@ -240,7 +192,7 @@ enum PackageScriptGate {
     }
 
     static func basename(_ token: String) -> String {
-        token.split(separator: "/").last.map(String.init) ?? token
+        PackageRunnerGrammar.basename(token)
     }
 
     static func isEnvAssignment(_ token: String) -> Bool {
@@ -249,86 +201,79 @@ enum PackageScriptGate {
     }
 
     /// Recognize one launched argv (`argv[0]` already reduced to its
-    /// folded command name) as a script-running runner invocation.
+    /// folded command name) as a package-runner invocation
+    /// (`PackageRunnerGrammar`); nil when it is not a runner at all.
     static func scriptInvocation(in argv: [String]) -> Invocation? {
-        guard let runner = argv.first.map(basename), runners.contains(runner.lowercased()) else { return nil }
-        let runnerName = runner.lowercased()
-        let words = Array(argv.dropFirst().prefix { $0 != "--" })
-        var invocation = Invocation()
-        let candidates = verbCandidates(words)
-        if candidates.count > maxVerbCandidates { invocation.unresolvable = true }
-        for index in candidates.prefix(maxVerbCandidates) {
-            addNames(runner: runnerName, verbAt: index, words: words, into: &invocation)
-        }
-        guard !invocation.isEmpty else { return nil }
-        // A workspace or override flag only matters when scripts run.
-        scanFlags(words, into: &invocation)
-        return invocation
+        PackageRunnerGrammar.read(argv)
     }
 
-    /// Prefix, workspace, and override flags anywhere before `--`.
-    private static func scanFlags(_ words: [String], into invocation: inout Invocation) {
-        var crossPackage = false
-        var override = false
-        for (index, word) in words.enumerated() where word.hasPrefix("-") {
-            let name = word.split(separator: "=", maxSplits: 1).first.map(String.init) ?? word
-            if crossPackageFlags.contains(name) { crossPackage = true }
-            if configOverrideFlags.contains(name) { override = true }
-            for flag in prefixFlags {
-                if word == flag, index + 1 < words.count { invocation.prefixDir = words[index + 1] }
-                if word.hasPrefix(flag + "=") { invocation.prefixDir = String(word.dropFirst(flag.count + 1)) }
+    /// Heads that only print or search text: a runner word in their
+    /// operands (`git commit -m "npm test"`) is data, not a launch.
+    static let textOnlyHeads: Set<String> = [
+        "echo", "printf", "git", "gh", "grep", "egrep", "fgrep", "rg", "ag", "ack", "man", "which", "type",
+        "whereis", "whatis", "apropos", "cat", "less", "more", "head", "tail", "wc", "sort", "uniq", "cut",
+        "tr", "brew", "apt", "apt-get", "dnf", "yum", "pacman", "port", "winget", "choco", "scoop", "jq",
+    ]
+    /// Operand words that make a dynamic head look like a runner call.
+    static let runnerVerbWords: Set<String> = [
+        "run", "run-script", "test", "t", "tst", "start", "stop", "restart", "install", "i", "ci", "it",
+        "cit", "add", "pack", "publish", "version", "rebuild", "exec", "x", "dlx", "task", "--run",
+        "create", "init", "update", "up", "upgrade",
+    ]
+
+    /// A runner the launcher parser did not surface as a command of its
+    /// own: behind a dynamic head (`$NPM test`, `"$(which npm)" test`) or
+    /// an unmodelled launcher (`xargs`, `find -exec`, `watch`, `script`,
+    /// `caffeinate`, `arch`). Over-claims (`docker run node npm test`),
+    /// never under-claims a modelled spelling.
+    static func hidesRunner(_ unitText: String, _ launched: [[String]]) -> Bool {
+        for argv in dynamicHeadLaunches(unitText) {
+            let head = argv[0].lowercased()
+            if runnerHeads.contains(where: { head.contains($0) }) || head.contains("node") { return true }
+            if argv.dropFirst().contains(where: { runnerVerbWords.contains($0.lowercased()) }) { return true }
+        }
+        for argv in launched {
+            guard let head = argv.first.map(basename)?.lowercased(),
+                  scriptInvocation(in: argv) == nil, !textOnlyHeads.contains(head)
+            else { continue }
+            let words = argv.dropFirst().flatMap { tokens(in: $0) }.map { basename($0).lowercased() }
+            for (index, word) in words.enumerated() where index + 1 < words.count {
+                if runnerHeads.contains(word) || (word == "node" && words[index + 1].hasPrefix("--run")) {
+                    return true
+                }
             }
         }
-        if crossPackage || override { invocation.unresolvable = true }
+        return false
     }
 
-    /// The first positional word is the verb unless an earlier flag takes
-    /// a value; a flag without `=` may, so the next positional is also a
-    /// candidate, and so on until a positional follows a non-flag.
-    private static func verbCandidates(_ words: [String]) -> [Int] {
-        var candidates: [Int] = []
-        var previousWasValuelessFlag = false
-        for (index, word) in words.enumerated() {
-            if word.hasPrefix("-"), word != "-" {
-                previousWasValuelessFlag = !word.contains("=")
-                continue
-            }
-            candidates.append(index)
-            if !previousWasValuelessFlag { break }
-            previousWasValuelessFlag = false
-        }
-        return candidates
+    /// Environment names that change what a script runs: the runner's
+    /// config (`npm_config_script_shell`, `YARN_*`), preloaded code
+    /// (`NODE_OPTIONS`), or which program a body's words resolve to (`PATH`).
+    static func isOverrideName(_ raw: String) -> Bool {
+        let name = raw.lowercased()
+        return ["npm_config_", "yarn_", "pnpm_", "bun_config_"].contains { name.hasPrefix($0) }
+            || ["node_options", "node_path", "path", "bash_env", "env", "shell"].contains(name)
     }
 
-    private static func addNames(runner: String, verbAt index: Int, words: [String], into invocation: inout Invocation) {
-        let verb = words[index]
-        if runVerbs.contains(verb) {
-            if let name = words[(index + 1)...].first(where: { !$0.hasPrefix("-") }) {
-                invocation.explicit.append(name)
-            }
-            return
-        }
-        if runner == "yarn", verb == "workspace" || verb == "workspaces" {
-            invocation.unresolvable = true
-            return
-        }
-        let canonical = runner == "npm" ? npmAliases[verb] ?? verb : verb
-        if let names = scriptVerbs[canonical] {
-            if runner == "bun", bunBuiltinVerbs.contains(canonical) { return }
-            invocation.explicit.append(contentsOf: names)
-            return
-        }
-        guard runner != "npm", builtins[runner]?.contains(verb) != true else { return }
-        invocation.implicit.append(verb)
-    }
-
-    /// `npm_config_*` and `NODE_OPTIONS` assignments in front of a runner
-    /// change the script shell or preload code for every script.
+    /// An override assignment anywhere in the unit (`FOO=x npm test`,
+    /// `export NODE_OPTIONS=…`, `env PATH=… npm test`).
     static func hasConfigOverrideAssignment(_ tokens: [String]) -> Bool {
         tokens.contains { token in
             guard isEnvAssignment(token) else { return false }
-            let name = token.prefix { $0 != "=" }.lowercased()
-            return name.hasPrefix("npm_config_") || name == "node_options"
+            return isOverrideName(String(token.prefix { $0 != "=" }))
+        }
+    }
+
+    /// A unit that changes the environment for the rest of the chain: an
+    /// override assignment or export, or sourcing a file that may set any.
+    static func setsOverride(_ unitTokens: [String], _ launched: [[String]]) -> Bool {
+        if hasConfigOverrideAssignment(unitTokens) { return true }
+        return launched.contains { argv in
+            guard let head = argv.first.map(basename) else { return false }
+            if head == "source" || head == "." { return true }
+            if head == "set" { return argv.contains { $0.hasPrefix("-") && $0.contains("a") } }
+            return ["export", "declare", "typeset", "readonly"].contains(head)
+                && argv.dropFirst().contains { isOverrideName(String($0.prefix { $0 != "=" })) }
         }
     }
 
@@ -451,7 +396,7 @@ enum PackageScriptGate {
     /// `env -C dir` / `sudo -D dir` / `--chdir` in front of the runner.
     private static func wrapperChangesDirectory(_ unitTokens: [String]) -> Bool {
         for token in unitTokens {
-            if runners.contains(basename(token).lowercased()) { return false }
+            if runnerHeads.contains(basename(token).lowercased()) { return false }
             if token.hasPrefix("--chdir") { return true }
             if token.hasPrefix("-"), !token.hasPrefix("--"), token.contains(where: { $0 == "C" || $0 == "D" }) {
                 return true
@@ -514,17 +459,21 @@ enum PackageScriptGate {
             let launched = launchedCommands(body)
             let bodyTokens = PackageScriptGate.tokens(in: body)
             let movesCwd = PackageScriptGate.changesDirectory(launched, bodyTokens)
-            let overrides = PackageScriptGate.hasConfigOverrideAssignment(bodyTokens)
+            let overrides = PackageScriptGate.setsOverride(bodyTokens, launched)
                 || PackageScriptGate.wrapperChangesDirectory(bodyTokens)
             var unresolved = launchIsTruncated(body)
+            if PackageScriptGate.hidesRunner(body, launched) { unresolved = true }
             for argv in launched {
                 guard let invocation = PackageScriptGate.scriptInvocation(in: argv) else { continue }
-                if invocation.unresolvable || invocation.prefixDir != nil || movesCwd || overrides
-                    || depth >= PackageScriptGate.maxDepth {
+                if invocation.runsNothing { continue }
+                guard !invocation.unresolvable, invocation.prefixDir == nil, !movesCwd, !overrides,
+                      depth < PackageScriptGate.maxDepth,
+                      let names = invocation.names(in: scripts)
+                else {
                     unresolved = true
                     continue
                 }
-                for name in invocation.names(in: scripts) {
+                for name in names {
                     switch check(name, depth: depth + 1) {
                     case .clear: continue
                     case .deny(let hit): return .deny(hit)
