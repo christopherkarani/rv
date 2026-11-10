@@ -32,167 +32,167 @@
   "safe_patterns": [
     {
       "name": "dd-file-out",
-      "pattern": "dd\\s+.*of=['\"]?[^/\\s'\"]+\\.",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dd(?:\\s+(?!of=)[^\\s;&|]+)*\\s+of=['\\\"]?[^/\\s'\\\";&|]+\\.[^\\s;&|]*(?:\\s+(?!of=)[^\\s;&|]+)*\\s*(?=$|[;&|\\n])",
       "description": ""
     },
     {
       "name": "dd-discard",
-      "pattern": "dd\\s+.*of=['\"]?/dev/(?:null|zero|full)['\"]?(?:\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dd(?:\\s+(?!of=)[^\\s;&|]+)*\\s+of=['\\\"]?/dev/(?:null|zero|full)['\\\"]?(?:\\s+(?!of=)[^\\s;&|]+)*\\s*(?=$|[;&|\\n])",
       "description": ""
     },
     {
       "name": "lsblk",
-      "pattern": "\\blsblk\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?lsblk\\b",
       "description": ""
     },
     {
       "name": "fdisk-list",
-      "pattern": "fdisk\\s+-l",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?fdisk\\s+-l",
       "description": ""
     },
     {
       "name": "parted-print",
-      "pattern": "parted\\b(?:\\s+--?\\S+)*\\s+(?:['\"]?/dev/\\S+['\"]?\\s+)?print(?:\\s+(?:devices|free|list|all|\\d+))?\\s*$",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?parted\\b(?:\\s+--?\\S+)*\\s+(?:['\"]?/dev/\\S+['\"]?\\s+)?print(?:\\s+(?:devices|free|list|all|\\d+))?\\s*$",
       "description": ""
     },
     {
       "name": "blkid",
-      "pattern": "\\bblkid\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?blkid\\b",
       "description": ""
     },
     {
       "name": "df",
-      "pattern": "\\bdf\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?df\\b",
       "description": ""
     },
     {
       "name": "mount-list",
-      "pattern": "\\bmount\\s*$",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mount\\s*$",
       "description": ""
     },
     {
       "name": "mkswap-check",
-      "pattern": "mkswap\\s+(?:.*\\s+)?--check\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mkswap\\s+(?:.*\\s+)?--check\\b",
       "description": ""
     },
     {
       "name": "mdadm-detail",
-      "pattern": "mdadm\\s+--detail\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mdadm\\s+--detail\\b",
       "description": ""
     },
     {
       "name": "mdadm-examine",
-      "pattern": "mdadm\\s+--examine\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mdadm\\s+--examine\\b",
       "description": ""
     },
     {
       "name": "mdadm-query",
-      "pattern": "mdadm\\s+--query\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mdadm\\s+--query\\b",
       "description": ""
     },
     {
       "name": "mdadm-query-short",
-      "pattern": "mdadm\\s+-Q\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mdadm\\s+-Q\\b",
       "description": ""
     },
     {
       "name": "mdadm-scan",
-      "pattern": "mdadm\\s+--scan\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?mdadm\\s+--scan\\b",
       "description": ""
     },
     {
       "name": "btrfs-subvolume-list",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+subvolume\\s+list(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+subvolume\\s+list(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-subvolume-show",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+subvolume\\s+show(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+subvolume\\s+show(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-filesystem-show",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+show(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+show(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-filesystem-df",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+df(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+df(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-filesystem-usage",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+usage(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+usage(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-device-stats",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+device\\s+stats(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+device\\s+stats(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-property-get",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+property\\s+(?:get|list)(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+property\\s+(?:get|list)(?=\\s|$)",
       "description": ""
     },
     {
       "name": "btrfs-scrub-status",
-      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+scrub\\s+status(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+scrub\\s+status(?=\\s|$)",
       "description": ""
     },
     {
       "name": "dmsetup-ls",
-      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ls(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ls(?=\\s|$)",
       "description": ""
     },
     {
       "name": "dmsetup-status",
-      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status(?=\\s|$)",
       "description": ""
     },
     {
       "name": "dmsetup-info",
-      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+info(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+info(?=\\s|$)",
       "description": ""
     },
     {
       "name": "dmsetup-table",
-      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+table(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+table(?=\\s|$)",
       "description": ""
     },
     {
       "name": "dmsetup-deps",
-      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deps(?=\\s|$)",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deps(?=\\s|$)",
       "description": ""
     },
     {
       "name": "nbd-client-list",
-      "pattern": "nbd-client\\s+-l\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?nbd-client\\s+-l\\b",
       "description": ""
     },
     {
       "name": "nbd-client-check",
-      "pattern": "nbd-client\\s+.*-check\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?nbd-client\\s+.*-check\\b",
       "description": ""
     },
     {
       "name": "diskutil-readonly",
-      "pattern": "(?i)diskutil\\s+(?:list|info|information|activity|listFilesystems|apfs\\s+list(?:Snapshots|Users)?)\\b[^;&|\\r\\n]*$",
+      "pattern": "(?i)(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?diskutil\\s+(?:list|info|information|activity|listFilesystems|apfs\\s+list(?:Snapshots|Users)?)\\b[^;&|\\r\\n]*$",
       "description": ""
     },
     {
       "name": "lvm-list",
-      "pattern": "\\b(?:lvs|vgs|pvs)\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?(?:lvs|vgs|pvs)\\b",
       "description": ""
     },
     {
       "name": "lvm-display",
-      "pattern": "\\b(?:lvdisplay|vgdisplay|pvdisplay)\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?(?:lvdisplay|vgdisplay|pvdisplay)\\b",
       "description": ""
     },
     {
       "name": "lvm-scan",
-      "pattern": "\\b(?:lvscan|vgscan|pvscan)\\b",
+      "pattern": "(?:^|(?<![\\\\<>])[;&|\\n])\\s*(?:sudo\\s+)?(?:lvscan|vgscan|pvscan)\\b",
       "description": ""
     }
   ],

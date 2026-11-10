@@ -19,6 +19,39 @@ public func evaluateWithSemantics<E: PatternEngine>(
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
+    func judge(_ request: EvaluationRequest) -> EvaluationResult {
+        evaluateSemanticsOnce(
+            request,
+            packs: packs,
+            secretPaths: secretPaths,
+            engine: engine,
+            compiled: compiled,
+            workingDirectory: workingDirectory,
+            gitProbe: gitProbe,
+            filesystemProbe: filesystemProbe,
+            policy: policy
+        )
+    }
+    // An alias body is judged by the same door: `git -c alias.p=push p`
+    // is a remote push only the semantic stage can see.
+    return gateAliases(judge(request), command: request.command, packs: packs) { expansion in
+        var inner = request
+        inner.command = expansion
+        return judge(inner)
+    }
+}
+
+private func evaluateSemanticsOnce<E: PatternEngine>(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    secretPaths: SecretPathDecider,
+    engine: E,
+    compiled: CompiledPacks<E.Compiled>,
+    workingDirectory: WorkingDirectory?,
+    gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
+    policy: EffectiveActionPolicy
+) -> EvaluationResult {
     let pack = evaluate(
         request,
         packs: packs,
