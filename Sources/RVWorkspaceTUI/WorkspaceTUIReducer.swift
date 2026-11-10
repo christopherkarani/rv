@@ -523,6 +523,8 @@ enum WorkspaceTUIReducerEvent: Equatable, Sendable {
     case reviewLoaded(sequence: UInt64, result: ReviewLoadResult)
     /// An approve or deny ceremony finished. Rows are re-read, never edited.
     case reviewActionCompleted(id: String, outcome: ReviewActionOutcome)
+    /// The review pane's measured content area, noted by its render.
+    case reviewPaneNoted(rows: Int, columns: Int)
 }
 
 /// One runtime action for the shell to execute. Effects never dispatch
@@ -775,6 +777,8 @@ enum WorkspaceTUIReducer {
                 id: id, outcome: outcome,
                 to: &next, effects: &effects, presentationChanged: &presentationChanged
             )
+        case .reviewPaneNoted(let rows, let columns):
+            next.review.paneSize = .init(rows: rows, columns: columns)
         }
         // Every transition ends here: stored lifecycles re-derive from
         // phases, so no observable state can contradict its phase.

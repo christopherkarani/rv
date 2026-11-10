@@ -136,6 +136,8 @@ extension WorkspaceTUIReducer {
                 presentationChanged = true
                 return
             }
+            // A freshly opened pane has not been measured yet.
+            next.review.paneSize = nil
             if next.review.inflightLoad == nil {
                 issueReviewLoad(to: &next, effects: &effects)
             }
@@ -146,6 +148,13 @@ extension WorkspaceTUIReducer {
         case .reviewBottom:
             moveReviewSelection(to: &next) { _, count in count - 1 }
         case .reviewApprove:
+            // The owner must see what they approve: the same check that
+            // makes the pane show `tooSmall` refuses the approve.
+            let now = next.review.lastTickAt ?? .distantPast
+            guard WorkspaceReviewText.showsWholeReview(next.review, mode: next.mode, now: now) else {
+                next.review.notice = .init(text: tooSmallRefusal, isError: true)
+                break
+            }
             guard let id = actionableEgress(in: &next, verb: "approve") else { break }
             let summary = next.review.selectedItem?.summary ?? id
             next.review.action = .approving(id)
@@ -214,6 +223,7 @@ extension WorkspaceTUIReducer {
     }
 
     private static let staleRefusal = "Review is stale: wait for a fresh read"
+    private static let tooSmallRefusal = "Terminal too small to review safely: enlarge it to approve"
 
     /// Why approve/deny may not start on the selected row, if anything.
     private static func reviewActionRefusal(_ review: WorkspaceReviewState) -> String? {
