@@ -25,6 +25,34 @@ enum WorkspaceReviewText {
         columns: Int = defaultColumns, rows: Int? = nil
     ) -> [String] {
         let width = max(1, columns)
+        let wrapped = wholeReview(review, mode: mode, now: now, width: width)
+        guard let rows, fits(wrapped, rows: rows) == false else { return wrapped }
+        var refusal = [tooSmall, "need \(wrapped.count) rows, have \(rows) · Esc close"]
+        // A refused approve explains itself even while the review is hidden.
+        if let notice = review.notice { refusal.append(noticeLine(notice)) }
+        return Array(refusal.flatMap { wrap($0, width: width) }.prefix(max(0, rows)))
+    }
+
+    /// The one "too small" answer the render and the reducer share: true
+    /// only when the pane has been measured and the whole review fits in
+    /// it. Approve is refused whenever this is false; deny never needs it.
+    static func showsWholeReview(_ review: WorkspaceReviewState, mode: CommandMode, now: Date) -> Bool {
+        guard let size = review.paneSize else { return false }
+        return fits(wholeReview(review, mode: mode, now: now, width: max(1, size.columns)), rows: size.rows)
+    }
+
+    private static func fits(_ wrapped: [String], rows: Int) -> Bool {
+        wrapped.count <= rows
+    }
+
+    private static func noticeLine(_ notice: WorkspaceReviewState.Notice) -> String {
+        (notice.isError ? "! " : "") + clean(notice.text)
+    }
+
+    /// Every line of the review, wrapped at `width`, before any refusal.
+    private static func wholeReview(
+        _ review: WorkspaceReviewState, mode: CommandMode, now: Date, width: Int
+    ) -> [String] {
         var lines = [header(review)]
         switch review.load {
         case .loading:
@@ -49,13 +77,10 @@ enum WorkspaceReviewText {
             lines.append("! Review is stale · \(updated)")
         }
         if let notice = review.notice {
-            lines.append((notice.isError ? "! " : "") + clean(notice.text))
+            lines.append(noticeLine(notice))
         }
         lines.append(hint(review, mode: mode))
-        let wrapped = lines.flatMap { wrap($0, width: width) }
-        guard let rows, wrapped.count > rows else { return wrapped }
-        let refusal = [tooSmall, "need \(wrapped.count) rows, have \(rows) · Esc close"]
-        return Array(refusal.flatMap { wrap($0, width: width) }.prefix(max(0, rows)))
+        return lines.flatMap { wrap($0, width: width) }
     }
 
     /// Only keys valid for the selected row's state are offered.

@@ -68,12 +68,19 @@ private func press(_ state: WorkspaceTUIState, _ keys: TUIKey...) -> WorkspaceTU
     return last
 }
 
-/// Opens the pane and lands one load with `items`.
-private func openReview(_ items: [ReviewItem], from state: WorkspaceTUIState = reviewState()) -> WorkspaceTUIState {
+/// Opens the pane, lands one load with `items`, and notes the pane size
+/// the render would report (unknown when `pane` is nil).
+private func openReview(
+    _ items: [ReviewItem],
+    from state: WorkspaceTUIState = reviewState(),
+    pane: (rows: Int, columns: Int)? = (rows: 40, columns: 100)
+) -> WorkspaceTUIState {
     let opened = press(state, .control("b"), .character("R"))
     #expect(opened.state.mode == .review)
     #expect(opened.effects == [.loadReview(sequence: 1)])
-    return reduce(opened.state, .reviewLoaded(sequence: 1, result: .loaded(items))).state
+    let loaded = reduce(opened.state, .reviewLoaded(sequence: 1, result: .loaded(items))).state
+    guard let pane else { return loaded }
+    return reduce(loaded, .reviewPaneNoted(rows: pane.rows, columns: pane.columns)).state
 }
 
 private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
@@ -334,7 +341,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         // The retry lands: fresh again and actionable.
         let fresh = reduce(late.state, .reviewLoaded(
             sequence: 3, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)])
-        )).state
+        ), .reviewPaneNoted(rows: 40, columns: 100)).state
         #expect(fresh.review.stale == false)
         #expect(press(fresh, .character("a")).effects == [.approveEgress(id: "p1")])
     }
@@ -509,6 +516,87 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
     }
 }
 
+// MARK: - Pane size guard
+
+/// Approve needs the owner to see the whole review; deny and Esc never do.
+@Suite struct ReviewPaneSizeGuardTests {
+    static let longHost = ReviewTextTests.longHost
+    static let enlarge = "Terminal too small to review safely: enlarge it to approve"
+
+    @Test func approveRefusedWhenPaneTooSmall() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: 8, columns: 80))
+        let refused = press(state, .character("a"))
+        #expect(refused.effects.isEmpty)
+        #expect(refused.state.mode == .review)
+        #expect(refused.state.review.action == nil)
+        #expect(refused.state.review.notice == .init(text: Self.enlarge, isError: true))
+        // Nothing else moved: same rows, same selection, still pending.
+        var withoutNotice = refused.state.review
+        withoutNotice.notice = state.review.notice
+        #expect(withoutNotice == state.review)
+        #expect(refused.state.review.pendingCount == 1)
+        // The notice is visible in the too-small pane itself.
+        let shown = WorkspaceReviewText.lines(
+            refused.state.review, mode: refused.state.mode, now: reviewEpoch, columns: 80, rows: 8)
+        #expect(shown.first == WorkspaceReviewText.tooSmall)
+        #expect(shown.contains("! " + Self.enlarge))
+    }
+
+    @Test func approveWorksAtAdequateSize() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: 40, columns: 80))
+        #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
+            .contains(WorkspaceReviewText.tooSmall) == false)
+        let approving = press(state, .character("a"))
+        #expect(approving.effects == [.approveEgress(id: "p1")])
+        #expect(approving.state.review.action == .approving("p1"))
+    }
+
+    @Test func denyAndCloseStillWorkWhenTooSmall() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: 3, columns: 80))
+        let prompt = press(state, .character("d"))
+        #expect(prompt.state.mode == .reviewDenyReason(id: "p1", input: ""))
+        let denied = press(prompt.state, .character("n"), .character("o"), .enter)
+        #expect(denied.effects == [.denyEgress(id: "p1", reason: "no")])
+        #expect(denied.state.review.action == .denying("p1"))
+        let closed = press(state, .escape)
+        #expect(closed.state.mode == .terminal)
+        #expect(closed.effects.contains(where: isReviewEffect) == false)
+    }
+
+    @Test func unknownSizeRefusesApprove() {
+        let never = openReview([egress("p1", "api.example.com", ageSeconds: 5)], pane: nil)
+        let refused = press(never, .character("a"))
+        #expect(refused.effects.isEmpty)
+        #expect(refused.state.review.action == nil)
+        #expect(refused.state.review.notice == .init(text: Self.enlarge, isError: true))
+        // A size measured while the pane was last open is forgotten on
+        // reopen: the new pane has not been measured yet.
+        let measured = openReview([egress("p1", "api.example.com", ageSeconds: 5)])
+        let reopened = press(measured, .escape, .control("b"), .character("R"))
+        let reloaded = reduce(reopened.state, .reviewLoaded(
+            sequence: 2, result: .loaded([egress("p1", "api.example.com", ageSeconds: 5)])
+        )).state
+        #expect(press(reloaded, .character("a")).effects.isEmpty)
+    }
+
+    /// Render and reducer read the same predicate, so they cannot drift.
+    @Test func approveRefusedExactlyWhenTheRenderRefuses() {
+        for rows in 1...24 {
+            for columns in [30, 80] {
+                let state = openReview(
+                    [egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: rows, columns: columns))
+                let rendered = WorkspaceReviewText.lines(
+                    state.review, mode: state.mode, now: reviewEpoch, columns: columns, rows: rows)
+                // The review itself starts with its header; a refusal (even
+                // one cut to a single wrapped row) never does.
+                let refusedByRender = rendered.first != WorkspaceReviewText.header(state.review)
+                let approved = press(state, .character("a")).effects == [.approveEgress(id: "p1")]
+                #expect(approved == !refusedByRender, "rows \(rows) columns \(columns)")
+            }
+        }
+    }
+}
+
 // MARK: - Text
 
 @Suite struct ReviewTextTests {
@@ -586,7 +674,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
     }
 
     /// A 253-byte host whose benign prefix hides the registrable domain.
-    private static let longHost: String = {
+    fileprivate static let longHost: String = {
         var host = "api.github.com."
         while host.count < 253 - "evil.io".count - 1 { host += "a" }
         return host + ".evil.io"
@@ -688,6 +776,7 @@ private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
     model.handle(.character("R"))
     #expect(await model.waitForReviewWork())
     #expect(model.snapshot().review.pendingCount == 1)
+    model.noteReviewPane(rows: 40, columns: 100)
     model.handle(.character("a"))
     #expect(await model.waitForReviewWork())
     #expect(source.recorded == ["load", "approve p1", "load"])
@@ -695,4 +784,28 @@ private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
     #expect(review.items.map(\.id) == [.block("b1")])
     #expect(review.notice?.text == "approved p1")
     #expect(review.action == nil)
+}
+
+@Test func modelRefusesApproveWhilePaneTooSmallOrUnmeasured() async {
+    let source = FakeReviewSource([egress("p1", "api.example.com", ageSeconds: 5)])
+    let model = WorkspaceTUIModel(
+        session: FakeWorkspaceSession(),
+        summary: WorkspaceTUISummary(project: "/tmp/project", phase: "active", protected: true, workspace: UUID()),
+        launcher: [],
+        review: source
+    )
+    model.handle(.control("b"))
+    model.handle(.character("R"))
+    #expect(await model.waitForReviewWork())
+    // Never measured: fail closed.
+    model.handle(.character("a"))
+    #expect(await model.waitForReviewWork())
+    model.noteReviewPane(rows: 2, columns: 80)
+    model.handle(.character("a"))
+    #expect(await model.waitForReviewWork())
+    #expect(source.recorded == ["load"])
+    let review = model.snapshot().review
+    #expect(review.pendingCount == 1)
+    #expect(review.action == nil)
+    #expect(review.notice == .init(text: ReviewPaneSizeGuardTests.enlarge, isError: true))
 }

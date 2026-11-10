@@ -202,6 +202,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         drain(.viewportNoted(rows: rows, columns: columns), route: { _ in .inline })
     }
 
+    /// Records the review pane's content area as rendered. Approve stays
+    /// refused until the pane has been measured large enough.
+    public func noteReviewPane(rows: Int, columns: Int) {
+        drain(.reviewPaneNoted(rows: rows, columns: columns), route: { _ in .inline })
+    }
+
     /// Called by the app's single coalescing timer. Equal dimensions never
     /// produce another RPC; changed dimensions wait for the debounce window.
     public func processPendingWork(now: Date = Date()) {
