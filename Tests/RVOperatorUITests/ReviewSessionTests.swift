@@ -621,6 +621,74 @@ struct ReviewSessionTests {
         #expect(s.session.arrivals.unseen.isEmpty)
     }
 
+    // MARK: Review vanished while busy
+
+    /// Applies a refresh whose list no longer contains the selected review.
+    private func vanish<Mode: ReviewMode>(_ s: inout Script<Mode>) {
+        guard case .list(let gen)? = s.send(.refreshRequested).first else {
+            Issue.record("no list")
+            return
+        }
+        s.send(.listReplied(gen: gen, .success([])))
+    }
+
+    @Test func completeFailureAfterVanishClearsSelection() {
+        let item = reviewItem()
+        var s = Launch()
+        let bundle = bound(&s, item)
+        s.send(.allowTapped)
+        vanish(&s)
+        #expect(s.session.selection == .authorizing(bundle))
+        s.send(.authenticated(challenge: bundle.challenge.challengeID, .authenticated))
+        s.send(.completeReplied(
+            challenge: bundle.challenge.challengeID,
+            .failure(ReviewFailure(message: "Request failed."))))
+        #expect(s.session.selection == .none)
+        #expect(s.session.notice == "Request failed.")
+        #expect(s.send(.allowTapped).isEmpty)
+    }
+
+    @Test func launchCancelFailureAfterVanishClearsSelection() {
+        let item = reviewItem()
+        var bound = Launch()
+        _ = self.bound(&bound, item)
+        var unbound = Launch()
+        unbound.connect(items: [item])
+        _ = unbound.select(item.operationID)
+        for var s in [bound, unbound] {
+            s.send(.denyTapped)
+            vanish(&s)
+            s.send(.denyReplied(item.operationID,
+                .failure(ReviewFailure(message: "Request failed."))))
+            #expect(s.session.selection == .none)
+            #expect(s.session.notice == "Request failed.")
+        }
+    }
+
+    @Test func actionDenyFailureAfterVanishClearsSelection() {
+        let item = actionReviewItem()
+        var s = Script<ActionReview>()
+        s.connect(items: [item])
+        let ticket = s.select(item.approvalID)
+        s.send(.bindReplied(item.approvalID, ticket: ticket, .success(actionBundle(item))))
+        s.send(.denyTapped)
+        vanish(&s)
+        s.send(.denyReplied(item.approvalID, .failure(ReviewFailure(message: "Request failed."))))
+        #expect(s.session.selection == .none)
+        #expect(s.session.notice == "Request failed.")
+    }
+
+    @Test func hookUnauthenticatedAfterVanishClearsSelection() {
+        let item = hookReviewItem()
+        var s = HookScript()
+        let bundle = hookBound(&s, item)
+        s.send(.allowTapped)
+        vanish(&s)
+        s.send(.authenticated(challenge: bundle.challenge.challengeID, .cancelled))
+        #expect(s.session.selection == .none)
+        #expect(s.session.notice == HookReview.notAuthenticatedNotice(.cancelled))
+    }
+
     // MARK: Invariant over scripted sequences
 
     @Test func invariantHoldsAfterEveryEvent() {
