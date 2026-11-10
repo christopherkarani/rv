@@ -24,10 +24,11 @@ struct DoctorEnvironment {
         environment: [String: String] = CLIProcess.environment()
     ) -> DoctorEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
-        let install = DoctorInstallProbes.live(home: home)
+        let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        let install = DoctorInstallProbes.live(home: home, pathEntries: pathEntries)
         return DoctorEnvironment(
             home: home,
-            pathEntries: (environment["PATH"] ?? "").split(separator: ":").map(String.init),
+            pathEntries: pathEntries,
             fileManager: .default,
             launchAgentLoaded: install.launchd.map { $0.loadedInGui || $0.loadedInUser }
                 ?? LaunchAgentProbe.isLoaded(label: SetupRun.launchAgentLabel),
@@ -165,6 +166,7 @@ enum DoctorRun {
             leftovers: environment.leftovers,
             problems: environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
+                    + DoctorInstallChecks.adapterRuntime(hosts: snapshot.hosts, probes: $0)
             } ?? []
         )
     }

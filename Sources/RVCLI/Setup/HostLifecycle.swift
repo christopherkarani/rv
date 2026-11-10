@@ -36,6 +36,7 @@ enum HostLifecycle {
             wrote: []
         )
         var serviceSkippedMissingRvd: String?
+        var runtimeMissing: [String: [HookHost]] = [:]
 
         for step in plan.steps {
             switch step {
@@ -61,6 +62,8 @@ enum HostLifecycle {
                 }
             case .skipUndetected, .skipOff:
                 break
+            case .skipRuntimeMissing(let host, let interpreter):
+                runtimeMissing[interpreter, default: []].append(host)
             case .skipOccupied(let host):
                 slots.assign(.occupied, to: host)
             case .forceClearThenWrite(let write), .write(let write):
@@ -90,14 +93,11 @@ enum HostLifecycle {
             wrote: slots.wrote
         )
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
+        report.unwiredForMissingInterpreter = runtimeMissing
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
     }
 
-    static func perform(
-        _ write: HostAttachWrite,
-        env: SetupEnvironment,
-        layout: OwnedPaths,
     /// Installs and starts the service, then waits (bounded) for rvd to
     /// answer. Throws before any host is wired when it does not.
     private static func startService(
@@ -123,6 +123,10 @@ enum HostLifecycle {
         }
     }
 
+    static func perform(
+        _ write: HostAttachWrite,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> HostAttachOutcome {
         switch write.prelude {

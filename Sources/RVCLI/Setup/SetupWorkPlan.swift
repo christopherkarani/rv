@@ -16,6 +16,9 @@ enum SetupWorkStep: Equatable, Sendable {
     case skipOccupied(HookHost)
     /// The operator turned rv off for this host (`rv host mode <host> off`).
     case skipOff(HookHost)
+    /// The host's hook command starts an interpreter that is not runnable,
+    /// so the hook would fail open: setup refuses to wire it.
+    case skipRuntimeMissing(HookHost, interpreter: String)
     case forceClearThenWrite(HostAttachWrite)
     case write(HostAttachWrite)
 }
@@ -26,7 +29,8 @@ enum SetupWorkPlanBuilder {
         layout: OwnedPaths,
         force: Bool,
         rvdIsExecutable: Bool,
-        offHosts: Set<HookHost> = []
+        offHosts: Set<HookHost> = [],
+        missingInterpreters: Set<String> = []
     ) -> SetupWorkPlan {
         // Service before hosts: rvd must answer before setup leaves any new
         // hook in place, because a hook with no answering rvd denies every
@@ -43,6 +47,13 @@ enum SetupWorkPlanBuilder {
             }
             if offHosts.contains(host) {
                 steps.append(.skipOff(host))
+                continue
+            }
+            if let interpreter = AdapterRuntime.interpreter(for: host),
+               missingInterpreters.contains(interpreter),
+               installations.installation(for: host).wouldWire
+            {
+                steps.append(.skipRuntimeMissing(host, interpreter: interpreter))
                 continue
             }
             steps.append(step(for: host, installation: installations.installation(for: host), layout: layout, force: force))
