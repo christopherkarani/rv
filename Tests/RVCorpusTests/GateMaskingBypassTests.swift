@@ -1,6 +1,13 @@
+import Foundation
 import Testing
 import RVDomain
 import RVEngine
+
+private func threadCPUSeconds() -> Double {
+    var spec = timespec()
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &spec)
+    return Double(spec.tv_sec) + Double(spec.tv_nsec) / 1e9
+}
 
 private func isDenied(_ result: EvaluationResult) -> Bool {
     if case .deny = result.decision { return true }
@@ -63,6 +70,74 @@ struct GateMaskingBypassTests {
         let harness = try StressHarness.dayOne()
         for result in [harness.pin(command), harness.door(command)] {
             #expect(isDenied(result), "\(command): \(describeDecision(result))")
+        }
+    }
+
+    /// A safe pattern vouches for a whole pack, so it must match the command
+    /// itself, never a word inside a destructive command's operands.
+    @Test(
+        "safe pattern word inside a destructive command does not skip the pack",
+        arguments: [
+            "mkfs.ext4 -L df /dev/sdb1",
+            "diskutil eraseDisk APFS df disk4",
+            "wipefs -a /dev/sdb --backup=lvs",
+            "wipefs -a /dev/sdb lsblk",
+            "mkfs.ext4 /dev/sdb1 mount",
+            "wipefs -a /dev/sdb -- fdisk -l",
+            "wipefs -a /dev/sdb >& lsblk",
+            "wipefs -a $(lsblk -no PATH /dev/sdb)",
+            "dd if=/x/of=y.img of=/dev/sda",
+            "git clean -fdx -- $PWD checkout -b y",
+            "git --no-pager clean -fdx -- $PWD checkout -b y",
+            "git clean -fdx -- . restore --staged",
+        ]
+    )
+    func safeWordInOperandsDoesNotSkipPack(_ command: String) throws {
+        let harness = try StressHarness.dayOne()
+        for result in [harness.pin(command), harness.door(command)] {
+            #expect(isDenied(result), "\(command): \(describeDecision(result))")
+        }
+    }
+
+    @Test(
+        "read-only disk and branch commands stay allowed",
+        arguments: [
+            "df -h /dev/sda1",
+            "lsblk /dev/sdb",
+            "blkid /dev/sda1",
+            "sudo fdisk -l /dev/sda",
+            "ls && df -h /dev/sda1",
+            "mount",
+            "dd if=/dev/sda of=/dev/null bs=1M count=1",
+            "git checkout -b feat",
+            "git -C repo checkout -b feat",
+            "git --no-pager checkout -b feat",
+            "git restore --staged src/a.txt",
+            "git clean -n",
+        ]
+    )
+    func readOnlyCommandsStayAllowed(_ command: String) throws {
+        let harness = try StressHarness.dayOne()
+        let result = harness.pin(command)
+        #expect(result.decision == .allow, "\(command): \(describeDecision(result))")
+    }
+
+    /// The 6 KB `rm --recursive` run took 7.8 s in `rv test` on main.
+    /// Measured in this thread's CPU time: wall time on a loaded host says
+    /// nothing about backtracking.
+    @Test func longRecursiveRunFinishesQuickly() throws {
+        let harness = try StressHarness.dayOne()
+        for command in [
+            String(repeating: "rm --recursive ", count: 400),
+            String(repeating: "rm --force ", count: 550),
+            "rm " + String(repeating: "-r ", count: 2000),
+            "rm -" + String(repeating: "r", count: 6000),
+        ] {
+            let started = threadCPUSeconds()
+            let result = harness.door(command)
+            #expect(threadCPUSeconds() - started < 1, "\(command.prefix(20))…")
+            if result.decision == .indeterminate(.budgetExhausted) { continue }
+            #expect(result.decision != .indeterminate(.commandTooLarge))
         }
     }
 
