@@ -103,6 +103,7 @@ struct WorkspacePublishAtomicityTests {
         }
         #expect(boundaryFailed(result))
         #expect(boundary.publishOutcome == .rolledBack(failedAt: failingName))
+        #expect(boundary.retainedRejectedImagePath != nil)
         #expect(try treeState(tree.workspaceURL.path) == before)
         #expect(before["keep"] == "d:750")
         #expect(before["gone/old.txt"] != nil)
@@ -189,8 +190,10 @@ struct WorkspacePublishAtomicityTests {
         #expect(lstat(original, &status) != 0)
     }
 
-    /// Tamper and inode rejections keep today's discard: the image is gone.
-    @Test func tamperRejectionStillUnlinksTheImage() throws {
+    /// An inode rejection publishes nothing, so the volume is still the only
+    /// copy of the agent's work: the image is kept, exactly as for a
+    /// symlink-policy rejection.
+    @Test func tamperRejectionRetainsTheImage() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         try seed(tree)
@@ -205,8 +208,59 @@ struct WorkspacePublishAtomicityTests {
 
         #expect(boundaryFailed(boundary.publishAndRestore()))
         #expect(boundary.publishOutcome.isContentPolicyRejection == false)
-        #expect(boundary.retainedRejectedImagePath == nil)
-        #expect(FileManager.default.fileExists(atPath: original) == false)
+        expectRetained(boundary, original: original)
+    }
+
+    /// A host shell whose cwd followed the project into the saved tree runs
+    /// `git status`, which replaces `.git/index` with a new inode. That name
+    /// is refused by path (the inode authority check stays), and the
+    /// agent's volume is kept.
+    @Test func hostReplacedGitIndexIsNamedAndTheImageKept() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try seed(tree)
+        let git = tree.workspaceURL.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+        try Data("index-1".utf8).write(to: git.appendingPathComponent("index"))
+        let boundary = try establish(tree)
+        let original = try #require(identityImagePath(boundary))
+        defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
+        try agentEdits(tree)
+        let savedIndex = boundary.savedPath.appendingPath(".git/index")
+        let replacement = boundary.savedPath.appendingPath(".git/index.lock")
+        try Data("index-2".utf8).write(to: URL(fileURLWithPath: replacement))
+        #expect(rename(replacement, savedIndex) == 0)
+
+        #expect(boundaryFailed(boundary.publishAndRestore()))
+        #expect(boundary.publishOutcome == .rejected([
+            WorkspacePublishRejection(relative: ".git/index", reason: .inodeChanged),
+        ]))
+        expectRetained(boundary, original: original)
+        #expect(try String(contentsOf: git.appendingPathComponent("index"), encoding: .utf8) == "index-2")
+    }
+
+    /// A FIFO the agent left on the volume cannot be published. It is
+    /// refused by name instead of failing the whole tree walk, nothing is
+    /// written, and the image is kept.
+    @Test func specialFileIsRefusedByNameAndTheImageKept() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try seed(tree)
+        let boundary = try establish(tree)
+        let original = try #require(identityImagePath(boundary))
+        defer { _ = boundary.discardAndRestore() }
+        defer { removeRetainedImage(boundary) }
+        try agentEdits(tree)
+        #expect(mkfifo(tree.workspaceURL.appendingPathComponent("keep/pipe").path, 0o600) == 0)
+        let before = try treeState(boundary.savedPath)
+
+        #expect(boundaryFailed(boundary.publishAndRestore()))
+        #expect(boundary.publishOutcome == .rejected([
+            WorkspacePublishRejection(relative: "keep/pipe", reason: .unsupportedFileType),
+        ]))
+        #expect(try treeState(tree.workspaceURL.path) == before)
+        expectRetained(boundary, original: original)
     }
 
     /// An escaping symlink beside a tampered inode is not a pure policy
@@ -344,6 +398,25 @@ private func establish(_ tree: ContainmentTree) throws -> WorkspaceInodeBoundary
 /// A policy rejection keeps the 30 MB image; tests must not leak it.
 private func removeRetainedImage(_ boundary: WorkspaceInodeBoundary) {
     if let retained = boundary.retainedRejectedImagePath { unlink(retained) }
+}
+
+/// The original image name is gone and a detached, owner-only
+/// `rv-rejected-*.sparseimage` holds the volume.
+private func expectRetained(
+    _ boundary: WorkspaceInodeBoundary,
+    original: String,
+    sourceLocation: SourceLocation = #_sourceLocation
+) {
+    guard let retained = boundary.retainedRejectedImagePath else {
+        Issue.record("expected a retained image, got \(boundary.publishOutcome)", sourceLocation: sourceLocation)
+        return
+    }
+    #expect(FileManager.default.fileExists(atPath: original) == false, sourceLocation: sourceLocation)
+    var status = stat()
+    #expect(lstat(retained, &status) == 0, sourceLocation: sourceLocation)
+    #expect((status.st_mode & S_IFMT) == S_IFREG, sourceLocation: sourceLocation)
+    #expect((retained as NSString).lastPathComponent.hasPrefix("rv-rejected-"), sourceLocation: sourceLocation)
+    #expect(boundary.isReleased, sourceLocation: sourceLocation)
 }
 
 private func identityImagePath(_ boundary: WorkspaceInodeBoundary) -> String? {
