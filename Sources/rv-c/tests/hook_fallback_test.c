@@ -17,10 +17,11 @@ static const char *const kHosts[] = {
 };
 #define HOST_COUNT (sizeof kHosts / sizeof kHosts[0])
 
-/* Absent or slow daemon: RV_HOOK_WHEN_DOWN decides. */
+/* Absent, slow or dropped daemon: RV_HOOK_WHEN_DOWN decides. */
 static const enum RvHookFailure kDown[] = {
     RV_HOOK_FAIL_UNREACHABLE,
     RV_HOOK_FAIL_TIMEOUT,
+    RV_HOOK_FAIL_CONNECTION,
 };
 #define DOWN_COUNT (sizeof kDown / sizeof kDown[0])
 
@@ -101,7 +102,7 @@ static void test_mode_parse(void) {
 static void test_messages(void) {
     const enum RvHookFailure all[] = {
         RV_HOOK_FAIL_INPUT, RV_HOOK_FAIL_UNREACHABLE, RV_HOOK_FAIL_TIMEOUT,
-        RV_HOOK_FAIL_UNTRUSTED, RV_HOOK_FAIL_PROTOCOL,
+        RV_HOOK_FAIL_UNTRUSTED, RV_HOOK_FAIL_PROTOCOL, RV_HOOK_FAIL_CONNECTION,
     };
     size_t i;
     size_t j;
@@ -132,6 +133,9 @@ static void test_messages(void) {
     }
     if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_TIMEOUT), "rv doctor") == NULL) {
         fail("timeout_actionable", "missing rv doctor");
+    }
+    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_CONNECTION), "rv doctor") == NULL) {
+        fail("connection_actionable", "missing rv doctor");
     }
     if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_UNTRUSTED), "rv setup") == NULL) {
         fail("untrusted_actionable", "missing rv setup");
@@ -279,6 +283,15 @@ static void test_observe(void) {
         render(name, host, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_ASK, &ask);
         if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code) {
             fail(name, "timeout under observe must render like ask");
+        }
+        /* A dropped or unverifiable connection (rvd draining mid-request, an
+         * agent-chosen XDG_RUNTIME_DIR) is not proof rvd is absent. */
+        snprintf(name, sizeof name, "%s_observe_connection", host);
+        render(name, host, RV_HOOK_FAIL_CONNECTION, RV_WHEN_DOWN_OBSERVE, &r);
+        render(name, host, RV_HOOK_FAIL_CONNECTION, RV_WHEN_DOWN_ASK, &ask);
+        if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code
+            || strstr(r.err, "observe") != NULL) {
+            fail(name, "connection failure under observe must render like ask");
         }
         /* Observe never softens impersonation, a malformed reply or bad input. */
         for (f = 0; f < HARD_COUNT; f++) {

@@ -60,7 +60,10 @@ clang_c_hook() {
 
 linux_c_hook_proof() {
   # Verified-daemon contract: with no daemon socket every hook call denies
-  # with the unreachable reason and never execs rv-cli; with a fake daemon on
+  # and never execs rv-cli. The socket dir here is an explicit
+  # XDG_RUNTIME_DIR, not the uid-derived /run/user/<uid>, so the miss is the
+  # connection-failed class (never the observe-eligible unreachable one:
+  # agents can set XDG_RUNTIME_DIR); with a fake daemon on
   # the socket the hook verifies the peer before sending (SO_PEERCRED +
   # sibling rvd) and denies without sending a single byte.
   local out home bin st
@@ -84,8 +87,8 @@ linux_c_hook_proof() {
   if ! grep -q '"decision":"deny"' "$out/deny.out"; then
     fail "no-daemon deny missing decision JSON"
   fi
-  if ! grep -q 'RV daemon is not reachable' "$out/deny.out"; then
-    fail "no-daemon deny missing unreachable reason"
+  if ! grep -q 'RV daemon connection failed' "$out/deny.out"; then
+    fail "no-daemon deny missing connection-failed reason"
   fi
   if grep -q 'git reset --hard' "$out/deny.out"; then
     fail "no-daemon deny echoes the command"

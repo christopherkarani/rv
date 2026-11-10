@@ -10,8 +10,9 @@
  *   build failure), UNTRUSTED (daemon identity verification failed or
  *   HelloAck refused) and PROTOCOL (malformed reply): always the host's
  *   deny shape and deny exit code. Impersonation must never soften.
- * - UNREACHABLE / TIMEOUT (daemon absent or slow): RV_HOOK_WHEN_DOWN
- *   selects the rendering.
+ * - UNREACHABLE / TIMEOUT / CONNECTION (daemon absent, slow, or the
+ *   connection failed in a way that does not prove rvd is absent):
+ *   RV_HOOK_WHEN_DOWN selects the rendering.
  *     ask (default, also any value but "deny"): Claude and Cursor get
  *       their native ask wire (exit 0) so the human decides in the host;
  *       hosts without an ask primitive get their deny shape.
@@ -21,9 +22,14 @@
  *   RV_WHEN_DOWN_OBSERVE (the host's allow wire, plus a stderr notice) is
  *   never parsed from the environment: rv.c selects it only when the
  *   owner's config.json puts the host in observe mode (observe_gate.h).
- *   It applies to UNREACHABLE only; TIMEOUT under it renders as ask,
- *   because a live but slow rvd would have enforced rv's self-protection
- *   and an agent can make rvd slow.
+ *   It applies to UNREACHABLE only, which rv.c reports solely for a
+ *   connect that fails before any request byte is sent: on Linux ENOENT or
+ *   ECONNREFUSED on the uid-derived socket (/run/user/<uid>), on Darwin an
+ *   invalid (unregistered) discovery connection. TIMEOUT and CONNECTION
+ *   under it render as ask: a live but slow rvd would have enforced rv's
+ *   self-protection, rvd drops in-flight requests while draining, an
+ *   agent can cause either, and an agent can point XDG_RUNTIME_DIR at an
+ *   empty directory through project-scoped host config.
  * Every case carries a distinct, actionable message. Mirrored by
  * `RVCLI/Service/HookDaemonFallback.swift`.
  */
@@ -35,7 +41,8 @@ enum RvHookFailure {
     RV_HOOK_FAIL_UNREACHABLE = 2,
     RV_HOOK_FAIL_TIMEOUT = 3,
     RV_HOOK_FAIL_UNTRUSTED = 4,
-    RV_HOOK_FAIL_PROTOCOL = 5
+    RV_HOOK_FAIL_PROTOCOL = 5,
+    RV_HOOK_FAIL_CONNECTION = 6
 };
 
 enum RvWhenDown {
