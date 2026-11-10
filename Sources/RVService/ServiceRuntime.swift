@@ -478,7 +478,12 @@ public actor ServiceRuntime {
         let verdict = await ownerPresence.confirm(summary, proof: params.proof, context: context)
         let reply: ConfirmOwnerActionReply
         switch verdict {
-        case .approved: reply = ConfirmOwnerActionReply(outcome: .approved)
+        case .approved:
+            // `confirm` approves only through rvd's prompt or, without one,
+            // a verified password: say which, so the CLI can tell this rvd
+            // from one that approved a pinned CLI unchecked.
+            reply = ConfirmOwnerActionReply(
+                outcome: .approved, presence: ownerPresence.promptsItself ? .daemonPrompt : .password)
         case .denied(let denied): reply = denied
         }
         OwnerPresence.audit(

@@ -141,6 +141,9 @@ actor OwnerPresence {
 
     private let checker: any OwnerPasswordChecking
     private let authenticator: (any OwnerAuthenticating)?
+
+    /// rvd shows its own owner prompt (macOS); otherwise it checks a password.
+    nonisolated var promptsItself: Bool { authenticator != nil }
     private let promptTimeout: Duration
     private let clock: @Sendable () -> Date
     private var failures: [Date] = []

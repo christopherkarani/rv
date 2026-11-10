@@ -50,10 +50,32 @@ enum OwnerConfirmation {
         let service = client ?? OwnerConfirmation.defaultClient()
         let reply = await service.confirmOwnerAction(ConfirmOwnerActionParams(
             summary: summary, proof: proof, clientSemver: ProtocolVersion.serviceSemver))
+        try accept(reply, summary: summary)
+    }
+
+    /// How this platform's rvd checks the owner (`OwnerPresence.confirm`).
+    #if canImport(LocalAuthentication)
+    static let expectedPresence = ConfirmOwnerActionReply.Presence.daemonPrompt
+    #else
+    static let expectedPresence = ConfirmOwnerActionReply.Presence.password
+    #endif
+
+    /// Returns only when rvd approved and said it checked the owner the way
+    /// this platform's rvd does. An older rvd approves a pinned CLI with no
+    /// check and omits `presence`: refused, fail closed.
+    static func accept(
+        _ reply: Result<ConfirmOwnerActionReply, ServiceClient.ServiceCommandError>, summary: String
+    ) throws {
         switch reply {
         case .success(let answer):
             switch answer.outcome {
             case .approved:
+                guard answer.presence == expectedPresence else {
+                    throw ValidationError(
+                        "rv: rvd approved \(summary) without saying it checked the owner "
+                            + "(an older rvd still running after an upgrade?); nothing was done. "
+                            + "Run rv service restart and try again.")
+                }
                 return
             case .wrongPassword:
                 throw ValidationError("rv: wrong password; \(summary) was not done")

@@ -287,7 +287,9 @@ struct OwnerPresenceTests {
             IPCRequest(method: .confirmOwnerAction(ConfirmOwnerActionParams(
                 summary: "set safety to\u{07} strict", proof: nil, clientSemver: "1.0.0"))),
             context: Self.unroledXPCContext())
-        #expect(reply.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved)))
+        // Only a current rvd says how it checked the owner; a CLI refuses
+        // an approval without this.
+        #expect(reply.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved, presence: .daemonPrompt)))
         // The prompt shows rvd's sanitized copy of the summary.
         #expect(prompt.reasons.withLock { $0 } == ["set safety to strict"])
         let lines = try auditLines(home)
@@ -314,7 +316,7 @@ struct OwnerPresenceTests {
             IPCRequest(method: .confirmOwnerAction(ConfirmOwnerActionParams(
                 summary: "enable packs cloud.aws", proof: OwnerProof(password: "secret"), clientSemver: "1.0.0"))),
             context: Self.socketContext(), sameUIDSocket: true)
-        #expect(right.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved)))
+        #expect(right.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved, presence: .password)))
         let lines = try auditLines(home)
         #expect(lines.count == 2)
         #expect(lines.allSatisfy { $0.contains("\"owner.action\"") && $0.contains("enable packs cloud.aws") })

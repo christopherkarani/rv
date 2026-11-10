@@ -57,12 +57,25 @@ public struct ConfirmOwnerActionReply: Sendable, Equatable, Codable {
         case unavailable
     }
 
+    /// How rvd checked the owner for an `.approved` outcome.
+    public enum Presence: String, Sendable, Equatable, Codable {
+        /// rvd showed its own LocalAuthentication prompt (macOS).
+        case daemonPrompt
+        /// rvd verified the login password the CLI sent (Linux).
+        case password
+    }
+
     public var outcome: Outcome
     /// Seconds until a lockout ends, when `outcome == .lockedOut`.
     public var retryAfterSeconds: Int?
+    /// Set with `.approved` by an rvd that checks the owner itself. An older
+    /// rvd approved a pinned CLI with no check and omits it, so a CLI must
+    /// refuse an approval without it.
+    public var presence: Presence?
 
-    public init(outcome: Outcome, retryAfterSeconds: Int? = nil) {
+    public init(outcome: Outcome, retryAfterSeconds: Int? = nil, presence: Presence? = nil) {
         self.outcome = outcome
         self.retryAfterSeconds = retryAfterSeconds
+        self.presence = presence
     }
 }

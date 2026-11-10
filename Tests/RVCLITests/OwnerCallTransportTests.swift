@@ -54,3 +54,52 @@ struct OwnerCallTransportTests {
         #expect(transport.lastSendTimeoutMs == ServiceClient.confirmOwnerActionTimeoutMs)
     }
 }
+
+/// Version skew: an rvd from before rvd showed its own prompt approves a
+/// `.cli` caller with no owner check at all. Only a current rvd says how
+/// it checked the owner, so the CLI refuses an approval that does not.
+struct OwnerConfirmationPresenceTests {
+    #if canImport(LocalAuthentication)
+    private static let expected = ConfirmOwnerActionReply.Presence.daemonPrompt
+    private static let other = ConfirmOwnerActionReply.Presence.password
+    #else
+    private static let expected = ConfirmOwnerActionReply.Presence.password
+    private static let other = ConfirmOwnerActionReply.Presence.daemonPrompt
+    #endif
+
+    @Test func anOldStyleApprovalWithoutPresenceIsRefused() throws {
+        let decoded = try JSONDecoder().decode(ConfirmOwnerActionReply.self, from: Data(#"{"outcome":"approved"}"#.utf8))
+        #expect(decoded.presence == nil)
+        #expect(throws: (any Error).self) {
+            try OwnerConfirmation.accept(.success(decoded), summary: "set safety to normal")
+        }
+    }
+
+    @Test func anApprovalNamingTheOtherPlatformsCheckIsRefused() {
+        #expect(throws: (any Error).self) {
+            try OwnerConfirmation.accept(
+                .success(ConfirmOwnerActionReply(outcome: .approved, presence: Self.other)), summary: "x")
+        }
+    }
+
+    @Test func aCurrentApprovalProceeds() throws {
+        try OwnerConfirmation.accept(
+            .success(ConfirmOwnerActionReply(outcome: .approved, presence: Self.expected)), summary: "x")
+    }
+
+    @Test func declinedAndUnreachableAreRefused() {
+        #expect(throws: (any Error).self) {
+            try OwnerConfirmation.accept(.success(ConfirmOwnerActionReply(outcome: .declined)), summary: "x")
+        }
+        #expect(throws: (any Error).self) {
+            try OwnerConfirmation.accept(.failure(.noTransport), summary: "x")
+        }
+    }
+
+    @Test func presenceRoundTripsOnTheWire() throws {
+        let reply = ConfirmOwnerActionReply(outcome: .approved, presence: .daemonPrompt)
+        let data = try JSONEncoder().encode(reply)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"presence\":\"daemonPrompt\""))
+        #expect(try JSONDecoder().decode(ConfirmOwnerActionReply.self, from: data) == reply)
+    }
+}
