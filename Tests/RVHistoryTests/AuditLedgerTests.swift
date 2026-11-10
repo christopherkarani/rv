@@ -159,8 +159,8 @@ struct AuditLedgerTests {
         }
         #expect(try event(#""observed":true,"would_be":"ask","#).detail["would_be"] == "ask")
         #expect(try event(#""observed":true,"would_be":"deny","#).detail["would_be"] == "deny")
-        // Observed rows from before `would_be` were would-be denies.
-        #expect(try event(#""observed":true,"#).detail["would_be"] == "deny")
+        // Legacy observed rows (no `would_be`) stay unchanged so their OCSF uid is stable.
+        #expect(try event(#""observed":true,"#).detail["would_be"] == nil)
         let enforced = try #require(AuditLedger.event(fromLine: Substring(Lines.block), source: .blocks))
         #expect(enforced.detail["would_be"] == nil)
     }
