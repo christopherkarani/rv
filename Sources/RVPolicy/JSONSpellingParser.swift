@@ -77,8 +77,9 @@ public enum JSONSpellingValue: Sendable, Equatable {
 public enum JSONSpellingParseError: Error, Sendable, Equatable {
     case invalid(offset: Int)
     case tooDeep
-    /// The same object key appears twice. The last value must not hide an earlier one.
-    case duplicateKey
+    /// The same object key appears twice, named as decoded. The last value
+    /// must not hide an earlier one.
+    case duplicateKey(String)
 }
 
 /// The one spelling-preserving JSON parser module. `JSONLiteral` (managed
@@ -183,7 +184,7 @@ public enum JSONSpellingParser {
                 try skipWhitespace()
                 guard index < bytes.count, bytes[index] == UInt8(ascii: "\"") else { throw invalid }
                 let key = try parseString()
-                if seen.contains(key) { throw JSONSpellingParseError.duplicateKey }
+                if seen.contains(key) { throw JSONSpellingParseError.duplicateKey(key) }
                 seen.insert(key)
                 try skipWhitespace()
                 guard index < bytes.count, bytes[index] == UInt8(ascii: ":") else { throw invalid }

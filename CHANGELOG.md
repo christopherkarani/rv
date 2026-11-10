@@ -45,6 +45,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- An unreadable `~/.config/rv/config.toml` (permissions, invalid UTF-8) no longer drops the owner's enabled packs back to day-one at every door; rv evaluates under every bundled pack until the file is repaired. This includes a config directory without search permission, which used to read as "no config". `rv doctor` reports the packs as broken, `rv packs` warns, and `rv packs enable/disable` refuse to overwrite the file. Malformed TOML that still decodes is not caught yet.
+- `rv packs` and `rv packs info` show packs the signed organization policy requires as enabled, `rv packs disable` says when a named pack stays enforced, and `rv scan` uses the org-required packs too. `rv managed status` warns when `gate.requirePacks` names an ID that is not a bundled pack, since nothing enforces it.
 - `rv uninstall` also removes the `dev.rv.audit-forward` LaunchAgent that `rv audit forward --install` writes.
 - `rv workspace run` help lists `--microvm`, `--macvm`, `--cpus` and `--memory-mib`.
 - Every evaluation door now uses the owner's configured packs: contained workspaces (`rv workspace`, `rv opencode`), SDK `evaluate`, `explain` and `classify`. Before, the workspace host sent only the three day-one packs and SDK callers could send an empty list, so packs such as `cloud.aws` were skipped there.

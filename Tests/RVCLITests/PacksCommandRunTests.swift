@@ -137,6 +137,23 @@ struct PacksCommandRunTests {
         }
     }
 
+    @Test func disableBody_unreadableConfigFailsWithoutOverwriting() async throws {
+        let home = try isolatedHome()
+        let url = PacksConfigStore.configURL(home: home)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = Data([0xFF, 0xFE, 0x5B, 0x70])
+        try bytes.write(to: url)
+        try await withCLIProcess(home: home) {
+            await #expect(throws: ExitCode(1)) {
+                try applyPackMutation(ids: ["core.git"], enabling: false)
+            }
+        }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
     @Test func info_missingHomeUnknownAndPrettyRobot() async throws {
         try await withCLIProcess(environment: [:]) {
             let home = try Packs.Info.parse(["core.git"])

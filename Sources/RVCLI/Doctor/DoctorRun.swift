@@ -218,6 +218,9 @@ enum DoctorRun {
 
     private static func homePacks(home: HomeDirectory) -> OperatorPacks {
         do {
+            // The doors fail closed to every pack on an unreadable config;
+            // doctor must report that instead of a healthy registry.
+            _ = try PacksConfigStore.load(home: home)
             return .home(try PacksFacade.effectiveIDs(home: home))
         } catch {
             return .unreadable
