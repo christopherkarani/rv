@@ -135,7 +135,7 @@ public struct GatedEvaluate: Sendable {
                 )
             )
         )
-        switch posture(result, door: .file, guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
+        switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
             if let row = Self.denialRow(
                 for: wouldBe, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now,
@@ -489,7 +489,7 @@ public struct GatedEvaluate: Sendable {
 
     /// Which door is asking. Shell doors run the script check and judge.
     private enum Door {
-        case file
+        case file(FileToolAction)
         case shell(EvaluationRequest, inputs: EvaluationInputs, isPeek: Bool)
     }
 
@@ -511,9 +511,11 @@ public struct GatedEvaluate: Sendable {
     /// untouched (a pack deny is a floor neither may lower).
     ///
     /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
-    /// result takes the enforce branch, on every door.
+    /// result takes the enforce branch, on every door. Stopping rvd or
+    /// writing its install is also floored at "run it in Terminal" there
+    /// (an allow becomes indeterminate; a deny stays the deny).
     private func posture(
-        _ result: EvaluationResult,
+        _ evaluated: EvaluationResult,
         door: Door,
         guardMode: GuardMode,
         cwd: WorkingDirectory?,
@@ -521,8 +523,16 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         effects: inout [GatedEffect]
     ) -> Posture {
-        let mode = guardMode == .observe && observeFloorHolds(result, door: door, cwd: cwd, home: home)
-            ? .enforce : guardMode
+        var result = evaluated
+        var mode = guardMode
+        if guardMode == .observe {
+            if let floored = lifecycleFloor(evaluated, door: door, cwd: cwd, home: home) {
+                result = floored
+                mode = .enforce
+            } else if observeFloorHolds(evaluated, door: door, cwd: cwd, home: home) {
+                mode = .enforce
+            }
+        }
         switch (mode, door) {
         case (.observe, .file):
             return .observed(result.observedAllow, wouldBe: result)
@@ -555,6 +565,20 @@ public struct GatedEvaluate: Sendable {
                 effects.append(.judgeLog(log))
             }
             return .enforced(judged.result)
+        }
+    }
+
+    private func lifecycleFloor(
+        _ result: EvaluationResult,
+        door: Door,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> EvaluationResult? {
+        switch door {
+        case .file(let action):
+            ObserveFloor.lifecycleFloor(result, action: action, home: home, cwd: cwd)
+        case .shell(let request, _, _):
+            ObserveFloor.lifecycleFloor(result, command: request.command, home: home, cwd: cwd)
         }
     }
 

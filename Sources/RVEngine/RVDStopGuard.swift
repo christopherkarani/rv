@@ -24,8 +24,8 @@ import RVDomain
 /// counts. Unmodelled words (`$`, backticks, globs) fail closed. `kill`
 /// with a numeric pid, or a pid in a variable or file, cannot be resolved
 /// and is not flagged.
-enum RVDStopGuard {
-    static func stopsRVD(_ raw: String) -> Bool {
+public enum RVDStopGuard {
+    public static func stopsRVD(_ raw: String) -> Bool {
         stopsRVD(raw, depth: 0)
     }
 

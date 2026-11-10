@@ -48,6 +48,13 @@ public enum RVInstallPathGuard {
     public static func isInstallFile(_ path: String, home: HomePath?) -> Bool {
         InstallPathModel(home: home).isProtected(word: path, bases: nil)
     }
+
+    /// File door: a write or edit of `path`, or of what it resolves to (a
+    /// symlink into the install is no way around), lands in rv's install.
+    public static func writesInstall(_ path: String, resolution: SecretPathResolution?, home: HomePath?) -> Bool {
+        let resolved = resolution?.resolve(path)
+        return ([path] + (resolved.map { [$0] } ?? [])).contains { isInstallFile($0, home: home) }
+    }
 }
 
 // MARK: commands

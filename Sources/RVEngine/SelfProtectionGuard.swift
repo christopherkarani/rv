@@ -10,20 +10,16 @@ import RVDomain
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
 /// (`rv host mode <host> observe|off`), or switching rv to observe
-/// (`rv setup --observe`). It is also true for a command that stops rvd
-/// (`RVDStopGuard`): an unreachable rvd lets an observe host allow every
-/// later call unchecked. That floor holds in every mode; in enforce a
-/// stopped rvd only locks the agent out. `evaluate` floors such a command at indeterminate
+/// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
 public enum SelfProtectionGuard {
     public static func weakensPolicy(_ command: ShellCommand) -> Bool {
-        let weakensRV = launchedCommandHeads(command.rawValue).contains { launched in
+        launchedCommandHeads(command.rawValue).contains { launched in
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
             // or glob head may resolve to rv: judged as rv (fail closed).
             launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
         }
-        return weakensRV || RVDStopGuard.stopsRVD(command.rawValue)
     }
 }
 

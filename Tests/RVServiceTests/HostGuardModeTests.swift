@@ -236,21 +236,6 @@ struct HostGuardModeTests {
         #expect(ledgerRows(home).allSatisfy { $0.observed == false }, "\(command)")
     }
 
-    @Test("enforce host: stopping or replacing rvd is not allowed either", arguments: [
-        "launchctl bootout gui/501/dev.rv.evaluate",
-        "rm ~/.local/bin/rvd",
-    ])
-    func enforceHostShellKeepsRVDLifecycle(command: String) async throws {
-        let home = try hostHome(#"{"guard":{"hosts":{"claude":"block"}}}"#)
-        defer { remove(home) }
-        let result = await GatedEvaluate().apply(
-            command: ShellCommand(rawValue: command), cwd: nil, home: home,
-            grants: EphemeralAllowOnceTable(), now: Self.now,
-            allowlist: { .empty }, host: .hook(.claude)
-        )
-        #expect(result.decision != .allow, "\(command)")
-    }
-
     @Test("observe host: file door never allows writing rv's install; reads are observed allows", arguments: [
         "/.local/bin/rvd",
         "/.local/bin/rv",

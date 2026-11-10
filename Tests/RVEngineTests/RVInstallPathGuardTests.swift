@@ -129,7 +129,7 @@ struct RVInstallPathGuardTests {
         #expect(Self.touches("rm othertool", cwd: bin) == false)
     }
 
-    @Test("file door: writes and edits of rv's install are self-protection; reads are plain", arguments: [
+    @Test("file door: writes and edits of rv's install are flagged", arguments: [
         "/Users/agent/.local/bin/rvd",
         "/Users/agent/.local/bin/rv",
         "~/.local/bin/rv-cli",
@@ -138,20 +138,24 @@ struct RVInstallPathGuardTests {
         "/run/user/1000/rv/evaluate.sock",
     ])
     func fileDoor(path: String) {
-        let decider = SecretPathDecider(home: Self.home)
-        for kind in [FileToolKind.write, .edit] {
-            let result = evaluateFileTool(FileToolAction(kind: kind, path: FileToolPath(rawValue: path)), secretPaths: decider)
-            #expect(result.decision == .indeterminate(.selfProtection), "\(kind) \(path)")
-        }
-        let read = evaluateFileTool(FileToolAction(kind: .read, path: FileToolPath(rawValue: path)), secretPaths: decider)
-        #expect(read.decision == .allow, "read \(path)")
+        #expect(RVInstallPathGuard.writesInstall(path, resolution: nil, home: Self.home), "\(path)")
     }
 
-    @Test("file door: unrelated writes stay plain")
+    @Test("file door: a symlink resolving into the install counts")
+    func fileDoorResolved() {
+        let resolution = SecretPathResolution { _ in "/Users/agent/.local/bin/rvd" }
+        #expect(RVInstallPathGuard.writesInstall("/tmp/link", resolution: resolution, home: Self.home))
+    }
+
+    @Test("file door: unrelated writes are not flagged, and the engine never floors them")
     func fileDoorUnrelated() {
+        #expect(RVInstallPathGuard.writesInstall(
+            "/Users/agent/.local/bin/othertool", resolution: nil, home: Self.home
+        ) == false)
+        // Every mode: the engine's file door is the catalog alone.
         let decider = SecretPathDecider(home: Self.home)
         let result = evaluateFileTool(
-            FileToolAction(kind: .write, path: FileToolPath(rawValue: "/Users/agent/.local/bin/othertool")),
+            FileToolAction(kind: .write, path: FileToolPath(rawValue: "/Users/agent/.local/bin/rvd")),
             secretPaths: decider
         )
         #expect(result.decision == .allow)

@@ -3,8 +3,8 @@ import RVDomain
 @testable import RVEngine
 
 /// An agent must never stop rvd: with rvd unreachable, an observe host
-/// allows every later call unchecked. `SelfProtectionGuard` floors these
-/// in every mode (in enforce, stopping rvd locks the agent out anyway).
+/// allows every later call unchecked. Observe hosts floor these
+/// (`ObserveFloor`); in enforce a stopped rvd fails closed anyway.
 @Suite("rvd lifecycle guard")
 struct RVDLifecycleGuardTests {
     static let stopping: [String] = [
@@ -129,12 +129,12 @@ struct RVDLifecycleGuardTests {
 
     @Test("commands that stop or kill rvd are flagged", arguments: stopping)
     func stoppingFlagged(command: String) {
-        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)), "\(command)")
+        #expect(RVDStopGuard.stopsRVD(command), "\(command)")
     }
 
     @Test("everyday process and service commands are not", arguments: benign)
     func benignPass(command: String) {
-        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
+        #expect(RVDStopGuard.stopsRVD(command) == false, "\(command)")
     }
 
     @Test("rv setup --observe sheds oversight; plain setup does not", arguments: [

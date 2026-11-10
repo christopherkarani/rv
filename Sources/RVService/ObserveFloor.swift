@@ -6,13 +6,16 @@ import RVPolicy
 ///
 /// An observe host allows and records what enforcement would deny, but it
 /// must not be able to loosen another host or the global guard. So an rv
-/// admin command that weakens rv or stops rvd (`SelfProtectionGuard`), a
-/// write to rv's install (`RVInstallPathGuard`: rvd's binaries, LaunchAgent,
-/// systemd unit, socket dir), or a touch of rv's config dir
-/// (`core.secrets:home-rv-config`, the only catalog rule that guards rv's
-/// own state) stays enforced. `GatedEvaluate.posture` is the
+/// admin command that weakens rv (`SelfProtectionGuard`) or a touch of rv's
+/// config dir (`core.secrets:home-rv-config`, the only catalog rule that
+/// guards rv's own state) stays enforced. `GatedEvaluate.posture` is the
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
+///
+/// Observe alone also floors stopping rvd (`RVDStopGuard`) and writing
+/// rv's install (`RVInstallPathGuard`): with rvd absent an observe hook
+/// allows every later call unchecked. In enforce a stopped rvd fails
+/// closed, so those floors would only add false positives there.
 enum ObserveFloor {
     static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config")]
 
@@ -46,10 +49,7 @@ enum ObserveFloor {
         home: HomeDirectory?,
         cwd: WorkingDirectory?
     ) -> Bool {
-        if holds(result) || SelfProtectionGuard.weakensPolicy(command)
-            || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) {
-            return true
-        }
+        if holds(result) || SelfProtectionGuard.weakensPolicy(command) { return true }
         let rvConfig = SecretPathDecider(
             catalog: catalog,
             safety: store.safety,
@@ -61,6 +61,34 @@ enum ObserveFloor {
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
         return words.contains { rvConfig.filePathHit($0) != nil }
+    }
+
+    /// Observe only: nil unless the command stops rvd or writes rv's
+    /// install. Then an allow becomes "run it in Terminal"; anything else
+    /// (a deny, an indeterminate) is kept, so the floor never weakens.
+    static func lifecycleFloor(
+        _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
+    ) -> EvaluationResult? {
+        guard RVDStopGuard.stopsRVD(command.rawValue)
+            || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
+        return floored(result)
+    }
+
+    /// File door: a write or edit of rv's install, typed or resolved.
+    static func lifecycleFloor(
+        _ result: EvaluationResult, action: FileToolAction, home: HomeDirectory?, cwd: WorkingDirectory?
+    ) -> EvaluationResult? {
+        guard action.kind != .read else { return nil }
+        let resolution = SecretPathCandidateResolver.resolution(home: home, cwd: cwd)
+        guard RVInstallPathGuard.writesInstall(action.path.rawValue, resolution: resolution, home: home) else {
+            return nil
+        }
+        return floored(result)
+    }
+
+    private static func floored(_ result: EvaluationResult) -> EvaluationResult {
+        guard result.decision == .allow else { return result }
+        return EvaluationResult(outcome: .indeterminate(.selfProtection), matchingView: result.matchingView)
     }
 
     private static let wordBreaks: Set<Character> = [
