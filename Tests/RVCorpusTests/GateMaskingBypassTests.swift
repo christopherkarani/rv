@@ -90,6 +90,7 @@ struct GateMaskingBypassTests {
             "git clean -fdx -- $PWD checkout -b y",
             "git --no-pager clean -fdx -- $PWD checkout -b y",
             "git clean -fdx -- . restore --staged",
+            "rm -rf ~ rm -rf /tmp/x",
         ]
     )
     func safeWordInOperandsDoesNotSkipPack(_ command: String) throws {
