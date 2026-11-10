@@ -16,12 +16,18 @@ import RVDomain
 /// agent. Reads of rv's config dir are a separate secret-path rule.
 public enum SelfProtectionGuard {
     public static func weakensPolicy(_ command: ShellCommand) -> Bool {
+        weakensPolicy(command, rvdPIDs: runningRVDaemonPIDs)
+    }
+
+    /// `rvdPIDs` names rvd's running pids (nil: unknown), read only when a
+    /// literal-pid `kill` is judged.
+    package static func weakensPolicy(_ command: ShellCommand, rvdPIDs: () -> Set<Int32>?) -> Bool {
         let launched = launchedCommandHeads(command.rawValue)
         return launched.contains { launched in
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
             // or glob head may resolve to rv: judged as rv (fail closed).
             launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
-        } || retunesOrStopsRVService(launched)
+        } || retunesOrStopsRVService(launched, rvdPIDs: rvdPIDs)
     }
 }
 

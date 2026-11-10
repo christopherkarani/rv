@@ -60,6 +60,25 @@ struct ServiceSelfProtectionTests {
         "kill $(pidof rvd)",
         "sh -c 'pkill rvd'",
         "pkill $PROC",
+        // Any non-read-only launchctl verb once an rv label or RV_* name appears.
+        "launchctl asuser 501 launchctl setenv RV_GUARD_MODE observe",
+        "launchctl bsexec 123 launchctl bootout gui/501/dev.rv.evaluate",
+        "launchctl asuser 501 pkill rvd",
+        "launchctl debug gui/501/dev.rv.evaluate --environment RV_JUDGE_ENGINE=laya",
+        "launchctl bootstrap gui/501 /tmp/dev.rv.evaluate.plist",
+        "launchctl submit -l dev.rv.evaluate -- /bin/sh",
+        "launchctl attach gui/501/dev.rv.evaluate",
+        "launchctl config user setenv RV_GUARD_MODE observe",
+        // An unmodelled launcher before a kill or service tool.
+        "lsof -ti:3000 | xargs kill",
+        "find /tmp -name x -exec kill {} +",
+        "caffeinate -i pkill node",
+        "script -q /dev/null launchctl list",
+        "arch -arm64 launchctl bootout gui/501/dev.rv.evaluate",
+        "watch -n1 systemctl --user status",
+        "unbuffer pkill rvd",
+        "kill -9 -1",
+        "kill -- -1",
     ]
 
     static let harmless: [String] = [
@@ -84,11 +103,31 @@ struct ServiceSelfProtectionTests {
         "kill $(pgrep node)",
         "echo pkill rvd",
         "git commit -m 'pkill rvd'",
+        "launchctl print-disabled gui/501",
+        "launchctl list | grep dev.rv",
+        "launchctl blame gui/501/dev.rv.evaluate",
+        "docker kill web",
+        "npm run kill",
+        "kill -1 12345",
     ]
 
     @Test("agent commands that retune or stop rv's service are flagged", arguments: weakening)
     func weakeningFlagged(command: String) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)), "\(command)")
+    }
+
+    @Test("a literal kill of rvd's pid at evaluation time is flagged", arguments: [
+        "kill 4242", "kill -9 4242", "kill -s TERM 4242", "kill -TERM 1 4242", "/bin/kill 4242",
+    ])
+    func literalRVDPidFlagged(command: String) {
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command), rvdPIDs: { [4242] }), "\(command)")
+    }
+
+    @Test("a literal kill of another pid is not; an unknown rvd pid set fails closed")
+    func literalOtherPid() {
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "kill 1234"), rvdPIDs: { [4242] }) == false)
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "kill 1234"), rvdPIDs: { nil }))
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "kill %1"), rvdPIDs: { nil }) == false)
     }
 
     @Test("unrelated service and process commands are not", arguments: harmless)
