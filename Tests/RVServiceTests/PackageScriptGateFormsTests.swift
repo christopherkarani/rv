@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import RVService
 import RVDomain
+import RVLaya
 
 /// Runner spellings the script gate must resolve to the package.json body
 /// they execute, plus the graph bounds and the unresolved floor.
@@ -228,6 +229,28 @@ struct PackageScriptGateFormsTests {
         #expect(Self.isClear(Self.evaluate(command, cwd: dir)) == false, "\(command)")
     }
 
+    @Test("a body carrying an inline program only the judge reads is unresolved")
+    func inlineProgramBodyUnresolved() throws {
+        let dir = try Self.makeDir(["test": #"node -e "require('child_process').execSync('id')""#])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isUnresolved(Self.evaluate("npm test", cwd: dir)))
+    }
+
+    @Test("the safe lane survives only when every body is itself safe-lane")
+    func safeLaneNeedsSafeBodies() throws {
+        let safe = try Self.makeDir(["test": "ls", "build": "echo done"])
+        let opaque = try Self.makeDir(["test": "jest --ci", "build": "echo done"])
+        defer { [safe, opaque].forEach { try? FileManager.default.removeItem(at: $0) } }
+        guard case .clear(let safeBodies) = Self.evaluate("npm test && npm run build", cwd: safe),
+              case .clear(let opaqueBodies) = Self.evaluate("npm test && npm run build", cwd: opaque)
+        else {
+            Issue.record("clean graphs must resolve clear")
+            return
+        }
+        #expect(safeBodies)
+        #expect(opaqueBodies == false)
+    }
+
     @Test("input the launcher parser stops following is not clear")
     func truncatedLaunchNotClear() throws {
         let dir = try Self.makeDir(["test": "node ok.js"])
@@ -264,30 +287,48 @@ struct PackageScriptGateFormsTests {
     }
 }
 
-@Suite("Package script gate packs-only floor")
+/// A judge that allows everything: an unresolved graph must not reach it.
+private struct AllowingJudge: JudgePort {
+    func judge(_ call: JudgeCall) -> JudgeRuntime.JudgeRun {
+        let json = """
+        {"choice":"allow","probabilities":{},"riskScore":0,"malicious":0,
+         "risk":0,"checkpoint":"fake","latencyMilliseconds":1,"truncated":false}
+        """
+        // swiftlint:disable:next force_try
+        return .verdict(try! JSONDecoder().decode(LayaVerdict.self, from: Data(json.utf8)))
+    }
+}
+
+@Suite("Package script gate unresolved floor")
 struct PackageScriptGateFloorTests {
-    static func packsOnly(_ command: String, scriptGraphResolved: Bool) throws -> EvaluationResult {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-scriptfloor-home-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let home = try #require(HomePath(validating: root.path))
-        return JudgeRuntime.apply(
-            to: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: command),
-            inputs: .gather(home: home, cwd: nil, environment: [:]), judge: LiveJudgePort(),
-            provenance: .unknown, now: Date(), cwd: nil,
-            allowSafeLane: scriptGraphResolved, isPeek: false
-        ).result
+    static let fakeBundle = JudgeSelection(
+        engine: .ft, bundle: URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
+    )
+
+    static func gated(_ command: String, scripts: [String: String], judge: JudgeSelection) throws -> EvaluationResult {
+        let home = try guardHome(mode: nil)
+        defer { remove(home) }
+        let dir = try PackageScriptGateFormsTests.makeDir(scripts)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cwd = WorkingDirectory(rawValue: dir.path)
+        return GatedEvaluate(EvaluateSession(), judge: AllowingJudge()).evaluateAgent(
+            EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
+            cwd: cwd, home: home, now: Date(),
+            inputs: EvaluationInputs(guardMode: .enforce, judge: judge, store: .gather(home: home, cwd: cwd))
+        )
     }
 
-    @Test("no judge and an unresolved script graph is indeterminate, not allow")
+    @Test("an unresolved script graph is indeterminate with or without a judge")
     func unresolvedIsIndeterminate() throws {
-        let result = try Self.packsOnly(#"cd "$D" && npm test"#, scriptGraphResolved: false)
-        #expect(result.decision == .indeterminate(.packageScriptUnresolved))
+        for judge in [Self.fakeBundle, JudgeSelection(engine: .ft, bundle: nil)] {
+            let result = try Self.gated(#"cd "$D" && npm test"#, scripts: ["test": "node ok.js"], judge: judge)
+            #expect(result.decision == .indeterminate(.packageScriptUnresolved), "\(judge)")
+        }
     }
 
-    @Test("no judge and a resolved script graph stays allowed")
+    @Test("a resolved, clean script graph stays allowed without a judge")
     func resolvedStaysAllowed() throws {
-        #expect(try Self.packsOnly("npm test", scriptGraphResolved: true).decision == .allow)
+        let result = try Self.gated("npm test", scripts: ["test": "node ok.js"], judge: JudgeSelection(engine: .ft, bundle: nil))
+        #expect(result.decision == .allow)
     }
 }

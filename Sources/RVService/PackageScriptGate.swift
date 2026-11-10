@@ -20,15 +20,18 @@ import RVEngine
 /// package.json, a missing one after earlier chain work, nesting past the
 /// depth cap, a cycle, the evaluation bound, a tree-mutating or
 /// package.json-touching segment earlier in the same chain) is
-/// `.unresolved`, never silently clear. The caller keeps such commands out
-/// of the judge-skipping safe lane, so they reach the judge or, with no
-/// judge, a human (`JudgeRuntime.packsOnlyFloor`).
+/// `.unresolved`, never silently clear. The door floors such commands to
+/// indeterminate whether or not a judge is loaded: the judge would only
+/// see the top-level string, never the bodies.
 ///
 /// A missing package.json with nothing earlier in the chain is `.clear`:
 /// every runner errors out before executing any script.
 enum PackageScriptGate {
     enum Verdict {
-        case clear
+        /// Every body the command runs was read and allowed.
+        /// `allBodiesSafe` is whether each is itself a safe-lane command:
+        /// only then may the top-level command skip the judge.
+        case clear(allBodiesSafe: Bool)
         case deny(EvaluationResult)
         case unresolved
     }
@@ -98,6 +101,7 @@ enum PackageScriptGate {
         var treeMutated = false
         var priorWork = false
         var unresolved = false
+        var allBodiesSafe = true
         for unit in chainUnits(command.rawValue) {
             let launched = launchedCommands(unit.text)
             let unitTokens = tokens(in: unit.text)
@@ -137,7 +141,7 @@ enum PackageScriptGate {
                     invocation, cwd: wrapperMovesCwd ? nil : effectiveCwd, home: home,
                     priorWork: priorWork || launched.count > 1, evalBody: evalBody
                 ) {
-                case .clear: continue
+                case .clear(let safe): allBodiesSafe = allBodiesSafe && safe
                 case .deny(let hit): return .deny(hit)
                 case .unresolved: unresolved = true
                 }
@@ -145,7 +149,7 @@ enum PackageScriptGate {
             if unitMutates { treeMutated = true }
             priorWork = true
         }
-        return unresolved ? .unresolved : .clear
+        return unresolved ? .unresolved : .clear(allBodiesSafe: allBodiesSafe)
     }
 
     /// Compatibility shim for pack-only tests: deny maps to the result,
@@ -187,7 +191,7 @@ enum PackageScriptGate {
         guard let packageDir = nearestPackageJSON(from: base) else {
             // No package.json: the runner errors and executes nothing,
             // unless earlier work in the chain may create one first.
-            return priorWork ? .unresolved : .clear
+            return priorWork ? .unresolved : .clear(allBodiesSafe: true)
         }
         guard let scripts = loadScripts(packageDir),
               let packageCwd = WorkingDirectory(rawValue: packageDir.path)
@@ -203,7 +207,7 @@ enum PackageScriptGate {
                 case .unresolved: unresolved = true
                 }
             }
-            return unresolved ? .unresolved : .clear
+            return unresolved ? .unresolved : .clear(allBodiesSafe: graph.allBodiesSafe)
         }
     }
 
@@ -460,7 +464,10 @@ enum PackageScriptGate {
 
     /// Memoised walk over one package's scripts: each name is evaluated at
     /// most once, a cycle is unresolved, and the total number of bodies
-    /// evaluated is bounded.
+    /// evaluated is bounded. A body the packs allowed but that carries an
+    /// inline program only the judge could read is unresolved (the judge
+    /// never sees bodies); `allBodiesSafe` records whether every body read
+    /// is itself a safe-lane command.
     private struct ScriptGraph {
         let scripts: [String: String]
         let packageCwd: WorkingDirectory
@@ -468,6 +475,7 @@ enum PackageScriptGate {
         var memo: [String: Verdict] = [:]
         var onStack: Set<String> = []
         var evaluations = 0
+        var allBodiesSafe = true
 
         mutating func check(_ name: String, depth: Int) -> Verdict {
             if let known = memo[name] { return known }
@@ -484,13 +492,17 @@ enum PackageScriptGate {
                 case .allow: break
                 case .deny, .indeterminate: return .deny(result)
                 }
+                if InlineProgramGuard.requiresJudge(ShellCommand(rawValue: body)) {
+                    unresolved = true
+                }
+                allBodiesSafe = allBodiesSafe && SafeCommandLane.isSafe(body)
                 switch nested(body, depth: depth) {
                 case .clear: break
                 case .deny(let hit): return .deny(hit)
                 case .unresolved: unresolved = true
                 }
             }
-            let verdict: Verdict = unresolved ? .unresolved : .clear
+            let verdict: Verdict = unresolved ? .unresolved : .clear(allBodiesSafe: true)
             memo[name] = verdict
             return verdict
         }
@@ -520,7 +532,7 @@ enum PackageScriptGate {
                     }
                 }
             }
-            return unresolved ? .unresolved : .clear
+            return unresolved ? .unresolved : .clear(allBodiesSafe: true)
         }
     }
 
