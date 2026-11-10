@@ -249,10 +249,12 @@ struct AllowOnceOwnerPromptTests {
             "LD_PRELOAD=/tmp/x.so sudo -u root git push --force origin main",
             "python3 -c 'import shutil; shutil.rmtree(\"/Users\")'",
         ]
+        // Quotes inside the command show escaped.
+        let shown = [commands[0], #"python3 -c 'import shutil; shutil.rmtree(\"/Users\")'"#]
         var expected: [String] = []
-        for command in commands {
+        for (command, display) in zip(commands, shown) {
             let params = try await issue(command, store: rig.store)
-            expected.append("allow once \"\(command)\" in /tmp/ws (code \(try await issuedCode(of: params, rig)))")
+            expected.append("allow once \"\(display)\" in /tmp/ws (code \(try await issuedCode(of: params, rig)))")
             let result = await attest(params, rig)
             #expect(result != .error(.allowOnceNotFound), "\(command): \(result) \(params)")
         }

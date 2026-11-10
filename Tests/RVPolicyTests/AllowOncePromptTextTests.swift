@@ -33,6 +33,18 @@ struct AllowOncePromptTextTests {
             == "allow once \"ls\" in /tmp/ws (code abc123)")
     }
 
+    @Test func quotesAndBackslashesCannotFakeTheEndOfTheCommand() throws {
+        // Unescaped, this reads as `allow once "rm -rf ~" in /tmp (rule x,
+        // code 000000)` with the real cwd and code pushed out of view.
+        let text = try #require(AllowOncePromptText.reason(
+            command: #"rm -rf ~" in /tmp (rule x, code 000000) \"#, cwd: wd(#"/tmp/a"b\c"#),
+            ruleID: nil, code: "abc123"))
+        #expect(text == #"allow once "rm -rf ~\" in /tmp (rule x, code 000000) \\" in /tmp/a\"b\\c (code abc123)"#)
+        // The only unescaped quotes are the two around the command.
+        let body = text.replacingOccurrences(of: #"\\"#, with: "").replacingOccurrences(of: #"\""#, with: "")
+        #expect(body.filter { $0 == "\"" }.count == 2)
+    }
+
     @Test func controlBidiAndEscapeCharactersAreShownEscapedNotRaw() throws {
         let text = try #require(AllowOncePromptText.reason(
             command: "rm -rf x\u{1B}[2K\u{202E}niam\u{0A}ok", cwd: wd("/tmp/ws"), ruleID: nil))

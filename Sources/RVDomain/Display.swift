@@ -44,19 +44,27 @@ public enum DisplayedText {
     }
 
     public static func field(_ text: String) -> String {
-        escaped(text, needsEscape: needsEscape)
+        escaped(text, needsEscape: needsEscape, escapeQuote: false)
     }
 
-    /// `field` with `needsApprovalEscape`: for approval prompts.
+    /// `field` with `needsApprovalEscape`, and `"` shown as `\"`, for
+    /// approval prompts: the text goes inside quotes, so a value cannot
+    /// close the quote and append a fake suffix (cwd, rule, code).
     public static func approvalField(_ text: String) -> String {
-        escaped(text, needsEscape: needsApprovalEscape)
+        escaped(text, needsEscape: needsApprovalEscape, escapeQuote: true)
     }
 
-    private static func escaped(_ text: String, needsEscape: (Unicode.Scalar) -> Bool) -> String {
+    private static func escaped(
+        _ text: String, needsEscape: (Unicode.Scalar) -> Bool, escapeQuote: Bool
+    ) -> String {
         var escaped = ""
         for scalar in text.unicodeScalars {
             if scalar.value == 0x5C {
                 escaped += "\\\\"
+                continue
+            }
+            if escapeQuote, scalar.value == 0x22 {
+                escaped += "\\\""
                 continue
             }
             switch scalar.value {

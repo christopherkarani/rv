@@ -8,7 +8,9 @@ import RVDomain
 ///
 /// Every field goes through `DisplayedText.approvalField`, so control,
 /// escape, bidi, invisible and blank-looking characters show as visible
-/// `\uXXXX` escapes instead of rewriting or hiding part of the line.
+/// `\uXXXX` escapes instead of rewriting or hiding part of the line, and
+/// `"` and `\` show as `\"` and `\\`, so a command cannot close its quote
+/// and append a fake ` in <cwd> (rule …, code …)` of its own.
 ///
 /// Nothing is ever cut. The grant covers the whole command and cwd, so a
 /// shortened prompt would hide exactly the part that runs
