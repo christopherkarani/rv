@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 /// Engine choice for one evaluation, with its validated bundle.
@@ -27,7 +28,8 @@ struct PolicyStoreInputs: Sendable {
         let policy = try? EffectiveActionPolicy(
             rules: PolicyWorkspace(home: home, workspace: workspace).loadEffectiveRules(builtin: [])
         )
-        let safety = SafetyStore.loadEffective(home: home, workspace: workspace)
+        // The organization's gate can only raise safety to strict.
+        let safety = ManagedGate.safety(SafetyStore.loadEffective(home: home, workspace: workspace), home: home)
         return PolicyStoreInputs(allowPaths: allowPaths, policy: policy, safety: safety)
     }
 }
@@ -43,17 +45,22 @@ struct EvaluationInputs: Sendable {
     let store: PolicyStoreInputs
 
     /// `environment` is explicit; the door's public entry points pass
-    /// `ProcessInfo.processInfo.environment`. `config.json` is parsed once
-    /// and shared by guard mode and engine selection.
+    /// `ProcessInfo.processInfo.environment`. It can only tighten the guard
+    /// mode; engine selection never reads it. `config.json` is parsed once
+    /// and shared by guard mode and engine selection. `host` selects the
+    /// per-host guard entry (`tty` has none).
     static func gather(
         home: HomeDirectory?,
         cwd: WorkingDirectory?,
-        environment: [String: String]
+        environment: [String: String],
+        host: LedgerHost = .tty
     ) -> EvaluationInputs {
         let config = JudgeRuntime.loadConfigDict(home: home)
         return EvaluationInputs(
-            guardMode: JudgeRuntime.guardMode(environment: environment, config: config),
-            judge: JudgeRuntime.selection(home: home, environment: environment, config: config),
+            // The organization's gate pins enforce mode while it applies.
+            guardMode: JudgeRuntime.effectiveGuardMode(
+                home: home, host: host, environment: environment, config: config),
+            judge: JudgeRuntime.selection(home: home, config: config),
             store: .gather(home: home, cwd: cwd)
         )
     }

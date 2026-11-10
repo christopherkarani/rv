@@ -341,6 +341,74 @@ struct MicroVMControlPlaceholderTests {
         }
         #expect(exists(ws, ".git") == false && exists(ws, ".rv") == false)
     }
+
+    @Test("a plain folder gets agent config placeholders: empty pinned dirs, {} for JSON, removed after")
+    func runLaterPlainFolder() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        for dir in [".claude", ".codex", ".cursor", ".gemini", ".vscode"] {
+            #expect(exists(ws, dir), "\(dir) placeholder")
+            #expect((try? FileManager.default.contentsOfDirectory(atPath: ws.appendingPathComponent(dir).path)) == [],
+                    "an empty \(dir) is mounted read-only whole")
+        }
+        let mcp = try String(contentsOf: ws.appendingPathComponent(".mcp.json"), encoding: .utf8)
+        #expect(mcp == "{}\n")
+        #expect(try Data(contentsOf: ws.appendingPathComponent(".envrc")).isEmpty)
+        #expect(exists(ws, "opencode.json") && exists(ws, "opencode.jsonc"))
+        registry.release(workspace: ws.path)
+        for path in [".claude", ".vscode", ".mcp.json", ".envrc", "opencode.json", "opencode.jsonc"] {
+            #expect(exists(ws, path) == false, "\(path) placeholder removed")
+        }
+    }
+
+    @Test("an existing agent config dir gets only its missing protected children")
+    func runLaterExistingDirectory() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let fm = FileManager.default
+        try fm.createDirectory(at: ws.appendingPathComponent(".claude/commands"), withIntermediateDirectories: true)
+        try "{\"hooks\":{}}\n".write(to: ws.appendingPathComponent(".claude/settings.json"), atomically: true, encoding: .utf8)
+        try fm.createDirectory(at: ws.appendingPathComponent(".gemini"), withIntermediateDirectories: true)
+        try "{}\n".write(to: ws.appendingPathComponent(".gemini/settings.json"), atomically: true, encoding: .utf8)
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        #expect(exists(ws, ".claude/settings.local.json") && exists(ws, ".claude/hooks"))
+        #expect(exists(ws, ".gemini/config"), "the intermediate dir is created empty, mounted read-only whole")
+        #expect(exists(ws, ".gemini/config/hooks.json") == false)
+        registry.release(workspace: ws.path)
+        #expect(exists(ws, ".claude/settings.local.json") == false && exists(ws, ".claude/hooks") == false)
+        #expect(exists(ws, ".gemini/config") == false)
+        #expect(try String(contentsOf: ws.appendingPathComponent(".claude/settings.json"), encoding: .utf8) == "{\"hooks\":{}}\n")
+        #expect(exists(ws, ".claude/commands") && exists(ws, ".gemini/settings.json"))
+    }
+
+    @Test("a nested pinned dir that exists gets its protected child")
+    func runLaterNestedPinned() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let fm = FileManager.default
+        try fm.createDirectory(at: ws.appendingPathComponent(".gemini/config/extra"), withIntermediateDirectories: true)
+        try "{}\n".write(to: ws.appendingPathComponent(".gemini/settings.json"), atomically: true, encoding: .utf8)
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        #expect(try String(contentsOf: ws.appendingPathComponent(".gemini/config/hooks.json"), encoding: .utf8) == "{}\n")
+        registry.release(workspace: ws.path)
+        #expect(exists(ws, ".gemini/config/hooks.json") == false && exists(ws, ".gemini/config/extra"))
+    }
+
+    @Test("a JSON placeholder a host process rewrote is left in place")
+    func runLaterChangedPlaceholderStays() throws {
+        let ws = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws) }
+        let registry = MicroVMControlPlaceholders()
+        try registry.acquire(workspace: ws.path).get()
+        try "{\"mcpServers\":{}}\n".write(to: ws.appendingPathComponent(".mcp.json"), atomically: false, encoding: .utf8)
+        registry.release(workspace: ws.path)
+        #expect(exists(ws, ".mcp.json"))
+        #expect(exists(ws, "opencode.json") == false)
+    }
 }
 
 @Suite("macOS guest launch")
@@ -385,7 +453,7 @@ struct MacOSGuestLaunchTests {
         let profile = macOSGuestSandboxProfile(workspacePath: "/Users/dev/p")
         // LaunchServices would start an opened app outside the sandbox, and an
         // Apple event can make a running app (System Events) run a shell command there.
-        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n"))
+        #expect(profile.hasPrefix("(version 1)\n(allow default)\n(deny lsopen)\n(deny appleevent-send)\n(deny file-link)\n(deny file-clone)\n"))
         #expect(profile.hasSuffix(workspaceControlDenies(workspacePath: "/Users/dev/p")))
     }
 

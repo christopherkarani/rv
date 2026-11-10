@@ -10,8 +10,31 @@ import RVDomain
 /// its `commandName`, and `sh`/`bash`/`zsh -c`, `eval` and `env -S` payloads
 /// recurse. Shared by the inline-program and self-protection floors; never
 /// evaluates policy.
-func launchedCommands(_ raw: String) -> [[String]] {
+package func launchedCommands(_ raw: String) -> [[String]] {
     launchedCommandHeads(raw).filter { $0.speculative == false && $0.truncated == false }.map(\.argv)
+}
+
+/// Whether `raw` holds input the launcher parser stopped following (depth
+/// cap, sensitive brace expansion): `launchedCommands` omits it, so a
+/// caller that must see every command treats it as unknown.
+package func launchIsTruncated(_ raw: String) -> Bool {
+    launchedCommandHeads(raw).contains { $0.truncated }
+}
+
+/// Launched commands whose head may resolve to any program (`$NPM test`,
+/// `"$(which npm)" test`): the head as written, then its operands.
+package func dynamicHeadLaunches(_ raw: String) -> [[String]] {
+    launchedCommandHeads(raw)
+        .filter { $0.headIsDynamic && $0.speculative == false && $0.truncated == false }
+        .map { [$0.head] + Array($0.guardArgv.dropFirst()) }
+}
+
+/// Launched commands as written: the head before `commandName` (`./ls`
+/// stays a path) and operands without structural redirects.
+package func launchedCommandsAsWritten(_ raw: String) -> [[String]] {
+    launchedCommandHeads(raw)
+        .filter { $0.speculative == false && $0.truncated == false }
+        .map { [$0.head] + Array($0.guardArgv.dropFirst()) }
 }
 
 /// A launched command with the head word as written (before `commandName`).
@@ -26,6 +49,8 @@ struct LaunchedCommand {
     let argv: [String]
     /// argv without structural redirects, for judging positional arguments.
     let guardArgv: [String]
+    /// The structural redirect words alone (operators and targets).
+    var redirects: [String] = []
     var headIsDynamic = false
     var speculative = false
     var truncated = false
@@ -46,20 +71,21 @@ struct LaunchedCommand {
 
     /// A command from a program name and operands that may carry redirect marks.
     static func make(head: String, program: String, args: [String], headIsDynamic: Bool, speculative: Bool = false) -> LaunchedCommand {
-        LaunchedCommand(
+        var command = LaunchedCommand(
             head: head,
             argv: [program] + args.map(unmarkedWord),
             guardArgv: [program] + args.filter { isRedirectWord($0) == false },
             headIsDynamic: headIsDynamic,
             speculative: speculative
         )
+        command.redirects = args.filter(isRedirectWord).map(unmarkedWord)
+        return command
     }
 
     var asSpeculative: LaunchedCommand {
-        LaunchedCommand(
-            head: head, argv: argv, guardArgv: guardArgv,
-            headIsDynamic: headIsDynamic, speculative: true, truncated: truncated
-        )
+        var copy = self
+        copy.speculative = true
+        return copy
     }
 }
 
@@ -533,7 +559,7 @@ private func isShellCommandFlag(_ word: String, shell: String) -> Bool {
 /// Launchers whose next non-flag word is the real command.
 let plainLaunchers: Set<String> = ["command", "exec", "nohup", "time", "builtin", "nice", "doas"]
 
-private func isAssignmentWord(_ word: String) -> Bool {
+func isAssignmentWord(_ word: String) -> Bool {
     guard let equals = word.firstIndex(of: "="), equals != word.startIndex else { return false }
     let name = word[..<equals]
     guard let first = name.first, assignmentNameStart.contains(first) else { return false }

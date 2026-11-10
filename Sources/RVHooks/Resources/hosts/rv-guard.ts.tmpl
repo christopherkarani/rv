@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 
 const RV_BINARY = "__RV_BINARY__";
-const RV_HOOK_TIMEOUT_MS = 5000;
+const RV_HOOK_TIMEOUT_MS = 15000;
 const RV_DECISION_TYPE = "rv-decision";
 const RV_BLOCK_WIDGET = "rv-block";
 const RV_DISPLAY_BRAND = "RV";
 const RV_CMD_PREVIEW = 96;
-const RV_FAILED_REASON = "rv failed";
+const RV_ADAPTER_ERROR_REASON = "The rv hook adapter hit an unexpected error. Run `rv doctor`.";
 const RV_MALFORMED_REASON = "rv blocked a malformed bash tool call (missing command).";
 const MINIMAL_LABEL_WIDTH = 4;
 const PLAIN_THEME = {
@@ -27,7 +27,7 @@ export default function (pi) {
     try {
       return await guardToolCall(pi, event, ctx);
     } catch {
-      return { block: true, reason: RV_FAILED_REASON };
+      return { block: true, reason: RV_ADAPTER_ERROR_REASON };
     }
   });
 }
@@ -348,12 +348,32 @@ function spawnRvHook(host, stdin) {
   });
 }
 
-function mapRvHookResult(value) {
+// Every block says what broke and what to run; never a bare "rv failed".
+function transportFailureReason(value) {
   if (value.error && value.error.code === "ENOENT") {
-    return { action: "block", reason: "rv missing" };
+    return `rv is not installed at ${RV_BINARY}. Reinstall rv or run \`rv setup\`.`;
   }
-  if (value.error || value.timedOut) {
-    return { action: "block", reason: "rv failed" };
+  if (value.timedOut) {
+    return `rv did not answer within ${RV_HOOK_TIMEOUT_MS / 1000}s; the daemon may be busy or stopped. Run \`rv doctor\`.`;
+  }
+  if (value.error) {
+    const why = value.error.code || value.error.message || "spawn error";
+    return `rv at ${RV_BINARY} could not be started: ${why}. Run \`rv doctor\`.`;
+  }
+  return undefined;
+}
+
+function badOutputReason(exitCode) {
+  if (typeof exitCode !== "number") {
+    return "rv was stopped before it returned a decision. Run `rv doctor`.";
+  }
+  return `rv exited with code ${exitCode} without a usable decision. Run \`rv doctor\`.`;
+}
+
+function mapRvHookResult(value) {
+  const failure = transportFailureReason(value);
+  if (failure) {
+    return { action: "block", reason: failure };
   }
   const stdout = value.stdout ?? "";
   const trimmed = stdout.trim();
@@ -379,10 +399,10 @@ function mapRvHookResult(value) {
     } catch {
       // non-JSON from a started rv is a failure, not allow
     }
-    return { action: "block", reason: "rv failed" };
+    return { action: "block", reason: badOutputReason(value.exitCode) };
   }
   if (value.exitCode === 0) {
     return { action: "allow" };
   }
-  return { action: "block", reason: "rv failed" };
+  return { action: "block", reason: badOutputReason(value.exitCode) };
 }

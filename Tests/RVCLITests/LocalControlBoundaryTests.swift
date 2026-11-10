@@ -13,7 +13,7 @@ struct LocalControlBoundaryTests {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
             let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
-            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .connection, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
@@ -105,7 +105,11 @@ struct LocalControlBoundaryTests {
         }
         let rows = await store.list(now: Date())
         #expect(rows.isEmpty)
-        #expect(throws: ValidationError.self) { try WorkspaceCommandRun.abandon("/tmp/ws") }
+        // Without owner authentication the abandon gate refuses before any
+        // workspace is touched.
+        await #expect(throws: ValidationError.self) {
+            try await withCLIProcess { try await WorkspaceCommandRun.abandon("/tmp/ws") }
+        }
     }
     @Test func abandonBodyBehindGateRefusesUnknownProject() throws {
         // The gate throws first (pinned above); the restored body behind
@@ -122,15 +126,21 @@ struct LocalControlBoundaryTests {
         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])
         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
-        await #expect(throws: ValidationError.self) { try await add.run() }
-        await #expect(throws: ValidationError.self) { try await exact.run() }
-        await #expect(throws: ValidationError.self) { try await remove.run() }
+        // No owner authentication given: every mutation refuses.
+        try await withCLIProcess(home: try isolatedHome()) {
+            await #expect(throws: ValidationError.self) { try await add.run() }
+            await #expect(throws: ValidationError.self) { try await exact.run() }
+            await #expect(throws: ValidationError.self) { try await remove.run() }
+        }
     }
 
-    @Test func safetyMutationRequiresOwnerAuthorization() throws {
+    @Test func safetyMutationRequiresOwnerAuthorization() async throws {
         let home = try isolatedHome()
-        #expect(throws: ValidationError.self) { try SafetyRun.set(.normal, home: home) }
-        #expect(throws: ValidationError.self) { try SafetyRun.set(.strict, home: home) }
+        try await withCLIProcess(home: home) {
+            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.normal, home: home) }
+            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.strict, home: home) }
+        }
+        #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
     }
 
     @Test func setupRunsUnauthenticated_uninstallRequiresDeviceOwnerAuth() async throws {
@@ -202,26 +212,45 @@ struct LocalControlBoundaryTests {
         #expect(transport.sendCount == 3)
     }
 
-    @Test func setupServiceWarningGating() {
-        #expect(SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: false) == true)
-        #expect(SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: true) == false)
-        #expect(SetupServiceWarning.needed(hasWiredHosts: false, serviceUp: false) == false)
-        #expect(SetupServiceWarning.needed(hasWiredHosts: false, serviceUp: true) == false)
-        #expect(SetupServiceWarning.text.contains("rv doctor"))
+    @Test func hookServiceProbeClassifiesAMissLikeAHook() async throws {
+        let ack = HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
+        let answering = ScriptedTransport(ack: ack, responseResult: .doctorSnapshot(DoctorSnapshotReply(
+            serviceSemver: "1.0.0", state: .running, idleExitSeconds: 300, packsEnabled: [], checks: []
+        )))
+        #expect(await try isolatedClient(transport: answering).probeHookService() == nil)
+        // Only a positive absence is `.unreachable`; busy or dropped is not.
+        let absent = ScriptedTransport(ack: ack, sendError: .connectFailed)
+        #expect(await try isolatedClient(transport: absent).probeHookService() == .unreachable)
+        let slow = ScriptedTransport(ack: ack, sendError: .timeout)
+        #expect(await try isolatedClient(transport: slow).probeHookService() == .timeout)
+        let dropped = ScriptedTransport(ack: ack, sendError: .interrupted)
+        #expect(await try isolatedClient(transport: dropped).probeHookService() == .connection)
+        #expect(await try isolatedClient(transport: nil).probeHookService() == .connection)
     }
 
-    @Test func setupWarnsWhenWiredHostsOutliveTheService() async throws {
-        // A wired slot with no daemon is the block-or-prompt-everything trap:
-        // setup stays green (files are written) but the outcome must carry
-        // the service warning on stderr, where robot stdout stays parseable.
-        // The probe is injected so the result never depends on a real rvd.
-        let outcome = try await wiredSetupOutcome(serviceUp: false)
+    @Test func setupOutcomeRunsTheFlowWithTheCallersContext() async throws {
+        // The flow runs on its own thread (its readiness wait blocks); the
+        // test seam must cross with it so setup never sees the live HOME.
+        // An isolated HOME does not own the real service, so no probe runs.
+        let (outcome, home) = try await wiredSetupOutcome()
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stderr.contains("rv doctor"))
+        let settings = try String(
+            contentsOfFile: home.rawValue + "/.config/muse/settings.json", encoding: .utf8)
+        #expect(settings != #"{"schema_version":1}"#, "setup wired the isolated HOME's muse")
+    }
+
+    @Test func observeSetupWarnsThatADownServiceLeavesCommandsUnchecked() async throws {
+        // Under observe a dead rvd no longer blocks: hooks step aside, so the
+        // warning must say commands run unchecked, not that they block.
+        let (outcome, _) = try await wiredSetupOutcome(serviceUp: false, observe: true)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.contains(SetupServiceWarning.observeText))
+        #expect(!outcome.stderr.contains(SetupServiceWarning.text))
+        #expect(SetupServiceWarning.observeText.contains("rv doctor"))
     }
 
     @Test func setupStaysQuietWhenWiredHostsHaveALiveService() async throws {
-        let outcome = try await wiredSetupOutcome(serviceUp: true)
+        let (outcome, _) = try await wiredSetupOutcome(serviceUp: true)
         #expect(outcome.exitCode == 0)
         #expect(!outcome.stderr.contains("rv doctor"))
     }
@@ -238,7 +267,10 @@ struct LocalControlBoundaryTests {
     /// Runs setup against a home with one wired host and a stubbed probe.
     /// Asserted on the outcome, not a captured fd: fd capture deadlocks
     /// under parallel test execution.
-    private func wiredSetupOutcome(serviceUp: Bool) async throws -> SetupOutcome {
+    private func wiredSetupOutcome(
+        serviceUp: Bool = true,
+        observe: Bool = false
+    ) async throws -> (SetupOutcome, HomeDirectory) {
         let home = try isolatedHome()
         let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
         try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
@@ -251,20 +283,23 @@ struct LocalControlBoundaryTests {
         try writeExecutableScript(at: binDir.appendingPathComponent("rv"), source: "#!/bin/sh\nexit 0\n")
         try writeExecutableScript(at: binDir.appendingPathComponent("rv-cli"), source: "#!/bin/sh\nexit 0\n")
         let environment = ["HOME": home.rawValue, "PATH": "/usr/bin:/bin"]
-        return try await withCLIProcess(environment: environment) {
+        let outcome = try await withCLIProcess(environment: environment) {
             await Setup().setupOutcome(
                 intent: SetupIntent(
                     kind: .install,
                     force: false,
                     appearance: .robot,
                     animate: false,
-                    ceremonyKind: .setup
+                    ceremonyKind: .setup,
+                    observe: observe
                 ),
                 clock: LiveSetupCeremonyClock(),
-                write: CeremonyCLI.stdoutWriter(),
-                probeService: { _ in serviceUp }
+                write: { _ in },
+                probeService: { _ in serviceUp },
+                authenticate: {}
             )
         }
+        return (outcome, home)
     }
 
 }

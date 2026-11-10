@@ -17,10 +17,11 @@ static const char *const kHosts[] = {
 };
 #define HOST_COUNT (sizeof kHosts / sizeof kHosts[0])
 
-/* Absent or slow daemon: RV_HOOK_WHEN_DOWN decides. */
+/* Absent, slow or dropped daemon: RV_HOOK_WHEN_DOWN decides. */
 static const enum RvHookFailure kDown[] = {
     RV_HOOK_FAIL_UNREACHABLE,
     RV_HOOK_FAIL_TIMEOUT,
+    RV_HOOK_FAIL_CONNECTION,
 };
 #define DOWN_COUNT (sizeof kDown / sizeof kDown[0])
 
@@ -94,12 +95,14 @@ static void test_mode_parse(void) {
     if (rv_when_down_parse("ALLOW") != RV_WHEN_DOWN_ASK) fail("parse_upper", "not ask");
     if (rv_when_down_parse("allow ") != RV_WHEN_DOWN_ASK) fail("parse_space", "not ask");
     if (rv_when_down_parse("1") != RV_WHEN_DOWN_ASK) fail("parse_junk", "not ask");
+    /* Observe comes only from the owner's config file, never the environment. */
+    if (rv_when_down_parse("observe") != RV_WHEN_DOWN_ASK) fail("parse_observe", "not ask");
 }
 
 static void test_messages(void) {
     const enum RvHookFailure all[] = {
         RV_HOOK_FAIL_INPUT, RV_HOOK_FAIL_UNREACHABLE, RV_HOOK_FAIL_TIMEOUT,
-        RV_HOOK_FAIL_UNTRUSTED, RV_HOOK_FAIL_PROTOCOL,
+        RV_HOOK_FAIL_UNTRUSTED, RV_HOOK_FAIL_PROTOCOL, RV_HOOK_FAIL_CONNECTION,
     };
     size_t i;
     size_t j;
@@ -130,6 +133,9 @@ static void test_messages(void) {
     }
     if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_TIMEOUT), "rv doctor") == NULL) {
         fail("timeout_actionable", "missing rv doctor");
+    }
+    if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_CONNECTION), "rv doctor") == NULL) {
+        fail("connection_actionable", "missing rv doctor");
     }
     if (strstr(rv_hook_failure_message(RV_HOOK_FAIL_UNTRUSTED), "rv setup") == NULL) {
         fail("untrusted_actionable", "missing rv setup");
@@ -245,6 +251,61 @@ static void test_matrix(void) {
     }
 }
 
+static const char kObserveErr[] =
+    "RV observe mode: daemon unavailable, so this call was allowed without being checked or logged. Run `rv doctor`.\n";
+
+/* The host's own allow wire (HostCodec.encodeAllow): rv steps aside. */
+static const char *observe_allow_out(const char *host) {
+    if (strcmp(host, "cursor") == 0) {
+        return "{\"permission\":\"allow\"}\n";
+    }
+    if (strcmp(host, "antigravity") == 0) {
+        return "{\"decision\":\"allow\"}\n";
+    }
+    return "";
+}
+
+static void test_observe(void) {
+    size_t h;
+    size_t f;
+    char name[96];
+    for (h = 0; h < HOST_COUNT; h++) {
+        const char *host = kHosts[h];
+        struct RvHookFallback r;
+        struct RvHookFallback ask;
+        snprintf(name, sizeof name, "%s_observe_unreachable", host);
+        expect_exact(name, host, RV_HOOK_FAIL_UNREACHABLE, RV_WHEN_DOWN_OBSERVE,
+                     observe_allow_out(host), kObserveErr, 0);
+        /* A live but slow daemon would have applied rv's self-protection, and
+         * an agent can make it slow: a timeout keeps the default ask render. */
+        snprintf(name, sizeof name, "%s_observe_timeout", host);
+        render(name, host, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_OBSERVE, &r);
+        render(name, host, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_ASK, &ask);
+        if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code) {
+            fail(name, "timeout under observe must render like ask");
+        }
+        /* A dropped or unverifiable connection (rvd draining mid-request, an
+         * agent-chosen XDG_RUNTIME_DIR) is not proof rvd is absent. */
+        snprintf(name, sizeof name, "%s_observe_connection", host);
+        render(name, host, RV_HOOK_FAIL_CONNECTION, RV_WHEN_DOWN_OBSERVE, &r);
+        render(name, host, RV_HOOK_FAIL_CONNECTION, RV_WHEN_DOWN_ASK, &ask);
+        if (strcmp(r.out, ask.out) != 0 || strcmp(r.err, ask.err) != 0 || r.exit_code != ask.exit_code
+            || strstr(r.err, "observe") != NULL) {
+            fail(name, "connection failure under observe must render like ask");
+        }
+        /* Observe never softens impersonation, a malformed reply or bad input. */
+        for (f = 0; f < HARD_COUNT; f++) {
+            snprintf(name, sizeof name, "%s_observe_hard_%d", host, (int)kHard[f]);
+            render(name, host, kHard[f], RV_WHEN_DOWN_OBSERVE, &r);
+            if (r.exit_code != deny_exit(host) || r.out[0] == '\0'
+                || strstr(r.out, rv_hook_failure_message(kHard[f])) == NULL
+                || strstr(r.out, "allow") != NULL) {
+                fail(name, "hard failure must deny under observe");
+            }
+        }
+    }
+}
+
 static void test_bad_args(void) {
     struct RvHookFallback r;
     if (rv_hook_fallback_render(NULL, RV_HOOK_FAIL_TIMEOUT, RV_WHEN_DOWN_ASK, &r) == 0) {
@@ -265,6 +326,7 @@ int main(void) {
     test_messages();
     test_exact_wires();
     test_matrix();
+    test_observe();
     test_bad_args();
     if (g_fails != 0) {
         fprintf(stderr, "%d failure(s)\n", g_fails);

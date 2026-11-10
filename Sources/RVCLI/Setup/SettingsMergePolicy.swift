@@ -36,9 +36,23 @@ enum SettingsMergePolicy {
         case wired(bakedPath: String)
     }
 
-    /// The single `RV_BINARY=` hook-command construction site.
-    static func hookCommand(rvPath: String, adapterPath: String) -> String {
-        "RV_BINARY=\(rvPath) python3 \(adapterPath)"
+    /// The single `RV_BINARY=` hook-command construction site. Every path
+    /// is shell-quoted when needed (a HOME with a space), since the host
+    /// runs the command through a shell. See `AdapterCommand` for the
+    /// interpreter and its flags.
+    static func hookCommand(rvPath: String, interpreter: String, adapterPath: String) -> String {
+        "RV_BINARY=\(ShellWord.quote(rvPath)) "
+            + AdapterCommand.render(interpreter: interpreter, adapterPath: adapterPath)
+    }
+
+    /// The forms rv wrote before the interpreter was baked: quoted, and
+    /// before that unquoted. Still rv's own command: setup rewrites it
+    /// without `--force`.
+    static func legacyHookCommands(rvPath: String, adapterPath: String) -> [String] {
+        [
+            "RV_BINARY=\(ShellWord.quote(rvPath)) " + AdapterCommand.renderLegacy(adapterPath: adapterPath),
+            "RV_BINARY=\(rvPath) \(AdapterCommand.legacyInterpreter) \(adapterPath)",
+        ]
     }
 
     /// Exclusive adapter location next to the host config file.
@@ -51,25 +65,50 @@ enum SettingsMergePolicy {
             || (descriptor.legacyFingerprint.map { command.contains($0) } ?? false)
     }
 
-    static func adapterPath(in command: String) -> String? {
-        let marker = " python3 "
-        if let range = command.range(of: marker) {
-            let path = String(command[range.upperBound...])
-            return path.hasPrefix("/") ? path : nil
+    /// The rv, interpreter and adapter an `RV_BINARY=` command names: the
+    /// current form, or rv's earlier `python3` forms, quoted or unquoted.
+    static func parseCommand(_ command: String) -> (rvPath: String, interpreter: String, adapterPath: String)? {
+        let envPrefix = "RV_BINARY="
+        guard command.hasPrefix(envPrefix) else { return nil }
+        if let rv = ShellWord.leadingWord(command.dropFirst(envPrefix.count)),
+           rv.rest.hasPrefix(" "),
+           let tail = AdapterCommand.parse(rv.rest.dropFirst())
+        {
+            return (rv.word, tail.interpreter, tail.adapterPath)
         }
-        let prefix = "python3 "
-        guard command.hasPrefix(prefix) else { return nil }
-        let path = String(command.dropFirst(prefix.count))
-        return path.hasPrefix("/") ? path : nil
+        let marker = " \(AdapterCommand.legacyInterpreter) "
+        guard let split = command.range(of: marker, options: .backwards) else { return nil }
+        let rvStart = command.index(command.startIndex, offsetBy: envPrefix.count)
+        guard rvStart <= split.lowerBound else { return nil }
+        return (
+            String(command[rvStart..<split.lowerBound]),
+            AdapterCommand.legacyInterpreter,
+            String(command[split.upperBound...])
+        )
+    }
+
+    static func adapterPath(in command: String) -> String? {
+        if let parsed = parseCommand(command) {
+            return parsed.adapterPath.hasPrefix("/") ? parsed.adapterPath : nil
+        }
+        return AdapterCommand.adapterPath(in: command)
+    }
+
+    /// The absolute interpreter rv's current command bakes; nil for an
+    /// earlier `python3` command or a foreign one.
+    static func bakedInterpreter(in command: String) -> String? {
+        let envPrefix = "RV_BINARY="
+        guard command.hasPrefix(envPrefix),
+              let rv = ShellWord.leadingWord(command.dropFirst(envPrefix.count)),
+              rv.rest.hasPrefix(" ")
+        else { return nil }
+        return AdapterCommand.bakedInterpreter(in: rv.rest.dropFirst())
     }
 
     static func bakedRvPath(in command: String, descriptor: SettingsMergeDescriptor) -> String? {
-        let envPrefix = "RV_BINARY="
-        if command.hasPrefix(envPrefix) {
-            let rest = command.dropFirst(envPrefix.count)
-            guard let space = rest.firstIndex(of: " ") else { return nil }
-            let path = String(rest[..<space])
-            return path.hasPrefix("/") && path.isEmpty == false ? path : nil
+        if command.hasPrefix("RV_BINARY=") {
+            guard let path = parseCommand(command)?.rvPath else { return nil }
+            return path.hasPrefix("/") ? path : nil
         }
         guard let legacy = descriptor.legacyFingerprint else { return nil }
         let suffix = " " + legacy
@@ -81,22 +120,49 @@ enum SettingsMergePolicy {
         return path.hasPrefix("/") && path.isEmpty == false ? path : nil
     }
 
+    /// rv's current hook, quoting and timeout included.
     static func matchesCurrentHook(
         _ hook: JSONValue,
         descriptor: SettingsMergeDescriptor
     ) -> Bool {
+        ownCommand(hook, descriptor: descriptor, acceptLegacy: false)
+            && hook["timeout"]?.int == descriptor.timeout
+    }
+
+    /// rv's own command whatever its timeout or quoting. An entry that
+    /// differs from the current hook only in its timeout (raised so rvd
+    /// always gives up before the host), in path quoting, or in running
+    /// `python3` from PATH was written by an older rv: it is outdated, not
+    /// a foreign guard, and setup rewrites it without --force.
+    static func matchesCurrentCommand(
+        _ hook: JSONValue,
+        descriptor: SettingsMergeDescriptor
+    ) -> Bool {
+        ownCommand(hook, descriptor: descriptor, acceptLegacy: true)
+    }
+
+    private static func ownCommand(
+        _ hook: JSONValue,
+        descriptor: SettingsMergeDescriptor,
+        acceptLegacy: Bool
+    ) -> Bool {
         guard let type = hook["type"]?.string, type == descriptor.hookType,
               let command = hook["command"]?.string,
-              let path = bakedRvPath(in: command, descriptor: descriptor),
-              path.hasPrefix("/"),
-              let adapter = adapterPath(in: command),
-              adapter.hasPrefix("/"),
-              adapter.hasSuffix("/hooks/" + descriptor.fingerprint),
-              hook["timeout"]?.int == descriptor.timeout
+              let parsed = parseCommand(command),
+              parsed.rvPath.hasPrefix("/"),
+              parsed.adapterPath.hasPrefix("/"),
+              parsed.adapterPath.hasSuffix("/hooks/" + descriptor.fingerprint)
         else {
             return false
         }
-        return command == hookCommand(rvPath: path, adapterPath: adapter)
+        if parsed.interpreter.hasPrefix("/"),
+           command == hookCommand(
+               rvPath: parsed.rvPath, interpreter: parsed.interpreter, adapterPath: parsed.adapterPath)
+        {
+            return true
+        }
+        return acceptLegacy
+            && legacyHookCommands(rvPath: parsed.rvPath, adapterPath: parsed.adapterPath).contains(command)
     }
 
     static func isFingerprintedHook(
@@ -123,11 +189,12 @@ enum SettingsMergePolicy {
 
     static func hookEntry(
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         descriptor: SettingsMergeDescriptor
     ) -> HookEntry {
         HookEntry(
-            command: hookCommand(rvPath: rvPath, adapterPath: adapterPath),
+            command: hookCommand(rvPath: rvPath, interpreter: interpreter, adapterPath: adapterPath),
             timeout: descriptor.timeout,
             type: descriptor.hookType,
             failClosed: nil,
@@ -137,6 +204,7 @@ enum SettingsMergePolicy {
 
     static func rvEntry(
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         matcher: String,
         descriptor: SettingsMergeDescriptor
@@ -145,7 +213,8 @@ enum SettingsMergePolicy {
             "matcher": .string(matcher),
             "hooks": .array([
                 HostHooksMergeEngine.hookValue(
-                    hookEntry(rvPath: rvPath, adapterPath: adapterPath, descriptor: descriptor)
+                    hookEntry(
+                        rvPath: rvPath, interpreter: interpreter, adapterPath: adapterPath, descriptor: descriptor)
                 ),
             ]),
         ])
@@ -168,6 +237,7 @@ enum SettingsMergePolicy {
         existingData: Data?,
         descriptor: SettingsMergeDescriptor,
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         force: Bool
     ) throws(SettingsMergeError) -> (data: Data, wrote: Bool) {
@@ -175,7 +245,7 @@ enum SettingsMergePolicy {
             return try HostHooksMergeEngine.merge(
                 existingData: existingData,
                 descriptor: descriptor.wiring,
-                context: HookCommandContext(rvPath: rvPath, adapterPath: adapterPath),
+                context: HookCommandContext(rvPath: rvPath, interpreter: interpreter, adapterPath: adapterPath),
                 willMerge: { root in
                     if force == false, inspectionState(of: root, descriptor: descriptor) == .occupied {
                         throw SettingsMergeError.occupiedWithoutForce
@@ -234,7 +304,9 @@ enum SettingsMergePolicy {
                 continue
             }
             allCurrent = false
-            if isStaleLegacyHook(item.hook, descriptor: descriptor) {
+            if isStaleLegacyHook(item.hook, descriptor: descriptor)
+                || matchesCurrentCommand(item.hook, descriptor: descriptor)
+            {
                 hasStaleLegacy = true
             } else {
                 hasNonCurrentGuard = true

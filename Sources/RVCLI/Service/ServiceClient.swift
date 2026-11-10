@@ -42,8 +42,9 @@ public struct ServiceClient: Sendable {
         )
     }
 #else
+    /// Linux: rvd's Unix socket (peer-verified as the sibling `rvd`).
     public init(
-        transport: (any ServiceTransport)? = nil,
+        transport: (any ServiceTransport)? = ServiceClient.defaultLinuxTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
@@ -58,6 +59,16 @@ public struct ServiceClient: Sendable {
             home: home,
             clock: clock
         )
+    }
+#endif
+
+#if !canImport(XPC)
+    public static func defaultLinuxTransport() -> (any ServiceTransport)? {
+        #if os(Linux)
+        UnixSocketServiceTransport.live()
+        #else
+        nil
+        #endif
     }
 #endif
 
@@ -283,7 +294,60 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 AttestTTYRedemptionCall(params: params),
                 using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs
+                // rvd holds the reply until the owner answers its prompt.
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
+            )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    /// `rv allow-once mint`: asks rvd to pre-arm a code after its owner check.
+    public func mintAllowOnce(_ params: MintAllowOnceParams) async -> Result<
+        MintAllowOnceReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                MintAllowOnceCall(params: params),
+                using: transport,
+                // rvd holds the reply until the owner answers its prompt.
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
+            )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    /// Asks rvd to confirm the device owner approves `params.summary`.
+    ///
+    /// Owner calls (this, `mintAllowOnce`, `attestTTYRedemption`) verify
+    /// rvd over the hook-consult session, as hooks do: the peer-trust
+    /// manifest when one is installed (a tampered one fails closed),
+    /// otherwise the pinned sibling `rvd`. The manifest-only session would
+    /// refuse every manifest-free install before the owner saw a prompt.
+    public func confirmOwnerAction(_ params: ConfirmOwnerActionParams) async -> Result<
+        ConfirmOwnerActionReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                ConfirmOwnerActionCall(params: params),
+                using: transport,
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
             )
             return .success(reply)
         } catch let error as IPCCallError {
@@ -308,25 +372,42 @@ public struct ServiceClient: Sendable {
     /// a launchd cold spawn) plus hookEvaluate (8000 ms; rvd enforces its
     /// own shorter deadline). Mirrors the C client's per-exchange budgets.
     static let hookEvaluateTimeoutMs = 14_000
+    /// macOS: a person answers rvd's Touch ID prompt, which rvd closes after
+    /// `OwnerPresence.defaultPromptTimeout` (60 s); this waits past that so
+    /// rvd's answer arrives first. Linux: a wrong password costs pam_unix's
+    /// ~2 s failure delay.
+    static let confirmOwnerActionTimeoutMs = 75_000
 
-    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`.
+    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`
+    /// and the owner's observe choice from their config file.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
         await hookEvaluate(
             host: host,
             stdin: stdin,
-            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey])
+            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey]),
+            ownerObserves: HookObserveFallback.live
         )
     }
 
     /// Authority-bearing hooks never retry through the local evaluation door,
     /// and the request is never resent. A daemon miss is classified and
-    /// rendered per `whenDown` (`HookDaemonFallback`).
-    public func hookEvaluate(host: HookHost, stdin: String, whenDown: HookWhenDown) async -> HookWire {
+    /// rendered per `whenDown` (`HookDaemonFallback`); `ownerObserves` is
+    /// consulted only on an unreachable daemon, and only in `.ask` mode.
+    /// A missing transport (Linux: XDG_RUNTIME_DIR set but empty or too long)
+    /// never reached rvd, so it is `.connection`, not `.unreachable`.
+    public func hookEvaluate(
+        host: HookHost,
+        stdin: String,
+        whenDown: HookWhenDown,
+        ownerObserves: @Sendable (HookHost) -> Bool = { _ in false }
+    ) async -> HookWire {
         func unavailable(_ failure: HookDaemonFailure) -> HookWire {
-            HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
+            // Only an absent daemon; an explicit RV_HOOK_WHEN_DOWN=deny wins.
+            let observes = whenDown == .ask && failure == .unreachable && ownerObserves(host)
+            return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: observes)
         }
         guard let transport else {
-            return unavailable(.unreachable)
+            return unavailable(.connection)
         }
         do {
             let reply = try await send(
@@ -393,6 +474,26 @@ public struct ServiceClient: Sendable {
             }
         }
         return false
+    }
+
+    /// One hook-door liveness probe, with a miss classified exactly as a
+    /// hook classifies it (`HookDaemonFallback.classify`). nil: rvd
+    /// answered. Only `.unreachable` means rvd is positively absent.
+    func probeHookService() async -> HookDaemonFailure? {
+        guard let transport else { return .connection }
+        do {
+            _ = try await send(
+                DoctorSnapshotCall(),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                hookConsult: true
+            )
+            return nil
+        } catch is IPCCallError {
+            return .protocol
+        } catch {
+            return HookDaemonFallback.classify(error)
+        }
     }
 
     public func status() async -> ServiceStatusReport {
@@ -496,11 +597,11 @@ public struct ServiceClient: Sendable {
     private static func xpcClientFailure(_ error: Error) -> XPCClientFailure? {
 #if canImport(XPC)
         switch error as? XPCEvaluateClientError {
-        case .connectFailed, .cancelled:
+        case .connectFailed, .connectionLost, .cancelled:
             return .down
         case .authenticationFailed:
             return .daemonRejected
-        case nil:
+        case .malformedReply, nil:
             return nil
         }
 #else

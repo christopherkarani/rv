@@ -7,6 +7,7 @@ import Foundation
 import RVDomain
 import RVIPC
 import RVPolicy
+import RVTheme
 
 /// In-process overrides for operator HOME / TTY / env. Production reads the
 /// process; tests install a `Context` so `run()` never touches live `$HOME`.
@@ -22,6 +23,13 @@ enum CLIProcess: Sendable {
         /// Scripted device-owner outcome for `rv allow-once`. Nil fails
         /// closed (tests never reach live LocalAuthentication).
         var ownerAuthOutcome: UIAuthenticationOutcome?
+        /// Stand-in for `rv policy draft`'s English compiler. Nil uses the
+        /// live chain, which reaches Apple Intelligence where it is enabled.
+        var englishCompiler: (any EnglishCompiler)?
+        /// Seams for the daemon-down owner fallback (`rv uninstall`, loosening
+        /// `rv host mode`). Nil assumes rvd reachable, so `ownerAuthOutcome`
+        /// alone decides and tests never probe rvd or read a terminal.
+        var daemonDownConfirmation: DaemonDownOwnerConfirmation.Seams?
 
         init(
             home: HomeDirectory? = nil,
@@ -32,6 +40,7 @@ enum CLIProcess: Sendable {
             workspacePath: String? = nil,
             stdinText: String? = nil,
             ownerAuthOutcome: UIAuthenticationOutcome? = nil,
+            englishCompiler: (any EnglishCompiler)? = nil,
             includeProcessEnvironment: Bool = false
         ) {
             self.home = home
@@ -53,6 +62,7 @@ enum CLIProcess: Sendable {
             self.workspacePath = workspacePath
             self.stdinText = stdinText
             self.ownerAuthOutcome = ownerAuthOutcome
+            self.englishCompiler = englishCompiler
         }
     }
 
@@ -76,6 +86,12 @@ enum CLIProcess: Sendable {
 
     static func stdoutIsTTY() -> Bool {
         context?.stdoutIsTTY ?? (isatty(STDOUT_FILENO) != 0)
+    }
+
+    /// The terminal the background probe asks. Installed contexts get none,
+    /// so tests never write a query to the operator's terminal.
+    static func terminalQueryChannel() -> any TerminalQueryChannel {
+        context == nil ? StandardTerminalChannel() : UnavailableTerminalChannel()
     }
 
     static func stdoutFileDescriptor() -> Int32 {

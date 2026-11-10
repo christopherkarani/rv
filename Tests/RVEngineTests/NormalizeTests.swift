@@ -47,12 +47,11 @@ import RVDomain
     for spelling in klass {
         #expect(Normalize.matchingView(of: spelling) == "git reset --hard")
     }
-    // Nuance (fail-closed by accident, pinned deliberately): value-taking
-    // sudo flags stop the strip, so `sudo -u root …` never joins the
-    // `git reset --hard` grant class.
+    // A value-taking sudo flag consumes its value: taking `root` (or
+    // `echo` in `sudo -u echo rm -rf src`) for argv0 masked the real command.
     #expect(
         Normalize.matchingView(of: "sudo -u root git reset --hard")
-            == "root git reset --hard"
+            == "git reset --hard"
     )
 }
 

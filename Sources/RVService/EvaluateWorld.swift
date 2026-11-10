@@ -49,9 +49,19 @@ public struct PackCoverage: Sendable, Equatable {
 /// enabled-ID rule, and the door around the resulting session.
 package enum EvaluationWorld {
     /// Walk set from config. Nil or unreadable HOME is day-one. Empty config is empty.
+    /// Packs the signed organization policy requires (`gate.requirePacks`)
+    /// are always added: user config can never drop them.
     package static func walkedPackIDs(home: HomeDirectory?) -> WalkedPackIDs {
-        guard let home else { return WalkedPackIDs(ids: dayOnePackIDs) }
-        return WalkedPackIDs(ids: (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs)
+        var ids: [PackID]
+        if let home {
+            ids = (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
+        } else {
+            ids = dayOnePackIDs
+        }
+        for id in ManagedGate.requiredPacks(home: home) where ids.contains(id) == false {
+            ids.append(id)
+        }
+        return WalkedPackIDs(ids: ids)
     }
 
     /// Full catalog first; day-one when the index is missing; none when both fail.
@@ -67,9 +77,15 @@ package enum EvaluationWorld {
     ) -> PackCoverage {
         let walked: WalkedPackIDs
         if let catalog {
-            let ids = catalog.records.isEmpty
+            var ids = catalog.records.isEmpty
                 ? dayOnePackIDs
                 : catalog.records.filter(\.isEnabled).map(\.id)
+            // Org-required packs are compiled whatever the catalog flags say;
+            // otherwise the walk wants a pack the session never compiled and
+            // the engine skips it.
+            for id in ManagedGate.requiredPacks(home: home) where ids.contains(id) == false {
+                ids.append(id)
+            }
             walked = WalkedPackIDs(ids: ids)
         } else {
             walked = walkedPackIDs(home: home)

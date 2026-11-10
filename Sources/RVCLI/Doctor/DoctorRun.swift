@@ -24,10 +24,11 @@ struct DoctorEnvironment {
         environment: [String: String] = CLIProcess.environment()
     ) -> DoctorEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
-        let install = DoctorInstallProbes.live()
+        let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        let install = DoctorInstallProbes.live(home: home, pathEntries: pathEntries)
         return DoctorEnvironment(
             home: home,
-            pathEntries: (environment["PATH"] ?? "").split(separator: ":").map(String.init),
+            pathEntries: pathEntries,
             fileManager: .default,
             launchAgentLoaded: install.launchd.map { $0.loadedInGui || $0.loadedInUser }
                 ?? LaunchAgentProbe.isLoaded(label: SetupRun.launchAgentLabel),
@@ -136,6 +137,7 @@ enum DoctorRun {
         )
         var service = snapshot.health.service
         service.fix = serviceFix(snapshot.health, paths: paths)
+        service.trust = environment.install?.daemonTrust
         return DoctorViewModel(
             service: service,
             packs: packsView(
@@ -151,7 +153,7 @@ enum DoctorRun {
                 )
             },
             config: configState(path: paths.configDirectory, fileManager: environment.fileManager),
-            safety: SafetyStore.loadEffective(
+            safety: ManagedGate.effectiveSafety(
                 home: environment.home,
                 workspace: URL(
                     fileURLWithPath: environment.fileManager.currentDirectoryPath,
@@ -164,6 +166,8 @@ enum DoctorRun {
             leftovers: environment.leftovers,
             problems: environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
+                    + DoctorInstallChecks.adapterRuntime(
+                        hosts: snapshot.hosts, paths: paths, fileManager: environment.fileManager, probes: $0)
             } ?? []
         )
     }
@@ -214,6 +218,9 @@ enum DoctorRun {
 
     private static func homePacks(home: HomeDirectory) -> OperatorPacks {
         do {
+            // The doors fail closed to every pack on an unreadable config;
+            // doctor must report that instead of a healthy registry.
+            _ = try PacksConfigStore.load(home: home)
             return .home(try PacksFacade.effectiveIDs(home: home))
         } catch {
             return .unreadable

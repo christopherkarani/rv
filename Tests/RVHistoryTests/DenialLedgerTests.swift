@@ -24,6 +24,16 @@ struct DenialLedgerTests {
         #expect(try encode(record) == LedgerJSONL.claudeReadEnv)
     }
 
+    @Test func observedRow_addsOnlyTheObservedKey() throws {
+        let record = try decode(LedgerJSONL.claudeObservedResetHard)
+        #expect(record.observed)
+        #expect(try encode(record) == LedgerJSONL.claudeObservedResetHard)
+        var enforced = record
+        enforced.observed = false
+        #expect(try encode(enforced).contains("observed") == false)
+        #expect(try decode(LedgerJSONL.grokBashResetHard).observed == false)
+    }
+
     @Test func ttyBashResetHard_jsonlBytesMatchToday() throws {
         let record = try decode(LedgerJSONL.ttyBashResetHard)
         #expect(record.host == .tty)
@@ -160,6 +170,8 @@ struct DenialLedgerTests {
 }
 
 private enum LedgerJSONL {
+    static let claudeObservedResetHard =
+        #"{"category":"core.git","host":"claude","observed":true,"path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash"}"#
     static let grokBashResetHard =
         #"{"category":"core.git","host":"grok","path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash"}"#
     static let claudeReadEnv =

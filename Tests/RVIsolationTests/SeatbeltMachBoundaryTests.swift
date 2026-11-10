@@ -221,39 +221,64 @@ struct SeatbeltMachBoundaryTests {
     }
 
     /// Public HTTPS still works through the RV proxy after hardening: the
-    /// contained fetch returns 200, proving network productivity does not
-    /// imply host credential access. Skips only when the unsandboxed control
-    /// fails (no internet on this runner).
+    /// contained fetch tunnels through the egress proxy and returns the
+    /// page, proving network productivity does not imply host credential
+    /// access. Certificate trust is deliberately out of scope (`--insecure`):
+    /// the chain a CDN edge serves varies by edge and over time, and caged
+    /// trust evaluation has its own test below. Skips only when the
+    /// unsandboxed control fails (no internet on this runner).
     @Test func proxiedPublicHTTPSStillSucceeds() async throws {
-        let control = runHost(
-            executable: "/usr/bin/curl",
-            arguments: ["-s", "--max-time", "20", "-o", "/dev/null", "-w", "%{http_code}", "https://example.com"]
-        )
-        guard control.output.contains("200") else {
-            print("mach-boundary egress coverage=NOT-TESTED reason=no-internet control=\(control.status)")
-            return
-        }
+        guard hostReachesPublicHTTPS(coverage: "egress") else { return }
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        let command = try #require(IsolatedCommand(
-            executable: "/bin/sh",
-            arguments: [
-                "-c",
-                "/usr/bin/curl -s --max-time 30 -o page.html -w \"%{http_code}\" https://example.com >code.txt 2>curl.err; echo CURL-EXIT=$? >>code.txt",
-            ]
-        ))
-        let run = try await IsolationBackends.applyOffPool(tree.contained, command: command).get()
-        #expect(run.exitStatus == 0)
-        let code = try String(
-            contentsOf: tree.workspaceURL.appendingPathComponent("code.txt"),
-            encoding: .utf8
-        )
+        let code = try await cagedCurl(in: tree, ["--insecure", "-o", "page.html"])
+        #expect(code.contains("CURL-EXIT=0"))
         #expect(code.contains("200"))
-        let page = try String(
+        let page = (try? String(
             contentsOf: tree.workspaceURL.appendingPathComponent("page.html"),
             encoding: .utf8
-        )
+        )) ?? ""
         #expect(page.contains("Example Domain"))
+    }
+
+    /// Known limitation, pinned: a contained process cannot consult the
+    /// system trust store. `/usr/bin/curl` verifies with LibreSSL against
+    /// /etc/ssl/cert.pem and, when that fails, falls back to
+    /// Security.framework trust evaluation, which needs the `trustd` Mach
+    /// service the cage denies. So a chain only the system store completes
+    /// fails inside the cage (CURL-EXIT=60) while succeeding outside it;
+    /// that is what turned the egress test red when example.com's edge
+    /// chain changed. The probe forces the case with a CA bundle that can
+    /// never verify the chain. If this starts failing, trust evaluation
+    /// became reachable from the cage: revisit the Mach policy with it.
+    @Test func cagedTLSCannotFallBackToTheSystemTrustStore() async throws {
+        guard hostReachesPublicHTTPS(coverage: "trust-fallback") else { return }
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let bundle = tree.workspaceURL.appendingPathComponent("unrelated-ca.pem")
+        let made = runHost(
+            executable: "/usr/bin/openssl",
+            arguments: [
+                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                "-subj", "/CN=rv-unrelated-test-ca",
+                "-keyout", tree.siblingURL.appendingPathComponent("unrelated-ca.key").path,
+                "-out", bundle.path,
+            ]
+        )
+        try #require(made.status == 0, "openssl: \(made.output)")
+        let host = runHost(
+            executable: "/usr/bin/curl",
+            arguments: [
+                "-s", "--max-time", "20", "--cacert", bundle.path,
+                "-o", "/dev/null", "-w", "%{http_code}", "https://example.com",
+            ]
+        )
+        guard host.output.contains("200") else {
+            print("mach-boundary trust-fallback coverage=NOT-TESTED reason=host-curl-has-no-system-trust-fallback control=\(host.status)")
+            return
+        }
+        let code = try await cagedCurl(in: tree, ["--cacert", "unrelated-ca.pem", "-o", "/dev/null"])
+        #expect(code.contains("CURL-EXIT=60"))
     }
 
     /// File-based secrets stay denied under the hardened policy: synthetic
@@ -376,6 +401,39 @@ struct SeatbeltMachBoundaryTests {
 
 private func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+/// The unsandboxed control for the public-HTTPS tests. False, with a
+/// NOT-TESTED marker, when this runner has no internet.
+private func hostReachesPublicHTTPS(coverage: String) -> Bool {
+    let control = runHost(
+        executable: "/usr/bin/curl",
+        arguments: ["-s", "--max-time", "20", "-o", "/dev/null", "-w", "%{http_code}", "https://example.com"]
+    )
+    guard control.output.contains("200") else {
+        print("mach-boundary \(coverage) coverage=NOT-TESTED reason=no-internet control=\(control.status)")
+        return false
+    }
+    return true
+}
+
+/// Runs `/usr/bin/curl <arguments> https://example.com` contained, from the
+/// workspace. Returns `<http code>CURL-EXIT=<status>` followed by curl's
+/// own error text, so a failed expectation shows why.
+private func cagedCurl(in tree: ContainmentTree, _ arguments: [String]) async throws -> String {
+    let flags = arguments.map(shellQuote).joined(separator: " ")
+    let command = try #require(IsolatedCommand(
+        executable: "/bin/sh",
+        arguments: [
+            "-c",
+            "/usr/bin/curl -sS --max-time 30 \(flags) -w \"%{http_code}\" https://example.com >code.txt 2>curl.err; echo CURL-EXIT=$? >>code.txt",
+        ]
+    ))
+    let run = try await IsolationBackends.applyOffPool(tree.contained, command: command).get()
+    #expect(run.exitStatus == 0)
+    let code = try String(contentsOf: tree.workspaceURL.appendingPathComponent("code.txt"), encoding: .utf8)
+    let error = (try? String(contentsOf: tree.workspaceURL.appendingPathComponent("curl.err"), encoding: .utf8)) ?? ""
+    return code + error
 }
 
 private func runHost(executable: String, arguments: [String]) -> (status: Int32, output: String) {

@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVPolicy
 import RVPresentation
 #if os(macOS)
 import RVIsolation
@@ -30,24 +31,39 @@ struct DoctorInstallProbes {
     var userID: uid_t
     var launchd: LaunchdObservation?
     var trustManifest: TrustManifestState
+    /// Would hooks trust the installed `rvd`? Nil when not evaluated.
+    var daemonTrust: DoctorServiceTrust? = nil
+    /// Does a hook interpreter run: the absolute path a hook command bakes,
+    /// or `python3` on PATH for an earlier rv's command? Asked only for an
+    /// interpreter some hooked host needs. Default true (tests).
+    var interpreterRunnable: (String) -> Bool = { _ in true }
+    /// Can this user replace a baked interpreter (its file or a directory
+    /// above it, through symlinks)? Default false (tests).
+    var interpreterReplaceable: (String) -> Bool = { _ in false }
 
     static func live(
+        home: HomeDirectory,
+        pathEntries: [String] = [],
         userID: uid_t = getuid(),
         launchctl: any LaunchctlApplying = ProcessLaunchctl()
     ) -> DoctorInstallProbes {
 #if os(macOS)
-        DoctorInstallProbes(
+        var probes = DoctorInstallProbes(
             userID: userID,
             launchd: LaunchAgentProbe.observe(
                 label: SetupRun.launchAgentLabel,
                 userID: userID,
                 launchctl: launchctl
             ),
-            trustManifest: liveTrustManifest()
+            trustManifest: liveTrustManifest(),
+            daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd)
         )
 #else
-        DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
+        var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
 #endif
+        probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
+        probes.interpreterReplaceable = AdapterRuntime.userCanReplace
+        return probes
     }
 
 #if os(macOS)
@@ -62,6 +78,46 @@ struct DoctorInstallProbes {
         }
     }
 #endif
+}
+
+/// Static trust check of the installed `rvd` with the rule hooks apply to
+/// the live daemon (`DaemonTrustVerdict`). Doctor and setup share it.
+enum DaemonTrustProbe {
+    /// Production evaluator; nil off macOS (Linux hooks trust a same-user socket).
+    static func live(_ rvdPath: String) -> DoctorServiceTrust? {
+#if os(macOS)
+        evaluate(rvdPath: rvdPath, source: ProtectedPeerTrustConfiguration.hookTrustSource())
+#else
+        nil
+#endif
+    }
+
+#if os(macOS)
+    /// Nil when no rvd is installed: `rvd-missing` already covers that.
+    static func evaluate(
+        rvdPath: String,
+        source: ProtectedPeerTrustConfiguration.HookTrustSource
+    ) -> DoctorServiceTrust? {
+        guard FileManager.default.fileExists(atPath: rvdPath) else { return nil }
+        let verdict = source.evaluateDaemon(atPath: rvdPath)
+        return DoctorServiceTrust(
+            source: verdict.source.rawValue, satisfied: verdict.satisfied, reason: verdict.reason
+        )
+    }
+#endif
+
+    /// Repair for an rvd the hooks would reject.
+    static func fix(_ trust: DoctorServiceTrust) -> String {
+        switch trust.source {
+        case "manifest":
+            "sign the build (RV_RELEASE_SIGN=1 Scripts/release.sh) and reinstall it, "
+                + "or remove the admin trust manifest: sudo rm '\(DoctorInstallChecks.trustManifestPath)'"
+        case "invalid":
+            "sudo rm '\(DoctorInstallChecks.trustManifestPath)' (or reinstall a valid manifest)"
+        default:
+            SetupRun.reinstallHint
+        }
+    }
 }
 
 /// Install/runtime problems that make hooks deny even though rv "looks"
@@ -81,11 +137,55 @@ enum DoctorInstallChecks {
     ) -> [DoctorProblem] {
         [
             trustManifest(probes.trustManifest),
+            daemonTrust(probes.daemonTrust),
             installedBinaries(paths: paths, fileManager: fileManager),
             launchAgentProgram(paths: paths, fileManager: fileManager),
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
             configDirectory(paths: paths, userID: probes.userID),
         ].compactMap { $0 }
+    }
+
+    /// One failing row per hooked host whose hook interpreter does not run:
+    /// that hook exits 127 and the host lets the tool call through. The
+    /// interpreter is the one the host's hook commands bake; an earlier
+    /// rv's `python3` command (or one doctor cannot read) is probed on PATH.
+    static func adapterRuntime(
+        hosts: HostAdapterInstallationSnapshot,
+        paths: OwnedPaths,
+        fileManager: FileManager,
+        probes: DoctorInstallProbes
+    ) -> [DoctorProblem] {
+        var runnable: [String: Bool] = [:]
+        return AdapterRuntime.hooked(hosts).compactMap { host in
+            guard let name = AdapterRuntime.interpreter(for: host) else { return nil }
+            let baked = AdapterRuntime.bakedInterpreters(host: host, paths: paths, fileManager: fileManager)
+            let missing = (baked.isEmpty ? [name] : baked).first { interpreter in
+                if runnable[interpreter] == nil {
+                    runnable[interpreter] = probes.interpreterRunnable(interpreter)
+                }
+                return runnable[interpreter] == false
+            }
+            guard let interpreter = missing else {
+                // Outside a system directory the interpreter is not in rv's
+                // wiring table: the agent rv guards could swap it.
+                guard let replaceable = baked.first(where: { $0.hasPrefix("/") && probes.interpreterReplaceable($0) })
+                else { return nil }
+                return DoctorProblem(
+                    id: "adapter-runtime-replaceable-\(host.rawValue)",
+                    severity: .warn,
+                    summary: "\(host.rawValue) hook runs \(replaceable), which this user can replace, "
+                        + "so an agent could swap the interpreter to skip the guard",
+                    fix: "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+                )
+            }
+            return DoctorProblem(
+                id: "adapter-runtime-\(host.rawValue)",
+                severity: .fail,
+                summary: "\(host.rawValue) hook runs \(interpreter), which is not runnable; "
+                    + "\(host.rawValue) treats the failed hook as non-blocking, so its tool calls run unguarded",
+                fix: "\(AdapterRuntime.installHint(name)), then rv setup"
+            )
+        }
     }
 
     private static func setupFix(_ paths: OwnedPaths) -> String {
@@ -100,6 +200,19 @@ enum DoctorInstallChecks {
             summary: "\(trustManifestPath) is present but rejected (must be a valid, root-owned manifest); "
                 + "hooks fail closed",
             fix: "sudo rm '\(trustManifestPath)' (or reinstall a valid manifest)"
+        )
+    }
+
+    /// The installed rvd fails the trust rule hooks apply, so every hook
+    /// call is denied however healthy the service looks. An invalid
+    /// manifest already has its own row.
+    static func daemonTrust(_ trust: DoctorServiceTrust?) -> DoctorProblem? {
+        guard let trust, trust.satisfied == false, trust.source != "invalid" else { return nil }
+        return DoctorProblem(
+            id: "daemon-trust",
+            severity: .fail,
+            summary: "hooks reject the installed rvd (\(trust.reason ?? "untrusted")); hooks deny every tool call",
+            fix: DaemonTrustProbe.fix(trust)
         )
     }
 

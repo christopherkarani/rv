@@ -123,6 +123,12 @@ extension WorkspaceTUIReducer {
                 presentationChanged = true
             }
         }
+        // The review stores are local files, independent of the host
+        // connection, so polling runs whether or not the host is reachable.
+        // Appended last: the branches below may replace `effects`.
+        var reviewEffects: [TUIRuntimeEffect] = []
+        tickReview(now: now, to: &next, effects: &reviewEffects, presentationChanged: &presentationChanged)
+        defer { effects.append(contentsOf: reviewEffects) }
         if next.lifecycle == .disconnected {
             Self.tickReconnect(now: now, to: &next, effects: &effects, presentationChanged: &presentationChanged)
             return

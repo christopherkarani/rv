@@ -10,42 +10,42 @@ import Testing
 @testable import RVIsolation
 
 @Test func egressProxyParsesStrictCONNECTOnly() {
-    let valid = EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: x\r\n\r\n")
+    let valid = EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: x\r\n\r\n")
     #expect(valid?.host == "api.anthropic.com")
     #expect(valid?.port == 443)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT 127.0.0.1:10100 HTTP/1.0\r\n\r\n")?.port == 10100)
-    #expect(EgressProxy.parseCONNECT(header: "GET http://x/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "connect api.anthropic.com:443 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT :443 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com:0 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com:99999 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com:443:1 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT user@api.anthropic.com:443 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT [::1]:443 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com:443/x HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT api.anthropic.com:443 HTTP/1.1 extra\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "CONNECT  api.anthropic.com:443 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseCONNECT(header: "no-crlf-here") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT 127.0.0.1:10100 HTTP/1.0\r\n\r\n")?.port == 10100)
+    #expect(EgressWire.parseCONNECT(header: "GET http://x/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "connect api.anthropic.com:443 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT :443 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com:0 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com:99999 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com:443:1 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT user@api.anthropic.com:443 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT [::1]:443 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com:443/x HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT api.anthropic.com:443 HTTP/1.1 extra\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "CONNECT  api.anthropic.com:443 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseCONNECT(header: "no-crlf-here") == nil)
 }
 
 @Test func egressProxyParsesAbsoluteHTTP() {
-    let valid = EgressProxy.parseAbsoluteHTTP(header: "POST http://127.0.0.1:10100/v1/messages HTTP/1.1\r\nHost: x\r\n\r\n")
+    let valid = EgressWire.parseAbsoluteHTTP(header: "POST http://127.0.0.1:10100/v1/messages HTTP/1.1\r\nHost: x\r\n\r\n")
     #expect(valid?.host == "127.0.0.1")
     #expect(valid?.port == 10100)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://localhost/ HTTP/1.0\r\n\r\n")?.port == 80)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://api.anthropic.com/ HTTP/1.1\r\n\r\n")?.host == "api.anthropic.com")
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "CONNECT 127.0.0.1:10100 HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET https://127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "get http://127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://user@127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://[::1]/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http:///path HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://127.0.0.1:0/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://127.0.0.1:1:2/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET http://127.0.0.1/ HTTP/1.1 extra\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "GET  http://127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
-    #expect(EgressProxy.parseAbsoluteHTTP(header: "no-crlf-here") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://localhost/ HTTP/1.0\r\n\r\n")?.port == 80)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://api.anthropic.com/ HTTP/1.1\r\n\r\n")?.host == "api.anthropic.com")
+    #expect(EgressWire.parseAbsoluteHTTP(header: "CONNECT 127.0.0.1:10100 HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET https://127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "get http://127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://user@127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://[::1]/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http:///path HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://127.0.0.1:0/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://127.0.0.1:1:2/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET http://127.0.0.1/ HTTP/1.1 extra\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "GET  http://127.0.0.1/ HTTP/1.1\r\n\r\n") == nil)
+    #expect(EgressWire.parseAbsoluteHTTP(header: "no-crlf-here") == nil)
 }
 
 private final class EgressDenialCollector: @unchecked Sendable {
@@ -787,7 +787,8 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::808:808")))
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::a9fe:a9fe")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::7f00:1")) == false)
-    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:808:808::")))
+    // The 64:ff9b:1::/48 local-use block has no fixed embedding: refused.
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:808:808::")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:a00:1::")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1::808:808")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001::1")) == false)
@@ -826,20 +827,20 @@ private func egressClientHello(_ host: String?) -> [UInt8] {
 
 @Test func egressProxyParsesClientHelloSNIAndRejectsMalformed() {
     let hello = egressClientHello
-    #expect(EgressProxy.tlsServerName(hello("api.example.com")) == "api.example.com")
-    #expect(EgressProxy.tlsServerName(hello(nil)) == nil)
-    #expect(EgressProxy.tlsServerName([]) == nil)
-    #expect(EgressProxy.tlsServerName([0x16, 0x03, 0x01]) == nil)
-    #expect(EgressProxy.tlsServerName(Array(hello("api.example.com").prefix(20))) == nil)
+    #expect(EgressWire.tlsServerName(hello("api.example.com")) == "api.example.com")
+    #expect(EgressWire.tlsServerName(hello(nil)) == nil)
+    #expect(EgressWire.tlsServerName([]) == nil)
+    #expect(EgressWire.tlsServerName([0x16, 0x03, 0x01]) == nil)
+    #expect(EgressWire.tlsServerName(Array(hello("api.example.com").prefix(20))) == nil)
     var truncated = hello("api.example.com")
     truncated[3] = 0xFF
-    #expect(EgressProxy.tlsServerName(truncated) == nil)
+    #expect(EgressWire.tlsServerName(truncated) == nil)
     var notTLS = hello("api.example.com")
     notTLS[0] = 0x17
-    #expect(EgressProxy.tlsServerName(notTLS) == nil)
+    #expect(EgressWire.tlsServerName(notTLS) == nil)
     var huge = hello("api.example.com")
     huge[5 + 4 + 2 + 32] = 0xFF // session id length runs past the record
-    #expect(EgressProxy.tlsServerName(huge) == nil)
+    #expect(EgressWire.tlsServerName(huge) == nil)
 }
 
 /// Scripted `stat`/hash backend for binary-gate tests: no filesystem,

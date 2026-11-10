@@ -95,16 +95,24 @@ struct WorkspaceLifecycleTests {
 
     @Test func publishRejectionCarriesTheRetainedImageToTheClient() {
         let image = "/var/folders/ab/cdef0123456789/T/rv-rejected-0123456789AB-20261102T101500Z.sparseimage"
-        let error = WorkspaceSessionError.publishRejected(retainedImage: image)
+        let reason = WorkspacePublishOutcome.rejected([
+            WorkspacePublishRejection(relative: ".git/index", reason: .inodeChanged),
+        ]).operatorSummary
+        let error = WorkspaceSessionError.publishRejected(retainedImage: image, reason: reason)
         #expect(workspaceControlCode(error) == .publishRejected)
         let detail = workspaceControlDetail(error)
-        #expect(detail == image)
+        #expect(detail?.hasPrefix(image) == true)
         #expect(workspaceControlDetail(.alreadyClosed) == nil)
         #expect(WorkspaceSessionFailure.isolation(error) == .workspaceInodeBoundaryFailed)
-        // The path survives the wire bound and the control-character filter.
+        // The path survives the wire bound and the control-character filter;
+        // only the reason's tail may be cut.
         let request = WorkspaceControlRequestFrame(id: UUID(), payload: .closeWorkspace)
         let response = WorkspaceControlResponseFrame.failure(request: request, code: .publishRejected, detail: detail)
-        #expect(response.detail == image)
+        let decoded = workspacePublishRejectedDetail(response.detail)
+        #expect(decoded.image == image)
+        #expect(decoded.reason.contains(".git/index"))
+        #expect(reason.hasPrefix(decoded.reason))
+        #expect(workspacePublishRejectedDetail(image) == (image: image, reason: ""))
     }
 
     @Test func closeFailureCachesOnlyTerminalFailures() {
@@ -116,7 +124,7 @@ struct WorkspaceLifecycleTests {
             .apply(.workspaceInodeBoundaryFailed),
             .notAcceptingRuntime(.closing),
             .cleanupFailed(.workspaceInodeBoundaryFailed),
-            .publishRejected(retainedImage: "/tmp/rv-rejected-x.sparseimage"),
+            .publishRejected(retainedImage: "/tmp/rv-rejected-x.sparseimage", reason: ""),
             .alreadyClosed,
             .unknownRuntime(RuntimeSessionID()),
             .runtimeLimit,

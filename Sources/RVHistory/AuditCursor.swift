@@ -76,7 +76,10 @@ extension AuditLedger {
                 lastLineHash: lastHash
             )
         }
-        return (events.sorted { $0.time < $1.time }, next)
+        // rvd writes each deny to both blocks.jsonl and the chain; forward
+        // the chained copy once. (`audit.jsonl` is read first, so a batch
+        // holds both copies unless the limit split them.)
+        return (Self.droppingLedgerDuplicates(events).sorted { $0.time < $1.time }, next)
     }
 
     /// The cursor at the current end of every ledger (forward from now on).

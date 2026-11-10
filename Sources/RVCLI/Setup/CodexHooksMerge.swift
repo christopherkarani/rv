@@ -14,7 +14,7 @@ enum CodexHooksMerge {
     static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
     static let hookType = "command"
-    static let timeout = 5
+    static let timeout = 18
     static let statusMessage = "RV"
 
     static let wiringDescriptor = HostWiringDescriptor(
@@ -23,12 +23,14 @@ enum CodexHooksMerge {
         hookType: hookType,
         isFingerprintedCommand: { isFingerprinted(command: $0) },
         buildEntry: { context, _ in
-            hookEntry(adapterPath: context.adapterPath)
+            hookEntry(interpreter: context.interpreter, adapterPath: context.adapterPath)
         }
     )
 
-    static func hookCommand(adapterPath: String) -> String {
-        "python3 \(adapterPath)"
+    /// Paths are shell-quoted when needed (a HOME with a space): the host
+    /// runs the command through a shell. See `AdapterCommand`.
+    static func hookCommand(interpreter: String, adapterPath: String) -> String {
+        AdapterCommand.render(interpreter: interpreter, adapterPath: adapterPath)
     }
 
     static func isFingerprinted(command: String) -> Bool {
@@ -37,16 +39,20 @@ enum CodexHooksMerge {
 
     static func adapterPath(in command: String) -> String? {
         guard isFingerprinted(command: command) else { return nil }
-        let prefix = "python3 "
-        guard command.hasPrefix(prefix) else { return nil }
-        let path = String(command.dropFirst(prefix.count))
-        return path.hasPrefix("/") ? path : nil
+        return AdapterCommand.adapterPath(in: command)
+    }
+
+    /// rv's current command for `adapterPath`, any absolute interpreter.
+    /// The earlier `python3 <adapter>` form is not current: setup rewrites it.
+    static func isCurrentCommand(_ command: String, adapterPath: String) -> Bool {
+        guard let interpreter = AdapterCommand.bakedInterpreter(in: Substring(command)) else { return false }
+        return command == hookCommand(interpreter: interpreter, adapterPath: adapterPath)
     }
 
     static func matchesCurrentHook(_ hook: JSONValue, adapterPath: String) -> Bool {
         guard let type = hook["type"]?.string, type == hookType,
               let command = hook["command"]?.string,
-              command == hookCommand(adapterPath: adapterPath),
+              isCurrentCommand(command, adapterPath: adapterPath),
               hook["timeout"]?.int == timeout,
               hook["statusMessage"]?.string == statusMessage
         else {
@@ -59,9 +65,9 @@ enum CodexHooksMerge {
         HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
     }
 
-    static func hookEntry(adapterPath: String) -> HookEntry {
+    static func hookEntry(interpreter: String, adapterPath: String) -> HookEntry {
         HookEntry(
-            command: hookCommand(adapterPath: adapterPath),
+            command: hookCommand(interpreter: interpreter, adapterPath: adapterPath),
             timeout: timeout,
             type: hookType,
             failClosed: nil,
@@ -69,11 +75,11 @@ enum CodexHooksMerge {
         )
     }
 
-    static func rvEntry(adapterPath: String) -> JSONValue {
+    static func rvEntry(interpreter: String, adapterPath: String) -> JSONValue {
         .object([
             "matcher": .string(matcher),
             "hooks": .array([
-                HostHooksMergeEngine.hookValue(hookEntry(adapterPath: adapterPath)),
+                HostHooksMergeEngine.hookValue(hookEntry(interpreter: interpreter, adapterPath: adapterPath)),
             ]),
         ])
     }
@@ -81,13 +87,14 @@ enum CodexHooksMerge {
     /// Returns merged hooks bytes and whether content changed.
     static func merge(
         existingData: Data?,
+        interpreter: String,
         adapterPath: String
     ) throws -> (data: Data, wrote: Bool) {
         do {
             return try HostHooksMergeEngine.merge(
                 existingData: existingData,
                 descriptor: wiringDescriptor,
-                context: HookCommandContext(rvPath: nil, adapterPath: adapterPath)
+                context: HookCommandContext(rvPath: nil, interpreter: interpreter, adapterPath: adapterPath)
             )
         } catch {
             throw CodexHooksMergeError.unreadable

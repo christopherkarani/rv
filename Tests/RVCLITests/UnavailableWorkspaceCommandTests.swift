@@ -5,20 +5,22 @@ import Testing
 @testable import RVCLI
 
 /// UX-01: `workspace agent`, `workspace custom`, and `workspace abandon`
-/// cannot succeed until operator permits and the authenticated service
-/// mutation route exist. Help must mark them "(not yet available)" and
+/// cannot succeed until operator permits exist. Help must mark them "(not yet available)" and
 /// each refusal must name what is missing and what to do instead.
 struct UnavailableWorkspaceCommandTests {
     @Test func workspaceHelpMarksUnavailableCommands() {
         let text = HelpDispatch.text(.workspace, palette: colorOffPalette)
         let lines = text.split(separator: "\n").map(String.init)
-        for command in ["rv workspace agent", "rv workspace custom", "rv workspace abandon"] {
+        for command in ["rv workspace agent", "rv workspace custom"] {
             let line = lines.first { $0.contains(command) }
             #expect(
                 line?.contains("(not yet available)") == true,
                 "\(command) help row must be marked (not yet available)"
             )
         }
+        // Abandon works now, behind owner authentication.
+        let abandon = lines.first { $0.contains("rv workspace abandon") }
+        #expect(abandon?.contains("(asks for owner authentication)") == true)
         let custom = lines.first { $0.contains("rv workspace custom") }
         #expect(
             custom?.contains(
@@ -35,20 +37,19 @@ struct UnavailableWorkspaceCommandTests {
     @Test func workspaceParserAbstractsMarkUnavailableCommands() {
         #expect(WorkspaceAgent.configuration.abstract.contains("(not yet available)"))
         #expect(WorkspaceCustom.configuration.abstract.contains("(not yet available)"))
-        #expect(WorkspaceAbandon.configuration.abstract.contains("(not yet available)"))
+        #expect(WorkspaceAbandon.configuration.abstract.contains("(asks for owner authentication)"))
     }
 
-    @Test func abandonRefusalNamesMissingAuthorizationAndInspection() throws {
+    @Test func abandonRefusalNamesMissingOwnerAuthentication() async throws {
         var caught: ValidationError?
         do {
-            try WorkspaceCommandRun.abandon("/tmp/ws")
+            try await withCLIProcess { try await WorkspaceCommandRun.abandon("/tmp/ws") }
         } catch let error as ValidationError {
             caught = error
         }
         let message = String(describing: try #require(caught))
-        #expect(message.contains("not yet available"))
-        #expect(message.contains("owner authorization"))
-        #expect(message.contains("rv workspace status"))
+        #expect(message.contains("owner authentication"))
+        #expect(message.contains("abandon"))
     }
 
     #if os(macOS)

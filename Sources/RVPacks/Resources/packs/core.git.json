@@ -13,32 +13,32 @@
   "safe_patterns": [
     {
       "name": "checkout-new-branch",
-      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:\\S+\\s+)*checkout\\s+-b\\s+",
+      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|attr-source|config-env|exec-path|list-cmds))\\s+\\S+\\s+|--?[A-Za-z][-A-Za-z]*(?:=\\S*)?\\s+)*checkout\\s+-b\\s+",
       "description": ""
     },
     {
       "name": "checkout-orphan",
-      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:\\S+\\s+)*checkout\\s+--orphan\\s+",
+      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|attr-source|config-env|exec-path|list-cmds))\\s+\\S+\\s+|--?[A-Za-z][-A-Za-z]*(?:=\\S*)?\\s+)*checkout\\s+--orphan\\s+",
       "description": ""
     },
     {
       "name": "restore-staged-long",
-      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:\\S+\\s+)*restore\\b(?=\\s)(?=.*\\s--staged\\b)(?!.*\\s(?:--worktree|-W)\\b)",
+      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|attr-source|config-env|exec-path|list-cmds))\\s+\\S+\\s+|--?[A-Za-z][-A-Za-z]*(?:=\\S*)?\\s+)*restore\\b(?=\\s)(?=.*\\s--staged\\b)(?!.*\\s(?:--worktree|-W)\\b)",
       "description": ""
     },
     {
       "name": "restore-staged-short",
-      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:\\S+\\s+)*restore\\b(?=\\s)(?=.*\\s-S\\b)(?!.*\\s(?:--worktree|-W)\\b)",
+      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|attr-source|config-env|exec-path|list-cmds))\\s+\\S+\\s+|--?[A-Za-z][-A-Za-z]*(?:=\\S*)?\\s+)*restore\\b(?=\\s)(?=.*\\s-S\\b)(?!.*\\s(?:--worktree|-W)\\b)",
       "description": ""
     },
     {
       "name": "clean-dry-run-short",
-      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:\\S+\\s+)*clean\\s+-[a-z]*n[a-z]*",
+      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|attr-source|config-env|exec-path|list-cmds))\\s+\\S+\\s+|--?[A-Za-z][-A-Za-z]*(?:=\\S*)?\\s+)*clean\\s+-[a-z]*n[a-z]*",
       "description": ""
     },
     {
       "name": "clean-dry-run-long",
-      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:\\S+\\s+)*clean\\s+--dry-run",
+      "pattern": "(?:^|[^[:alnum:]_-])git\\s+(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace|super-prefix|attr-source|config-env|exec-path|list-cmds))\\s+\\S+\\s+|--?[A-Za-z][-A-Za-z]*(?:=\\S*)?\\s+)*clean\\s+--dry-run",
       "description": ""
     }
   ],

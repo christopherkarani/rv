@@ -26,8 +26,9 @@ public enum JudgeEngine: String, Sendable {
 
 /// Laya judge wiring for the gated evaluate door.
 ///
-/// One config knob (~/.config/rv/config.json; env wins over file):
-/// `guard.mode` / `RV_GUARD_MODE`: `enforce` (default) | `observe`.
+/// One config knob (~/.config/rv/config.json): `guard.mode`: `enforce`
+/// (default) | `observe`. `RV_GUARD_MODE=enforce` may pin enforce; the
+/// environment never loosens to observe.
 /// Engine knob: `judge.engine` / `RV_JUDGE_ENGINE`: `ft` | `laya`.
 ///
 /// Engine resolution: an explicit engine (env, then config) always wins,
@@ -55,18 +56,68 @@ public enum JudgeRuntime {
         provenance.isUntrusted ? (0.6, 0.30) : (0.8, 0.45)
     }
 
-    /// Live guard mode (doctor, and the file door once per evaluation). The
-    /// shell doors read it once per evaluation through `EvaluationInputs`.
+    /// Machine-wide guard mode, ignoring per-host entries and the
+    /// organization pin (doctor, `rv host list`).
     public static func guardMode(home: HomeDirectory?) -> GuardMode {
         guardMode(environment: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home))
     }
 
-    /// `RV_GUARD_MODE` > `guard.mode` > enforce. An unknown value at either
-    /// level falls through to the next.
-    static func guardMode(environment: [String: String], config: [String: Any]?) -> GuardMode {
+    /// Machine-wide `guard.mode` from `config.json` alone. `RV_GUARD_MODE`
+    /// is ignored: a caller deciding whether a change sheds oversight must
+    /// not let a same-user environment make enforce look like observe.
+    public static func configuredGuardMode(home: HomeDirectory?) -> GuardMode {
+        guardMode(environment: [:], config: loadConfigDict(home: home))
+    }
+
+    /// The mode one evaluation from `host` runs under: per-host resolution,
+    /// then the organization pin (`ManagedGate.guardMode`). The file door
+    /// reads it once per evaluation; the shell doors read it through
+    /// `EvaluationInputs`.
+    static func effectiveGuardMode(
+        home: HomeDirectory?,
+        host: LedgerHost,
+        environment: [String: String],
+        config: [String: Any]?
+    ) -> GuardMode {
+        let hookHost: HookHost?
+        switch host {
+        case .tty: hookHost = nil
+        case .hook(let hook): hookHost = hook
+        }
+        return ManagedGate.guardMode(
+            guardMode(environment: environment, config: config, host: hookHost), home: home)
+    }
+
+    /// The mode the config file alone selects for `host`, ignoring
+    /// `RV_GUARD_MODE` and the organization pin. The hook's daemon-down
+    /// fallback reads it: hook environment can come from project-scoped
+    /// host config an agent writes.
+    public static func configuredGuardMode(config: [String: Any]?, host: HookHost) -> GuardMode {
+        guardMode(environment: [:], config: config, host: host)
+    }
+
+    /// `RV_GUARD_MODE=enforce` > `guard.hosts.<host>` > `guard.mode` >
+    /// enforce. An unknown value at any level falls through to the next. A
+    /// host entry of `block` is enforce; `observe` and `off` are observe (an
+    /// `off` host should be unwired, so a stale hook that still fires must
+    /// never block).
+    ///
+    /// The environment can only tighten: `RV_GUARD_MODE=observe` is
+    /// ignored. rvd inherits its environment from launchd/systemd, which a
+    /// same-user agent can edit (`launchctl setenv`); loosening belongs to
+    /// the owner's config (`rv host mode`, `guard.mode`), never to the
+    /// launch environment. Tests inject `environment` and `config` directly.
+    static func guardMode(
+        environment: [String: String],
+        config: [String: Any]?,
+        host: HookHost? = nil
+    ) -> GuardMode {
         if let raw = environment["RV_GUARD_MODE"],
-           let mode = GuardMode(rawValue: raw.lowercased()) {
-            return mode
+           GuardMode(rawValue: raw.lowercased()) == .enforce {
+            return .enforce
+        }
+        if let host, let hostMode = HostModeStore.modes(inConfig: config)[host] {
+            return hostMode == .block ? .enforce : .observe
         }
         if let raw = configGuardMode(config),
            let mode = GuardMode(rawValue: raw.lowercased()) {
@@ -114,53 +165,54 @@ public enum JudgeRuntime {
         return nil
     }
 
-    /// Testable engine resolution. `env` and `config` are injected (only
-    /// `RV_JUDGE_ENGINE` / `judge.engine` are read); `bundleExists` probes
-    /// whether an engine's bundle validates on disk, so tests need no HOME.
+    /// Testable engine resolution. `config` is injected (only
+    /// `judge.engine` is read); `bundleExists` probes whether an engine's
+    /// bundle validates on disk, so tests need no HOME.
     ///
-    /// Precedence: `RV_JUDGE_ENGINE` > `judge.engine` > FT-if-installed >
-    /// stock. An explicit engine whose bundle is missing still wins
-    /// (`bundlePresent` false): the gate goes packs-only with an
-    /// `engine-missing` note rather than failing closed or silently
-    /// switching engines.
-    static func explicitEngine(env: [String: String], config: [String: Any]?) -> JudgeEngine? {
-        env["RV_JUDGE_ENGINE"].flatMap { JudgeEngine(rawValue: $0.lowercased()) }
-            ?? configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+    /// Precedence: `judge.engine` > FT-if-installed > stock. An explicit
+    /// engine whose bundle is missing still wins (`bundlePresent` false):
+    /// the gate goes packs-only with an `engine-missing` note rather than
+    /// failing closed or silently switching engines.
+    ///
+    /// The launch environment is never read here (`RV_JUDGE_ENGINE`,
+    /// `RV_FT_BUNDLE`, `RV_LAYA_BUNDLE`): rvd inherits it from
+    /// launchd/systemd, which a same-user agent can edit, and picking a
+    /// missing or foreign bundle disables or replaces the judge. Engine and
+    /// bundle belong to the owner's config and install, like `guard.mode`.
+    static func explicitEngine(config: [String: Any]?) -> JudgeEngine? {
+        configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
     }
 
     static func resolveEngine(
-        env: [String: String],
         config: [String: Any]?,
         bundleExists: (JudgeEngine) -> Bool
     ) -> (engine: JudgeEngine, bundlePresent: Bool) {
-        let resolved = resolveEngine(env: env, config: config) { bundleExists($0) ? () : nil }
+        let resolved = resolveEngine(config: config) { bundleExists($0) ? () : nil }
         return (resolved.engine, resolved.bundle != nil)
     }
 
     /// The one precedence ladder. `bundle` probes each engine at most once.
     static func resolveEngine<Bundle>(
-        env: [String: String],
         config: [String: Any]?,
         bundle: (JudgeEngine) -> Bundle?
     ) -> (engine: JudgeEngine, bundle: Bundle?) {
-        if let explicit = explicitEngine(env: env, config: config) {
+        if let explicit = explicitEngine(config: config) {
             return (explicit, bundle(explicit))
         }
         if let ft = bundle(.ft) { return (.ft, ft) }
         return (.laya, bundle(.laya))
     }
 
-    /// Engine and validated bundle from already-read env and config. Only
-    /// the bundle directories are probed.
+    /// Engine and validated bundle from already-read config. Only the
+    /// bundle directories are probed.
     static func selection(
         home: HomeDirectory?,
-        environment: [String: String],
         config: [String: Any]?
     ) -> JudgeSelection {
-        let resolved = resolveEngine(env: environment, config: config) { engine -> URL? in
+        let resolved = resolveEngine(config: config) { engine -> URL? in
             switch engine {
-            case .ft: return ftBundleDir(home: home, environment: environment)
-            case .laya: return bundleDir(home: home, environment: environment)
+            case .ft: return ftBundleDir(home: home)
+            case .laya: return bundleDir(home: home)
             }
         }
         return JudgeSelection(engine: resolved.engine, bundle: resolved.bundle)
@@ -170,11 +222,7 @@ public enum JudgeRuntime {
     /// Nil when the selected engine's bundle is missing — the caller goes
     /// packs-only (never fail-closed; see `apply`).
     static func resolvedJudge(home: HomeDirectory?) -> (engine: JudgeEngine, bundle: URL)? {
-        let selected = selection(
-            home: home,
-            environment: ProcessInfo.processInfo.environment,
-            config: loadConfigDict(home: home)
-        )
+        let selected = selection(home: home, config: loadConfigDict(home: home))
         guard let bundle = selected.bundle else { return nil }
         return (selected.engine, bundle)
     }
@@ -199,9 +247,7 @@ public enum JudgeRuntime {
         // broken install, not an absence. Check the explicit engine,
         // else FT (production default) before stock — the resolver
         // falls back to stock precisely because FT did not validate.
-        let explicitChoice = explicitEngine(
-            env: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home)
-        )
+        let explicitChoice = explicitEngine(config: loadConfigDict(home: home))
         for engine in explicitChoice.map { [$0] } ?? [JudgeEngine.ft, .laya] {
             if let expected = expectedBundleDir(engine: engine, home: home),
                FileManager.default.fileExists(atPath: expected.path) {
@@ -213,9 +259,7 @@ public enum JudgeRuntime {
         }
         // Nothing installed: point at the production (FT) bundle unless
         // another engine was explicitly selected.
-        let explicit = explicitEngine(
-            env: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home)
-        )
+        let explicit = explicitEngine(config: loadConfigDict(home: home))
         let installEngine = explicit ?? .ft
         return .missing(
             engine: installEngine,
@@ -261,10 +305,9 @@ public enum JudgeRuntime {
             .appendingPathComponent("models/\(name)", isDirectory: true)
     }
 
-    /// Fine-tuned bundle: `RV_FT_BUNDLE` when set and valid, else the
-    /// installed `models/laya-ft-v2-coreml`. A directory only counts when
-    /// `model.mlpackage` is in it.
-    static func ftBundleDir(home: HomeDirectory?, environment: [String: String]) -> URL? {
+    /// Fine-tuned bundle: the installed `models/laya-ft-v2-coreml`. A
+    /// directory only counts when `model.mlpackage` is in it.
+    static func ftBundleDir(home: HomeDirectory?) -> URL? {
         func valid(_ dir: URL) -> URL? {
             let fm = FileManager.default
             let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
@@ -272,16 +315,13 @@ public enum JudgeRuntime {
                 || fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
             return hasModel && hasTokenizer ? dir : nil
         }
-        if let raw = environment["RV_FT_BUNDLE"], !raw.isEmpty {
-            return valid(URL(fileURLWithPath: raw))
-        }
         guard let expected = expectedBundleDir(engine: .ft, home: home) else { return nil }
         return valid(expected)
     }
 
     /// A directory only counts as a bundle when a model artifact is in it;
     /// anything else (unset, empty, wrong path) means packs-only.
-    static func bundleDir(home: HomeDirectory?, environment: [String: String]) -> URL? {
+    static func bundleDir(home: HomeDirectory?) -> URL? {
         func valid(_ dir: URL) -> URL? {
             // Only the CoreML judge is wired; an ONNX-only directory is
             // not a runnable bundle and must not read as judge-on.
@@ -289,9 +329,6 @@ public enum JudgeRuntime {
             let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
             let hasTokenizer = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
             return hasModel && hasTokenizer ? dir : nil
-        }
-        if let raw = environment["RV_LAYA_BUNDLE"], !raw.isEmpty {
-            return valid(URL(fileURLWithPath: raw))
         }
         guard let home else { return nil }
         return valid(
@@ -344,9 +381,10 @@ public enum JudgeRuntime {
 
     /// Enforce path: judge may raise a pack-allow. Deny untouched.
     ///
-    /// `allowSafeLane` is false when the package-script graph could not
-    /// be resolved: such a command must reach the judge (or a human),
-    /// never the judge-skipping lane. `isPeek` only tags the log row.
+    /// `allowSafeLane` is false when a package script the command runs is
+    /// not itself safe-lane: the command then reaches the judge (or the
+    /// packs-only floor). An unresolved script graph never gets here: the
+    /// door floors it to indeterminate first. `isPeek` only tags the log row.
     /// The log row is returned, not written; nil when the judge is not
     /// consulted (a pack deny).
     static func apply(
@@ -395,11 +433,15 @@ public enum JudgeRuntime {
         )
         // Only enforce floors an unscored allow; the log keeps the pack
         // result, as for engine-missing above.
-        if case .unavailable = run { return (packsOnlyFloor(reading.outcome, command: command), row) }
+        if case .unavailable = run {
+            return (packsOnlyFloor(reading.outcome, command: command), row)
+        }
         return (reading.outcome, row)
     }
 
     /// Observe path: the would-be verdict as a log row, always allow.
+    /// `wouldBe` is what enforcement would have returned before the Policy
+    /// gate (the door records an observed denial row from it).
     static func observe(
         wouldBe result: EvaluationResult,
         command: ShellCommand,
@@ -410,7 +452,7 @@ public enum JudgeRuntime {
         cwd: WorkingDirectory?,
         allowSafeLane: Bool,
         isPeek: Bool
-    ) -> (result: EvaluationResult, log: GatedEffect.JudgeLogRow) {
+    ) -> (result: EvaluationResult, wouldBe: EvaluationResult, log: GatedEffect.JudgeLogRow) {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
         let selection = inputs.judge
@@ -428,7 +470,7 @@ public enum JudgeRuntime {
                 provenance: provenance
             )
         }
-        return (result.observedAllow, logRow(
+        return (result.observedAllow, reading.outcome, logRow(
             guardMode: inputs.guardMode, subject: .wouldBe(reading.outcome),
             verdict: reading.verdict, action: reading.action, engine: selection.engine,
             note: noteFor(reading.note, contextPartial: partial), now: now, isPeek: isPeek
@@ -456,7 +498,7 @@ public enum JudgeRuntime {
             return JudgeReading(
                 outcome: result, verdict: nil, action: nil, note: "judge-unavailable: \(note)"
             )
-        case .failed, .warming:
+        case .failed, .warming, .busy:
             let (raised, note) = failClosed(run, over: result)
             return JudgeReading(outcome: raised, verdict: nil, action: .review, note: note)
         case .verdict(let verdict):
@@ -474,8 +516,10 @@ public enum JudgeRuntime {
 
     /// Packs-only (no judge could score): an inline interpreter program the
     /// packs masked as data, carrying spawn/eval/delete/secret markers, is
-    /// indeterminate rather than an unreviewed allow.
+    /// indeterminate rather than an unreviewed allow. (An unresolved
+    /// package-script graph is floored earlier, by the door, judge or not.)
     static func packsOnlyFloor(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
+        guard case .allow = result.decision else { return result }
         guard InlineProgramGuard.requiresJudge(command) else { return result }
         return EvaluationResult(
             outcome: .indeterminate(.inlineProgramNeedsJudge),
@@ -491,11 +535,16 @@ public enum JudgeRuntime {
     /// `warming` is a load still in progress past the bounded wait. It goes
     /// to a human (review), never packs-only: a same-user agent could
     /// otherwise kill rvd to buy an unjudged window.
+    ///
+    /// `busy` is a request `JudgeAdmission` turned away (queue full, or its
+    /// hook deadline passed while waiting for the model). Review for the
+    /// same reason: flooding the judge must not buy an unjudged allow.
     enum JudgeRun: Sendable {
         case verdict(LayaVerdict)
         case unavailable(String)
         case failed
         case warming
+        case busy
     }
 
     static func runJudge(
@@ -506,16 +555,21 @@ public enum JudgeRuntime {
         wait: Duration? = loadWait
     ) -> JudgeRun {
         #if canImport(CoreML)
+        let wait = JudgeAdmission.loadWait(wait, until: JudgeAdmission.deadline)
         do {
             switch engine {
             case .laya:
                 let judge = try slot.stockJudge(bundleDir: bundle, wait: wait)
-                do { return .verdict(try judge.judge(command)) }
-                catch { return .failed }
+                return admitted {
+                    do { return .verdict(try judge.judge(command)) }
+                    catch { return .failed }
+                }
             case .ft:
                 let judge = try slot.ftJudge(bundleDir: bundle, wait: wait)
-                do { return .verdict(try judge.judge(command, context: context)) }
-                catch { return .failed }
+                return admitted {
+                    do { return .verdict(try judge.judge(command, context: context)) }
+                    catch { return .failed }
+                }
             }
         } catch JudgeLoadError.warming {
             return .warming
@@ -532,18 +586,40 @@ public enum JudgeRuntime {
         #endif
     }
 
-    /// A judge that cannot answer this request (prediction failed, or still
-    /// warming past the bounded wait) fails closed to human review.
+    /// Inference through the live admission, bounded by this request's hook
+    /// deadline. The model load is not admitted: it is single-flight and
+    /// has its own bounded wait (`loadWait`).
+    static func admitted(
+        through admission: JudgeAdmission = .live,
+        until deadline: ContinuousClock.Instant? = JudgeAdmission.deadline,
+        _ inference: () -> JudgeRun
+    ) -> JudgeRun {
+        admission.run(until: deadline, inference) ?? .busy
+    }
+
+    /// A judge that cannot answer this request (prediction failed, still
+    /// warming past the bounded wait, or busy) fails closed to human review.
     static func failClosed(
         _ run: JudgeRun, over result: EvaluationResult
     ) -> (result: EvaluationResult, note: String) {
         let note: String
+        let reason: String
         switch run {
-        case .warming: note = "judge-warming"
-        case .failed, .unavailable, .verdict: note = "prediction-failed"
+        case .warming:
+            note = "judge-warming"
+            reason = "Laya judge is still loading on this device; retry in a few seconds."
+        case .busy:
+            note = "judge-busy"
+            reason = "Laya judge queue is full; retry shortly."
+        case .failed, .unavailable, .verdict:
+            note = "prediction-failed"
+            reason = unavailableReason
         }
-        return (raise(result, verdict: nil, action: .review), note)
+        return (raise(result, verdict: nil, action: .review, unavailable: reason), note)
     }
+
+    /// User-visible reason when the judge could not score this request.
+    static let unavailableReason = "Laya judge unavailable; failing closed. Run `rv doctor`."
 
     /// RVServiceTests seam: the warming outcome over `result`.
     static func warmingOutcomeSeam(over result: EvaluationResult) -> (EvaluationResult, String) {
@@ -581,14 +657,17 @@ public enum JudgeRuntime {
     /// (Ask). `action` is the caller's threshold-resolved action — never
     /// re-derived here at default thresholds.
     static func raise(
-        _ result: EvaluationResult, verdict: LayaVerdict?, action: LayaVerdict.Action
+        _ result: EvaluationResult,
+        verdict: LayaVerdict?,
+        action: LayaVerdict.Action,
+        unavailable: String = unavailableReason
     ) -> EvaluationResult {
         let isBlock = action == .block
         let reason = verdict.map {
             "Laya judge: \($0.choice.rawValue) (risk \(String(format: "%.2f", $0.risk)))"
-        } ?? "Laya judge unavailable; failing closed"
+        } ?? unavailable
         let deny = Deny(
-            ruleID: RuleID(pack: .coreJudge, pattern: isBlock ? "laya-block" : "laya-review"),
+            ruleID: (isBlock ? JudgeRule.block : JudgeRule.review).ruleID,
             reason: reason
         )
         return EvaluationResult(

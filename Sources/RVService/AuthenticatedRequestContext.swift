@@ -72,6 +72,10 @@ public enum ServiceMethodAuthorization {
         /// still re-validates every field and enforces per-epoch code
         /// single-use, so a buggy caller cannot plant garbage or doubles.
         case ttyAttestation
+        /// Owner-action confirmation. Any authenticated local peer may ask;
+        /// authority comes only from the presence proof rvd verifies in the
+        /// handler (`OwnerPresence`), never from the caller's identity alone.
+        case ownerConfirm
     }
 
     public static func requirement(for method: IPCMethod) -> Requirement {
@@ -88,8 +92,10 @@ public enum ServiceMethodAuthorization {
             return .ownerMutation
         case .proposeWorkspaceLaunch, .launchProposalStatus:
             return .launchProposal
-        case .attestTTYRedemption:
+        case .attestTTYRedemption, .mintAllowOnce:
             return .ttyAttestation
+        case .confirmOwnerAction:
+            return .ownerConfirm
         }
     }
 
@@ -130,21 +136,28 @@ public enum ServiceMethodAuthorization {
                 return false
             }
         case .ttyAttestation:
-            // Pinned genuine CLI only (manifest identity + hardened
-            // runtime, assigned by the peer authenticator). The role proves
-            // WHICH code attests; the in-binary ceremony (display → LA →
-            // attest) proves a human reviewed and authenticated. Every
-            // other role — including unauthenticated same-user peers —
-            // fails closed here. Linux SO_PEERCRED peers carry no code
-            // identity and never receive .cli, so TTY attestation stays a
-            // macOS-only ceremony; launch proposals are likewise denied
-            // for socket peers until Linux gains an equivalent pinning.
+            // Allow-once redeem and pre-arm. The matrix only admits the
+            // caller; the owner approves in the handler
+            // (`attestTTYRedemption`, `mintAllowOnce`), so no role here is
+            // authority. Admitted: the pinned CLI and role-less
+            // peers. Other pinned components have no business redeeming and
+            // unauthenticated peers never get in.
+            guard context.peer != nil else { return false }
             switch context.componentRole {
             case .cli:
-                return context.peer != nil
-            case .service, .workspaceHost, .operatorUI, .mcpCustodian, nil:
+                return true
+            case .service, .workspaceHost, .operatorUI, .mcpCustodian:
                 return false
+            case nil:
+                // A kernel-attested XPC peer (macOS one-click install, no
+                // peer-trust manifest), where rvd shows its own owner
+                // prompt, or a bare socket peer (Linux), which first asks
+                // without a password to get rvd's description and then
+                // sends the owner's password for the handler to verify.
+                return true
             }
+        case .ownerConfirm:
+            return context.peer != nil
         }
     }
 }

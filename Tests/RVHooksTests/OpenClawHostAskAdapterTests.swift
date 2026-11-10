@@ -184,7 +184,7 @@ private func resetHardEvent() -> [String: Any] {
         confirm: "yes",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.hookTimeoutMs == 20_000)
+    #expect(result.hookTimeoutMs == 30_000)
     #expect(result.block == true)
 }
 
@@ -213,6 +213,35 @@ private func resetHardEvent() -> [String: Any] {
     #expect(result.blockReason == resetHardReason)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openClawAdapter_missingRvNamesPathAndSetup() async throws {
+    let result = try await runOpenClawAdapter(event: resetHardEvent(), stub: .missing)
+    #expect(result.block == true)
+    #expect(result.blockReason?.hasPrefix("rv is not installed at ") == true)
+    #expect(result.blockReason?.contains("`rv setup`") == true)
+}
+
+@Test func openClawAdapter_timeoutNamesBudgetAndDoctor() async throws {
+    let result = try await runOpenClawAdapter(
+        event: resetHardEvent(),
+        stub: .sleep(seconds: 1),
+        timeoutMs: 50
+    )
+    #expect(result.block == true)
+    #expect(
+        result.blockReason
+            == "rv did not answer within 0.05s; the daemon may be busy or stopped. Run `rv doctor`."
+    )
+}
+
+@Test(arguments: [("not-json", Int32(5)), ("", Int32(6))])
+func openClawAdapter_unusableOutputNamesExitCode(stdout: String, exit: Int32) async throws {
+    let result = try await runOpenClawAdapter(event: resetHardEvent(), stub: .stdout(stdout, exit: exit))
+    #expect(result.block == true)
+    #expect(
+        result.blockReason == "rv exited with code \(exit) without a usable decision. Run `rv doctor`."
+    )
 }
 
 private func adapterSource(for host: HookHost, rvPath: String) throws -> String {
@@ -245,7 +274,8 @@ private func runOpenClawAdapter(
     gatewayThrow: Bool = false,
     gatewayNoRoute: Bool = false,
     abort: Bool = false,
-    secondStub: StubRV? = nil
+    secondStub: StubRV? = nil,
+    timeoutMs: Int? = nil
 ) async throws -> OpenClawAdapterRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-openclaw-\(UUID().uuidString)", isDirectory: true)
@@ -295,7 +325,13 @@ private func runOpenClawAdapter(
         )
     }
 
-    let source = try adapterSource(for: .openclaw, rvPath: rvPath)
+    var source = try adapterSource(for: .openclaw, rvPath: rvPath)
+    if let timeoutMs {
+        source = source.replacingOccurrences(
+            of: "const RV_HOOK_TIMEOUT_MS = 15000;",
+            with: "const RV_HOOK_TIMEOUT_MS = \(timeoutMs);"
+        )
+    }
     let adapter = root.appendingPathComponent("index.js")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 

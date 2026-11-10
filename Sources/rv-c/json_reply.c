@@ -552,3 +552,190 @@ enum RvHookReplyKind rv_parse_hook_reply(
     *out = local;
     return RV_HOOK_REPLY_OK;
 }
+
+/* Guard-mode resolution levels for rv_guard_config_observes. */
+#define RV_GUARD_UNSET 0
+#define RV_GUARD_ENFORCE 1
+#define RV_GUARD_OBSERVE 2
+
+/* ASCII case-insensitive exact match (rvd lowercases before matching). */
+static int value_is(const char *v, size_t n, const char *want) {
+    size_t i;
+    if (n != strlen(want)) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)v[i];
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = (unsigned char)(ch - 'A' + 'a');
+        }
+        if (ch != (unsigned char)want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A string value is returned in *str (caller frees); any other value is
+ * skipped and *str stays NULL. A non-ASCII string is an error: rvd
+ * lowercases Unicode, so ASCII matching here could read such a value
+ * differently (KELVIN SIGN lowercases to k). */
+static int string_or_skip(struct Cur *c, int depth, char **str, size_t *len) {
+    size_t i;
+    *str = NULL;
+    *len = 0;
+    if (peek(c) != '"') {
+        return skip_value(c, depth);
+    }
+    if (parse_string(c, str, len) != 0) {
+        return -1;
+    }
+    for (i = 0; i < *len; i++) {
+        if ((unsigned char)(*str)[i] >= 0x80) {
+            free(*str);
+            *str = NULL;
+            c->err = 1;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* guard.mode, nested or flat: empty or non-string is unset; a non-empty
+ * value is observe or enforce (unknown values do not fall through). */
+static int read_mode_value(struct Cur *c, int depth, int *mode) {
+    char *v;
+    size_t n;
+    if (string_or_skip(c, depth, &v, &n) != 0) {
+        return -1;
+    }
+    if (v != NULL && n > 0) {
+        *mode = value_is(v, n, "observe") ? RV_GUARD_OBSERVE : RV_GUARD_ENFORCE;
+    }
+    free(v);
+    return 0;
+}
+
+static int read_guard_hosts(struct Cur *c, int depth, const char *host, int *mode) {
+    int first = 1;
+    int seen = 0;
+    for (;;) {
+        char *key = NULL;
+        size_t key_len = 0;
+        int r = next_object_key(c, &first, &key, &key_len);
+        int bad = 0;
+        if (r != 0) {
+            return r < 0 ? -1 : 0;
+        }
+        if (key_eq(key, key_len, host)) {
+            char *v;
+            size_t n;
+            bad = seen || string_or_skip(c, depth + 1, &v, &n) != 0;
+            seen = 1;
+            if (!bad && v != NULL) {
+                if (value_is(v, n, "block")) {
+                    *mode = RV_GUARD_ENFORCE;
+                } else if (value_is(v, n, "observe") || value_is(v, n, "off")) {
+                    *mode = RV_GUARD_OBSERVE;
+                }
+            }
+            if (!bad) {
+                free(v);
+            }
+        } else {
+            bad = skip_value(c, depth + 1) != 0;
+        }
+        free(key);
+        if (bad) {
+            return -1;
+        }
+    }
+}
+
+static int read_guard_object(struct Cur *c, int depth, const char *host, int *host_mode, int *nested) {
+    int first = 1;
+    int seen_mode = 0;
+    int seen_hosts = 0;
+    for (;;) {
+        char *key = NULL;
+        size_t key_len = 0;
+        int r = next_object_key(c, &first, &key, &key_len);
+        int bad = 0;
+        if (r != 0) {
+            return r < 0 ? -1 : 0;
+        }
+        if (key_eq(key, key_len, "mode")) {
+            bad = seen_mode || read_mode_value(c, depth + 1, nested) != 0;
+            seen_mode = 1;
+        } else if (key_eq(key, key_len, "hosts")) {
+            bad = seen_hosts;
+            seen_hosts = 1;
+            if (!bad) {
+                bad = peek(c) == '{' ? read_guard_hosts(c, depth + 1, host, host_mode) != 0
+                                     : skip_value(c, depth + 1) != 0;
+            }
+        } else {
+            bad = skip_value(c, depth + 1) != 0;
+        }
+        free(key);
+        if (bad) {
+            return -1;
+        }
+    }
+}
+
+int rv_guard_config_observes(const char *json, size_t n, const char *host) {
+    struct Cur c;
+    int first = 1;
+    int seen_guard = 0;
+    int seen_flat = 0;
+    int host_mode = RV_GUARD_UNSET;
+    int nested = RV_GUARD_UNSET;
+    int flat = RV_GUARD_UNSET;
+    if (json == NULL || host == NULL) {
+        return 0;
+    }
+    c.p = json;
+    c.end = json + n;
+    c.err = 0;
+    for (;;) {
+        char *key = NULL;
+        size_t key_len = 0;
+        int r = next_object_key(&c, &first, &key, &key_len);
+        int bad = 0;
+        if (r < 0) {
+            return 0;
+        }
+        if (r == 1) {
+            break;
+        }
+        if (key_eq(key, key_len, "guard")) {
+            bad = seen_guard;
+            seen_guard = 1;
+            if (!bad) {
+                bad = peek(&c) == '{' ? read_guard_object(&c, 1, host, &host_mode, &nested) != 0
+                                      : skip_value(&c, 1) != 0;
+            }
+        } else if (key_eq(key, key_len, "guard.mode")) {
+            bad = seen_flat || read_mode_value(&c, 1, &flat) != 0;
+            seen_flat = 1;
+        } else {
+            bad = skip_value(&c, 1) != 0;
+        }
+        free(key);
+        if (bad) {
+            return 0;
+        }
+    }
+    skip_ws(&c);
+    if (c.p != c.end) {
+        return 0;
+    }
+    if (host_mode != RV_GUARD_UNSET) {
+        return host_mode == RV_GUARD_OBSERVE;
+    }
+    if (nested != RV_GUARD_UNSET) {
+        return nested == RV_GUARD_OBSERVE;
+    }
+    return flat == RV_GUARD_OBSERVE;
+}

@@ -127,6 +127,8 @@ enum SecretPathGuard {
             plain[plain.index(after: index)...].first.map({ $0 != "<" && $0 != "(" }) ?? false
         {
             plain = String(plain[plain.index(after: index)...])
+            // `<>FILE` opens FILE read-write.
+            if plain.hasPrefix(">") { plain.removeFirst() }
         }
         while plain.hasPrefix("@") { plain.removeFirst() }
         add(plain)
@@ -220,7 +222,23 @@ enum SecretPathGuard {
         // return before the args array is materialized.
         let tokens = ShellPipeline.tokenize(haystack)
         guard tokens.isEmpty == false else { return .empty }
-        return argvCandidates(tokens.map(\.lexeme), includeMetadata: includeMetadata)
+        return argvCandidates(tokens.flatMap(splitGluedInputRedirect), includeMetadata: includeMetadata)
+    }
+
+    /// `cat<.env`, `base64 -w0<~/.ssh/id_rsa`: an unquoted input redirect
+    /// glued to the word before it still opens its file. Split it off as a
+    /// `<file` word so it reads exactly like the spaced `cat <.env`. Heredoc
+    /// and process-substitution spellings (`<<`, `<(`) stay glued; splitting
+    /// a literal `\<` over-claims a read, which only fails closed.
+    private static func splitGluedInputRedirect(_ token: ShellPipeline.Token) -> [String] {
+        let word = token.lexeme
+        guard token.wasQuoted == false,
+            let index = word.firstIndex(of: "<"),
+            word[..<index].contains(where: { $0.isNumber == false })
+        else {
+            return [word]
+        }
+        return [String(word[..<index]), String(word[index...])]
     }
 
     /// Candidates of one argv, routed on its head word. `find -exec` routes

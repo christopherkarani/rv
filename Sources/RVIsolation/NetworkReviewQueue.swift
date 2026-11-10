@@ -16,8 +16,8 @@ import RVPolicy
 /// it the config directory, so only host-side writers resolve rows. A
 /// same-user host process can already rewrite every static policy file,
 /// so file-signal approvals add no privilege beyond existing config
-/// trust; the `LocalControlBoundary` transition will move approval
-/// authority into authenticated service routes when they land.
+/// trust. `rv egress approve`/`deny` resolve rows only after rvd confirms
+/// the device owner approved them (`OwnerConfirmation`).
 public actor NetworkReviewQueue {
     /// One proxy push: the full live set plus its generation. The proxy
     /// applies it only when the generation is newer (guard lives there).
@@ -203,9 +203,6 @@ public actor NetworkReviewQueue {
             updatedAt: now
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(
-            to: RVPolicyPaths.egressLoadedSnapshotFile(inConfigDir: store.baseDirectory),
-            options: .atomic
-        )
+        _ = OwnerOnlyFile.write(data, to: RVPolicyPaths.egressLoadedSnapshotFile(inConfigDir: store.baseDirectory))
     }
 }

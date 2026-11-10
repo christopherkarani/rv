@@ -44,6 +44,10 @@ struct Packs: AsyncParsableCommand {
         let home = try ctx.requireHome()
         // Always load the full snapshot; filtering is local so JSON and pretty share the same view.
         let full = try PacksFacade.list(home: home, enabledOnly: false)
+        if (try? PacksConfigStore.load(home: home)) == nil {
+            ctx.writeStderr(
+                "warning: \(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+        }
         let filtered = PacksListFilter.apply(
             full,
             category: category,
@@ -115,7 +119,7 @@ struct Packs: AsyncParsableCommand {
         var ids: [String]
 
         func run() async throws {
-            try mutate(ids: ids, enabling: true)
+            try await mutate(ids: ids, enabling: true)
         }
     }
 
@@ -129,7 +133,7 @@ struct Packs: AsyncParsableCommand {
         var ids: [String]
 
         func run() async throws {
-            try mutate(ids: ids, enabling: false)
+            try await mutate(ids: ids, enabling: false)
         }
     }
 
@@ -166,7 +170,7 @@ struct Packs: AsyncParsableCommand {
                 "id: \(row.id.rawValue)",
                 "name: \(row.name)",
                 "category: \(row.category)",
-                "enabled: \(row.enabled)",
+                "enabled: \(row.enabled)\(row.requiredByOrganization ? " (required by organization policy)" : "")",
                 "safe_patterns: \(row.safePatternCount)",
                 "destructive_patterns: \(row.destructivePatternCount)",
             ]
@@ -208,14 +212,12 @@ enum PacksListFilter {
     }
 }
 
-private func mutate(ids: [String], enabling: Bool) throws {
-    try LocalControlBoundary.requireOwnerAuthorization()
+private func mutate(ids: [String], enabling: Bool) async throws {
+    try await OwnerConfirmation.require("\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
     try applyPackMutation(ids: ids, enabling: enabling)
 }
 
-/// Pack enable/disable behind the owner gate. The gate throws until
-/// authenticated service mutation routes exist; without this body an
-/// implemented gate would report success while changing nothing.
+/// Pack enable/disable, run after the owner gate approved it.
 func applyPackMutation(ids: [String], enabling: Bool) throws {
     guard !ids.isEmpty else {
         throw ValidationError("missing pack id")
@@ -230,6 +232,9 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
         try CommandContext.fail("unknown pack id: \(token.rawValue)\n")
     } catch PacksCommandError.criticalPatternUncompilable(let rule) {
         try CommandContext.fail("critical pattern uncompilable: \(rule.rawValue)\n")
+    } catch PacksCommandError.configUnreadable {
+        try CommandContext.fail(
+            "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
     } catch {
         throw ExitCode(1)
     }
@@ -238,6 +243,14 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     let line =
         "\(verb): \(changed) (\(result.enabledCount)/\(result.totalCount) enabled)\n"
     CommandContext.writeStdout(line)
+    if enabling == false {
+        let required = Set(ManagedGate.requiredPacks(home: home).map(\.rawValue))
+        let stillOn = ids.filter { required.contains($0) }
+        if stillOn.isEmpty == false {
+            CommandContext.writeStdout(
+                "note: \(stillOn.joined(separator: ", ")) stays enforced: required by organization policy\n")
+        }
+    }
 }
 
 enum PacksListFormat {

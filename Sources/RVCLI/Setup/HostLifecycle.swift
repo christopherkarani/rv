@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVPresentation
+import RVService
 
 enum HostAttachOutcome: Equatable, Sendable {
     case occupied
@@ -36,6 +37,7 @@ enum HostLifecycle {
             wrote: []
         )
         var serviceSkippedMissingRvd: String?
+        var runtimeMissing: [String: [HookHost]] = [:]
 
         for step in plan.steps {
             switch step {
@@ -46,22 +48,24 @@ enum HostLifecycle {
                     throw SetupError.configDirectoryCreateFailed
                 }
             case .skipLaunchAgent:
-                serviceSkippedMissingRvd = env.rvdPath
-            case .writeLaunchAgent:
-                switch env.supervisor {
-                case .launchd:
-                    try SetupRun.writeLaunchAgent(
-                        env: env,
-                        layout: layout,
-                        files: files,
-                        keepAlive: env.companionPresence.presence().keepAlive
-                    )
-                    try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
-                case .systemdUser:
-                    try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
+                // Only a run that owns the real supervisor can prove rvd
+                // answers; an isolated HOME keeps the warning instead.
+                guard env.managesService else {
+                    serviceSkippedMissingRvd = env.rvdPath
+                    break
                 }
-            case .skipUndetected:
+                throw SetupError.serviceDown(
+                    .rvdMissing(env.rvdPath), alreadyWired: plan.alreadyWired, observing: observing(env))
+            case .writeLaunchAgent:
+                do {
+                    try startService(env: env, layout: layout, files: files)
+                } catch {
+                    throw SetupError.serviceDown(error, alreadyWired: plan.alreadyWired, observing: observing(env))
+                }
+            case .skipUndetected, .skipOff:
                 break
+            case .skipRuntimeMissing(let host, let interpreter):
+                runtimeMissing[interpreter, default: []].append(host)
             case .skipOccupied(let host):
                 slots.assign(.occupied, to: host)
             case .forceClearThenWrite(let write), .write(let write):
@@ -91,8 +95,38 @@ enum HostLifecycle {
             wrote: slots.wrote
         )
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
+        report.unwiredForMissingInterpreter = runtimeMissing
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
+    }
+
+    private static func observing(_ env: SetupEnvironment) -> Bool {
+        JudgeRuntime.configuredGuardMode(home: env.home) == .observe
+    }
+
+    /// Installs and starts the service, then waits (bounded) for rvd to
+    /// answer. Throws before any host is wired when it does not.
+    private static func startService(
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) {
+        switch env.supervisor {
+        case .launchd:
+            try SetupRun.writeLaunchAgent(
+                env: env,
+                layout: layout,
+                files: files,
+                keepAlive: env.companionPresence.presence().keepAlive
+            )
+            try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
+        case .systemdUser:
+            try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
+        }
+        guard env.managesService else { return }
+        guard env.serviceAnswers() else {
+            throw SetupError.serviceNotAnswering(env.supervisor)
+        }
     }
 
     static func perform(
@@ -138,11 +172,14 @@ enum HostLifecycle {
         return .wired(wrote: wrote)
     }
 
+    /// Removes rv-owned hook artifacts. `only` scopes it to some hosts
+    /// (`rv host mode <host> off`); nil is every host (`rv uninstall`).
     static func detach(
         installations: HostAdapterInstallationSnapshot,
         env _: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps
+        files: FileOps,
+        only: Set<HookHost>? = nil
     ) throws(SetupError) -> UninstallHostResult {
         var removedHosts: Set<HookHost> = []
         var occupiedHosts: Set<HookHost> = []
@@ -150,7 +187,7 @@ enum HostLifecycle {
         var stripOpenCodeAsk = false
         var emptyDirectories: [String] = []
 
-        for owned in layout.hostAdapters {
+        for owned in layout.hostAdapters where only?.contains(owned.host) ?? true {
             let write = HostArtifacts.detach(host: owned.host, layout: layout)
             emptyDirectories.append(contentsOf: write.alwaysEmptyDirectories)
             switch installations.installation(for: owned.host).uninstallPlan {

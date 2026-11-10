@@ -18,6 +18,7 @@ Current boundary and policy:
 - [Python SDK service boundary](security/sdk-python-boundary.md)
 - [Agent identity spec v1](security/rv-agent-identity-spec-v1.md)
 - [Runtime adversarial test inventory](security/adversarial-inventory.md)
+- [Linux kernel e2e](security/linux-kernel-e2e.md)
 
 Decisions and designs:
 

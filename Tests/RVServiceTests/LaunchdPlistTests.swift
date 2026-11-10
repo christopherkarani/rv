@@ -27,13 +27,14 @@ struct LaunchdPlistTests {
     }
 
     @Test func linuxSocketSourcesHaveNoBSDFlags() throws {
-        let url = packageRoot()
-            .appendingPathComponent("Sources/RVService/UnixFrameTransport.swift")
-        let text = try String(contentsOf: url, encoding: .utf8)
-        #expect(text.contains("sun_len") == false)
-        #expect(text.contains("SO_NOSIGPIPE") == false)
-        #expect(text.contains("MSG_NOSIGNAL"))
-        #expect(text.contains("AF_UNIX"))
+        for name in linuxOnlySocketSources {
+            let url = packageRoot().appendingPathComponent("Sources/RVService/\(name)")
+            let text = try String(contentsOf: url, encoding: .utf8)
+            #expect(text.contains("sun_len") == false, "\(name)")
+            #expect(text.contains("SO_NOSIGPIPE") == false, "\(name)")
+            #expect(text.contains("MSG_NOSIGNAL"), "\(name)")
+            #expect(text.contains("AF_UNIX"), "\(name)")
+        }
     }
     #else
     @Test func productionRejectsSocketFlag() {
@@ -53,11 +54,16 @@ struct LaunchdPlistTests {
         let files = try swiftFiles(under: root.appendingPathComponent("RVService"))
             + swiftFiles(under: root.appendingPathComponent("rvd"))
         for url in files {
-            if url.lastPathComponent == "UnixFrameTransport.swift" {
-                // Linux-gated; covered by linuxSocketSourcesHaveNoBSDFlags.
+            let text = try String(contentsOf: url, encoding: .utf8)
+            if linuxOnlySocketSources.contains(url.lastPathComponent) {
+                // Not macOS surface only while the whole file is Linux-gated;
+                // the Linux run checks it in linuxSocketSourcesHaveNoBSDFlags.
+                let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { $0.isEmpty == false }
+                #expect(lines.first == "#if os(Linux)", "\(url.lastPathComponent)")
+                #expect(lines.last == "#endif", "\(url.lastPathComponent)")
                 continue
             }
-            let text = try String(contentsOf: url, encoding: .utf8)
             let mayListen = url.lastPathComponent == "UnixSocketListener.swift"
             #expect(text.contains("AF_UNIX") == false || mayListen)
             #expect(text.contains("NWListener") == false)
@@ -71,6 +77,10 @@ struct LaunchdPlistTests {
     }
     #endif
 }
+
+/// rvd's socket server framing and the Swift CLI's client connection: both
+/// compile on Linux only.
+private let linuxOnlySocketSources = ["UnixFrameTransport.swift", "UnixServiceConnection.swift"]
 
 private func packageRoot() -> URL {
     URL(fileURLWithPath: #filePath)

@@ -8,6 +8,8 @@ enum SetupFailureCommand: String {
     case setup
     case uninstall
     case serviceRestart = "service restart"
+    case hostList = "host list"
+    case hostMode = "host mode"
 }
 
 /// One launchctl step whose refusal setup/uninstall surfaces.
@@ -42,6 +44,8 @@ enum SetupError: Error, Equatable, Sendable {
     case hostHookOccupiedNeedsForce(HookHost)
     /// Could not write an owned hook payload.
     case hostHookWriteFailed(HookHost)
+    /// An owned hook payload survived removal (`rv host mode <host> off`).
+    case hostHookRemoveFailed(HookHost)
     /// Could not write the LaunchAgent plist.
     case launchAgentWriteFailed
     /// launchctl refused or failed the given step.
@@ -61,6 +65,24 @@ enum SetupError: Error, Equatable, Sendable {
     case notInstalledCopy(running: String, installedRv: String)
     /// The `rvd` the service must run is missing (or not executable).
     case rvdMissing(String)
+    /// Hooks would reject the installed `rvd` (trust manifest or sibling
+    /// pin), so wiring them would deny every tool call.
+    case daemonUntrusted(reason: String, fix: String)
+    /// The service was started but rvd did not answer a health round-trip
+    /// within `ServiceReadiness.deadline`.
+    case serviceNotAnswering(EvaluateSupervisor)
+    /// The service step failed, so setup wired no hooks: wired hooks with no
+    /// answering rvd deny every agent tool call. `alreadyWired` names hosts
+    /// wired before this run; they were left as they were. `observing`:
+    /// the configured mode is observe, so those hooks step aside (run
+    /// calls unchecked) rather than block while rvd is unreachable.
+    indirect case serviceDown(SetupError, alreadyWired: [HookHost], observing: Bool = false)
+    /// `rv setup --observe` while an organization gate pins enforce: rvd
+    /// would ignore the stored observe mode.
+    case observePinnedByOrganization
+    /// `config.json` (or its `guard` value) is not an object, or could not
+    /// be written, so `guard.mode: observe` was not stored.
+    case guardModeWriteFailed
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -77,6 +99,15 @@ func setupFailureOutput(
     _ error: SetupError,
     command: SetupFailureCommand
 ) -> (stderr: String, exitCode: Int32) {
+    let parts = setupFailureParts(error, command: command)
+    let lines = ["rv \(command.rawValue) failed: \(parts.phrase)"] + parts.detail
+    return (lines.joined(separator: "\n") + "\n", parts.exitCode)
+}
+
+private func setupFailureParts(
+    _ error: SetupError,
+    command: SetupFailureCommand
+) -> (phrase: String, exitCode: Int32, detail: [String]) {
     let phrase: String
     let exitCode: Int32
     var detail: [String] = []
@@ -105,15 +136,15 @@ func setupFailureOutput(
     case .hostHookWriteFailed(let host):
         phrase = "unable to write \(host.rawValue) hook"
         exitCode = EX_CANTCREAT
+    case .hostHookRemoveFailed(let host):
+        phrase = "unable to remove \(host.rawValue) hook"
+        exitCode = EX_CANTCREAT
     case .launchAgentWriteFailed:
         phrase = "unable to write LaunchAgent"
         exitCode = EX_CANTCREAT
     case .launchctlApplyFailed(.bootstrap):
         phrase = "unable to load LaunchAgent"
         exitCode = EX_UNAVAILABLE
-        if command == .setup {
-            detail.append("hooks are wired but rvd is not loaded, so agent tool calls will be denied")
-        }
         detail.append(
             "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause"
         )
@@ -126,6 +157,11 @@ func setupFailureOutput(
     case .systemdApplyFailed(.enable):
         phrase = "unable to enable systemd unit"
         exitCode = EX_UNAVAILABLE
+        detail.append(
+            "fix: systemctl --user enable --now \(SystemdUserTemplate.unitName) "
+                + "from a login session with a user systemd manager; "
+                + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
+        )
     case .systemdApplyFailed(.disable):
         phrase = "unable to disable systemd unit"
         exitCode = EX_UNAVAILABLE
@@ -144,7 +180,54 @@ func setupFailureOutput(
         phrase = "rvd not found at \(path)"
         exitCode = EX_UNAVAILABLE
         detail.append("fix: \(SetupRun.reinstallHint)")
+    case .daemonUntrusted(let reason, let fix):
+        phrase = "hooks would reject the installed rvd: \(reason)"
+        exitCode = EX_CONFIG
+        detail.append("no hooks were wired: wired hooks would deny every agent tool call")
+        detail.append("fix: \(fix)")
+    case .serviceNotAnswering(let supervisor):
+        phrase = "rvd did not answer within \(Int(ServiceReadiness.deadline)) seconds of starting the service"
+        exitCode = EX_UNAVAILABLE
+        switch supervisor {
+        case .launchd:
+            detail.append(
+                "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause"
+            )
+        case .systemdUser:
+            detail.append(
+                "fix: systemctl --user restart \(SystemdUserTemplate.unitName); "
+                    + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
+            )
+        }
+    case .serviceDown(let cause, let alreadyWired, let observing):
+        let inner = setupFailureParts(cause, command: command)
+        phrase = inner.phrase
+        exitCode = inner.exitCode
+        detail.append(serviceDownConsequence(alreadyWired: alreadyWired, observing: observing))
+        detail.append(contentsOf: inner.detail)
+        detail.append("then rerun rv setup to wire agent hooks")
+    case .observePinnedByOrganization:
+        phrase = "organization policy pins enforce, so observe mode would have no effect"
+        exitCode = EX_NOPERM
+        detail.append("nothing was changed")
+        detail.append("fix: run rv setup without --observe")
+    case .guardModeWriteFailed:
+        phrase = "unable to write guard.mode to config.json"
+        exitCode = EX_CANTCREAT
+        detail.append("no hooks were wired; config.json must be a JSON object whose \"guard\" value is an object")
     }
-    let lines = ["rv \(command.rawValue) failed: \(phrase)"] + detail
-    return (lines.joined(separator: "\n") + "\n", exitCode)
+    return (phrase, exitCode, detail)
+}
+
+/// What a failed service step left behind. Setup never wires a hook it
+/// cannot prove rvd answers, but hooks from an earlier run stay put.
+private func serviceDownConsequence(alreadyWired: [HookHost], observing: Bool) -> String {
+    guard alreadyWired.isEmpty == false else {
+        return "no hooks were wired: rv wires agent hooks only once rvd answers"
+    }
+    let names = alreadyWired.map(\.rawValue).joined(separator: ", ")
+    let effect = observing
+        ? "so in observe mode those agents' tool calls run unchecked until rvd answers"
+        : "so those agents are blocked until rvd answers"
+    return "no new hooks were wired; hooks already wired before this run (\(names)) were left in place, " + effect
 }

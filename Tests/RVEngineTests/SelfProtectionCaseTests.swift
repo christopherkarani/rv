@@ -229,6 +229,13 @@ struct SelfProtectionCaseTests {
         "echo x {a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15,a16,a17,a18,a19,a20,a21,a22,a23,a24,a25,a26,a27,a28,a29,a30,a31,a32,a33,a34,a35,a36,a37,a38,a39,a40,a41,a42,a43,a44,a45,a46,a47,a48,a49,a50,a51,a52,a53,a54,a55,a56,a57,a58,a59,a60,a61,a62,a63,a64,a65}",
         "echo \\\\\n\\\nrv uninstall",
         "echo \\\\\nr\\\nv uninstall",
+        // `rv host mode`: anything but `block` is floored at the door.
+        "rv host mode claude off",
+        "RV host mode cursor observe",
+        "sh -c 'rv host mode codex off'",
+        "rv host mode claude",
+        "rv host mode claude 'off'",
+        "rv host mode claude of\\f",
     ]
 
     @Test("case-folded and escaped rv invocations still hit the self-protection floor", arguments: weakening)
@@ -243,7 +250,8 @@ struct SelfProtectionCaseTests {
             "rvm use 3.3", "./server --port 80", "cargo run --bin rvx", "grep -i rv notes.txt", "echo rv uninstall", "rv --version", "rv status",
             "ls {src,Tests}", "echo {a,b}", "cp f{,.bak}", "mkdir -p a/{b,c}", "git diff {main,HEAD}", "touch {1..3}.txt", "rv packs list '>' x",
             "rv policy draft --english x", "rv packs list 2>&1", "echo {a,b}", "ls {src,Tests}", "echo hi \\\nthere",
-            "rv packs list $X", "$HOME/bin/tool \"$1\"", "eval \"$(direnv hook bash)\"", "bash -lc 'make test'", "env -i PATH=/usr/bin make", "</dev/null swift test", "rv mcp check \"$s\"", "rv policy show $X"] {
+            "rv packs list $X", "$HOME/bin/tool \"$1\"", "bash -lc 'make test'", "env -i PATH=/usr/bin make", "</dev/null swift test", "rv mcp check \"$s\"", "rv policy show $X",
+            "rv host list", "RV host mode claude block", "rv host mode cursor block --json"] {
             #expect(try runEngine(command).decision == .allow, "\(command)")
         }
     }

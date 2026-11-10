@@ -55,9 +55,12 @@ installed RV runtime ≥ 0.1.5 speaking `rv.ipc.v1`.
   plus iterator `close()` cover cancellation.
 - Sensitive operations are gated by construction: `pending_resolve` only resolves
   items obtained from the approvals iterator (fingerprint + identity echo);
-  `rule_save` only persists drafts from `rule_preview`; `set_pack_enabled` is
-  operator-only. There are no session/exec/PTY, secrets, MCP, or supervisor APIs
-  in v1 — RV exposes none of those over this boundary.
+  `rule_save` only persists drafts from `rule_preview`. All three owner
+  mutations (`set_pack_enabled`, `pending_resolve`, `rule_save`) are refused
+  over the SDK socket with `AuthorizationDenied`, so a same-user process cannot
+  disable packs, approve its own actions or save rules. Owners approve through
+  rv's attended flows instead. There are no session/exec/PTY, secrets, MCP, or
+  supervisor APIs in v1 — RV exposes none of those over this boundary.
 
 ## Layout
 

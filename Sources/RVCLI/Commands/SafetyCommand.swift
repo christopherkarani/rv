@@ -2,14 +2,15 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVPolicy
+import RVService
 
 enum SafetyRun {
     static func show(home: HomeDirectory, workspace: URL?) -> String {
-        SafetyStore.loadEffective(home: home, workspace: workspace).rawValue
+        ManagedGate.effectiveSafety(home: home, workspace: workspace).rawValue
     }
 
-    static func set(_ level: SafetyLevel, home: HomeDirectory) throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
+    static func set(_ level: SafetyLevel, home: HomeDirectory) async throws {
+        try await OwnerConfirmation.require("set safety to \(level.rawValue)")
         try SafetyStore(
             configDirectory: RVPolicyPaths.configDirectory(home: home)
         ).saveMachine(level)
@@ -25,14 +26,17 @@ struct Safety: AsyncParsableCommand {
     @Argument(help: "normal or strict.")
     var level: String?
 
-    func run() throws {
+    func run() async throws {
         let home = try CommandContext.requireHome(command: "safety")
         if let raw = level {
             guard let parsed = SafetyLevel(rawValue: raw) else {
                 try CommandContext.fail("rv safety: expected normal or strict\n")
             }
             do {
-                try SafetyRun.set(parsed, home: home)
+                try await SafetyRun.set(parsed, home: home)
+            } catch let refusal as ValidationError {
+                // Owner check refused: say why, not "could not write config".
+                try CommandContext.fail("\(refusal.message)\n")
             } catch {
                 try CommandContext.fail("rv safety: could not write config\n")
             }

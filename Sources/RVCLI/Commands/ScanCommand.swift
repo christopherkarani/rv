@@ -4,6 +4,7 @@ import RVDomain
 import RVPolicy
 import RVPresentation
 import RVScan
+import RVService
 import RVTheme
 import RVTUI
 
@@ -40,12 +41,24 @@ struct ScanSessionsFlags: ParsableArguments {
         scanAll ? .all : .lastDays(days)
     }
 
-    func resolvedPackIDs() throws -> [PackID] {
-        guard packs.isEmpty == false else { return dayOnePackIDs }
+    /// Packs to scan with. Without `--packs`, the owner's configured packs,
+    /// so scan reports what the live gate would deny rather than only the
+    /// three day-one packs. `--packs` IDs must name bundled packs: an
+    /// unknown ID used to be accepted and silently match nothing.
+    func resolvedPackIDs(home: HomeDirectory? = nil) throws -> [PackID] {
+        guard packs.isEmpty == false else {
+            guard let home else { return dayOnePackIDs }
+            // Exactly what the evaluation doors walk: the owner's packs
+            // plus the organization's required packs.
+            return EvaluationWorld.walkedPackIDs(home: home).ids
+        }
+        let known: Set<PackID>? = home.flatMap { home in
+            (try? PacksFacade.makeCatalog(home: home)).map { Set($0.records.map(\.id)) }
+        }
         var ids: [PackID] = []
         ids.reserveCapacity(packs.count)
         for token in packs {
-            guard let id = PackID(validating: token) else {
+            guard let id = PackID(validating: token), known?.contains(id) ?? true else {
                 throw ValidationError("unknown pack id: \(DisplayedText.field(token))")
             }
             ids.append(id)
@@ -79,6 +92,12 @@ struct ScanSessions: AsyncParsableCommand {
     var format: FormatFlags
 
     func validate() throws {
+        // Hosts without a session reader (Antigravity, Muse) used to be
+        // accepted and silently scan nothing.
+        if let host = flags.host, SessionScanAdapters.adapters(for: host).isEmpty {
+            let supported = SessionScanAdapters.all.map { $0.host.rawValue }.joined(separator: ", ")
+            throw ValidationError("rv scan cannot read \(host.rawValue) sessions yet; supported hosts: \(supported)")
+        }
         if flags.includeGlobs.isEmpty == false, path == nil {
             throw ValidationError("--include-glob requires a path argument")
         }
@@ -87,7 +106,7 @@ struct ScanSessions: AsyncParsableCommand {
     func run() async throws {
         let ctx = CommandContext.current(command: "scan", format: format)
         let scanHome = try ctx.requireHome()
-        let packIDs = try flags.resolvedPackIDs()
+        let packIDs = try flags.resolvedPackIDs(home: HomeDirectory(validating: scanHome.path))
         let result: SessionScanResult
         do {
             result = try SessionScan().run(

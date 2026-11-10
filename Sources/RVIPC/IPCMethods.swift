@@ -17,6 +17,8 @@ public enum IPCMethod: Sendable, Equatable {
     case proposeWorkspaceLaunch(ProposeLaunchParams)
     case launchProposalStatus(ProposalStatusParams)
     case attestTTYRedemption(AttestTTYRedemptionParams)
+    case confirmOwnerAction(ConfirmOwnerActionParams)
+    case mintAllowOnce(MintAllowOnceParams)
 }
 
 public enum IPCResult: Sendable, Equatable {
@@ -35,6 +37,8 @@ public enum IPCResult: Sendable, Equatable {
     case proposeWorkspaceLaunch(ProposeLaunchReply)
     case launchProposalStatus(ProposalStatusReply)
     case attestTTYRedemption(AttestTTYRedemptionReply)
+    case confirmOwnerAction(ConfirmOwnerActionReply)
+    case mintAllowOnce(MintAllowOnceReply)
     case uiRegistered(UIRegisteredDTO)
     case uiReviewList(UIReviewListDTO)
     case uiChallengeBundle(UIChallengeBundleDTO)
@@ -67,7 +71,14 @@ extension IPCMethod: Codable {
         case ruleSave
         case proposeWorkspaceLaunch
         case launchProposalStatus
-        case attestTTYRedemption
+        /// Not the old "attestTTYRedemption": an rvd from before rvd showed
+        /// its own owner prompt planted for a pinned CLI with no owner check,
+        /// and plants before it replies. It cannot decode this key, so it
+        /// refuses ("unknown IPCMethod") and plants nothing; a current rvd
+        /// refuses the old key the same way.
+        case attestTTYRedemption = "redeemAllowOnceOwnerChecked"
+        case confirmOwnerAction
+        case mintAllowOnce
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -103,6 +114,10 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .launchProposalStatus)
         case .attestTTYRedemption(let params):
             try container.encode(params, forKey: .attestTTYRedemption)
+        case .confirmOwnerAction(let params):
+            try container.encode(params, forKey: .confirmOwnerAction)
+        case .mintAllowOnce(let params):
+            try container.encode(params, forKey: .mintAllowOnce)
         }
     }
 
@@ -141,6 +156,12 @@ extension IPCMethod: Codable {
         } else if let params = try container.decodeIfPresent(
             AttestTTYRedemptionParams.self, forKey: .attestTTYRedemption) {
             self = .attestTTYRedemption(params)
+        } else if let params = try container.decodeIfPresent(
+            ConfirmOwnerActionParams.self, forKey: .confirmOwnerAction) {
+            self = .confirmOwnerAction(params)
+        } else if let params = try container.decodeIfPresent(
+            MintAllowOnceParams.self, forKey: .mintAllowOnce) {
+            self = .mintAllowOnce(params)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCMethod")
@@ -166,6 +187,8 @@ extension IPCResult: Codable {
         case proposeWorkspaceLaunch
         case launchProposalStatus
         case attestTTYRedemption
+        case confirmOwnerAction
+        case mintAllowOnce
         case uiRegistered
         case uiReviewList
         case uiChallengeBundle
@@ -215,6 +238,10 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .launchProposalStatus)
         case .attestTTYRedemption(let reply):
             try container.encode(reply, forKey: .attestTTYRedemption)
+        case .confirmOwnerAction(let reply):
+            try container.encode(reply, forKey: .confirmOwnerAction)
+        case .mintAllowOnce(let reply):
+            try container.encode(reply, forKey: .mintAllowOnce)
         case .uiRegistered(let reply):
             try container.encode(reply, forKey: .uiRegistered)
         case .uiReviewList(let reply):
@@ -281,6 +308,12 @@ extension IPCResult: Codable {
         } else if let reply = try container.decodeIfPresent(
             AttestTTYRedemptionReply.self, forKey: .attestTTYRedemption) {
             self = .attestTTYRedemption(reply)
+        } else if let reply = try container.decodeIfPresent(
+            ConfirmOwnerActionReply.self, forKey: .confirmOwnerAction) {
+            self = .confirmOwnerAction(reply)
+        } else if let reply = try container.decodeIfPresent(
+            MintAllowOnceReply.self, forKey: .mintAllowOnce) {
+            self = .mintAllowOnce(reply)
         } else if let reply = try container.decodeIfPresent(
             UIRegisteredDTO.self, forKey: .uiRegistered) {
             self = .uiRegistered(reply)

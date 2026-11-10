@@ -20,7 +20,7 @@ struct JudgeGateTests {
         #expect(PackageScriptGate.scriptNames(in: "npm test") == ["test"])
         #expect(PackageScriptGate.scriptNames(in: "pnpm run build") == ["build"])
         #expect(PackageScriptGate.scriptNames(in: "bun lint") == ["lint"])
-        #expect(PackageScriptGate.scriptNames(in: "npm install left-pad") == nil)
+        #expect(PackageScriptGate.scriptNames(in: "npm install left-pad") == PackageRunnerGrammar.installLifecycle)
         #expect(PackageScriptGate.scriptNames(in: "ls -la") == nil)
     }
 
@@ -71,26 +71,14 @@ struct JudgeEngineResolutionTests {
         { $0 == .ft ? ft : laya }
     }
 
-    @Test("env wins over config and default")
-    func envWins() {
-        let got = JudgeRuntime.resolveEngine(
-            env: ["RV_JUDGE_ENGINE": "laya"],
-            config: ["judge": ["engine": "ft"]],
-            bundleExists: Self.probe(ft: true, laya: true)
-        )
-        #expect(got.engine == .laya && got.bundlePresent)
-    }
-
     @Test("config selects when env is absent")
     func configSelects() {
         let nested = JudgeRuntime.resolveEngine(
-            env: [:],
             config: ["judge": ["engine": "ft"]],
             bundleExists: Self.probe(ft: false, laya: true)
         )
         #expect(nested.engine == .ft && !nested.bundlePresent)
         let flat = JudgeRuntime.resolveEngine(
-            env: [:],
             config: ["judge.engine": "laya"],
             bundleExists: Self.probe(ft: true, laya: true)
         )
@@ -100,7 +88,7 @@ struct JudgeEngineResolutionTests {
     @Test("default prefers ft when its bundle validates")
     func defaultPrefersFT() {
         let got = JudgeRuntime.resolveEngine(
-            env: [:], config: nil, bundleExists: Self.probe(ft: true, laya: true)
+            config: nil, bundleExists: Self.probe(ft: true, laya: true)
         )
         #expect(got.engine == .ft && got.bundlePresent)
     }
@@ -108,7 +96,7 @@ struct JudgeEngineResolutionTests {
     @Test("default falls back to stock when ft is missing")
     func defaultFallsBack() {
         let got = JudgeRuntime.resolveEngine(
-            env: [:], config: nil, bundleExists: Self.probe(ft: false, laya: true)
+            config: nil, bundleExists: Self.probe(ft: false, laya: true)
         )
         #expect(got.engine == .laya && got.bundlePresent)
     }
@@ -116,13 +104,12 @@ struct JudgeEngineResolutionTests {
     @Test("explicit engine with missing bundle stays selected, packs-only")
     func explicitMissingStaysSelected() {
         let forced = JudgeRuntime.resolveEngine(
-            env: ["RV_JUDGE_ENGINE": "laya"],
-            config: nil,
+            config: ["judge": ["engine": "laya"]],
             bundleExists: Self.probe(ft: true, laya: false)
         )
         #expect(forced.engine == .laya && !forced.bundlePresent)
         let neither = JudgeRuntime.resolveEngine(
-            env: [:], config: nil, bundleExists: Self.probe(ft: false, laya: false)
+            config: nil, bundleExists: Self.probe(ft: false, laya: false)
         )
         #expect(neither.engine == .laya && !neither.bundlePresent)
     }
@@ -130,7 +117,6 @@ struct JudgeEngineResolutionTests {
     @Test("unknown engine values are ignored")
     func unknownIgnored() {
         let got = JudgeRuntime.resolveEngine(
-            env: ["RV_JUDGE_ENGINE": "bogus"],
             config: ["judge": ["engine": "nope"]],
             bundleExists: Self.probe(ft: true, laya: false)
         )
@@ -140,7 +126,6 @@ struct JudgeEngineResolutionTests {
     @Test("config engine values are case-insensitive")
     func caseInsensitive() {
         let got = JudgeRuntime.resolveEngine(
-            env: [:],
             config: ["judge": ["engine": "FT"]],
             bundleExists: Self.probe(ft: true, laya: true)
         )
@@ -305,14 +290,14 @@ struct PackageScriptGateTests {
         }
     }
 
-    @Test("runner with no package.json anywhere is unresolved, not clear")
-    func missingPackageUnresolved() throws {
+    @Test("runner with no package.json anywhere executes nothing: clear")
+    func missingPackageClear() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-scriptgate-empty-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        guard case .unresolved = Self.evaluate("npm test", cwd: dir) else {
-            Issue.record("missing package.json must be unresolved")
+        guard case .clear = Self.evaluate("npm test", cwd: dir) else {
+            Issue.record("missing package.json with nothing earlier must be clear")
             return
         }
     }
@@ -339,6 +324,55 @@ struct PackageScriptGateTests {
             Issue.record("--prefix package must be the one checked")
             return
         }
+    }
+}
+
+@Suite("Judge fail-closed reasons")
+struct JudgeFailClosedReasonTests {
+    static func failClosedDeny(_ run: JudgeRuntime.JudgeRun) -> (deny: Deny?, note: String) {
+        let allow = EvaluationResult(
+            outcome: .plain, matchingView: "npm install left-pad", analysis: .unknown)
+        let (raised, note) = JudgeRuntime.failClosed(run, over: allow)
+        guard case .deny(let deny) = raised.decision else { return (nil, note) }
+        return (deny, note)
+    }
+
+    @Test("warming tells the user the judge is still loading")
+    func warmingReason() throws {
+        let (deny, note) = Self.failClosedDeny(.warming)
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("still loading"))
+        #expect(reason.contains("retry in a few seconds"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "judge-warming")
+    }
+
+    @Test("busy tells the user the judge queue is full")
+    func busyReason() throws {
+        let (deny, note) = Self.failClosedDeny(.busy)
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("queue is full"))
+        #expect(reason.contains("retry shortly"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "judge-busy")
+    }
+
+    @Test("failed keeps the fail-closed text and points at rv doctor")
+    func failedReason() throws {
+        let (deny, note) = Self.failClosedDeny(.failed)
+        let reason = try #require(deny?.reason)
+        #expect(reason.contains("failing closed"))
+        #expect(reason.contains("`rv doctor`"))
+        #expect(deny?.ruleID.rawValue == "core.judge:laya-review")
+        #expect(note == "prediction-failed")
+    }
+
+    @Test("the three reasons are distinct")
+    func reasonsDistinct() {
+        let reasons = [JudgeRuntime.JudgeRun.warming, .busy, .failed].map {
+            Self.failClosedDeny($0).deny?.reason
+        }
+        #expect(Set(reasons.compactMap { $0 }).count == 3)
     }
 }
 

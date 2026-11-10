@@ -7,23 +7,26 @@ func maskNonExecutingHeredocBodies(_ text: String) -> String {
 }
 
 /// Heredoc masking plus the masked body for M-07 payload binding.
-/// The body is one segment when masking fires, empty otherwise.
+/// The body is one segment when masking fires, empty otherwise. Only the
+/// body at its parsed position is blanked, never an earlier copy of its
+/// text; a body that cannot be placed unambiguously stays visible.
 func maskNonExecutingHeredocBodiesDetailed(_ text: String) -> (view: String, masked: [String]) {
-    guard let heredoc = extractHeredoc(text), heredoc.body.isEmpty == false else {
+    guard let heredoc = locateHeredoc(text), heredoc.body.isEmpty == false else {
         return (text, [])
     }
     if peelExecutingSink(text, workingDirectory: nil) != nil {
         return (text, [])
     }
-    guard let range = text.range(of: heredoc.body) else {
+    guard let range = heredoc.bodyRange else {
         return (text, [])
     }
+    let body = String(text[range])
     return (
         text.replacingCharacters(
             in: range,
-            with: String(repeating: " ", count: heredoc.body.count)
+            with: String(repeating: " ", count: body.count)
         ),
-        [heredoc.body]
+        [body]
     )
 }
 
@@ -505,6 +508,16 @@ private func substitutionInners(_ segment: String) -> [String] {
             }
             index += 1
             continue
+        }
+        // Process substitution `<(cmd)` / `>(cmd)` runs `cmd` too; as its
+        // own segment it is judged alone, never vouched for by a safe
+        // match on the outer command.
+        if char == "<" || char == ">", index + 1 < chars.count, chars[index + 1] == "(" {
+            if let (inner, next) = matchDollarParen(chars, open: index + 1) {
+                inners.append(inner)
+                index = next
+                continue
+            }
         }
         if char == "`" {
             if let (inner, next) = matchBacktick(chars, open: index) {

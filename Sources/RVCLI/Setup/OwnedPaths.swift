@@ -40,6 +40,8 @@ struct OwnedPaths: Equatable, Sendable {
     var museHooks: String { home.rawValue + "/.config/muse/rv-hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var custodianLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.mcp-custodian.plist" }
+    /// Written by `rv audit forward --install` (`AuditForwardInstall.label`).
+    var auditForwardLaunchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.audit-forward.plist" }
     var custodianAppExecutable: String {
         home.rawValue + "/Applications/RVApprovals.app/Contents/MacOS/rv-mcp-custodian"
     }
@@ -47,6 +49,13 @@ struct OwnedPaths: Equatable, Sendable {
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }
+    /// install.sh's bin dir; `InstallManifest` names what rv owns in it.
+    var localBinDirectory: String { home.rawValue + "/.local/bin" }
+    /// The approvals custodian bundle install.sh copies on macOS.
+    var approvalsApp: String { home.rawValue + "/Applications/RVApprovals.app" }
+    /// Judge weights install.sh downloads (hundreds of MB). `rv uninstall`
+    /// keeps them unless asked (`--remove-models`).
+    var modelsDirectory: String { home.rawValue + "/.config/rv/models" }
 
     var hostAdapters: [OwnedHostAdapterPath] {
         HookHost.setupSlotOrder.map(hostAdapter)

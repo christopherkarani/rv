@@ -27,6 +27,7 @@ enum HelpCatalog {
         case .allowlist: allowlist
         case .safety: safety
         case .blocks: blocks
+        case .host: host
         case .audit: audit
         case .secrets: secrets
         case .mcp: mcp
@@ -63,6 +64,7 @@ enum HelpCatalog {
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
+                HelpRow(name: "host", description: "Per-host mode: block, observe, or off"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
                 HelpRow(name: "login", description: "App logins agents use through rv (vercel, github)"),
@@ -137,18 +139,22 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] [--microvm <image> | --macvm <name>] [--cpus N] [--memory-mib M] -- <absolute-executable> [args...]"),
                 HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
-                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (not yet available)"),
+                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (asks for owner authentication)"),
                 HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
+                HelpRow(name: "rv workspace vms [--json] [--limit N]", description: "List micro-VM runtime sessions, newest first"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
                 HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
                 HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
                 HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
+                HelpRow(name: "--microvm", description: "Run inside a network-less Linux micro-VM booted from this OCI image (macOS 26+, Apple silicon); the executable is a path inside the guest"),
+                HelpRow(name: "--macvm", description: "Run inside a network-less macOS VM cloned from an image built with rv-macvm prepare (macOS 27); the executable is a path inside the guest"),
+                HelpRow(name: "--cpus / --memory-mib", description: "VM size, with --microvm or --macvm"),
             ]),
             HelpSection(heading: "Platform", rows: [
                 HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux the workspace host refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
@@ -281,10 +287,11 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv setup [--force] [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv setup [--force] [--observe] [--json] [--robot] [--plain] [--no-color]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--force", description: "Replace occupied owned hooks (backup *.bak)"),
+                HelpRow(name: "--observe", description: "Log what rv would block instead of blocking"),
                 HelpRow(name: "--json", description: "One line, no circles (same as --robot)"),
                 HelpRow(name: "--robot", description: "One line, no circles"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
@@ -294,6 +301,7 @@ enum HelpCatalog {
         examples: [
             "rv setup",
             "rv setup --force",
+            "rv setup --observe",
             "rv setup --robot",
         ],
         nextHeading: "After setup",
@@ -414,6 +422,45 @@ enum HelpCatalog {
         examples: [
             "rv blocks",
             "rv blocks --json",
+        ]
+    )
+
+    static let host = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv host list [--json]"),
+                HelpRow(name: "rv host mode <host> <block|observe|off> [--json]"),
+            ]),
+            HelpSection(heading: "Modes", rows: [
+                HelpRow(name: "block", description: "Enforce (a host with no mode follows guard.mode)"),
+                HelpRow(name: "observe", description: "Allow, and record what would have been blocked"),
+                HelpRow(name: "off", description: "Remove this host's rv hooks; rv setup skips it"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "owner",
+                    description: "Loosening a host asks for device-owner authentication"
+                ),
+                HelpRow(
+                    name: "managed",
+                    description: "An organization gate keeps enforce for every host"
+                ),
+                HelpRow(
+                    name: "repair",
+                    description: "A host set off stays unwired under a later gate: run rv setup"
+                ),
+                HelpRow(
+                    name: "observe",
+                    description: "Keeps rv's own protection (rv admin, rv's config) while rvd runs"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv host list",
+            "rv host mode claude observe",
+            "rv host mode cursor block",
         ]
     )
 
@@ -669,8 +716,9 @@ enum HelpCatalog {
                 HelpRow(name: "files", description: "policy.json; org-key.pub pins a key, then policy.json.sig is required"),
                 HelpRow(name: "rotation", description: "org-key.pub may list several keys, one per line (# comments); any one verifies"),
                 HelpRow(name: "serial", description: "A serial lower than one already accepted is a rollback and makes the policy invalid"),
-                HelpRow(name: "restrict-only", description: "Org rules only tighten mcp.json and secrets.json; deny > ask > allow"),
-                HelpRow(name: "invalid", description: "A bad owner, mode, signature, or key disables MCP and secret staging"),
+                HelpRow(name: "restrict-only", description: "Org rules only tighten mcp.json, secrets.json and the gate; deny > ask > allow"),
+                HelpRow(name: "gate", description: "gate.requirePacks: packs every door applies whatever the user's pack config says; gate.safety: \"strict\" forbids normal safety"),
+                HelpRow(name: "invalid", description: "A bad owner, mode, signature, or key disables MCP and secret staging and forces strict safety"),
             ]),
         ],
         examples: [

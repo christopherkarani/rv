@@ -6,8 +6,8 @@ import RVPolicy
 @testable import RVCLI
 
 struct AllowlistCommandRunTests {
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_missingHome() async throws {
-        try await withCLIProcess(environment: [:]) {
+    @Test func add_missingHome() async throws {
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(1)) {
                 try await command.run()
@@ -15,9 +15,9 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_emptyReason() async throws {
+    @Test func add_emptyReason() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "   "])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -25,9 +25,9 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_invalidRule() async throws {
+    @Test func add_invalidRule() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["not-a-rule", "--reason", "reviewed"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -59,9 +59,9 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_requiresTTY() async throws {
+    @Test func add_requiresTTY() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -69,9 +69,9 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_slashRuleSucceedsOnTTY() async throws {
+    @Test func add_slashRuleSucceedsOnTTY() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git/reset-hard", "--reason", "reviewed"])
             try await command.run()
         }
@@ -83,11 +83,11 @@ struct AllowlistCommandRunTests {
         #expect(entries.count == 1)
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_lockFailed() async throws {
+    @Test func add_lockFailed() async throws {
         let home = try isolatedHome()
         let lock = allowlistLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -95,7 +95,7 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_invalidExistingTOML() async throws {
+    @Test func add_invalidExistingTOML() async throws {
         let home = try isolatedHome()
         let file = RVPolicyPaths.allowlistFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
         try FileManager.default.createDirectory(
@@ -103,7 +103,7 @@ struct AllowlistCommandRunTests {
             withIntermediateDirectories: true
         )
         try "not toml".write(to: file, atomically: true, encoding: .utf8)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -111,9 +111,9 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func addCommand_emptyReasonAndTTYAndSuccess() async throws {
+    @Test func addCommand_emptyReasonAndTTYAndSuccess() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var missing = try AllowlistAddCommand.parse(["echo hi", "--reason", ""])
             await #expect(throws: ExitCode(2)) {
                 try await missing.run()
@@ -121,7 +121,7 @@ struct AllowlistCommandRunTests {
             var ok = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             try await ok.run()
         }
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var tty = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
@@ -129,11 +129,11 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func addCommand_lockAndParseErrors() async throws {
+    @Test func addCommand_lockAndParseErrors() async throws {
         let home = try isolatedHome()
         let lock = allowlistLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -142,7 +142,7 @@ struct AllowlistCommandRunTests {
         try FileManager.default.removeItem(at: lock)
         let file = RVPolicyPaths.allowlistFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
         try "broken".write(to: file, atomically: true, encoding: .utf8)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -160,23 +160,23 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func remove_ttyLockParseAndSuccess() async throws {
+    @Test func remove_ttyLockParseAndSuccess() async throws {
         let home = try isolatedHome()
         try seedAllowlist(home: home)
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, ownerAuthOutcome: .authenticated) {
             var tty = try AllowlistRemove.parse(["core.git:reset-hard"])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var ok = try AllowlistRemove.parse(["core.git:reset-hard"])
             try await ok.run()
         }
         #expect(AllowlistCLI.store(home: home).loadForValidate(workspacePath: nil) == .ok([]))
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func remove_normalizedExactAlias() async throws {
+    @Test func remove_normalizedExactAlias() async throws {
         let home = try isolatedHome()
         let store = AllowlistCLI.store(home: home)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
@@ -188,18 +188,18 @@ struct AllowlistCommandRunTests {
             ),
             tty: tty
         )
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistRemove.parse(["sudo rm -rf ./build"])
             try await command.run()
         }
         #expect(store.loadForValidate(workspacePath: nil) == .ok([]))
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func remove_lockAndParseErrors() async throws {
+    @Test func remove_lockAndParseErrors() async throws {
         let home = try isolatedHome()
         let lock = allowlistLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistRemove.parse(["core.git:reset-hard"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -212,7 +212,7 @@ struct AllowlistCommandRunTests {
             withIntermediateDirectories: true
         )
         try "broken".write(to: file, atomically: true, encoding: .utf8)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var command = try AllowlistRemove.parse(["core.git:reset-hard"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -395,8 +395,8 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func addCommand_andValidate_missingHome() async throws {
-        try await withCLIProcess(environment: [:]) {
+    @Test func addCommand_andValidate_missingHome() async throws {
+        try await withCLIProcess(environment: [:], ownerAuthOutcome: .authenticated) {
             var add = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(1)) {
                 try await add.run()
@@ -412,9 +412,9 @@ struct AllowlistCommandRunTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func add_userFlagAndRemoveUnsupportedLayer() async throws {
+    @Test func add_userFlagAndRemoveUnsupportedLayer() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
             var add = try AllowlistAdd.parse([
                 "core.git:reset-hard", "--reason", "reviewed", "--user",
             ])

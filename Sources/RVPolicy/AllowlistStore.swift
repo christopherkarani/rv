@@ -18,6 +18,7 @@ public struct AllowlistStore: Sendable {
     }
 
     /// Fail-open load for evaluate. Symlink into `workspacePath` → empty. Invalid TOML → empty.
+    /// The denylist fails closed instead: see `DenylistStore.loadSnapshot`.
     public func loadUserSnapshot(workspacePath: String?, now: Date) -> AllowlistSnapshot {
         let blocked = DenylistStore(baseDirectory: baseDirectory).loadSnapshot()
         switch loadForValidate(workspacePath: workspacePath) {

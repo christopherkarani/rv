@@ -11,6 +11,7 @@ private func antigravityMerged(_ existing: String? = nil, force: Bool = false) t
     return try AntigravityHooksMerge.merge(
         existingData: data,
         rvPath: antigravityRvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: antigravityAdapter,
         force: force
     ).data
@@ -24,6 +25,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     let merged = try AntigravityHooksMerge.merge(
         existingData: nil,
         rvPath: antigravityRvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: antigravityAdapter,
         force: false
     )
@@ -38,8 +40,8 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         let inner = try #require(entry["hooks"] as? [[String: Any]])
         #expect(inner.count == 1)
         #expect(inner[0]["type"] as? String == "command")
-        #expect(inner[0]["command"] as? String == "RV_BINARY=\(antigravityRvPath) python3 \(antigravityAdapter)")
-        #expect(inner[0]["timeout"] as? Int == 10)
+        #expect(inner[0]["command"] as? String == "RV_BINARY=\(antigravityRvPath) /usr/bin/python3 -I -S \(antigravityAdapter)")
+        #expect(inner[0]["timeout"] as? Int == 18)
     }
 }
 
@@ -62,6 +64,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     let merged = try AntigravityHooksMerge.merge(
         existingData: Data(existing.utf8),
         rvPath: antigravityRvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: antigravityAdapter,
         force: false
     )
@@ -82,6 +85,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     let second = try AntigravityHooksMerge.merge(
         existingData: first,
         rvPath: antigravityRvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: antigravityAdapter,
         force: false
     )
@@ -145,6 +149,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         _ = try AntigravityHooksMerge.merge(
             existingData: Data("[]".utf8),
             rvPath: "/r",
+            interpreter: "/usr/bin/python3",
             adapterPath: "/c/hooks/rv-guard.py",
             force: false
         )
@@ -196,6 +201,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     let merged = try AntigravityHooksMerge.merge(
         existingData: occupied,
         rvPath: antigravityRvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: antigravityAdapter,
         force: true
     )
@@ -217,6 +223,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         _ = try AntigravityHooksMerge.merge(
             existingData: occupied,
             rvPath: antigravityRvPath,
+            interpreter: "/usr/bin/python3",
             adapterPath: antigravityAdapter,
             force: false
         )
@@ -233,6 +240,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     let merged = try AntigravityHooksMerge.merge(
         existingData: shellOnly,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -252,6 +260,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     let applied = try HostWiring.applyAntigravity(
         existing: nil,
         rvPath: antigravityRvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: antigravityAdapter
     )
     #expect(applied.wrote)

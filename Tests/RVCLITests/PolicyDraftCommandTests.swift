@@ -96,7 +96,7 @@ struct PolicyDraftCommandTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func save_persistsMachineDenyTOML() async throws {
+    @Test func save_persistsMachineDenyTOML() async throws {
         try await withTempPolicyContext { home, workspace in
             let result = try await PolicyDraftRun.execute(
                 english: "never allow force-push to main",
@@ -127,7 +127,7 @@ struct PolicyDraftCommandTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func save_upsertsSamePredicate_keepsOtherMachineRules() async throws {
+    @Test func save_upsertsSamePredicate_keepsOtherMachineRules() async throws {
         try await withTempPolicyContext { home, workspace in
             let store = TypedRuleStore(
                 baseDirectory: RVPolicyPaths.configDirectory(home: home)
@@ -167,7 +167,7 @@ struct PolicyDraftCommandTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func refuse_writesNothing() async throws {
+    @Test func refuse_writesNothing() async throws {
         try await withTempPolicyContext { home, workspace in
             let result = try await PolicyDraftRun.execute(
                 english: "be careful in prod",
@@ -219,7 +219,7 @@ struct PolicyDraftCommandTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func unavailablePrimary_uncompilableEnglish_refusesAndWritesNothing() async throws {
+    @Test func unavailablePrimary_uncompilableEnglish_refusesAndWritesNothing() async throws {
         try await withTempPolicyContext { home, workspace in
             let result = try await PolicyDraftRun.execute(
                 english: "be careful in prod",
@@ -238,7 +238,7 @@ struct PolicyDraftCommandTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func save_unavailablePrimary_persistsFakePreviewOnce() async throws {
+    @Test func save_unavailablePrimary_persistsFakePreviewOnce() async throws {
         try await withTempPolicyContext { home, workspace in
             let fallbackLog = CompileCallLog()
             let result = try await PolicyDraftRun.execute(
@@ -265,7 +265,7 @@ struct PolicyDraftCommandTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-BOUNDARY: LocalControlBoundary denies local mutations until service mutation routes land; re-enable then")) func save_storeError_doesNotInvokeFallbackAgain() async throws {
+    @Test func save_storeError_doesNotInvokeFallbackAgain() async throws {
         try await withTempPolicyContext { home, workspace in
             let config = RVPolicyPaths.configDirectory(home: home)
             try FileManager.default.createDirectory(
@@ -490,7 +490,10 @@ private func withTempPolicyContext(
         try? FileManager.default.removeItem(at: homeURL)
         try? FileManager.default.removeItem(at: workspace)
     }
-    try await body(home, workspace)
+    // Saves ask for owner authentication; the seam stands in for it.
+    try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: .authenticated) {
+        try await body(home, workspace)
+    }
 }
 
 private func policyDraftCommandSourceURL() -> URL {

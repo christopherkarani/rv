@@ -1,0 +1,811 @@
+import Foundation
+import Testing
+@testable import RVWorkspaceTUI
+
+// MARK: - Fixtures
+
+private let reviewRuntime = UUID(uuidString: "00000000-0000-0000-0000-0000000000c3")!
+private let reviewEpoch = Date(timeIntervalSince1970: 1_800_000_000)
+
+private func reviewState(enabled: Bool = true, attached: Bool = true) -> WorkspaceTUIState {
+    var state = WorkspaceTUIState(
+        lifecycle: .neverConnected,
+        summary: WorkspaceTUISummary(project: "/tmp/project", phase: "active", protected: true, workspace: UUID()),
+        launcher: [RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil)],
+        initialRows: 24,
+        initialColumns: 80,
+        mode: .terminal,
+        terminal: nil,
+        leasedRuntime: nil,
+        retryAcquire: false,
+        shouldExit: false,
+        initialLaunchRequested: true,
+        viewSize: .init(rows: 40, columns: 100),
+        presentationRevision: 1,
+        reviewEnabled: enabled
+    )
+    state.lifecycle = .connected
+    if attached {
+        var resize = ResizeCoalescer()
+        resize.recordLaunch(rows: 24, columns: 80)
+        state.terminal = WorkspaceTUIState.AttachedTerminal(
+            state: WorkspaceTerminalState(
+                runtime: reviewRuntime, title: "agent", running: true, lease: .owned, subscribed: true
+            ),
+            resize: resize
+        )
+    }
+    return state
+}
+
+private func egress(_ id: String, _ host: String, ageSeconds: TimeInterval) -> ReviewItem {
+    ReviewItem(
+        id: .egress(id), kind: .pendingEgress, at: reviewEpoch.addingTimeInterval(-ageSeconds),
+        summary: "\(host):443", detail: ["proposal \(id)", "  egress \(host):443"]
+    )
+}
+
+private func block(_ id: String, ageSeconds: TimeInterval) -> ReviewItem {
+    ReviewItem(
+        id: .block(id), kind: .block, at: reviewEpoch.addingTimeInterval(-ageSeconds),
+        summary: "core.git/reset-hard  Bash", detail: ["RV EXPLAIN", "├─ Decision: DENY"]
+    )
+}
+
+private func reduce(_ state: WorkspaceTUIState, _ events: WorkspaceTUIReducerEvent...) -> WorkspaceTUITransition {
+    var last = WorkspaceTUITransition(state: state, effects: [])
+    for event in events {
+        last = WorkspaceTUIReducer.reduce(last.state, event)
+    }
+    return last
+}
+
+private func press(_ state: WorkspaceTUIState, _ keys: TUIKey...) -> WorkspaceTUITransition {
+    var last = WorkspaceTUITransition(state: state, effects: [])
+    for key in keys {
+        last = WorkspaceTUIReducer.reduce(last.state, .key(key))
+    }
+    return last
+}
+
+/// Opens the pane, lands one load with `items`, and notes the pane size
+/// the render would report (unknown when `pane` is nil).
+private func openReview(
+    _ items: [ReviewItem],
+    from state: WorkspaceTUIState = reviewState(),
+    pane: (rows: Int, columns: Int)? = (rows: 40, columns: 100)
+) -> WorkspaceTUIState {
+    let opened = press(state, .control("b"), .character("R"))
+    #expect(opened.state.mode == .review)
+    #expect(opened.effects == [.loadReview(sequence: 1)])
+    let loaded = reduce(opened.state, .reviewLoaded(sequence: 1, result: .loaded(items))).state
+    guard let pane else { return loaded }
+    return reduce(loaded, .reviewPaneNoted(rows: pane.rows, columns: pane.columns)).state
+}
+
+private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
+    switch effect {
+    case .approveEgress, .denyEgress, .loadReview: true
+    default: false
+    }
+}
+
+// MARK: - Routing
+
+@Test func reviewRoutingOpensOnlyFromPrefix() {
+    let target = PrefixTarget(pane: PaneID(), generation: nil)
+    #expect(CommandPrefix.route(.character("R"), mode: .prefix(target), launcher: []) == (.review, .enterReview))
+    // In terminal mode every review key is runtime input.
+    for key: TUIKey in [.character("R"), .character("a"), .character("d"), .character("y"), .enter] {
+        #expect(CommandPrefix.route(key, mode: .terminal, launcher: []) == (.terminal, .sendKey(key)))
+    }
+}
+
+@Test func reviewRoutingNavigatesActsAndCloses() {
+    #expect(CommandPrefix.route(.character("j"), mode: .review, launcher: []) == (.review, .reviewMove(delta: 1)))
+    #expect(CommandPrefix.route(.arrow(.down), mode: .review, launcher: []) == (.review, .reviewMove(delta: 1)))
+    #expect(CommandPrefix.route(.character("k"), mode: .review, launcher: []) == (.review, .reviewMove(delta: -1)))
+    #expect(CommandPrefix.route(.arrow(.up), mode: .review, launcher: []) == (.review, .reviewMove(delta: -1)))
+    #expect(CommandPrefix.route(.character("g"), mode: .review, launcher: []) == (.review, .reviewTop))
+    #expect(CommandPrefix.route(.character("G"), mode: .review, launcher: []) == (.review, .reviewBottom))
+    #expect(CommandPrefix.route(.character("a"), mode: .review, launcher: []) == (.review, .reviewApprove))
+    #expect(CommandPrefix.route(.character("d"), mode: .review, launcher: []) == (.review, .reviewDenyStart))
+    #expect(CommandPrefix.route(.character("A"), mode: .review, launcher: []) == (.review, nil))
+    #expect(CommandPrefix.route(.enter, mode: .review, launcher: []) == (.review, nil))
+    #expect(CommandPrefix.route(.escape, mode: .review, launcher: []) == (.terminal, .exitReview))
+    #expect(CommandPrefix.route(.character("q"), mode: .review, launcher: []) == (.terminal, .exitReview))
+}
+
+@Test func denyReasonRoutingEditsSubmitsAndBacksOut() {
+    let mode = CommandMode.reviewDenyReason(id: "p1", input: "trac")
+    #expect(CommandPrefix.route(.character("k"), mode: mode, launcher: [])
+        == (.reviewDenyReason(id: "p1", input: "track"), nil))
+    #expect(CommandPrefix.route(.backspace, mode: mode, launcher: [])
+        == (.reviewDenyReason(id: "p1", input: "tra"), nil))
+    #expect(CommandPrefix.route(.enter, mode: mode, launcher: [])
+        == (.review, .reviewDenySubmit(id: "p1", reason: "trac")))
+    #expect(CommandPrefix.route(.escape, mode: mode, launcher: []) == (.review, nil))
+    let full = CommandMode.reviewDenyReason(id: "p1", input: String(repeating: "x", count: 500))
+    #expect(CommandPrefix.route(.character("y"), mode: full, launcher: []) == (full, nil))
+}
+
+// MARK: - Runtime keystrokes never reach review actions
+
+@Suite struct ReviewRuntimeIsolationTests {
+    @Test func keysTypedIntoRuntimeOnlyBecomeRuntimeInput() {
+        let state = reviewState()
+        for key: TUIKey in [.character("a"), .character("d"), .character("R"), .character("y"), .enter] {
+            let transition = press(state, key)
+            #expect(transition.state.mode == .terminal)
+            #expect(transition.effects.contains(where: isReviewEffect) == false)
+            #expect(transition.effects == [.queueKey(binding: state.activeBindingKey!, key: key)])
+        }
+    }
+
+    @Test func runtimeOutputCannotOpenOrDriveReview() {
+        // Ctrl-B R a d y, as bytes the agent writes to its own PTY.
+        let hostile = Data([0x02]) + Data("Rady\r".utf8)
+        let state = openReview([egress("p1", "evil.example.com", ageSeconds: 5)])
+        var terminalState = state
+        terminalState.mode = .terminal
+        for base in [terminalState, state] {
+            let fed = reduce(base, .hostEvents([.bytes(runtime: reviewRuntime, data: hostile)]))
+            #expect(fed.effects.contains(where: isReviewEffect) == false)
+            #expect(fed.state.mode == base.mode)
+            #expect(fed.state.review.action == nil)
+            let replied = reduce(base, .emulatorResponded(
+                binding: base.activeBindingKey!, responses: [hostile]
+            ))
+            #expect(replied.effects.contains(where: isReviewEffect) == false)
+            #expect(replied.state.review.action == nil)
+        }
+    }
+
+    @Test func pasteNeverReachesReviewActions() {
+        let hostile = "\u{02}Ra"
+        let base = reviewState()
+        let terminal = reduce(base, .paste(hostile))
+        #expect(terminal.effects == [.queuePaste(binding: base.activeBindingKey!, text: hostile)])
+        let open = openReview([egress("p1", "api.example.com", ageSeconds: 5)])
+        let pasted = reduce(open, .paste("a"))
+        #expect(pasted.effects.isEmpty)
+        #expect(pasted.state.review.action == nil)
+        var denying = open
+        denying.mode = .reviewDenyReason(id: "p1", input: "")
+        #expect(reduce(denying, .paste("x\r")).state.mode == .reviewDenyReason(id: "p1", input: ""))
+    }
+
+    @Test func reviewKeysNeverReachTheRuntime() {
+        let open = openReview([egress("p1", "api.example.com", ageSeconds: 5)])
+        for key: TUIKey in [.character("j"), .character("x"), .enter, .character("z")] {
+            let transition = press(open, key)
+            #expect(transition.effects.allSatisfy { effect in
+                if case .queueKey = effect { return false }
+                return true
+            })
+        }
+    }
+}
+
+// MARK: - Reducer
+
+@Suite struct ReviewReducerTests {
+    @Test func openingWithoutSourceRefuses() {
+        let transition = press(reviewState(enabled: false), .control("b"), .character("R"))
+        #expect(transition.state.mode == .terminal)
+        #expect(transition.state.feedback == "Review is unavailable")
+        #expect(transition.effects.isEmpty)
+    }
+
+    @Test func disabledReviewNeverPolls() {
+        let transition = reduce(reviewState(enabled: false), .tick(now: reviewEpoch))
+        #expect(transition.effects.contains(where: isReviewEffect) == false)
+    }
+
+    @Test func tickPollsOnCadenceAndNeverOverlaps() {
+        let first = reduce(reviewState(), .tick(now: reviewEpoch))
+        #expect(first.effects.contains(.loadReview(sequence: 1)))
+        // In flight: no second read even once the cadence is due again.
+        let waiting = reduce(first.state, .tick(now: reviewEpoch.addingTimeInterval(5)))
+        #expect(waiting.effects.contains(where: isReviewEffect) == false)
+        let landed = reduce(waiting.state, .reviewLoaded(sequence: 1, result: .loaded([])))
+        let early = reduce(landed.state, .tick(now: reviewEpoch.addingTimeInterval(1)))
+        #expect(early.effects.contains(where: isReviewEffect) == false)
+        let due = reduce(landed.state, .tick(now: reviewEpoch.addingTimeInterval(1.5)))
+        #expect(due.effects.contains(.loadReview(sequence: 2)))
+    }
+
+    @Test func pollKeepsRunningWhileHostDisconnected() {
+        var state = reviewState()
+        state.lifecycle = .disconnected
+        state.reconnectAttempt = 0
+        let transition = reduce(state, .tick(now: reviewEpoch))
+        #expect(transition.effects.contains(.loadReview(sequence: 1)))
+    }
+
+    @Test func loadSortsNewestFirstAndCountsPending() {
+        let state = openReview([
+            block("b1", ageSeconds: 300), egress("p1", "a.example.com", ageSeconds: 60),
+            egress("p2", "b.example.com", ageSeconds: 10),
+        ])
+        #expect(state.review.items.map(\.id) == [.egress("p2"), .egress("p1"), .block("b1")])
+        #expect(state.review.pendingCount == 2)
+        #expect(state.review.selected == .egress("p2"))
+    }
+
+    @Test func selectionFollowsIdAcrossRefresh() {
+        var state = openReview([egress("p1", "a.example.com", ageSeconds: 60), block("b1", ageSeconds: 300)])
+        state = press(state, .character("j")).state
+        #expect(state.review.selected == .block("b1"))
+        // A newer row arrives on top; the selection stays on b1.
+        let refreshed = reduce(
+            state, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([
+                egress("p9", "new.example.com", ageSeconds: 1),
+                egress("p1", "a.example.com", ageSeconds: 60), block("b1", ageSeconds: 300),
+            ]))
+        )
+        #expect(refreshed.state.review.selected == .block("b1"))
+    }
+
+    @Test func vanishedSelectionKeepsPositionButNeverRetargetsAnAction() {
+        var state = openReview([
+            egress("p1", "a.example.com", ageSeconds: 10), egress("p2", "b.example.com", ageSeconds: 20),
+            egress("p3", "c.example.com", ageSeconds: 30),
+        ])
+        state = press(state, .character("j")).state
+        #expect(state.review.selected == .egress("p2"))
+        // p2 is resolved elsewhere; the cursor lands on p3, another pending
+        // proposal, but a keypress meant for p2 must not approve p3.
+        let refreshed = reduce(
+            state, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([
+                egress("p1", "a.example.com", ageSeconds: 10), egress("p3", "c.example.com", ageSeconds: 30),
+            ]))
+        ).state
+        #expect(refreshed.review.selected == .egress("p3"))
+        #expect(refreshed.review.selectionConfirmed == false)
+        #expect(refreshed.review.notice?.text == "Selected item resolved elsewhere")
+        #expect(WorkspaceReviewText.hint(refreshed.review, mode: refreshed.mode)
+            == "j/k move · g/G first/last · Esc close")
+        let approve = press(refreshed, .character("a"))
+        #expect(approve.effects.contains(where: isReviewEffect) == false)
+        #expect(approve.state.review.action == nil)
+        let deny = press(refreshed, .character("d"))
+        #expect(deny.state.mode == .review)
+        #expect(deny.effects.contains(where: isReviewEffect) == false)
+        // A later poll that keeps the fallback row does not confirm it.
+        let polled = reduce(
+            refreshed, .tick(now: reviewEpoch.addingTimeInterval(20)),
+            .reviewLoaded(sequence: 3, result: .loaded([
+                egress("p1", "a.example.com", ageSeconds: 10), egress("p3", "c.example.com", ageSeconds: 30),
+            ]))
+        ).state
+        #expect(press(polled, .character("a")).effects.contains(where: isReviewEffect) == false)
+        // Moving the cursor confirms the selection again.
+        let moved = press(polled, .character("k"), .character("j")).state
+        #expect(moved.review.selected == .egress("p3"))
+        #expect(moved.review.selectionConfirmed)
+        #expect(press(moved, .character("a")).effects == [.approveEgress(id: "p3")])
+        // Falling onto a block keeps the same position too.
+        var blocks = openReview([egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 30)])
+        blocks = reduce(
+            blocks, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([block("b1", ageSeconds: 30)]))
+        ).state
+        #expect(blocks.review.selected == .block("b1"))
+    }
+
+    @Test func ownActionKeepsItsNoticeButStillNeedsReselection() {
+        let state = openReview([egress("p1", "a.example.com", ageSeconds: 10), egress("p2", "b.example.com", ageSeconds: 20)])
+        let approving = press(state, .character("a")).state
+        let completed = reduce(approving, .reviewActionCompleted(id: "p1", outcome: .completed("approved p1")))
+        #expect(completed.effects == [.loadReview(sequence: 2)])
+        let reread = reduce(
+            completed.state, .reviewLoaded(sequence: 2, result: .loaded([egress("p2", "b.example.com", ageSeconds: 20)]))
+        ).state
+        #expect(reread.review.selected == .egress("p2"))
+        #expect(reread.review.notice?.text == "approved p1")
+        #expect(press(reread, .character("a")).effects.contains(where: isReviewEffect) == false)
+    }
+
+    @Test func hungLoadGoesStaleDisablesActionsAndRetries() {
+        let opened = press(reviewState(), .control("b"), .character("R")).state
+        var state = reduce(
+            opened, .tick(now: reviewEpoch),
+            .reviewLoaded(sequence: 1, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)]))
+        ).state
+        // The next poll is issued and never returns.
+        let polling = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(1.5)))
+        #expect(polling.effects.contains(.loadReview(sequence: 2)))
+        state = polling.state
+        let waiting = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(11.5)))
+        #expect(waiting.effects.contains(where: isReviewEffect) == false)
+        #expect(waiting.state.review.stale == false)
+        let timedOut = reduce(waiting.state, .tick(now: reviewEpoch.addingTimeInterval(12)))
+        #expect(timedOut.effects.contains(.loadReview(sequence: 3)))
+        #expect(timedOut.state.presentationRevision != waiting.state.presentationRevision)
+        state = timedOut.state
+        #expect(state.review.stale)
+        #expect(WorkspaceReviewText.hint(state.review, mode: state.mode) == "j/k move · g/G first/last · Esc close")
+        #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch.addingTimeInterval(12))
+            .contains("! Review is stale · last updated 12s ago"))
+        let approve = press(state, .character("a"))
+        #expect(approve.effects.contains(where: isReviewEffect) == false)
+        #expect(approve.state.review.action == nil)
+        #expect(press(state, .character("d")).state.mode == .review)
+        // The late result of the hung read is ignored.
+        let late = reduce(state, .reviewLoaded(sequence: 2, result: .loaded([])))
+        #expect(late.state.review.items.count == 1)
+        #expect(late.state.review.stale)
+        // The retry lands: fresh again and actionable.
+        let fresh = reduce(late.state, .reviewLoaded(
+            sequence: 3, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)])
+        ), .reviewPaneNoted(rows: 40, columns: 100)).state
+        #expect(fresh.review.stale == false)
+        #expect(press(fresh, .character("a")).effects == [.approveEgress(id: "p1")])
+    }
+
+    @Test func staleReviewRefusesDenySubmit() {
+        var state = reduce(reviewState(), .tick(now: reviewEpoch)).state
+        state = reduce(state, .reviewLoaded(sequence: 1, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)]))).state
+        state = press(state, .control("b"), .character("R"), .character("d"), .character("n")).state
+        #expect(state.mode == .reviewDenyReason(id: "p1", input: "n"))
+        state = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(20))).state
+        #expect(state.review.stale)
+        let submitted = press(state, .enter)
+        #expect(submitted.effects.contains(where: isReviewEffect) == false)
+        #expect(submitted.state.mode == .reviewDenyReason(id: "p1", input: "n"))
+    }
+
+    @Test func actionsAppendToExistingEffects() {
+        let state = openReview([egress("p1", "a.example.com", ageSeconds: 10)])
+        var next = state
+        var effects: [TUIRuntimeEffect] = [.loadReview(sequence: 99)]
+        var changed = false
+        WorkspaceTUIReducer.applyReviewCommand(.reviewApprove, to: &next, effects: &effects, presentationChanged: &changed)
+        #expect(effects == [.loadReview(sequence: 99), .approveEgress(id: "p1")])
+        var denyState = state
+        var denyEffects: [TUIRuntimeEffect] = [.loadReview(sequence: 99)]
+        WorkspaceTUIReducer.applyReviewCommand(
+            .reviewDenySubmit(id: "p1", reason: "no"), to: &denyState, effects: &denyEffects, presentationChanged: &changed
+        )
+        #expect(denyEffects == [.loadReview(sequence: 99), .denyEgress(id: "p1", reason: "no")])
+    }
+
+    @Test func navigationClampsAndJumps() {
+        var state = openReview([
+            egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 20), block("b2", ageSeconds: 30),
+        ])
+        state = press(state, .character("k")).state
+        #expect(state.review.selected == .egress("p1"))
+        state = press(state, .character("G")).state
+        #expect(state.review.selected == .block("b2"))
+        state = press(state, .character("j")).state
+        #expect(state.review.selected == .block("b2"))
+        state = press(state, .character("g")).state
+        #expect(state.review.selected == .egress("p1"))
+    }
+
+    @Test func staleLoadNeverLands() {
+        let state = openReview([egress("p1", "a.example.com", ageSeconds: 10)])
+        let stale = reduce(state, .reviewLoaded(sequence: 1, result: .loaded([])))
+        #expect(stale.state.review.items.count == 1)
+    }
+
+    @Test func loadFailureShowsErrorAndOffersNoActions() {
+        let opened = press(reviewState(), .control("b"), .character("R"))
+        let failed = reduce(opened.state, .reviewLoaded(sequence: 1, result: .failed("egress store unavailable")))
+        #expect(failed.state.review.load == .failed("egress store unavailable"))
+        #expect(failed.state.review.selected == nil)
+        let approve = press(failed.state, .character("a"))
+        #expect(approve.effects.isEmpty)
+        #expect(approve.state.review.action == nil)
+        #expect(approve.state.review.notice?.isError == true)
+        // A failure after a good load also drops the rows (fail closed).
+        let good = openReview([egress("p1", "a.example.com", ageSeconds: 10)])
+        let dropped = reduce(
+            good, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .failed("egress store unavailable"))
+        )
+        #expect(dropped.state.review.items.isEmpty)
+        #expect(press(dropped.state, .character("a")).effects.isEmpty)
+    }
+
+    @Test func approveStartsOneCeremonyAndNeverEditsRows() {
+        let state = openReview([egress("p1", "api.example.com", ageSeconds: 10)])
+        let approving = press(state, .character("a"))
+        #expect(approving.effects == [.approveEgress(id: "p1")])
+        #expect(approving.state.review.action == .approving("p1"))
+        // No approve-all, no second ceremony while one runs.
+        let again = press(approving.state, .character("a"))
+        #expect(again.effects.isEmpty)
+        let completed = reduce(approving.state, .reviewActionCompleted(
+            id: "p1", outcome: .completed("approved api.example.com:443")
+        ))
+        #expect(completed.state.review.action == nil)
+        #expect(completed.state.review.notice == .init(text: "approved api.example.com:443", isError: false))
+        // The row is untouched until the forced re-read lands.
+        #expect(completed.state.review.items == state.review.items)
+        #expect(completed.effects == [.loadReview(sequence: 2)])
+        let reread = reduce(completed.state, .reviewLoaded(sequence: 2, result: .loaded([])))
+        #expect(reread.state.review.items.isEmpty)
+    }
+
+    @Test func refusedApproveKeepsRowAndRereads() {
+        let state = openReview([egress("p1", "api.example.com", ageSeconds: 10)])
+        let approving = press(state, .character("a"))
+        let refused = reduce(approving.state, .reviewActionCompleted(
+            id: "p1", outcome: .refused("approve refused: device-owner authentication required")
+        ))
+        #expect(refused.state.review.notice?.isError == true)
+        #expect(refused.state.review.items == state.review.items)
+        #expect(refused.effects == [.loadReview(sequence: 2)])
+    }
+
+    @Test func approveSupersedesInflightPoll() {
+        let state = openReview([egress("p1", "api.example.com", ageSeconds: 10)])
+        let polling = reduce(state, .tick(now: reviewEpoch.addingTimeInterval(10)))
+        #expect(polling.effects.contains(.loadReview(sequence: 2)))
+        let approving = press(polling.state, .character("a"))
+        let completed = reduce(approving.state, .reviewActionCompleted(id: "p1", outcome: .completed("approved")))
+        #expect(completed.effects == [.loadReview(sequence: 3)])
+        // The pre-approve poll result is stale and must not land.
+        let stale = reduce(completed.state, .reviewLoaded(
+            sequence: 2, result: .loaded([egress("p1", "api.example.com", ageSeconds: 10)])
+        ))
+        #expect(stale.state.review.inflightLoad == 3)
+        let fresh = reduce(stale.state, .reviewLoaded(sequence: 3, result: .loaded([])))
+        #expect(fresh.state.review.items.isEmpty)
+    }
+
+    @Test func blocksOfferNoActions() {
+        let state = openReview([block("b1", ageSeconds: 10)])
+        #expect(press(state, .character("a")).effects.isEmpty)
+        let deny = press(state, .character("d"))
+        #expect(deny.effects.isEmpty)
+        #expect(deny.state.mode == .review)
+        #expect(deny.state.review.notice?.text == "Select a pending egress proposal to deny")
+    }
+
+    @Test func denyAsksForReasonAndTargetsCapturedProposal() {
+        var state = openReview([egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 20)])
+        state = press(state, .character("d")).state
+        #expect(state.mode == .reviewDenyReason(id: "p1", input: ""))
+        // Empty reason: stays in the prompt, no ceremony.
+        let empty = press(state, .character(" "), .enter)
+        #expect(empty.effects.isEmpty)
+        #expect(empty.state.mode == .reviewDenyReason(id: "p1", input: " "))
+        #expect(empty.state.review.notice?.text == "A reason is required to deny")
+        // A refresh that moves the selection cannot retarget the deny.
+        let moved = reduce(
+            state, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([
+                egress("p0", "z.example.com", ageSeconds: 1),
+                egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 20),
+            ]))
+        ).state
+        let submitted = press(moved, .character("n"), .character("o"), .enter)
+        #expect(submitted.effects == [.denyEgress(id: "p1", reason: "no")])
+        #expect(submitted.state.review.action == .denying("p1"))
+        #expect(submitted.state.mode == .review)
+        // Esc backs out of the prompt without a ceremony.
+        let backed = press(state, .character("x"), .escape)
+        #expect(backed.state.mode == .review)
+        #expect(backed.effects.isEmpty)
+    }
+
+    @Test func denyRefusesWhenProposalLeftTheQueue() {
+        var state = openReview([egress("p1", "a.example.com", ageSeconds: 10)])
+        state = press(state, .character("d")).state
+        state = reduce(
+            state, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([]))
+        ).state
+        let submitted = press(state, .character("n"), .enter)
+        #expect(submitted.effects.isEmpty)
+        #expect(submitted.state.review.notice?.text == "Proposal is no longer pending")
+    }
+
+    @Test func completionAfterDetachIsIgnored() {
+        let state = openReview([egress("p1", "a.example.com", ageSeconds: 10)])
+        let approving = press(state, .character("a")).state
+        let detached = reduce(approving, .detachRequested).state
+        let late = reduce(detached, .reviewActionCompleted(id: "p1", outcome: .completed("approved")))
+        #expect(late.effects.contains(where: isReviewEffect) == false)
+    }
+}
+
+// MARK: - Pane size guard
+
+/// Approve needs the owner to see the whole review; deny and Esc never do.
+@Suite struct ReviewPaneSizeGuardTests {
+    static let longHost = ReviewTextTests.longHost
+    static let enlarge = "Terminal too small to review safely: enlarge it to approve"
+
+    @Test func approveRefusedWhenPaneTooSmall() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: 8, columns: 80))
+        let refused = press(state, .character("a"))
+        #expect(refused.effects.isEmpty)
+        #expect(refused.state.mode == .review)
+        #expect(refused.state.review.action == nil)
+        #expect(refused.state.review.notice == .init(text: Self.enlarge, isError: true))
+        // Nothing else moved: same rows, same selection, still pending.
+        var withoutNotice = refused.state.review
+        withoutNotice.notice = state.review.notice
+        #expect(withoutNotice == state.review)
+        #expect(refused.state.review.pendingCount == 1)
+        // The notice is visible in the too-small pane itself.
+        let shown = WorkspaceReviewText.lines(
+            refused.state.review, mode: refused.state.mode, now: reviewEpoch, columns: 80, rows: 8)
+        #expect(shown.first == WorkspaceReviewText.tooSmall)
+        #expect(shown.contains("! " + Self.enlarge))
+    }
+
+    @Test func approveWorksAtAdequateSize() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: 40, columns: 80))
+        #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
+            .contains(WorkspaceReviewText.tooSmall) == false)
+        let approving = press(state, .character("a"))
+        #expect(approving.effects == [.approveEgress(id: "p1")])
+        #expect(approving.state.review.action == .approving("p1"))
+    }
+
+    @Test func denyAndCloseStillWorkWhenTooSmall() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: 3, columns: 80))
+        let prompt = press(state, .character("d"))
+        #expect(prompt.state.mode == .reviewDenyReason(id: "p1", input: ""))
+        let denied = press(prompt.state, .character("n"), .character("o"), .enter)
+        #expect(denied.effects == [.denyEgress(id: "p1", reason: "no")])
+        #expect(denied.state.review.action == .denying("p1"))
+        let closed = press(state, .escape)
+        #expect(closed.state.mode == .terminal)
+        #expect(closed.effects.contains(where: isReviewEffect) == false)
+    }
+
+    @Test func unknownSizeRefusesApprove() {
+        let never = openReview([egress("p1", "api.example.com", ageSeconds: 5)], pane: nil)
+        let refused = press(never, .character("a"))
+        #expect(refused.effects.isEmpty)
+        #expect(refused.state.review.action == nil)
+        #expect(refused.state.review.notice == .init(text: Self.enlarge, isError: true))
+        // A size measured while the pane was last open is forgotten on
+        // reopen: the new pane has not been measured yet.
+        let measured = openReview([egress("p1", "api.example.com", ageSeconds: 5)])
+        let reopened = press(measured, .escape, .control("b"), .character("R"))
+        let reloaded = reduce(reopened.state, .reviewLoaded(
+            sequence: 2, result: .loaded([egress("p1", "api.example.com", ageSeconds: 5)])
+        )).state
+        #expect(press(reloaded, .character("a")).effects.isEmpty)
+    }
+
+    /// Render and reducer read the same predicate, so they cannot drift.
+    @Test func approveRefusedExactlyWhenTheRenderRefuses() {
+        for rows in 1...24 {
+            for columns in [30, 80] {
+                let state = openReview(
+                    [egress("p1", Self.longHost, ageSeconds: 5)], pane: (rows: rows, columns: columns))
+                let rendered = WorkspaceReviewText.lines(
+                    state.review, mode: state.mode, now: reviewEpoch, columns: columns, rows: rows)
+                // The review itself starts with its header; a refusal (even
+                // one cut to a single wrapped row) never does.
+                let refusedByRender = rendered.first != WorkspaceReviewText.header(state.review)
+                let approved = press(state, .character("a")).effects == [.approveEgress(id: "p1")]
+                #expect(approved == !refusedByRender, "rows \(rows) columns \(columns)")
+            }
+        }
+    }
+}
+
+// MARK: - Text
+
+@Suite struct ReviewTextTests {
+    @Test func goldenPaneWithPendingSelected() {
+        let state = openReview([egress("p1", "api.example.com", ageSeconds: 120), block("b1", ageSeconds: 300)])
+        #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch) == [
+            "REVIEW  1 pending · 1 block",
+            "> egress  api.example.com:443 · 2m",
+            "  block   core.git/reset-hard  Bash · 5m",
+            "",
+            "proposal p1",
+            "  egress api.example.com:443",
+            "",
+            "a approve · d deny · j/k move · g/G first/last · Esc close",
+        ])
+    }
+
+    @Test func goldenPaneWithBlockSelectedOffersNoActions() {
+        let state = press(openReview([egress("p1", "api.example.com", ageSeconds: 120), block("b1", ageSeconds: 300)]),
+                          .character("j")).state
+        #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch) == [
+            "REVIEW  1 pending · 1 block",
+            "  egress  api.example.com:443 · 2m",
+            "> block   core.git/reset-hard  Bash · 5m",
+            "",
+            "RV EXPLAIN",
+            "├─ Decision: DENY",
+            "",
+            "j/k move · g/G first/last · Esc close",
+        ])
+    }
+
+    @Test func goldenDenyPromptAndBusyHints() {
+        var state = openReview([egress("p1", "api.example.com", ageSeconds: 5)])
+        state = press(state, .character("d"), .character("n"), .character("o")).state
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch)
+        #expect(Array(lines.suffix(2)) == ["Deny reason: no", "Enter deny · Esc back"])
+        let busy = press(state, .enter).state
+        #expect(WorkspaceReviewText.hint(busy.review, mode: busy.mode) == "j/k move · g/G first/last · Esc close")
+        #expect(WorkspaceReviewText.lines(busy.review, mode: busy.mode, now: reviewEpoch).suffix(2) == [
+            "Denying api.example.com:443: authenticate to continue",
+            "j/k move · g/G first/last · Esc close",
+        ])
+    }
+
+    @Test func goldenLoadingFailedAndEmpty() {
+        let opened = press(reviewState(), .control("b"), .character("R")).state
+        #expect(WorkspaceReviewText.lines(opened.review, mode: opened.mode, now: reviewEpoch)
+            == ["REVIEW", "Loading review queue…", "", "Esc close"])
+        let failed = reduce(opened, .reviewLoaded(sequence: 1, result: .failed("egress store unavailable"))).state
+        #expect(WorkspaceReviewText.lines(failed.review, mode: failed.mode, now: reviewEpoch)
+            == ["REVIEW", "Review unavailable: egress store unavailable", "", "Esc close"])
+        let empty = reduce(opened, .reviewLoaded(sequence: 1, result: .loaded([]))).state
+        #expect(WorkspaceReviewText.lines(empty.review, mode: empty.mode, now: reviewEpoch)
+            == ["REVIEW  0 pending · 0 blocks", "Nothing to review.", "", "Esc close"])
+    }
+
+    @Test func untrustedTextCannotPaintTheTerminal() {
+        let spoof = ReviewItem(
+            id: .block("b1"), kind: .block, at: reviewEpoch,
+            summary: "x\u{1b}[2K\rapproved\u{202E}", detail: ["\u{1b}]0;title\u{07}line"]
+        )
+        let state = openReview([spoof])
+        let text = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch).joined()
+        #expect(text.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f || $0.value == 0x202E } == false)
+    }
+
+    @Test func listWindowKeepsSelectionVisible() {
+        let items = (0..<20).map { block("b\($0)", ageSeconds: TimeInterval($0)) }
+        let state = press(openReview(items), .character("G")).state
+        let rows = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch)
+            .filter { $0.hasPrefix("> ") || $0.hasPrefix("  block") }
+        #expect(rows.count == WorkspaceReviewText.listRows)
+        #expect(rows.last?.hasPrefix("> ") == true)
+    }
+
+    /// A 253-byte host whose benign prefix hides the registrable domain.
+    fileprivate static let longHost: String = {
+        var host = "api.github.com."
+        while host.count < 253 - "evil.io".count - 1 { host += "a" }
+        return host + ".evil.io"
+    }()
+
+    @Test func detailShowsTheCompleteHostAndPortWrapped() throws {
+        #expect(Self.longHost.utf8.count == 253)
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
+        #expect(lines.allSatisfy { $0.count <= 80 })
+        let start = try #require(lines.firstIndex { $0.hasPrefix("  egress api.github.com") })
+        let joined = lines[start...].joined()
+        #expect(joined.contains("  egress \(Self.longHost):443"))
+        #expect(lines.last == "a approve · d deny · j/k move · g/G first/last · Esc close")
+    }
+
+    @Test func listRowKeepsTheRegistrableTailAndPortBehindAVisibleEllipsis() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
+        let row = lines[1]
+        #expect(row.count <= 80)
+        #expect(row.hasPrefix("> egress  api.github.com."))
+        #expect(row.contains("…"))
+        #expect(row.hasSuffix(".evil.io:443 · 5s"))
+    }
+
+    @Test func narrowRowStillShowsTheRegistrableTail() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 30, rows: 60)
+        #expect(lines.joined().contains("evil.io:443 · 5s"))
+        #expect(lines.joined().contains("…"))
+    }
+
+    @Test func tooSmallTerminalRefusesToShowAPartialReview() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 8)
+        #expect(lines.count <= 8)
+        #expect(lines.contains("terminal too small to review safely"))
+        #expect(lines.contains { $0.contains("a approve") } == false)
+    }
+
+    @Test func longNoticeAndCleanTextAreNotCut() {
+        let long = String(repeating: "x", count: 400)
+        #expect(WorkspaceReviewText.clean(long + "\u{1b}") == long)
+    }
+
+    @Test func badgeShowsOnlyPendingCount() {
+        #expect(WorkspaceReviewText.badge(openReview([block("b1", ageSeconds: 1)]).review) == nil)
+        let pending = openReview([egress("p1", "a.example.com", ageSeconds: 1), egress("p2", "b.example.com", ageSeconds: 2)])
+        #expect(WorkspaceReviewText.badge(pending.review) == "2 pending · Ctrl-B R")
+    }
+}
+
+// MARK: - Model runtime
+
+private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var queue: [ReviewItem]
+    private var calls: [String] = []
+
+    init(_ items: [ReviewItem]) { queue = items }
+
+    var recorded: [String] { lock.withLock { calls } }
+
+    func load(now: Date) async -> ReviewLoadResult {
+        lock.withLock {
+            calls.append("load")
+            return .loaded(queue)
+        }
+    }
+
+    func approve(egress id: String) async -> ReviewActionOutcome {
+        lock.withLock {
+            calls.append("approve \(id)")
+            queue.removeAll { $0.id == .egress(id) }
+            return .completed("approved \(id)")
+        }
+    }
+
+    func deny(egress id: String, reason: String) async -> ReviewActionOutcome {
+        lock.withLock {
+            calls.append("deny \(id) \(reason)")
+            return .refused("deny refused: store unavailable")
+        }
+    }
+}
+
+/// Async on purpose: the review work runs on the cooperative pool, and a
+/// synchronous test blocking a pool thread on it can starve it (CI hang).
+@Test func modelApproveRunsSourceOnceThenRereadsStore() async {
+    let source = FakeReviewSource([egress("p1", "api.example.com", ageSeconds: 5), block("b1", ageSeconds: 9)])
+    let model = WorkspaceTUIModel(
+        session: FakeWorkspaceSession(),
+        summary: WorkspaceTUISummary(project: "/tmp/project", phase: "active", protected: true, workspace: UUID()),
+        launcher: [],
+        review: source
+    )
+    model.handle(.control("b"))
+    model.handle(.character("R"))
+    #expect(await model.waitForReviewWork())
+    #expect(model.snapshot().review.pendingCount == 1)
+    model.noteReviewPane(rows: 40, columns: 100)
+    model.handle(.character("a"))
+    #expect(await model.waitForReviewWork())
+    #expect(source.recorded == ["load", "approve p1", "load"])
+    let review = model.snapshot().review
+    #expect(review.items.map(\.id) == [.block("b1")])
+    #expect(review.notice?.text == "approved p1")
+    #expect(review.action == nil)
+}
+
+@Test func modelRefusesApproveWhilePaneTooSmallOrUnmeasured() async {
+    let source = FakeReviewSource([egress("p1", "api.example.com", ageSeconds: 5)])
+    let model = WorkspaceTUIModel(
+        session: FakeWorkspaceSession(),
+        summary: WorkspaceTUISummary(project: "/tmp/project", phase: "active", protected: true, workspace: UUID()),
+        launcher: [],
+        review: source
+    )
+    model.handle(.control("b"))
+    model.handle(.character("R"))
+    #expect(await model.waitForReviewWork())
+    // Never measured: fail closed.
+    model.handle(.character("a"))
+    #expect(await model.waitForReviewWork())
+    model.noteReviewPane(rows: 2, columns: 80)
+    model.handle(.character("a"))
+    #expect(await model.waitForReviewWork())
+    #expect(source.recorded == ["load"])
+    let review = model.snapshot().review
+    #expect(review.pendingCount == 1)
+    #expect(review.action == nil)
+    #expect(review.notice == .init(text: ReviewPaneSizeGuardTests.enlarge, isError: true))
+}

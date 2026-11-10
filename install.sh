@@ -15,7 +15,20 @@
 # below. A mix of signed and unsigned never installs.
 # TTY download UI matches SetupRenderer: "Downloading" + 24× ━/─ bar, driven by
 # real Content-Length weights (and mid-file byte growth while each curl runs).
+# RV_INSTALL_MODE picks the guard mode setup starts in: unset or `enforce`
+# runs plain `rv setup` (which never changes an existing guard.mode);
+# `observe` runs `rv setup --observe` (log what rv would
+# block; while rvd runs, only rv's own self-protection still blocks). Any other value is
+# refused before anything is downloaded or staged.
 set -eu
+
+case "${RV_INSTALL_MODE:-}" in
+  ''|enforce|observe) ;;
+  *)
+    echo "rv: RV_INSTALL_MODE must be observe or enforce (got: $RV_INSTALL_MODE)" >&2
+    exit 1
+    ;;
+esac
 
 refuse() {
   echo "rv: macOS 15 Apple Silicon, or Linux aarch64/x86_64" >&2
@@ -858,6 +871,115 @@ verify_release_signatures() {
   echo "rv: warning: release files are not code-signed:$unsigned" >&2
 }
 
+# An admin trust manifest makes hooks trust only the rvd it names; any other
+# rvd is denied on every agent tool call. An rvd under ~/.local/bin can only
+# meet a manifest's production entry (Developer ID, team, hardened runtime;
+# development pins need a root-owned path), so a staged rvd lacking those
+# can never be trusted: refuse before staging. This is the necessary
+# condition only; rv setup then applies the exact rule. The path override
+# exists for tests (as HOME does) and can only skip this check, never add
+# trust: hooks always read the fixed path.
+trust_manifest="${RV_INSTALL_TRUST_MANIFEST:-/Library/Application Support/RV/peer-trust.json}"
+if [ -n "${RV_INSTALL_TRUST_MANIFEST+set}" ]; then
+  echo "rv: WARNING: RV_INSTALL_TRUST_MANIFEST is set: the trust-manifest check uses test override path $trust_manifest, not the path hooks read" >&2
+fi
+
+# present | absent | unknown:<reason>. Mirrors C trust_source: only a
+# missing path (ENOENT) is "no manifest"; anything that hides the answer
+# (an unsearchable or non-directory ancestor) is an invalid manifest there.
+trust_manifest_state() {
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    echo present
+    return 0
+  fi
+  dir=$(dirname "$1")
+  while :; do
+    if [ -d "$dir" ]; then
+      if [ -x "$dir" ]; then echo absent; else echo "unknown:$dir is not searchable"; fi
+      return 0
+    fi
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+      echo "unknown:$dir is not a directory"
+      return 0
+    fi
+    [ "$dir" != "/" ] || { echo absent; return 0; }
+    dir=$(dirname "$dir")
+  done
+}
+
+# The manifest's service-entry value for key $2, or nothing.
+manifest_service_field() {
+  plutil=/usr/bin/plutil
+  [ -x "$plutil" ] || return 0
+  i=0
+  while [ "$i" -lt 32 ]; do
+    role="$("$plutil" -extract "$i.role" raw -o - "$1" 2>/dev/null)" || return 0
+    if [ "$role" = "service" ]; then
+      "$plutil" -extract "$i.$2" raw -o - "$1" 2>/dev/null || true
+      return 0
+    fi
+    i=$((i + 1))
+  done
+}
+
+# Why rvd $1 can never satisfy a trust manifest, or nothing.
+staged_rvd_trust_gap() {
+  codesign=/usr/bin/codesign
+  if [ ! -x "$codesign" ]; then
+    echo "cannot be checked (codesign is not available)"
+    return 0
+  fi
+  details="$("$codesign" -dvv "$1" 2>&1 || true)"
+  case "$details" in
+    *"code object is not signed at all"*) echo "is not code-signed"; return 0 ;;
+  esac
+  if ! "$codesign" --verify --strict "$1" >/dev/null 2>&1; then
+    echo "has an invalid code signature"
+    return 0
+  fi
+  case "$details" in
+    *"Signature=adhoc"*) echo "is ad-hoc signed"; return 0 ;;
+    *"TeamIdentifier=not set"*) echo "has no team identifier"; return 0 ;;
+  esac
+  case "$(last_field_prefix "$details" "CodeDirectory ")" in
+    *runtime*) ;;
+    *) echo "lacks hardened runtime" ;;
+  esac
+}
+
+refuse_untrusted_rvd_under_manifest() {
+  [ "$os" = "Darwin" ] || return 0
+  state="$(trust_manifest_state "$trust_manifest")"
+  case "$state" in
+    absent) return 0 ;;
+    unknown:*)
+      echo "rv: refusing to install: cannot tell whether trust manifest $trust_manifest exists (${state#unknown:})" >&2
+      echo "rv: hooks treat that as an invalid manifest and would deny every agent tool call" >&2
+      echo "rv: fix: make that directory searchable, or remove the manifest directory with sudo" >&2
+      exit 1
+      ;;
+  esac
+  gap="$(staged_rvd_trust_gap "$1/rvd")"
+  [ -n "$gap" ] || return 0
+  want_id="$(manifest_service_field "$trust_manifest" requiredIdentifier)"
+  want_team="$(manifest_service_field "$trust_manifest" requiredTeamIdentifier)"
+  if [ -n "$want_id" ] && [ -n "$want_team" ]; then
+    requires="requires Developer ID $want_id (team $want_team)"
+  else
+    requires="requires a Developer ID signed rvd"
+  fi
+  if [ "${RV_INSTALL_ALLOW_UNSIGNED:-}" = "1" ]; then
+    echo "rv: WARNING: trust manifest $trust_manifest $requires; staged rvd $gap" >&2
+    echo "rv: WARNING: RV_INSTALL_ALLOW_UNSIGNED=1, staging it anyway; rv setup will refuse to wire hooks to it" >&2
+    return 0
+  fi
+  echo "rv: refusing to install: trust manifest $trust_manifest $requires; staged rvd $gap" >&2
+  echo "rv: hooks fail closed on an rvd the manifest does not trust, so hooks would deny every agent tool call" >&2
+  echo "rv: fix: sign the build (RV_RELEASE_SIGN=1 Scripts/release.sh), or remove the manifest: sudo rm '$trust_manifest'" >&2
+  echo "rv: set RV_INSTALL_ALLOW_UNSIGNED=1 to stage it anyway (rv setup will still refuse to wire hooks)" >&2
+  exit 1
+}
+
 if [ -n "${RV_INSTALL_BIN:-}" ]; then
   src="$RV_INSTALL_BIN"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
@@ -963,6 +1085,8 @@ if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then
   exit 1
 fi
 
+refuse_untrusted_rvd_under_manifest "$src"
+
 if [ "$os" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
   if otool -L "$src/rv-cli" 2>/dev/null | grep -q 'libswiftCompatibilitySpan.dylib' \
     && [ ! -f "$src/libswiftCompatibilitySpan.dylib" ]; then
@@ -1066,14 +1190,21 @@ for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
 done
 
 # Linux Swift runtime libraries ship in rv-swiftlibs-<target>.tar.gz and
-# land beside the binaries, where their $ORIGIN RUNPATH finds them.
+# land beside the binaries, where their $ORIGIN RUNPATH finds them. Their
+# names are generic, so each is recorded in $bin/.rv-swiftlibs: `rv
+# uninstall` removes only recorded names (InstallManifest.swiftLibsListName).
 for lib in "$src"/*.so; do
   [ -f "$lib" ] && [ ! -L "$lib" ] || continue
   name="$(basename "$lib")"
   rm -f "$bin/$name"
   cp "$lib" "$bin/$name"
   chmod 755 "$bin/$name"
+  printf '%s\n' "$name" >> "$bin/.rv-swiftlibs"
 done
+if [ -f "$bin/.rv-swiftlibs" ]; then
+  sort -u "$bin/.rv-swiftlibs" > "$bin/.rv-swiftlibs.installing" \
+    && mv -f "$bin/.rv-swiftlibs.installing" "$bin/.rv-swiftlibs"
+fi
 
 # The approvals custodian bundle lands in ~/Applications with the same
 # stage-then-swap discipline as the binaries: setup registers it only when
@@ -1088,4 +1219,7 @@ if [ "$os" = "Darwin" ] && [ -d "$src/RVApprovals.app" ]; then
   mv -f "$tmp_app" "$apps_dir/RVApprovals.app"
 fi
 
+if [ "${RV_INSTALL_MODE:-}" = "observe" ]; then
+  RV_FROM_INSTALL=1 exec "$bin/rv" setup --observe
+fi
 RV_FROM_INSTALL=1 exec "$bin/rv" setup

@@ -140,6 +140,35 @@ struct AuditLedgerTests {
         #expect(newest == Array(all.suffix(2)))
     }
 
+    @Test func observedBlockRowMapsToCommandObservedInfo() throws {
+        let observed = Lines.block.replacingOccurrences(of: #""host":"claude","#, with: #""host":"claude","observed":true,"#)
+        let event = try #require(AuditLedger.event(fromLine: Substring(observed), source: .blocks))
+        #expect(event.kind == .commandObserved)
+        #expect(event.kind.rawValue == "command.observed")
+        #expect(event.decision == .info)
+        #expect(event.subject == "core.git:reset-hard")
+        let enforced = try #require(AuditLedger.event(fromLine: Substring(Lines.block), source: .blocks))
+        #expect(enforced.kind == .commandDenied)
+        #expect(enforced.decision == .denied)
+    }
+
+    @Test func chainedObservedCopyDropsOnlyTheMatchingObservedBlocksRow() throws {
+        let time = Date(timeIntervalSince1970: 1_791_900_000)
+        func event(_ kind: AuditEventKind, _ source: AuditLedger.Source) -> AuditEvent {
+            AuditEvent(
+                time: time, kind: kind, decision: kind == .commandObserved ? .info : .denied,
+                subject: "core.git:reset-hard", source: source.rawValue, detail: ["host": "claude"]
+            )
+        }
+        let kept = AuditLedger.droppingLedgerDuplicates([
+            event(.commandObserved, .audit),
+            event(.commandObserved, .blocks),
+            event(.commandDenied, .blocks),
+        ])
+        #expect(kept.map(\.source) == ["audit.jsonl", "blocks.jsonl"])
+        #expect(kept.last?.kind == .commandDenied)
+    }
+
     @Test func kindPrefixDoesNotMatchPartialWords() {
         #expect(AuditEventKind.egressDenied.matches("egress"))
         #expect(AuditEventKind.egressDenied.matches("egress.denied"))

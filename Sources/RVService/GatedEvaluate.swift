@@ -87,7 +87,11 @@ public struct GatedEvaluate: Sendable {
     ) -> EvaluationResult {
         runFile(
             action, home: home, cwd: cwd, host: host, now: now,
-            guardMode: JudgeRuntime.guardMode(home: home)
+            guardMode: JudgeRuntime.effectiveGuardMode(
+                home: home, host: host,
+                environment: ProcessInfo.processInfo.environment,
+                config: JudgeRuntime.loadConfigDict(home: home)
+            )
         )
     }
 
@@ -120,7 +124,7 @@ public struct GatedEvaluate: Sendable {
         if let audit = Self.exemptionAudit(detailed.droppedRepoLiterals, workspace: workspace, now: now) {
             effects.append(audit)
         }
-        let result = evaluateFileTool(
+        var result = evaluateFileTool(
             action,
             secretPaths: SecretPathDecider(
                 allowPaths: detailed.effective,
@@ -131,8 +135,20 @@ public struct GatedEvaluate: Sendable {
                 )
             )
         )
-        switch posture(result, door: .file, guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
-        case .observed(let observed):
+        // Edit/Write to rv's own hook, service or binary files: the agent
+        // must not unhook the guard watching it. Reads stay allowed.
+        if case .allow = result.decision, action.kind != .read,
+           WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
+            result = WiringPathGuard.deny(path: action.path.rawValue)
+        }
+        switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
+        case .observed(let observed, let wouldBe):
+            if let row = Self.denialRow(
+                for: wouldBe, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now,
+                observed: true
+            ) {
+                effects.append(row)
+            }
             return (observed, effects)
         case .enforced(let enforced):
             // Checked on every enforced result, exactly as before effects
@@ -267,7 +283,7 @@ public struct GatedEvaluate: Sendable {
             allowlist: allowlist,
             host: host,
             tool: tool,
-            inputs: Self.liveInputs(home: home, cwd: cwd)
+            inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
         )
     }
 
@@ -293,16 +309,19 @@ public struct GatedEvaluate: Sendable {
             allowlist: allowlist,
             host: host,
             tool: tool,
-            inputs: Self.liveInputs(home: home, cwd: cwd)
+            inputs: Self.liveInputs(home: home, cwd: cwd, host: host)
         )
     }
 
     /// The shell read: process env once, then config and stores once.
-    private static func liveInputs(home: HomeDirectory?, cwd: WorkingDirectory?) -> EvaluationInputs {
+    private static func liveInputs(
+        home: HomeDirectory?, cwd: WorkingDirectory?, host: LedgerHost = .tty
+    ) -> EvaluationInputs {
         EvaluationInputs.gather(
             home: home,
             cwd: cwd,
-            environment: ProcessInfo.processInfo.environment
+            environment: ProcessInfo.processInfo.environment,
+            host: host
         )
     }
 
@@ -388,41 +407,33 @@ public struct GatedEvaluate: Sendable {
         var effects = offloaded
         let candidate: EvaluationResult
         switch screened {
-        case .observed(let observed):
+        case .observed(let observed, let wouldBe):
+            // Observe apply records what enforcement would have denied: the
+            // would-be verdict through a Policy-gate preview (an allowlist
+            // entry or live grant would have let it through; nothing is
+            // spent). Not deadline-gated: the reply is an allow either way,
+            // and checking would trip the deadline into a timeout deny.
+            if verb.recordsDenial, case .deny = wouldBe.decision {
+                let previewed = await Self.policyFinish(
+                    .peek, candidate: wouldBe, request: request, cwd: cwd, grants: grants,
+                    now: now, allowlist: allowlist, safety: safety
+                )
+                if let row = Self.denialRow(
+                    for: previewed.result, path: nil, host: host, tool: tool, now: now, observed: true
+                ) {
+                    effects.append(row)
+                }
+            }
             return (observed, effects)
         case .enforced(let enforced):
             candidate = enforced
         }
-        // Fast path: allow/indeterminate never touch PolicyGate or the
-        // allowlist loader; PolicyGate returns them unchanged anyway.
-        let finished: EvaluationResult
-        switch candidate.decision {
-        case .allow, .indeterminate:
-            finished = candidate
-        case .deny:
-            if HookAuthorization.policyGateAccess(for: candidate) == .skip {
-                finished = candidate
-            } else if verb == .apply, HookDeadline.permitsSideEffects() == false {
-                // The hook client already gave up: spending the human's
-                // allow-once grant on a reply nobody reads would burn it.
-                finished = candidate
-            } else {
-                let snapshot = allowlist()
-                let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
-                finished = await Self.applyPolicy(
-                    verb,
-                    result: candidate,
-                    cwd: cwd,
-                    snapshot: snapshot,
-                    grants: grants,
-                    now: now,
-                    rebaseInProgress: rebasing,
-                    safety: safety,
-                    maskedSegments: Normalize.maskedSegments(of: request.command),
-                    invocationPrefix: Normalize.invocationPrefix(of: request.command)
-                )
-            }
-        }
+        let decision = await Self.policyFinish(
+            verb, candidate: candidate, request: request, cwd: cwd, grants: grants,
+            now: now, allowlist: allowlist, safety: safety
+        )
+        let finished = decision.result
+        let override = decision.override
         // On the task, after the offload (`HookDeadline.current` is
         // task-local). Checked on every apply, allow included: past the
         // deadline the check trips it and `HookDoor` swaps in the timeout
@@ -431,19 +442,68 @@ public struct GatedEvaluate: Sendable {
            let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
             effects.append(row)
         }
+        if verb.recordsDenial,
+           let row = Self.overrideAudit(candidate: candidate, finished: finished, override: override,
+                                        host: host, cwd: cwd, now: now) {
+            effects.append(row)
+        }
         return (finished, effects)
+    }
+
+    /// The Policy gate over a candidate verdict. Fast path: allow and
+    /// indeterminate never touch PolicyGate or the allowlist loader;
+    /// PolicyGate returns them unchanged anyway.
+    private static func policyFinish(
+        _ verb: PolicyVerb,
+        candidate: EvaluationResult,
+        request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        grants: EphemeralAllowOnceTable,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        safety: SafetyLevel
+    ) async -> (result: EvaluationResult, override: PolicyOverride) {
+        switch candidate.decision {
+        case .allow, .indeterminate:
+            return (candidate, .none)
+        case .deny:
+            if HookAuthorization.policyGateAccess(for: candidate) == .skip {
+                return (candidate, .none)
+            }
+            if verb == .apply, HookDeadline.permitsSideEffects() == false {
+                // The hook client already gave up: spending the human's
+                // allow-once grant on a reply nobody reads would burn it.
+                return (candidate, .none)
+            }
+            let snapshot = allowlist()
+            let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
+            let decision = await applyPolicy(
+                verb,
+                result: candidate,
+                cwd: cwd,
+                snapshot: snapshot,
+                grants: grants,
+                now: now,
+                rebaseInProgress: rebasing,
+                safety: safety,
+                maskedSegments: Normalize.maskedSegments(of: request.command),
+                invocationPrefix: Normalize.invocationPrefix(of: request.command)
+            )
+            return (decision.result, decision.override)
+        }
     }
 
     /// Which door is asking. Shell doors run the script check and judge.
     private enum Door {
-        case file
+        case file(FileToolAction)
         case shell(EvaluationRequest, inputs: EvaluationInputs, isPeek: Bool)
     }
 
-    /// `observed` is final: the door returns it as-is. `enforced` is what
-    /// the door acts on (Policy gate, denial row).
+    /// `observed` is final: the door returns it as-is; `wouldBe` is what
+    /// enforcement would have acted on (observed denial row). `enforced` is
+    /// what the door acts on (Policy gate, denial row).
     private enum Posture {
-        case observed(EvaluationResult)
+        case observed(EvaluationResult, wouldBe: EvaluationResult)
         case enforced(EvaluationResult)
     }
 
@@ -451,11 +511,17 @@ public struct GatedEvaluate: Sendable {
     ///
     /// Observe is whole-guard: everything is evaluated, the would-be verdict
     /// is logged (shell doors, as a `.judgeLog` effect), and the door allows. Grants are never spent
-    /// and denials never recorded on that path. Enforce runs the script
+    /// on that path; apply and the file door record a would-be deny as an
+    /// observed denial row. Enforce runs the script
     /// check, then the judge, over a pack-allow; anything else is returned
     /// untouched (a pack deny is a floor neither may lower).
+    ///
+    /// Observe never relaxes rv's own protection (`ObserveFloor`): such a
+    /// result takes the enforce branch, on every door. Stopping rvd or
+    /// writing its install is also floored at "run it in Terminal" there
+    /// (an allow becomes indeterminate; a deny stays the deny).
     private func posture(
-        _ result: EvaluationResult,
+        _ evaluated: EvaluationResult,
         door: Door,
         guardMode: GuardMode,
         cwd: WorkingDirectory?,
@@ -463,9 +529,19 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         effects: inout [GatedEffect]
     ) -> Posture {
-        switch (guardMode, door) {
+        var result = evaluated
+        var mode = guardMode
+        if guardMode == .observe {
+            if let floored = lifecycleFloor(evaluated, door: door, cwd: cwd, home: home) {
+                result = floored
+                mode = .enforce
+            } else if observeFloorHolds(evaluated, door: door, cwd: cwd, home: home) {
+                mode = .enforce
+            }
+        }
+        switch (mode, door) {
         case (.observe, .file):
-            return .observed(result.observedAllow)
+            return .observed(result.observedAllow, wouldBe: result)
         case (.enforce, .file):
             return .enforced(result)
         case (.observe, .shell(let request, let inputs, let isPeek)):
@@ -478,7 +554,7 @@ public struct GatedEvaluate: Sendable {
                 cwd: cwd, allowSafeLane: screened.allowSafeLane, isPeek: isPeek
             )
             effects.append(.judgeLog(observed.log))
-            return .observed(observed.result)
+            return .observed(observed.result, wouldBe: observed.wouldBe)
         case (.enforce, .shell(let request, let inputs, let isPeek)):
             let screened = scriptScreen(
                 result, request: request, cwd: cwd, home: home, inputs: inputs, now: now, effects: &effects
@@ -498,8 +574,37 @@ public struct GatedEvaluate: Sendable {
         }
     }
 
+    private func lifecycleFloor(
+        _ result: EvaluationResult,
+        door: Door,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> EvaluationResult? {
+        switch door {
+        case .file(let action):
+            ObserveFloor.lifecycleFloor(result, action: action, home: home, cwd: cwd)
+        case .shell(let request, _, _):
+            ObserveFloor.lifecycleFloor(result, command: request.command, home: home, cwd: cwd)
+        }
+    }
+
+    private func observeFloorHolds(
+        _ result: EvaluationResult,
+        door: Door,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> Bool {
+        switch door {
+        case .file:
+            ObserveFloor.holds(result)
+        case .shell(let request, let inputs, _):
+            ObserveFloor.holds(result, command: request.command, store: inputs.store, home: home, cwd: cwd)
+        }
+    }
+
     /// Package-script check over a pack-allow. A script deny is projected
-    /// over the pack result; an unresolved graph closes the safe lane.
+    /// over the pack result; an unresolved graph is indeterminate before
+    /// any judge runs. `scriptDenied` means the screen's result is final.
     private struct ScriptScreen {
         let result: EvaluationResult
         let allowSafeLane: Bool
@@ -524,9 +629,27 @@ public struct GatedEvaluate: Sendable {
                 result: Self.projectScriptHit(hit, over: result), allowSafeLane: true, scriptDenied: true
             )
         case .unresolved:
+            // Nobody has read what this runner executes. The judge only
+            // ever sees the top-level string (`npm test`), so it cannot
+            // vouch for the graph either: a human decides, judge or not.
+            // Depth, cycle and evaluation caps all land here.
+            return ScriptScreen(
+                result: EvaluationResult(
+                    outcome: .indeterminate(.packageScriptUnresolved),
+                    matchingView: result.matchingView,
+                    analysis: result.analysis
+                ),
+                allowSafeLane: false, scriptDenied: true
+            )
+        case .needsJudge:
+            // A package bin, a remote runner, or a run after earlier work
+            // with no script to run: no body the judge cannot see, so the
+            // judge decides from the whole command, never the safe lane.
             return ScriptScreen(result: result, allowSafeLane: false, scriptDenied: false)
-        case .clear:
-            return ScriptScreen(result: result, allowSafeLane: true, scriptDenied: false)
+        case .clear(let allBodiesSafe):
+            // A body that is not itself safe-lane (`jest`, `node x.js`)
+            // keeps the command in front of the judge.
+            return ScriptScreen(result: result, allowSafeLane: allBodiesSafe, scriptDenied: false)
         }
     }
 
@@ -579,7 +702,7 @@ public struct GatedEvaluate: Sendable {
         safety: SafetyLevel,
         maskedSegments: [String]?,
         invocationPrefix: [String]
-    ) async -> EvaluationResult {
+    ) async -> PolicyDecision {
         switch verb {
         case .peek:
             return await PolicyGate.preview(
@@ -592,7 +715,7 @@ public struct GatedEvaluate: Sendable {
                 safety: safety,
                 maskedSegments: maskedSegments,
                 invocationPrefix: invocationPrefix
-            ).result
+            )
         case .apply:
             // The claim runs inside the grant table, atomically with the
             // spend: past the deadline the grant stays live for the retry,
@@ -610,7 +733,7 @@ public struct GatedEvaluate: Sendable {
                 maskedSegments: maskedSegments,
                 invocationPrefix: invocationPrefix,
                 claim: { deadline?.claimGrantSpend() ?? true }
-            ).result
+            )
         }
     }
 
@@ -669,7 +792,7 @@ public struct GatedEvaluate: Sendable {
             now: now,
             effects: &effects
         ) {
-        case .observed(let final), .enforced(let final):
+        case .observed(let final, _), .enforced(let final):
             return (final, effects)
         }
     }
@@ -694,10 +817,7 @@ public struct GatedEvaluate: Sendable {
             return EvaluationResult(
                 outcome: .deny(
                     Deny(
-                        ruleID: RuleID(
-                            pack: ActionPolicyEngine.Builtin.pack,
-                            pattern: "typed-rules-invalid"
-                        ),
+                        ruleID: BuiltinRule.typedRulesInvalid.ruleID,
                         reason: "Typed rules could not be loaded."
                     ),
                     matched: nil
@@ -750,7 +870,8 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?,
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
-        invocationDisplay: String? = nil
+        invocationDisplay: String? = nil,
+        rawCommand: String? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -764,12 +885,36 @@ public struct GatedEvaluate: Sendable {
             now: now,
             maskedSegments: maskedSegments,
             invocationPrefix: invocationPrefix,
-            invocationDisplay: invocationDisplay
+            invocationDisplay: invocationDisplay,
+            rawCommand: rawCommand
         )
     }
 
     private static func workspaceURL(cwd: WorkingDirectory?) -> URL? {
         cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
+    }
+
+    /// The audit row for a deny the Policy gate overrode; nil otherwise.
+    private static func overrideAudit(
+        candidate: EvaluationResult,
+        finished: EvaluationResult,
+        override: PolicyOverride,
+        host: LedgerHost,
+        cwd: WorkingDirectory?,
+        now: Date
+    ) -> GatedEffect? {
+        guard case .deny(let deny) = candidate.decision, case .allow = finished.decision else { return nil }
+        let name: String
+        switch override {
+        case .none: return nil
+        case .allowlist: name = "allowlist"
+        case .allowOnce: name = "allowOnce"
+        case .rebaseRecovery: name = "rebaseRecovery"
+        case .containedReversible: name = "containedReversible"
+        }
+        return .overrideAudit(GatedEffect.OverrideRow(
+            at: now, host: host, ruleID: deny.ruleID, override: name, workspace: workspaceURL(cwd: cwd)
+        ))
     }
 
     /// The denial-ledger row a final deny asks for; nil for anything else.
@@ -778,7 +923,8 @@ public struct GatedEvaluate: Sendable {
         path: String?,
         host: LedgerHost,
         tool: LedgerTool,
-        now: Date
+        now: Date,
+        observed: Bool = false
     ) -> GatedEffect? {
         guard case .deny(let deny, let matched) = result.outcome else { return nil }
         let rawPath: String
@@ -800,7 +946,8 @@ public struct GatedEvaluate: Sendable {
             category = .pack(deny.ruleID.pack)
         }
         return .denialRow(GatedEffect.DenialRow(
-            at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath
+            at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
+            observed: observed
         ))
     }
 
@@ -824,9 +971,52 @@ public struct GatedEvaluate: Sendable {
             case .judgeLog(let row):
                 JudgeRuntime.appendLog(row, home: home)
             case .denialRow(let row):
+                // Chained record first: a forward that runs between the two
+                // writes then sees the chained row and drops the blocks copy.
+                auditDenial(row, home: home)
                 recordDenial(row, home: home)
+            case .overrideAudit(let row):
+                auditOverride(row, home: home)
             }
         }
+    }
+
+    /// Appends a `command.denied` event to the hash-chained `audit.jsonl`
+    /// for every enforced deny (`command.observed`, decision `info`, for an
+    /// observe-mode would-be deny), whatever `blocks.enabled` says: the
+    /// ledger is a pruned convenience view, the chain is the record.
+    /// Carries the rule, host, tool and redacted path, never the command
+    /// text.
+    private static func auditDenial(_ row: GatedEffect.DenialRow, home: HomeDirectory) {
+        var detail = ["host": row.host.rawValue, "tool": row.tool.rawValue, "category": row.category.rawValue]
+        let path = DenialPathRedaction.redact(row.path, home: home)
+        if path.isEmpty == false { detail["path"] = path }
+        AuditLog.append(
+            AuditEvent(
+                time: row.at,
+                kind: row.observed ? .commandObserved : .commandDenied,
+                decision: row.observed ? .info : .denied,
+                subject: row.ruleID.rawValue, agent: row.host == .tty ? nil : row.host.rawValue,
+                source: AuditLedger.Source.audit.rawValue, detail: detail
+            ),
+            configDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
+    }
+
+    /// Appends a `command.override` event: a deny a human-granted or policy
+    /// override turned into an allow. The rule and override kind only.
+    private static func auditOverride(_ row: GatedEffect.OverrideRow, home: HomeDirectory) {
+        AuditLog.append(
+            AuditEvent(
+                time: row.at, kind: .commandOverride, decision: .allowed,
+                subject: row.ruleID.rawValue, reason: row.override,
+                workspace: row.workspace.map { DenialPathRedaction.redact($0.path, home: home) },
+                agent: row.host == .tty ? nil : row.host.rawValue,
+                source: AuditLedger.Source.audit.rawValue,
+                detail: ["host": row.host.rawValue, "override": row.override]
+            ),
+            configDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
     }
 
     /// Appends a denial row when the ledger is enabled (`blocks.enabled`,
@@ -841,7 +1031,8 @@ public struct GatedEvaluate: Sendable {
                 tool: row.tool,
                 ruleID: row.ruleID,
                 category: row.category,
-                path: DenialPathRedaction.redact(row.path, home: home)
+                path: DenialPathRedaction.redact(row.path, home: home),
+                observed: row.observed
             ),
             now: row.at
         )

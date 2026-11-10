@@ -54,7 +54,9 @@ public struct Palette: Equatable, Sendable {
 
 extension Palette {
     /// Color-off palette is identity strings so renderers never emit CSI.
-    public init(for capability: ColorCapability) {
+    /// A light background swaps the inks that wash out on white (yellow,
+    /// cyan, bright cyan, light grey) for darker 256-color ones.
+    public init(for capability: ColorCapability, background: TerminalBackground = .dark) {
         if !capability.colorsEnabled {
             self.init(
                 colorsEnabled: false,
@@ -68,6 +70,26 @@ extension Palette {
                 trace: "",
                 silver: "",
                 regex: .off
+            )
+            return
+        }
+        if background == .light {
+            self.init(
+                colorsEnabled: true,
+                reset: "\u{001B}[0m",
+                fact: "\u{001B}[1m",
+                muted: "\u{001B}[2m",
+                deny: "\u{001B}[1;31m",
+                allow: "\u{001B}[1;38;5;28m",
+                heading: "\u{001B}[1;38;5;30m",
+                mark: "\u{001B}[1;38;5;130m",
+                trace: "\u{001B}[1;34m",
+                silver: "\u{001B}[38;5;240m",
+                regex: RegexInk(
+                    meta: "\u{001B}[1;38;5;130m",
+                    escape: "\u{001B}[38;5;31m",
+                    name: "\u{001B}[35m"
+                )
             )
             return
         }

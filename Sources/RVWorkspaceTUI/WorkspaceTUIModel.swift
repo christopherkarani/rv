@@ -11,6 +11,10 @@ import Foundation
 public final class WorkspaceTUIModel: @unchecked Sendable {
     private let session: any WorkspaceTUISession
     private let emulators: any TerminalEmulatorFactory
+    /// Review-pane stores. Nil disables the pane and its polling.
+    private let reviewSource: (any ReviewQueueSource)?
+    /// Tracks in-flight review reads and ceremonies (test seam only).
+    private let reviewWork = DispatchGroup()
     private let lock = NSLock()
     /// Lifecycle RPCs use a separate Workspace Host connection. Cancellation
     /// can wait for child teardown without blocking terminal I/O.
@@ -54,10 +58,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         rows: Int = 24,
         columns: Int = 80,
         restoredView: WorkspaceView? = nil,
-        initialViewID: ViewID? = nil
+        initialViewID: ViewID? = nil,
+        review: (any ReviewQueueSource)? = nil
     ) {
         self.session = session
         self.emulators = emulators
+        self.reviewSource = review
         let acceptedView = restoredView.flatMap { view -> WorkspaceView? in
             // A restored view suppresses the initial launch, so it must be
             // able to host a terminal: structurally valid, workspace-bound,
@@ -84,7 +90,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             viewSize: nil,
             presentationRevision: 0,
             viewID: initialViewID ?? ViewID(),
-            restoredView: acceptedView
+            restoredView: acceptedView,
+            reviewEnabled: review != nil
         )
     }
 
@@ -195,6 +202,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         drain(.viewportNoted(rows: rows, columns: columns), route: { _ in .inline })
     }
 
+    /// Records the review pane's content area as rendered. Approve stays
+    /// refused until the pane has been measured large enough.
+    public func noteReviewPane(rows: Int, columns: Int) {
+        drain(.reviewPaneNoted(rows: rows, columns: columns), route: { _ in .inline })
+    }
+
     /// Called by the app's single coalescing timer. Equal dimensions never
     /// produce another RPC; changed dimensions wait for the debounce window.
     public func processPendingWork(now: Date = Date()) {
@@ -233,7 +246,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             reconnecting: state.lifecycle == .disconnected
                 && (state.reconnectInflight || state.reconnectFiresAt != nil
                     || state.reconnectAttempt < WorkspaceTUIReducer.maxReconnectAttempts),
-            frameRevisions: emulatorSlots.mapValues(\.revision)
+            frameRevisions: emulatorSlots.mapValues(\.revision),
+            review: state.review
         )
     }
 
@@ -344,6 +358,22 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     func waitForRoutedEffects() {
         terminalQueue.sync {}
         commandQueue.sync {}
+    }
+
+    /// Test seam: true once every review read and ceremony started before
+    /// this call, and any re-read it chained, has landed; false after
+    /// `timeout` seconds. The review work runs on the cooperative pool, so
+    /// the caller suspends instead of blocking a pool thread (a blocked
+    /// pool thread can starve that very work on a small runner); the
+    /// bounded wait parks a GCD thread.
+    func waitForReviewWork(timeout: TimeInterval = 10) async -> Bool {
+        let group = reviewWork
+        let deadline = DispatchTime.now() + timeout
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: group.wait(timeout: deadline) == .success)
+            }
+        }
     }
 
     // MARK: - Runtime effect boundary
@@ -727,6 +757,34 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                 emulatorSlots[binding.pane] = nil
             }
             lock.unlock()
+
+        case .loadReview, .approveEgress, .denyEgress:
+            startReviewWork(effect)
+        }
+    }
+
+    /// Runs one review effect off the caller's thread (store reads and the
+    /// owner-authentication prompt are async) and reduces its completion.
+    /// A completion that chains a re-read enters the group before this
+    /// task leaves it, so `waitForReviewWork` covers the whole chain.
+    private func startReviewWork(_ effect: TUIRuntimeEffect) {
+        guard let source = reviewSource else { return }
+        let group = reviewWork
+        group.enter()
+        Task.detached { [weak self] in
+            defer { group.leave() }
+            let event: WorkspaceTUIReducerEvent
+            switch effect {
+            case .loadReview(let sequence):
+                event = .reviewLoaded(sequence: sequence, result: await source.load(now: Date()))
+            case .approveEgress(let id):
+                event = .reviewActionCompleted(id: id, outcome: await source.approve(egress: id))
+            case .denyEgress(let id, let reason):
+                event = .reviewActionCompleted(id: id, outcome: await source.deny(egress: id, reason: reason))
+            default:
+                return
+            }
+            self?.drain(event, route: { _ in .inline })
         }
     }
 
@@ -789,6 +847,7 @@ public struct WorkspaceTUISnapshot: Equatable, Sendable {
     public var knownRuntimes: [ListedRuntime]
     public var reconnecting: Bool
     public var frameRevisions: [PaneID: UInt64]
+    public var review: WorkspaceReviewState
 }
 
 struct WorkspaceTUIRefreshGate {

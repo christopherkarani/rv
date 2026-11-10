@@ -1,7 +1,7 @@
 /// C1 single recursive unwrap (T2 seam).
 ///
 /// One recursive unwrap over `Argv` with one `UnwrapBudget` value type. This
-/// seam consolidates the former `Unwrap*.swift` implementations (prefix
+/// file consolidates the former `Unwrap*.swift` implementations (prefix
 /// wrappers, SSH, executing sinks, shells, interpreters) behind a single
 /// `ShellPipeline.unwrap` recursion and a single `peel` dispatch keyed on
 /// `argv.program`. Tokens carry quoting/ANSI-C provenance parallel to the argv
@@ -10,12 +10,6 @@
 /// Behavior is identical to the pre-T2 pipeline: same peel outcomes, same
 /// budget cutoffs, same fail-closed `.limited` cases. `Normalize`,
 /// `unwrapCommand`, and `CommandPeel` keep their signatures and delegate here.
-///
-/// Handlers live in sibling files by concern: `Unwrap+PrefixWrappers.swift`
-/// (sudo/env/command/timeout/nice/mise/ssh), `Unwrap+Interpreters.swift`
-/// (`sh -c` shells and python/node/ruby programs), `Unwrap+Sinks.swift`
-/// (executing pipe/heredoc sinks), and `Unwrap+TextScan.swift` (top-level
-/// pipe and heredoc splitting).
 import Foundation
 import RVDomain
 
@@ -315,19 +309,592 @@ enum Peel: Sendable, Equatable {
     case next(String, WrapperKind, WorkingDirectory?)
 }
 
-// MARK: - Interpreter eval flags (read by `peelAfterSink`)
+// MARK: - Wrapper handlers (single Token-based implementations)
+
+private func shellKind(_ head: String) -> WrapperKind? {
+    switch head {
+    case "bash":
+        return .bash
+    case "sh":
+        return .sh
+    case "zsh":
+        return .zsh
+    default:
+        return nil
+    }
+}
+
+private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
+    var index = 1
+    var cwd = workingDirectory
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            index += 1
+            break
+        }
+        if token.hasPrefix("--") {
+            if let value = attachedOptionValue(token, long: "--chdir") {
+                cwd = resolveWorkingDirectory(value, current: cwd)
+                index += 1
+                continue
+            }
+            if sudoLongArgFlags.contains(token) {
+                guard index + 1 < tokens.count else { return .limited(.sudo) }
+                if token == "--chdir" {
+                    cwd = resolveWorkingDirectory(tokens[index + 1].lexeme, current: cwd)
+                }
+                index += 2
+                continue
+            }
+            if sudoLongFlags.contains(token) {
+                index += 1
+                continue
+            }
+            return .limited(.sudo)
+        }
+        if token.hasPrefix("-") {
+            if token == "-D" {
+                guard index + 1 < tokens.count else { return .limited(.sudo) }
+                cwd = resolveWorkingDirectory(tokens[index + 1].lexeme, current: cwd)
+                index += 2
+                continue
+            }
+            // A chroot (`-R`) or a cluster ending in a directory changes
+            // what every path means.
+            if shortClusterConsumesValue(token, valueLetters: ["D", "R"]) {
+                return .limited(.sudo)
+            }
+            if shortClusterConsumesValue(token, valueLetters: sudoShortArgLetters) {
+                guard index + 1 < tokens.count else { return .limited(.sudo) }
+                index += 2
+                continue
+            }
+            index += 1
+            continue
+        }
+        break
+    }
+    let rest = Array(tokens.dropFirst(index))
+    if rest.isEmpty { return .notWrapper }
+    return .next(renderCommand(rest), .sudo, cwd)
+}
+
+private let sudoShortArgLetters: Set<Character> = ["u", "g", "h", "p", "C", "U", "T", "r", "t", "c", "a"]
+private let sudoLongArgFlags: Set<String> = [
+    "--user", "--group", "--host", "--prompt", "--close-from", "--chdir",
+    "--other-user", "--command-timeout",
+]
+private let sudoLongFlags: Set<String> = [
+    "--preserve-env", "--login", "--shell", "--non-interactive", "--set-home",
+    "--reset-timestamp", "--askpass", "--background", "--preserve-groups",
+    "--stdin", "--help", "--version",
+]
+
+private func peelEnv(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
+    var index = 1
+    var cwd = workingDirectory
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token.hasPrefix("-") {
+            switch envOptionShape(token) {
+            case .unknown, .splitString:
+                return .limited(.env)
+            case .flag:
+                index += 1
+            case .chdirAttached(let value):
+                cwd = resolveWorkingDirectory(value, current: cwd)
+                index += 1
+            case .valueNext(let chdir):
+                guard index + 1 < tokens.count else { return .limited(.env) }
+                if chdir {
+                    cwd = resolveWorkingDirectory(tokens[index + 1].lexeme, current: cwd)
+                }
+                index += 2
+            }
+            continue
+        }
+        if token.contains("=") {
+            index += 1
+            continue
+        }
+        break
+    }
+    let rest = Array(tokens.dropFirst(index))
+    if rest.isEmpty { return .notWrapper }
+    return .next(renderCommand(rest), .env, cwd)
+}
+
+private func peelCommandWrapper(
+    _ tokens: [ShellPipeline.Token],
+    workingDirectory: WorkingDirectory?
+) -> Peel {
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "-v" || token == "-V" {
+            return .notWrapper
+        }
+        if token == "-p" || token.hasPrefix("-") {
+            index += 1
+            continue
+        }
+        break
+    }
+    let rest = Array(tokens.dropFirst(index))
+    if rest.isEmpty { return .notWrapper }
+    return .next(renderCommand(rest), .command, workingDirectory)
+}
+
+private func peelShell(
+    _ tokens: [ShellPipeline.Token],
+    kind: WrapperKind,
+    workingDirectory: WorkingDirectory?
+) -> Peel {
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            return .notWrapper
+        }
+        if token == "-c" || token == "--command" {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            return peelShellPayload(tokens[index + 1], kind: kind, cwd: workingDirectory)
+        }
+        if let value = attachedOptionValue(token, long: "--command") {
+            return peelShellPayload(
+                ShellPipeline.Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
+                kind: kind,
+                cwd: workingDirectory
+            )
+        }
+        if token == "-o" || token == "-O" {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            index += 2
+            continue
+        }
+        if token.hasPrefix("--") {
+            index += 1
+            continue
+        }
+        if token.hasPrefix("-"), token.contains("c") {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            return peelShellPayload(tokens[index + 1], kind: kind, cwd: workingDirectory)
+        }
+        if token.hasPrefix("-") {
+            index += 1
+            continue
+        }
+        return .notWrapper
+    }
+    return .notWrapper
+}
+
+/// Unquoted, `$`, and `$'…'` `-c` payloads are uncertain. Fail-closed.
+private func peelShellPayload(
+    _ token: ShellPipeline.Token,
+    kind: WrapperKind,
+    cwd: WorkingDirectory?
+) -> Peel {
+    if token.wasQuoted == false {
+        return .limited(kind)
+    }
+    if token.lexeme.contains("$") || token.lexeme.contains("`") {
+        return .limited(kind)
+    }
+    return .next(token.lexeme, kind, cwd)
+}
 
 private let pythonEvalFlags: Set<String> = ["-c"]
 private let nodeEvalFlags: Set<String> = ["-e", "--eval", "-p", "--print"]
 private let rubyEvalFlags: Set<String> = ["-e"]
 
-// MARK: - Shared peel helpers
+private func peelInterpreter(
+    _ tokens: [ShellPipeline.Token],
+    kind: WrapperKind,
+    flags: Set<String>,
+    extract: (String) -> InterpreterExtract,
+    workingDirectory: WorkingDirectory?
+) -> Peel {
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if flags.contains(token) {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            return peelCapturedInterpreterPayload(
+                tokens[index + 1],
+                kind: kind,
+                extract: extract,
+                cwd: workingDirectory
+            )
+        }
+        if kind == .ruby, token.hasPrefix("-e"), token.count > 2 {
+            // Same gate as a separate `-e` payload: expanding text is unknown.
+            if tokens[index].wasQuoted == false || token.contains("$") || token.contains("`") {
+                return .limited(kind)
+            }
+            return interpreterPeel(
+                extract(String(token.dropFirst(2))),
+                kind: kind,
+                cwd: workingDirectory
+            )
+        }
+        if token == "-W" || token == "-X" || token == "--check-hash-based-pycs"
+            || token == "-r" || token == "-I" || token == "-C" || token == "--title"
+        {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            index += 2
+            continue
+        }
+        if token.hasPrefix("-") {
+            index += 1
+            continue
+        }
+        return .notWrapper
+    }
+    return .notWrapper
+}
 
-func attachedOptionValue(_ token: String, long: String) -> String? {
+/// Quoted `-c`/`-e` with no `$` / backtick is a captured program. Unquoted
+/// or expanding payloads are an unknown inner program (never-slip).
+private func peelCapturedInterpreterPayload(
+    _ payload: ShellPipeline.Token,
+    kind: WrapperKind,
+    extract: (String) -> InterpreterExtract,
+    cwd: WorkingDirectory?
+) -> Peel {
+    if payload.wasQuoted == false {
+        return .limited(kind)
+    }
+    if payload.lexeme.contains("$") {
+        return .limited(kind)
+    }
+    return interpreterPeel(extract(payload.lexeme), kind: kind, cwd: cwd)
+}
+
+private func interpreterPeel(
+    _ extract: InterpreterExtract,
+    kind: WrapperKind,
+    cwd: WorkingDirectory?
+) -> Peel {
+    switch extract {
+    case .command(let inner):
+        return .next(inner, kind, cwd)
+    case .dataOnly:
+        return .notWrapper
+    case .limited:
+        return .limited(kind)
+    }
+}
+
+private enum InterpreterExtract: Sendable, Equatable {
+    case command(String)
+    case dataOnly
+    case limited
+}
+
+/// `code` with the first call matching `pattern` removed (name through its
+/// balanced closing paren, or a backtick span). Nil when the call cannot be
+/// delimited, so the caller fails closed.
+private func removingFirstCall(_ code: String, pattern: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+        let match = regex.firstMatch(in: code, range: NSRange(code.startIndex..., in: code)),
+        let range = Range(match.range, in: code)
+    else { return nil }
+    if code[range].hasPrefix("`") {
+        return code.replacingCharacters(in: range, with: " ")
+    }
+    var depth = 1
+    var quote: Character?
+    var index = range.upperBound
+    while index < code.endIndex {
+        let char = code[index]
+        if let open = quote {
+            if char == "\\" {
+                index = code.index(after: index)
+                if index == code.endIndex { return nil }
+            } else if char == open {
+                quote = nil
+            }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "(" {
+            depth += 1
+        } else if char == ")" {
+            depth -= 1
+            if depth == 0 {
+                return code.replacingCharacters(in: range.lowerBound...index, with: " ")
+            }
+        }
+        index = code.index(after: index)
+    }
+    return nil
+}
+
+/// The extracted command when nothing else in `code` can spawn or write:
+/// the first call is removed and the remainder runs the same checks, so a
+/// second call (`os.system('ls'); os.execvp(...)`) limits instead of hiding.
+private func extractedUnlessRemainder(
+    _ command: String, code: String, pattern: String,
+    remainderIsRisky: (String) -> Bool
+) -> InterpreterExtract {
+    guard let rest = removingFirstCall(code, pattern: pattern), remainderIsRisky(rest) == false else {
+        return .limited
+    }
+    return .command(command)
+}
+
+private func extractPython(_ code: String) -> InterpreterExtract {
+    let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if folded.isEmpty { return .limited }
+    if let command = pythonShellCommand(folded) {
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:__import__\s*\(\s*['"]\w+['"]\s*\)|\b\w+)\s*\.\s*)?\b(?:system|popen|remove|unlink|rmtree|run|call|Popen|check_call|check_output)\s*\("#
+        ) { pythonCodeCanSpawn($0) || pythonFileWrites($0).paths.isEmpty == false || pythonFileWrites($0).opaque }
+    }
+    if pythonCodeCanSpawn(folded) {
+        return .limited
+    }
+    let paths = pythonFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
+}
+
+private func pythonShellCommand(_ code: String) -> String? {
+    if let command = callStringArgument(code, names: ["os.system", "os.popen"]) {
+        return command
+    }
+    if let command = importOsSystem(code) {
+        return command
+    }
+    if let command = subprocessCommand(code) {
+        return command
+    }
+    if let path = callStringArgument(code, names: ["os.remove", "os.unlink"]) {
+        return reconstructedRm(path)
+    }
+    if let path = callStringArgument(code, names: ["shutil.rmtree"]) {
+        return reconstructedRm(path, recursive: true)
+    }
+    return nil
+}
+
+private func importOsSystem(_ code: String) -> String? {
+    let markers = [#"__import__('os').system"#, #"__import__("os").system"#]
+    for marker in markers {
+        if let command = callStringArgument(code, names: [marker]) {
+            return command
+        }
+    }
+    return nil
+}
+
+private func subprocessCommand(_ code: String) -> String? {
+    let names = [
+        "subprocess.run", "subprocess.call", "subprocess.Popen",
+        "subprocess.check_call", "subprocess.check_output",
+    ]
+    if let command = callStringArgument(code, names: names) {
+        return command
+    }
+    return callStringListArgument(code, names: names)
+}
+
+private func extractNode(_ code: String) -> InterpreterExtract {
+    let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if folded.isEmpty { return .limited }
+    if let command = nodeShellCommand(folded) {
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:require\s*\(\s*['"][\w:/]+['"]\s*\)|[\w$]+)\s*\.\s*)?\b(?:exec|execSync|unlinkSync|rmdirSync|rmSync|rm|unlink|rmdir)\s*\("#
+        ) { nodeCodeCanSpawn($0) || nodeFileWrites($0).paths.isEmpty == false || nodeFileWrites($0).opaque }
+    }
+    if nodeCodeCanSpawn(folded) {
+        return .limited
+    }
+    let paths = nodeFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
+}
+
+private func nodeShellCommand(_ code: String) -> String? {
+    let execNames = [
+        "require('child_process').execSync",
+        "require(\"child_process\").execSync",
+        "require('child_process').exec",
+        "require(\"child_process\").exec",
+        "require('node:child_process').execSync",
+        "require(\"node:child_process\").execSync",
+        "require('node:child_process').exec",
+        "require(\"node:child_process\").exec",
+        "child_process.execSync",
+        "child_process.exec",
+    ]
+    if let command = callStringArgument(code, names: execNames) {
+        return command
+    }
+    if let path = callStringArgument(code, names: ["fs.unlinkSync", "fs.rmdirSync"]) {
+        return reconstructedRm(path)
+    }
+    if let path = callStringArgument(code, names: ["fs.rmSync", "fs.rm"]) {
+        return reconstructedRm(path, recursive: code.contains("recursive"))
+    }
+    return nil
+}
+
+private func extractRuby(_ code: String) -> InterpreterExtract {
+    let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if folded.isEmpty { return .limited }
+    if let command = rubyShellCommand(folded) {
+        // Only the first call is extracted; a second one is unknown.
+        return extractedUnlessRemainder(
+            command, code: folded,
+            pattern: #"(?:(?:\b[A-Z]\w*\s*\.\s*)?\b(?:system|exec|delete|unlink|rm_rf|remove_entry_secure)\s*\(|`[^`]*`)"#
+        ) { rubyCodeCanSpawn($0) || rubyFileWrites($0).paths.isEmpty == false || rubyFileWrites($0).opaque }
+    }
+    if rubyCodeCanSpawn(folded) {
+        return .limited
+    }
+    let paths = rubyFileWrites(folded).paths
+    return paths.isEmpty ? .dataOnly : .command(writeProxyCommand(paths))
+}
+
+private func rubyShellCommand(_ code: String) -> String? {
+    if let command = callStringArgument(code, names: ["system", "exec"]) {
+        return command
+    }
+    if let path = callStringArgument(code, names: ["File.delete", "File.unlink"]) {
+        return reconstructedRm(path)
+    }
+    if let path = callStringArgument(code, names: ["FileUtils.rm_rf", "FileUtils.remove_entry_secure"]) {
+        return reconstructedRm(path, recursive: true)
+    }
+    if let command = rubyBacktickCommand(code) {
+        return command
+    }
+    return nil
+}
+
+private func rubyBacktickCommand(_ code: String) -> String? {
+    guard let start = code.firstIndex(of: "`") else { return nil }
+    let innerStart = code.index(after: start)
+    guard let end = code[innerStart...].firstIndex(of: "`") else { return nil }
+    let command = String(code[innerStart..<end])
+    return command.isEmpty ? nil : command
+}
+
+private func callStringArgument(_ code: String, names: [String]) -> String? {
+    for name in names {
+        guard let range = code.range(of: name) else { continue }
+        var index = range.upperBound
+        while index < code.endIndex, code[index].isWhitespace {
+            index = code.index(after: index)
+        }
+        guard index < code.endIndex, code[index] == "(" else { continue }
+        index = code.index(after: index)
+        while index < code.endIndex, code[index].isWhitespace {
+            index = code.index(after: index)
+        }
+        if let quoted = readQuotedLiteral(in: code, startingAt: index) {
+            return quoted.value.isEmpty ? nil : quoted.value
+        }
+    }
+    return nil
+}
+
+private func callStringListArgument(_ code: String, names: [String]) -> String? {
+    for name in names {
+        guard let range = code.range(of: name) else { continue }
+        var index = range.upperBound
+        while index < code.endIndex, code[index].isWhitespace {
+            index = code.index(after: index)
+        }
+        guard index < code.endIndex, code[index] == "(" else { continue }
+        index = code.index(after: index)
+        while index < code.endIndex, code[index].isWhitespace {
+            index = code.index(after: index)
+        }
+        guard index < code.endIndex, code[index] == "[" else { continue }
+        index = code.index(after: index)
+        var parts: [String] = []
+        while index < code.endIndex {
+            while index < code.endIndex, code[index].isWhitespace || code[index] == "," {
+                index = code.index(after: index)
+            }
+            if index < code.endIndex, code[index] == "]" {
+                break
+            }
+            guard let quoted = readQuotedLiteral(in: code, startingAt: index) else {
+                return nil
+            }
+            parts.append(quoted.value)
+            index = quoted.end
+        }
+        if parts.isEmpty == false {
+            return parts.joined(separator: " ")
+        }
+    }
+    return nil
+}
+
+private func readQuotedLiteral(
+    in text: String,
+    startingAt start: String.Index
+) -> (value: String, end: String.Index)? {
+    guard start < text.endIndex else { return nil }
+    let quote = text[start]
+    guard quote == "'" || quote == "\"" else { return nil }
+    var index = text.index(after: start)
+    var value = ""
+    while index < text.endIndex {
+        let character = text[index]
+        if character == "\\" {
+            let next = text.index(after: index)
+            guard next < text.endIndex else { return nil }
+            value.append(text[next])
+            index = text.index(after: next)
+            continue
+        }
+        if character == quote {
+            return (value, text.index(after: index))
+        }
+        value.append(character)
+        index = text.index(after: index)
+    }
+    return nil
+}
+
+private func attachedOptionValue(_ token: String, long: String) -> String? {
     let prefix = long + "="
     guard token.hasPrefix(prefix) else { return nil }
     let value = String(token.dropFirst(prefix.count))
     return value.isEmpty ? nil : value
+}
+
+private func resolveWorkingDirectory(
+    _ apparent: String,
+    current: WorkingDirectory?
+) -> WorkingDirectory? {
+    let path = lexicalFilesystemPath(
+        apparent,
+        workingDirectory: current,
+        homeDirectory: nil
+    )
+    return WorkingDirectory(validating: path)
+}
+
+private func reconstructedRm(_ path: String, recursive: Bool = false) -> String {
+    let flags = recursive ? "-rf " : ""
+    return "rm \(flags)\(quoteIfNeeded(path))"
+}
+
+private func quoteIfNeeded(_ value: String) -> String {
+    if value.isEmpty { return "''" }
+    if value.contains(where: { $0.isWhitespace || $0 == "'" }) {
+        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+    return value
 }
 
 func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
@@ -339,4 +906,1131 @@ private func renderToken(_ token: ShellPipeline.Token) -> String {
         return "'" + token.lexeme.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
     return token.lexeme
+}
+
+func peelTimeout(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            index += 1
+            break
+        }
+        if timeoutFlags.contains(token) {
+            index += 1
+            continue
+        }
+        if timeoutArgFlags.contains(token) {
+            guard index + 1 < tokens.count else { return .limited(.timeout) }
+            index += 2
+            continue
+        }
+        if attachedOptionValue(token, long: "--kill-after") != nil
+            || attachedOptionValue(token, long: "--signal") != nil
+        {
+            index += 1
+            continue
+        }
+        if token.hasPrefix("-") {
+            return .limited(.timeout)
+        }
+        break
+    }
+    guard index < tokens.count else { return .limited(.timeout) }
+    guard looksLikeTimeoutDuration(tokens[index].lexeme) else {
+        return .limited(.timeout)
+    }
+    index += 1
+    let rest = Array(tokens.dropFirst(index))
+    if rest.isEmpty { return .limited(.timeout) }
+    return .next(renderCommand(rest), .timeout, workingDirectory)
+}
+
+private func peelNice(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
+    var index = 1
+    var sawOption = false
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            index += 1
+            break
+        }
+        if token == "-n" || token == "--adjustment" {
+            guard index + 1 < tokens.count else { return .limited(.nice) }
+            index += 2
+            sawOption = true
+            continue
+        }
+        if attachedOptionValue(token, long: "--adjustment") != nil {
+            index += 1
+            sawOption = true
+            continue
+        }
+        if token.hasPrefix("-n"), token.hasPrefix("--") == false, token != "-n" {
+            index += 1
+            sawOption = true
+            continue
+        }
+        if looksLikeNiceAdjustment(token) {
+            index += 1
+            sawOption = true
+            continue
+        }
+        if token.hasPrefix("-") {
+            return .limited(.nice)
+        }
+        break
+    }
+    let rest = Array(tokens.dropFirst(index))
+    if rest.isEmpty {
+        return sawOption ? .limited(.nice) : .notWrapper
+    }
+    return .next(renderCommand(rest), .nice, workingDirectory)
+}
+
+private func peelMise(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
+    guard tokens.count >= 2 else { return .notWrapper }
+    let subcommand = tokens[1].lexeme.lowercased()
+    guard subcommand == "exec" || subcommand == "x" else { return .notWrapper }
+    let index = 2
+    if index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            let rest = Array(tokens.dropFirst(index + 1))
+            if rest.isEmpty { return .limited(.mise) }
+            return .next(renderCommand(rest), .mise, workingDirectory)
+        }
+        if token == "-c" || token == "--command" {
+            guard index + 1 < tokens.count else { return .limited(.mise) }
+            return peelShellPayload(tokens[index + 1], kind: .mise, cwd: workingDirectory)
+        }
+        if let value = attachedOptionValue(token, long: "--command") {
+            return peelShellPayload(
+                ShellPipeline.Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
+                kind: .mise,
+                cwd: workingDirectory
+            )
+        }
+        return .limited(.mise)
+    }
+    return .limited(.mise)
+}
+
+private let timeoutFlags: Set<String> = [
+    "--foreground", "--preserve-status", "--verbose", "-v",
+]
+private let timeoutArgFlags: Set<String> = [
+    "--kill-after", "-k", "--signal", "-s",
+]
+
+private func looksLikeTimeoutDuration(_ token: String) -> Bool {
+    guard token.isEmpty == false else { return false }
+    var sawDigit = false
+    var sawDot = false
+    var index = token.startIndex
+    while index < token.endIndex {
+        let character = token[index]
+        let next = token.index(after: index)
+        if character.isASCII, character.isNumber {
+            sawDigit = true
+            index = next
+            continue
+        }
+        if character == ".", sawDot == false, sawDigit {
+            sawDot = true
+            index = next
+            continue
+        }
+        if next == token.endIndex, sawDigit, "smhd".contains(character) {
+            return true
+        }
+        return false
+    }
+    return sawDigit
+}
+
+private func looksLikeNiceAdjustment(_ token: String) -> Bool {
+    guard token.hasPrefix("-") || token.hasPrefix("+") else { return false }
+    if token.hasPrefix("--") { return false }
+    let body = token.dropFirst()
+    return body.isEmpty == false && body.allSatisfy(\.isNumber)
+}
+
+private func peelSSH(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            index += 1
+            break
+        }
+        if token.hasPrefix("-") == false || token == "-" {
+            break
+        }
+        switch consumeSSHOption(tokens, at: index) {
+        case .unknown, .missingArgument:
+            return .notWrapper
+        case .consumed(let next):
+            index = next
+        }
+    }
+    guard index < tokens.count else { return .notWrapper }
+    index += 1
+    let rest = Array(tokens.dropFirst(index))
+    if rest.isEmpty { return .notWrapper }
+    for token in rest {
+        if token.wasQuoted, token.lexeme.contains("$") || token.lexeme.contains("`") {
+            return .limited(.ssh)
+        }
+    }
+    if rest.count == 1 {
+        return .next(rest[0].lexeme, .ssh, workingDirectory)
+    }
+    return .next(renderCommand(rest), .ssh, workingDirectory)
+}
+
+private enum SSHOptionParse: Sendable {
+    case consumed(Int)
+    case unknown
+    case missingArgument
+}
+
+private func consumeSSHOption(_ tokens: [ShellPipeline.Token], at index: Int) -> SSHOptionParse {
+    let token = tokens[index].lexeme
+    if token.hasPrefix("--") {
+        if let equals = token.firstIndex(of: "=") {
+            let name = String(token[token.index(token.startIndex, offsetBy: 2)..<equals])
+            return sshLongArgNames.contains(name) ? .consumed(index + 1) : .unknown
+        }
+        let name = String(token.dropFirst(2))
+        guard sshLongArgNames.contains(name) else { return .unknown }
+        guard index + 1 < tokens.count else { return .missingArgument }
+        return .consumed(index + 2)
+    }
+    let body = token.dropFirst()
+    guard body.isEmpty == false else { return .unknown }
+    let characters = Array(body)
+    var offset = 0
+    while offset < characters.count {
+        let flag = characters[offset]
+        if sshArgShort.contains(flag) {
+            if offset + 1 < characters.count {
+                return .consumed(index + 1)
+            }
+            guard index + 1 < tokens.count else { return .missingArgument }
+            return .consumed(index + 2)
+        }
+        if sshFlagShort.contains(flag) {
+            offset += 1
+            continue
+        }
+        return .unknown
+    }
+    return .consumed(index + 1)
+}
+
+private let sshFlagShort: Set<Character> = [
+    "4", "6", "A", "a", "C", "f", "G", "g", "K", "k", "M", "N", "n",
+    "q", "s", "T", "t", "V", "v", "X", "x", "Y", "y",
+]
+private let sshArgShort: Set<Character> = [
+    "b", "c", "D", "E", "e", "F", "I", "i", "J", "L", "l", "m",
+    "O", "o", "p", "Q", "R", "S", "W", "w",
+]
+private let sshLongArgNames: Set<String> = [
+    "b", "c", "D", "E", "e", "F", "I", "i", "J", "L", "l", "m",
+    "O", "o", "p", "Q", "R", "S", "W", "w",
+    "bind-address", "cipher", "dynamic", "log-file", "escape", "config",
+    "pkcs11", "identity", "identity-file", "jump", "jump-host", "local",
+    "local-forward", "login", "login-name", "mac", "option", "port", "query",
+    "remote", "remote-forward", "ctl-cmd", "ctl-path", "stdio-forward", "tun",
+]
+
+func peelExecutingSink(_ text: String, workingDirectory: WorkingDirectory?) -> Peel? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return nil }
+
+    let heredoc = extractHeredoc(trimmed)
+    let header = heredoc?.header ?? trimmed
+    let heredocBody = heredoc?.body
+
+    let pipes = splitTopLevelPipes(header)
+    guard let sinkIndex = lastExecutingSinkIndex(pipes) else {
+        return nil
+    }
+    let consumer = pipes[sinkIndex]
+    let hasPipe = sinkIndex >= 1
+    let producer: String? = hasPipe ? pipes[..<sinkIndex].joined(separator: " | ") : nil
+
+    if hasPipe, let payload = peelPayloadWrapper(consumer, cwd: workingDirectory) {
+        return payload
+    }
+
+    return peelStdinExecuting(
+        consumer: consumer,
+        producer: producer,
+        heredocBody: heredocBody,
+        cwd: workingDirectory
+    )
+}
+
+private func peelPayloadWrapper(_ consumer: String, cwd: WorkingDirectory?) -> Peel? {
+    let tokens = ShellPipeline.tokenize(consumer)
+    guard let first = tokens.first else { return nil }
+    let head = unescapeBackslashPairs(basename(first.lexeme)).lowercased()
+    guard let kind = sinkKind(head) else { return nil }
+
+    switch kind {
+    case .bash, .sh, .zsh:
+        return peelShellDashC(tokens, kind: kind, cwd: cwd)
+    case .python, .node, .ruby:
+        return peelInterpreterProgramFlag(tokens, kind: kind)
+    default:
+        return nil
+    }
+}
+
+private func peelShellDashC(
+    _ tokens: [ShellPipeline.Token],
+    kind: WrapperKind,
+    cwd: WorkingDirectory?
+) -> Peel? {
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token == "--" {
+            return nil
+        }
+        if token == "-c" || token == "--command" {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            return peelShellPayload(tokens[index + 1], kind: kind, cwd: cwd)
+        }
+        if let value = attachedOptionValue(token, long: "--command") {
+            return peelShellPayload(
+                ShellPipeline.Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
+                kind: kind,
+                cwd: cwd
+            )
+        }
+        if token == "-o" || token == "-O" {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            index += 2
+            continue
+        }
+        if token.hasPrefix("--") {
+            index += 1
+            continue
+        }
+        if token.hasPrefix("-"), token.contains("c") {
+            guard index + 1 < tokens.count else { return .limited(kind) }
+            return peelShellPayload(tokens[index + 1], kind: kind, cwd: cwd)
+        }
+        if token.hasPrefix("-") {
+            index += 1
+            continue
+        }
+        return nil
+    }
+    return nil
+}
+
+private func peelInterpreterProgramFlag(_ tokens: [ShellPipeline.Token], kind: WrapperKind) -> Peel? {
+    let flags: Set<String>
+    switch kind {
+    case .python:
+        flags = ["-c"]
+    case .node:
+        flags = ["-e", "--eval", "-p", "--print"]
+    case .ruby:
+        flags = ["-e"]
+    default:
+        return nil
+    }
+    var index = 1
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if flags.contains(token) {
+            return .limited(kind)
+        }
+        if kind == .ruby, token.hasPrefix("-e"), token.hasPrefix("--") == false, token.count > 2 {
+            return .limited(kind)
+        }
+        if kind == .node, token.hasPrefix("--eval=") || token.hasPrefix("--print=") {
+            return .limited(kind)
+        }
+        index += 1
+    }
+    return nil
+}
+
+private func peelStdinExecuting(
+    consumer: String,
+    producer: String?,
+    heredocBody: String?,
+    cwd: WorkingDirectory?
+) -> Peel? {
+    let tokens = ShellPipeline.tokenize(consumer)
+    guard let first = tokens.first else { return nil }
+    let head = unescapeBackslashPairs(basename(first.lexeme)).lowercased()
+    guard let kind = sinkKind(head) else { return nil }
+
+    let processSub = extractProcessSub(consumer)
+    var index = 1
+    var unmodeled = false
+    var sawStdinOperand = false
+    var sawScriptFile = false
+
+    while index < tokens.count {
+        let token = tokens[index].lexeme
+        if token.hasPrefix("<(") || token.hasPrefix("<<") {
+            break
+        }
+        if token == "--" {
+            index += 1
+            if index < tokens.count {
+                classifyOperand(tokens[index].lexeme, sawStdinOperand: &sawStdinOperand, sawScriptFile: &sawScriptFile)
+            }
+            break
+        }
+        if isSinkArgFlag(token, kind: kind) {
+            guard index + 1 < tokens.count else {
+                unmodeled = true
+                break
+            }
+            index += 2
+            continue
+        }
+        if attachedSinkArg(token, kind: kind) != nil {
+            index += 1
+            continue
+        }
+        if isSinkFlag(token, kind: kind) || isClusteredSinkShort(token, kind: kind) {
+            index += 1
+            continue
+        }
+        if token.hasPrefix("-"), token != "-" {
+            unmodeled = true
+            break
+        }
+        classifyOperand(token, sawStdinOperand: &sawStdinOperand, sawScriptFile: &sawScriptFile)
+        break
+    }
+
+    let executing =
+        producer != nil
+        || processSub != nil
+        || (heredocBody?.isEmpty == false)
+        || sawStdinOperand
+    if executing == false {
+        return nil
+    }
+    if unmodeled {
+        return .limited(kind)
+    }
+    if sawScriptFile, processSub == nil, (heredocBody == nil || heredocBody?.isEmpty == true) {
+        return .limited(kind)
+    }
+
+    if let processSub {
+        guard let program = programFromSource(processSub), program.isEmpty == false else {
+            return .limited(kind)
+        }
+        return .next(program, kind, cwd)
+    }
+    if let heredocBody, heredocBody.isEmpty == false {
+        return .next(heredocBody, kind, cwd)
+    }
+    if let producer, let program = peelProducerProgram(producer) {
+        return .next(program, kind, cwd)
+    }
+    return .limited(kind)
+}
+
+private func classifyOperand(
+    _ token: String,
+    sawStdinOperand: inout Bool,
+    sawScriptFile: inout Bool
+) {
+    if token == "-" || token == "/dev/stdin" || token == "/dev/fd/0" {
+        sawStdinOperand = true
+    } else {
+        sawScriptFile = true
+    }
+}
+
+private func peelProducerProgram(_ producer: String) -> String? {
+    let parts = splitTopLevelPipes(producer)
+    guard let first = parts.first, let echoed = peelEchoPrintf(first) else {
+        return nil
+    }
+    if parts.dropFirst().allSatisfy(isDataConsumer) {
+        return echoed
+    }
+    return nil
+}
+
+private func programFromSource(_ source: String) -> String? {
+    peelEchoPrintf(source.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
+private func peelEchoPrintf(_ text: String) -> String? {
+    let tokens = ShellPipeline.tokenize(text)
+    guard let first = tokens.first else { return nil }
+    let head = unescapeBackslashPairs(basename(first.lexeme)).lowercased()
+    guard head == "echo" || head == "printf" else { return nil }
+    var index = 1
+    var args: [String] = []
+    while index < tokens.count {
+        let token = tokens[index]
+        if token.wasAnsiC { return nil }
+        if token.lexeme.contains("$") || token.lexeme.contains("`") { return nil }
+        let decoded = token.lexeme
+        if args.isEmpty, head == "echo" {
+            if decoded == "--" {
+                index += 1
+                continue
+            }
+            if isEchoOption(decoded) {
+                index += 1
+                continue
+            }
+        }
+        args.append(decoded)
+        index += 1
+    }
+    if head == "printf", let format = args.first, format.contains("%") {
+        args.removeFirst()
+    }
+    if args.isEmpty { return nil }
+    return args.joined(separator: " ")
+}
+
+private func isEchoOption(_ token: String) -> Bool {
+    if token == "-n" || token == "-e" || token == "-E" {
+        return true
+    }
+    guard token.hasPrefix("-"), token.hasPrefix("--") == false, token != "-" else {
+        return false
+    }
+    return token.dropFirst().allSatisfy { $0 == "n" || $0 == "e" || $0 == "E" }
+}
+
+private func lastExecutingSinkIndex(_ pipes: [String]) -> Int? {
+    for index in pipes.indices.reversed() {
+        if isDataConsumer(pipes[index]) {
+            continue
+        }
+        return index
+    }
+    return nil
+}
+
+private func isDataConsumer(_ consumer: String) -> Bool {
+    let tokens = ShellPipeline.tokenize(consumer)
+    guard let first = tokens.first else { return false }
+    switch unescapeBackslashPairs(basename(first.lexeme)).lowercased() {
+    case "grep", "rg", "ripgrep", "wc", "tee", "sort", "uniq", "head", "tail", "less", "more", "cat":
+        return true
+    default:
+        return false
+    }
+}
+
+private func sinkKind(_ head: String) -> WrapperKind? {
+    switch head {
+    case "bash":
+        return .bash
+    case "sh":
+        return .sh
+    case "zsh":
+        return .zsh
+    default:
+        if isPythonExecutable(head) { return .python }
+        if isNodeExecutable(head) { return .node }
+        if isRubyExecutable(head) { return .ruby }
+        return nil
+    }
+}
+
+private let shellLongFlags: Set<String> = [
+    "--norc", "--noprofile", "--restricted", "--posix", "--login",
+    "--verbose", "--debugger", "--noediting", "--pretty-print",
+    "--help", "--version", "--dump-po-strings", "--dump-strings",
+]
+private let shellArgFlags: Set<String> = [
+    "--init-file", "--rcfile", "-o", "-O",
+]
+private let shellShortLetters: Set<Character> = [
+    "a", "b", "e", "f", "h", "i", "k", "l", "m", "n", "p", "r", "s",
+    "t", "u", "v", "x", "B", "C", "E", "H", "P", "T", "D",
+]
+private let pythonFlags: Set<String> = [
+    "-u", "-B", "-E", "-I", "-O", "-S", "-s", "-v", "-q", "-b", "-P",
+]
+private let pythonArgFlags: Set<String> = ["-X", "-W"]
+private let nodeFlags: Set<String> = [
+    "--abort-on-uncaught-exception", "--no-warnings", "--trace-warnings",
+]
+private let nodeArgFlags: Set<String> = ["--input-type", "--title"]
+private let rubyFlags: Set<String> = ["-v", "-w", "-W0", "-W1", "-W2"]
+private let rubyArgFlags: Set<String> = ["-I", "-r", "-C"]
+
+private func isSinkFlag(_ token: String, kind: WrapperKind) -> Bool {
+    switch kind {
+    case .bash, .sh, .zsh:
+        return shellLongFlags.contains(token)
+    case .python:
+        return pythonFlags.contains(token)
+    case .node:
+        return nodeFlags.contains(token)
+    case .ruby:
+        return rubyFlags.contains(token)
+    default:
+        return false
+    }
+}
+
+private func isSinkArgFlag(_ token: String, kind: WrapperKind) -> Bool {
+    switch kind {
+    case .bash, .sh, .zsh:
+        return shellArgFlags.contains(token)
+    case .python:
+        return pythonArgFlags.contains(token)
+    case .node:
+        return nodeArgFlags.contains(token)
+    case .ruby:
+        return rubyArgFlags.contains(token)
+    default:
+        return false
+    }
+}
+
+private func attachedSinkArg(_ token: String, kind: WrapperKind) -> String? {
+    let longs: [String]
+    switch kind {
+    case .bash, .sh, .zsh:
+        longs = ["--init-file", "--rcfile"]
+    case .node:
+        longs = ["--input-type", "--title"]
+    default:
+        longs = []
+    }
+    for long in longs {
+        if let value = attachedOptionValue(token, long: long) {
+            return value
+        }
+    }
+    return nil
+}
+
+private func isClusteredSinkShort(_ token: String, kind: WrapperKind) -> Bool {
+    guard kind == .bash || kind == .sh || kind == .zsh else { return false }
+    guard token.hasPrefix("-"), token.hasPrefix("--") == false, token != "-" else {
+        return false
+    }
+    let letters = token.dropFirst()
+    if letters.isEmpty { return false }
+    if letters.contains("c") { return false }
+    return letters.allSatisfy { shellShortLetters.contains($0) }
+}
+
+func splitTopLevelPipes(_ text: String) -> [String] {
+    var segments: [String] = []
+    var current = ""
+    var quote: Character?
+    var parenDepth = 0
+    var inBacktick = false
+    var index = text.startIndex
+
+    func flush() {
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty == false {
+            segments.append(trimmed)
+        }
+        current = ""
+    }
+
+    while index < text.endIndex {
+        let character = text[index]
+        let next = text.index(after: index)
+        if let currentQuote = quote {
+            current.append(character)
+            if character == currentQuote {
+                quote = nil
+            }
+            index = next
+            continue
+        }
+        if inBacktick {
+            current.append(character)
+            if character == "`" {
+                inBacktick = false
+            }
+            index = next
+            continue
+        }
+        if character == "'" || character == "\"" {
+            quote = character
+            current.append(character)
+            index = next
+            continue
+        }
+        if character == "`" {
+            inBacktick = true
+            current.append(character)
+            index = next
+            continue
+        }
+        if (character == "<" || character == ">" || character == "$"),
+            next < text.endIndex, text[next] == "("
+        {
+            parenDepth += 1
+            current.append(character)
+            current.append("(")
+            index = text.index(after: next)
+            continue
+        }
+        if character == "(" {
+            parenDepth += 1
+            current.append(character)
+            index = next
+            continue
+        }
+        if character == ")" {
+            if parenDepth > 0 {
+                parenDepth -= 1
+            }
+            current.append(character)
+            index = next
+            continue
+        }
+        if parenDepth == 0, character == "|" {
+            if next < text.endIndex, text[next] == "|" {
+                current.append(character)
+                current.append("|")
+                index = text.index(after: next)
+                continue
+            }
+            flush()
+            index = next
+            continue
+        }
+        current.append(character)
+        index = next
+    }
+    flush()
+    return segments
+}
+
+private func extractProcessSub(_ text: String) -> String? {
+    var quote: Character?
+    var inBacktick = false
+    var index = text.startIndex
+    var start: String.Index?
+    var depth = 0
+
+    while index < text.endIndex {
+        let character = text[index]
+        let next = text.index(after: index)
+        if start == nil {
+            if let currentQuote = quote {
+                if character == currentQuote {
+                    quote = nil
+                }
+                index = next
+                continue
+            }
+            if inBacktick {
+                if character == "`" {
+                    inBacktick = false
+                }
+                index = next
+                continue
+            }
+            if character == "'" || character == "\"" {
+                quote = character
+                index = next
+                continue
+            }
+            if character == "`" {
+                inBacktick = true
+                index = next
+                continue
+            }
+            if character == "<", next < text.endIndex, text[next] == "(" {
+                start = text.index(after: next)
+                depth = 1
+                index = text.index(after: next)
+                continue
+            }
+            index = next
+            continue
+        }
+
+        if let currentQuote = quote {
+            if character == currentQuote {
+                quote = nil
+            }
+            index = next
+            continue
+        }
+        if inBacktick {
+            if character == "`" {
+                inBacktick = false
+            }
+            index = next
+            continue
+        }
+        if character == "'" || character == "\"" {
+            quote = character
+            index = next
+            continue
+        }
+        if character == "`" {
+            inBacktick = true
+            index = next
+            continue
+        }
+        if (character == "<" || character == ">" || character == "$"),
+            next < text.endIndex, text[next] == "("
+        {
+            depth += 1
+            index = text.index(after: next)
+            continue
+        }
+        if character == "(" {
+            depth += 1
+            index = next
+            continue
+        }
+        if character == ")" {
+            depth -= 1
+            if depth == 0, let start {
+                return String(text[start..<index]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            index = next
+            continue
+        }
+        index = next
+    }
+    return nil
+}
+
+func extractHeredoc(_ text: String) -> (header: String, body: String)? {
+    locateHeredoc(text).map { ($0.header, $0.body) }
+}
+
+/// The first top-level heredoc: its header, trimmed body, and where that
+/// body sits in `text`.
+struct HeredocMatch {
+    let header: String
+    let body: String
+    /// The trimmed body's range in the scanned text, its lines split on LF
+    /// as bash splits them. Nil when the body's position is ambiguous: no
+    /// terminator line, a CR on the header line or a CR-only terminator, a
+    /// delimiter word bash reads differently (partly quoted, escaped), an
+    /// escape, `#`, ANSI-C quote, open `${`/`$[` or earlier `<<` before the
+    /// operator, or a header line that holds another heredoc or spills
+    /// quoting or a substitution past its end.
+    let bodyRange: Range<String.Index>?
+}
+
+func locateHeredoc(_ text: String) -> HeredocMatch? {
+    var quote: Character?
+    var parenDepth = 0
+    var inBacktick = false
+    // Ambiguity never changes which operator is chosen; it only withholds
+    // the body's position. Set by an escape that can hide a quote or the
+    // operator, a `#` that can start a comment, an ANSI-C quote, an open
+    // `${`/`$[` expansion, or an earlier `<<` in any context: its body may
+    // hold the quotes or parens this scan miscounts.
+    var ambiguousPrefix = false
+    var openExpansions: [Character] = []
+    var index = text.startIndex
+
+    while index < text.endIndex {
+        let character = text[index]
+        let next = text.index(after: index)
+        let following = next < text.endIndex ? text[next] : nil
+        if let currentQuote = quote {
+            // Inside double quotes only `\"` can move the closing quote: a
+            // `\\` run that ends at a quote ends in `\"` too.
+            if currentQuote == "\"", character == "\\", following == "\"" {
+                ambiguousPrefix = true
+            }
+            // A substitution inside double quotes nests its own quotes,
+            // which this scan would read as closing the outer one.
+            if currentQuote == "\"", character == "`" || (character == "$" && following == "(") {
+                ambiguousPrefix = true
+            }
+            if isHeredocOperator(in: text, at: index) {
+                ambiguousPrefix = true
+            }
+            if character == currentQuote {
+                quote = nil
+            }
+            index = next
+            continue
+        }
+        if inBacktick {
+            if character == "\\" || isHeredocOperator(in: text, at: index) {
+                ambiguousPrefix = true
+            }
+            if character == "`" {
+                inBacktick = false
+            }
+            index = next
+            continue
+        }
+        if character == "\\" {
+            // `\<newline>` is a line continuation; any other escape can
+            // hide a quote or the operator itself.
+            if following != "\n" {
+                ambiguousPrefix = true
+            }
+            index = following == "\n" ? text.index(after: next) : next
+            continue
+        }
+        if character == "'" || character == "\"" {
+            quote = character
+            index = next
+            continue
+        }
+        if character == "`" {
+            inBacktick = true
+            index = next
+            continue
+        }
+        if character == "#" || (character == "$" && following == "'") {
+            ambiguousPrefix = true
+        }
+        if character == "$", following == "{" || following == "[" {
+            openExpansions.append(following == "{" ? "}" : "]")
+            index = text.index(after: next)
+            continue
+        }
+        // zsh counts nested braces inside `${…}`; this scan does not.
+        if character == "{", openExpansions.isEmpty == false {
+            ambiguousPrefix = true
+        }
+        if character == openExpansions.last {
+            openExpansions.removeLast()
+        }
+        if (character == "<" || character == ">" || character == "$"),
+            next < text.endIndex, text[next] == "("
+        {
+            parenDepth += 1
+            index = text.index(after: next)
+            continue
+        }
+        if character == "(" {
+            parenDepth += 1
+            index = next
+            continue
+        }
+        if character == ")" {
+            if parenDepth > 0 {
+                parenDepth -= 1
+            }
+            index = next
+            continue
+        }
+        if parenDepth > 0, isHeredocOperator(in: text, at: index) {
+            ambiguousPrefix = true
+        }
+        if parenDepth == 0, character == "<", next < text.endIndex, text[next] == "<" {
+            let afterTwo = text.index(after: next)
+            if afterTwo < text.endIndex, text[afterTwo] == "<" {
+                index = text.index(after: afterTwo)
+                continue
+            }
+            if let parsed = parseHeredoc(in: text, operatorStart: index, afterOperator: afterTwo) {
+                guard ambiguousPrefix == false, openExpansions.isEmpty else {
+                    return HeredocMatch(header: parsed.header, body: parsed.body, bodyRange: nil)
+                }
+                return parsed
+            }
+            ambiguousPrefix = true
+            index = afterTwo
+            continue
+        }
+        index = next
+    }
+    return nil
+}
+
+/// A `<<` that is not part of a `<<<` here-string.
+private func isHeredocOperator(in text: String, at index: String.Index) -> Bool {
+    guard text[index] == "<" else { return false }
+    let next = text.index(after: index)
+    guard next < text.endIndex, text[next] == "<" else { return false }
+    let afterTwo = text.index(after: next)
+    if afterTwo < text.endIndex, text[afterTwo] == "<" { return false }
+    return index == text.startIndex || text[text.index(before: index)] != "<"
+}
+
+private func parseHeredoc(
+    in text: String,
+    operatorStart: String.Index,
+    afterOperator: String.Index
+) -> HeredocMatch? {
+    var cursor = afterOperator
+    var stripTabs = false
+    if cursor < text.endIndex, text[cursor] == "-" {
+        stripTabs = true
+        cursor = text.index(after: cursor)
+    }
+    while cursor < text.endIndex, text[cursor].isWhitespace, text[cursor] != "\n" {
+        cursor = text.index(after: cursor)
+    }
+    guard cursor < text.endIndex, text[cursor] != "\n" else { return nil }
+
+    let delimiter: String
+    // Bash strips quotes and backslashes from the whole delimiter word;
+    // this parser reads one quoted span or one bare word. Only words both
+    // read the same way may place the body.
+    var delimiterIsPlain: Bool
+    if text[cursor] == "'" || text[cursor] == "\"" {
+        let quote = text[cursor]
+        cursor = text.index(after: cursor)
+        let start = cursor
+        while cursor < text.endIndex, text[cursor] != quote {
+            cursor = text.index(after: cursor)
+        }
+        delimiter = String(text[start..<cursor])
+        delimiterIsPlain = cursor < text.endIndex
+        if cursor < text.endIndex {
+            cursor = text.index(after: cursor)
+        }
+        if cursor < text.endIndex, isHeredocWordBoundary(text[cursor]) == false {
+            delimiterIsPlain = false
+        }
+    } else {
+        let start = cursor
+        while cursor < text.endIndex {
+            let character = text[cursor]
+            if isHeredocWordBoundary(character) {
+                break
+            }
+            cursor = text.index(after: cursor)
+        }
+        delimiter = String(text[start..<cursor])
+        delimiterIsPlain = true
+    }
+    if delimiter.isEmpty { return nil }
+    if delimiter.unicodeScalars.contains(where: { "'\"\\`$\n\r".unicodeScalars.contains($0) }) {
+        delimiterIsPlain = false
+    }
+
+    var lineEnd = cursor
+    while lineEnd < text.endIndex, text[lineEnd] != "\n" {
+        lineEnd = text.index(after: lineEnd)
+    }
+    guard lineEnd < text.endIndex else { return nil }
+    let header = String(text[text.startIndex..<lineEnd])
+    let bodyStart = text.index(after: lineEnd)
+    let body = heredocBody(String(text[bodyStart...]), delimiter: delimiter, stripTabs: stripTabs)
+    let placeable = delimiterIsPlain
+        && headerLineEndsCleanly(text, operatorStart: operatorStart, from: cursor, to: lineEnd)
+    let bodyRange = placeable
+        ? placeBody(in: text, from: bodyStart, delimiter: delimiter, stripTabs: stripTabs)
+        : nil
+    return HeredocMatch(header: header, body: body, bodyRange: bodyRange)
+}
+
+private func isHeredocWordBoundary(_ character: Character) -> Bool {
+    character.isWhitespace || character == "|" || character == "<"
+        || character == ">" || character == ";" || character == "&"
+        || character == "(" || character == ")"
+}
+
+/// True when the header line holds no carriage return and no second
+/// heredoc operator and, after the delimiter, nothing that could carry the
+/// line past its newline: an open quote, a backslash outside single
+/// quotes, a backtick, or a paren.
+private func headerLineEndsCleanly(
+    _ text: String,
+    operatorStart: String.Index,
+    from delimiterEnd: String.Index,
+    to lineEnd: String.Index
+) -> Bool {
+    let lineStart = text[..<operatorStart].lastIndex(of: "\n").map { text.index(after: $0) }
+        ?? text.startIndex
+    let line = String(text[lineStart..<lineEnd])
+    if line.unicodeScalars.contains("\r") { return false }
+    if line.replacingOccurrences(of: "<<<", with: "").components(separatedBy: "<<").count > 2 {
+        return false
+    }
+    var quote: Character?
+    for character in text[delimiterEnd..<lineEnd] {
+        if let open = quote {
+            if open == "\"", character == "\\" { return false }
+            if character == open { quote = nil }
+            continue
+        }
+        if character == "'" || character == "\"" {
+            quote = character
+        } else if "\\`()".contains(character) {
+            return false
+        }
+    }
+    return quote == nil
+}
+
+/// The trimmed body's range, found the way bash finds it: lines split on
+/// LF alone (a CR stays part of its line), ending at the first line equal
+/// to the delimiter. Nil without a terminator line, when a line matches the
+/// delimiter only once its CRs are dropped, or when the trimmed bounds are
+/// not Character boundaries.
+private func placeBody(
+    in text: String,
+    from bodyStart: String.Index,
+    delimiter: String,
+    stripTabs: Bool
+) -> Range<String.Index>? {
+    let scalars = text.unicodeScalars
+    var lineStart = bodyStart
+    var terminatorStart: String.Index?
+    while lineStart < scalars.endIndex {
+        let lineEnd = scalars[lineStart...].firstIndex(of: "\n") ?? scalars.endIndex
+        let line = String(String.UnicodeScalarView(scalars[lineStart..<lineEnd]))
+        let compared = stripTabs ? String(line.drop(while: { $0 == "\t" })) : line
+        if compared == delimiter {
+            terminatorStart = lineStart
+            break
+        }
+        // `EOF\r` ends the body for a shell that drops CRs, not for bash.
+        if compared.replacingOccurrences(of: "\r", with: "") == delimiter { return nil }
+        guard lineEnd < scalars.endIndex else { break }
+        lineStart = scalars.index(after: lineEnd)
+    }
+    guard let terminatorStart else { return nil }
+    let raw = scalars[bodyStart..<terminatorStart]
+    guard let first = raw.firstIndex(where: { $0.properties.isWhitespace == false }),
+        let last = raw.lastIndex(where: { $0.properties.isWhitespace == false })
+    else { return nil }
+    let end = scalars.index(after: last)
+    guard first.samePosition(in: text) != nil, end.samePosition(in: text) != nil else { return nil }
+    return first..<end
+}
+
+private func heredocBody(_ rest: String, delimiter: String, stripTabs: Bool) -> String {
+    var lines: [String] = []
+    var remaining = rest[...]
+    while remaining.isEmpty == false {
+        let line: Substring
+        if let newline = remaining.firstIndex(of: "\n") {
+            line = remaining[..<newline]
+            remaining = remaining[remaining.index(after: newline)...]
+        } else {
+            line = remaining
+            remaining = remaining[remaining.endIndex...]
+        }
+        let compared = stripTabs ? String(line.drop(while: { $0 == "\t" })) : String(line)
+        if compared == delimiter {
+            break
+        }
+        lines.append(String(line))
+    }
+    return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
 }

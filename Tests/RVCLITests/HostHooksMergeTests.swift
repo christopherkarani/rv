@@ -12,7 +12,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -22,7 +22,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -32,7 +32,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -42,7 +42,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -52,7 +52,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -62,7 +62,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -72,7 +72,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -82,7 +82,7 @@ private let claudeFreshBytes = """
       {
         "hooks": [
           {
-            "command": "RV_BINARY=/usr/local/bin/rv python3 /tmp/home/.claude/hooks/rv-guard.py",
+            "command": "RV_BINARY=/usr/local/bin/rv /usr/bin/python3 -I -S /tmp/home/.claude/hooks/rv-guard.py",
             "timeout": 90,
             "type": "command"
           }
@@ -102,9 +102,9 @@ private let codexFreshBytes = """
       {
         "hooks": [
           {
-            "command": "python3 /tmp/home/.codex/hooks/rv-guard.py",
+            "command": "/usr/bin/python3 -I -S /tmp/home/.codex/hooks/rv-guard.py",
             "statusMessage": "RV",
-            "timeout": 5,
+            "timeout": 18,
             "type": "command"
           }
         ],
@@ -121,23 +121,23 @@ private let cursorFreshBytes = """
   "hooks": {
     "beforeReadFile": [
       {
-        "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
+        "command": "/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
-        "timeout": 5
+        "timeout": 18
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
+        "command": "/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
-        "timeout": 5
+        "timeout": 18
       }
     ],
     "preToolUse": [
       {
-        "command": "python3 /tmp/home/.cursor/hooks/rv-guard.py",
+        "command": "/usr/bin/python3 -I -S /tmp/home/.cursor/hooks/rv-guard.py",
         "failClosed": true,
-        "timeout": 5
+        "timeout": 18
       }
     ]
   },
@@ -150,6 +150,7 @@ private let cursorFreshBytes = """
     let merged = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/home/.claude/hooks/rv-guard.py",
         force: false
     )
@@ -160,6 +161,7 @@ private let cursorFreshBytes = """
 @Test func mergeEngine_codexFreshMergeIsByteExact() throws {
     let merged = try CodexHooksMerge.merge(
         existingData: nil,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/home/.codex/hooks/rv-guard.py"
     )
     #expect(merged.wrote)
@@ -169,6 +171,7 @@ private let cursorFreshBytes = """
 @Test func mergeEngine_cursorFreshMergeIsByteExact() throws {
     let merged = try CursorHooksMerge.merge(
         existingData: nil,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/home/.cursor/hooks/rv-guard.py"
     )
     #expect(merged.wrote)
@@ -203,7 +206,7 @@ private let syntheticFlat = HostWiringDescriptor(
 )
 
 private func syntheticContext() -> HookCommandContext {
-    HookCommandContext(rvPath: nil, adapterPath: "/a/ours")
+    HookCommandContext(rvPath: nil, interpreter: "/usr/bin/python3", adapterPath: "/a/ours")
 }
 
 @Test func mergeEngine_nestedStripIsIdempotentAndKeepsForeign() throws {
@@ -316,6 +319,7 @@ private func syntheticContext() -> HookCommandContext {
     let claude = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -326,7 +330,7 @@ private func syntheticContext() -> HookCommandContext {
     #expect(Set(claudeLocated.compactMap { $0.matcher }) == Set(ClaudeSettingsMerge.matchers))
     #expect(Set(claudeLocated.map { $0.listKey }) == [ClaudeSettingsMerge.preToolUseKey])
 
-    let cursor = try CursorHooksMerge.merge(existingData: nil, adapterPath: "/u/rv-guard.py")
+    let cursor = try CursorHooksMerge.merge(existingData: nil, interpreter: "/usr/bin/python3", adapterPath: "/u/rv-guard.py")
     let cursorLocated = HostHooksMergeEngine.locateFingerprintedHooks(
         in: try HostHooksMergeEngine.parseRoot(cursor.data),
         descriptor: CursorHooksMerge.wiringDescriptor
@@ -422,6 +426,7 @@ private func syntheticContext() -> HookCommandContext {
     let merged = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/home/.claude/hooks/rv-guard.py",
         force: false
     )
@@ -441,6 +446,7 @@ private func syntheticContext() -> HookCommandContext {
     let merged = try ClaudeSettingsMerge.merge(
         existingData: occupied,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: true
     )
@@ -459,6 +465,7 @@ private func syntheticContext() -> HookCommandContext {
         _ = try ClaudeSettingsMerge.merge(
             existingData: occupied,
             rvPath: "/r",
+            interpreter: "/usr/bin/python3",
             adapterPath: "/c/hooks/rv-guard.py",
             force: false
         )
@@ -474,6 +481,7 @@ private func syntheticContext() -> HookCommandContext {
     let merged = try ClaudeSettingsMerge.merge(
         existingData: stale,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -528,6 +536,7 @@ private let cursorForeignPretty = """
     let claudeMerged = try ClaudeSettingsMerge.merge(
         existingData: claudeForeign,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -538,6 +547,7 @@ private let cursorForeignPretty = """
 
     let codexMerged = try CodexHooksMerge.merge(
         existingData: claudeForeign,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/x/hooks/rv-guard.py"
     )
     #expect(
@@ -552,6 +562,7 @@ private let cursorForeignPretty = """
     )
     let cursorMerged = try CursorHooksMerge.merge(
         existingData: cursorForeign,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/u/rv-guard.py"
     )
     #expect(
@@ -564,6 +575,7 @@ private let cursorForeignPretty = """
     let claude = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -576,21 +588,22 @@ private let cursorForeignPretty = """
     let claudeAgain = try ClaudeSettingsMerge.merge(
         existingData: claude.data,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
     #expect(claudeAgain.wrote == false)
     #expect(claudeAgain.data == claude.data)
 
-    let codex = try CodexHooksMerge.merge(existingData: nil, adapterPath: "/x/hooks/rv-guard.py")
+    let codex = try CodexHooksMerge.merge(existingData: nil, interpreter: "/usr/bin/python3", adapterPath: "/x/hooks/rv-guard.py")
     #expect(codex.wrote)
-    let codexAgain = try CodexHooksMerge.merge(existingData: codex.data, adapterPath: "/x/hooks/rv-guard.py")
+    let codexAgain = try CodexHooksMerge.merge(existingData: codex.data, interpreter: "/usr/bin/python3", adapterPath: "/x/hooks/rv-guard.py")
     #expect(codexAgain.wrote == false)
     #expect(codexAgain.data == codex.data)
 
-    let cursor = try CursorHooksMerge.merge(existingData: nil, adapterPath: "/u/rv-guard.py")
+    let cursor = try CursorHooksMerge.merge(existingData: nil, interpreter: "/usr/bin/python3", adapterPath: "/u/rv-guard.py")
     #expect(cursor.wrote)
-    let cursorAgain = try CursorHooksMerge.merge(existingData: cursor.data, adapterPath: "/u/rv-guard.py")
+    let cursorAgain = try CursorHooksMerge.merge(existingData: cursor.data, interpreter: "/usr/bin/python3", adapterPath: "/u/rv-guard.py")
     #expect(cursorAgain.wrote == false)
     #expect(cursorAgain.data == cursor.data)
 }
@@ -601,13 +614,13 @@ private let cursorForeignPretty = """
         {"version":9,"hooks":{"beforeShellExecution":[{"command":"foreign","timeout":1}],"preToolUse":[{"command":"other","timeout":2}]}}
         """.utf8
     )
-    let merged = try CursorHooksMerge.merge(existingData: pinned, adapterPath: "/u/rv-guard.py")
+    let merged = try CursorHooksMerge.merge(existingData: pinned, interpreter: "/usr/bin/python3", adapterPath: "/u/rv-guard.py")
     #expect(merged.wrote)
     let root = try #require(
         JSONSerialization.jsonObject(with: merged.data) as? [String: Any]
     )
     #expect(root["version"] as? Int == 9)
-    let again = try CursorHooksMerge.merge(existingData: merged.data, adapterPath: "/u/rv-guard.py")
+    let again = try CursorHooksMerge.merge(existingData: merged.data, interpreter: "/usr/bin/python3", adapterPath: "/u/rv-guard.py")
     #expect(again.wrote == false)
     #expect(again.data == merged.data)
 }
@@ -616,13 +629,14 @@ private let cursorForeignPretty = """
     let claude = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
     #expect(try ClaudeSettingsMerge.uninstall(existingData: claude.data) == nil)
-    let codex = try CodexHooksMerge.merge(existingData: nil, adapterPath: "/x/rv-guard.py")
+    let codex = try CodexHooksMerge.merge(existingData: nil, interpreter: "/usr/bin/python3", adapterPath: "/x/rv-guard.py")
     #expect(try CodexHooksMerge.uninstall(existingData: codex.data) == nil)
-    let cursor = try CursorHooksMerge.merge(existingData: nil, adapterPath: "/u/rv-guard.py")
+    let cursor = try CursorHooksMerge.merge(existingData: nil, interpreter: "/usr/bin/python3", adapterPath: "/u/rv-guard.py")
     #expect(try CursorHooksMerge.uninstall(existingData: cursor.data) == nil)
 }
 
@@ -634,7 +648,7 @@ private let cursorForeignPretty = """
     }.joined(separator: ",")
     let old = Data("{\"hooks\":{\"PreToolUse\":[\(legacy)]}}".utf8)
     let first = try ClaudeSettingsMerge.merge(
-        existingData: old, rvPath: "/r", adapterPath: "/h/hooks/rv-guard.py", force: false
+        existingData: old, rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/h/hooks/rv-guard.py", force: false
     )
     #expect(first.wrote)
     let located = HostHooksMergeEngine.locateFingerprintedHooks(
@@ -644,7 +658,7 @@ private let cursorForeignPretty = """
     #expect(located.compactMap(\.matcher) == ClaudeSettingsMerge.matchers)
     #expect(located.count == 8)
     let again = try ClaudeSettingsMerge.merge(
-        existingData: first.data, rvPath: "/r", adapterPath: "/h/hooks/rv-guard.py", force: false
+        existingData: first.data, rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/h/hooks/rv-guard.py", force: false
     )
     #expect(again.wrote == false)
     #expect(again.data == first.data)
