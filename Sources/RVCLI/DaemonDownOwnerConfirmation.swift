@@ -167,7 +167,7 @@ extension DaemonDownOwnerConfirmation {
         case .cancelled, .failed, .invalidated, .timedOut: return .rejected
         }
         #elseif os(Linux)
-        return unixChkpwdCheck(reason: reason)
+        return await unixChkpwdCheck(reason: reason)
         #else
         return .unavailable
         #endif
@@ -176,7 +176,7 @@ extension DaemonDownOwnerConfirmation {
     /// Linux: the caller's own login password, read from /dev/tty with echo
     /// off and checked by `unix_chkpwd` here, without rvd. Compiled on every
     /// platform so it type-checks; only Linux calls it.
-    static func unixChkpwdCheck(reason: String, checker: UnixChkpwdChecker = UnixChkpwdChecker()) -> LocalCheck {
+    static func unixChkpwdCheck(reason: String, checker: UnixChkpwdChecker = UnixChkpwdChecker()) async -> LocalCheck {
         guard checker.helpers.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             return .unavailable
         }
@@ -186,7 +186,7 @@ extension DaemonDownOwnerConfirmation {
         guard let password = OwnerConfirmation.readOwnerPassword(
             prompt: "\(reason)\nPassword for \(UserName.current ?? "your account"): ")
         else { return .unavailable }
-        switch checker.check(password) {
+        switch await checker.check(password) {
         case .some(true): return .verified
         case .some(false): return .rejected
         case .none: return .unavailable

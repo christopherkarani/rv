@@ -12,8 +12,9 @@ import RVPolicy
 /// Checks the owner's login password. Only rvd calls this, so a CLI cannot
 /// claim success: it can only hand over a password.
 protocol OwnerPasswordChecking: Sendable {
-    /// nil when this system cannot check passwords at all.
-    func check(_ password: String) -> Bool?
+    /// nil when this system cannot check passwords at all, or no answer
+    /// came (timed out or cancelled).
+    func check(_ password: String) async -> Bool?
 }
 
 /// Verifies the invoking user's own password with pam_unix's setgid helper
@@ -35,7 +36,12 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
 
     package init() {}
 
-    package func check(_ password: String) -> Bool? {
+    /// The helper wait blocks for up to `timeout` plus the kill grace, so it
+    /// runs on a thread of its own, never the caller's. A Swift cooperative
+    /// pool thread (one per core) parked that long stalls every other task in
+    /// rvd, hook evaluations included. Cancelling the calling task kills the
+    /// helper and answers nil.
+    package func check(_ password: String) async -> Bool? {
         guard let helper = helpers.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
               let user = Self.userName()
         else { return nil }
@@ -43,6 +49,22 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
         guard bytes.isEmpty == false, bytes.count <= Self.maxPasswordBytes, bytes.contains(0) == false else {
             return false
         }
+        // NUL-terminated, as pam_unix writes it.
+        let payload = Data(bytes + [0])
+        let run = HelperRun()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                Thread.detachNewThread {
+                    continuation.resume(returning: Self.runHelper(helper, user: user, payload: payload, run: run))
+                }
+            }
+        } onCancel: {
+            run.cancel()
+        }
+    }
+
+    /// Blocking; `check` runs it on its own thread.
+    private static func runHelper(_ helper: String, user: String, payload: Data, run: HelperRun) -> Bool? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: helper)
         process.arguments = [user, "nonull"]
@@ -61,16 +83,17 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
         } catch {
             return nil
         }
-        // NUL-terminated, as pam_unix writes it. rvd does not ignore SIGPIPE,
-        // so the write runs on a thread with SIGPIPE blocked: a helper that
-        // exits without reading becomes EPIPE here instead of killing rvd.
+        run.attach(process)
+        defer { run.detach() }
+        // rvd does not ignore SIGPIPE, so the write runs on a thread with
+        // SIGPIPE blocked: a helper that exits without reading becomes EPIPE
+        // here instead of killing rvd.
         let writer = input.fileHandleForWriting
         #if canImport(Darwin)
         // Darwin can still raise a thread-blocked SIGPIPE on the process;
         // this makes the write itself fail with EPIPE instead.
         _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
         #endif
-        let payload = Data(bytes + [0])
         Thread.detachNewThread {
             var blocked = sigset_t()
             sigemptyset(&blocked)
@@ -90,13 +113,54 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
             }
             return nil
         }
-        return process.terminationReason == .exit && process.terminationStatus == 0
+        if process.terminationReason == .exit {
+            return process.terminationStatus == 0
+        }
+        // Killed by a signal: ours after a cancel is no answer, any other a failure.
+        return run.isCancelled ? nil : false
     }
 
     static func userName() -> String? {
         guard let entry = getpwuid(getuid()), let name = entry.pointee.pw_name else { return nil }
         let user = String(cString: name)
         return user.isEmpty ? nil : user
+    }
+}
+
+/// One `unix_chkpwd` launch, so cancelling the check can kill it.
+private final class HelperRun: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    /// Kills the helper at once if the check was cancelled before it started.
+    func attach(_ process: Process) {
+        let cancelled = lock.withLock { () -> Bool in
+            self.process = process
+            return self.cancelled
+        }
+        if cancelled { Self.stop(process) }
+    }
+
+    func detach() {
+        lock.withLock { process = nil }
+    }
+
+    func cancel() {
+        let process = lock.withLock { () -> Process? in
+            cancelled = true
+            return self.process
+        }
+        if let process { Self.stop(process) }
+    }
+
+    /// SIGKILL: the helper has nothing to clean up, and a cancelled check
+    /// must not wait out a helper that ignores SIGTERM.
+    private static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
     }
 }
 
@@ -237,9 +301,8 @@ actor OwnerPresence {
         }
         inFlight = true
         defer { inFlight = false }
-        let checker = checker
-        // Off the actor: the helper is a short blocking process.
-        let result = await Task.detached { checker.check(password) }.value
+        // Suspends: the helper runs off this actor and off the cooperative pool.
+        let result = await checker.check(password)
         switch result {
         case .none:
             return .denied(ConfirmOwnerActionReply(outcome: .unavailable))

@@ -24,9 +24,18 @@ struct OwnerPresenceTests {
             self.accepted = accepted
             self.gate = gate
         }
-        func check(_ password: String) -> Bool? {
+        func check(_ password: String) async -> Bool? {
             calls.withLock { $0 += 1 }
-            gate?.wait()
+            if let gate {
+                // Blocks a thread of its own, as the real helper does, never
+                // a cooperative-pool thread.
+                await withCheckedContinuation { continuation in
+                    Thread.detachNewThread {
+                        gate.wait()
+                        continuation.resume()
+                    }
+                }
+            }
             guard let accepted else { return nil }
             return password == accepted
         }
@@ -291,7 +300,8 @@ struct OwnerPresenceTests {
         let context = Self.unroledXPCContext()
         let started = ContinuousClock.now
         #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .declined)))
-        #expect(ContinuousClock.now - started < .seconds(10))
+        // 200 ms timeout; the slack is CI noise, far short of a starved pool.
+        #expect(ContinuousClock.now - started < .seconds(3))
         // The slot is free again: the next request reaches the prompt.
         #expect(await presence.confirm("y", proof: nil, context: context) == .denied(.init(outcome: .declined)))
         #expect(prompt.promptCount == 2)
@@ -407,18 +417,18 @@ struct OwnerPresenceTests {
     // Linux allow-once redeem: see AllowOnceOwnerPromptTests (it needs a
     // code rvd issued).
 
-    @Test func realUnixChkpwdRejectsAWrongPassword() {
+    @Test func realUnixChkpwdRejectsAWrongPassword() async {
         // Runs against the system helper when present; a random password
         // never matches any account's.
         let checker = UnixChkpwdChecker()
         guard UnixChkpwdChecker.candidates.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             return
         }
-        #expect(checker.check("rv-test-\(UUID().uuidString)") == false)
-        #expect(checker.check("") == false)
+        #expect(await checker.check("rv-test-\(UUID().uuidString)") == false)
+        #expect(await checker.check("") == false)
     }
 
-    @Test func helperThatExitsWithoutReadingIsAWrongPasswordNotACrash() {
+    @Test func helperThatExitsWithoutReadingIsAWrongPasswordNotACrash() async {
         // The password write must not raise SIGPIPE in rvd when the helper
         // exits before reading its stdin.
         guard let quitter = ["/bin/false", "/usr/bin/false"].first(where: {
@@ -427,7 +437,59 @@ struct OwnerPresenceTests {
         var checker = UnixChkpwdChecker()
         checker.helpers = [quitter]
         for _ in 0..<20 {
-            #expect(checker.check(String(repeating: "x", count: 400)) == false)
+            #expect(await checker.check(String(repeating: "x", count: 400)) == false)
         }
+    }
+
+    @Test func hungPasswordHelpersNeitherStarveRvdNorOutliveACancel() async throws {
+        // More hung checks than the cooperative pool has threads. Each can
+        // wait `UnixChkpwdChecker.timeout` for its helper: on the pool they
+        // would park every thread, stalling every other rvd task (hook
+        // evaluations, Hello, the idle watchdog) that long. The probe and the
+        // cancel run from private Dispatch queues so a starved pool still
+        // ends the test.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rv-chkpwd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let hung = dir.appendingPathComponent("unix_chkpwd")
+        try Data("#!/bin/sh\nexec /bin/sleep 30\n".utf8).write(to: hung)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hung.path)
+        let checker = {
+            var checker = UnixChkpwdChecker()
+            checker.helpers = [hung.path]
+            return checker
+        }()
+        let checks = ProcessInfo.processInfo.activeProcessorCount * 3
+        let probeRan = Mutex<ContinuousClock.Instant?>(nil)
+        let cancelledAt = Mutex<ContinuousClock.Instant?>(nil)
+        let started = ContinuousClock.now
+        let running = Task {
+            await withTaskGroup(of: Bool?.self) { group in
+                for _ in 0..<checks {
+                    group.addTask { await checker.check("rv-test-password") }
+                }
+                return await group.reduce(into: [Bool?]()) { $0.append($1) }
+            }
+        }
+        DispatchQueue(label: "test.probe").asyncAfter(deadline: .now() + .milliseconds(300)) {
+            Task.detached { probeRan.withLock { $0 = ContinuousClock.now } }
+        }
+        DispatchQueue(label: "test.cancel").asyncAfter(deadline: .now() + .seconds(2)) {
+            cancelledAt.withLock { $0 = ContinuousClock.now }
+            running.cancel()
+        }
+        let results = await running.value
+        let elapsed = ContinuousClock.now - started
+        // A cancelled check is "cannot check" (never a strike), and it kills
+        // its helper rather than waiting out the 10 s timeout.
+        #expect(results.count == checks)
+        #expect(results.allSatisfy { $0 == nil })
+        #expect(elapsed < .seconds(6), "hung checks took \(elapsed) to end after the cancel")
+        while probeRan.withLock({ $0 }) == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let ran = try #require(probeRan.withLock { $0 })
+        let cancelled = try #require(cancelledAt.withLock { $0 })
+        #expect(ran < cancelled, "an unrelated task only ran \(ran - cancelled) after the hung checks were cancelled")
     }
 }
