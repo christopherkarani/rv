@@ -1,10 +1,12 @@
 /* Linux test double for run.sh, installed as the sibling `rvd` so the
  * hook's peer check (SO_PEERCRED + /proc/<pid>/exe) accepts it.
  *
- *   fake_rvd drop  <socket> <record>  accept one connection, read the whole
- *       request frame, write its byte count to <record>, then close without
- *       replying: a verified daemon dropping an in-flight request (rvd does
- *       this while draining).
+ *   fake_rvd drop  <socket> <record>  accept one connection, unlink the
+ *       socket (so a retry finds no daemon), read the whole request frame,
+ *       write its byte count to <record>, then close without replying: a
+ *       verified daemon dropping an in-flight request (rvd does this while
+ *       draining). Run from a non-sibling path, the hook refuses the peer and
+ *       sends nothing; the record is then never written.
  *   fake_rvd stale <socket>           bind and exit without listening: the
  *       socket file stays and connect gets ECONNREFUSED.
  */
@@ -73,6 +75,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     conn = accept(server, NULL, NULL);
+    unlink(argv[2]);
     if (conn < 0 || read_exact(conn, header, 4) != 0) {
         return 1;
     }
@@ -90,7 +93,6 @@ int main(int argc, char **argv) {
     fclose(record);
     close(conn);
     close(server);
-    unlink(argv[2]);
     free(body);
     return 0;
 }

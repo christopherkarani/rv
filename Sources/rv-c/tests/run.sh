@@ -572,7 +572,23 @@ if [[ "$down_ready" -eq 1 ]]; then
       printf 'rv-c tests: post-send drop must not take the observe path\n' >&2
       exit 1
     fi
-    rm -f "$PROBE/rvd"
+    # A daemon that fails the peer check and is gone by the retry: the
+    # retry's ENOENT does not prove absence after a live (if unverified)
+    # daemon answered, so the untrusted deny stands.
+    cp "$PROBE/rvd" "$OUT/not-the-sibling"
+    "$OUT/not-the-sibling" drop "$OWNER_RUNTIME/rv/evaluate.sock" "$OUT/untrusted.record" &
+    untrusted_pid=$!
+    for _try in $(seq 1 50); do
+      [[ -S "$OWNER_RUNTIME/rv/evaluate.sock" ]] && break
+      sleep 0.1
+    done
+    expect_down untrusted-then-gone claude "" 0 '"permissionDecision":"deny"' "$REASON_REJECTED"
+    wait "$untrusted_pid" || true
+    if [[ -e "$OUT/untrusted.record" ]]; then
+      printf 'rv-c tests: hook sent request bytes to an unverified daemon\n' >&2
+      exit 1
+    fi
+    rm -f "$PROBE/rvd" "$OUT/not-the-sibling"
     DOWN_ENV=("${LINUX_DOWN_ENV[@]}")
     printf 'rv-c daemon-down fallback: Linux socket classification passed\n'
   fi

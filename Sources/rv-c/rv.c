@@ -1047,7 +1047,10 @@ static int unix_hook_evaluate(
 #endif
 
 /* One retry, only for transient failures before the hookEvaluate request
- * left this process (cold launchd spawn, idle-exit race). */
+ * left this process (cold launchd spawn, idle-exit race). A daemon that
+ * answered the first attempt in any way (untrusted, interrupted, slow) was
+ * live, so a retry that then finds none is not proof of absence: the first
+ * such failure is reported instead of UNREACHABLE. */
 static int hook_evaluate(
     const char *request,
     size_t request_len,
@@ -1057,6 +1060,7 @@ static int hook_evaluate(
 ) {
     int attempt;
     int failure = RV_HOOK_FAIL_CONNECTION;
+    int seen_live = 0;
     for (attempt = 0; attempt < 2; attempt++) {
         int retryable = 0;
 #ifdef __APPLE__
@@ -1068,6 +1072,11 @@ static int hook_evaluate(
         failure = unix_hook_evaluate(
             request, request_len, reply_json, reply_len, &retryable);
 #endif
+        if (failure == RV_HOOK_FAIL_UNREACHABLE && seen_live != 0) {
+            failure = seen_live;
+        } else if (failure != 0 && failure != RV_HOOK_FAIL_UNREACHABLE && seen_live == 0) {
+            seen_live = failure;
+        }
         if (failure == 0 || !retryable) {
             break;
         }
