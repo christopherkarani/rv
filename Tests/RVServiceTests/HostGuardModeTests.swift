@@ -236,11 +236,20 @@ struct HostGuardModeTests {
         #expect(ledgerRows(home).allSatisfy { $0.observed == false }, "\(command)")
     }
 
-    @Test("enforce host: stopping or replacing rvd is not allowed either", arguments: [
-        "launchctl bootout gui/501/dev.rv.evaluate",
-        "rm ~/.local/bin/rvd",
+    // The stop/install floors are observe-only: an enforce host must not be
+    // newly floored, and the everyday commands these resemble stay allowed.
+    @Test("enforce host: install-adjacent everyday commands stay allowed", arguments: [
+        "export PATH=\"$HOME/.local/bin:$PATH\"",
+        "PATH=$HOME/.local/bin:$PATH npm test",
+        "open ~/.local/bin",
+        "rg foo ~",
+        "git -C ~ status",
+        "pkill -f 'rails s'",
+        "pkill -P $$",
+        "git commit -m 'fix: pkill rvd bug'",
+        "swift build --product rv",
     ])
-    func enforceHostShellKeepsRVDLifecycle(command: String) async throws {
+    func enforceHostEverydayAllowed(command: String) async throws {
         let home = try hostHome(#"{"guard":{"hosts":{"claude":"block"}}}"#)
         defer { remove(home) }
         let result = await GatedEvaluate().apply(
@@ -248,7 +257,26 @@ struct HostGuardModeTests {
             grants: EphemeralAllowOnceTable(), now: Self.now,
             allowlist: { .empty }, host: .hook(.claude)
         )
-        #expect(result.decision != .allow, "\(command)")
+        #expect(result.decision == .allow, "\(command)")
+    }
+
+    // On an enforce host stopping rvd fails closed on its own; the floor is
+    // not added there, so these keep their base (non-floored) verdict.
+    @Test("enforce host: stopping or replacing rvd is not a self-protection floor", arguments: [
+        "launchctl bootout gui/501/dev.rv.evaluate",
+        "pkill -f rvd",
+    ])
+    func enforceHostNoLifecycleFloor(command: String) async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"block"}}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        if case .indeterminate(.selfProtection) = result.decision {
+            Issue.record("enforce host newly floored: \(command)")
+        }
     }
 
     @Test("observe host: file door never allows writing rv's install; reads are observed allows", arguments: [
