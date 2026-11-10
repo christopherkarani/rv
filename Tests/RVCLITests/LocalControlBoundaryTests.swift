@@ -13,7 +13,7 @@ struct LocalControlBoundaryTests {
         let client = try isolatedClient(transport: nil)
         for host in HookHost.allCases {
             let wire = await client.hookEvaluate(host: host, stdin: "{}", whenDown: .deny)
-            #expect(wire == HookDaemonFallback.wire(host: host, failure: .unreachable, mode: .deny))
+            #expect(wire == HookDaemonFallback.wire(host: host, failure: .connection, mode: .deny))
             #expect(!wire.stdout.isEmpty)
             if host == .codex {
                 #expect(wire.exitCode == 2)
@@ -230,6 +230,16 @@ struct LocalControlBoundaryTests {
         #expect(outcome.stderr.contains("rv doctor"))
     }
 
+    @Test func observeSetupWarnsThatADownServiceLeavesCommandsUnchecked() async throws {
+        // Under observe a dead rvd no longer blocks: hooks step aside, so the
+        // warning must say commands run unchecked, not that they block.
+        let outcome = try await wiredSetupOutcome(serviceUp: false, observe: true)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.contains(SetupServiceWarning.observeText))
+        #expect(!outcome.stderr.contains(SetupServiceWarning.text))
+        #expect(SetupServiceWarning.observeText.contains("rv doctor"))
+    }
+
     @Test func setupStaysQuietWhenWiredHostsHaveALiveService() async throws {
         let outcome = try await wiredSetupOutcome(serviceUp: true)
         #expect(outcome.exitCode == 0)
@@ -248,7 +258,7 @@ struct LocalControlBoundaryTests {
     /// Runs setup against a home with one wired host and a stubbed probe.
     /// Asserted on the outcome, not a captured fd: fd capture deadlocks
     /// under parallel test execution.
-    private func wiredSetupOutcome(serviceUp: Bool) async throws -> SetupOutcome {
+    private func wiredSetupOutcome(serviceUp: Bool, observe: Bool = false) async throws -> SetupOutcome {
         let home = try isolatedHome()
         let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
         try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
@@ -268,11 +278,13 @@ struct LocalControlBoundaryTests {
                     force: false,
                     appearance: .robot,
                     animate: false,
-                    ceremonyKind: .setup
+                    ceremonyKind: .setup,
+                    observe: observe
                 ),
                 clock: LiveSetupCeremonyClock(),
                 write: CeremonyCLI.stdoutWriter(),
-                probeService: { _ in serviceUp }
+                probeService: { _ in serviceUp },
+                authenticate: {}
             )
         }
     }

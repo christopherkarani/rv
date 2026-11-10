@@ -377,5 +377,7 @@ struct NetworkReviewQueueTests {
         let again = try #require(EgressLoadedSnapshot.parse(againData))
         #expect(again.generation == 4)
         #expect(again.rules == [ruleA])
+        let mode = try #require(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int)
+        #expect(mode & 0o777 == 0o600, "the loaded snapshot is owner-only")
     }
 }

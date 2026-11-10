@@ -1173,16 +1173,6 @@ extension WorkspaceRecovery {
     }
 }
 
-/// Mount observation shared by recovery and the inode boundary.
-enum WorkspaceMountObservation: CaseIterable, Equatable, Sendable {
-    case ownedMount
-    case missingMount
-    case originalRestored
-    case unrelatedMount
-    case savedTreeMismatch
-    case ambiguous
-}
-
 enum RVIsolationMount {
     static func observe(
         project: String,

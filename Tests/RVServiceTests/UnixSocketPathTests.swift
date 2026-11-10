@@ -27,6 +27,30 @@ struct UnixSocketPathTests {
         }
     }
 
+    /// Mirrors `unix_socket_path` in Sources/rv-c/rv.c: only the uid-derived
+    /// runtime dir is the owner's, because an agent can set XDG_RUNTIME_DIR
+    /// through project-scoped host config.
+    @Test func clientSocketFallsBackToTheUidRuntimeDirAndMarksOnlyItAsTheOwners() throws {
+        let unset = try #require(UnixSocketPath.clientSocket(xdgRuntimeDir: nil, uid: 1000))
+        #expect(unset.url.path == "/run/user/1000/rv/evaluate.sock")
+        #expect(unset.isOwnerRuntime)
+
+        let same = try #require(UnixSocketPath.clientSocket(xdgRuntimeDir: "/run/user/1000", uid: 1000))
+        #expect(same == unset)
+
+        let foreign = try #require(UnixSocketPath.clientSocket(xdgRuntimeDir: "/tmp/agent-dir", uid: 1000))
+        #expect(foreign.url.path == "/tmp/agent-dir/rv/evaluate.sock")
+        #expect(foreign.isOwnerRuntime == false)
+        // Same socket file, but not the exact uid-derived string: fail closed like C.
+        let slash = try #require(UnixSocketPath.clientSocket(xdgRuntimeDir: "/run/user/1000/", uid: 1000))
+        #expect(slash.isOwnerRuntime == false)
+        let otherUser = try #require(UnixSocketPath.clientSocket(xdgRuntimeDir: "/run/user/1001", uid: 1000))
+        #expect(otherUser.isOwnerRuntime == false)
+
+        #expect(UnixSocketPath.clientSocket(xdgRuntimeDir: "", uid: 1000) == nil)
+        #expect(UnixSocketPath.clientSocket(xdgRuntimeDir: "/tmp/" + String(repeating: "x", count: 120), uid: 1000) == nil)
+    }
+
     #if os(Linux)
     @Test func productionReadsInjectedXDGNotTmpFallback() throws {
         let previous = liveXDG()
