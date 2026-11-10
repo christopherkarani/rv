@@ -3,119 +3,67 @@ import RVDomain
 import RVHooks
 import Testing
 
-// Every non-Claude host adapter names why it blocked: its own timeout, an
-// unreadable reply, a crash and a spawn failure each read differently, and
-// none of them says "rv failed", emits ask, or allows. Wording matches the
-// Claude adapter (`rv-guard-claude.py.tmpl`) so every host says the same.
-
-enum AdapterFailureClass: String, CaseIterable, Sendable {
-    case timeout, badReply, exitStatus, signal, spawnFailed
-}
+// Fail-closed cases for the non-Claude host adapters that
+// AdapterFailureMessageTests, AdapterHookTests and OpenClawHostAskAdapterTests
+// do not reach: rv killed by a signal, a Node adapter that cannot spawn rv, an
+// exit-0 reply that is not a usable decision, and Cursor's reasonless native
+// ask. Each must block with an actionable reason, never allow or emit ask.
 
 private let failureHosts: [HookHost] = [
     .codex, .cursor, .antigravity, .hermes, .pi, .opencode, .openclaw,
 ]
 
-private let badReplyReason =
-    "RV hook sent an unreadable reply (version skew after an upgrade?). Run `rv doctor`; `rv setup` repairs the install."
-private let spawnFailedReason =
-    "RV hook could not be started. Run `rv doctor`; `rv setup` repairs the install."
-private let daemonDownReason =
-    "RV daemon is not reachable or did not answer in time. Run `rv doctor`."
-/// `kUnreachableMessage` in `Sources/rv-c/hook_fallback.c`.
-private let cUnreachableReason =
-    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
-
-private func shimTimeoutReason(seconds: String) -> String {
-    "RV hook did not finish within \(seconds) s (rvd busy or hung?). Retry; if it persists run `rv doctor`."
-}
-
-private func exitReason(_ status: String) -> String {
-    "RV hook \(status) without a decision. Run `rv doctor`; `rv setup` repairs the install."
-}
+private let nodeHosts: [HookHost] = [.pi, .opencode, .openclaw]
 
 private func isNode(_ host: HookHost) -> Bool {
-    host == .pi || host == .opencode || host == .openclaw
+    nodeHosts.contains(host)
 }
 
-/// Expected reason for `kind`, given the test-shortened shim budget.
-private func expectedReason(_ kind: AdapterFailureClass, host: HookHost) -> String {
-    switch kind {
-    case .timeout: shimTimeoutReason(seconds: isNode(host) ? "0.5" : "1")
-    case .badReply: badReplyReason
-    case .exitStatus: exitReason("exited with status 70")
-    case .signal: exitReason("was killed by signal 9")
-    case .spawnFailed: spawnFailedReason
-    }
-}
-
-private func stub(for kind: AdapterFailureClass) -> FailureStub {
-    switch kind {
-    case .timeout: .sleep(seconds: 4)
-    case .badReply: .reply("not-json\n", exit: 0)
-    case .exitStatus: .reply("", exit: 70)
-    case .signal: .signal(9)
-    case .spawnFailed: .notExecutable
-    }
-}
-
-@Test(arguments: failureHosts, AdapterFailureClass.allCases)
-func adapterFailure_deniesWithItsOwnReason(host: HookHost, kind: AdapterFailureClass) async throws {
-    let outcome = try await runFailingAdapter(host: host, stub: stub(for: kind), shortTimeout: kind == .timeout)
-    let label = Comment(rawValue: "\(host.rawValue) \(kind.rawValue): \(outcome.raw)")
+/// Python sees the negative signal as the return code; Node's `close` gives a null code.
+@Test(arguments: failureHosts)
+func adapterKilledBySignal_denies(host: HookHost) async throws {
+    let outcome = try await runFailingAdapter(host: host, stub: .signal(9))
+    let label = Comment(rawValue: "\(host.rawValue): \(outcome.raw)")
+    let expected = isNode(host)
+        ? "rv was stopped before it returned a decision. Run `rv doctor`."
+        : "rv exited with code -9 without a usable decision. Run `rv doctor`."
     #expect(outcome.denied, label)
-    #expect(outcome.reason == expectedReason(kind, host: host), label)
+    #expect(outcome.reason == expected, label)
     #expect(outcome.raw.contains("\"ask\"") == false, label)
 }
 
-@Test(arguments: failureHosts, ["[1,2]\n", "{\"decision\":\"maybe\"}\n"])
-func adapterUnrecognizedReply_deniesAsBadReply(host: HookHost, stdout: String) async throws {
+/// Python hosts are covered by `AdapterFailureMessageTests.notExecutable_saysCouldNotStart`.
+@Test(arguments: nodeHosts)
+func nodeAdapterSpawnFailure_namesPathAndError(host: HookHost) async throws {
+    let outcome = try await runFailingAdapter(host: host, stub: .notExecutable)
+    let label = Comment(rawValue: "\(host.rawValue): \(outcome.raw)")
+    #expect(outcome.denied, label)
+    #expect(
+        outcome.reason == "rv at \(outcome.rvPath) could not be started: EACCES. Run `rv doctor`.",
+        label
+    )
+}
+
+@Test(arguments: failureHosts, ["not-json\n", "[1,2]\n", "{\"decision\":\"maybe\"}\n"])
+func adapterUnusableReplyWithExitZero_denies(host: HookHost, stdout: String) async throws {
     let outcome = try await runFailingAdapter(host: host, stub: .reply(stdout, exit: 0))
     let label = Comment(rawValue: "\(host.rawValue): \(outcome.raw)")
     #expect(outcome.denied, label)
-    #expect(outcome.reason == badReplyReason, label)
+    #expect(outcome.reason == "rv exited with code 0 without a usable decision. Run `rv doctor`.", label)
 }
 
-@Test(arguments: failureHosts)
-func adapterFailureReasons_areDistinctPerHost(host: HookHost) {
-    let reasons = AdapterFailureClass.allCases.map { expectedReason($0, host: host) }
-    #expect(Set(reasons + ["rv missing", "rv failed"]).count == reasons.count + 2)
-}
-
-@Test(arguments: [HookHost.cursor, .antigravity])
-func explicitAllowHost_emptyReplyDeniesAsBadReply(host: HookHost) async throws {
-    let outcome = try await runFailingAdapter(host: host, stub: .reply("", exit: 0))
-    #expect(outcome.denied, Comment(rawValue: outcome.raw))
-    #expect(outcome.reason == badReplyReason, Comment(rawValue: outcome.raw))
-}
-
-@Test func cursorDownAsk_deniesWithTheCHookUserMessage() async throws {
-    // `render_ask` for Cursor (`RV_HOOK_WHEN_DOWN=ask`).
-    let ask = "{\"permission\":\"ask\",\"user_message\":\"\(cUnreachableReason)\",\"agent_message\":\"\(cUnreachableReason)\"}\n"
-    let outcome = try await runFailingAdapter(host: .cursor, stub: .reply(ask, exit: 0))
-    #expect(outcome.denied, Comment(rawValue: outcome.raw))
-    #expect(outcome.reason == cUnreachableReason, Comment(rawValue: outcome.raw))
-    #expect(outcome.raw.contains("\"ask\"") == false, Comment(rawValue: outcome.raw))
-}
-
-@Test func cursorDownAskWithoutMessage_deniesAsDaemonDown() async throws {
+@Test func cursorDownAskWithoutMessage_deniesWithGuidance() async throws {
     let outcome = try await runFailingAdapter(host: .cursor, stub: .reply("{\"permission\":\"ask\"}\n", exit: 0))
-    #expect(outcome.denied, Comment(rawValue: outcome.raw))
-    #expect(outcome.reason == daemonDownReason, Comment(rawValue: outcome.raw))
-    #expect(outcome.raw.contains("\"ask\"") == false, Comment(rawValue: outcome.raw))
-}
-
-@Test(arguments: failureHosts)
-func shippedShimTimeout_isFifteenSeconds(host: HookHost) throws {
-    let source = try HostAdapterResources.load(for: host).rendered(rvPath: "/opt/rv")
-    #expect(source.contains(isNode(host) ? "const RV_HOOK_TIMEOUT_MS = 15000;" : "RV_HOOK_TIMEOUT_S = 15\n"))
+    let label = Comment(rawValue: outcome.raw)
+    #expect(outcome.denied, label)
+    #expect(outcome.reason == "rv blocked this action without giving a reason. Run `rv doctor`.", label)
+    #expect(outcome.raw.contains("\"ask\"") == false, label)
 }
 
 // MARK: - Runner
 
 private enum FailureStub: Sendable {
     case reply(String, exit: Int32)
-    case sleep(seconds: Int)
     case signal(Int32)
     case notExecutable
 }
@@ -124,6 +72,7 @@ private struct FailureOutcome {
     var denied: Bool
     var reason: String?
     var raw: String
+    var rvPath: String = ""
 }
 
 private func hostEvent(_ host: HookHost) -> [String: Any] {
@@ -158,9 +107,6 @@ private func writeStubRV(at path: URL, executable: Bool) throws {
     if [ -n "$RV_STUB_SIGNAL" ]; then
       kill -"$RV_STUB_SIGNAL" $$
     fi
-    if [ -n "$RV_STUB_SLEEP" ]; then
-      exec sleep "$RV_STUB_SLEEP"
-    fi
     printf '%s' "$RV_STUB_STDOUT"
     exit "${RV_STUB_EXIT:-0}"
     """
@@ -173,8 +119,7 @@ private func writeStubRV(at path: URL, executable: Bool) throws {
 
 private func runFailingAdapter(
     host: HookHost,
-    stub: FailureStub,
-    shortTimeout: Bool = false
+    stub: FailureStub
 ) async throws -> FailureOutcome {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-fail-\(UUID().uuidString)", isDirectory: true)
@@ -188,14 +133,7 @@ private func runFailingAdapter(
         try writeStubRV(at: rvPath, executable: true)
     }
 
-    var source = try HostAdapterResources.load(for: host).rendered(rvPath: rvPath.path)
-    if shortTimeout {
-        let (shipped, short) = isNode(host)
-            ? ("const RV_HOOK_TIMEOUT_MS = 15000;", "const RV_HOOK_TIMEOUT_MS = 500;")
-            : ("RV_HOOK_TIMEOUT_S = 15\n", "RV_HOOK_TIMEOUT_S = 1\n")
-        #expect(source.contains(shipped))
-        source = source.replacingOccurrences(of: shipped, with: short)
-    }
+    let source = try HostAdapterResources.load(for: host).rendered(rvPath: rvPath.path)
 
     var environment = ProcessInfo.processInfo.environment
     environment["HOME"] = root.path
@@ -204,8 +142,6 @@ private func runFailingAdapter(
     case .reply(let stdout, let exitCode):
         environment["RV_STUB_STDOUT"] = stdout
         environment["RV_STUB_EXIT"] = String(exitCode)
-    case .sleep(let seconds):
-        environment["RV_STUB_SLEEP"] = String(seconds)
     case .signal(let signal):
         environment["RV_STUB_SIGNAL"] = String(signal)
     case .notExecutable:
@@ -266,7 +202,9 @@ private func runFailingAdapter(
     let out = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     process.waitUntilExit()
-    return try parseOutcome(host: host, stdout: out, stderr: err, exitCode: process.terminationStatus)
+    var outcome = try parseOutcome(host: host, stdout: out, stderr: err, exitCode: process.terminationStatus)
+    outcome.rvPath = rvPath.path
+    return outcome
 }
 
 private func parseOutcome(host: HookHost, stdout: String, stderr: String, exitCode: Int32) throws -> FailureOutcome {
