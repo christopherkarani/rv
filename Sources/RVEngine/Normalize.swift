@@ -390,11 +390,21 @@ private func consumeWrapper(decoded: String, seek: inout WrapperSeek) -> String?
         seek = .none
         return nil
     case .envAssignments:
-        if envFlagTakesValue(decoded) {
-            seek = .envFlagValue
-            return .some(nil)
+        if decoded.hasPrefix("-") {
+            switch envOptionShape(decoded) {
+            case .valueNext, .splitString:
+                seek = .envFlagValue
+                return .some(nil)
+            case .flag, .chdirAttached:
+                return .some(nil)
+            case .unknown:
+                // Which word is argv0 is unknown: take the option itself,
+                // which is no data command, so nothing after it is masked.
+                seek = .none
+                return nil
+            }
         }
-        if decoded.contains("=") || decoded.hasPrefix("-") {
+        if decoded.contains("=") {
             return .some(nil)
         }
         seek = .none
