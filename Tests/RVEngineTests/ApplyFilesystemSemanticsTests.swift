@@ -766,6 +766,7 @@ private func runFilesystemPack(
     secrets: SecretPathCatalog = .dayOne
 ) throws -> EvaluationResult {
     let world = try filesystemSampleWorld()
+    var budget = PatternBudget()
     // The pack pass as the semantic door runs it: the unresolved-invocation
     // ask is the door's last step, so semantic denies still apply here.
     return evaluateGated(
@@ -774,7 +775,7 @@ private func runFilesystemPack(
         secretPaths: SecretPathDecider(catalog: secrets),
         engine: world.engine,
         compiled: world.compiled,
-        patternBudget: PatternBudget(),
+        patternBudget: &budget,
         floorUnresolved: false
     )
 }

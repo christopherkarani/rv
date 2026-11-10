@@ -20,6 +20,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     policy: EffectiveActionPolicy = .empty,
     patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
+    var budget = patternBudget
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluateSemanticsOnce(
             request,
@@ -31,7 +32,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
             gitProbe: gitProbe,
             filesystemProbe: filesystemProbe,
             policy: policy,
-            patternBudget: patternBudget
+            patternBudget: &budget
         )
     }
     // An alias body is judged by the same door: `git -c alias.p=push p`
@@ -53,7 +54,7 @@ private func evaluateSemanticsOnce<E: PatternEngine>(
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
     policy: EffectiveActionPolicy,
-    patternBudget: PatternBudget
+    patternBudget: inout PatternBudget
 ) -> EvaluationResult {
     // The unresolved-invocation ask waits for the door's own gate, so a
     // semantic deny below still wins over it.
@@ -63,7 +64,7 @@ private func evaluateSemanticsOnce<E: PatternEngine>(
         secretPaths: secretPaths,
         engine: engine,
         compiled: compiled,
-        patternBudget: patternBudget,
+        patternBudget: &patternBudget,
         floorUnresolved: false
     )
     let unwrapped = unwrapCommand(

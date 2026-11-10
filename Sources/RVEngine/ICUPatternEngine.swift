@@ -39,11 +39,11 @@ public struct ICUPatternEngine: PatternEngine, Sendable {
     public func search(
         _ compiled: ICUCompiledPattern,
         in text: String,
-        budget: PatternBudget
+        budget: inout PatternBudget
     ) -> PatternSearch {
         guard budget.isSpent == false else { return .exhausted }
         let search = budget.beginSearch()
-        defer { search.finish() }
+        defer { budget.finish(search) }
         let full = NSRange(text.startIndex..., in: text)
         var found: NSRange?
         var exhausted = false

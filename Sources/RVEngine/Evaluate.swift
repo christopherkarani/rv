@@ -5,8 +5,8 @@ public let commandByteCap = 65_536
 
 /// Returns the pack-only evaluation of `request`; semantic policy is `evaluateWithSemantics`.
 /// An allow is tightened by the alias bodies the command uses or defines.
-/// `patternBudget` bounds all pattern matching for the request; callers
-/// that evaluate one request in several passes share one budget.
+/// `patternBudget` bounds all pattern matching for the request: every pass
+/// (segments, full view, alias expansions) charges the same allowance.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
@@ -15,9 +15,10 @@ public func evaluate<E: PatternEngine>(
     compiled: CompiledPacks<E.Compiled>,
     patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
-    evaluateGated(
+    var budget = patternBudget
+    return evaluateGated(
         request, packs: packs, secretPaths: secretPaths, engine: engine,
-        compiled: compiled, patternBudget: patternBudget, floorUnresolved: true
+        compiled: compiled, patternBudget: &budget, floorUnresolved: true
     )
 }
 
@@ -28,13 +29,13 @@ func evaluateGated<E: PatternEngine>(
     secretPaths: SecretPathDecider,
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
-    patternBudget: PatternBudget,
+    patternBudget: inout PatternBudget,
     floorUnresolved: Bool
 ) -> EvaluationResult {
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluatePacks(
             request, packs: packs, secretPaths: secretPaths, engine: engine,
-            compiled: compiled, timeBudget: patternBudget
+            compiled: compiled, timeBudget: &patternBudget
         )
     }
     return gateAliases(
@@ -53,7 +54,7 @@ private func evaluatePacks<E: PatternEngine>(
     secretPaths: SecretPathDecider,
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
-    timeBudget: PatternBudget
+    timeBudget: inout PatternBudget
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -100,7 +101,7 @@ private func evaluatePacks<E: PatternEngine>(
                 engine: engine,
                 attempts: &attempts,
                 budget: budget,
-                timeBudget: timeBudget,
+                timeBudget: &timeBudget,
                 exhausted: &exhausted,
                 ranPacks: &ranPacks
             )
@@ -119,7 +120,7 @@ private func evaluatePacks<E: PatternEngine>(
         engine: engine,
         attempts: &attempts,
         budget: budget,
-        timeBudget: timeBudget,
+        timeBudget: &timeBudget,
         exhausted: &exhausted,
         ranPacks: &fullViewRanPacks,
         segments: judged
@@ -233,7 +234,7 @@ private func evaluateSingle<E: PatternEngine>(
     engine: E,
     attempts: inout Int,
     budget: Int?,
-    timeBudget: PatternBudget,
+    timeBudget: inout PatternBudget,
     exhausted: inout Bool,
     ranPacks: inout Set<PackID>,
     segments: [JudgedSegment] = []
@@ -261,7 +262,7 @@ private func evaluateSingle<E: PatternEngine>(
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
-            switch engine.search(named.compiled, in: view, budget: timeBudget) {
+            switch engine.search(named.compiled, in: view, budget: &timeBudget) {
             case .exhausted:
                 // Never vouches: the pack's destructive rules still run.
                 exhausted = true
@@ -297,7 +298,7 @@ private func evaluateSingle<E: PatternEngine>(
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
             let range: Range<String.Index>
-            switch engine.search(rule.compiled, in: view, budget: timeBudget) {
+            switch engine.search(rule.compiled, in: view, budget: &timeBudget) {
             case .exhausted:
                 exhausted = true
                 continue

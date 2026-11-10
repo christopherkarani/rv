@@ -15,39 +15,39 @@ struct PatternTimeBoundTests {
     @Test func icuSearch_pastPerSearchCap_isExhausted() throws {
         let engine = ICUPatternEngine()
         let compiled = try engine.compile(catastrophic)
-        let budget = PatternBudget(perSearchCPU: .milliseconds(50))
+        var budget = PatternBudget(perSearchCPU: .milliseconds(50))
         let started = ContinuousClock.now
-        #expect(engine.search(compiled, in: nearMiss, budget: budget) == .exhausted)
+        #expect(engine.search(compiled, in: nearMiss, budget: &budget) == .exhausted)
         #expect(ContinuousClock.now - started < .seconds(5))
     }
 
     @Test func icuSearch_spentBudget_isExhaustedWithoutSearching() throws {
         let engine = ICUPatternEngine()
         let compiled = try engine.compile(#"git\s+status"#)
-        let budget = PatternBudget(totalCPU: .zero)
+        var budget = PatternBudget(totalCPU: .zero)
         #expect(budget.isSpent)
-        #expect(engine.search(compiled, in: "git status", budget: budget) == .exhausted)
+        #expect(engine.search(compiled, in: "git status", budget: &budget) == .exhausted)
     }
 
     @Test func icuSearch_withinBudget_matchesLikeFirstMatch() throws {
         let engine = ICUPatternEngine()
         let compiled = try engine.compile(#"git\s+reset\s+--hard"#)
         let text = "cd x && git reset --hard"
-        let budget = PatternBudget()
-        guard case .match(let range) = engine.search(compiled, in: text, budget: budget) else {
+        var budget = PatternBudget()
+        guard case .match(let range) = engine.search(compiled, in: text, budget: &budget) else {
             Issue.record("expected a match")
             return
         }
         #expect(range == engine.firstMatch(compiled, in: text))
-        #expect(engine.search(compiled, in: "git status", budget: budget) == .noMatch)
+        #expect(engine.search(compiled, in: "git status", budget: &budget) == .noMatch)
     }
 
     @Test func budget_isSharedAcrossSearches() throws {
         let engine = ICUPatternEngine()
         let compiled = try engine.compile(catastrophic)
-        let budget = PatternBudget(totalCPU: .milliseconds(60), perSearchCPU: .milliseconds(40))
-        _ = engine.search(compiled, in: nearMiss, budget: budget)
-        _ = engine.search(compiled, in: nearMiss, budget: budget)
+        var budget = PatternBudget(totalCPU: .milliseconds(60), perSearchCPU: .milliseconds(40))
+        _ = engine.search(compiled, in: nearMiss, budget: &budget)
+        _ = engine.search(compiled, in: nearMiss, budget: &budget)
         #expect(budget.isSpent)
     }
 

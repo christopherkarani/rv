@@ -5,11 +5,12 @@ public protocol PatternEngine: Sendable {
     func compile(_ pattern: String) throws(PatternCompileError) -> Compiled
     func matches(_ compiled: Compiled, in text: String) -> Bool
     func firstMatch(_ compiled: Compiled, in text: String) -> Range<String.Index>?
-    /// `firstMatch` bounded by `budget`. An engine that cannot finish
-    /// within it returns `.exhausted`: a timed-out safe pattern never
+    /// `firstMatch` bounded by `budget`, which the search charges. An
+    /// engine that cannot finish within it returns `.exhausted`: a
+    /// timed-out safe pattern never
     /// vouches, and a timed-out destructive pattern leaves the verdict
     /// indeterminate unless another rule denies.
-    func search(_ compiled: Compiled, in text: String, budget: PatternBudget) -> PatternSearch
+    func search(_ compiled: Compiled, in text: String, budget: inout PatternBudget) -> PatternSearch
 }
 
 /// Outcome of one bounded pattern search.
@@ -25,10 +26,10 @@ extension PatternEngine {
     }
 
     /// Unbounded engines honor the budget between searches only.
-    public func search(_ compiled: Compiled, in text: String, budget: PatternBudget) -> PatternSearch {
+    public func search(_ compiled: Compiled, in text: String, budget: inout PatternBudget) -> PatternSearch {
         guard budget.isSpent == false else { return .exhausted }
         let search = budget.beginSearch()
-        defer { search.finish() }
+        defer { budget.finish(search) }
         return firstMatch(compiled, in: text).map(PatternSearch.match) ?? .noMatch
     }
 }

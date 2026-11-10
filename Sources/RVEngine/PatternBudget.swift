@@ -10,8 +10,9 @@ import Foundation
 /// rules after it: a deny those rules find still wins. A wall-clock ceiling
 /// stays as a backstop below the hook's 8 s timeout.
 ///
-/// Not thread-safe: an evaluation is synchronous and owns its budget.
-public final class PatternBudget: @unchecked Sendable {
+/// A value threaded `inout` through one evaluation: every pass charges the
+/// same copy, so the request has one allowance.
+public struct PatternBudget: Sendable {
     public static let defaultTotalCPU: Duration = .milliseconds(1500)
     public static let defaultPerSearchCPU: Duration = .milliseconds(150)
     public static let defaultWallCeiling: Duration = .seconds(6)
@@ -40,22 +41,30 @@ public final class PatternBudget: @unchecked Sendable {
     /// cap, the remaining total, or the wall ceiling; `finish` charges the
     /// CPU the search used.
     public func beginSearch() -> Search {
-        Search(budget: self, startCPU: threadCPUSeconds())
+        Search(
+            startCPU: threadCPUSeconds(),
+            perSearchCPU: perSearchCPU,
+            remainingCPU: totalCPU - spentCPU,
+            wallDeadline: wallDeadline
+        )
     }
 
-    public struct Search {
-        fileprivate let budget: PatternBudget
+    /// Charges the CPU `search` used since it began.
+    public mutating func finish(_ search: Search) {
+        spentCPU += max(0, threadCPUSeconds() - search.startCPU)
+    }
+
+    public struct Search: Sendable {
         fileprivate let startCPU: Double
+        fileprivate let perSearchCPU: Double
+        fileprivate let remainingCPU: Double
+        fileprivate let wallDeadline: ContinuousClock.Instant
 
         public var shouldStop: Bool {
             let used = threadCPUSeconds() - startCPU
-            return used >= budget.perSearchCPU
-                || budget.spentCPU + used >= budget.totalCPU
-                || ContinuousClock.now >= budget.wallDeadline
-        }
-
-        public func finish() {
-            budget.spentCPU += max(0, threadCPUSeconds() - startCPU)
+            return used >= perSearchCPU
+                || used >= remainingCPU
+                || ContinuousClock.now >= wallDeadline
         }
     }
 }
