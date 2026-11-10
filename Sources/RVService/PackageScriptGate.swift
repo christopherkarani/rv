@@ -72,6 +72,7 @@ enum PackageScriptGate {
     ) -> Verdict {
         var effectiveCwd: String? = cwd?.rawValue
         var treeMutated = false
+        var manifestMayChange = false
         var priorWork = false
         var unresolved = false
         var needsJudge = false
@@ -95,6 +96,7 @@ enum PackageScriptGate {
             // the unit outside the read-only allowlist counts against every
             // runner in it. Its own redirects only count for later units.
             let unitMutates = !launchedCommandsAsWritten(unit.text).allSatisfy(isReadOnly)
+            let unitMayChangeManifest = !launchedCommandsAsWritten(unit.text).allSatisfy(isReadOnlyOrBenign)
             if changesDirectory(launched, unitTokens) {
                 // A cd inside a group, subshell, payload or launcher: its
                 // scope is not modelled, so the cwd is now unknown.
@@ -117,7 +119,13 @@ enum PackageScriptGate {
                 // A mutation earlier in this chain (or in this unit) runs
                 // before the runner reads its manifest (TOCTOU).
                 let mutatedBefore = treeMutated || unitMutates
-                if invocation.unresolvable || overridden || (mutatedBefore && (configNamed || unitNamesConfig)) {
+                // Work that may swap in another manifest (`git checkout x`,
+                // `tar xf`, `cp -r`) leaves today's manifest saying nothing
+                // about the scripts that will run, even absent ones. Only a
+                // pure bin run reads no script.
+                let manifestChangedBefore = (manifestMayChange || unitMayChangeManifest) && !invocation.onlyBin
+                if invocation.unresolvable || overridden || manifestChangedBefore
+                    || (mutatedBefore && (configNamed || unitNamesConfig)) {
                     unresolved = true
                     continue
                 }
@@ -133,6 +141,7 @@ enum PackageScriptGate {
                 }
             }
             if unitMutates || !unitIsReadOnly(unit.text) { treeMutated = true }
+            if !unitIsReadOnly(unit.text, allowingBenign: true) { manifestMayChange = true }
             if setsOverride(unitTokens, launched) { chainOverride = true }
             if unitNamesConfig { configNamed = true }
             priorWork = true
@@ -291,6 +300,21 @@ enum PackageScriptGate {
     /// or another host): a runner there reads that place's manifest, not
     /// the cwd's as the gate would. Its words go to the judge.
     static let remoteHeads: Set<String> = ["docker", "podman", "nerdctl", "ssh"]
+    static let containerHeads: Set<String> = ["docker", "podman", "nerdctl"]
+
+    /// A container run that mounts host paths (`-v $(pwd):/app`,
+    /// `--volume`, `--mount`, `--volumes-from`, a short cluster such as
+    /// `-itv`) or whose mounts a compose file decides: the runner inside
+    /// may read the cwd's own manifest, which the judge never sees.
+    static func mountsHostPaths(_ argv: [String]) -> Bool {
+        argv.dropFirst().map(dequote).contains { word in
+            if word == "compose" { return true }
+            if ["--volume", "--mount", "--volumes-from"].contains(where: { word == $0 || word.hasPrefix($0 + "=") }) {
+                return true
+            }
+            return word.hasPrefix("-") && !word.hasPrefix("--") && word.dropFirst().contains("v")
+        }
+    }
 
     enum HiddenRunner { case none, remote, hidden }
 
@@ -299,7 +323,8 @@ enum PackageScriptGate {
     /// an unmodelled launcher (`xargs`, `find -exec`, `watch`, `script`,
     /// `caffeinate`, `arch`), which is `.hidden`. One behind a container or
     /// remote head (`docker run node npm test`, `ssh host npm test`) is
-    /// `.remote`. Over-claims, never under-claims a modelled spelling.
+    /// `.remote`, unless the container mounts host paths (`.hidden`).
+    /// Over-claims, never under-claims a modelled spelling.
     static func hiddenRunner(_ unitText: String, _ launched: [[String]]) -> HiddenRunner {
         for argv in dynamicHeadLaunches(unitText) {
             let head = argv[0].lowercased()
@@ -315,6 +340,7 @@ enum PackageScriptGate {
             for (index, word) in words.enumerated() where index + 1 < words.count {
                 if runnerHeads.contains(word) || (word == "node" && words[index + 1].hasPrefix("--run")) {
                     guard remoteHeads.contains(head) else { return .hidden }
+                    if containerHeads.contains(head), mountsHostPaths(argv) { return .hidden }
                     found = .remote
                 }
             }
@@ -362,9 +388,41 @@ enum PackageScriptGate {
     /// output redirect other than an fd dup or `/dev/null`, and nothing
     /// the launcher parser could not follow. Anything else may rewrite a
     /// manifest (TOCTOU), so later runners are unresolved.
-    static func unitIsReadOnly(_ text: String) -> Bool {
-        !launchIsTruncated(text) && dynamicHeadLaunches(text).isEmpty
-            && !writesOutput(text) && launchedCommandsAsWritten(text).allSatisfy(isReadOnly)
+    /// `allowingBenign`: also count the mutations that cannot swap in
+    /// another manifest (`isBenignMutation`).
+    static func unitIsReadOnly(_ text: String, allowingBenign: Bool = false) -> Bool {
+        !launchIsTruncated(text) && dynamicHeadLaunches(text).isEmpty && !writesOutput(text)
+            && launchedCommandsAsWritten(text).allSatisfy(allowingBenign ? isReadOnlyOrBenign : isReadOnly)
+    }
+
+    static func isReadOnlyOrBenign(_ argv: [String]) -> Bool {
+        isReadOnly(argv) || isBenignMutation(argv)
+    }
+
+    /// Build output a cleanup removes; deleting one never exposes another
+    /// manifest.
+    static let buildOutputNames: Set<String> = [
+        "node_modules", "dist", "build", "out", ".next", ".nuxt", ".turbo", ".cache", "coverage",
+        ".parcel-cache", ".svelte-kit", ".vite", ".output",
+    ]
+
+    /// A mutation that cannot put another manifest or scripts in front of a
+    /// later runner: `mkdir`, or removing named build output with no glob
+    /// or expansion. Everything else (git checkout/pull/stash, tar, unzip,
+    /// cp, mv, rsync, curl, make, `rm *.json`, …) may.
+    static func isBenignMutation(_ argv: [String]) -> Bool {
+        guard let raw = argv.first.map(dequote), !raw.contains("/") || raw.hasPrefix("/bin/") else { return false }
+        let operands = argv.dropFirst().map(dequote).filter { !$0.hasPrefix("-") }
+        switch basename(raw) {
+        case "mkdir":
+            return true
+        case "rm", "rmdir":
+            return !operands.isEmpty && operands.allSatisfy { operand in
+                !operand.contains(where: { "$`*?[{~".contains($0) }) && buildOutputNames.contains(basename(operand))
+            }
+        default:
+            return false
+        }
     }
 
     /// Heads that read or print only. A path head (`./ls`) is not one.

@@ -167,7 +167,7 @@ struct PackageScriptGateFormsTests {
         "yarn eslint .", "pnpm tsc", "pnpm vitest", "bun eslint", "yarn notascript",
         "npm i -g typescript", "npm install -g @anthropic-ai/claude-code", "sudo npm install -g pnpm",
         "npm install --global typescript", "npm i --location=global typescript",
-        "docker run -v $(pwd):/app node:20 npm test", "ssh host npm test",
+        "docker run node:20 npm test", "ssh host npm test",
     ])
     func binRunsNeedTheJudge(command: String) throws {
         let dir = try Self.makeDir([
@@ -343,10 +343,10 @@ struct PackageScriptGateFormsTests {
         #expect(Self.isClear(Self.evaluate("npm test", cwd: dir)))
         // A bare word with no manifest may still run a bin: the judge decides.
         #expect(Self.needsJudge(Self.evaluate("yarn evil", cwd: dir)))
-        // An earlier segment may create package.json before the runner
-        // reads it: no script runs now, so the judge (which reads the whole
-        // chain) decides; one that names a manifest is the floor.
-        #expect(Self.needsJudge(Self.evaluate("make && npm test", cwd: dir)))
+        // Earlier runner work leaves no script to run now: the judge
+        // (which reads the whole chain) decides. Work that may create or
+        // swap in a manifest (`make`, naming one) is the floor.
+        #expect(Self.isUnresolved(Self.evaluate("make && npm test", cwd: dir)))
         #expect(Self.needsJudge(Self.evaluate("npm test && npm run lint", cwd: dir)))
         #expect(Self.needsJudge(Self.evaluate("npm install && npm run build && npm test", cwd: dir)))
         #expect(Self.isUnresolved(Self.evaluate("npm test $(touch package.json)", cwd: dir)))
@@ -403,8 +403,7 @@ struct PackageScriptGateFormsTests {
         let hooked = try Self.makeDir(["test": "node ok.js", "prepare": "husky install"])
         defer { [plain, hooked].forEach { try? FileManager.default.removeItem(at: $0) } }
         for command in [
-            "rm -rf node_modules && npm install", "git pull && npm install", "rm -rf node_modules && npx tsc",
-            "mkdir -p dist && npm ci",
+            "rm -rf node_modules && npm install", "rm -rf node_modules && npx tsc", "mkdir -p dist && npm ci",
         ] {
             #expect(Self.needsJudge(Self.evaluate(command, cwd: plain)), "\(command)")
             // A script that will run after the mutation: TOCTOU, the floor.
@@ -418,6 +417,10 @@ struct PackageScriptGateFormsTests {
             #"echo '{"scripts":{"install":"rm -rf ~"}}' > package.json && npm install"#,
             "cp /tmp/x .npmrc && npx tsc",
             "rm package.json && npm install",
+            // Work that may swap in another manifest: the scripts that will
+            // run are not today's, even when today's has none.
+            "git pull && npm install", "git checkout x && npm run pwn", "tar xf x.tgz && npm install",
+            "make && npm run pwn",
         ] {
             #expect(Self.isUnresolved(Self.evaluate(command, cwd: plain)), "\(command)")
         }
