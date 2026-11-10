@@ -23,6 +23,10 @@ public struct HelloAckView: Sendable, Equatable {
 }
 
 public enum ServiceTransportError: Error, Sendable, Equatable {
+    /// rvd is positively absent: the connect failed before any request byte
+    /// was sent (Linux: ENOENT/ECONNREFUSED on the uid-derived socket). The
+    /// hook's owner observe mode steps aside only for this; throw
+    /// `.interrupted` for any connection that may have reached rvd.
     case connectFailed
     case timeout
     case interrupted
@@ -152,7 +156,7 @@ public struct XPCServiceTransport: ServiceTransport {
             }
             do {
                 guard let first = try await group.next() else {
-                    throw ServiceTransportError.connectFailed
+                    throw ServiceTransportError.unexpected
                 }
                 group.cancelAll()
                 return first

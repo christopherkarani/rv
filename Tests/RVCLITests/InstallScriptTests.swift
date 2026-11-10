@@ -667,6 +667,57 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(marker.contains("setup"))
 }
 
+/// `RV_INSTALL_MODE` picks the argv the installer hands `rv setup`.
+@Test(arguments: [
+    ("", "argv=setup\n"),
+    ("enforce", "argv=setup\n"),
+    ("observe", "argv=setup --observe\n"),
+])
+func installSh_installModeSelectsSetupArgv(mode: String, argv: String) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-mode-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    try writeExecutable(
+        src.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        printf 'argv=%s\\n' "$*" > "$HOME/.rv-setup-argv"
+        exit 0
+        """
+    )
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(
+        home: home, src: src, pathPrefix: shim.path, extraEnvironment: ["RV_INSTALL_MODE": mode])
+    #expect(result.status == 0)
+    #expect(try String(contentsOfFile: home.path + "/.rv-setup-argv", encoding: .utf8) == argv)
+}
+
+@Test func installSh_unknownInstallModeRefusesBeforeStaging() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-mode-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(
+        home: home, src: src, pathPrefix: shim.path, extraEnvironment: ["RV_INSTALL_MODE": "loud"])
+    #expect(result.status == 1)
+    #expect(result.stderr.contains("RV_INSTALL_MODE must be observe or enforce (got: loud)"))
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
+}
+
 /// Incident regression: an admin trust manifest pins a Developer ID rvd; a
 /// local unsigned/ad-hoc stage must be refused before anything is staged,
 /// or rv setup wires hooks that deny every tool call.

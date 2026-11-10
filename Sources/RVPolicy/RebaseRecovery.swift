@@ -23,7 +23,7 @@ public enum RebaseRecovery: Sendable {
     /// `HookAuthorization` pin.
     private static func isUnoverridableHardStop(_ result: EvaluationResult) -> Bool {
         if case .deny(let deny) = result.decision,
-           deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID
+           BuiltinRule(deny.ruleID) == .workingTreeDiscard
         {
             return false
         }
