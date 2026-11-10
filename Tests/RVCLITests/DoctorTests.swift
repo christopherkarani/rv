@@ -619,6 +619,30 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
+@Test func doctor_unreadablePacksConfigReportsBrokenAndExitsOne() throws {
+    try withDoctorHome { _, _, environment in
+        let url = PacksConfigStore.configURL(home: environment.home)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        // Invalid UTF-8: the doors fail closed to every pack; doctor must
+        // say the config is broken instead of reporting a healthy registry.
+        try Data([0xFF, 0xFE, 0x5B, 0x70]).write(to: url)
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: .xpc(
+                snapshot: runningDoctorSnapshot(),
+                localCorePacksReady: true
+            ),
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 1)
+        #expect(outcome.stdout.contains("broken"))
+    }
+}
+
 @Test func doctor_homePackIDReadFailureDoesNotUseServiceSnapshot() {
     let view = DoctorRun.packsView(
         .unreadable,

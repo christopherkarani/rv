@@ -107,4 +107,27 @@ struct ManagedGateTests {
             #expect(ManagedGate.guardMode(.observe, home: nil) == .observe)
         }
     }
+
+    @Test func unknownRequiredPackIDsAreReported() {
+        let ids = [PackID(rawValue: "database.sqlite"), PackID(rawValue: "cloud.aw"), PackID(rawValue: "cloud")]
+        #expect(ManagedGate.unknownRequiredPacks(ids) == [PackID(rawValue: "cloud.aw"), PackID(rawValue: "cloud")])
+        #expect(ManagedGate.unknownRequiredPacks([]).isEmpty)
+    }
+
+    @Test func packsListShowsRequiredPacksAsEnforced() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-gate-list-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let home = try #require(HomeDirectory(validating: url.path))
+        var gate = ManagedPolicy.Gate()
+        gate.requirePacks = [PackID(rawValue: "database.sqlite")]
+        try ManagedGate.$override.withValue(active(gate)) {
+            let row = try PacksFacade.info(home: home, id: PackID(rawValue: "database.sqlite"))
+            #expect(row.enabled)
+            #expect(row.requiredByOrganization)
+            let other = try PacksFacade.info(home: home, id: PackID(rawValue: "database.redis"))
+            #expect(other.requiredByOrganization == false)
+        }
+    }
 }
