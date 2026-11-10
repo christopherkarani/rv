@@ -300,6 +300,96 @@ struct WorkspaceControlMountTests {
     func other() {
         #expect(plan([".rv": .other]) == .failure(.unsupported("/w/.rv")))
     }
+
+    @Test("agent and editor config a host tool runs later is read-only inside a pinned directory")
+    func runLaterInsidePinned() throws {
+        let mounts = try plan([
+            ".claude": .directory, ".claude/settings.json": .file, ".claude/settings.local.json": .file,
+            ".claude/hooks": .emptyDirectory, ".claude/commands": .directory,
+        ]).get()
+        #expect(mounts == [
+            .init(path: "/w/.claude", readOnly: false),
+            .init(path: "/w/.claude/settings.json", readOnly: true),
+            .init(path: "/w/.claude/settings.local.json", readOnly: true),
+            .init(path: "/w/.claude/hooks", readOnly: true),
+        ], "other .claude content (commands, skills) stays writable")
+    }
+
+    @Test("root run-later files are read-only when present")
+    func runLaterRootFiles() throws {
+        let mounts = try plan([".mcp.json": .file, ".envrc": .file, "opencode.json": .file, "opencode.jsonc": .file]).get()
+        #expect(mounts == [
+            .init(path: "/w/.mcp.json", readOnly: true),
+            .init(path: "/w/opencode.json", readOnly: true),
+            .init(path: "/w/opencode.jsonc", readOnly: true),
+            .init(path: "/w/.envrc", readOnly: true),
+        ])
+    }
+
+    @Test("an empty agent config directory (rv's placeholder) is read-only whole")
+    func runLaterEmptyPinned() throws {
+        let mounts = try plan([".vscode": .emptyDirectory, ".gemini": .emptyDirectory]).get()
+        #expect(mounts == [
+            .init(path: "/w/.gemini", readOnly: true),
+            .init(path: "/w/.vscode", readOnly: true),
+        ])
+    }
+
+    @Test("a nested directory on the way to a protected file is pinned too")
+    func nestedPinned() throws {
+        let mounts = try plan([
+            ".gemini": .directory, ".gemini/settings.json": .file,
+            ".gemini/config": .directory, ".gemini/config/hooks.json": .file,
+        ]).get()
+        #expect(mounts == [
+            .init(path: "/w/.gemini", readOnly: false),
+            .init(path: "/w/.gemini/settings.json", readOnly: true),
+            .init(path: "/w/.gemini/config", readOnly: false),
+            .init(path: "/w/.gemini/config/hooks.json", readOnly: true),
+        ])
+        #expect(
+            plan([".gemini": .directory, ".gemini/settings.json": .file, ".gemini/config": .emptyDirectory])
+                == .success([
+                    .init(path: "/w/.gemini", readOnly: false),
+                    .init(path: "/w/.gemini/settings.json", readOnly: true),
+                    .init(path: "/w/.gemini/config", readOnly: true),
+                ])
+        )
+    }
+
+    @Test("a non-empty agent config directory missing a protected child is refused")
+    func runLaterMissingChild() {
+        #expect(plan([".vscode": .directory, ".vscode/settings.json": .file])
+            == .failure(.missingChild("/w/.vscode/tasks.json")))
+        #expect(plan([".claude": .directory, ".claude/settings.json": .file, ".claude/settings.local.json": .file])
+            == .failure(.missingChild("/w/.claude/hooks")))
+    }
+
+    @Test("a symlinked agent config file is refused")
+    func runLaterSymlink() {
+        #expect(plan([".mcp.json": .symlink]) == .failure(.unsupported("/w/.mcp.json")))
+    }
+
+    @Test("every run-later path is covered by a mount when its parents exist")
+    func layoutCoversEveryPath() throws {
+        var kinds: [String: WorkspaceControlMounts.Kind] = [:]
+        let all = WorkspaceControlLayout.controlFiles + WorkspaceControlLayout.runLaterFiles
+        let trees = WorkspaceControlLayout.controlTrees + WorkspaceControlLayout.runLaterTrees
+        for path in all { kinds[path] = .file }
+        for path in trees { kinds[path] = .directory }
+        for path in all + trees {
+            var parts = path.split(separator: "/").dropLast()
+            while parts.isEmpty == false {
+                kinds[parts.joined(separator: "/")] = .directory
+                parts = parts.dropLast()
+            }
+        }
+        let mounts = try plan(kinds).get()
+        let readOnly = Set(mounts.filter(\.readOnly).map(\.path))
+        for path in all + trees {
+            #expect(readOnly.contains("/w/\(path)"), "\(path) has no read-only mount")
+        }
+    }
 }
 
 @Suite("SocketBridge")

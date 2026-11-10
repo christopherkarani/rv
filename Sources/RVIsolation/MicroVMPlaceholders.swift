@@ -11,24 +11,33 @@ import Synchronization
 /// micro-VM run starts.
 ///
 /// The Seatbelt cage denies creating `.git`, `.git/hooks/*`, `.git/config`,
-/// `.rv` and `.config/rv` (see `workspaceControlDenies`). A VM can only
+/// `.rv`, `.config/rv` and the agent and editor config in
+/// `WorkspaceRunLaterPaths` (see `workspaceControlDenies`). A VM can only
 /// protect a path by mounting over it, and a missing path has nothing to
 /// mount over. So before the first micro-VM run in a workspace, rv creates
 /// each missing control path empty; `rv-microvm` then mounts it read-only
-/// (an empty `.git` or `.config` is mounted read-only whole, so its children
-/// are not needed). Placeholders are reference-counted across concurrent
-/// micro-VM runs and removed after the last one ends, but only while still
-/// empty: anything a host process put there stays.
+/// (an empty pinned directory such as `.git` or `.claude` is mounted
+/// read-only whole, so its children are not needed). A JSON placeholder
+/// holds `{}` so a tool in the guest reads it as empty config, not a parse
+/// error. Placeholders are reference-counted across concurrent micro-VM
+/// runs and removed after the last one ends, but only while unchanged:
+/// anything a host process put there stays.
 ///
-/// If the host process dies mid-run, empty placeholders can be left in the
-/// project. An empty `.rv`, `.config/rv` or `.git/hooks` changes nothing
-/// for rv or git.
+/// If the host process dies mid-run, placeholders can be left in the
+/// project, and some of them change behavior. A leftover empty `.envrc`
+/// makes direnv report it as blocked and hides a `.envrc` in a parent
+/// directory. A leftover empty `.claude` (or other agent directory) is
+/// mounted read-only whole by later micro-VM runs, so the agent cannot
+/// create `.claude/commands` or similar inside it. rv does not clean these
+/// up on its own; remove them by hand.
 final class MicroVMControlPlaceholders: Sendable {
     static let shared = MicroVMControlPlaceholders()
 
     private struct Created: Sendable {
         let path: String
         let isDirectory: Bool
+        /// What a file placeholder was created with; removal requires it unchanged.
+        var contents: [UInt8] = []
     }
 
     private struct Entry: Sendable {
@@ -99,34 +108,48 @@ final class MicroVMControlPlaceholders: Sendable {
             created.append(Created(path: path, isDirectory: true))
             return true
         }
-        func makeFile(_ path: String) -> Bool {
+        func makeFile(_ path: String, _ contents: [UInt8]) -> Bool {
             let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
             guard fd >= 0 else { return false }
+            let written = contents.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
             close(fd)
-            created.append(Created(path: path, isDirectory: false))
+            guard written == contents.count else {
+                // A partial placeholder would not match `contents`, so removal
+                // would skip it: unlink it now, it is a file rv just made.
+                unlink(path)
+                return false
+            }
+            created.append(Created(path: path, isDirectory: false, contents: contents))
             return true
         }
-        /// `children` are ensured only inside a directory that already existed.
-        func ensure(_ relative: String, children: [(String, Bool)]) -> String? {
-            let path = "\(workspace)/\(relative)"
+        func make(_ node: MicroVMControlLayout.Node, at path: String) -> Bool {
+            switch node {
+            case .file(let name): makeFile(path, MicroVMControlLayout.placeholderContents(name))
+            case .tree, .pinned: makeDirectory(path)
+            }
+        }
+        /// Children are ensured only inside a pinned directory that already
+        /// existed and is not empty: an empty one is mounted read-only whole,
+        /// and adding children would make a later run mount it read-write.
+        func ensure(_ node: MicroVMControlLayout.Node, at path: String) -> String? {
             switch kind(path) {
             case .absent:
-                return makeDirectory(path) ? nil : path
+                return make(node, at: path) ? nil : path
             case .file:
                 return nil
             case .unsupported:
                 return path
             case .directory:
-                // An empty directory is mounted read-only whole; adding
-                // children would make a later run mount it read-write.
+                guard case .pinned(_, let children) = node else { return nil }
                 if let entries = try? FileManager.default.contentsOfDirectory(atPath: path), entries.isEmpty { return nil }
-                for (child, isDirectory) in children {
-                    let childPath = "\(path)/\(child)"
+                for child in children {
+                    let childPath = "\(path)/\(child.name)"
                     switch kind(childPath) {
                     case .absent:
-                        let made = isDirectory ? makeDirectory(childPath) : makeFile(childPath)
-                        if made == false { return childPath }
-                    case .directory, .file:
+                        if make(child, at: childPath) == false { return childPath }
+                    case .directory:
+                        if let failed = ensure(child, at: childPath) { return failed }
+                    case .file:
                         continue
                     case .unsupported:
                         return childPath
@@ -135,12 +158,8 @@ final class MicroVMControlPlaceholders: Sendable {
                 return nil
             }
         }
-        for (relative, children) in [
-            (".git", [("hooks", true), ("config", false)]),
-            (".rv", []),
-            (".config", [("rv", true)]),
-        ] {
-            if let failed = ensure(relative, children: children) { return refuse(failed) }
+        for root in MicroVMControlLayout.roots {
+            if let failed = ensure(root, at: "\(workspace)/\(root.name)") { return refuse(failed) }
         }
         return .success(created)
     }
@@ -153,10 +172,85 @@ final class MicroVMControlPlaceholders: Sendable {
                 _ = rmdir(item.path)
             } else {
                 var info = stat()
-                if lstat(item.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size == 0 {
+                guard lstat(item.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+                    Int(info.st_size) == item.contents.count
+                else { continue }
+                let current = FileManager.default.contents(atPath: item.path).map { [UInt8]($0) }
+                if current == item.contents {
                     _ = unlink(item.path)
                 }
             }
         }
+    }
+}
+
+/// The workspace control paths a micro-VM guest mounts over, as a tree.
+///
+/// Built from the same lists as the Seatbelt profile (`workspaceControlDenies`
+/// and `WorkspaceRunLaterPaths`), so a path added there is protected in the
+/// guest too. `WorkspaceControlLayout` in `Packages/rv-microvm` holds the
+/// guest's copy; `WorkspaceControlParityTests` fails when the two drift.
+enum MicroVMControlLayout {
+    indirect enum Node: Equatable, Sendable {
+        case file(String)
+        case tree(String)
+        case pinned(String, [Node])
+
+        var name: String {
+            switch self {
+            case .file(let name), .tree(let name), .pinned(let name, _): name
+            }
+        }
+    }
+
+    /// rv and git control paths (same set as `workspaceControlDenies`).
+    static let controlFiles = [".git/config"]
+    static let controlTrees = [".git/hooks", ".rv", ".config/rv"]
+    static let controlPinnedDirectories = [".git", ".config"]
+
+    static let roots: [Node] = tree(
+        protected: controlTrees + controlFiles + WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees,
+        trees: Set(controlTrees + WorkspaceRunLaterPaths.trees),
+        pinnedRoots: controlPinnedDirectories + WorkspaceRunLaterPaths.pinnedDirectories,
+        order: [".git", ".rv", ".config"] + WorkspaceRunLaterPaths.pinnedDirectories
+    )
+
+    /// `{}` for JSON config, so a guest tool reads an empty object; empty
+    /// otherwise (`.git/config`, `config.toml` and `.envrc` accept that).
+    static func placeholderContents(_ name: String) -> [UInt8] {
+        name.hasSuffix(".json") || name.hasSuffix(".jsonc") ? Array("{}\n".utf8) : []
+    }
+
+    /// Same shape and order as `WorkspaceControlLayout.tree` in the guest
+    /// package: a path under a pinned root goes inside it, and an
+    /// intermediate directory on the way to a deeper path is pinned too.
+    /// `trees` marks which leaves are directories.
+    static func tree(protected: [String], trees: Set<String>, pinnedRoots: [String], order: [String]) -> [Node] {
+        func leaf(_ path: String) -> Node {
+            let name = String(path.split(separator: "/").last ?? Substring(path))
+            return trees.contains(path) ? .tree(name) : .file(name)
+        }
+        func children(of prefix: String) -> [Node] {
+            var names: [String] = []
+            var deeper: [String: Bool] = [:]
+            for path in protected where path.hasPrefix(prefix + "/") {
+                let rest = path.dropFirst(prefix.count + 1)
+                let first = String(rest.split(separator: "/", maxSplits: 1)[0])
+                if deeper[first] == nil { names.append(first) }
+                deeper[first] = (deeper[first] ?? false) || rest.contains("/")
+            }
+            return names.map { name in
+                deeper[name] == true ? .pinned(name, children(of: "\(prefix)/\(name)")) : leaf("\(prefix)/\(name)")
+            }
+        }
+        var roots: [Node] = []
+        var seen = Set<String>()
+        func add(_ name: String) {
+            guard seen.insert(name).inserted else { return }
+            roots.append(pinnedRoots.contains(name) ? .pinned(name, children(of: name)) : leaf(name))
+        }
+        for name in order { add(name) }
+        for path in protected where path.contains("/") == false { add(path) }
+        return roots
     }
 }
