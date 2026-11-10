@@ -14,9 +14,12 @@ import RVDomain
 /// names a program are `unverifiable`, which denies.
 ///
 /// An invocation whose program or git subcommand is not statically known
-/// (a same-line shell function, a variable head, a dynamic `eval`, a
-/// command after `source`, an unknown git subcommand such as an alias
-/// defined in an earlier call) is `unresolved`, which asks.
+/// (a same-line shell function, a variable head, a dynamic `eval`, git or
+/// a git-shaped call after `source`, an unknown git subcommand such as an
+/// alias defined in an earlier call) is `unresolved`, which asks.
+///
+/// File-writing heredoc bodies are data (`maskNonExecutingHeredocBodies`):
+/// they are not read as commands. An executing heredoc (`bash <<EOF`) is.
 struct AliasExpansion: Sendable, Equatable {
     /// The commands the aliases expand to, `;`-joined, with the line's
     /// `cd` segments kept in order so relative paths resolve the same.
@@ -33,6 +36,7 @@ struct AliasExpansion: Sendable, Equatable {
 private let maxAliasDepth = 8
 
 func expandAliases(_ command: String) -> AliasExpansion {
+    let command = maskNonExecutingHeredocBodies(command)
     if gitEnvironmentInjection(command) { return .unverifiableConstruct }
     // A same-line function whose body reads no call arguments runs exactly
     // the body text, which every pass already judges as its own segments.
@@ -44,9 +48,7 @@ func expandAliases(_ command: String) -> AliasExpansion {
     var expandedAny = false
     var afterSource = false
     for segment in aliasSegments(command) {
-        // A sourced file may define the functions and aliases every later
-        // command on the line runs.
-        if afterSource { resolver.unresolved = true }
+        if afterSource, mayBeRedefinedGit(segment) { resolver.unresolved = true }
         guard let resolved = resolver.resolve(segment, depth: 0) else { return .unverifiableConstruct }
         if resolved.expanded {
             expandedAny = true
@@ -54,7 +56,8 @@ func expandAliases(_ command: String) -> AliasExpansion {
         } else if isDirectoryChange(segment) {
             out.append(segment)
         }
-        let head = firstWord(segment).word
+        // `\source` is still the builtin: quoting only stops alias lookup.
+        let head = unescapeBackslashPairs(firstWord(segment).word)
         if head == "source" || head == "." { afterSource = true }
     }
     return AliasExpansion(
@@ -132,13 +135,44 @@ private func aliasSegments(_ command: String) -> [String] {
         .flatMap(peeledSegments)
 }
 
+/// Git subcommands that rewrite or discard history, the tree or the
+/// remote, or change config.
+private let destructiveGitSubcommands: Set<String> = [
+    "reset", "push", "clean", "checkout", "restore", "switch", "rebase", "branch", "stash", "rm", "mv",
+    "commit", "merge", "cherry-pick", "revert", "am", "apply", "tag", "worktree", "submodule", "config",
+    "filter-branch", "filter-repo", "update-ref", "reflog", "gc", "prune", "replace", "notes",
+]
+
+/// After `source`/`.`, whether a later segment's meaning may hinge on
+/// what the sourced file defined, as far as this guard is concerned.
+///
+/// The sourced file already ran with full power, and rv allows `source X`
+/// without reading X, so a definition it leaves behind can do no more
+/// than the file itself could; an unknown head is allowed without a
+/// source too (the agent's shell already carries the user's own aliases).
+/// What the file adds is a reason to distrust this guard's own reading of
+/// git: it can define `git` as a function or alias, or export config
+/// (`GIT_CONFIG_*`) and helper programs the command text never shows, and
+/// it can define a short alias for git (`g reset --hard`). So git, and a
+/// bare word whose next word is a destructive git subcommand, stay
+/// unresolved; `pytest`, `pip install …` and `nvm use 20` do not.
+private func mayBeRedefinedGit(_ segment: String) -> Bool {
+    let words = ShellPipeline.tokenize(segment).filter { $0.isNewline == false }.map(\.lexeme)
+    guard let head = words.first else { return false }
+    let program = unescapeBackslashPairs(basename(head)).lowercased()
+    if program == "git" { return true }
+    guard head.contains("/") == false, words.count > 1 else { return false }
+    return destructiveGitSubcommands.contains(words[1].lowercased())
+}
+
 private func isDirectoryChange(_ segment: String) -> Bool {
     let head = firstWord(segment).word
     return head == "cd" || head == "pushd" || head == "popd"
 }
 
-/// Total segments resolved per command: fan-out (`alias a='b;b;b'`) is
-/// multiplicative across depth, so depth alone does not bound the work.
+/// Total expansion segments resolved per command: fan-out (`alias
+/// a='b;b;b'`) is multiplicative across depth, so depth alone does not
+/// bound the work.
 private let maxAliasSteps = 256
 
 private struct AliasResolver {
@@ -157,11 +191,10 @@ private struct AliasResolver {
     /// The commands `segment` runs once aliases resolve, plus whether any
     /// alias was involved. Nil when an alias cannot be verified.
     mutating func resolve(_ segment: String, depth: Int) -> (commands: [String], expanded: Bool)? {
-        steps += 1
-        guard depth <= maxAliasDepth, steps <= maxAliasSteps else { return nil }
+        guard depth <= maxAliasDepth else { return nil }
         let words = ShellPipeline.tokenize(segment).filter { $0.isNewline == false }.map(\.lexeme)
         guard let head = words.first else { return ([segment], false) }
-        if basename(head) == "alias" {
+        if unescapeBackslashPairs(basename(head)) == "alias" {
             return recordShellAliases(Array(words.dropFirst())) ? ([segment], false) : nil
         }
         if let value = shellAliases[head] {
@@ -186,10 +219,13 @@ private struct AliasResolver {
         return resolveGit(words, segment: segment, depth: depth)
     }
 
+    /// Steps count only segments produced by an expansion: the line's own
+    /// segments are bounded by its length, while fan-out multiplies.
     private mutating func resolveExpansion(_ text: String, depth: Int) -> (commands: [String], expanded: Bool)? {
         var commands: [String] = []
         for piece in aliasSegments(text) {
-            guard let inner = resolve(piece, depth: depth + 1) else { return nil }
+            steps += 1
+            guard steps <= maxAliasSteps, let inner = resolve(piece, depth: depth + 1) else { return nil }
             commands.append(contentsOf: inner.commands)
         }
         return (commands, true)

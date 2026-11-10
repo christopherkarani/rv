@@ -130,6 +130,13 @@ struct GateBypassFollowupTests {
             #"eval "$CMD""#,
             "source ./helpers.sh && g reset --hard",
             ". ./helpers.sh; g reset --hard",
+            // After a source, git itself may be a function or run under
+            // exported config the guard cannot see.
+            "source ./helpers.sh && git status",
+            ". ./env.sh; sudo git log",
+            // A backslash stops alias lookup, not the builtin.
+            "\\alias g=git; g st",
+            "\\source ./helpers.sh && g reset --hard",
             "git st",
             "git z",
             "git $SUB --hard",
@@ -164,6 +171,13 @@ struct GateBypassFollowupTests {
             // A function that reads no arguments runs only its visible body.
             "x() { echo hi; }; x",
             "foo(){ bar | baz; }; foo",
+            // A sourced file's definitions can do no more than the file did
+            // when sourced; only git and git-shaped calls stay floored.
+            "source .venv/bin/activate && pytest",
+            "source .venv/bin/activate && python -m pytest -x",
+            "source venv/bin/activate && pip install -r requirements.txt",
+            ". ~/.nvm/nvm.sh && nvm use 20",
+            "source ~/.cargo/env; cargo test",
         ]
     )
     func resolvedInvocationAllows(_ command: String) throws {
@@ -181,6 +195,38 @@ struct GateBypassFollowupTests {
         let harness = try StressHarness.dayOne()
         for result in [harness.pin(command), harness.door(command)] {
             #expect(result.decision == .indeterminate(.unresolvedInvocation), "\(command): \(describeDecision(result))")
+        }
+    }
+
+    /// A file-writing heredoc body is data: it is not alias-resolved, so a
+    /// long body does not exhaust the expansion bound (which denies) and a
+    /// script's own `main "$@"` does not read as a function call (which asks).
+    @Test func heredocBodiesAreNotAliasResolved() throws {
+        let harness = try StressHarness.dayOne()
+        let long = (0..<300).map { "print(\($0))" }.joined(separator: "\n")
+        let script = """
+        main() {
+          echo "building $1"
+        }
+        main "$@"
+        """
+        for command in [
+            "cat > big.py <<'EOF'\n\(long)\nEOF",
+            "cat > build.sh <<'EOF'\n\(script)\nEOF",
+            "cat > notes.md <<'EOF'\ng() { git \"$@\"; }\ng reset --hard\nEOF",
+        ] {
+            for result in [harness.pin(command), harness.door(command)] {
+                #expect(result.decision == .allow, "\(command.prefix(40)): \(describeDecision(result))")
+            }
+        }
+    }
+
+    /// An executing heredoc is still read: its body runs.
+    @Test func executingHeredocBodyIsStillResolved() throws {
+        let harness = try StressHarness.dayOne()
+        let command = "bash <<'EOF'\ng() { git \"$@\"; }\ng reset --hard\nEOF"
+        for result in [harness.pin(command), harness.door(command)] {
+            #expect(result.decision != .allow, "\(describeDecision(result))")
         }
     }
 
