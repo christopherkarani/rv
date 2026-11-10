@@ -152,6 +152,19 @@ struct AuditLedgerTests {
         #expect(enforced.decision == .denied)
     }
 
+    @Test func observedBlockRowCarriesWouldBe() throws {
+        func event(_ fields: String) throws -> AuditEvent {
+            let line = Lines.block.replacingOccurrences(of: #""host":"claude","#, with: #""host":"claude","# + fields)
+            return try #require(AuditLedger.event(fromLine: Substring(line), source: .blocks))
+        }
+        #expect(try event(#""observed":true,"would_be":"ask","#).detail["would_be"] == "ask")
+        #expect(try event(#""observed":true,"would_be":"deny","#).detail["would_be"] == "deny")
+        // Observed rows from before `would_be` were would-be denies.
+        #expect(try event(#""observed":true,"#).detail["would_be"] == "deny")
+        let enforced = try #require(AuditLedger.event(fromLine: Substring(Lines.block), source: .blocks))
+        #expect(enforced.detail["would_be"] == nil)
+    }
+
     @Test func chainedObservedCopyDropsOnlyTheMatchingObservedBlocksRow() throws {
         let time = Date(timeIntervalSince1970: 1_791_900_000)
         func event(_ kind: AuditEventKind, _ source: AuditLedger.Source) -> AuditEvent {
