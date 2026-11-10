@@ -37,7 +37,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
         gitWorld: gitWorld,
         filesystemWorld: filesystemWorld
     )
-    return applySemantics(
+    let result = applySemantics(
         pack: pack,
         analysis: analysis,
         command: request.command,
@@ -46,4 +46,17 @@ public func evaluateWithSemantics<E: PatternEngine>(
         enabledPacks: request.enabledPacks,
         policy: policy
     )
+    return floorInstallPaths(result, command: request.command, home: secretPaths.home, cwd: workingDirectory)
+}
+
+/// An allowed command that writes, moves or removes rv's install
+/// (`RVInstallPathGuard`) is indeterminate: stopping or replacing rvd is
+/// the owner's job, in Terminal. Last, so no policy allow lowers it.
+private func floorInstallPaths(
+    _ result: EvaluationResult, command: ShellCommand, home: HomePath?, cwd: WorkingDirectory?
+) -> EvaluationResult {
+    guard result.decision == .allow, RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else {
+        return result
+    }
+    return EvaluationResult(outcome: .indeterminate(.selfProtection), matchingView: result.matchingView)
 }

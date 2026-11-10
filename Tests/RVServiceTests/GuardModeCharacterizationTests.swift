@@ -12,7 +12,8 @@ import RVPolicy
 @Suite("Guard mode characterization")
 struct GuardModeCharacterizationTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
-    private static let packDeny = ShellCommand(rawValue: "rm -rf ~")
+    // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
+    private static let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
 
     @Test("observe: apply of a pack deny allows, records an observed denial, logs would-be deny")
     func observeApplyLogsWouldBe() async throws {

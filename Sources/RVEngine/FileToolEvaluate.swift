@@ -22,6 +22,9 @@ public func evaluateFileTool(
         )
     }
     guard let hit = secretPaths.filePathHit(path) else {
+        if action.kind != .read, writesInstall(path, secretPaths: secretPaths) {
+            return EvaluationResult(outcome: .indeterminate(.selfProtection), matchingView: matchingView)
+        }
         return EvaluationResult(outcome: .plain, matchingView: matchingView)
     }
     return pinnedSecretDeny(
@@ -30,6 +33,16 @@ public func evaluateFileTool(
         matchingView: matchingView,
         catalogReason: hit.rule.reason
     )
+}
+
+/// A write or edit of rv's install (`RVInstallPathGuard`) stops or
+/// replaces rvd: the owner does that, never the agent. The resolved
+/// spelling counts too, so a symlink into the install is no way around.
+private func writesInstall(_ path: String, secretPaths: SecretPathDecider) -> Bool {
+    let resolved = secretPaths.resolution?.resolve(path)
+    return ([path] + (resolved.map { [$0] } ?? [])).contains {
+        RVInstallPathGuard.isInstallFile($0, home: secretPaths.home)
+    }
 }
 
 private func pinnedSecretDeny(

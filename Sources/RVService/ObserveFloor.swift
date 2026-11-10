@@ -6,9 +6,11 @@ import RVPolicy
 ///
 /// An observe host allows and records what enforcement would deny, but it
 /// must not be able to loosen another host or the global guard. So an rv
-/// admin command that weakens rv (`SelfProtectionGuard`) or a touch of rv's
-/// config dir (`core.secrets:home-rv-config`, the only catalog rule that
-/// guards rv's own state) stays enforced. `GatedEvaluate.posture` is the
+/// admin command that weakens rv or stops rvd (`SelfProtectionGuard`), a
+/// write to rv's install (`RVInstallPathGuard`: rvd's binaries, LaunchAgent,
+/// systemd unit, socket dir), or a touch of rv's config dir
+/// (`core.secrets:home-rv-config`, the only catalog rule that guards rv's
+/// own state) stays enforced. `GatedEvaluate.posture` is the
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
 enum ObserveFloor {
@@ -44,7 +46,10 @@ enum ObserveFloor {
         home: HomeDirectory?,
         cwd: WorkingDirectory?
     ) -> Bool {
-        if holds(result) || SelfProtectionGuard.weakensPolicy(command) { return true }
+        if holds(result) || SelfProtectionGuard.weakensPolicy(command)
+            || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) {
+            return true
+        }
         let rvConfig = SecretPathDecider(
             catalog: catalog,
             safety: store.safety,
