@@ -657,7 +657,10 @@ func parseInstall(_ args: [String]) -> ParsedFilesystemCommand? {
 }
 
 /// `ln` destination: the `-t` overrides, else the last operand; a single
-/// operand links into the working directory. Parses as `.create`.
+/// operand links into the working directory. Parses as `.create`. A hard
+/// link (no `-s`) also lists its sources: the new name writes through to
+/// the same inode, so linking `~/.claude/settings.json` or a secret is a
+/// write to it.
 func parseLn(_ argv: Argv) -> ParsedFilesystemCommand? {
     let (targetDirs, reduced, overrideAmbiguous) = extractTargetDirectory(
         argv.args,
@@ -687,6 +690,10 @@ func parseLn(_ argv: Argv) -> ParsedFilesystemCommand? {
             } else if scan.operands.count >= 2, let last = scan.operands.last {
                 dests.append(last)
             }
+        }
+        let symbolic = scan.bareShortHits.contains("s") || scan.bareLongHits.contains("symbolic")
+        if symbolic == false {
+            dests += hasOverride || scan.operands.count == 1 ? scan.operands : Array(scan.operands.dropLast())
         }
     }
     return writerParsed(operation: .create, paths: dests)

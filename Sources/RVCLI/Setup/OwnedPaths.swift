@@ -49,6 +49,13 @@ struct OwnedPaths: Equatable, Sendable {
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }
+    /// install.sh's bin dir; `InstallManifest` names what rv owns in it.
+    var localBinDirectory: String { home.rawValue + "/.local/bin" }
+    /// The approvals custodian bundle install.sh copies on macOS.
+    var approvalsApp: String { home.rawValue + "/Applications/RVApprovals.app" }
+    /// Judge weights install.sh downloads (hundreds of MB). `rv uninstall`
+    /// keeps them unless asked (`--remove-models`).
+    var modelsDirectory: String { home.rawValue + "/.config/rv/models" }
 
     var hostAdapters: [OwnedHostAdapterPath] {
         HookHost.setupSlotOrder.map(hostAdapter)

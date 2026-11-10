@@ -24,7 +24,7 @@ func isolatedRuntime(
 ) throws -> ServiceRuntime {
     let resolvedHome = try home
         ?? HomeDirectory(validating: isolatedHomeDirectory().path)
-    return ServiceRuntime(
+    return hookTestRuntime(
         snapshots: snapshots,
         home: resolvedHome,
         allowOnceDirectory: try isolatedAllowOnceDirectory(),

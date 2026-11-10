@@ -8,6 +8,7 @@ import Testing
     let bytes = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/rv-t1/.claude/hooks/rv-guard.py",
         force: false
     ).data
@@ -28,6 +29,7 @@ import Testing
 @Test func hostWiring_cursorCompanionFileToolEntryIsWired() throws {
     let companion = try CursorHooksMerge.merge(
         existingData: nil,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
     ).data
 
@@ -65,6 +67,7 @@ import Testing
 @Test func hostWiring_cursorCompanionWithoutWiredAdapterIsNotApplicable() throws {
     let companion = try CursorHooksMerge.merge(
         existingData: nil,
+        interpreter: "/usr/bin/python3",
         adapterPath: "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
     ).data
 
@@ -102,6 +105,7 @@ func hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_ host: HookHost) {
     let applied = try HostWiring.applyClaude(
         existing: nil,
         rvPath: rvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: adapterPath
     )
     let inspected = HostWiring.fileTools(
@@ -114,6 +118,7 @@ func hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_ host: HookHost) {
     let merged = try ClaudeSettingsMerge.merge(
         existingData: nil,
         rvPath: rvPath,
+        interpreter: "/usr/bin/python3",
         adapterPath: adapterPath,
         force: false
     )
@@ -123,7 +128,7 @@ func hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_ host: HookHost) {
 
 @Test func hostWiring_applyCursorCompanion_fileToolsOnReturnedDataEqualsApplyAndIsWired() throws {
     let adapterPath = "/tmp/rv-t2/.cursor/hooks/rv-guard.py"
-    let applied = try HostWiring.applyCursor(existing: nil, adapterPath: adapterPath)
+    let applied = try HostWiring.applyCursor(existing: nil, interpreter: "/usr/bin/python3", adapterPath: adapterPath)
     let inspected = HostWiring.fileTools(
         host: .cursor,
         adapterBytes: applied.data,
@@ -131,7 +136,7 @@ func hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_ host: HookHost) {
     )
     #expect(inspected == applied.fileTools)
     #expect(applied.fileTools == .wired)
-    let merged = try CursorHooksMerge.merge(existingData: nil, adapterPath: adapterPath)
+    let merged = try CursorHooksMerge.merge(existingData: nil, interpreter: "/usr/bin/python3", adapterPath: adapterPath)
     #expect(applied.data == merged.data)
     #expect(applied.wrote == merged.wrote)
 }
@@ -160,6 +165,7 @@ private func claudeSettings(matchers: [String]) throws -> Data {
             ClaudeSettingsMerge.preToolUseKey: .array(matchers.map { matcher in
                 ClaudeSettingsMerge.rvEntry(
                     rvPath: "/usr/local/bin/rv",
+                    interpreter: "/usr/bin/python3",
                     adapterPath: "/tmp/rv-t1/.claude/hooks/rv-guard.py",
                     matcher: matcher
                 )
@@ -174,7 +180,7 @@ private func cursorCompanionWithoutFileToolEntry() throws -> Data {
     let root = JSONValue.object([
         CursorHooksMerge.versionKey: .number(Double(CursorHooksMerge.schemaVersion)),
         CursorHooksMerge.hooksRootKey: .object([
-            CursorHooksMerge.beforeShellKey: .array([CursorHooksMerge.rvEntry(adapterPath: adapterPath)]),
+            CursorHooksMerge.beforeShellKey: .array([CursorHooksMerge.rvEntry(interpreter: "/usr/bin/python3", adapterPath: adapterPath)]),
         ]),
     ])
     return try JSONEncoder().encode(root)

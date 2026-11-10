@@ -4,12 +4,57 @@ import RVDomain
 public let commandByteCap = 65_536
 
 /// Returns the pack-only evaluation of `request`; semantic policy is `evaluateWithSemantics`.
+/// An allow is tightened by the alias bodies the command uses or defines.
+/// `patternBudget` bounds all pattern matching for the request: every pass
+/// (segments, full view, alias expansions) charges the same allowance.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
     secretPaths: SecretPathDecider = .dayOne,
     engine: E,
-    compiled: CompiledPacks<E.Compiled>
+    compiled: CompiledPacks<E.Compiled>,
+    patternBudget: PatternBudget = PatternBudget()
+) -> EvaluationResult {
+    var budget = patternBudget
+    return evaluateGated(
+        request, packs: packs, secretPaths: secretPaths, engine: engine,
+        compiled: compiled, patternBudget: &budget, floorUnresolved: true
+    )
+}
+
+/// `evaluate`, with the unresolved-invocation ask optional (see `gateAliases`).
+func evaluateGated<E: PatternEngine>(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    secretPaths: SecretPathDecider,
+    engine: E,
+    compiled: CompiledPacks<E.Compiled>,
+    patternBudget: inout PatternBudget,
+    floorUnresolved: Bool
+) -> EvaluationResult {
+    func judge(_ request: EvaluationRequest) -> EvaluationResult {
+        evaluatePacks(
+            request, packs: packs, secretPaths: secretPaths, engine: engine,
+            compiled: compiled, timeBudget: &patternBudget
+        )
+    }
+    return gateAliases(
+        judge(request), command: request.command, packs: packs,
+        enabledPacks: request.enabledPacks, floorUnresolved: floorUnresolved
+    ) { expansion in
+        var inner = request
+        inner.command = expansion
+        return judge(inner)
+    }
+}
+
+private func evaluatePacks<E: PatternEngine>(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    secretPaths: SecretPathDecider,
+    engine: E,
+    compiled: CompiledPacks<E.Compiled>,
+    timeBudget: inout PatternBudget
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -39,6 +84,10 @@ public func evaluate<E: PatternEngine>(
 
     var attempts = 0
     let budget = request.budget?.maxPatternAttempts
+    // A search the time budget cut short never decides alone: every other
+    // rule still runs, any deny wins, and only an otherwise-allow verdict
+    // becomes indeterminate.
+    var exhausted = false
 
     let segments = splitSegments(matchingView.rawValue)
     var judged: [JudgedSegment] = []
@@ -52,6 +101,8 @@ public func evaluate<E: PatternEngine>(
                 engine: engine,
                 attempts: &attempts,
                 budget: budget,
+                timeBudget: &timeBudget,
+                exhausted: &exhausted,
                 ranPacks: &ranPacks
             )
             if let result, isTerminal(result.outcome) {
@@ -69,6 +120,8 @@ public func evaluate<E: PatternEngine>(
         engine: engine,
         attempts: &attempts,
         budget: budget,
+        timeBudget: &timeBudget,
+        exhausted: &exhausted,
         ranPacks: &fullViewRanPacks,
         segments: judged
     ) {
@@ -76,12 +129,20 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return floorSelfProtection(request.command, secretPaths.fold(viewed, command: request.command))
+        return floorExhaustion(exhausted, floorSelfProtection(
+            request.command, secretPaths.fold(viewed, command: request.command)))
     }
-    return floorSelfProtection(request.command, secretPaths.fold(
+    return floorExhaustion(exhausted, floorSelfProtection(request.command, secretPaths.fold(
         EvaluationResult(outcome: .plain, matchingView: matchingView),
         command: request.command
-    ))
+    )))
+}
+
+/// A time-exhausted search leaves an allow unproven; a deny or another
+/// indeterminate already stands on its own.
+private func floorExhaustion(_ exhausted: Bool, _ result: EvaluationResult) -> EvaluationResult {
+    guard exhausted, result.decision == .allow else { return result }
+    return EvaluationResult(outcome: .indeterminate(.budgetExhausted), matchingView: result.matchingView)
 }
 
 /// An allowed `rv` invocation that weakens rv is indeterminate: the owner
@@ -173,6 +234,8 @@ private func evaluateSingle<E: PatternEngine>(
     engine: E,
     attempts: inout Int,
     budget: Int?,
+    timeBudget: inout PatternBudget,
+    exhausted: inout Bool,
     ranPacks: inout Set<PackID>,
     segments: [JudgedSegment] = []
 ) -> EvaluationResult? {
@@ -199,11 +262,18 @@ private func evaluateSingle<E: PatternEngine>(
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
-            if engine.matches(named.compiled, in: view) {
+            switch engine.search(named.compiled, in: view, budget: &timeBudget) {
+            case .exhausted:
+                // Never vouches: the pack's destructive rules still run.
+                exhausted = true
+                continue
+            case .noMatch:
+                continue
+            case .match:
                 lastSafe = SafeMatch(packID: pack.snapshot.id, patternName: named.name)
                 skippedBySafe = true
-                break
             }
+            break
         }
         // In the full view of a multi-segment command a safe match vouches only
         // for segments the segment pass already judged. A rule written to match
@@ -227,7 +297,16 @@ private func evaluateSingle<E: PatternEngine>(
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
-            guard let range = engine.firstMatch(rule.compiled, in: view) else { continue }
+            let range: Range<String.Index>
+            switch engine.search(rule.compiled, in: view, budget: &timeBudget) {
+            case .exhausted:
+                exhausted = true
+                continue
+            case .noMatch:
+                continue
+            case .match(let found):
+                range = found
+            }
             // Exempt only a match some segment already judged with this pack's
             // rules; a segment whose own safe match skipped the pack (`echo
             // $(cp -a /etc /tmp/s && rm -rf /tmp/s)`) judged nothing.

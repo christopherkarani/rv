@@ -118,14 +118,16 @@ extension HookEvaluateWorld {
             // M-07: the hook holds exact text, so its mint binds the
             // hidden payload; the row stores the digest only. B1: the mint
             // also binds the erased invocation prefix (wrappers live in the
-            // exact text, never in the view).
+            // exact text, never in the view). The exact text itself stays
+            // in rvd's memory for the owner's allow-once prompt only.
             mintOnDenyWithCommand: { result, cwd, command in
                 await world.mintUnlockCode(
                     for: result,
                     cwd: cwd,
                     maskedSegments: Normalize.maskedSegments(of: command),
                     invocationPrefix: Normalize.invocationPrefix(of: command),
-                    invocationDisplay: Normalize.invocationDisplay(of: command)
+                    invocationDisplay: Normalize.invocationDisplay(of: command),
+                    rawCommand: command.rawValue
                 )
             }
         ))

@@ -620,7 +620,7 @@ private func makeIsolatedHome(_ label: String) throws -> URL {
     return home
 }
 
-private func findDarwinRVDExecutable() -> URL? {
+func findDarwinRVDExecutable() -> URL? {
     if let override = ProcessInfo.processInfo.environment["RV_RVD"] {
         let url = URL(fileURLWithPath: override)
         if FileManager.default.isExecutableFile(atPath: url.path) {

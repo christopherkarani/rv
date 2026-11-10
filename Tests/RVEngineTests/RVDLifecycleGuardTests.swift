@@ -174,6 +174,94 @@ struct RVDLifecycleGuardTests {
         #expect(RVDStopGuard.stopsRVD(command) == false, "\(command)")
     }
 
+    // Folded in from the former every-host service floor, now observe-only
+    // here: retuning rv's launch environment or tampering with its job, and
+    // the stop forms it caught.
+    static let retuning: [String] = [
+        "launchctl setenv RV_GUARD_MODE observe",
+        "launchctl setenv RV_JUDGE_ENGINE laya",
+        "launchctl setenv PATH /usr/bin RV_LAYA_BUNDLE /tmp/x",
+        "launchctl unsetenv RV_FT_BUNDLE",
+        "launchctl setenv $NAME observe",
+        "sudo launchctl setenv RV_GUARD_MODE observe",
+        "bash -c 'launchctl setenv RV_GUARD_MODE observe'",
+        "/bin/launchctl setenv RV_GUARD_MODE observe",
+        "launchctl config user setenv RV_GUARD_MODE observe",
+        "launchctl asuser 501 launchctl setenv RV_GUARD_MODE observe",
+        "launchctl debug gui/501/dev.rv.evaluate --environment RV_JUDGE_ENGINE=laya",
+        "launchctl submit -l dev.rv.evaluate -- /bin/sh",
+        "launchctl attach gui/501/dev.rv.evaluate",
+        "launchctl bootout gui/501/$LABEL",
+        "launchctl kickstart -kp gui/501/dev.rv.evaluate",
+        "launchctl bsexec 123 launchctl bootout gui/501/dev.rv.evaluate",
+        "launchctl asuser 501 pkill rvd",
+        "systemctl --user set-environment RV_GUARD_MODE=observe",
+        "systemctl --user unset-environment RV_JUDGE_ENGINE",
+        "systemctl --user import-environment",
+        "systemctl --user edit dev.rv.evaluate.service",
+        "systemctl --user stop $UNIT",
+        "killall -m 'rv.*'",
+        "kill $(pidof rvd)",
+        "pkill $PROC",
+        "unbuffer pkill rvd",
+    ]
+
+    static let notRetuning: [String] = [
+        "launchctl setenv NODE_ENV production",
+        "launchctl getenv RV_GUARD_MODE",
+        "launchctl kickstart gui/501/dev.rv.evaluate",
+        "launchctl kickstart -k gui/501/com.example.agent",
+        "launchctl print-disabled gui/501",
+        "launchctl blame gui/501/dev.rv.evaluate",
+        "launchctl debug gui/501/com.example.agent --stdout /tmp/x",
+        "systemctl --user start dev.rv.evaluate.service",
+        "systemctl --user stop nginx.service",
+        "killall Finder",
+        "pgrep rvd",
+        "docker kill web",
+        "npm run kill",
+        "kill -1 12345",
+    ]
+
+    @Test("retuning rv's service environment or job is flagged", arguments: retuning)
+    func retuningFlagged(command: String) {
+        #expect(RVDStopGuard.stopsRVD(command), "\(command)")
+    }
+
+    @Test("other services' environment and read-only forms are not", arguments: notRetuning)
+    func notRetuningPasses(command: String) {
+        #expect(RVDStopGuard.stopsRVD(command, rvdPIDs: { [4242] }) == false, "\(command)")
+    }
+
+    @Test("a literal kill of rvd's pid is flagged", arguments: [
+        "kill 4242", "kill -9 4242", "kill -s TERM 4242", "kill -TERM 1 4242", "/bin/kill 4242",
+        "sh -c 'kill 4242'", "true && kill -9 4242",
+    ])
+    func literalRVDPidFlagged(command: String) {
+        #expect(RVDStopGuard.stopsRVD(command, rvdPIDs: { [4242] }), "\(command)")
+    }
+
+    @Test("another literal pid is not; an unreadable process table fails closed")
+    func literalOtherPid() {
+        #expect(RVDStopGuard.stopsRVD("kill 1234", rvdPIDs: { [4242] }) == false)
+        #expect(RVDStopGuard.stopsRVD("kill 1234", rvdPIDs: { nil }))
+        #expect(RVDStopGuard.stopsRVD("kill %1", rvdPIDs: { nil }) == false)
+        #expect(RVDStopGuard.stopsRVD("kill $!", rvdPIDs: { nil }) == false)
+        // Without a process table literal pids are not judged.
+        #expect(RVDStopGuard.stopsRVD("kill 4242") == false)
+    }
+
+    /// The service floor is observe-only now: `rv` admin self-protection,
+    /// which applies on every host, no longer sees service stops at all,
+    /// and never reads `$$` in a `-P` option value as a pattern.
+    @Test("every-host self-protection does not floor service stops", arguments: [
+        "pkill -P $$", "pkill -u $USER node", "launchctl bootout gui/501/dev.rv.evaluate", "pkill -f rvd",
+        "launchctl setenv RV_GUARD_MODE observe", "kill 1234",
+    ])
+    func everyHostFloorIgnoresServiceStops(command: String) {
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
     // Residual (documented, not attempted): an agent-supplied pattern cannot
     // hang the gate. A nested-quantifier/backreference pattern or an
     // oversized word list fails closed within a hard time bound.

@@ -49,7 +49,7 @@ private enum SharedMergeHost: CaseIterable, Sendable {
 }
 
 private func currentEntry(matcher: String, timeout: Int) -> String {
-    "{\"matcher\":\"\(matcher)\",\"hooks\":[{\"type\":\"command\",\"command\":\"RV_BINARY=/r python3 /c/hooks/rv-guard.py\",\"timeout\":\(timeout)}]}"
+    "{\"matcher\":\"\(matcher)\",\"hooks\":[{\"type\":\"command\",\"command\":\"RV_BINARY=/r /usr/bin/python3 -I -S /c/hooks/rv-guard.py\",\"timeout\":\(timeout)}]}"
 }
 
 private func foreignEntry(matcher: String) -> String {
@@ -61,10 +61,10 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
 }
 
 @Test func sharedMerge_hookCommandIsSingleSite() {
-    let expected = "RV_BINARY=/r python3 /c/hooks/rv-guard.py"
-    #expect(SettingsMergePolicy.hookCommand(rvPath: "/r", adapterPath: "/c/hooks/rv-guard.py") == expected)
-    #expect(ClaudeSettingsMerge.hookCommand(rvPath: "/r", adapterPath: "/c/hooks/rv-guard.py") == expected)
-    #expect(AntigravityHooksMerge.hookCommand(rvPath: "/r", adapterPath: "/c/hooks/rv-guard.py") == expected)
+    let expected = "RV_BINARY=/r /usr/bin/python3 -I -S /c/hooks/rv-guard.py"
+    #expect(SettingsMergePolicy.hookCommand(rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/c/hooks/rv-guard.py") == expected)
+    #expect(ClaudeSettingsMerge.hookCommand(rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/c/hooks/rv-guard.py") == expected)
+    #expect(AntigravityHooksMerge.hookCommand(rvPath: "/r", interpreter: "/usr/bin/python3", adapterPath: "/c/hooks/rv-guard.py") == expected)
 }
 
 @Test func sharedMerge_adapterPathBuildersDelegate() {
@@ -189,6 +189,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
                 existingData: occupied,
                 descriptor: host.descriptor,
                 rvPath: "/r",
+                interpreter: "/usr/bin/python3",
                 adapterPath: "/c/hooks/rv-guard.py",
                 force: false
             )
@@ -197,6 +198,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
             existingData: occupied,
             descriptor: host.descriptor,
             rvPath: "/r",
+            interpreter: "/usr/bin/python3",
             adapterPath: "/c/hooks/rv-guard.py",
             force: true
         )
@@ -220,6 +222,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
         existingData: stale,
         descriptor: claude.descriptor,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -237,6 +240,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
         existingData: partial,
         descriptor: antigravity.descriptor,
         rvPath: "/r",
+        interpreter: "/usr/bin/python3",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
@@ -249,6 +253,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
             existingData: nil,
             descriptor: host.descriptor,
             rvPath: "/r",
+            interpreter: "/usr/bin/python3",
             adapterPath: "/c/hooks/rv-guard.py",
             force: false
         )
@@ -258,6 +263,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
             own = try ClaudeSettingsMerge.merge(
                 existingData: nil,
                 rvPath: "/r",
+                interpreter: "/usr/bin/python3",
                 adapterPath: "/c/hooks/rv-guard.py",
                 force: false
             )
@@ -265,6 +271,7 @@ private func tamperedEntry(matcher: String, timeout: Int) -> String {
             own = try AntigravityHooksMerge.merge(
                 existingData: nil,
                 rvPath: "/r",
+                interpreter: "/usr/bin/python3",
                 adapterPath: "/c/hooks/rv-guard.py",
                 force: false
             )

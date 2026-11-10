@@ -1190,14 +1190,21 @@ for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
 done
 
 # Linux Swift runtime libraries ship in rv-swiftlibs-<target>.tar.gz and
-# land beside the binaries, where their $ORIGIN RUNPATH finds them.
+# land beside the binaries, where their $ORIGIN RUNPATH finds them. Their
+# names are generic, so each is recorded in $bin/.rv-swiftlibs: `rv
+# uninstall` removes only recorded names (InstallManifest.swiftLibsListName).
 for lib in "$src"/*.so; do
   [ -f "$lib" ] && [ ! -L "$lib" ] || continue
   name="$(basename "$lib")"
   rm -f "$bin/$name"
   cp "$lib" "$bin/$name"
   chmod 755 "$bin/$name"
+  printf '%s\n' "$name" >> "$bin/.rv-swiftlibs"
 done
+if [ -f "$bin/.rv-swiftlibs" ]; then
+  sort -u "$bin/.rv-swiftlibs" > "$bin/.rv-swiftlibs.installing" \
+    && mv -f "$bin/.rv-swiftlibs.installing" "$bin/.rv-swiftlibs"
+fi
 
 # The approvals custodian bundle lands in ~/Applications with the same
 # stage-then-swap discipline as the binaries: setup registers it only when
