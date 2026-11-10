@@ -279,6 +279,10 @@ private struct AliasResolver {
             return ([segment], false)
         case .dynamic:
             return nil
+        case .namedProgram:
+            // An exec vector the owner should see, but an everyday one.
+            unresolved = true
+            return ([segment], false)
         case .body(let body):
             // The original is judged on its own; the expansion adds the body.
             return resolveExpansion(aliasBodyCommand(body, gitPrefix: ["git"], args: []), depth: depth)
@@ -360,7 +364,31 @@ private func hidesConfig(_ entry: String, fromEnvironment: Bool) -> Bool {
 private enum GitConfigAliasDefinition {
     case notADefinition
     case dynamic
+    /// An editor or pager set to a named program (`core.editor vim`).
+    case namedProgram
     case body(String)
+}
+
+/// Interpreters and fetchers: as an editor or pager they run arbitrary
+/// code, never just edit or page.
+private let hostileProgramHeads: Set<String> = [
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "env", "eval", "exec", "command", "xargs",
+    "python", "python2", "python3", "perl", "ruby", "node", "deno", "bun", "php", "lua", "osascript",
+    "curl", "wget", "nc", "ncat", "socat", "ssh", "sudo", "rm", "open",
+]
+
+/// An editor or pager key set to a value that names a program by a plain
+/// name, with plain arguments (`vim`, `code --wait`, `less -R`): no path,
+/// no shell text, no interpreter. Anything else stays unjudgeable.
+private func isNamedEditorOrPager(_ key: String, value: String) -> Bool {
+    let key = key.lowercased()
+    guard ["core.editor", "sequence.editor", "core.pager"].contains(key) || key.hasPrefix("pager.") else {
+        return false
+    }
+    let plain = value.allSatisfy { $0.isLetter || $0.isNumber || " _.+=-".contains($0) }
+    let words = value.split(separator: " ").map(String.init)
+    guard plain, let head = words.first, head.hasPrefix("-") == false else { return false }
+    return hostileProgramHeads.contains(head.lowercased()) == false
 }
 
 /// `git config [scope] alias.NAME BODY` (also `set`, `--add`,
@@ -396,7 +424,7 @@ private func gitConfigAliasDefinition(_ args: [String]) -> GitConfigAliasDefinit
     let key = positionals[0]
     if isDynamicWord(key), positionals[1].isEmpty == false { return .dynamic }
     if isProgramOrIncludeConfigKey(key), isInertProgramSetting(key, value: positionals[1]) == false {
-        return .dynamic
+        return isNamedEditorOrPager(key, value: positionals[1]) ? .namedProgram : .dynamic
     }
     guard key.lowercased().hasPrefix("alias.") else { return .notADefinition }
     let body = positionals[1]

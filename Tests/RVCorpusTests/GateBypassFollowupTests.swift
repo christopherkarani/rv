@@ -38,6 +38,14 @@ struct GateBypassFollowupTests {
             "git -c filter.x.smudge=./x checkout .",
             "git --config-env=core.pager=PAGER log",
             "git -c core.pager=./x log",
+            // An editor or pager value that is a path, shell text or an
+            // interpreter is hostile: still a deny.
+            "git config --global core.editor ./x.sh",
+            "git config core.editor '/tmp/evil'",
+            "git config core.editor 'vim; rm -rf ~'",
+            "git config core.pager 'sh -c id'",
+            "git config sequence.editor 'bash -c x'",
+            "git config core.editor '$(id)'",
         ]
     )
     func hiddenConfigDenies(_ command: String) throws {
@@ -227,6 +235,25 @@ struct GateBypassFollowupTests {
         let command = "bash <<'EOF'\ng() { git \"$@\"; }\ng reset --hard\nEOF"
         for result in [harness.pin(command), harness.door(command)] {
             #expect(result.decision != .allow, "\(describeDecision(result))")
+        }
+    }
+
+    /// Setting an editor or pager to a named program is an exec vector the
+    /// owner should see, but an everyday one: it asks, never hard-denies.
+    @Test(
+        "an editor or pager set to a named program asks",
+        arguments: [
+            "git config --global core.editor vim",
+            "git config --global core.editor nano",
+            #"git config --global core.editor "code --wait""#,
+            "git config core.pager delta",
+            "git config --global sequence.editor 'subl -n -w'",
+        ]
+    )
+    func namedEditorAsks(_ command: String) throws {
+        let harness = try StressHarness.dayOne()
+        for result in [harness.pin(command), harness.door(command)] {
+            #expect(result.decision == .indeterminate(.unresolvedInvocation), "\(command): \(describeDecision(result))")
         }
     }
 
