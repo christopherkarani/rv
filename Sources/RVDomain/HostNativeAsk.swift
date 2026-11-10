@@ -23,7 +23,7 @@ public enum HostAskVerdict: Sendable, Equatable {
 /// `HostApprovalCapability` (routing only, never authority).
 public enum HostNativeAsk {
     public static let leftoverAskDeny = Deny(
-        ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "leftover-ask"),
+        ruleID: BuiltinRule.leftoverAsk.ruleID,
         reason: "Ask is not a permit."
     )
 

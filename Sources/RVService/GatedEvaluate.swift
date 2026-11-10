@@ -792,10 +792,7 @@ public struct GatedEvaluate: Sendable {
             return EvaluationResult(
                 outcome: .deny(
                     Deny(
-                        ruleID: RuleID(
-                            pack: ActionPolicyEngine.Builtin.pack,
-                            pattern: "typed-rules-invalid"
-                        ),
+                        ruleID: BuiltinRule.typedRulesInvalid.ruleID,
                         reason: "Typed rules could not be loaded."
                     ),
                     matched: nil
