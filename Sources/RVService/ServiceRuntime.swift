@@ -52,6 +52,10 @@ public actor ServiceRuntime {
     /// Shared with the XPC UI sessions. Resolves through `HookAskResolver`
     /// only: never an `AgentInstance` grant (F3).
     let hookCeremonies: HookReviewCeremonyService
+    /// Each hookEvaluate's `HookDeadline` budget. Always
+    /// `HookDeadline.budget` in rvd: only this module's internal init sets
+    /// it, so no caller, request or launch environment can stretch it.
+    let hookBudget: Duration
 
     package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
@@ -99,9 +103,11 @@ public actor ServiceRuntime {
         ceremonies: WorkspaceOperatorCeremonyService,
         actionCeremonies: ActionApprovalCeremonyService? = nil,
         hookCeremonies: HookReviewCeremonyService? = nil,
-        ownerPresence: OwnerPresence = OwnerPresence()
+        ownerPresence: OwnerPresence = OwnerPresence(),
+        hookBudget: Duration = HookDeadline.budget
     ) {
         self.ownerPresence = ownerPresence
+        self.hookBudget = hookBudget
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
         // Built before the hook ceremony below: the ceremony captures
@@ -336,7 +342,7 @@ public actor ServiceRuntime {
         case .evaluate(let params):
             result = .evaluate(await evaluate(params.request, cwd: params.cwd))
         case .hookEvaluate(let params):
-            let deadline = HookDeadline(receivedAt: receivedAt ?? .now)
+            let deadline = HookDeadline(receivedAt: receivedAt ?? .now, budget: hookBudget)
             switch await makeHookEvaluateResult(params, deadline: deadline) {
             case .success(let reply): result = .hookEvaluate(reply)
             case .failure(let error): result = .error(error)

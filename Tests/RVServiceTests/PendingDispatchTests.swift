@@ -967,7 +967,7 @@ struct PendingDispatchTests {
     ) throws -> ServiceRuntime {
         let homeURL = try homeURL ?? isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
-        return ServiceRuntime(
+        return hookTestRuntime(
             home: home,
             allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
             log: log,

@@ -46,7 +46,8 @@ struct AllowOnceOwnerPromptTests {
             idleExitSeconds: IdleWatchdog.defaultSeconds, log: nil, analytics: nil, clock: { clock.now },
             pendingApprovals: .automatic, ceremonies: WorkspaceOperatorCeremonyService(),
             ownerPresence: OwnerPresence(
-                checker: FakeChecker(accepted: "secret"), authenticator: prompt, promptTimeout: promptTimeout))
+                checker: FakeChecker(accepted: "secret"), authenticator: prompt, promptTimeout: promptTimeout),
+            hookBudget: testHookBudget)
         return Rig(runtime: runtime, store: store, home: home, homeURL: homeURL)
     }
 

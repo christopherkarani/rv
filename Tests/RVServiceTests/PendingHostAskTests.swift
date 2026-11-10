@@ -248,7 +248,7 @@ private struct IsolatedPendingHostAsk {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         home = try #require(HomeDirectory(validating: homeURL.path))
-        runtime = ServiceRuntime(
+        runtime = hookTestRuntime(
             home: home,
             allowOnceDirectory: allowOnceDirectory,
             clock: { Date(timeIntervalSince1970: 1_700_000_000) },

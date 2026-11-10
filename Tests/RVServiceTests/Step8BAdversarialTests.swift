@@ -310,7 +310,7 @@ private func makeAdversarialRuntime(
 ) throws -> ServiceRuntime {
     let homeURL = try isolatedHomeDirectory()
     let home = try #require(HomeDirectory(validating: homeURL.path))
-    return ServiceRuntime(
+    return hookTestRuntime(
         home: home,
         allowOnceDirectory: try isolatedAllowOnceDirectory(),
         clock: { Date(timeIntervalSince1970: 1_700_000_000) },
