@@ -39,8 +39,14 @@ Out of scope (do not touch, do not relitigate):
   globals, RuntimeAdmissionEvent derived fields, HostTable.
 - Hook notice auto-dismiss on poll and arrival-baseline quirks in
   `HookReviewModel` — preserve exactly in T1b; flag only.
-- Anything in open PRs #532–#554. No ticket here writes a file those PRs
-  touch.
+- Anything in open PRs #532–#549. No ticket here writes a file those PRs
+  touch. (#550–#554 have since merged.)
+- Open PR #566 (prodfix/integration) overlaps T4/T4s: it edits
+  `AllowOnceCommand.swift`, `CLIProcess.swift`, `CLIOwnerAuth.swift` and
+  `OwnerConfirmation.swift`, moves the allow-once owner check into rvd and
+  adds new owner refusals. Merge order: #566 lands before T4s/T4; T4 must
+  then route #566's new refusals through `OwnerGateRefusal`, and the T4
+  wording table is re-checked against post-#566 main.
 - Toolchain, deployment target, `Package.swift`. New files inside an
   existing target directory need no manifest edit.
 
@@ -53,10 +59,11 @@ Audience: implementers, fresh-context reviewers. Assumes Swift 6.4,
   kind — connection, item list, current selection, last status, notice.
 - **stale reply**: an async bridge reply whose request no longer matches the
   current selection/challenge.
-- **sealed revision log**: `policy-revisions-machine.log` + tip + key; the
-  HMAC chain that makes machine policy history tamper-evident.
-- **display log**: the human-readable revision JSONL that must agree with
-  the sealed log.
+- **sealed revision log**: `policy-revisions.log` + `.policy-revisions.tip` +
+  `.policy-revisions.key` (RVPolicyPaths); the HMAC chain that makes machine
+  policy history tamper-evident.
+- **display log**: the human-readable revision JSONL
+  (`policy-revisions.jsonl`) that must agree with the sealed log.
 - **phase** (idle exit): `serving(inFlight, generation)`,
   `draining(inFlight)`, `exited`.
 - **owner gate**: the TTY + device-owner authentication ceremony in front of
@@ -309,7 +316,8 @@ Frontier at start: T1a, T2, T3, T4s, T5 (no shared write paths).
   `Tests/RVServiceTests/IdleExitPolicyTests.swift`
 - **work**: §4 T3. Interpreter: `Mutex<(phase, requestCount)>`, one
   `send(_:) -> Bool` applying `reduce` under the lock and running effects
-  after unlock; `[weak self]` timer closures. `ManualIdleScheduler`
+  after unlock; timer closures may capture the watchdog strongly, as the
+  current idle timer does (the timer is cancelled on exit). `ManualIdleScheduler`
   (`advance(by:)`, `runDetached()`) in tests.
 - **acceptance**:
   - Public API and the four callers have no diff; IdleExit /
@@ -347,7 +355,7 @@ Frontier at start: T1a, T2, T3, T4s, T5 (no shared write paths).
   `Sources/RVCLI/AllowlistCommand.swift` (three ladders),
   `Sources/RVCLI/Commands/WorkspaceReviewQueue.swift` (`refusal`);
   `Tests/RVCLITests/{AllowOnceCommandRunTests,AllowlistCommandRunTests}.swift`,
-  `Tests/RVWorkspaceTUITests/WorkspaceReviewQueueTests.swift` (or wherever it lives).
+  `Tests/RVCLITests/WorkspaceReviewQueueTests.swift`.
   Do not touch `OwnerConfirmation.swift`, `ServiceClient.swift` (#549),
   Managed/Packs/Scan commands (#546), `CLIOwnerAuth.swift`, RVPolicy.
 - **work**: §4 T4. Each site keeps its domain-specific catches and ends with
