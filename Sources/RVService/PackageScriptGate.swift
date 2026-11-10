@@ -103,8 +103,10 @@ enum PackageScriptGate {
             let unitTokens = tokens(in: unit.text)
             if let target = plainCD(unitTokens, launched) {
                 // A cd in a pipeline or in the background runs in a subshell
-                // (or, in zsh, maybe not): untracked either way.
-                effectiveCwd = unit.inSubshell ? nil : resolveCD(target, from: effectiveCwd, home: home)
+                // (or, in zsh, maybe not), and one inside a group ends with
+                // it: untracked either way.
+                effectiveCwd = unit.inSubshell || unit.grouped
+                    ? nil : resolveCD(target, from: effectiveCwd, home: home)
                 continue
             }
             let wrapperMovesCwd = wrapperChangesDirectory(unitTokens)
@@ -353,6 +355,27 @@ enum PackageScriptGate {
         var text: String
         /// Next to a single `|` or `&`: runs in a subshell or the background.
         var inSubshell: Bool
+        /// Opened or closed a `( … )` / `{ … }` group split across units.
+        var grouped = false
+    }
+
+    /// Drop the unbalanced `(`/`{` opening and `)`/`}` closing a group that
+    /// the separator split cut through (`(cd sub`, `npm test)`, `{ npm
+    /// test`), so the launcher parser sees the command inside. Balanced
+    /// pairs (`$(…)`, `${HOME}`) are kept. Quotes are not modelled here: an
+    /// extra strip only exposes more words to judge.
+    static func stripGroupDelimiters(_ text: String) -> String {
+        var text = text
+        func excess(_ open: Character, over close: Character) -> Bool {
+            text.filter { $0 == open }.count > text.filter { $0 == close }.count
+        }
+        while let first = text.first, (first == "(" && excess("(", over: ")")) || (first == "{" && excess("{", over: "}")) {
+            text = String(text.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        while let last = text.last, (last == ")" && excess(")", over: "(")) || (last == "}" && excess("}", over: "{")) {
+            text = String(text.dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        return text
     }
 
     /// Quote-aware split at `;`, newline, `&&`, `||`, `|`, `&`, recording
@@ -366,8 +389,13 @@ enum PackageScriptGate {
         let chars = Array(raw)
         var i = 0
         func flush(subshellAfter: Bool) {
-            let text = current.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { units.append(ChainUnit(text: text, inSubshell: subshellBefore || subshellAfter)) }
+            let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = stripGroupDelimiters(trimmed)
+            if !text.isEmpty {
+                units.append(ChainUnit(
+                    text: text, inSubshell: subshellBefore || subshellAfter, grouped: text != trimmed
+                ))
+            }
             current = ""
             subshellBefore = subshellAfter
         }

@@ -215,6 +215,19 @@ struct PackageScriptGateFormsTests {
         #expect(Self.isUnresolved(Self.evaluate("npm test", cwd: dir)))
     }
 
+    @Test("runners inside subshells and brace groups are read", arguments: [
+        "(npm test)",
+        "{ npm test; }",
+        "(npm run evil)",
+        "(cd . ; npm test)",
+        "if true; then npm test; fi",
+    ])
+    func groupedRunnersNotClear(command: String) throws {
+        let dir = try Self.makeDir(["test": Self.poison, "evil": Self.poison])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isClear(Self.evaluate(command, cwd: dir)) == false, "\(command)")
+    }
+
     @Test("input the launcher parser stops following is not clear")
     func truncatedLaunchNotClear() throws {
         let dir = try Self.makeDir(["test": "node ok.js"])
