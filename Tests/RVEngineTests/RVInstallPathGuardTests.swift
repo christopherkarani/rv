@@ -73,7 +73,6 @@ struct RVInstallPathGuardTests {
         "true; rm ~/.local/bin/rvd",
         "f=~/.local/bin/rvd; rm $f",
         "echo ~/.local/bin/rvd | xargs rm",
-        "python3 -c 'import os; os.remove(\"/Users/agent/.local/bin/rvd\")'",
     ]
 
     static let notTouching: [String] = [
@@ -105,12 +104,60 @@ struct RVInstallPathGuardTests {
         "cd ~/project && npm test",
     ]
 
-    @Test("writes, moves and removes of rv's install are flagged", arguments: touching)
+    // Round-2 coverage: redirect-only writes, env -C/sudo -D as a cd,
+    // substitution/xargs feeding a destructive program, and the extended
+    // systemd unit search dirs (rv's `dev.rv.*` unit and its `.d` drop-ins).
+    static let touchingR2: [String] = [
+        "> ~/.local/bin/rvd",
+        ">| ~/.local/bin/rvd",
+        "exec > ~/.local/bin/rvd",
+        "cd ~/.local/bin; > rvd",
+        "rm $(which rvd)",
+        "mv \"$(which rvd)\" /tmp/",
+        "rm \"$(dirname \"$(command -v rv)\")/rvd\"",
+        "find ~/.local/bin -name rvd | xargs rm",
+        "ls ~/.local/bin | xargs rm",
+        "env -C ~/.local/bin rm rvd",
+        "sudo -D ~/.local/bin rm rvd",
+        "rm ~/.config/systemd/user.control/dev.rv.evaluate.service",
+        "rm ~/.local/share/systemd/user/dev.rv.evaluate.service",
+        "rm $XDG_RUNTIME_DIR/systemd/user/dev.rv.evaluate.service",
+        // Decided and documented as held: extracting/chowning into a dir
+        // that holds rvd can replace or re-mode it.
+        "tar -C ~/.local -xzf node.tgz",
+        "sudo chown -R $USER ~/.local",
+    ]
+
+    // Round-2 false positives: an assignment word is a value, not a path;
+    // a directory/ancestor hit counts only for a destructive program.
+    static let notTouchingR2: [String] = [
+        "export PATH=\"$HOME/.local/bin:$PATH\"",
+        "PATH=$HOME/.local/bin:$PATH npm test",
+        "env PATH=$HOME/.local/bin make test",
+        "PATH=\"$HOME/.local/bin:$PATH\" uv run pytest",
+        "export XDG_RUNTIME_DIR=/run/user/1000",
+        "docker exec app ls /",
+        "make install PREFIX=~/.local",
+        "./configure --prefix=$HOME/.local",
+        "cargo install --root ~/.local",
+        "rg foo ~",
+        "fd rvd ~",
+        "tree ~/.local",
+        "git status ~",
+        "git -C ~ status",
+        "git --git-dir=$HOME/.dotfiles --work-tree=$HOME status",
+        "open ~/.local/bin",
+        "open ~/Library/LaunchAgents",
+        "open -R ~/.local/bin/rv",
+        "code ~/.local/bin",
+    ]
+
+    @Test("writes, moves and removes of rv's install are flagged", arguments: touching + touchingR2)
     func touchingFlagged(command: String) {
         #expect(Self.touches(command), "\(command)")
     }
 
-    @Test("reads and unrelated writes are not", arguments: notTouching)
+    @Test("reads and unrelated writes are not", arguments: notTouching + notTouchingR2)
     func notTouchingPasses(command: String) {
         #expect(Self.touches(command) == false, "\(command)")
     }

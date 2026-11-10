@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 @testable import RVEngine
@@ -22,6 +23,7 @@ struct RVDLifecycleGuardTests {
         // a plist is opaque: launchd stops whatever Label it names
         "launchctl unload /tmp/x.plist",
         "launchctl stop dev.rv.evaluate",
+        "launchctl kickstart -k gui/501/dev.rv.evaluate",
         "launchctl kill SIGKILL gui/501/dev.rv.evaluate",
         "launchctl kill 9 gui/501/dev.rv.evaluate",
         "launchctl disable gui/501/dev.rv.evaluate",
@@ -87,7 +89,6 @@ struct RVDLifecycleGuardTests {
         "ls && killall rvd",
         "echo hi | xargs launchctl bootout gui/501/dev.rv.evaluate",
         "find . -maxdepth 0 -exec launchctl bootout gui/501/dev.rv.evaluate \\;",
-        "python3 -c 'import os; os.system(\"pkill -f rvd\")'",
         "$LAUNCHER bootout gui/501/dev.rv.evaluate",
     ]
 
@@ -109,7 +110,6 @@ struct RVDLifecycleGuardTests {
         "launchctl list",
         "launchctl list | grep dev.rv",
         "launchctl print gui/501/dev.rv.evaluate",
-        "launchctl kickstart -k gui/501/dev.rv.evaluate",
         "launchctl bootstrap gui/501 ~/Library/LaunchAgents/dev.rv.evaluate.plist",
         "launchctl bootout gui/501/com.example.agent",
         "systemctl --user status rvd",
@@ -127,14 +127,68 @@ struct RVDLifecycleGuardTests {
         ".build/debug/rv-cli doctor",
     ]
 
-    @Test("commands that stop or kill rvd are flagged", arguments: stopping)
+    // Round-2 coverage: xargs/stdin-fed stop programs, PID lookups that hide
+    // the name, echo/printf piped to a shell or scheduler, and D-Bus stops.
+    static let stoppingR2: [String] = [
+        "launchctl kickstart -k gui/501/dev.rv.evaluate",
+        "pgrep rvd | xargs -I{} kill {}",
+        "pgrep rvd | xargs -I % kill %",
+        "echo rvd | xargs pkill",
+        "echo rvd | xargs killall -9",
+        "xargs pkill < names.txt",
+        "echo gui/501/dev.rv.evaluate | xargs -n1 launchctl bootout",
+        "ps ax | grep '[r]vd' | awk '{print $1}' | xargs kill",
+        "kill $(ps ax | awk '/rv[d]/{print $1}')",
+        "ps ax | grep 'r''vd' | awk '{print $1}' | xargs kill",
+        "kill $(launchctl list | awk '/dev.r.\\./{print $1}')",
+        "pkill -f 'bob.*rvd'",
+        "echo \"launchctl bootout gui/501/dev.rv.evaluate\" | sh",
+        "printf 'pkill rvd' | bash",
+        "echo \"pkill rvd\" | at now",
+        "crontab -l | { cat; echo '* * * * * pkill rvd'; } | crontab -",
+        "busctl --user stop dev.rv.evaluate",
+        "dbus-send --session /dev/rv dev.rv.Stop",
+    ]
+
+    // Round-2 false positives that must stay allowed: a quoted pattern is one
+    // regex, a non-name selection narrows, a quoted message is not a command.
+    static let benignR2: [String] = [
+        "pkill -f 'rails s'",
+        "pkill -u $USER Slack",
+        "pkill -P $$",
+        "git commit -m 'fix: pkill rvd bug'",
+        "brew install rv",
+        "brew services stop rv",
+        "swift build --product rv",
+        "swift run rvd",
+        "git log --grep='rvd'",
+    ]
+
+    @Test("commands that stop or kill rvd are flagged", arguments: stopping + stoppingR2)
     func stoppingFlagged(command: String) {
         #expect(RVDStopGuard.stopsRVD(command), "\(command)")
     }
 
-    @Test("everyday process and service commands are not", arguments: benign)
+    @Test("everyday process and service commands are not", arguments: benign + benignR2)
     func benignPass(command: String) {
         #expect(RVDStopGuard.stopsRVD(command) == false, "\(command)")
+    }
+
+    // Residual (documented, not attempted): an agent-supplied pattern cannot
+    // hang the gate. A nested-quantifier/backreference pattern or an
+    // oversized word list fails closed within a hard time bound.
+    @Test("agent-supplied patterns and word lists evaluate in bounded time")
+    func boundedTime() {
+        let adversarial = [
+            "pkill -f '" + String(repeating: "(.|.)", count: 40) + "+X'",
+            "pkill -f '" + String(repeating: "(a+)", count: 30) + "+b'",
+            "pkill -f '" + String(repeating: "a", count: 5000) + "'",
+            "launchctl bootout " + Array(repeating: "x", count: 4000).joined(separator: " "),
+            "kill $(ps ax | grep '" + String(repeating: "(x+)", count: 40) + "+y')",
+        ]
+        let start = Date()
+        for command in adversarial { _ = RVDStopGuard.stopsRVD(command) }
+        #expect(Date().timeIntervalSince(start) < 2.0)
     }
 
     @Test("rv setup --observe sheds oversight; plain setup does not", arguments: [

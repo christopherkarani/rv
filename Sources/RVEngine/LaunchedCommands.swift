@@ -536,7 +536,7 @@ private func isShellCommandFlag(_ word: String, shell: String) -> Bool {
 /// Launchers whose next non-flag word is the real command.
 let plainLaunchers: Set<String> = ["command", "exec", "nohup", "time", "builtin", "nice", "doas"]
 
-private func isAssignmentWord(_ word: String) -> Bool {
+func isAssignmentWord(_ word: String) -> Bool {
     guard let equals = word.firstIndex(of: "="), equals != word.startIndex else { return false }
     let name = word[..<equals]
     guard let first = name.first, assignmentNameStart.contains(first) else { return false }

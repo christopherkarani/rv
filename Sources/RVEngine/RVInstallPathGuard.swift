@@ -17,31 +17,40 @@ import RVDomain
 /// `~/.config/rv`, which `core.secrets:home-rv-config` already guards.)
 ///
 /// `touchesInstall` is true when a shell command may write, move or remove
-/// one of these: a program not known to only read is handed such a path or
-/// a directory that holds one (`rm -rf ~/.local/bin`, `cp rvd ~/.local/bin/`),
-/// a redirect targets one, or the path appears anywhere in the command
-/// (an assignment, an inline program, `xargs` input) beside such a program.
-/// `~`, `$HOME`, `$XDG_RUNTIME_DIR` and in-command `cd` are resolved; globs
-/// are matched; a variable inside a path may be any components. A path held
+/// one of these. A directory or ancestor hit (`~`, `~/.local`,
+/// `~/.local/bin`, `~/Library/LaunchAgents`, `/`) counts only for a
+/// destructive program (`rm`, `mv`, `cp`, `ln`, `chmod`, `chown`,
+/// `chflags`, `find -delete`/`-exec rm`, `rsync --delete`, `tar -x -C`,
+/// …); an exact install file counts for any of those or a redirect onto it.
+/// A `$(…)` substitution or `xargs` that feeds a destructive program and
+/// names the install is held too. `~`, `$HOME`, `$XDG_RUNTIME_DIR`,
+/// in-command `cd`, and `env -C`/`sudo -D` are resolved; globs are matched;
+/// a variable inside a path may be any components. An assignment word
+/// (`PATH=$HOME/.local/bin …`) is a value, not a path operand. A path held
 /// entirely in a variable (`rm "$f"`) is not resolvable and is not flagged
-/// unless the command assigns it. Reads (`ls`, `cat`, `stat`, running
-/// `~/.local/bin/rv`) stay allowed.
+/// unless the command assigns it. Reads (`ls`, `cat`, `stat`, `rg`, `open`,
+/// `git`, running `~/.local/bin/rv`) stay allowed.
 public enum RVInstallPathGuard {
     public static func touchesInstall(_ command: ShellCommand, home: HomePath?, cwd: WorkingDirectory?) -> Bool {
+        let raw = command.rawValue
         let model = InstallPathModel(home: home)
-        let launched = launchedCommandHeads(command.rawValue).filter { $0.truncated == false }
-        let bases = trackedBases(launched, cwd: cwd, model: model)
-        for command in launched {
-            let writes = mayWrite(command)
-            if writes, command.guardArgv.dropFirst().contains(where: { model.touches(word: $0, bases: bases) }) {
-                return true
-            }
-            if command.redirects.contains(where: { model.touches(word: redirectTarget($0), bases: bases) }) {
-                return true
-            }
+        let launched = launchedCommandHeads(raw).filter { $0.truncated == false }
+        let bases = trackedBases(launched, raw: raw, cwd: cwd, model: model)
+        for command in launched where isDestructive(command) {
+            let operands = command.guardArgv.dropFirst().filter { isAssignmentWord($0) == false }
+            if operands.contains(where: { model.touches(word: $0, bases: bases) }) { return true }
         }
-        guard launched.contains(where: mayWrite) else { return false }
-        return anchoredWords(command.rawValue).contains { model.isProtected(word: $0, bases: nil) }
+        // A redirect writes its exact target, even with no command (`> rvd`).
+        if redirectTargets(raw).contains(where: { model.touchesExact(word: $0, bases: bases) }) { return true }
+        // An assignment or `xargs` input that names an exact install file,
+        // beside a destructive program (`f=~/.local/bin/rvd; rm $f`).
+        if launched.contains(where: isDestructive),
+           anchoredWords(raw).contains(where: { model.isProtected(word: $0, bases: nil) }) {
+            return true
+        }
+        // A `$(…)`/xargs source that names the install fed to a destructive
+        // program (`rm $(which rvd)`, `ls ~/.local/bin | xargs rm`).
+        return feedsInstall(raw, launched: launched)
     }
 
     /// File door: whether a write or edit of `path` lands in rv's install.
@@ -59,29 +68,47 @@ public enum RVInstallPathGuard {
 
 // MARK: commands
 
-/// Programs that never write a path they are handed. `launchctl` and
-/// `systemctl` are judged by `RVDStopGuard`; `rv` by `SelfProtectionGuard`.
-private let readOnlyPrograms: Set<String> = [
-    "ls", "cat", "head", "tail", "less", "more", "bat", "stat", "file", "wc", "du", "df", "which",
-    "type", "whereis", "readlink", "realpath", "basename", "dirname", "echo", "printf", "test", "[",
-    "[[", "grep", "egrep", "fgrep", "ag", "ack", "diff", "cmp", "md5", "md5sum", "shasum", "sha1sum",
-    "sha256sum", "sha512sum", "cksum", "otool", "nm", "strings", "hexdump", "od", "jq", "pwd", "cd",
-    "pushd", "popd", "true", "false", "mkdir", "launchctl", "systemctl", "journalctl", "rv", "rv-cli",
-    "pgrep", "ps", "lsof", "id", "whoami", "sleep",
+/// Programs that write, move or remove a path operand (directories too), so
+/// a hit on an install file or a directory holding one is a mutation.
+/// Everything else (readers, `make`, `docker`, `git`, viewers like `open`)
+/// never mutates its operands here. `launchctl`/`systemctl` are
+/// `RVDStopGuard`'s; `rv` is `SelfProtectionGuard`'s.
+private let destructivePrograms: Set<String> = [
+    "rm", "rmdir", "unlink", "mv", "cp", "ln", "link", "chmod", "chown", "chgrp", "chflags",
+    "install", "rsync", "dd", "tee", "truncate", "touch", "shred", "ditto", "rename", "mkfifo",
 ]
 
 private let findActions: Set<String> = [
     "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls",
 ]
 
-private func mayWrite(_ command: LaunchedCommand) -> Bool {
+/// Whether `command` mutates a path operand. A dynamic head may be `rm`
+/// (fail closed). `find`, `tar`, `curl`/`wget`, `plutil`, `sed`, `defaults`
+/// mutate only in certain forms.
+private func isDestructive(_ command: LaunchedCommand) -> Bool {
     guard command.headIsDynamic == false, let program = command.guardArgv.first else { return true }
-    if program == "find" {
-        return command.guardArgv.dropFirst().contains { word in
-            findActions.contains(foldedWord(word)) || word.contains(where: { $0 == "$" || $0 == "`" })
-        }
+    let args = command.guardArgv.dropFirst()
+    func hasDynamic() -> Bool { args.contains { $0.contains(where: { $0 == "$" || $0 == "`" }) } }
+    switch program {
+    case "find":
+        return args.contains { findActions.contains(foldedWord($0)) } || hasDynamic()
+    case "tar":
+        // Extraction (`-x`) overwrites; create/list do not.
+        return args.contains { arg in
+            let f = foldedWord(arg)
+            return f == "--extract" || (f.hasPrefix("-") && f.hasPrefix("--") == false && f.contains("x"))
+        } || hasDynamic()
+    case "curl", "wget":
+        return args.contains { ["-o", "-O", "--output", "--remote-name", "--output-document"].contains(foldedWord($0)) }
+    case "plutil":
+        return args.contains { ["-replace", "-insert", "-remove", "-convert"].contains(foldedWord($0)) }
+    case "sed":
+        return args.contains { foldedWord($0) == "-i" || foldedWord($0).hasPrefix("-i") && foldedWord($0).hasPrefix("--") == false }
+    case "defaults":
+        return args.first.map { ["write", "delete", "import", "rename"].contains(foldedWord($0)) } ?? false
+    default:
+        return destructivePrograms.contains(program)
     }
-    return readOnlyPrograms.contains(program) == false
 }
 
 /// `2>&1` → `1`, `>file` → `file`, a bare operator → "".
@@ -94,12 +121,77 @@ private func redirectTarget(_ word: String) -> String {
     return String(rest)
 }
 
+/// Every output-redirect target in `raw`, across all segments, even a
+/// segment with no command (`cd dir; > rvd`). The resolve() path drops a
+/// commandless redirect, so this scans the tokens directly.
+private func redirectTargets(_ raw: String) -> [String] {
+    var targets: [String] = []
+    for segment in splitSegments(raw) {
+        let tokens = ShellPipeline.tokenize(segment).filter { $0.isNewline == false }
+        var index = 0
+        while index < tokens.count {
+            let token = tokens[index]
+            let skip = token.wasQuoted ? 0 : redirectWordCount(token.lexeme)
+            guard skip > 0, token.lexeme.contains("<") == false else { index += max(skip, 1); continue }
+            if skip == 1 {
+                targets.append(redirectTarget(token.lexeme))
+            } else if index + 1 < tokens.count {
+                targets.append(tokens[index + 1].lexeme)
+            }
+            index += skip
+        }
+    }
+    return targets
+}
+
+/// A `$(…)`/backtick substitution or an `xargs` pipeline that feeds a
+/// destructive program and names rv's install (`rm $(which rvd)`,
+/// `ls ~/.local/bin | xargs rm`). Coarse by design: it only raises the bar.
+private func feedsInstall(_ raw: String, launched: [LaunchedCommand]) -> Bool {
+    for command in launched where isDestructive(command) {
+        if command.guardArgv.dropFirst().contains(where: { carriesSubstitution($0) && mentionsInstall($0) }) {
+            return true
+        }
+    }
+    // `… | xargs <destructive>`: the destructive program is xargs's operand,
+    // so it is not a launched command of its own. The producer text names it.
+    let xargsDestructive = launched.contains { command in
+        guard command.headIsDynamic == false, command.guardArgv.first == "xargs" else { return false }
+        return command.guardArgv.dropFirst().contains { isDestructiveName($0) }
+    }
+    return xargsDestructive && mentionsInstall(raw)
+}
+
+private func isDestructiveName(_ word: String) -> Bool {
+    destructivePrograms.contains(commandName(word))
+}
+
+/// Install tokens in free text (a substitution body or a pipe producer):
+/// the binary names, an install directory, or a `which`/`command -v` of rv.
+private func mentionsInstall(_ text: String) -> Bool {
+    let folded = text.folding(options: .caseInsensitive, locale: nil)
+    if ["rvd", "dev.rv", ".local/bin/rv", "launchagents/dev.rv", "/rv\"", "/rv'", "which rv",
+        "command -v rv", "-name rv"].contains(where: { folded.contains($0) }) {
+        return true
+    }
+    return folded.hasSuffix("/rv") || folded.contains(".local/bin")
+}
+
 /// Directories relative words may resolve against: the hook cwd plus every
-/// `cd`/`pushd` target. Nil when one is unknown (relative words then match
-/// any directory, fail closed).
-private func trackedBases(_ launched: [LaunchedCommand], cwd: WorkingDirectory?, model: InstallPathModel) -> [[Comp]]? {
+/// `cd`/`pushd` target and every `env -C`/`env --chdir`/`sudo -D` directory.
+/// Nil when one is unknown (relative words then match any directory, fail
+/// closed).
+private func trackedBases(
+    _ launched: [LaunchedCommand], raw: String, cwd: WorkingDirectory?, model: InstallPathModel
+) -> [[Comp]]? {
     guard let cwd else { return nil }
     var bases = [model.components(of: cwd.rawValue, bases: nil).first ?? []]
+    func add(_ target: String) -> Bool {
+        let resolved = model.components(of: unescapeBackslashPairs(target), bases: bases)
+        if resolved.isEmpty || resolved.contains(where: { $0.contains(.any) }) { return false }
+        bases.append(contentsOf: resolved)
+        return bases.count <= maxBases
+    }
     for command in launched where command.guardArgv.first == "cd" || command.guardArgv.first == "pushd" {
         guard command.headIsDynamic == false else { return nil }
         // `cd -` returns to a directory this command never names.
@@ -110,12 +202,35 @@ private func trackedBases(_ launched: [LaunchedCommand], cwd: WorkingDirectory?,
             bases.append(home.map(Comp.name))
             continue
         }
-        let resolved = model.components(of: unescapeBackslashPairs(target), bases: bases)
-        if resolved.isEmpty || resolved.contains(where: { $0.contains(.any) }) { return nil }
-        bases.append(contentsOf: resolved)
-        if bases.count > maxBases { return nil }
+        guard add(target) else { return nil }
     }
+    for dir in chdirLauncherDirs(raw) where add(dir) == false { return nil }
     return bases
+}
+
+/// `env -C dir`, `env --chdir dir`/`--chdir=dir`, `sudo -D dir`: the
+/// directory a launcher runs its command from, so relative operands resolve
+/// against it just like `cd`. The flag case is significant (`-C`/`-D`, not
+/// a shell `-c`), and only in a segment that runs `env`/`sudo`.
+private func chdirLauncherDirs(_ raw: String) -> [String] {
+    var dirs: [String] = []
+    for segment in splitSegments(raw) {
+        let words = ShellPipeline.tokenize(segment).filter { $0.isNewline == false }.map { unescapeBackslashPairs($0.lexeme) }
+        guard words.contains(where: { ["env", "sudo"].contains(commandName($0)) }) else { continue }
+        var index = 0
+        while index < words.count {
+            let word = words[index]
+            let next = index + 1 < words.count ? words[index + 1] : nil
+            if word.hasPrefix("--chdir=") {
+                dirs.append(String(word.drop(while: { $0 != "=" }).dropFirst()))
+            } else if (word == "-C" || word == "-D" || word == "--chdir"), let next, next.hasPrefix("-") == false {
+                dirs.append(next)
+                index += 1
+            }
+            index += 1
+        }
+    }
+    return dirs
 }
 
 private let maxBases = 32
@@ -170,10 +285,18 @@ private struct InstallPathModel {
             [.fixed(".local"), .fixed("bin"), .binary],
             [.fixed("library"), .fixed("launchagents"), .rvJob],
             [.fixed(".config"), .fixed("systemd"), .fixed("user"), .anyOne],
+            // Further systemd unit search dirs, scoped to rv's `dev.rv.*` unit
+            // and its `.d` drop-ins (not every unit there).
+            [.fixed(".config"), .fixed("systemd"), .fixed("user.control"), .rvJob],
+            [.fixed(".local"), .fixed("share"), .fixed("systemd"), .fixed("user"), .rvJob],
             [.fixed("applications"), .fixed("rvapprovals.app")],
         ]
         var sequences = homes.flatMap { home in tails.map { (home + $0, home.count) } }
         sequences.append(([.fixed("run"), .fixed("user"), .anyOne, .fixed("rv")], 3))
+        // System and runtime systemd dirs, rv's unit only.
+        sequences.append(([.fixed("etc"), .fixed("systemd"), .fixed("user"), .rvJob], 3))
+        sequences.append(([.fixed("run"), .fixed("user"), .anyOne, .fixed("systemd"), .fixed("user"), .rvJob], 3))
+        sequences.append(([.fixed("run"), .fixed("user"), .anyOne, .fixed("systemd"), .fixed("transient"), .rvJob], 3))
         self.sequences = sequences
     }
 
@@ -191,6 +314,15 @@ private struct InstallPathModel {
         components(of: unescapeBackslashPairs(word), bases: bases, relativeUnknown: { relative in
             matchesSuffix(relative, ancestors: false)
         }).contains(where: protects)
+    }
+
+    /// An exact install file (not a directory holding one): for a redirect
+    /// target, which always names a file.
+    func touchesExact(word: String, bases: [[Comp]]?) -> Bool {
+        candidates(of: word).contains { candidate in
+            components(of: candidate, bases: bases, relativeUnknown: { matchesSuffix($0, ancestors: false) })
+                .contains(where: protects)
+        }
     }
 
     /// Absolute components of `word` against each base. A relative word
@@ -284,7 +416,7 @@ private func namesInstallPart(_ comp: Comp) -> Bool {
 
 private let installParts: Set<String> = [
     ".local", "bin", "library", "launchagents", ".config", "systemd", "user", "applications",
-    "rvapprovals.app", "run", "rv",
+    "rvapprovals.app", "run", "rv", "share", "user.control", "transient", "etc",
 ]
 
 private func matches(_ comps: ArraySlice<Comp>, _ slots: ArraySlice<Slot>, extraAllowed: Bool) -> Bool {

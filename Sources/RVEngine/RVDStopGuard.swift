@@ -34,7 +34,8 @@ public enum RVDStopGuard {
         let launched = launchedCommandHeads(raw)
         let context = StopContext(raw: raw, launched: launched, depth: depth)
         if launched.contains(where: { stops($0, context) }) { return true }
-        return speculativeTails(raw).contains { stops(argv: $0, context) }
+        if speculativeTails(raw).contains(where: { stops(argv: $0, context) }) { return true }
+        return echoFedShellStops(raw, depth: depth)
     }
 
     private static let maxDepth = 4
@@ -42,6 +43,26 @@ public enum RVDStopGuard {
     fileprivate static func nested(_ raw: String, _ context: StopContext) -> Bool {
         stopsRVD(raw, depth: context.depth + 1)
     }
+
+    fileprivate static func nestedText(_ raw: String, depth: Int) -> Bool {
+        stopsRVD(raw, depth: depth + 1)
+    }
+}
+
+/// `echo`/`printf` text is inert, unless its pipe consumer is a shell or a
+/// scheduler that runs it (`sh`, `bash`, `zsh`, `dash`, `at`, `batch`,
+/// `crontab`). Then the echoed string is a command: evaluate it.
+/// `echo "pkill rvd" | sh`, `… echo '* * * * * pkill rvd' … | crontab -`.
+private let shellConsumers: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "at", "batch", "crontab"]
+
+private func echoFedShellStops(_ raw: String, depth: Int) -> Bool {
+    let segments = rawSegments(raw).filter { $0.isEmpty == false }
+    guard segments.contains(where: { shellConsumers.contains(commandName($0[0])) }) else { return false }
+    for segment in segments where ["echo", "printf"].contains(commandName(segment[0])) {
+        let text = segment.dropFirst().filter { $0.hasPrefix("-") == false }.joined(separator: " ")
+        if text.isEmpty == false, RVDStopGuard.nestedText(text, depth: depth) { return true }
+    }
+    return false
 }
 
 /// Facts about the whole command that one launched `kill` cannot see.
@@ -51,10 +72,14 @@ private struct StopContext {
     let depth: Int
 
     /// Whether the command looks up rvd's pid: it names rvd, rv's label or
-    /// its socket, or runs a `pgrep`/`pidof` that may select rvd.
+    /// its socket, or runs a `pgrep`/`pidof` that may select rvd. The text
+    /// is folded (`[r]vd` → `rvd`, quotes stripped so `'r''vd'` → `rvd`)
+    /// before the mention check, and grep/awk regexes are tested against
+    /// rvd's names, so a pipeline that hides the name still counts.
     var looksUpRVD: Bool {
-        let folded = raw.folding(options: .caseInsensitive, locale: nil)
+        let folded = foldHiddenMentions(raw)
         if rvdMentions.contains(where: { folded.contains($0) }) { return true }
+        if pipelinePatterns(raw).contains(where: patternMatchesRVDName) { return true }
         return launched.contains { command in
             guard command.truncated == false, let program = command.guardArgv.first else { return false }
             let args = Array(command.guardArgv.dropFirst())
@@ -65,6 +90,51 @@ private struct StopContext {
             }
         }
     }
+}
+
+/// `[r]vd` → `rvd`, quote marks dropped, case-folded: a `grep '[r]vd'` or
+/// `'r''vd'` no longer hides the name from a substring check.
+func foldHiddenMentions(_ raw: String) -> String {
+    var out = ""
+    let chars = Array(raw)
+    var index = 0
+    while index < chars.count {
+        // A single-character class `[x]` matches the literal `x`.
+        if chars[index] == "[", index + 2 < chars.count, chars[index + 2] == "]" {
+            out.append(chars[index + 1])
+            index += 3
+            continue
+        }
+        if chars[index] != "'", chars[index] != "\"" { out.append(chars[index]) }
+        index += 1
+    }
+    return out.folding(options: .caseInsensitive, locale: nil)
+}
+
+/// Quoted or `/…/`-delimited regexes in grep/awk/sed stages, to test
+/// against rvd's names. Bounded: only short words that look like patterns.
+private func pipelinePatterns(_ raw: String) -> [String] {
+    var patterns: [String] = []
+    for segment in rawSegments(raw) where segment.isEmpty == false {
+        guard ["grep", "egrep", "fgrep", "awk", "sed", "rg"].contains(commandName(segment[0])) else { continue }
+        for word in segment.dropFirst() where word.hasPrefix("-") == false {
+            // An awk program `/pat/{…}`: take the first `/…/` slash span.
+            if let open = word.firstIndex(of: "/"), let close = word[word.index(after: open)...].firstIndex(of: "/") {
+                patterns.append(String(word[word.index(after: open)..<close]))
+            } else {
+                patterns.append(word)
+            }
+        }
+    }
+    return patterns
+}
+
+/// rvd's process name and launchd/systemd labels, for regex tests.
+private let rvdNameSubjects = ["rvd", "dev.rv.evaluate", "dev.rv.mcp-custodian", "dev.rv.audit-forward"]
+
+private func patternMatchesRVDName(_ pattern: String) -> Bool {
+    guard pattern.isEmpty == false else { return false }
+    return boundedRegexMatches(pattern, subjects: rvdNameSubjects)
 }
 
 private let rvdMentions = ["rvd", "dev.rv", "evaluate.sock"]
@@ -92,8 +162,32 @@ private func stops(argv: [String], _ context: StopContext) -> Bool {
     case "pkill": return pkillSelectsRVD(args)
     case "killall": return killallSelectsRVD(args)
     case "kill": return killStops(args, context)
+    case "xargs": return xargsStops(args, context)
+    case "busctl", "gdbus", "dbus-send", "systemd-run", "loginctl":
+        // Linux D-Bus / systemd manager calls that name rv's bus or unit.
+        let folded = context.raw.folding(options: .caseInsensitive, locale: nil)
+        return folded.contains("systemd1") || folded.contains("dev.rv")
     default: return false
     }
+}
+
+/// `xargs <program> [args]` runs `program` with the words from stdin
+/// appended. The program is judged with the inline args it carries (the
+/// stdin words make an operand-less stop still stop). `xargs` options and
+/// their values are skipped first.
+private func xargsStops(_ args: [String], _ context: StopContext) -> Bool {
+    var index = 0
+    let valued: Set<String> = ["-I", "-i", "-n", "-L", "-P", "-s", "-E", "-e", "-d", "-a", "--max-args",
+                               "--max-procs", "--max-lines", "--replace", "--delimiter", "--arg-file"]
+    while index < args.count {
+        let word = args[index]
+        guard word.hasPrefix("-") else { break }
+        // `-I {}` / `-n 1` take the next word; `-I{}` / `-n1` carry it attached.
+        index += valued.contains(word) ? 2 : 1
+    }
+    let rest = Array(args[index...])
+    guard rest.isEmpty == false else { return false }
+    return stops(argv: rest, context)
 }
 
 /// `$X`, backticks, globs and braces: the word's runtime value is unknown.
@@ -113,6 +207,16 @@ private func verbIndexes(_ folded: [String]) -> [Int] {
     return folded.indices.filter { folded[$0].hasPrefix("-") == false }
 }
 
+/// A verb-candidate × target scan is quadratic; past this bound fail closed
+/// instead, matching `SelfProtectionGuard`'s `maxVerbCandidates`. A 16 KB
+/// `launchctl` word list no longer runs for seconds.
+private let maxVerbCandidates = 256
+
+/// Whether a huge word list should fail closed before the quadratic scan.
+private func verbScanOverflows(_ folded: [String]) -> Bool {
+    verbIndexes(folded).count > maxVerbCandidates
+}
+
 // MARK: launchd
 
 private let launchctlStopVerbs: Set<String> = ["bootout", "unload", "remove", "kill", "disable", "stop"]
@@ -120,6 +224,7 @@ private let launchdDomains: Set<String> = ["gui", "user", "login", "session", "p
 
 private func launchctlStops(_ args: [String], _ context: StopContext) -> Bool {
     let folded = args.map(foldedWord)
+    if verbScanOverflows(folded) { return true }
     return verbIndexes(folded).contains { index in
         let verb = folded[index]
         if verb == "asuser" || verb == "bsexec" {
@@ -127,10 +232,16 @@ private func launchctlStops(_ args: [String], _ context: StopContext) -> Bool {
             let rest = args.dropFirst(index + 2)
             return rest.contains(where: isDynamic) || RVDStopGuard.nested(rest.joined(separator: " "), context)
         }
+        // `kickstart -k` restarts the job, killing the running instance.
+        if verb == "kickstart", args.contains(where: { foldedWord($0) == "-k" }) {
+            let targets = folded[(index + 1)...].filter { $0.hasPrefix("-") == false }
+            return targets.contains(where: launchdTargetMayBeRV)
+        }
         guard isUnmodelled(verb) || launchctlStopVerbs.contains(verb) else { return false }
         var targets = folded[(index + 1)...].filter { $0.hasPrefix("-") == false }
-        // An unmodelled verb may word-split into a verb and its target.
-        if targets.isEmpty { return isUnmodelled(verb) }
+        // No inline target: a stop verb is fed one from stdin (`xargs launchctl
+        // bootout`), so it holds; an unmodelled verb may be a split word.
+        if targets.isEmpty { return true }
         // `bootout <domain> <path…>` stops the listed jobs, not the domain.
         if targets.count > 1, isDomainOnly(targets[0]) { targets.removeFirst() }
         return targets.contains(where: launchdTargetMayBeRV)
@@ -173,12 +284,14 @@ private let systemctlManagerVerbs: Set<String> = [
 
 private func systemctlStops(_ args: [String], _ context: StopContext) -> Bool {
     let folded = args.map(foldedWord)
+    if verbScanOverflows(folded) { return true }
     return verbIndexes(folded).contains { index in
         let verb = folded[index]
         if systemctlManagerVerbs.contains(verb) { return true }
         guard isUnmodelled(verb) || systemctlStopVerbs.contains(verb) else { return false }
         let units = folded[(index + 1)...].filter { $0.hasPrefix("-") == false }
-        if units.isEmpty { return isUnmodelled(verb) }
+        // No inline unit: fed from stdin under `xargs`, so a stop verb holds.
+        if units.isEmpty { return true }
         return units.contains { isUnmodelled($0) || $0.contains("dev.rv") }
     }
 }
@@ -209,14 +322,26 @@ private struct SignalSelection {
     var words: [String] = []
     /// Non-option words that are not values of a valued option.
     var names: [String] = []
+    /// A user/negation option (`-u`, `-U`, `-v`) that alone selects rvd.
     var selectsByOption = false
+    /// Any narrowing option at all (`-P`, `-g`, `-t`, `-F`, …): a deliberate
+    /// selection, not an operand-less invocation fed from stdin.
+    var sawSelectionOption = false
+    /// An informational flag (`-l`, `-V`, `--help`): never kills.
+    var informational = false
     var negated = false
     var fullCommandLine = false
     var regex = false
 }
 
+private let selectionLongOptions: Set<String> = [
+    "--euid", "--uid", "--group", "--pgroup", "--parent", "--session", "--terminal",
+    "--pidfile", "--user", "--cgroup", "--ns", "--runstates",
+]
+
 private func parseSelection(
-    _ args: [String], valued: Set<Character>, selecting: Set<Character>, longValued: Set<String>,
+    _ args: [String], valued: Set<Character>, selecting: Set<Character>,
+    narrowing: Set<Character>, longValued: Set<String>,
     flags: (Character, inout SignalSelection) -> Void
 ) -> SignalSelection {
     var selection = SignalSelection()
@@ -241,9 +366,10 @@ private func parseSelection(
             if name == "--full" { selection.fullCommandLine = true }
             if name == "--inverse" { selection.negated = true }
             if name == "--regexp" { selection.regex = true }
-            if ["--euid", "--uid", "--group", "--pgroup", "--parent", "--session", "--terminal",
-                "--pidfile", "--user", "--cgroup", "--ns"].contains(name) {
-                selection.selectsByOption = true
+            if ["--help", "--version", "--list-name", "--list-full"].contains(name) { selection.informational = true }
+            if selectionLongOptions.contains(name) {
+                selection.sawSelectionOption = true
+                if ["--uid", "--euid", "--user"].contains(name) { selection.selectsByOption = true }
             }
             if word.contains("=") == false, longValued.contains(name) {
                 takeValue(at: index)
@@ -254,6 +380,8 @@ private func parseSelection(
         let letters = Array(word.dropFirst())
         for (offset, letter) in letters.enumerated() {
             flags(letter, &selection)
+            if letter == "l" || letter == "V" || letter == "h" { selection.informational = true }
+            if narrowing.contains(letter) { selection.sawSelectionOption = true }
             if selecting.contains(letter) { selection.selectsByOption = true }
             guard valued.contains(letter) else { continue }
             if offset == letters.count - 1 {
@@ -266,52 +394,127 @@ private func parseSelection(
     return selection
 }
 
+/// A `pkill`/`killall` with no name pattern: holds when it is fed from
+/// stdin (operand-less, as under `xargs`) or selects by user/negation;
+/// a deliberate narrowing (`-P $$`) or an informational flag does not.
+private func operandLessSelectsRVD(_ selection: SignalSelection) -> Bool {
+    if selection.negated || selection.selectsByOption { return true }
+    if selection.sawSelectionOption || selection.informational { return false }
+    return true
+}
+
 private let pkillLongValued: Set<String> = [
     "--signal", "--euid", "--uid", "--group", "--pgroup", "--parent", "--session", "--terminal",
     "--pidfile", "--ns", "--nslist", "--older", "--runstates", "--cgroup", "--env",
 ]
 
-/// Whether `pkill args` (or `pgrep args`) may select rvd.
+/// Whether `pkill args` (or `pgrep args`) may select rvd. When a name
+/// pattern is present it decides (a `-u`/`-P` only narrows it); with no
+/// name, a user/negation selection or an operand-less stdin feed holds.
 private func pkillSelectsRVD(_ args: [String]) -> Bool {
     let selection = parseSelection(
         args, valued: ["F", "G", "g", "J", "M", "N", "P", "s", "t", "U", "u", "d"],
-        selecting: ["F", "G", "g", "J", "P", "s", "t", "U", "u"], longValued: pkillLongValued
+        selecting: ["U", "u"], narrowing: ["F", "G", "g", "J", "M", "N", "P", "s", "t", "U", "u"],
+        longValued: pkillLongValued
     ) { letter, selection in
         if letter == "f" { selection.fullCommandLine = true }
         if letter == "v" { selection.negated = true }
     }
     if selection.negated { return true }
-    if selection.names.isEmpty { return selection.selectsByOption }
-    return selection.words.contains { word in
-        isDynamic(word) || patternMatchesRVD(word, fullCommandLine: selection.fullCommandLine)
+    if selection.names.isEmpty { return operandLessSelectsRVD(selection) }
+    return selection.names.contains { name in
+        isDynamic(name) || patternMatchesRVD(name, fullCommandLine: selection.fullCommandLine)
     }
 }
 
 /// Whether `killall args` (or `pidof args`) may select rvd.
 private func killallSelectsRVD(_ args: [String]) -> Bool {
     let selection = parseSelection(
-        args, valued: ["u", "t", "s", "o", "y", "n", "Z"], selecting: ["u", "t"],
+        args, valued: ["u", "t", "s", "o", "y", "n", "Z"], selecting: ["u"], narrowing: ["u", "t"],
         longValued: ["--signal", "--user", "--older-than", "--younger-than", "--ns", "--context"]
     ) { letter, selection in
         if letter == "m" || letter == "r" { selection.regex = true }
     }
-    if selection.names.isEmpty { return selection.selectsByOption }
-    return selection.words.contains { word in
-        if isUnmodelled(word) && selection.regex == false { return true }
-        if isDynamic(word) { return true }
-        if selection.regex { return patternMatchesRVD(word, fullCommandLine: false) }
-        return commandName(word) == "rvd"
+    if selection.names.isEmpty { return operandLessSelectsRVD(selection) }
+    return selection.names.contains { name in
+        if isUnmodelled(name) && selection.regex == false { return true }
+        if isDynamic(name) { return true }
+        if selection.regex { return patternMatchesRVD(name, fullCommandLine: false) }
+        return commandName(name) == "rvd"
     }
 }
 
 /// `pkill`/`pgrep` patterns are extended regexes searched in the process
-/// name (or full command line with `-f`). An invalid pattern fails closed.
+/// name (or full command line with `-f`). With `-f`, a pattern whose text
+/// just mentions rvd counts even if the regex would not match the sample
+/// command lines (`pkill -f 'bob.*rvd'`). An invalid pattern fails closed.
 private func patternMatchesRVD(_ pattern: String, fullCommandLine: Bool) -> Bool {
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return true }
+    if fullCommandLine {
+        let folded = pattern.folding(options: .caseInsensitive, locale: nil)
+        if folded.contains("rvd") || folded.contains("dev.rv") { return true }
+    }
     let subjects = ["rvd"] + (fullCommandLine ? rvdCommandLines : [])
+    return boundedRegexMatches(pattern, subjects: subjects)
+}
+
+/// A regex match with a hard bound on agent-supplied patterns.
+///
+/// `NSRegularExpression` has no evaluation time limit, and a pattern with a
+/// quantified group, alternation inside a quantifier, or a backreference
+/// can backtrack for seconds on a short subject (`(.|.)+X` with `-f`). Such
+/// a pattern — or any over `maxPatternLength` — fails closed (treated as a
+/// match) without ever being run. Otherwise the bounded pattern runs on the
+/// short, fixed subjects.
+func boundedRegexMatches(_ pattern: String, subjects: [String]) -> Bool {
+    if pattern.count > maxPatternLength || isCatastrophicPattern(pattern) { return true }
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return true }
     return subjects.contains { subject in
         regex.firstMatch(in: subject, range: NSRange(subject.startIndex..., in: subject)) != nil
     }
+}
+
+private let maxPatternLength = 128
+
+/// A pattern whose backtracking could blow up: a quantifier on a group, an
+/// alternation inside a group, or a backreference. Conservative: any of
+/// these makes the pattern fail closed rather than run.
+func isCatastrophicPattern(_ pattern: String) -> Bool {
+    let chars = Array(pattern)
+    var escaped = false
+    var groupDepth = 0
+    var alternationDepth = Set<Int>()
+    for index in chars.indices {
+        let char = chars[index]
+        if escaped {
+            // A backreference (`\1`…`\9`) can force exponential rematching.
+            if char.isNumber { return true }
+            escaped = false
+            continue
+        }
+        switch char {
+        case "\\":
+            escaped = true
+        case "(":
+            groupDepth += 1
+        case ")":
+            if alternationDepth.contains(groupDepth) {
+                // An alternation inside this group; if quantified, blow up.
+                let next = index + 1
+                if next < chars.count, "*+?{".contains(chars[next]) { return true }
+            }
+            alternationDepth.remove(groupDepth)
+            groupDepth -= 1
+        case "|":
+            if groupDepth > 0 { alternationDepth.insert(groupDepth) }
+        case "*", "+", "{":
+            // A quantifier applied to a group close is handled above; a
+            // nested-quantifier group like `(a+)+` is caught here.
+            if index > 0, chars[index - 1] == ")" { return true }
+        default:
+            break
+        }
+    }
+    return false
 }
 
 /// `kill -1` signals every process the user owns; pids from a lookup that
@@ -328,9 +531,14 @@ private func killStops(_ args: [String], _ context: StopContext) -> Bool {
     if operands.isEmpty { return context.looksUpRVD }
     return operands.contains { operand in
         if operand == "-1" || commandName(operand) == "rvd" { return true }
-        guard isDynamic(operand) else { return false }
-        if ["$!", "${!}", "$$"].contains(operand) { return false }
-        return context.looksUpRVD
+        if isDynamic(operand) {
+            if ["$!", "${!}", "$$"].contains(operand) { return false }
+            return context.looksUpRVD
+        }
+        // A non-numeric operand is an `xargs -I` placeholder (`{}`, `%`)
+        // filled from stdin, not a literal pid.
+        if operand.allSatisfy(\.isNumber) == false { return context.looksUpRVD }
+        return false
     }
 }
 
@@ -358,20 +566,29 @@ private let textHeads: Set<String> = [
     "wc", "less", "more", "man", "which", "type", "file", "stat", "jq", "diff", "test", "[",
 ]
 
+/// Quote-aware so a quoted argument stays one word: a `pkill -f 'rails s'`
+/// pattern or a `git commit -m '… pkill rvd …'` message is not re-split into
+/// a `pkill` command. Adjacent quotes (`'r''vd'`) still concatenate, since
+/// the quote mark itself is not a separator.
 private func rawSegments(_ raw: String) -> [[String]] {
     var segments: [[String]] = []
     var words: [String] = []
     var current = ""
+    var quote: Character?
     func endWord() {
         if current.isEmpty == false { words.append(current) }
         current = ""
     }
     for char in raw {
-        if ";|&\n()".contains(char) {
+        if let active = quote {
+            if char == active { quote = nil } else { current.append(char) }
+        } else if char == "'" || char == "\"" {
+            quote = char
+        } else if ";|&\n()".contains(char) {
             endWord()
             segments.append(words)
             words = []
-        } else if " \t\r'\"<>,`".contains(char) {
+        } else if " \t\r<>,`".contains(char) {
             endWord()
         } else {
             current.append(char)
