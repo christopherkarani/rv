@@ -9,10 +9,26 @@ public let commandByteCap = 65_536
 public let patternTimeBudget: Duration = .seconds(2)
 
 /// Returns the pack-only evaluation of `request`; semantic policy is `evaluateWithSemantics`.
+/// An allow is tightened by the alias bodies the command uses or defines.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
     secretPaths: SecretPathDecider = .dayOne,
+    engine: E,
+    compiled: CompiledPacks<E.Compiled>
+) -> EvaluationResult {
+    let result = evaluatePacks(request, packs: packs, secretPaths: secretPaths, engine: engine, compiled: compiled)
+    return gateAliases(result, command: request.command, packs: packs) { expansion in
+        var inner = request
+        inner.command = expansion
+        return evaluatePacks(inner, packs: packs, secretPaths: secretPaths, engine: engine, compiled: compiled)
+    }
+}
+
+private func evaluatePacks<E: PatternEngine>(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    secretPaths: SecretPathDecider,
     engine: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
