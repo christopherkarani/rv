@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import RVDomain
 
@@ -67,5 +68,71 @@ struct RVWiringPathsTests {
     ])
     func notWiring(path: String) {
         #expect(RVWiringPaths.matches(path, home: Self.home) == false, "\(path)")
+    }
+
+    @Test("adapter matching is exact: other rv-guard names are not wiring", arguments: [
+        "/Users/me/rv-guard-notes.txt",
+        "/Users/me/src/rv-guard/main.swift",
+        "/Users/me/.claude/rv-guard-backup.md",
+        "/Users/me/.claude/hooks/rv-guard-old.py",
+        "/Users/me/Downloads/rv-guard.py",
+    ])
+    func adapterNamesExact(path: String) {
+        #expect(RVWiringPaths.matches(path, home: Self.home) == false, "\(path)")
+    }
+
+    @Test("proper ancestors of wiring entries, below home, are ancestors", arguments: [
+        "/Users/me/.claude", "~/.claude", "/Users/me/.claude/hooks", "/Users/me/.local", "/Users/me/.local/bin",
+        "/Users/me/Library", "/Users/me/Library/LaunchAgents", "/Users/me/.config", "/Users/me/.config/systemd",
+        "/Users/me/.config/systemd/user", "/Users/me/.config/opencode", "/Users/me/.config/opencode/plugins",
+        "/Users/me/.codex", "/Users/me/.gemini/config", "/Users/me/Applications",
+    ])
+    func ancestors(path: String) {
+        #expect(RVWiringPaths.matchesAncestor(path, home: Self.home), "\(path)")
+    }
+
+    @Test("home itself, siblings and other trees are not ancestors", arguments: [
+        "/Users/me", "/Users/me/src", "/Users/me/.claude/projects", "/tmp/.claude", "/Users/me/.config/gh",
+        "/Users/other/.claude",
+    ])
+    func notAncestors(path: String) {
+        #expect(RVWiringPaths.matchesAncestor(path, home: Self.home) == false, "\(path)")
+    }
+
+    @Test("host settings files that can disable hooks match at any scope", arguments: [
+        "/Users/me/src/app/.claude/settings.json",
+        "/Users/me/src/app/.claude/settings.local.json",
+        "/Users/me/.claude/settings.local.json",
+        "/tmp/x/.codex/hooks.json",
+        "/Users/me/src/app/.codex/config.toml",
+        "/Users/me/.codex/config.toml",
+        "/Users/me/src/app/.cursor/hooks.json",
+        "/Users/me/src/app/.gemini/settings.json",
+        "relative/.gemini/config/hooks.json",
+    ])
+    func hostSettings(path: String) {
+        #expect(RVWiringPaths.isHostSettingsFile(path), "\(path)")
+    }
+
+    @Test("other host files are not host settings", arguments: [
+        "/Users/me/src/app/.claude/CLAUDE.md",
+        "/Users/me/src/app/.claude/commands/x.md",
+        "/Users/me/src/app/settings.json",
+        "/Users/me/.cursor/mcp.json",
+    ])
+    func notHostSettings(path: String) {
+        #expect(RVWiringPaths.isHostSettingsFile(path) == false, "\(path)")
+    }
+
+    @Test("~user expands through the user database; an unknown user does not")
+    func tildeUser() throws {
+        let user = NSUserName()
+        let home = try #require(FileManager.default.homeDirectory(forUser: user)).path
+        #expect(expandTildeUser("~\(user)/.claude") == .expanded(home + "/.claude"))
+        #expect(expandTildeUser("~\(user)") == .expanded(home))
+        #expect(expandTildeUser("~no-such-user-rv-test/x") == .unknownUser)
+        #expect(expandTildeUser("~/x") == .notTildeUser)
+        #expect(expandTildeUser("~") == .notTildeUser)
+        #expect(expandTildeUser("a/~b") == .notTildeUser)
     }
 }

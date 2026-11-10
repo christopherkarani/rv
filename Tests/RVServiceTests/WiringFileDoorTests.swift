@@ -91,16 +91,41 @@ struct WiringFileDoorTests {
         }
     }
 
-    @Test("project host files are guarded only when rv's hook is wired there")
+    @Test("project and local host settings files are guarded whether or not rv is wired there")
     func projectHostFiles() throws {
         try Self.withHome { root, home in
             let plain = root.appendingPathComponent("src/app/.claude/settings.json")
             try Self.touch(plain, #"{"permissions":{"allow":["Bash(ls)"]}}"#)
-            #expect(Self.decide(.write, plain.path, home: home).decision == .allow)
-            let wired = root.appendingPathComponent("src/other/.claude/settings.local.json")
-            try Self.touch(wired, #"{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 /x/rv-guard.py"}]}]}}"#)
-            #expect(Self.isWiringDeny(Self.decide(.edit, wired.path, home: home)))
+            #expect(Self.isWiringDeny(Self.decide(.write, plain.path, home: home)))
+            let local = root.appendingPathComponent("src/app/.claude/settings.local.json")
+            #expect(Self.isWiringDeny(Self.decide(.write, local.path, home: home)))
+            #expect(Self.isWiringDeny(Self.decide(.edit, root.path + "/src/app/.codex/config.toml", home: home)))
+            #expect(Self.decide(.read, plain.path, home: home).decision == .allow)
+            #expect(Self.decide(.write, root.path + "/src/app/.claude/commands/x.md", home: home).decision == .allow)
         }
+    }
+
+    @Test("a hard link to a wiring file is wiring", arguments: [
+        ".claude/settings.json", ".codex/hooks/rv-guard.py", ".local/bin/rvd",
+    ])
+    func hardLinkIsWiring(relative: String) throws {
+        try Self.withHome { root, home in
+            let wiring = root.appendingPathComponent(relative)
+            try Self.touch(wiring)
+            let src = root.appendingPathComponent("src")
+            try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+            try FileManager.default.linkItem(at: wiring, to: src.appendingPathComponent("innocent.json"))
+            #expect(Self.isWiringDeny(Self.decide(.write, src.path + "/innocent.json", home: home)), "\(relative)")
+            #expect(Self.decide(.write, src.path + "/other.json", home: home).decision == .allow)
+        }
+    }
+
+    @Test("~user spellings of wiring are wiring")
+    func tildeUserIsWiring() throws {
+        let user = NSUserName()
+        let real = try #require(FileManager.default.homeDirectory(forUser: user)).path
+        let home = try #require(HomeDirectory(validating: real))
+        #expect(Self.isWiringDeny(Self.decide(.write, "~\(user)/.claude/settings.json", home: home)))
     }
 
     @Test("ordinary files stay allowed")

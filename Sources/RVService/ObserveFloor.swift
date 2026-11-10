@@ -25,9 +25,18 @@ enum ObserveFloor {
         case .indeterminate(.selfProtection):
             true
         case .deny(let deny):
-            ruleIDs.contains(deny.ruleID)
+            ruleIDs.contains(deny.ruleID) || hitsFloorTarget(result.analysis)
         case .allow, .indeterminate:
             false
+        }
+    }
+
+    /// The shell door reports a wiring or rv-config write as the generic
+    /// protected-path rule; the analysis still names the target's match.
+    private static func hitsFloorTarget(_ analysis: SemanticAnalysis) -> Bool {
+        guard let action = analysis.filesystemAction, action.operationKind != .read else { return false }
+        return action.targets.contains { target in
+            target.protectedMatch.map { ruleIDs.contains($0.ruleID) } ?? false
         }
     }
 
@@ -53,7 +62,10 @@ enum ObserveFloor {
             home: home,
             resolution: SecretPathCandidateResolver.resolution(home: home, cwd: cwd)
         )
-        let words = Set([command.rawValue, result.matchingView.rawValue].flatMap { text in
+        // Also the command with quotes removed, so `"$HOME"/.claude/x`
+        // reads as one word.
+        let unquoted = command.rawValue.filter { $0 != "'" && $0 != "\"" }
+        let words = Set([command.rawValue, unquoted, result.matchingView.rawValue].flatMap { text in
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
         return words.contains { rvConfig.filePathHit($0) != nil || namesWiring($0, home: home, cwd: cwd) }
@@ -62,13 +74,14 @@ enum ObserveFloor {
     /// A word naming one of rv's wiring files (`RVWiringPaths`): the shell
     /// door enforces writes there, so an observe host must too. Reads are
     /// allowed under enforce anyway.
+    /// The word is normalised first (`~`/`$HOME`/`~user` expanded, joined
+    /// to the cwd, `.`/`..` collapsed). Host settings files at any scope
+    /// count: a project one can disable hooks for every host.
     private static func namesWiring(_ word: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        if RVWiringPaths.isHostSettingsFile(word) { return true }
         guard let home else { return false }
-        if word.hasPrefix("/") || isHomeAliasPath(word) {
-            return RVWiringPaths.matches(word, home: home.rawValue)
-        }
-        guard let cwd else { return false }
-        return RVWiringPaths.matches(cwd.rawValue + "/" + word, home: home.rawValue)
+        let path = lexicalFilesystemPath(word, workingDirectory: cwd, homeDirectory: home)
+        return RVWiringPaths.matches(path, home: home.rawValue)
     }
 
     private static let wordBreaks: Set<Character> = [
