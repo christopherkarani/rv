@@ -45,7 +45,7 @@ private func request(
 
 @Suite("Evaluation inputs: guard mode")
 struct EvaluationInputsGuardModeTests {
-    @Test("RV_GUARD_MODE beats config; unknown values fall through; default enforce")
+    @Test("RV_GUARD_MODE=enforce beats config; env never loosens; default enforce")
     func precedence() throws {
         let observeHome = try guardHome(mode: "observe")
         let enforceHome = try guardHome(mode: "enforce")
@@ -54,7 +54,8 @@ struct EvaluationInputsGuardModeTests {
         func mode(_ env: [String: String], _ home: HomeDirectory) -> GuardMode {
             EvaluationInputs.gather(home: home, cwd: nil, environment: env).guardMode
         }
-        #expect(mode(["RV_GUARD_MODE": "observe"], enforceHome) == .observe)
+        #expect(mode(["RV_GUARD_MODE": "observe"], enforceHome) == .enforce)
+        #expect(mode(["RV_GUARD_MODE": "observe"], bare) == .enforce)
         #expect(mode(["RV_GUARD_MODE": "ENFORCE"], observeHome) == .enforce)
         #expect(mode(["RV_GUARD_MODE": "bogus"], observeHome) == .observe)
         #expect(mode(["RV_GUARD_MODE": "bogus"], bare) == .enforce)
@@ -63,34 +64,28 @@ struct EvaluationInputsGuardModeTests {
     }
 
     /// AC-007: the explicit environment drives the door, whatever the
-    /// process env says. The mode passed is the opposite of the one the
-    /// process env (plus an empty home) would produce.
-    @Test("explicit environment, not process env, drives observe vs enforce")
+    /// process env says. The environment can only tighten: an explicit
+    /// `enforce` pins an observe-config home to enforce, and an explicit
+    /// `observe` never loosens an enforce-config home.
+    @Test("explicit environment, not process env, drives the door; env never loosens")
     func explicitEnvironmentDrivesDoor() async throws {
-        let home = try guardHome(mode: nil)
-        defer { remove(home) }
-        let processMode = JudgeRuntime.guardMode(
-            environment: ProcessInfo.processInfo.environment, config: nil
-        )
-        let explicit: GuardMode = processMode == .observe ? .enforce : .observe
-        let gathered = EvaluationInputs.gather(
-            home: home, cwd: nil, environment: ["RV_GUARD_MODE": explicit.rawValue]
-        )
-        #expect(gathered.guardMode == explicit)
-        let result = await GatedEvaluate().gated(
-            .apply, request(packDeny), cwd: nil, home: home,
-            grants: EphemeralAllowOnceTable(), now: now,
-            allowlist: { AllowlistSnapshot(entries: []) },
-            host: .tty, tool: .bash, inputs: gathered
-        )
-        switch explicit {
-        case .observe:
-            #expect(result.decision == .allow)
-            #expect(ledgerRows(home).map(\.observed) == [true])
-        case .enforce:
+        let observeHome = try guardHome(mode: "observe")
+        let enforceHome = try guardHome(mode: nil)
+        defer { [observeHome, enforceHome].forEach(remove) }
+        for (home, env) in [(observeHome, "enforce"), (enforceHome, "observe")] {
+            let gathered = EvaluationInputs.gather(
+                home: home, cwd: nil, environment: ["RV_GUARD_MODE": env]
+            )
+            #expect(gathered.guardMode == .enforce)
+            let result = await GatedEvaluate().gated(
+                .apply, request(packDeny), cwd: nil, home: home,
+                grants: EphemeralAllowOnceTable(), now: now,
+                allowlist: { AllowlistSnapshot(entries: []) },
+                host: .tty, tool: .bash, inputs: gathered
+            )
             guard case .deny = result.decision else {
-                Issue.record("explicit enforce must deny, got \(result.decision)")
-                return
+                Issue.record("env \(env) must enforce, got \(result.decision)")
+                continue
             }
             #expect(ledgerRows(home).count == 1)
         }

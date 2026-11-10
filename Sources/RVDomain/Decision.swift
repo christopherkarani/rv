@@ -19,6 +19,10 @@ public enum IndeterminateReason: String, Sendable, Equatable, Codable {
     case inlineProgramNeedsJudge
     /// An `rv` invocation that would weaken rv; the owner runs it in Terminal.
     case selfProtection
+    /// A package-manager runner whose script graph could not be resolved
+    /// (untracked cd, workspace run, malformed package.json, ...) and no
+    /// judge was available to score it.
+    case packageScriptUnresolved
 }
 
 /// Pack-door evaluate result: allow, deny, or indeterminate. Never Ask.

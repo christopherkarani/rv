@@ -45,7 +45,8 @@ func filesystemScopeForResolution(
     _ resolution: FilesystemResolution,
     canonical: String,
     repositoryRoot: RepositoryRoot?,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    homeDirectory: HomePath? = nil
 ) -> FilesystemScope {
     if resolution == .uncertain {
         return .unknown
@@ -53,7 +54,8 @@ func filesystemScopeForResolution(
     return classifyFilesystemScope(
         canonical: canonical,
         repositoryRoot: repositoryRoot,
-        catalog: catalog
+        catalog: catalog,
+        homeDirectory: homeDirectory
     )
 }
 
@@ -77,10 +79,17 @@ public func lexicalFilesystemPath(
 func classifyFilesystemScope(
     canonical: String,
     repositoryRoot: RepositoryRoot?,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    homeDirectory: HomePath? = nil
 ) -> FilesystemScope {
     if let rule = catalog.firstMatch(of: canonical) {
         return .protectedPath(SecretPathMatch(rule))
+    }
+    // rv's own wiring (hook configs, binaries, service units) is protected
+    // even inside a repository rooted at `$HOME`: same table as the
+    // file-tool door, so the two doors cannot drift. Only writes act on it.
+    if let homeDirectory, RVWiringPaths.matches(canonical, home: homeDirectory.rawValue) {
+        return .protectedPath(SecretPathMatch(pattern: RVWiringPaths.pattern, category: .host))
     }
     guard let repositoryRoot else { return .unknown }
     if isInsideRepository(canonical, root: repositoryRoot.rawValue) {
@@ -122,7 +131,8 @@ private func classifiedTarget(
             resolution,
             canonical: canonical,
             repositoryRoot: context.repositoryRoot,
-            catalog: context.catalog
+            catalog: context.catalog,
+            homeDirectory: context.homeDirectory
         ),
         kind: classifyFilesystemKind(canonical),
         followedSymlink: followedSymlink,

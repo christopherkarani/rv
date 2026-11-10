@@ -10,8 +10,15 @@ import RVDomain
 /// its `commandName`, and `sh`/`bash`/`zsh -c`, `eval` and `env -S` payloads
 /// recurse. Shared by the inline-program and self-protection floors; never
 /// evaluates policy.
-func launchedCommands(_ raw: String) -> [[String]] {
+package func launchedCommands(_ raw: String) -> [[String]] {
     launchedCommandHeads(raw).filter { $0.speculative == false && $0.truncated == false }.map(\.argv)
+}
+
+/// Whether `raw` holds input the launcher parser stopped following (depth
+/// cap, sensitive brace expansion): `launchedCommands` omits it, so a
+/// caller that must see every command treats it as unknown.
+package func launchIsTruncated(_ raw: String) -> Bool {
+    launchedCommandHeads(raw).contains { $0.truncated }
 }
 
 /// A launched command with the head word as written (before `commandName`).
