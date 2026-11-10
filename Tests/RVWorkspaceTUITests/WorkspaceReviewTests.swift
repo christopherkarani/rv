@@ -585,6 +585,54 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         #expect(rows.last?.hasPrefix("> ") == true)
     }
 
+    /// A 253-byte host whose benign prefix hides the registrable domain.
+    private static let longHost: String = {
+        var host = "api.github.com."
+        while host.count < 253 - "evil.io".count - 1 { host += "a" }
+        return host + ".evil.io"
+    }()
+
+    @Test func detailShowsTheCompleteHostAndPortWrapped() throws {
+        #expect(Self.longHost.utf8.count == 253)
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
+        #expect(lines.allSatisfy { $0.count <= 80 })
+        let start = try #require(lines.firstIndex { $0.hasPrefix("  egress api.github.com") })
+        let joined = lines[start...].joined()
+        #expect(joined.contains("  egress \(Self.longHost):443"))
+        #expect(lines.last == "a approve · d deny · j/k move · g/G first/last · Esc close")
+    }
+
+    @Test func listRowKeepsTheRegistrableTailAndPortBehindAVisibleEllipsis() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
+        let row = lines[1]
+        #expect(row.count <= 80)
+        #expect(row.hasPrefix("> egress  api.github.com."))
+        #expect(row.contains("…"))
+        #expect(row.hasSuffix(".evil.io:443 · 5s"))
+    }
+
+    @Test func narrowRowStillShowsTheRegistrableTail() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 30, rows: 60)
+        #expect(lines.joined().contains("evil.io:443 · 5s"))
+        #expect(lines.joined().contains("…"))
+    }
+
+    @Test func tooSmallTerminalRefusesToShowAPartialReview() {
+        let state = openReview([egress("p1", Self.longHost, ageSeconds: 5)])
+        let lines = WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 8)
+        #expect(lines.count <= 8)
+        #expect(lines.contains("terminal too small to review safely"))
+        #expect(lines.contains { $0.contains("a approve") } == false)
+    }
+
+    @Test func longNoticeAndCleanTextAreNotCut() {
+        let long = String(repeating: "x", count: 400)
+        #expect(WorkspaceReviewText.clean(long + "\u{1b}") == long)
+    }
+
     @Test func badgeShowsOnlyPendingCount() {
         #expect(WorkspaceReviewText.badge(openReview([block("b1", ageSeconds: 1)]).review) == nil)
         let pending = openReview([egress("p1", "a.example.com", ageSeconds: 1), egress("p2", "b.example.com", ageSeconds: 2)])

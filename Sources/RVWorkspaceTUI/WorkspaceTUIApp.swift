@@ -141,10 +141,16 @@ struct WorkspaceShellView: View {
         if Self.showsReview(snapshot.mode) {
             // The review pane replaces the pane grid while open; runtimes
             // keep running and are fed in the background.
-            Text(WorkspaceReviewText.lines(snapshot.review, mode: snapshot.mode, now: Date())
-                .joined(separator: "\n"))
-                .foregroundStyle(ink.attention)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // Sized to the pane so the text wraps instead of clipping, and
+            // a pane too short to show the whole review says so.
+            GeometryReader { proxy in
+                Text(WorkspaceReviewText.lines(
+                    snapshot.review, mode: snapshot.mode, now: Date(),
+                    columns: Int(proxy.size.width), rows: Int(proxy.size.height))
+                    .joined(separator: "\n"))
+                    .foregroundStyle(ink.attention)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
         } else {
             panes(snapshot)
         }
