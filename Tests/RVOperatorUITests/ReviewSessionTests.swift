@@ -426,6 +426,22 @@ struct ReviewSessionTests {
         #expect(s.session.selection == .bound(bundle))
     }
 
+    @Test func launchBindReplyAfterFailedCancelStillBinds() {
+        let item = reviewItem()
+        var s = Launch()
+        s.connect(items: [item])
+        let ticket = s.select(item.operationID)
+        s.send(.denyTapped)
+        s.send(.denyReplied(item.operationID, .failure(ReviewFailure(message: "Request failed."))))
+        #expect(s.session.selection == .unbound(item.operationID))
+        // The select's bind is still in flight: its reply is the only one
+        // that ticket will produce, so it must still bind the review.
+        let bundle = launchBundle(item)
+        s.send(.bindReplied(item.operationID, ticket: ticket, .success(bundle)))
+        #expect(s.session.selection == .bound(bundle))
+        #expect(s.session.notice == "Request failed.")
+    }
+
     @Test func denyReplyForOtherIDDropped() {
         let item = reviewItem()
         var s = Launch()
