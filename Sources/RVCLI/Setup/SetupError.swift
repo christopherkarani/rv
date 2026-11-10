@@ -68,6 +68,12 @@ enum SetupError: Error, Equatable, Sendable {
     /// Hooks would reject the installed `rvd` (trust manifest or sibling
     /// pin), so wiring them would deny every tool call.
     case daemonUntrusted(reason: String, fix: String)
+    /// `rv setup --observe` while an organization gate pins enforce: rvd
+    /// would ignore the stored observe mode.
+    case observePinnedByOrganization
+    /// `config.json` (or its `guard` value) is not an object, or could not
+    /// be written, so `guard.mode: observe` was not stored.
+    case guardModeWriteFailed
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -159,6 +165,15 @@ func setupFailureOutput(
         exitCode = EX_CONFIG
         detail.append("no hooks were wired: wired hooks would deny every agent tool call")
         detail.append("fix: \(fix)")
+    case .observePinnedByOrganization:
+        phrase = "organization policy pins enforce, so observe mode would have no effect"
+        exitCode = EX_NOPERM
+        detail.append("nothing was changed")
+        detail.append("fix: run rv setup without --observe")
+    case .guardModeWriteFailed:
+        phrase = "unable to write guard.mode to config.json"
+        exitCode = EX_CANTCREAT
+        detail.append("no hooks were wired; config.json must be a JSON object whose \"guard\" value is an object")
     }
     let lines = ["rv \(command.rawValue) failed: \(phrase)"] + detail
     return (lines.joined(separator: "\n") + "\n", exitCode)

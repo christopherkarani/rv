@@ -12,10 +12,15 @@ static const char kUnreachableMessage[] =
     "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service.";
 static const char kTimeoutMessage[] =
     "RV daemon did not answer in time. Retry; if it persists run `rv doctor`.";
+static const char kConnectionMessage[] =
+    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`.";
 static const char kUntrustedMessage[] =
     "RV daemon identity check failed (stale or mismatched rvd after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
 static const char kProtocolMessage[] =
     "RV daemon sent an unexpected reply (version skew after an upgrade?). Run `rv service restart`; if it persists, `rv setup`.";
+
+static const char kObserveMessage[] =
+    "RV observe mode: daemon unavailable, so this call was allowed without being checked or logged. Run `rv doctor`.";
 
 /* Cursor deny `agent_message`; mirrors `cursorAgentStopLine` (RVHooks).
  * Down-case asks never use it. */
@@ -44,6 +49,8 @@ const char *rv_hook_failure_message(enum RvHookFailure failure) {
         return kUntrustedMessage;
     case RV_HOOK_FAIL_PROTOCOL:
         return kProtocolMessage;
+    case RV_HOOK_FAIL_CONNECTION:
+        return kConnectionMessage;
     }
     return kProtocolMessage;
 }
@@ -112,6 +119,25 @@ static int render_ask(const char *host, const char *msg, struct RvHookFallback *
     return fits(n, sizeof out->out) ? 1 : -1;
 }
 
+/* The host's own allow wire (HostCodec.encodeAllow): Cursor and
+ * Antigravity need explicit allow JSON; every other host allows on empty
+ * stdout and exit 0. The notice goes to stderr, never into host JSON. */
+static int render_observe(const char *host, struct RvHookFallback *out) {
+    int n;
+    const char *allow = "";
+    if (strcmp(host, "cursor") == 0) {
+        allow = "{\"permission\":\"allow\"}\n";
+    } else if (strcmp(host, "antigravity") == 0) {
+        allow = "{\"decision\":\"allow\"}\n";
+    }
+    n = snprintf(out->out, sizeof out->out, "%s", allow);
+    if (!fits(n, sizeof out->out)) {
+        return -1;
+    }
+    n = snprintf(out->err, sizeof out->err, "%s\n", kObserveMessage);
+    return fits(n, sizeof out->err) ? 0 : -1;
+}
+
 int rv_hook_fallback_render(
     const char *host,
     enum RvHookFailure failure,
@@ -126,11 +152,18 @@ int rv_hook_fallback_render(
     out->err[0] = '\0';
     out->exit_code = 0;
     msg = rv_hook_failure_message(failure);
-    /* Only an absent or slow daemon is configurable. Malformed input, a
-     * daemon that fails identity verification (possible impersonation) and
-     * a malformed reply always deny. */
-    if (failure != RV_HOOK_FAIL_UNREACHABLE && failure != RV_HOOK_FAIL_TIMEOUT) {
+    /* Only an absent, slow or dropped daemon is configurable. Malformed
+     * input, a daemon that fails identity verification (possible
+     * impersonation) and a malformed reply always deny. */
+    if (failure != RV_HOOK_FAIL_UNREACHABLE && failure != RV_HOOK_FAIL_TIMEOUT
+        && failure != RV_HOOK_FAIL_CONNECTION) {
         return render_deny(host, msg, out);
+    }
+    /* Observe steps aside only for a daemon positively absent before the
+     * request was sent: a slow or dropped one may be live and would have
+     * applied rv's self-protection, and an agent can cause either. */
+    if (mode == RV_WHEN_DOWN_OBSERVE && failure == RV_HOOK_FAIL_UNREACHABLE) {
+        return render_observe(host, out);
     }
     switch (mode) {
     case RV_WHEN_DOWN_DENY:

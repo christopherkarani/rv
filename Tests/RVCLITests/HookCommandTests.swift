@@ -151,8 +151,10 @@ private func runHonorHook(
     return HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode, stderr: outcome.stderr)
 }
 
-/// Unreachable-daemon fallback reason (no transport in these probes).
-private let daemonDownReason = HookDaemonFallback.message(for: .unreachable)
+/// Daemon-unavailable fallback reason. No transport in these probes: that
+/// never reached rvd, so it is `.connection`, not the observe-eligible
+/// `.unreachable`.
+private let daemonDownReason = HookDaemonFallback.message(for: .connection)
 
 @Test func hookAllowGitStatus_emptyStdoutExitZero() async throws {
     let expected = try grokExpected("allow-git-status")

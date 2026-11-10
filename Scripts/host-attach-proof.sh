@@ -193,6 +193,7 @@ stage_from_debug() {
     "$C_SRC/json_reply.c" \
     "$C_SRC/daemon_trust.c" \
     "$C_SRC/hook_fallback.c" \
+    "$C_SRC/observe_gate.c" \
     "$C_SRC/rv.c" || return 1
   chmod 755 "$STAGE/rv"
   cp "$rvcli" "$STAGE/rv-cli"
@@ -301,6 +302,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     "$C_SRC/json_reply.c" \
     "$C_SRC/daemon_trust.c" \
     "$C_SRC/hook_fallback.c" \
+    "$C_SRC/observe_gate.c" \
     "$C_SRC/rv.c" || fail "could not compile proof rv"
   chmod 755 "$BIN/rv"
   RVD_PROOF_DIR="/tmp/rv-host-attach-$$"

@@ -12,7 +12,8 @@ import RVPolicy
 @Suite("Gated effects as values")
 struct GatedEffectTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
-    private static let packDeny = ShellCommand(rawValue: "rm -rf ~")
+    // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
+    private static let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
     /// Pack-allowed and outside the safe lane, so it reaches the judge.
     private static let judged = ShellCommand(rawValue: "python3 deploy.py --prod")
     private static let fakeBundle = URL(fileURLWithPath: "/nonexistent/rv-fake-bundle", isDirectory: true)
