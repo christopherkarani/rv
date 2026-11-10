@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Synchronization
 import Testing
@@ -300,8 +305,10 @@ struct OwnerPresenceTests {
         let context = Self.unroledXPCContext()
         let started = ContinuousClock.now
         #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .declined)))
-        // 200 ms timeout; the slack is CI noise, far short of a starved pool.
-        #expect(ContinuousClock.now - started < .seconds(3))
+        // The fake answers only after 60 s, so returning in under 30 s means
+        // the 200 ms timeout fired. The slack absorbs a pool starved by other
+        // suites (seen at ~11 s on CI) without hiding a broken timeout.
+        #expect(ContinuousClock.now - started < .seconds(30))
         // The slot is free again: the next request reaches the prompt.
         #expect(await presence.confirm("y", proof: nil, context: context) == .denied(.init(outcome: .declined)))
         #expect(prompt.promptCount == 2)
@@ -441,28 +448,41 @@ struct OwnerPresenceTests {
         }
     }
 
+    /// Where one helper wait ran.
+    struct WaitThread: Sendable {
+        let name: String?
+        let inTask: Bool
+        let isMain: Bool
+        let at: DispatchTime
+    }
+
     @Test func hungPasswordHelpersNeitherStarveRvdNorOutliveACancel() async throws {
-        // More hung checks than the cooperative pool has threads. Each can
-        // wait `UnixChkpwdChecker.timeout` for its helper: on the pool they
-        // would park every thread, stalling every other rvd task (hook
-        // evaluations, Hello, the idle watchdog) that long. The probe and the
-        // cancel run from private Dispatch queues so a starved pool still
-        // ends the test.
+        // More hung checks than the cooperative pool has threads. Each waits
+        // up to `UnixChkpwdChecker.timeout` for its helper; on the pool that
+        // would park every thread and stall every other rvd task. Rather than
+        // timing an unrelated task (which other suites' load can delay), each
+        // wait reports the thread it blocks on: a dedicated thread, never one
+        // running a Swift task.
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rv-chkpwd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
+        let pidFile = dir.appendingPathComponent("pids")
         let hung = dir.appendingPathComponent("unix_chkpwd")
-        try Data("#!/bin/sh\nexec /bin/sleep 30\n".utf8).write(to: hung)
+        try Data("#!/bin/sh\necho $$ >> '\(pidFile.path)'\nexec /bin/sleep 30\n".utf8).write(to: hung)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hung.path)
+        let waits = Mutex<[WaitThread]>([])
         let checker = {
             var checker = UnixChkpwdChecker()
             checker.helpers = [hung.path]
+            checker.onWaitThread = {
+                let wait = WaitThread(
+                    name: Thread.current.name, inTask: withUnsafeCurrentTask { $0 != nil },
+                    isMain: Thread.isMainThread, at: .now())
+                waits.withLock { $0.append(wait) }
+            }
             return checker
         }()
         let checks = ProcessInfo.processInfo.activeProcessorCount * 3
-        let probeRan = Mutex<ContinuousClock.Instant?>(nil)
-        let cancelledAt = Mutex<ContinuousClock.Instant?>(nil)
-        let started = ContinuousClock.now
         let running = Task {
             await withTaskGroup(of: Bool?.self) { group in
                 for _ in 0..<checks {
@@ -471,25 +491,44 @@ struct OwnerPresenceTests {
                 return await group.reduce(into: [Bool?]()) { $0.append($1) }
             }
         }
-        DispatchQueue(label: "test.probe").asyncAfter(deadline: .now() + .milliseconds(300)) {
-            Task.detached { probeRan.withLock { $0 = ContinuousClock.now } }
-        }
-        DispatchQueue(label: "test.cancel").asyncAfter(deadline: .now() + .seconds(2)) {
-            cancelledAt.withLock { $0 = ContinuousClock.now }
-            running.cancel()
+        // Once every helper is up and hung, cancel, then watch them die. This
+        // runs on a thread of its own so a starved pool cannot delay it.
+        let (launched, survivors): ([pid_t], [pid_t]) = await withCheckedContinuation { continuation in
+            Thread.detachNewThread {
+                func pids() -> [pid_t] {
+                    let text = (try? String(contentsOf: pidFile, encoding: .utf8)) ?? ""
+                    return text.split(separator: "\n").compactMap { pid_t($0) }
+                }
+                let upBy = DispatchTime.now() + .seconds(60)
+                while pids().count < checks, DispatchTime.now() < upBy {
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+                let launched = pids()
+                running.cancel()
+                // A helper launches only after its wait reported in, so none
+                // can reach the checker's own timeout before the earliest
+                // report plus `timeout`. Dying before then means the cancel
+                // killed it.
+                let earliest = waits.withLock { $0.map(\.at).min() } ?? .now()
+                let beforeTimeout = earliest + UnixChkpwdChecker.timeout - .seconds(1)
+                func alive() -> [pid_t] {
+                    launched.filter { kill($0, 0) == 0 || errno != ESRCH }
+                }
+                while alive().isEmpty == false, DispatchTime.now() < beforeTimeout {
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+                continuation.resume(returning: (launched, alive()))
+            }
         }
         let results = await running.value
-        let elapsed = ContinuousClock.now - started
-        // A cancelled check is "cannot check" (never a strike), and it kills
-        // its helper rather than waiting out the 10 s timeout.
+        #expect(launched.count == checks, "only \(launched.count) of \(checks) helpers started")
+        #expect(survivors.isEmpty, "helpers \(survivors) outlived the cancel")
+        // A cancelled check is "cannot check", never a strike.
         #expect(results.count == checks)
         #expect(results.allSatisfy { $0 == nil })
-        #expect(elapsed < .seconds(6), "hung checks took \(elapsed) to end after the cancel")
-        while probeRan.withLock({ $0 }) == nil {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        let ran = try #require(probeRan.withLock { $0 })
-        let cancelled = try #require(cancelledAt.withLock { $0 })
-        #expect(ran < cancelled, "an unrelated task only ran \(ran - cancelled) after the hung checks were cancelled")
+        let seen = waits.withLock { $0 }
+        #expect(seen.count == checks)
+        #expect(seen.allSatisfy { $0.name == UnixChkpwdChecker.waitThreadName && $0.inTask == false && $0.isMain == false },
+            "helper waits ran on \(seen)")
     }
 }

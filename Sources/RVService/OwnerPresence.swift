@@ -31,8 +31,14 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
     /// the CLI waits 15 s for rvd's answer.
     static let timeout: DispatchTimeInterval = .seconds(10)
 
+    /// Name of the dedicated thread that runs and waits for the helper.
+    static let waitThreadName = "rv.unix_chkpwd"
+
     /// Helper paths tried in order; tests point this at a stand-in.
     package var helpers: [String] = Self.candidates
+    /// Called on the waiting thread just before the helper launches; tests
+    /// use it to see which thread blocks.
+    package var onWaitThread: (@Sendable () -> Void)?
 
     package init() {}
 
@@ -52,9 +58,12 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
         // NUL-terminated, as pam_unix writes it.
         let payload = Data(bytes + [0])
         let run = HelperRun()
+        let onWaitThread = onWaitThread
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 Thread.detachNewThread {
+                    Thread.current.name = Self.waitThreadName
+                    onWaitThread?()
                     continuation.resume(returning: Self.runHelper(helper, user: user, payload: payload, run: run))
                 }
             }
