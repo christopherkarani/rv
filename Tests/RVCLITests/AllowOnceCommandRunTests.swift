@@ -278,15 +278,17 @@ struct AllowOnceCommandRunTests {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .authenticated
+            ownerAuthOutcome: .authenticated, output: out
         ) {
             var command = try AllowOnceRedeem.parse(["abcdef"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once: store unavailable\n")
     }
 
     @Test func mint_missingCommand() async throws {
@@ -334,15 +336,19 @@ struct AllowOnceCommandRunTests {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .authenticated
+            ownerAuthOutcome: .authenticated, output: out
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        // The LA-prompt reservation runs before the mint write and fails
+        // closed on the broken lock, so the refusal reads as throttled.
+        #expect(out.stderr == "rv allow-once mint: too many authentication prompts; wait and retry\n")
     }
 
     @Test func list_emptyPrettyAndRobot() async throws {
@@ -403,12 +409,14 @@ struct AllowOnceCommandRunTests {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: out) {
             var command = try AllowOnceClear.parse([])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once clear: store unavailable\n")
     }
 
     @Test func redeem_authenticationCancelledRefusesWithoutGrant() async throws {
@@ -422,15 +430,17 @@ struct AllowOnceCommandRunTests {
             tty: tty,
             now: Date()
         )
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .cancelled
+            ownerAuthOutcome: .cancelled, output: out
         ) {
             var command = try AllowOnceRedeem.parse([code.rawValue])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once: device-owner authentication required\n")
         let rows = await store.list(now: Date())
         #expect(rows.allSatisfy { $0.kind != .granted })
     }
@@ -460,15 +470,17 @@ struct AllowOnceCommandRunTests {
 
     @Test func mint_authenticationFailedWritesNoRow() async throws {
         let home = try isolatedHome()
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .failed
+            ownerAuthOutcome: .failed, output: out
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once mint: device-owner authentication required\n")
         let rows = await AllowOnceCLI.store(home: home).list(now: Date())
         #expect(rows.isEmpty)
     }

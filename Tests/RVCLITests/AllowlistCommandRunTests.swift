@@ -89,12 +89,14 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         let lock = allowlistLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: out) {
             var command = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "reviewed"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allowlist add: store unavailable\n")
     }
 
     @Test func add_invalidExistingTOML() async throws {
@@ -137,12 +139,14 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         let lock = allowlistLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: out) {
             var command = try AllowlistAddCommand.parse(["echo hi", "--reason", "safe"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allowlist add-command: store unavailable\n")
         try FileManager.default.removeItem(at: lock)
         let file = RVPolicyPaths.allowlistFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
         try "broken".write(to: file, atomically: true, encoding: .utf8)
@@ -205,12 +209,14 @@ struct AllowlistCommandRunTests {
         let home = try isolatedHome()
         let lock = allowlistLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .authenticated, output: out) {
             var command = try AllowlistRemove.parse(["core.git:reset-hard"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allowlist remove: store unavailable\n")
         try FileManager.default.removeItem(at: lock)
         let file = RVPolicyPaths.allowlistFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
         try FileManager.default.createDirectory(
