@@ -17,7 +17,8 @@ public func evaluateWithSemantics<E: PatternEngine>(
     workingDirectory: WorkingDirectory? = nil,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
-    policy: EffectiveActionPolicy = .empty
+    policy: EffectiveActionPolicy = .empty,
+    patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluateSemanticsOnce(
@@ -29,7 +30,8 @@ public func evaluateWithSemantics<E: PatternEngine>(
             workingDirectory: workingDirectory,
             gitProbe: gitProbe,
             filesystemProbe: filesystemProbe,
-            policy: policy
+            policy: policy,
+            patternBudget: patternBudget
         )
     }
     // An alias body is judged by the same door: `git -c alias.p=push p`
@@ -50,14 +52,16 @@ private func evaluateSemanticsOnce<E: PatternEngine>(
     workingDirectory: WorkingDirectory?,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
-    policy: EffectiveActionPolicy
+    policy: EffectiveActionPolicy,
+    patternBudget: PatternBudget
 ) -> EvaluationResult {
     let pack = evaluate(
         request,
         packs: packs,
         secretPaths: secretPaths,
         engine: engine,
-        compiled: compiled
+        compiled: compiled,
+        patternBudget: patternBudget
     )
     let unwrapped = unwrapCommand(
         request.command,

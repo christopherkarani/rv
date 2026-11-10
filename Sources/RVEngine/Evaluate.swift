@@ -3,25 +3,28 @@ import RVDomain
 
 public let commandByteCap = 65_536
 
-/// Wall-clock bound on all pattern matching for one evaluation. Ordinary
-/// commands finish in milliseconds; past the bound the verdict is
-/// indeterminate (`budgetExhausted`), never allow.
-public let patternTimeBudget: Duration = .seconds(2)
-
 /// Returns the pack-only evaluation of `request`; semantic policy is `evaluateWithSemantics`.
 /// An allow is tightened by the alias bodies the command uses or defines.
+/// `patternBudget` bounds all pattern matching for the request; callers
+/// that evaluate one request in several passes share one budget.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
     secretPaths: SecretPathDecider = .dayOne,
     engine: E,
-    compiled: CompiledPacks<E.Compiled>
+    compiled: CompiledPacks<E.Compiled>,
+    patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
-    let result = evaluatePacks(request, packs: packs, secretPaths: secretPaths, engine: engine, compiled: compiled)
-    return gateAliases(result, command: request.command, packs: packs) { expansion in
+    func judge(_ request: EvaluationRequest) -> EvaluationResult {
+        evaluatePacks(
+            request, packs: packs, secretPaths: secretPaths, engine: engine,
+            compiled: compiled, timeBudget: patternBudget
+        )
+    }
+    return gateAliases(judge(request), command: request.command, packs: packs) { expansion in
         var inner = request
         inner.command = expansion
-        return evaluatePacks(inner, packs: packs, secretPaths: secretPaths, engine: engine, compiled: compiled)
+        return judge(inner)
     }
 }
 
@@ -30,7 +33,8 @@ private func evaluatePacks<E: PatternEngine>(
     packs: [PackSnapshot],
     secretPaths: SecretPathDecider,
     engine: E,
-    compiled: CompiledPacks<E.Compiled>
+    compiled: CompiledPacks<E.Compiled>,
+    timeBudget: PatternBudget
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -60,7 +64,10 @@ private func evaluatePacks<E: PatternEngine>(
 
     var attempts = 0
     let budget = request.budget?.maxPatternAttempts
-    let deadline = ContinuousClock.now + patternTimeBudget
+    // A search the time budget cut short never decides alone: every other
+    // rule still runs, any deny wins, and only an otherwise-allow verdict
+    // becomes indeterminate.
+    var exhausted = false
 
     let segments = splitSegments(matchingView.rawValue)
     var judged: [JudgedSegment] = []
@@ -74,7 +81,8 @@ private func evaluatePacks<E: PatternEngine>(
                 engine: engine,
                 attempts: &attempts,
                 budget: budget,
-                deadline: deadline,
+                timeBudget: timeBudget,
+                exhausted: &exhausted,
                 ranPacks: &ranPacks
             )
             if let result, isTerminal(result.outcome) {
@@ -92,7 +100,8 @@ private func evaluatePacks<E: PatternEngine>(
         engine: engine,
         attempts: &attempts,
         budget: budget,
-        deadline: deadline,
+        timeBudget: timeBudget,
+        exhausted: &exhausted,
         ranPacks: &fullViewRanPacks,
         segments: judged
     ) {
@@ -100,12 +109,20 @@ private func evaluatePacks<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return floorSelfProtection(request.command, secretPaths.fold(viewed, command: request.command))
+        return floorExhaustion(exhausted, floorSelfProtection(
+            request.command, secretPaths.fold(viewed, command: request.command)))
     }
-    return floorSelfProtection(request.command, secretPaths.fold(
+    return floorExhaustion(exhausted, floorSelfProtection(request.command, secretPaths.fold(
         EvaluationResult(outcome: .plain, matchingView: matchingView),
         command: request.command
-    ))
+    )))
+}
+
+/// A time-exhausted search leaves an allow unproven; a deny or another
+/// indeterminate already stands on its own.
+private func floorExhaustion(_ exhausted: Bool, _ result: EvaluationResult) -> EvaluationResult {
+    guard exhausted, result.decision == .allow else { return result }
+    return EvaluationResult(outcome: .indeterminate(.budgetExhausted), matchingView: result.matchingView)
 }
 
 /// An allowed `rv` invocation that weakens rv is indeterminate: the owner
@@ -197,7 +214,8 @@ private func evaluateSingle<E: PatternEngine>(
     engine: E,
     attempts: inout Int,
     budget: Int?,
-    deadline: ContinuousClock.Instant,
+    timeBudget: PatternBudget,
+    exhausted: inout Bool,
     ranPacks: inout Set<PackID>,
     segments: [JudgedSegment] = []
 ) -> EvaluationResult? {
@@ -224,9 +242,11 @@ private func evaluateSingle<E: PatternEngine>(
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
-            switch engine.search(named.compiled, in: view, deadline: deadline) {
+            switch engine.search(named.compiled, in: view, budget: timeBudget) {
             case .exhausted:
-                return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
+                // Never vouches: the pack's destructive rules still run.
+                exhausted = true
+                continue
             case .noMatch:
                 continue
             case .match:
@@ -258,9 +278,10 @@ private func evaluateSingle<E: PatternEngine>(
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
             let range: Range<String.Index>
-            switch engine.search(rule.compiled, in: view, deadline: deadline) {
+            switch engine.search(rule.compiled, in: view, budget: timeBudget) {
             case .exhausted:
-                return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
+                exhausted = true
+                continue
             case .noMatch:
                 continue
             case .match(let found):

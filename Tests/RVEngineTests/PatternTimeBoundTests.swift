@@ -3,33 +3,52 @@ import Testing
 import RVDomain
 @testable import RVEngine
 
-/// ICU backtracking is bounded: a search that cannot finish by its deadline
-/// is `.exhausted`, and the gate turns that into indeterminate, never allow.
+/// ICU backtracking is bounded by one CPU-time budget per request: a search
+/// past its own cap or the request's total is `.exhausted`. Exhaustion never
+/// allows, never skips the remaining deny rules, and never downgrades a deny.
 @Suite("Pattern time bound")
 struct PatternTimeBoundTests {
     /// Exponential on a near-miss subject; never finishes unbounded.
     private let catastrophic = #"(a+)+$"#
     private let nearMiss = String(repeating: "a", count: 40) + "b"
 
-    @Test func icuSearch_pastDeadline_isExhausted() throws {
+    @Test func icuSearch_pastPerSearchCap_isExhausted() throws {
         let engine = ICUPatternEngine()
         let compiled = try engine.compile(catastrophic)
+        let budget = PatternBudget(perSearchCPU: .milliseconds(50))
         let started = ContinuousClock.now
-        let result = engine.search(compiled, in: nearMiss, deadline: started + .milliseconds(100))
-        #expect(result == .exhausted)
-        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(engine.search(compiled, in: nearMiss, budget: budget) == .exhausted)
+        #expect(ContinuousClock.now - started < .seconds(5))
     }
 
-    @Test func icuSearch_withinDeadline_matchesLikeFirstMatch() throws {
+    @Test func icuSearch_spentBudget_isExhaustedWithoutSearching() throws {
+        let engine = ICUPatternEngine()
+        let compiled = try engine.compile(#"git\s+status"#)
+        let budget = PatternBudget(totalCPU: .zero)
+        #expect(budget.isSpent)
+        #expect(engine.search(compiled, in: "git status", budget: budget) == .exhausted)
+    }
+
+    @Test func icuSearch_withinBudget_matchesLikeFirstMatch() throws {
         let engine = ICUPatternEngine()
         let compiled = try engine.compile(#"git\s+reset\s+--hard"#)
         let text = "cd x && git reset --hard"
-        guard case .match(let range) = engine.search(compiled, in: text, deadline: .now + .seconds(1)) else {
+        let budget = PatternBudget()
+        guard case .match(let range) = engine.search(compiled, in: text, budget: budget) else {
             Issue.record("expected a match")
             return
         }
         #expect(range == engine.firstMatch(compiled, in: text))
-        #expect(engine.search(compiled, in: "git status", deadline: .now + .seconds(1)) == .noMatch)
+        #expect(engine.search(compiled, in: "git status", budget: budget) == .noMatch)
+    }
+
+    @Test func budget_isSharedAcrossSearches() throws {
+        let engine = ICUPatternEngine()
+        let compiled = try engine.compile(catastrophic)
+        let budget = PatternBudget(totalCPU: .milliseconds(60), perSearchCPU: .milliseconds(40))
+        _ = engine.search(compiled, in: nearMiss, budget: budget)
+        _ = engine.search(compiled, in: nearMiss, budget: budget)
+        #expect(budget.isSpent)
     }
 
     @Test func evaluate_catastrophicDestructivePattern_isIndeterminateNotAllow() throws {
@@ -42,6 +61,29 @@ struct PatternTimeBoundTests {
         let result = try evaluateWithSinglePack(
             safe: [#"rm\s+(a+)+$"#], destructive: [#"rm\s+-rf"#], command: "rm " + nearMiss)
         #expect(result.decision == .indeterminate(.budgetExhausted))
+    }
+
+    @Test func evaluate_exhaustedSafePattern_stillDenies() throws {
+        let result = try evaluateWithSinglePack(
+            safe: [#"rm\s+(a+)+$"#], destructive: [#"rm\s+a"#], command: "rm " + nearMiss)
+        #expect(deniedRule(result) == "core.filesystem:rule-0")
+    }
+
+    @Test func evaluate_exhaustedEarlierDestructiveRule_laterRuleStillDenies() throws {
+        let result = try evaluateWithSinglePack(
+            safe: [], destructive: [catastrophic, #"rm\s+a"#], command: "rm " + nearMiss)
+        #expect(deniedRule(result) == "core.filesystem:rule-1")
+    }
+
+    @Test func evaluate_exhaustionInSegmentPass_laterSegmentStillDenies() throws {
+        let result = try evaluateWithSinglePack(
+            safe: [], destructive: [catastrophic], command: "rm \(nearMiss); git reset --hard")
+        #expect(deniedRule(result) == "core.git:reset-hard")
+    }
+
+    private func deniedRule(_ result: EvaluationResult) -> String? {
+        guard case .deny(let deny) = result.decision else { return nil }
+        return deny.ruleID.rawValue
     }
 
     private func evaluateWithSinglePack(
@@ -73,7 +115,8 @@ struct PatternTimeBoundTests {
             EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: [.coreFilesystem, .coreGit]),
             packs: packs,
             engine: engine,
-            compiled: compiled
+            compiled: compiled,
+            patternBudget: PatternBudget(perSearchCPU: .milliseconds(50))
         )
     }
 }

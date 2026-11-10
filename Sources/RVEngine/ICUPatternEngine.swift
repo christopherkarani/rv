@@ -34,14 +34,16 @@ public struct ICUPatternEngine: PatternEngine, Sendable {
 
     /// ICU backtracking can go super-linear on adversarial input (a 6 KB
     /// `rm --recursive …` run took seconds). `.reportProgress` calls back
-    /// periodically during a long match, so the search stops at `deadline`
-    /// and reports `.exhausted` instead of running unbounded.
+    /// periodically during a long match, so the search stops when `budget`
+    /// says so and reports `.exhausted` instead of running unbounded.
     public func search(
         _ compiled: ICUCompiledPattern,
         in text: String,
-        deadline: ContinuousClock.Instant
+        budget: PatternBudget
     ) -> PatternSearch {
-        guard ContinuousClock.now < deadline else { return .exhausted }
+        guard budget.isSpent == false else { return .exhausted }
+        let search = budget.beginSearch()
+        defer { search.finish() }
         let full = NSRange(text.startIndex..., in: text)
         var found: NSRange?
         var exhausted = false
@@ -49,7 +51,7 @@ public struct ICUPatternEngine: PatternEngine, Sendable {
             if let result {
                 found = result.range
                 stop.pointee = true
-            } else if ContinuousClock.now >= deadline {
+            } else if search.shouldStop {
                 exhausted = true
                 stop.pointee = true
             }
