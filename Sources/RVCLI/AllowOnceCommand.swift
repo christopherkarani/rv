@@ -437,20 +437,6 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 "rv allow-once: rvd refused this request (it could not identify the caller); nothing was allowed\n",
                 exitCode: 2
             )
-        } catch AllowOnceAttestError.notIssuedByService {
-            try ctx.fail(
-                "rv allow-once: rvd did not issue this code (rvd restarted since it issued it, or the pending file was edited); rerun the command for a fresh code\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAttestError.notShowable {
-            try ctx.fail("rv allow-once: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
-        } catch AllowOnceAttestError.ownerCheckUnconfirmed {
-            try ctx.fail(
-                "rv allow-once: rvd did not say it checked the owner (an older rvd still running after an upgrade?); nothing was allowed. Run rv service restart and try again\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAttestError.notApproved(let refused) {
-            try ctx.fail("rv allow-once: \(AllowOnceCLI.notApprovedMessage(refused))\n", exitCode: 2)
         } catch {
             try ctx.failOwnerGate(error, command: "allow-once", subject: .grant)
         }
@@ -490,14 +476,10 @@ struct AllowOnceMint: AsyncParsableCommand {
             ctx.writeStdout(AllowOnceCLI.mintedMessage(code: code.rawValue))
         } catch AllowOnceError.emptyCommand {
             try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
-        } catch AllowOnceAttestError.notShowable {
-            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
         } catch AllowOnceAttestError.serviceUnavailable {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceUnavailableMessage)\n", exitCode: 2)
-        } catch AllowOnceAttestError.serviceDenied, AllowOnceAttestError.notIssuedByService {
+        } catch AllowOnceAttestError.serviceDenied {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceDeniedMessage)\n", exitCode: 2)
-        } catch AllowOnceAttestError.notApproved(let refused) {
-            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintNotApprovedMessage(refused))\n", exitCode: 2)
         } catch AllowOnceError.notUnlockable {
             try ctx.fail(
                 "rv allow-once mint: no one-shot unlock is possible for this command\n",
@@ -509,7 +491,7 @@ struct AllowOnceMint: AsyncParsableCommand {
                 exitCode: 2
             )
         } catch {
-            try ctx.failOwnerGate(error, command: "allow-once mint", subject: .grant)
+            try ctx.failOwnerGate(error, command: "allow-once mint", subject: .newCode)
         }
     }
 }

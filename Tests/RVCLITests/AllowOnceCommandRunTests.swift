@@ -340,6 +340,24 @@ struct AllowOnceCommandRunTests {
         #expect(await AllowOnceCLI.store(home: home).list(now: Date()).isEmpty)
     }
 
+    @Test func mint_tooLongToShowRefusesThroughTheGateTable() async throws {
+        // #566's notShowable refusal, worded by OwnerGateRefusal for mint.
+        let home = try isolatedHome()
+        let out = CLIOutputCapture()
+        let long = "echo " + String(repeating: "a", count: AllowOncePromptText.maxCommandScalars + 1)
+        try await withCLIProcess(
+            home: home, stdinIsTTY: true, stdoutIsTTY: true,
+            ownerAuthOutcome: .authenticated, output: out
+        ) {
+            var command = try AllowOnceMint.parse(long.split(separator: " ").map(String.init))
+            await #expect(throws: ExitCode(2)) {
+                try await command.run()
+            }
+        }
+        #expect(out.stderr == "rv allow-once mint: \(AllowOnceCLI.notShowableMessage)\n")
+        #expect(out.stdout.isEmpty)
+    }
+
     @Test func mint_storeUnavailable() async throws {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)

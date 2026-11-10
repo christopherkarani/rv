@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import Testing
+import RVIPC
 import RVPolicy
 @testable import RVCLI
 
@@ -38,6 +39,19 @@ struct OwnerGateRefusalTests {
         #expect(OwnerGateRefusal(EgressReviewError.reasonRequired) == nil)
     }
 
+    private static let declined = ConfirmOwnerActionReply(outcome: .declined)
+
+    /// rvd's owner-check refusals for allow-once redeem/mint (#566) are gate
+    /// refusals; reachability and caller-identity failures stay site-worded.
+    @Test func attestErrorsClassify() {
+        #expect(OwnerGateRefusal(AllowOnceAttestError.notApproved(Self.declined)) == .notApproved(Self.declined))
+        #expect(OwnerGateRefusal(AllowOnceAttestError.notShowable) == .notShowable)
+        #expect(OwnerGateRefusal(AllowOnceAttestError.ownerCheckUnconfirmed) == .ownerCheckUnconfirmed)
+        #expect(OwnerGateRefusal(AllowOnceAttestError.notIssuedByService) == .notIssuedByService)
+        #expect(OwnerGateRefusal(AllowOnceAttestError.serviceUnavailable) == nil)
+        #expect(OwnerGateRefusal(AllowOnceAttestError.serviceDenied) == nil)
+    }
+
     @Test func allowlistLockFailureClassifies() {
         #expect(OwnerGateRefusal(AllowlistStoreError.lockFailed) == .storeUnavailable)
     }
@@ -67,18 +81,59 @@ struct OwnerGateRefusalTests {
         (.storeUnavailable, .grant, "store unavailable"),
         (.storeUnavailable, .proposal, "store unavailable"),
         (.storeUnavailable, .allowlistEntry, "store unavailable"),
+        (.storeUnavailable, .newCode, "store unavailable"),
+        (.ttyRequired, .newCode, "requires an interactive TTY (stdin and stdout)"),
+        (.robotRefused, .newCode, "--json/--robot refused"),
+        (.changedDuringReview, .newCode, "grant changed during review; retry with a fresh code"),
+        (.authRequired, .newCode, "device-owner authentication required"),
+        (.throttled, .newCode, "too many authentication prompts; wait and retry"),
+    ] + attestGolden
+
+    /// #566's wording, unchanged: redeem (`.grant`) and mint (`.newCode`)
+    /// differ only where #566 worded them differently.
+    private static let notShowableText =
+        "this command is too long to approve in a prompt (it cannot be shown in full, and nothing is approved from a shortened view); nothing was allowed. Run it yourself in a terminal instead"
+    private static let unconfirmedText =
+        "rvd did not say it checked the owner (an older rvd still running after an upgrade?); nothing was allowed. Run rv service restart and try again"
+    private static let notIssuedText =
+        "rvd did not issue this code (rvd restarted since it issued it, or the pending file was edited); rerun the command for a fresh code"
+    private static let mintDeniedText =
+        "rvd refused to pre-arm a code (it could not identify the caller, or it is older than this rv: restart it); nothing was minted"
+    private static let attestGolden: [(OwnerGateRefusal, OwnerGateRefusal.Subject, String)] =
+        OwnerGateRefusal.Subject.allCases.flatMap { subject -> [(OwnerGateRefusal, OwnerGateRefusal.Subject, String)] in
+            let mint = subject == .newCode
+            return [
+                (.notShowable, subject, notShowableText),
+                (.ownerCheckUnconfirmed, subject, unconfirmedText),
+                (.notIssuedByService, subject, mint ? mintDeniedText : notIssuedText),
+                (.notApproved(declined), subject, mint
+                    ? "not approved (the Touch ID or password prompt was cancelled, failed or timed out); nothing was minted"
+                    : "not approved (the Touch ID or password prompt was cancelled, failed or timed out); the code stays live"),
+                (.notApproved(ConfirmOwnerActionReply(outcome: .wrongPassword)), subject, mint
+                    ? "wrong password; nothing was minted"
+                    : "wrong password; nothing was allowed and the code stays live"),
+                (.notApproved(ConfirmOwnerActionReply(outcome: .lockedOut, retryAfterSeconds: 120)), subject,
+                    "too many failed owner checks; owner approvals are locked. Try again in 3 min."),
+            ]
+        }
+
+    /// One value per refusal case (payload cases once). `text(subject:)` is
+    /// an exhaustive switch, so a new case does not compile until worded;
+    /// this list makes the golden table cover it too.
+    private static let everyRefusal: [OwnerGateRefusal] = [
+        .ttyRequired, .robotRefused, .changedDuringReview, .authRequired, .throttled, .storeUnavailable,
+        .notShowable, .ownerCheckUnconfirmed, .notIssuedByService, .notApproved(declined),
     ]
 
     @Test(arguments: golden)
     func goldenText(refusal: OwnerGateRefusal, subject: OwnerGateRefusal.Subject, text: String) {
         #expect(refusal.text(subject: subject) == text)
-        let message = refusal.message(command: "allow-once mint", subject: subject)
-        #expect(message.text == "rv allow-once mint: \(text)\n")
-        #expect(message.exitCode == 2)
+        #expect(refusal.message(command: "allow-once mint", subject: subject) == "rv allow-once mint: \(text)\n")
+        #expect(OwnerGateRefusal.exitCode == 2)
     }
 
     @Test func goldenTableCoversEveryRefusalAndSubject() {
-        for refusal in OwnerGateRefusal.allCases {
+        for refusal in Self.everyRefusal {
             for subject in OwnerGateRefusal.Subject.allCases {
                 #expect(Self.golden.contains { $0.0 == refusal && $0.1 == subject })
             }
@@ -118,7 +173,7 @@ struct OwnerGateRefusalTests {
         #expect(wired.sorted() == [
             "allow-once -> grant",
             "allow-once clear -> grant",
-            "allow-once mint -> grant",
+            "allow-once mint -> newCode",
             "allowlist add -> allowlistEntry",
             "allowlist add-command -> allowlistEntry",
             "allowlist remove -> allowlistEntry",
