@@ -6,7 +6,8 @@ import RVDomain
 /// authority from its role: rvd plants only after the device owner
 /// approves, on macOS in rvd's own LocalAuthentication prompt naming the
 /// code rvd issued, on Linux with the login password in `ownerProof`
-/// (see `ServiceRuntime.attestTTYRedemption`). rvd re-validates every field
+/// (asked for after a first request without one returns rvd's
+/// description; see `ServiceRuntime.attestTTYRedemption`). rvd re-validates every field
 /// and enforces per-epoch code single-use, so a buggy caller cannot plant
 /// garbage or doubles.
 ///
@@ -59,20 +60,29 @@ public struct AttestTTYRedemptionReply: Sendable, Equatable, Codable {
     public var epoch: String
     /// Set only when the owner check refused (declined or failed prompt,
     /// wrong password, lockout, a prompt already open, no prompt
-    /// possible); nothing was planted. Nil on a plant or an
+    /// possible) or, on Linux, still needs the password
+    /// (`proofRequired`); nothing was planted. Nil on a plant or an
     /// already-planted retry.
     public var ownerCheck: ConfirmOwnerActionReply?
     /// True with an `unavailable` owner check when rvd refused to prompt
     /// because it cannot show the whole command and cwd (too long once
     /// escaped). rvd never shows a shortened command for approval.
     public var notShowable: Bool?
+    /// Linux: rvd's own description of the code it issued (exact command,
+    /// cwd, rule; already escaped), set with a `proofRequired` owner check
+    /// when the request carried no password. The CLI shows it above the
+    /// password prompt and asks again with the password, so the owner reads
+    /// what rvd will grant, not the same-user pending file.
+    public var promptText: String?
 
     public init(
-        planted: Bool, epoch: String, ownerCheck: ConfirmOwnerActionReply? = nil, notShowable: Bool? = nil
+        planted: Bool, epoch: String, ownerCheck: ConfirmOwnerActionReply? = nil, notShowable: Bool? = nil,
+        promptText: String? = nil
     ) {
         self.planted = planted
         self.epoch = epoch
         self.ownerCheck = ownerCheck
         self.notShowable = notShowable
+        self.promptText = promptText
     }
 }

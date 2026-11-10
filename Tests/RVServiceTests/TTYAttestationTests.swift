@@ -13,10 +13,17 @@ import RVPolicy
 @Suite("TTY attestation authority")
 struct TTYAttestationTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
+    /// rvd's store: the hook path issues codes into it, and rvd plants only
+    /// for codes it issued.
+    private let store: AllowOnceStore
+
+    init() throws {
+        store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+    }
 
     @Test func attestAsCliPlantsAndSpendsExactlyOnce() async throws {
         let runtime = try makeRuntime()
-        let params = attestParams(command: "git reset --hard", code: "abcdef")
+        let params = try await issue("git reset --hard")
         let first = await runtime.dispatch(
             IPCRequest(method: .attestTTYRedemption(params)),
             context: peerCliContext()
@@ -55,7 +62,6 @@ struct TTYAttestationTests {
     @Test func attestAsNonCliFailsClosedWithoutPlant() async throws {
         let contexts: [(String, AuthenticatedRequestContext)] = [
             ("unauthenticated", .unauthenticated),
-            ("nil-role peer", peerHookContext()),
             ("service", peerServiceContext()),
             ("operatorUI", peerOperatorUIContext()),
         ]
@@ -82,6 +88,23 @@ struct TTYAttestationTests {
                 Issue.record("nothing may plant for \(name)")
                 return
             }
+        }
+    }
+
+    @Test func aRoleLessPeerWithACodeRvdNeverIssuedPlantsNothing() async throws {
+        // Role-less peers reach the handler (it is the gate), which knows
+        // only the codes rvd issued.
+        let runtime = try makeRuntime()
+        let denied = await runtime.dispatch(
+            IPCRequest(method: .attestTTYRedemption(attestParams(command: "git reset --hard", code: "abcdef"))),
+            context: peerHookContext())
+        #expect(denied.result == .error(.allowOnceNotFound))
+        let evaluated = await runtime.evaluate(
+            EvaluationRequest(command: ShellCommand(rawValue: "git reset --hard"), enabledPacks: dayOnePackIDs),
+            cwd: wd("/tmp/ws"))
+        guard case .deny = evaluated.result.decision else {
+            Issue.record("nothing may plant for a code rvd never issued")
+            return
         }
     }
 
@@ -151,7 +174,7 @@ struct TTYAttestationTests {
 
     @Test func doubleAttestPlantsOnce() async throws {
         let runtime = try makeRuntime()
-        let params = attestParams(command: "git reset --hard", code: "abcdef")
+        let params = try await issue("git reset --hard")
         let first = await runtime.dispatch(
             IPCRequest(method: .attestTTYRedemption(params)),
             context: peerCliContext()
@@ -191,9 +214,7 @@ struct TTYAttestationTests {
         // and the grant survives for the reviewed command.
         let runtime = try makeRuntime()
         let planted = await runtime.dispatch(
-            IPCRequest(method: .attestTTYRedemption(
-                attestParams(command: "git reset --hard", code: "abcdef")
-            )),
+            IPCRequest(method: .attestTTYRedemption(try await issue("git reset --hard"))),
             context: peerCliContext()
         )
         guard case .attestTTYRedemption(let reply) = planted.result, reply.planted else {
@@ -227,9 +248,7 @@ struct TTYAttestationTests {
     @Test func attestBindsExactCwd() async throws {
         let runtime = try makeRuntime()
         let planted = await runtime.dispatch(
-            IPCRequest(method: .attestTTYRedemption(
-                attestParams(command: "git reset --hard", code: "abcdef")
-            )),
+            IPCRequest(method: .attestTTYRedemption(try await issue("git reset --hard"))),
             context: peerCliContext()
         )
         guard case .attestTTYRedemption(let reply) = planted.result, reply.planted else {
@@ -257,9 +276,7 @@ struct TTYAttestationTests {
         // grant is gone. Two runtimes model the before/after.
         let before = try makeRuntime()
         let planted = await before.dispatch(
-            IPCRequest(method: .attestTTYRedemption(
-                attestParams(command: "git reset --hard", code: "abcdef")
-            )),
+            IPCRequest(method: .attestTTYRedemption(try await issue("git reset --hard"))),
             context: peerCliContext()
         )
         guard case .attestTTYRedemption(let reply) = planted.result, reply.planted else {
@@ -284,9 +301,7 @@ struct TTYAttestationTests {
         let box = AttestClockBox(now)
         let runtime = try makeRuntime(clock: { box.now })
         let planted = await runtime.dispatch(
-            IPCRequest(method: .attestTTYRedemption(
-                attestParams(command: "git reset --hard", code: "abcdef")
-            )),
+            IPCRequest(method: .attestTTYRedemption(try await issue("git reset --hard"))),
             context: peerCliContext()
         )
         guard case .attestTTYRedemption(let reply) = planted.result, reply.planted else {
@@ -316,13 +331,31 @@ struct TTYAttestationTests {
         let home = try #require(HomeDirectory(validating: homeURL.path))
         let now = self.now
         return ServiceRuntime(
-            snapshots: nil, catalog: nil, home: home, allowOnce: nil,
-            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            snapshots: nil, catalog: nil, home: home, allowOnce: store,
+            allowOnceDirectory: nil,
             idleExitSeconds: IdleWatchdog.defaultSeconds, log: nil, analytics: nil,
             clock: clock ?? { now }, pendingApprovals: .automatic,
             ceremonies: WorkspaceOperatorCeremonyService(),
             ownerPresence: OwnerPresence(authenticator: nil)
         )
+    }
+
+    /// A deny code rvd's hook path issued for `command` in /tmp/ws, and
+    /// the attest the CLI sends for it (read back from the pending row).
+    private func issue(_ command: String) async throws -> AttestTTYRedemptionParams {
+        let shell = ShellCommand(rawValue: command)
+        let code = try #require(await store.mintFromDeny(
+            matchingView: Normalize.matchingView(of: shell), cwd: wd("/tmp/ws"), ruleID: nil, now: now,
+            maskedSegments: Normalize.maskedSegments(of: shell),
+            invocationPrefix: Normalize.invocationPrefix(of: shell),
+            invocationDisplay: Normalize.invocationDisplay(of: shell), rawCommand: command
+        )?.code)
+        let pending = try #require(await store.validatePending(code: code.rawValue, now: now))
+        return AttestTTYRedemptionParams(
+            fingerprint: GrantFingerprint(rawValue: pending.fingerprint), cwd: pending.row.cwd,
+            codeHash: CodeHash(rawValue: sha256Hex(code.rawValue)),
+            clientSemver: ProtocolVersion.serviceSemver,
+            payloadDigest: pending.payloadDigest.map(ContentPayloadDigest.init(rawValue:)))
     }
 
     private func attestParams(

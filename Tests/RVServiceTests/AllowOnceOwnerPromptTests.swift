@@ -29,7 +29,9 @@ struct AllowOnceOwnerPromptTests {
         let homeURL: URL
     }
 
-    private func rig(_ prompt: FakeAuthenticator) throws -> Rig {
+    /// `prompt` nil is Linux: no LocalAuthentication, the login password
+    /// ("secret") is the owner check.
+    private func rig(_ prompt: FakeAuthenticator?) throws -> Rig {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
         let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
@@ -355,13 +357,84 @@ struct AllowOnceOwnerPromptTests {
         #expect(text.contains("origin main") == false)
     }
 
-    @Test func theMatrixAdmitsAnUnroledXPCPeerButNotABareSocketPeer() {
+    @Test func theMatrixAdmitsAuthenticatedRoleLessPeersButNoOtherComponent() {
+        // The handler is the gate: it answers only for codes rvd issued and
+        // plants only after the owner check.
         let method = IPCMethod.attestTTYRedemption(AttestTTYRedemptionParams(
             fingerprint: GrantFingerprint(rawValue: String(repeating: "a", count: 64)),
             cwd: wd("/tmp/ws"), codeHash: CodeHash(rawValue: String(repeating: "b", count: 64)),
             clientSemver: ProtocolVersion.serviceSemver))
         #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.unroledXPCContext()))
-        #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.socketContext()) == false)
+        #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.socketContext()))
+        #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.cliContext()))
         #expect(ServiceMethodAuthorization.permits(method, context: peerOperatorUIContext()) == false)
+        #expect(ServiceMethodAuthorization.permits(method, context: .unauthenticated) == false)
+    }
+
+    // MARK: Linux: the login password, checked by rvd
+
+    private func linuxAttest(
+        _ params: AttestTTYRedemptionParams, _ rig: Rig, password: String?,
+        context: AuthenticatedRequestContext = OwnerPresenceTests.socketContext()
+    ) async -> IPCResult {
+        var params = params
+        params.ownerProof = password.map { OwnerProof(password: $0) }
+        return await rig.runtime.dispatch(
+            IPCRequest(method: .attestTTYRedemption(params)), context: context, sameUIDSocket: true
+        ).result
+    }
+
+    @Test func linuxAskingWithoutAPasswordGetsRvdsDescriptionAndPlantsNothing() async throws {
+        // The CLI shows rvd's text above the password prompt, not the
+        // same-user pending file's.
+        let rig = try rig(nil)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let command = "LD_PRELOAD=/tmp/x.so git push --force origin main"
+        let params = try await issue(command, store: rig.store, rule: pushRule)
+        guard case .attestTTYRedemption(let reply) = await linuxAttest(params, rig, password: nil) else {
+            Issue.record("a redeem without a password must answer with rvd's description")
+            return
+        }
+        #expect(reply.planted == false)
+        #expect(reply.ownerCheck?.outcome == .proofRequired)
+        #expect(reply.promptText == "allow once \"\(command)\" in /tmp/ws (rule core.git:push-force)")
+        #expect(isAllow(await evaluate(command, rig)) == false)
+    }
+
+    @Test func linuxPlantsOnlyWithTheOwnersPassword() async throws {
+        let rig = try rig(nil)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let params = try await issue("git reset --hard", store: rig.store)
+        guard case .attestTTYRedemption(let refused) = await linuxAttest(params, rig, password: "nope") else {
+            Issue.record("a wrong password must answer with the owner check")
+            return
+        }
+        #expect(refused.planted == false)
+        #expect(refused.ownerCheck == ConfirmOwnerActionReply(outcome: .wrongPassword))
+        guard case .attestTTYRedemption(let reply) = await linuxAttest(params, rig, password: "secret") else {
+            Issue.record("the owner's password must plant")
+            return
+        }
+        #expect(reply.planted)
+        #expect(isAllow(await evaluate("git reset --hard", rig)))
+    }
+
+    @Test func linuxForgedRowIsNotFoundEvenWithThePasswordOrThePinnedCLI() async throws {
+        // A row rvd did not issue, written to the same-user pending file:
+        // neither the right password nor the pinned CLI role plants it.
+        let rig = try rig(nil)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await rig.store.mint(
+            matchingView: "rm -rf ~", cwd: wd("/tmp/ws"), ruleID: nil, tty: tty, now: now)
+        let row = try #require(await rig.store.validatePending(code: code.rawValue, now: now))
+        let forged = AttestTTYRedemptionParams(
+            fingerprint: GrantFingerprint(rawValue: row.fingerprint), cwd: wd("/tmp/ws"),
+            codeHash: CodeHash(rawValue: sha256Hex(code.rawValue)),
+            clientSemver: ProtocolVersion.serviceSemver)
+        #expect(await linuxAttest(forged, rig, password: "secret") == .error(.allowOnceNotFound))
+        #expect(await linuxAttest(forged, rig, password: nil, context: OwnerPresenceTests.cliContext())
+            == .error(.allowOnceNotFound))
+        #expect(isAllow(await evaluate("rm -rf ~", rig)) == false)
     }
 }

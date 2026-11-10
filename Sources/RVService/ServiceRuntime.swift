@@ -486,6 +486,8 @@ public actor ServiceRuntime {
     /// role confers nothing: on macOS rvd shows the LocalAuthentication
     /// prompt itself (Touch ID or the login password), for the pinned `.cli`
     /// and for the unsigned CLI of a one-click install alike; on Linux rvd
+    /// first answers a request without a password with its own description
+    /// of the code, which the CLI shows above the password prompt, then
     /// checks the login password the CLI read from its terminal.
     ///
     /// Why a coding agent cannot redeem its own code. It sees the code in
@@ -522,33 +524,39 @@ public actor ServiceRuntime {
             return denied()
         }
         // M-07: the attested payload digest binds the planted grant. Shape
-        // only here; on macOS it must also equal the digest rvd issued.
+        // only here; it must also equal the digest rvd issued.
         if let digest = params.payloadDigest {
             guard ContentPayloadDigest(validatingHex: digest.rawValue) != nil else {
                 return denied()
             }
         }
-        var description = ""
-        if ownerPresence.promptsInRvd {
-            switch await redemptionDescription(params) {
-            case .notIssued:
-                return .error(.allowOnceNotFound)
-            case .notShowable:
-                // Never a shortened command: the grant covers all of it.
-                return .attestTTYRedemption(AttestTTYRedemptionReply(
-                    planted: false, epoch: grants.epoch.uuidString,
-                    ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true))
-            case .found(_, redeemed: true):
-                // Already planted in this rvd lifetime: answer the retry
-                // without a second prompt.
-                return .attestTTYRedemption(AttestTTYRedemptionReply(
-                    planted: false, epoch: grants.epoch.uuidString))
-            case .found(let text, redeemed: false):
-                description = text
-            }
+        // Both platforms: only a code rvd issued, matching every field.
+        let description: String
+        switch await redemptionDescription(params) {
+        case .notIssued:
+            return .error(.allowOnceNotFound)
+        case .notShowable:
+            // Never a shortened command: the grant covers all of it.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString,
+                ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true))
+        case .found(_, redeemed: true):
+            // Already planted in this rvd lifetime: answer the retry
+            // without a second prompt.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString))
+        case .found(let text, redeemed: false):
+            description = text
         }
         let verdict = await ownerPresence.confirmRedemption(
             description, proof: params.ownerProof, context: context)
+        if case .denied(let reply) = verdict, reply.outcome == .proofRequired {
+            // Linux, no password yet: no owner check ran. Hand back rvd's
+            // description for the CLI to show above the password prompt.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString, ownerCheck: reply,
+                promptText: description))
+        }
         let approved = verdict == .approved
         let outcome: String
         switch verdict {
@@ -561,9 +569,7 @@ public actor ServiceRuntime {
             summary: "redeem allow-once code", approved: approved, outcome: outcome,
             context: context, home: configHome)
         if case .denied(let reply) = verdict {
-            // No proof at all stays a plain refusal; an owner check that
-            // ran and refused tells the CLI why.
-            guard reply.outcome != .proofRequired else { return denied() }
+            // The owner check ran and refused: tell the CLI why.
             return .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: false, epoch: grants.epoch.uuidString, ownerCheck: reply))
         }

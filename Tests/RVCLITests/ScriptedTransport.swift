@@ -12,6 +12,8 @@ final class ScriptedTransport: ServiceTransport {
     let responseID: UUID?
     let responseProtocolName: String?
 
+    /// Replies served in order before `responseResult`.
+    private let queuedResults: Mutex<[IPCResult]>
     private let sentBodies = Mutex<[Data]>([])
     private let sendTimeouts = Mutex<[Int]>([])
     private let helloCalls = Mutex(0)
@@ -24,8 +26,10 @@ final class ScriptedTransport: ServiceTransport {
         sendReply: Data? = nil,
         responseResult: IPCResult? = nil,
         responseID: UUID? = nil,
-        responseProtocolName: String? = nil
+        responseProtocolName: String? = nil,
+        responseResults: [IPCResult] = []
     ) {
+        self.queuedResults = Mutex(responseResults)
         self.ack = ack
         self.helloError = helloError
         self.sendError = sendError
@@ -58,7 +62,8 @@ final class ScriptedTransport: ServiceTransport {
         if let sendError {
             throw sendError
         }
-        if let responseResult {
+        let queued = queuedResults.withLock { $0.isEmpty ? nil : $0.removeFirst() }
+        if let responseResult = queued ?? responseResult {
             let request = try IPCJSON.decode(IPCRequest.self, from: body)
             return try IPCJSON.encode(
                 IPCResponse(

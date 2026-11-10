@@ -141,7 +141,7 @@ public enum ServiceMethodAuthorization {
             // role here is authority. Admitted: the pinned CLI and role-less
             // peers. Other pinned components have no business redeeming and
             // unauthenticated peers never get in.
-            guard let peer = context.peer else { return false }
+            guard context.peer != nil else { return false }
             switch context.componentRole {
             case .cli:
                 return true
@@ -149,11 +149,11 @@ public enum ServiceMethodAuthorization {
                 return false
             case nil:
                 // A kernel-attested XPC peer (macOS one-click install, no
-                // peer-trust manifest): rvd shows its own owner prompt. A
-                // bare socket peer (Linux) must carry the owner's password,
-                // which the handler verifies.
-                guard case .attestTTYRedemption(let params) = method else { return false }
-                return peer.evidence.auditToken != nil || params.ownerProof != nil
+                // peer-trust manifest), where rvd shows its own owner
+                // prompt, or a bare socket peer (Linux), which first asks
+                // without a password to get rvd's description and then
+                // sends the owner's password for the handler to verify.
+                return true
             }
         case .ownerConfirm:
             return context.peer != nil

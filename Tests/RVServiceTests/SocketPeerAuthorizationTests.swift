@@ -51,11 +51,13 @@ struct SocketPeerAuthorizationTests {
         #expect(ServiceMethodAuthorization.permits(hookMethod(), context: .unauthenticated) == false)
     }
 
-    @Test func socketPeerCannotAttestOrLaunch() {
-        // TTY attestation and launch proposals stay macOS-only: no code
-        // identity means no .cli role, and the matrix fails closed.
+    @Test func socketPeerCanAskToRedeemButCannotLaunch() {
+        // Allow-once redeem is admitted: the handler answers only for codes
+        // rvd issued and plants only after the owner's password checks out
+        // (AllowOnceOwnerPromptTests). Launch proposals stay macOS-only: no
+        // code identity means no .cli role, and the matrix fails closed.
         let context = socketContext()
-        #expect(ServiceMethodAuthorization.permits(attestMethod(), context: context) == false)
+        #expect(ServiceMethodAuthorization.permits(attestMethod(), context: context))
         #expect(ServiceMethodAuthorization.permits(proposeMethod(), context: context) == false)
         #expect(ServiceMethodAuthorization.permits(
             .launchProposalStatus(ProposalStatusParams(operationID: UUID())),

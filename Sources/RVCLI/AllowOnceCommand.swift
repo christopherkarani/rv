@@ -66,20 +66,20 @@ enum AllowOnceCLI {
 
     /// Redeems one unlock code into one exact-command grant. The owner's
     /// approval happens in rvd, not here: on macOS rvd shows its own
-    /// Touch ID or password prompt naming the code it issued; on Linux this
-    /// process reads the login password and rvd verifies it. Nothing about
-    /// this process is trusted by rvd. Order:
+    /// Touch ID or password prompt naming the code it issued; on Linux rvd
+    /// answers a first ask with its own description of that code, this
+    /// process shows it above the password prompt, and rvd verifies the
+    /// password. Nothing about this process is trusted by rvd. Order:
     ///
     /// 1. Gates cheapest-first (TTY, robot, code shape).
-    /// 2. Atomically read display row + fingerprint (pre-prompt review).
-    /// 3. Linux: read the login password under the reviewed grant (B-F6).
-    /// 4. Re-read + compare fingerprint AND full row AND payload digest
-    ///    (TOCTOU bind: a swapped file aborts with redemptionChanged
-    ///    instead of attesting a row the human never reviewed; the
-    ///    fingerprint covers the action, the row covers cwd/expiry/
-    ///    display, the digest covers the hidden payload).
-    /// 5. Attest to the daemon (rvd runs the owner check, re-checks the
-    ///    fields and per-epoch code single-use, then plants the grant).
+    /// 2. Atomically read display row + fingerprint.
+    /// 3. Re-read + compare fingerprint AND full row AND payload digest
+    ///    (TOCTOU bind: a swapped file aborts with redemptionChanged; rvd
+    ///    independently refuses anything that differs from what it issued).
+    /// 4. Attest to the daemon (rvd matches the code it issued, runs the
+    ///    owner check, enforces per-epoch code single-use, then plants).
+    /// 5. Linux: on rvd's `proofRequired` answer, read the login password
+    ///    under rvd's description and attest again with it.
     /// 6. Flip the file row as a display projection (best-effort: a flip
     ///    failure after a planted attestation is a display gap, still
     ///    granted; an attest failure leaves pending intact for retry).
@@ -96,20 +96,6 @@ enum AllowOnceCLI {
     ) -> Bool {
         before.fingerprint == after.fingerprint && before.row == after.row
             && before.payloadDigest == after.payloadDigest
-    }
-
-    /// The CLI's description of the grant, from the pending file. Linux
-    /// shows it above the password prompt. The file keeps only the
-    /// command's head (a full command can carry a secret), so this names
-    /// the rule and cwd too; on macOS rvd's own prompt names the whole
-    /// command from what rvd issued. B1: the invocation tag names erased
-    /// wrappers (`sudo`, `FOO=…`) the normalized redaction hides.
-    static func redeemReason(row: AllowOnceListRow) -> String? {
-        AllowOncePromptText.reason(
-            command: AllowOncePromptText.invoked(
-                view: row.commandRedacted, invocationDisplay: row.invocationDisplay),
-            cwd: row.cwd,
-            ruleID: row.ruleID)
     }
 
     static let notShowableMessage =
@@ -151,7 +137,8 @@ enum AllowOnceCLI {
         robot: Bool,
         store: AllowOnceStore,
         now: Date,
-        client: ServiceClient? = nil
+        client: ServiceClient? = nil,
+        readOwnerProof: @Sendable (String) async throws -> OwnerProof? = CLIOwnerAuth.ownerProofForAttestation(reason:)
     ) async throws -> (row: AllowOnceListRow, epochChanged: Bool) {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -177,15 +164,14 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        guard let reason = redeemReason(row: peeked.row) else { throw AllowOnceAttestError.notShowable }
-        let ownerProof = try await CLIOwnerAuth.ownerProofForAttestation(reason: reason)
+        try CLIOwnerAuth.beginRedeem()
         let service = client ?? OwnerConfirmation.defaultClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
             Self.redemptionUnchanged(before: peeked, after: rechecked)
         else {
             throw AllowOnceError.redemptionChanged
         }
-        let attested = await service.attestTTYRedemption(AttestTTYRedemptionParams(
+        var params = AttestTTYRedemptionParams(
             fingerprint: GrantFingerprint(rawValue: rechecked.fingerprint),
             cwd: rechecked.row.cwd,
             codeHash: CodeHash(rawValue: sha256Hex(normalized)),
@@ -193,10 +179,17 @@ enum AllowOnceCLI {
             // M-07: the rechecked row's payload digest binds the planted
             // grant to the reviewed hidden payload (digest only — exact
             // segments never cross IPC). Nil rows plant unbound.
-            payloadDigest: rechecked.payloadDigest.map(ContentPayloadDigest.init(rawValue:)),
-            // Linux: the owner's password, verified by rvd before planting.
-            ownerProof: ownerProof
-        ))
+            payloadDigest: rechecked.payloadDigest.map(ContentPayloadDigest.init(rawValue:))
+        )
+        var attested = await service.attestTTYRedemption(params)
+        // Linux: rvd answers the first ask with its own description of the
+        // code it issued; the owner reads that (never the same-user pending
+        // file) above the password prompt, and rvd verifies the password.
+        if case .success(let first) = attested, first.ownerCheck?.outcome == .proofRequired,
+            let described = first.promptText {
+            params.ownerProof = try await readOwnerProof(described)
+            attested = await service.attestTTYRedemption(params)
+        }
         let reply: AttestTTYRedemptionReply
         switch attested {
         case .success(let response):

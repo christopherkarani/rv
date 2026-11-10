@@ -70,13 +70,6 @@ struct AllowOncePromptTextTests {
         #expect(AllowOncePromptText.reason(command: "ls", cwd: wd(deep), ruleID: nil) == nil)
     }
 
-    @Test func invokedCommandPrefixesTheWrapperTag() {
-        #expect(AllowOncePromptText.invoked(view: "git reset --hard", invocationDisplay: "sudo")
-            == "sudo git reset --hard")
-        #expect(AllowOncePromptText.invoked(view: "git reset --hard", invocationDisplay: nil)
-            == "git reset --hard")
-    }
-
     // MARK: rvd's memory of the codes it issued
 
     @Test func aDenyMintRemembersTheWholeCommandInMemoryOnly() async throws {

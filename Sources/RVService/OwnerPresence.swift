@@ -193,10 +193,6 @@ actor OwnerPresence {
         return recordFailure(.declined)
     }
 
-    /// True when rvd shows its own owner prompt (macOS). Then the caller's
-    /// role never stands in for the owner.
-    nonisolated var promptsInRvd: Bool { authenticator != nil }
-
     /// Allow-once redeem. `description` is rvd's own text for the code it
     /// issued (never the caller's). With rvd's prompt (macOS) every
     /// authenticated caller goes through `confirm`; without one (Linux), the

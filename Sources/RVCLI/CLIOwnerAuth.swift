@@ -54,12 +54,26 @@ enum CLIOwnerAuth {
         #endif
     }
 
-    /// Owner proof for allow-once redeem, which carries it to rvd inside
-    /// `attestTTYRedemption`. macOS: no proof and no prompt here; rvd shows
+    /// Before allow-once redeem asks rvd. macOS: no prompt here; rvd shows
     /// its own Touch ID or password prompt, so the owner sees exactly one.
-    /// Linux: reads the login password from the terminal and returns it
+    static func beginRedeem() throws {
+        if let context = CLIProcess.context {
+            guard context.ownerAuthOutcome == .authenticated else {
+                throw AllowOnceAuthError.required
+            }
+            return
+        }
+        #if canImport(LocalAuthentication)
+        FileHandle.standardError.write(Data(
+            "rv allow-once: approve in the Touch ID or password prompt from rvd, which names the full command\n".utf8))
+        #endif
+    }
+
+    /// Owner proof for allow-once redeem on Linux, asked for once rvd has
+    /// answered with `reason`, its own description of the code it issued.
+    /// Reads the login password from the terminal and returns it
     /// unverified; rvd verifies it before it plants anything, so callers
-    /// must forward it, never act on it.
+    /// must forward it, never act on it. macOS: none (rvd prompts itself).
     static func ownerProofForAttestation(reason: String) async throws -> OwnerProof? {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
@@ -68,8 +82,6 @@ enum CLIOwnerAuth {
             return nil
         }
         #if canImport(LocalAuthentication)
-        FileHandle.standardError.write(Data(
-            "rv allow-once: approve in the Touch ID or password prompt from rvd, which names the full command\n".utf8))
         return nil
         #else
         guard let password = OwnerConfirmation.readOwnerPassword(

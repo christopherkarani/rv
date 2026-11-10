@@ -33,14 +33,6 @@ public enum AllowOncePromptText {
         guard let ruleID else { return base }
         return "\(base) (rule \(DisplayedText.approvalField(ruleID.rawValue)))"
     }
-
-    /// The command as invoked: the wrapper tag the normalized view erases
-    /// (`sudo`, `FOO=… sudo`) in front of the view.
-    public static func invoked(view: String, invocationDisplay: String?) -> String {
-        guard let invocationDisplay, invocationDisplay.isEmpty == false else { return view }
-        return "\(invocationDisplay) \(view)"
-    }
-
 }
 
 /// What rvd saw when it issued one deny code. Memory only, held by rvd's
@@ -55,8 +47,9 @@ public struct IssuedAllowOnce: Sendable, Equatable {
     /// The exact text the hook denied: env values, wrapper flags, the
     /// argv0 path and interpreter code included, none of which the matching
     /// view keeps. It can carry secrets, so it lives only here and goes
-    /// only to the owner's local prompt, through `AllowOncePromptText`;
-    /// never to a file, the audit log or IPC. Nil when the mint had only
+    /// only to the owner's local prompt, through `AllowOncePromptText`
+    /// (on Linux via the redeeming CLI, which proved it holds the code);
+    /// never to a file or the audit log. Nil when the mint had only
     /// the view: rvd cannot show what the grant covers and will not prompt.
     public let command: String?
     public let ruleID: RuleID?

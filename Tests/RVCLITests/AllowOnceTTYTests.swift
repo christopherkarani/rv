@@ -8,25 +8,6 @@ import RVIPC
 @testable import RVCLI
 
 struct AllowOnceTTYTests {
-    @Test func redeemReasonNamesDenyRuleWhenPresent() {
-        func row(ruleID: RuleID?) -> AllowOnceListRow {
-            AllowOnceListRow(
-                kind: .pending,
-                codeHash: "hash",
-                commandRedacted: "git …",
-                cwd: wd("/tmp/ws"),
-                createdAt: Date(timeIntervalSince1970: 1),
-                expiresAt: Date(timeIntervalSince1970: 2),
-                ruleID: ruleID
-            )
-        }
-        #expect(AllowOnceCLI.redeemReason(row: row(ruleID: nil))
-            == "allow once \"git …\" in /tmp/ws")
-        let rule = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
-        #expect(AllowOnceCLI.redeemReason(row: row(ruleID: rule))
-            == "allow once \"git …\" in /tmp/ws (rule core.git:reset-hard)")
-    }
-
     @Test func nonTTYMintRefuses() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -407,21 +388,6 @@ struct AllowOnceTTYTests {
         }
         // The throttled redeem prompted nothing and flipped nothing.
         #expect((await store.list(now: now)).contains { $0.kind == .pending })
-    }
-
-    @Test func redeemReasonNamesInvocationTag() {
-        let row = AllowOnceListRow(
-            kind: .pending,
-            codeHash: "hash",
-            commandRedacted: "git …",
-            cwd: wd("/tmp/ws"),
-            createdAt: Date(timeIntervalSince1970: 1),
-            expiresAt: Date(timeIntervalSince1970: 2),
-            ruleID: nil,
-            invocationDisplay: "sudo"
-        )
-        #expect(AllowOnceCLI.redeemReason(row: row)
-            == "allow once \"sudo git …\" in /tmp/ws")
     }
 }
 
