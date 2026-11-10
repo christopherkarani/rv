@@ -467,6 +467,26 @@ public struct ServiceClient: Sendable {
         return false
     }
 
+    /// One hook-door liveness probe, with a miss classified exactly as a
+    /// hook classifies it (`HookDaemonFallback.classify`). nil: rvd
+    /// answered. Only `.unreachable` means rvd is positively absent.
+    func probeHookService() async -> HookDaemonFailure? {
+        guard let transport else { return .connection }
+        do {
+            _ = try await send(
+                DoctorSnapshotCall(),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs,
+                hookConsult: true
+            )
+            return nil
+        } catch is IPCCallError {
+            return .protocol
+        } catch {
+            return HookDaemonFallback.classify(error)
+        }
+    }
+
     public func status() async -> ServiceStatusReport {
         ServiceHealth.inspect(await diagnostics()).statusReport
     }

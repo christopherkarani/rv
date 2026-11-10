@@ -13,40 +13,39 @@ import RVService
 ///
 /// Owner actions normally confirm through rvd (Linux verifies the login
 /// password there), so a dead rvd would lock the human out of removing rv.
-/// When rvd does not answer a bounded probe, the human confirms locally:
+/// When a bounded probe finds rvd positively absent (`.unreachable`: no
+/// daemon registered or listening), the human confirms locally:
 /// 1. stdin AND stdout must both be a terminal, or this refuses;
-/// 2. the owner check runs without rvd where the platform has one
-///    (macOS: LocalAuthentication; Linux: `unix_chkpwd` on the caller's own
-///    login password, read from /dev/tty with echo off);
-/// 3. where no local check is possible (no passcode, no `unix_chkpwd`, an
-///    account without a password), the human types an exact phrase at
-///    /dev/tty instead.
-/// When rvd answers, the existing rvd-backed path runs unchanged.
+/// 2. the platform's owner check runs without rvd (macOS:
+///    LocalAuthentication; Linux: `unix_chkpwd` on the caller's own login
+///    password, read from /dev/tty with echo off);
+/// 3. where no local check is possible (no passcode, no `unix_chkpwd`),
+///    this refuses and says how to start rvd or remove rv by hand.
+/// A busy, slow, dropped, untrusted or skewed rvd is not absent: this
+/// refuses rather than confirm locally. When rvd answers, the existing
+/// rvd-backed path runs unchanged.
 ///
 /// SECURITY: an agent must not be able to use this path.
 /// - The hook gate denies agents running `rv uninstall` / `rv host mode … off`
-///   while rvd is up, and this path is never taken while rvd is up.
-/// - With rvd down the hook fails closed: it denies every agent tool call (or,
-///   for hosts with a native ask, puts the exact command in front of the
-///   human), so no agent tool call reaches this code unattended.
-/// - It requires a real TTY on stdin AND stdout and reads the answer only
-///   from /dev/tty. An agent's tool call runs with piped stdio and cannot
-///   satisfy that. The confirmation is never read from a stdin pipe, an
-///   argument, or an environment variable.
+///   while rvd is up, and this path is never taken unless rvd is absent.
+/// - With rvd absent an observe host's hook steps aside and allows every
+///   call, so an agent CAN reach this code. The TTY check alone does not
+///   stop it: `script`, `expect` or `unbuffer` give an agent both TTYs and
+///   a pty it writes to. So only a real owner check (a password, passcode
+///   or Touch ID the agent does not have) proceeds; nothing typed at the
+///   terminal stands in for one. The confirmation is never read from a
+///   stdin pipe, an argument, or an environment variable.
 struct DaemonDownOwnerConfirmation: Sendable {
-    /// What the human is confirming, and the phrase they type when no local
-    /// owner check is available.
+    /// What the human is confirming.
     struct Action: Sendable, Equatable {
         let summary: String
-        let phrase: String
 
-        static let uninstall = Action(summary: "uninstall rv", phrase: "uninstall rv")
+        static let uninstall = Action(summary: "uninstall rv")
 
         static func hostMode(_ mode: HostMode, host: HookHost) -> Action {
-            let phrase = mode == .off
+            Action(summary: mode == .off
                 ? "turn off rv for \(host.rawValue)"
-                : "set rv to \(mode.rawValue) for \(host.rawValue)"
-            return Action(summary: phrase, phrase: phrase)
+                : "set rv to \(mode.rawValue) for \(host.rawValue)")
         }
     }
 
@@ -70,23 +69,19 @@ struct DaemonDownOwnerConfirmation: Sendable {
     /// tests inject closures through `CLIProcess.Context` and never reach a
     /// live prompt, terminal, or rvd.
     struct Seams: Sendable {
-        var rvdReachable: @Sendable () async -> Bool
+        /// One bounded rvd probe: nil when rvd answered, otherwise how it
+        /// missed (classified exactly as the hook classifies a miss).
+        var probeRVD: @Sendable () async -> HookDaemonFailure?
         var stdinIsTTY: @Sendable () -> Bool
         var stdoutIsTTY: @Sendable () -> Bool
         /// The platform's daemon-free owner check; the argument is the reason.
         var localOwnerCheck: @Sendable (String) async -> LocalCheck
-        /// One line from /dev/tty (echo on) after writing the prompt there;
-        /// nil when there is no controlling terminal.
-        var readTTYLine: @Sendable (String) -> String?
         /// One line of explanation for the human (stderr).
         var notice: @Sendable (String) -> Void
     }
 
     static let daemonDownNotice =
-        "rv: rvd is not answering, so your password cannot be checked by rvd. Confirming locally instead."
-
-    static let noLocalVerifierNotice =
-        "rv: this account's password cannot be checked on this system without rvd."
+        "rv: rvd is not running, so your password cannot be checked by rvd. Confirming locally instead."
 
     static func notATerminalMessage(_ action: Action) -> String {
         "rv: \(action.summary) needs you at an interactive terminal while rvd is down "
@@ -98,17 +93,27 @@ struct DaemonDownOwnerConfirmation: Sendable {
         "rv: owner check failed or was cancelled; \(action.summary) was not done."
     }
 
-    static func phrasePrompt(_ action: Action) -> String {
-        "Type \"\(action.phrase)\" to confirm: "
+    static func notConfirmedDownMessage(_ action: Action) -> String {
+        "rv: rvd did not answer but is not confirmed stopped (busy, slow, or failing its identity check), "
+            + "so \(action.summary) cannot be confirmed without it and was not done. "
+            + "Retry; if it persists run `rv doctor` or `rv service restart`."
     }
 
-    static func phraseMismatchMessage(_ action: Action) -> String {
-        "rv: confirmation did not match \"\(action.phrase)\"; \(action.summary) was not done."
+    static func noLocalVerifierMessage(_ action: Action) -> String {
+        "rv: this account has no owner check that works without rvd (no login password or passcode, "
+            + "or no unix_chkpwd), so \(action.summary) was not done. Start rvd with `rv setup` and retry, "
+            + "or remove rv by hand: its hooks, `~/.config/rv`, its service, and the rv files in ~/.local/bin."
     }
 
     static func decide(_ action: Action, reason: String, seams: Seams) async -> Decision {
-        guard await seams.rvdReachable() == false else {
+        switch await seams.probeRVD() {
+        case nil:
             return .useDaemonPath
+        case .unreachable?:
+            break
+        case .some:
+            // Busy or slow is not absent: an agent can cause either.
+            return .refused(notConfirmedDownMessage(action))
         }
         seams.notice(daemonDownNotice)
         // A piped tool call (an agent) never gets past this line.
@@ -121,29 +126,22 @@ struct DaemonDownOwnerConfirmation: Sendable {
         case .rejected:
             return .refused(rejectedMessage(action))
         case .unavailable:
-            seams.notice(noLocalVerifierNotice)
-            let typed = seams.readTTYLine(phrasePrompt(action))?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard typed == action.phrase else {
-                return .refused(phraseMismatchMessage(action))
-            }
-            return .proceed
+            return .refused(noLocalVerifierMessage(action))
         }
     }
 }
 
 extension DaemonDownOwnerConfirmation.Seams {
     /// Real process: one bounded rvd probe (the hook's own consult
-    /// transport), isatty, and /dev/tty.
+    /// transport and miss classification) and isatty.
     static func live() -> Self {
         Self(
-            rvdReachable: {
-                await ServiceClient.probing(home: CLIProcess.home()).verifyHookService(attempts: 1)
+            probeRVD: {
+                await ServiceClient.probing(home: CLIProcess.home()).probeHookService()
             },
             stdinIsTTY: { isatty(STDIN_FILENO) != 0 },
             stdoutIsTTY: { isatty(STDOUT_FILENO) != 0 },
             localOwnerCheck: { reason in await DaemonDownOwnerConfirmation.liveLocalCheck(reason: reason) },
-            readTTYLine: { prompt in DaemonDownOwnerConfirmation.readTTYLine(prompt: prompt) },
             notice: { line in FileHandle.standardError.write(Data("\(line)\n".utf8)) }
         )
     }
@@ -152,11 +150,10 @@ extension DaemonDownOwnerConfirmation.Seams {
     /// reachable, so the existing `ownerAuthOutcome` seam decides and
     /// nothing local is consulted.
     static let daemonAssumedReachable = Self(
-        rvdReachable: { true },
+        probeRVD: { nil },
         stdinIsTTY: { false },
         stdoutIsTTY: { false },
         localOwnerCheck: { _ in .rejected },
-        readTTYLine: { _ in nil },
         notice: { _ in }
     )
 }
@@ -183,36 +180,17 @@ extension DaemonDownOwnerConfirmation {
         guard checker.helpers.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             return .unavailable
         }
-        // Empty input: the account has no password to check (key-only
-        // logins); the caller falls through to the typed phrase. So the
-        // password is a check on the human, not the boundary: the boundary
-        // is the fail-closed hook plus the TTY requirement (see the type doc).
+        // The password is the boundary: an agent at a pty has the TTYs but
+        // not the password (see the type doc). A key-only account's empty
+        // answer fails `unix_chkpwd` and is refused.
         guard let password = OwnerConfirmation.readOwnerPassword(
-            prompt: "\(reason)\nPassword for \(UserName.current ?? "your account") "
-                + "(press Return if this account has no password): ")
+            prompt: "\(reason)\nPassword for \(UserName.current ?? "your account"): ")
         else { return .unavailable }
         switch checker.check(password) {
         case .some(true): return .verified
         case .some(false): return .rejected
         case .none: return .unavailable
         }
-    }
-
-    /// Reads one line from the controlling terminal (echo on). nil when
-    /// there is no terminal. Never reads stdin, which an agent can pipe.
-    static func readTTYLine(prompt: String) -> String? {
-        let fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
-        guard fd >= 0 else { return nil }
-        defer { close(fd) }
-        _ = prompt.withCString { write(fd, $0, strlen($0)) }
-        var bytes: [UInt8] = []
-        var byte: UInt8 = 0
-        while read(fd, &byte, 1) == 1 {
-            if byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") { break }
-            bytes.append(byte)
-            if bytes.count > 1024 { return nil }
-        }
-        return String(decoding: bytes, as: UTF8.self)
     }
 }
 

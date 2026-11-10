@@ -12,49 +12,41 @@ private final class SeamRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _probes = 0
     private var _localChecks = 0
-    private var _prompts: [String] = []
     private var _notices: [String] = []
 
-    let reachable: Bool
+    /// nil: rvd answered; otherwise how the probe missed.
+    let probe: HookDaemonFailure?
     let stdinTTY: Bool
     let stdoutTTY: Bool
     let local: DaemonDownOwnerConfirmation.LocalCheck
-    let typed: String?
 
     init(
-        reachable: Bool,
+        probe: HookDaemonFailure?,
         stdinTTY: Bool = true,
         stdoutTTY: Bool = true,
-        local: DaemonDownOwnerConfirmation.LocalCheck = .unavailable,
-        typed: String? = nil
+        local: DaemonDownOwnerConfirmation.LocalCheck = .unavailable
     ) {
-        self.reachable = reachable
+        self.probe = probe
         self.stdinTTY = stdinTTY
         self.stdoutTTY = stdoutTTY
         self.local = local
-        self.typed = typed
     }
 
     var probes: Int { lock.withLock { _probes } }
     var localChecks: Int { lock.withLock { _localChecks } }
-    var prompts: [String] { lock.withLock { _prompts } }
     var notices: [String] { lock.withLock { _notices } }
 
     var seams: DaemonDownOwnerConfirmation.Seams {
         DaemonDownOwnerConfirmation.Seams(
-            rvdReachable: { [self] in
+            probeRVD: { [self] in
                 lock.withLock { _probes += 1 }
-                return reachable
+                return probe
             },
             stdinIsTTY: { [self] in stdinTTY },
             stdoutIsTTY: { [self] in stdoutTTY },
             localOwnerCheck: { [self] _ in
                 lock.withLock { _localChecks += 1 }
                 return local
-            },
-            readTTYLine: { [self] prompt in
-                lock.withLock { _prompts.append(prompt) }
-                return typed
             },
             notice: { [self] line in lock.withLock { _notices.append(line) } }
         )
@@ -72,28 +64,36 @@ private func decide(
 struct DaemonDownOwnerConfirmationTests {
     // MARK: decision
 
-    @Test func rvdReachable_usesDaemonPathAndNeverConsultsFallback() async {
-        let recorder = SeamRecorder(reachable: true, local: .verified, typed: "uninstall rv")
+    @Test func rvdAnswers_usesDaemonPathAndNeverConsultsFallback() async {
+        let recorder = SeamRecorder(probe: nil, local: .verified)
         #expect(await decide(recorder) == .useDaemonPath)
         #expect(recorder.probes == 1)
         #expect(recorder.localChecks == 0)
-        #expect(recorder.prompts.isEmpty)
         #expect(recorder.notices.isEmpty)
     }
 
-    @Test func rvdDown_stdinNotATTY_refusedWithReason() async {
-        let recorder = SeamRecorder(reachable: false, stdinTTY: false, local: .verified, typed: "uninstall rv")
+    @Test(
+        "a busy, slow, dropped, untrusted or skewed rvd is not down: refuse, never confirm locally",
+        arguments: [HookDaemonFailure.timeout, .connection, .untrusted, .protocol]
+    )
+    func rvdNotPositivelyDown_refusesWithoutLocalCheck(failure: HookDaemonFailure) async {
+        let recorder = SeamRecorder(probe: failure, local: .verified)
+        #expect(await decide(recorder) == .refused(Confirmation.notConfirmedDownMessage(.uninstall)))
+        #expect(recorder.localChecks == 0)
+        #expect(recorder.notices.contains(Confirmation.daemonDownNotice) == false)
+    }
+
+    @Test func rvdUnreachable_stdinNotATTY_refusedWithReason() async {
+        let recorder = SeamRecorder(probe: .unreachable, stdinTTY: false, local: .verified)
         #expect(await decide(recorder) == .refused(Confirmation.notATerminalMessage(.uninstall)))
         #expect(recorder.notices == [Confirmation.daemonDownNotice])
         #expect(recorder.localChecks == 0)
-        #expect(recorder.prompts.isEmpty)
     }
 
-    @Test func rvdDown_stdoutNotATTY_refusedWithReason() async {
-        let recorder = SeamRecorder(reachable: false, stdoutTTY: false, local: .verified, typed: "uninstall rv")
+    @Test func rvdUnreachable_stdoutNotATTY_refusedWithReason() async {
+        let recorder = SeamRecorder(probe: .unreachable, stdoutTTY: false, local: .verified)
         #expect(await decide(recorder) == .refused(Confirmation.notATerminalMessage(.uninstall)))
         #expect(recorder.localChecks == 0)
-        #expect(recorder.prompts.isEmpty)
     }
 
     @Test func notATerminalMessage_namesTheActionAndTheRepair() {
@@ -103,57 +103,44 @@ struct DaemonDownOwnerConfirmationTests {
         #expect(message.contains("rv setup"))
     }
 
-    @Test func rvdDown_tty_localPasswordVerified_proceedsWithoutPhrase() async {
-        let recorder = SeamRecorder(reachable: false, local: .verified)
+    @Test func rvdUnreachable_tty_localPasswordVerified_proceeds() async {
+        let recorder = SeamRecorder(probe: .unreachable, local: .verified)
         #expect(await decide(recorder) == .proceed)
         #expect(recorder.localChecks == 1)
-        #expect(recorder.prompts.isEmpty)
         #expect(recorder.notices.first == Confirmation.daemonDownNotice)
     }
 
-    @Test func rvdDown_tty_localPasswordRejected_refusedWithoutPhrase() async {
-        let recorder = SeamRecorder(reachable: false, local: .rejected, typed: "uninstall rv")
+    @Test func rvdUnreachable_tty_localPasswordRejected_refused() async {
+        let recorder = SeamRecorder(probe: .unreachable, local: .rejected)
         #expect(await decide(recorder) == .refused(Confirmation.rejectedMessage(.uninstall)))
-        #expect(recorder.prompts.isEmpty)
     }
 
-    @Test func rvdDown_tty_noLocalVerifier_rightPhraseProceeds() async {
-        let recorder = SeamRecorder(reachable: false, local: .unavailable, typed: "uninstall rv")
-        #expect(await decide(recorder) == .proceed)
-        #expect(recorder.prompts == [Confirmation.phrasePrompt(.uninstall)])
-        #expect(recorder.notices.contains(Confirmation.noLocalVerifierNotice))
-    }
-
-    @Test func rvdDown_tty_noLocalVerifier_phraseToleratesSurroundingWhitespace() async {
-        let recorder = SeamRecorder(reachable: false, local: .unavailable, typed: "  uninstall rv \r")
-        #expect(await decide(recorder) == .proceed)
-    }
-
-    @Test func rvdDown_tty_noLocalVerifier_wrongPhraseRefused() async {
-        for typed in ["", "y", "yes", "Uninstall rv", "uninstall", "uninstall rv now"] {
-            let recorder = SeamRecorder(reachable: false, local: .unavailable, typed: typed)
-            #expect(await decide(recorder) == .refused(Confirmation.phraseMismatchMessage(.uninstall)))
+    /// `script`/`expect`/`unbuffer` give an agent both TTYs and a pty it
+    /// can write to. With no local owner check, nothing entered there may
+    /// stand in for the owner: the only answer is a refusal.
+    @Test func rvdUnreachable_ptyWithNoLocalVerifier_typedPhraseCannotAuthorize() async {
+        for action in [Confirmation.Action.uninstall, .hostMode(.off, host: .claude)] {
+            let recorder = SeamRecorder(probe: .unreachable, local: .unavailable)
+            #expect(await decide(recorder, action: action) == .refused(Confirmation.noLocalVerifierMessage(action)))
+            #expect(recorder.localChecks == 1)
         }
     }
 
-    @Test func rvdDown_tty_noLocalVerifier_noTerminalToReadRefused() async {
-        let recorder = SeamRecorder(reachable: false, local: .unavailable, typed: nil)
-        #expect(await decide(recorder) == .refused(Confirmation.phraseMismatchMessage(.uninstall)))
+    @Test func noLocalVerifierMessage_saysHowToProceedWithoutAnAgent() {
+        let message = Confirmation.noLocalVerifierMessage(.uninstall)
+        #expect(message.contains("uninstall rv was not done"))
+        #expect(message.contains("rv setup"))
+        #expect(message.contains("~/.local/bin"))
     }
 
-    @Test func hostModeActions_phraseNamesHostAndMode() async {
-        #expect(Confirmation.Action.hostMode(.off, host: .claude).phrase == "turn off rv for claude")
-        #expect(Confirmation.Action.hostMode(.observe, host: .codex).phrase == "set rv to observe for codex")
-        let action = Confirmation.Action.hostMode(.off, host: .claude)
-        let wrong = SeamRecorder(reachable: false, local: .unavailable, typed: "uninstall rv")
-        #expect(await decide(wrong, action: action) == .refused(Confirmation.phraseMismatchMessage(action)))
-        let right = SeamRecorder(reachable: false, local: .unavailable, typed: "turn off rv for claude")
-        #expect(await decide(right, action: action) == .proceed)
+    @Test func hostModeActions_nameHostAndMode() {
+        #expect(Confirmation.Action.hostMode(.off, host: .claude).summary == "turn off rv for claude")
+        #expect(Confirmation.Action.hostMode(.observe, host: .codex).summary == "set rv to observe for codex")
     }
 
     @Test func daemonDownNotice_saysWhy() {
         #expect(Confirmation.daemonDownNotice
-            == "rv: rvd is not answering, so your password cannot be checked by rvd. Confirming locally instead.")
+            == "rv: rvd is not running, so your password cannot be checked by rvd. Confirming locally instead.")
     }
 
     // MARK: CLIOwnerAuth entry point
@@ -173,16 +160,15 @@ struct DaemonDownOwnerConfirmationTests {
     }
 
     @Test func entry_rvdReachable_runsExistingOwnerAuth() async throws {
-        let approved = SeamRecorder(reachable: true, local: .verified)
+        let approved = SeamRecorder(probe: nil, local: .verified)
         try await withContext(approved, ownerAuthOutcome: .authenticated) { try await authenticate() }
         #expect(approved.localChecks == 0)
 
-        let refused = SeamRecorder(reachable: true, local: .verified, typed: "uninstall rv")
+        let refused = SeamRecorder(probe: nil, local: .verified)
         await #expect(throws: AllowOnceAuthError.required) {
             try await withContext(refused) { try await authenticate() }
         }
         #expect(refused.localChecks == 0)
-        #expect(refused.prompts.isEmpty)
     }
 
     @Test func entry_seamedContextWithoutFallbackSeam_failsClosed() async {
@@ -192,12 +178,12 @@ struct DaemonDownOwnerConfirmationTests {
     }
 
     @Test func entry_rvdDown_localConfirmation_proceeds() async throws {
-        let recorder = SeamRecorder(reachable: false, local: .unavailable, typed: "uninstall rv")
+        let recorder = SeamRecorder(probe: .unreachable, local: .verified)
         try await withContext(recorder) { try await authenticate() }
     }
 
     @Test func entry_rvdDown_refusal_printsReasonAndThrows() async {
-        let recorder = SeamRecorder(reachable: false, stdinTTY: false)
+        let recorder = SeamRecorder(probe: .unreachable, stdinTTY: false)
         await #expect(throws: AllowOnceAuthError.required) {
             try await withContext(recorder) { try await authenticate() }
         }
@@ -209,7 +195,7 @@ struct DaemonDownOwnerConfirmationTests {
     // MARK: command wiring
 
     @Test func uninstall_rvdDownNotATTY_refusedBeforeTouchingHome() async throws {
-        let recorder = SeamRecorder(reachable: false, stdinTTY: false)
+        let recorder = SeamRecorder(probe: .unreachable, stdinTTY: false)
         await #expect(throws: ExitCode(EX_NOPERM)) {
             try await withContext(recorder) { try await Uninstall.parse(["--robot"]).run() }
         }

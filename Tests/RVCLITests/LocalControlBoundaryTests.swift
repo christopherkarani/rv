@@ -212,6 +212,22 @@ struct LocalControlBoundaryTests {
         #expect(transport.sendCount == 3)
     }
 
+    @Test func hookServiceProbeClassifiesAMissLikeAHook() async throws {
+        let ack = HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
+        let answering = ScriptedTransport(ack: ack, responseResult: .doctorSnapshot(DoctorSnapshotReply(
+            serviceSemver: "1.0.0", state: .running, idleExitSeconds: 300, packsEnabled: [], checks: []
+        )))
+        #expect(await try isolatedClient(transport: answering).probeHookService() == nil)
+        // Only a positive absence is `.unreachable`; busy or dropped is not.
+        let absent = ScriptedTransport(ack: ack, sendError: .connectFailed)
+        #expect(await try isolatedClient(transport: absent).probeHookService() == .unreachable)
+        let slow = ScriptedTransport(ack: ack, sendError: .timeout)
+        #expect(await try isolatedClient(transport: slow).probeHookService() == .timeout)
+        let dropped = ScriptedTransport(ack: ack, sendError: .interrupted)
+        #expect(await try isolatedClient(transport: dropped).probeHookService() == .connection)
+        #expect(await try isolatedClient(transport: nil).probeHookService() == .connection)
+    }
+
     @Test func setupOutcomeRunsTheFlowWithTheCallersContext() async throws {
         // The flow runs on its own thread (its readiness wait blocks); the
         // test seam must cross with it so setup never sees the live HOME.
