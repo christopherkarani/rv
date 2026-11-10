@@ -85,20 +85,38 @@ struct AllowOncePromptTextTests {
         let rule = RuleID(pack: .coreGit, pattern: "push-force")
         let code = try #require(await store.mintFromDeny(
             matchingView: "git push --force origin main", cwd: wd("/tmp/ws"), ruleID: rule, now: now,
-            maskedSegments: [], invocationPrefix: ["sudo"], invocationDisplay: "sudo"
+            maskedSegments: [], invocationPrefix: ["LD_PRELOAD=/tmp/x.so", "sudo -u deploy"],
+            invocationDisplay: "LD_PRELOAD=… sudo",
+            rawCommand: "LD_PRELOAD=/tmp/x.so sudo -u deploy git push --force origin main"
         )?.code)
         let issued = try #require(await store.issued(codeHash: sha256Hex(code.rawValue), now: now))
-        #expect(issued.command == "sudo git push --force origin main")
+        // The exact text the hook denied, not the matching view: env
+        // values and wrapper flags the view drops are all there.
+        #expect(issued.command == "LD_PRELOAD=/tmp/x.so sudo -u deploy git push --force origin main")
         #expect(issued.cwd == wd("/tmp/ws"))
         #expect(issued.ruleID == rule)
         #expect(issued.fingerprint
-            == grantFingerprint(MatchingView("git push --force origin main"), invocationPrefix: ["sudo"]))
+            == grantFingerprint(
+                MatchingView("git push --force origin main"),
+                invocationPrefix: ["LD_PRELOAD=/tmp/x.so", "sudo -u deploy"]))
         #expect(issued.payloadDigest == maskedPayloadContentDigest([]))
         #expect(issued.redeemed == false)
         // The same-user file keeps only the redacted head.
         let disk = try String(
             contentsOf: RVPolicyPaths.allowOnceFile(inConfigDir: store.baseDirectory), encoding: .utf8)
         #expect(disk.contains("origin main") == false)
+        #expect(disk.contains("/tmp/x.so") == false)
+    }
+
+    @Test func aMintWithoutTheExactTextRemembersNoCommand() async throws {
+        // Only the matching view: rvd cannot show what the grant covers,
+        // so it will not prompt for this code.
+        let store = try promptStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let code = try #require(await store.mintFromDeny(
+            matchingView: "git push --force", cwd: wd("/tmp/ws"), ruleID: nil, now: now)?.code)
+        let issued = try #require(await store.issued(codeHash: sha256Hex(code.rawValue), now: now))
+        #expect(issued.command == nil)
     }
 
     @Test func onlyCodesThisStoreIssuedAreKnown() async throws {
@@ -135,20 +153,6 @@ struct AllowOncePromptTextTests {
         let hash = sha256Hex(code.rawValue)
         await store.markIssuedRedeemed(codeHash: hash)
         #expect(await store.issued(codeHash: hash, now: now)?.redeemed == true)
-    }
-
-    @Test func pendingRowIsReadByCodeHash() async throws {
-        let store = try promptStore()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let code = try await store.mint(
-            matchingView: "git reset --hard", cwd: wd("/tmp/ws"), ruleID: nil, tty: tty, now: now)
-        let byCode = try #require(await store.validatePending(code: code.rawValue, now: now))
-        let byHash = try #require(await store.pendingRow(codeHash: sha256Hex(code.rawValue), now: now))
-        #expect(byHash.row == byCode.row)
-        #expect(byHash.fingerprint == byCode.fingerprint)
-        let missing = await store.pendingRow(codeHash: sha256Hex("abcdef"), now: now)
-        #expect(missing.map(\.fingerprint) == nil)
     }
 }
 

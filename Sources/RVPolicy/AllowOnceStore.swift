@@ -112,7 +112,9 @@ public actor AllowOnceStore {
     /// Writes `kind: .pending` only. Never plants a granted row. A live pending
     /// for the same command+cwd+payload is reused instead of minting a new code.
     /// TTL matches the pending-row TTL: the wire-delivered code is visible
-    /// to the gated agent, so its bearer window stays short.
+    /// to the gated agent, so its bearer window stays short. `rawCommand`
+    /// is the exact denied text; it is kept in memory only (see
+    /// `IssuedAllowOnce.command`) and never written.
     package func mintFromDeny(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
@@ -121,7 +123,8 @@ public actor AllowOnceStore {
         ttl: TimeInterval = 15 * 60,
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
-        invocationDisplay: String? = nil
+        invocationDisplay: String? = nil,
+        rawCommand: String? = nil
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
@@ -167,8 +170,7 @@ public actor AllowOnceStore {
                             fingerprint: fingerprint,
                             cwd: cwd,
                             payloadDigest: payloadDigest,
-                            command: AllowOncePromptText.invoked(
-                                view: view.rawValue, invocationDisplay: invocationDisplay),
+                            command: rawCommand,
                             ruleID: ruleID,
                             expiresAt: now.addingTimeInterval(ttl),
                             redeemed: false
@@ -239,25 +241,6 @@ public actor AllowOnceStore {
         let hash = sha256Hex(normalized)
         return (try? withFileLock {
             AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
-        }).flatMap { record in
-            AllowOnceLedger.rows(records: [record], now: now).first.map {
-                (
-                    row: $0,
-                    fingerprint: record.commandFingerprint.rawValue,
-                    payloadDigest: record.payloadDigest?.rawValue
-                )
-            }
-        }
-    }
-
-    /// The live pending row whose code hashes to `codeHash`, read the way
-    /// `validatePending` reads it. rvd holds only the hash.
-    package func pendingRow(
-        codeHash: String,
-        now: Date
-    ) async -> (row: AllowOnceListRow, fingerprint: String, payloadDigest: String?)? {
-        (try? withFileLock {
-            AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: codeHash, now: now)
         }).flatMap { record in
             AllowOnceLedger.rows(records: [record], now: now).first.map {
                 (

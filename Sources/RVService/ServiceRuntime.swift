@@ -497,7 +497,8 @@ public actor ServiceRuntime {
     /// finger or login password, which a process cannot synthesise; with no
     /// login session (headless, ssh) no prompt can be shown and the answer
     /// is `unavailable`. The prompt names only what rvd itself issued and
-    /// matched against this request (command, cwd, payload digest, code), so
+    /// matched against this request (the exact command text the hook
+    /// denied, cwd, payload digest, code), shown in full or not at all, so
     /// the agent cannot dress a dangerous grant up as a harmless one through
     /// the same-user pending file, and a code rvd never issued raises no
     /// prompt at all. One prompt at a time, closed after 60 s, and five
@@ -529,7 +530,7 @@ public actor ServiceRuntime {
         }
         var description = ""
         if ownerPresence.promptsInRvd {
-            switch await redemptionDescription(params, context: context) {
+            switch await redemptionDescription(params) {
             case .notIssued:
                 return .error(.allowOnceNotFound)
             case .notShowable:
@@ -602,36 +603,21 @@ public actor ServiceRuntime {
 
     /// rvd's own prompt text for this redeem.
     ///
-    /// The code rvd issued on a hook deny is the source: rvd kept the whole
-    /// command in memory, and every field of the request must match it.
-    /// A row pre-armed with `rv allow-once mint` was never seen by rvd; its
-    /// only record is the same-user pending file, whose text the agent can
-    /// rewrite. The pinned `.cli` keeps that path (its trust is unchanged);
-    /// for anyone else such a code is not found.
-    private func redemptionDescription(
-        _ params: AttestTTYRedemptionParams, context: AuthenticatedRequestContext
-    ) async -> RedemptionLookup {
-        let now = clock()
-        let hash = params.codeHash.rawValue
-        if let issued = await allowOnce.issued(codeHash: hash, now: now) {
-            guard issued.fingerprint == params.fingerprint, issued.cwd == params.cwd,
-                issued.payloadDigest == params.payloadDigest
-            else { return .notIssued }
-            guard let text = AllowOncePromptText.reason(
-                command: issued.command, cwd: issued.cwd, ruleID: issued.ruleID)
-            else { return .notShowable }
-            return .found(text, redeemed: issued.redeemed)
-        }
-        guard context.componentRole == .cli, context.peer != nil,
-            let pending = await allowOnce.pendingRow(codeHash: hash, now: now),
-            pending.fingerprint == params.fingerprint.rawValue, pending.row.cwd == params.cwd,
-            pending.payloadDigest == params.payloadDigest?.rawValue
+    /// The only source is the code rvd issued on a hook deny: rvd kept the
+    /// exact denied text in memory, and every field of the request must
+    /// match what it issued. A row in the same-user pending file that rvd
+    /// did not issue (pre-armed with `rv allow-once mint`, or written by the
+    /// agent) is not found, whatever the caller's role: rvd cannot vouch
+    /// for its text.
+    private func redemptionDescription(_ params: AttestTTYRedemptionParams) async -> RedemptionLookup {
+        guard let issued = await allowOnce.issued(codeHash: params.codeHash.rawValue, now: clock()),
+            issued.fingerprint == params.fingerprint, issued.cwd == params.cwd,
+            issued.payloadDigest == params.payloadDigest
         else { return .notIssued }
-        let command = AllowOncePromptText.invoked(
-            view: pending.row.commandRedacted, invocationDisplay: pending.row.invocationDisplay)
-        guard let text = AllowOncePromptText.reason(command: command, cwd: pending.row.cwd, ruleID: pending.row.ruleID)
+        guard let command = issued.command,
+            let text = AllowOncePromptText.reason(command: command, cwd: issued.cwd, ruleID: issued.ruleID)
         else { return .notShowable }
-        return .found(text, redeemed: false)
+        return .found(text, redeemed: issued.redeemed)
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {

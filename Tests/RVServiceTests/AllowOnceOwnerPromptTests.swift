@@ -3,6 +3,7 @@ import Testing
 import RVDomain
 import RVEngine
 import RVHistory
+import RVHooks
 import RVIPC
 @testable import RVIsolation
 import RVPolicy
@@ -53,14 +54,16 @@ struct AllowOnceOwnerPromptTests {
         let code = try #require(await store.mintFromDeny(
             matchingView: view, cwd: wd("/tmp/ws"), ruleID: rule, now: now,
             maskedSegments: masked, invocationPrefix: prefix,
-            invocationDisplay: Normalize.invocationDisplay(of: shell)
+            invocationDisplay: Normalize.invocationDisplay(of: shell), rawCommand: command
         )?.code)
+        // Read back from the pending row, as the CLI does.
+        let pending = try #require(await store.validatePending(code: code.rawValue, now: now))
         return AttestTTYRedemptionParams(
-            fingerprint: grantFingerprint(view, invocationPrefix: prefix),
-            cwd: wd("/tmp/ws"),
+            fingerprint: GrantFingerprint(rawValue: pending.fingerprint),
+            cwd: pending.row.cwd,
             codeHash: CodeHash(rawValue: sha256Hex(code.rawValue)),
             clientSemver: ProtocolVersion.serviceSemver,
-            payloadDigest: maskedPayloadContentDigest(masked))
+            payloadDigest: pending.payloadDigest.map(ContentPayloadDigest.init(rawValue:)))
     }
 
     private func attest(
@@ -97,6 +100,45 @@ struct AllowOnceOwnerPromptTests {
             == ["allow once \"git push --force origin main\" in /tmp/ws (rule core.git:push-force)"])
         #expect(isAllow(await evaluate("git push --force origin main", rig)))
         #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
+    }
+
+    @Test func theHookDenyCodeRedeemsEndToEndThroughRvdsPrompt() async throws {
+        // Production path: the hook denies through rvd, the code in the
+        // deny text is read back from the pending file the way the CLI
+        // does, and rvd's own prompt (the injected fake) shows the exact
+        // command the hook saw.
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let stdin = """
+        {"toolName":"bash","cwd":"/tmp/ws","sessionId":"s","input":{"command":"sudo -u root git reset --hard"}}
+        """
+        let hook = IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: stdin)))
+        guard case .hookEvaluate(let denied) = await rig.runtime.dispatch(hook, context: peerHookContext()).result
+        else {
+            Issue.record("the hook must answer")
+            return
+        }
+        let match = try #require(denied.stdout.firstMatch(of: /rv allow-once ([0-9a-f]{6})/))
+        let code = String(match.1)
+        let pending = try #require(await rig.store.validatePending(code: code, now: now))
+        let params = AttestTTYRedemptionParams(
+            fingerprint: GrantFingerprint(rawValue: pending.fingerprint), cwd: pending.row.cwd,
+            codeHash: CodeHash(rawValue: sha256Hex(code)), clientSemver: ProtocolVersion.serviceSemver,
+            payloadDigest: pending.payloadDigest.map(ContentPayloadDigest.init(rawValue:)))
+        guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
+            Issue.record("the owner's approval must plant")
+            return
+        }
+        #expect(reply.planted)
+        #expect(prompt.reasons.withLock { $0 }
+            == ["allow once \"sudo -u root git reset --hard\" in /tmp/ws (rule core.git:reset-hard)"])
+        guard case .hookEvaluate(let allowed) = await rig.runtime.dispatch(hook, context: peerHookContext()).result
+        else {
+            Issue.record("the hook must answer")
+            return
+        }
+        #expect(allowed.stdout.contains("rv allow-once") == false)
     }
 
     @Test func aCommandTooLongToShowIsRefusedWithoutAPrompt() async throws {
@@ -175,31 +217,69 @@ struct AllowOnceOwnerPromptTests {
         #expect(prompt.promptCount == 0)
     }
 
-    @Test func aPreArmedRowRedeemsOnlyThroughThePinnedCLI() async throws {
+    @Test func thePromptShowsTheExactCommandNotTheMatchingView() async throws {
+        // The view drops env values and wrapper flags and blanks
+        // interpreter code; the grant still covers them, so the owner
+        // sees the text the hook denied.
+        let prompt = FakeAuthenticator(approve: false)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let commands = [
+            "LD_PRELOAD=/tmp/x.so sudo -u root git push --force origin main",
+            "python3 -c 'import shutil; shutil.rmtree(\"/Users\")'",
+        ]
+        for command in commands {
+            let params = try await issue(command, store: rig.store)
+            let result = await attest(params, rig)
+            #expect(result != .error(.allowOnceNotFound), "\(command): \(result) \(params)")
+        }
+        #expect(prompt.reasons.withLock { $0 } == commands.map { "allow once \"\($0)\" in /tmp/ws" })
+    }
+
+    @Test func aCodeIssuedWithoutTheExactTextIsNotShown() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let view = Normalize.matchingView(of: ShellCommand(rawValue: "git reset --hard"))
+        let code = try #require(await rig.store.mintFromDeny(
+            matchingView: view, cwd: wd("/tmp/ws"), ruleID: nil, now: now)?.code)
+        let params = AttestTTYRedemptionParams(
+            fingerprint: grantFingerprint(view, invocationPrefix: []), cwd: wd("/tmp/ws"),
+            codeHash: CodeHash(rawValue: sha256Hex(code.rawValue)),
+            clientSemver: ProtocolVersion.serviceSemver)
+        guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
+            Issue.record("an unshowable code must answer with the owner check")
+            return
+        }
+        #expect(reply.notShowable == true)
+        #expect(reply.planted == false)
+        #expect(prompt.promptCount == 0)
+    }
+
+    @Test func aPreArmedOrForgedFileRowNeverRaisesAPromptEvenForThePinnedCLI() async throws {
         // `rv allow-once mint` runs in the CLI, so rvd never saw the
-        // command: the file row is all there is, and anyone same-user can
-        // write that file. Only the pinned CLI keeps that path.
+        // command, and anyone same-user can write the pending file. rvd
+        // prompts only for codes it issued, whatever the caller's role.
         let prompt = FakeAuthenticator(approve: true)
         let rig = try rig(prompt)
         defer { try? FileManager.default.removeItem(at: rig.homeURL) }
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         let code = try await rig.store.mint(
-            matchingView: "git reset --hard", cwd: wd("/tmp/ws"), ruleID: nil, tty: tty, now: now)
+            matchingView: "rm -rf ~", cwd: wd("/tmp/ws"), ruleID: nil, tty: tty, now: now)
         let row = try #require(await rig.store.validatePending(code: code.rawValue, now: now))
-        let params = AttestTTYRedemptionParams(
+        let preArmed = AttestTTYRedemptionParams(
             fingerprint: GrantFingerprint(rawValue: row.fingerprint), cwd: wd("/tmp/ws"),
             codeHash: CodeHash(rawValue: sha256Hex(code.rawValue)),
             clientSemver: ProtocolVersion.serviceSemver)
-        #expect(await attest(params, rig) == .error(.allowOnceNotFound))
-        #expect(prompt.promptCount == 0)
-        guard case .attestTTYRedemption(let reply) = await attest(
-            params, rig, context: OwnerPresenceTests.cliContext())
-        else {
-            Issue.record("the pinned CLI must still redeem a pre-armed row")
-            return
+        // A row rewritten to another command under a code rvd did issue.
+        var forged = try await issue("git status", store: rig.store)
+        forged.fingerprint = GrantFingerprint(rawValue: row.fingerprint)
+        for context in [OwnerPresenceTests.cliContext(), OwnerPresenceTests.unroledXPCContext()] {
+            #expect(await attest(preArmed, rig, context: context) == .error(.allowOnceNotFound))
+            #expect(await attest(forged, rig, context: context) == .error(.allowOnceNotFound))
         }
-        #expect(reply.planted)
-        #expect(prompt.reasons.withLock { $0 } == ["allow once \"git …\" in /tmp/ws"])
+        #expect(prompt.promptCount == 0)
+        #expect(isAllow(await evaluate("rm -rf ~", rig)) == false)
     }
 
     @Test func aRetryAfterThePlantDoesNotPromptAgain() async throws {

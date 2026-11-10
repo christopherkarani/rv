@@ -52,9 +52,13 @@ public struct IssuedAllowOnce: Sendable, Equatable {
     public let fingerprint: GrantFingerprint
     public let cwd: WorkingDirectory
     public let payloadDigest: ContentPayloadDigest?
-    /// Wrapper tag plus the matching view (quoted payloads already masked).
-    /// Raw: render it only through `AllowOncePromptText`.
-    public let command: String
+    /// The exact text the hook denied: env values, wrapper flags, the
+    /// argv0 path and interpreter code included, none of which the matching
+    /// view keeps. It can carry secrets, so it lives only here and goes
+    /// only to the owner's local prompt, through `AllowOncePromptText`;
+    /// never to a file, the audit log or IPC. Nil when the mint had only
+    /// the view: rvd cannot show what the grant covers and will not prompt.
+    public let command: String?
     public let ruleID: RuleID?
     public let expiresAt: Date
     /// rvd planted a grant for this code in this lifetime.

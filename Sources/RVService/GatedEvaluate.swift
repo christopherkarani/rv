@@ -824,7 +824,8 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?,
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
-        invocationDisplay: String? = nil
+        invocationDisplay: String? = nil,
+        rawCommand: String? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -838,7 +839,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             maskedSegments: maskedSegments,
             invocationPrefix: invocationPrefix,
-            invocationDisplay: invocationDisplay
+            invocationDisplay: invocationDisplay,
+            rawCommand: rawCommand
         )
     }
 
