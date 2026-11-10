@@ -2,13 +2,20 @@ name: pr
 
 on:
   pull_request:
+  # Merged state gets the same gate: a PR can be green on its own base and
+  # still break once combined with another merge.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
+# PR runs supersede each other. Main runs never cancel a running one, so
+# every merge that starts gets a verdict; GitHub keeps only the newest
+# pending main run queued behind it.
 concurrency:
   group: pr-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Extra hygiene only. Not the Swift gate (OPE-263).
@@ -398,10 +405,29 @@ jobs:
       # was silently never run on macOS. The rest of RVMCPTests (remote
       # transport / OAuth) needs the loopback fixture and is not run here. Skip the
       # in-process CHookPipeTests proof — this job already ran
-      # Scripts/c-hook-proof.sh. One invocation: a second
-      # `swift test --filter` would re-plan and re-typecheck.
+      # Scripts/c-hook-proof.sh. Build once, then one --skip-build run per
+      # test product under a watchdog: `swift test` block-buffers each
+      # product's output, so a stalled product used to print nothing until
+      # the job timeout. The watchdog names the product, samples the test
+      # runner (the stacks name the stuck test), and kills it. Every product
+      # still runs after one fails.
+      - name: Build Darwin test products
+        run: Scripts/swift-6.4 build --build-tests
+
       - name: Darwin Swift (XPC / CLI)
-        run: Scripts/swift-6.4 test --filter 'RVServiceTests|RVLayaTests|RVCLITests|RVWorkspaceTUITests|RVOperatorUITests|MCPSandboxCreateTests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
+        run: |
+          skip='injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
+          status=0
+          for run in RVWorkspaceTUITests:RVWorkspaceTUITests RVOperatorUITests:RVOperatorUITests \
+                     RVLayaTests:RVLayaTests RVMCPTests:MCPSandboxCreateTests \
+                     RVServiceTests:RVServiceTests RVCLITests:RVCLITests; do
+            product="${run%%:*}"
+            filter="${run#*:}"
+            printf '== %s (filter %s)\n' "$product" "$filter"
+            Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
+              --test-product "$product" --filter "$filter" --skip "$skip" || status=1
+          done
+          exit "$status"
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh

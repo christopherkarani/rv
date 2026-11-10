@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 - Action fingerprints now use an injective encoding. Pending runtime-HTTP asks, and pending asks for commands containing `:`, `,` or `\`, created before upgrade are re-asked after upgrade. Existing grants are unaffected. (#510)
 - Hooks that cannot reach `rvd` now name the cause. (#441)
+- `rvd` started by launchd (stderr on /dev/null) now writes its launch failures, with the cause, and transport warnings to an owner-only `~/Library/Logs/rv/rvd.log` (rotated at 1 MiB on startup). Under systemd they stay in the journal.
 - `rv setup` refuses, before writing any hook, when the hooks would reject the installed `rvd` (an admin trust manifest that does not name it, or an unsigned build), instead of wiring hooks that deny every tool call. `rv doctor` reports `service.trust` with the reason and the fix, and `install.sh` refuses a local stage whose `rvd` cannot satisfy an installed trust manifest unless `RV_INSTALL_ALLOW_UNSIGNED=1`.
 - `rvd` outages no longer block agents: client time budgets, judge warmup, safe idle exit, and setup/doctor repair. (#468)
 - Hook ceremony peek evaluates with the live compile set. (#465)

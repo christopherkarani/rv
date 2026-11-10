@@ -674,7 +674,9 @@ private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
     }
 }
 
-@Test func modelApproveRunsSourceOnceThenRereadsStore() {
+/// Async on purpose: the review work runs on the cooperative pool, and a
+/// synchronous test blocking a pool thread on it can starve it (CI hang).
+@Test func modelApproveRunsSourceOnceThenRereadsStore() async {
     let source = FakeReviewSource([egress("p1", "api.example.com", ageSeconds: 5), block("b1", ageSeconds: 9)])
     let model = WorkspaceTUIModel(
         session: FakeWorkspaceSession(),
@@ -684,10 +686,10 @@ private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
     )
     model.handle(.control("b"))
     model.handle(.character("R"))
-    model.waitForReviewWork()
+    #expect(await model.waitForReviewWork())
     #expect(model.snapshot().review.pendingCount == 1)
     model.handle(.character("a"))
-    model.waitForReviewWork()
+    #expect(await model.waitForReviewWork())
     #expect(source.recorded == ["load", "approve p1", "load"])
     let review = model.snapshot().review
     #expect(review.items.map(\.id) == [.block("b1")])
