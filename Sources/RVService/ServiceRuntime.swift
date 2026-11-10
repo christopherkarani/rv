@@ -52,6 +52,10 @@ public actor ServiceRuntime {
     /// Shared with the XPC UI sessions. Resolves through `HookAskResolver`
     /// only: never an `AgentInstance` grant (F3).
     let hookCeremonies: HookReviewCeremonyService
+    /// Each hookEvaluate's `HookDeadline` budget. Always
+    /// `HookDeadline.budget` in rvd: only this module's internal init sets
+    /// it, so no caller, request or launch environment can stretch it.
+    let hookBudget: Duration
 
     package var compiledPackIDs: [PackID] { compileSet.compiledPackIDs }
 
@@ -99,9 +103,11 @@ public actor ServiceRuntime {
         ceremonies: WorkspaceOperatorCeremonyService,
         actionCeremonies: ActionApprovalCeremonyService? = nil,
         hookCeremonies: HookReviewCeremonyService? = nil,
-        ownerPresence: OwnerPresence = OwnerPresence()
+        ownerPresence: OwnerPresence = OwnerPresence(),
+        hookBudget: Duration = HookDeadline.budget
     ) {
         self.ownerPresence = ownerPresence
+        self.hookBudget = hookBudget
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
         // Built before the hook ceremony below: the ceremony captures
@@ -304,6 +310,8 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .confirmOwnerAction(let params):
             return params.clientSemver
+        case .mintAllowOnce(let params):
+            return params.clientSemver
         }
     }
 
@@ -334,7 +342,7 @@ public actor ServiceRuntime {
         case .evaluate(let params):
             result = .evaluate(await evaluate(params.request, cwd: params.cwd))
         case .hookEvaluate(let params):
-            let deadline = HookDeadline(receivedAt: receivedAt ?? .now)
+            let deadline = HookDeadline(receivedAt: receivedAt ?? .now, budget: hookBudget)
             switch await makeHookEvaluateResult(params, deadline: deadline) {
             case .success(let reply): result = .hookEvaluate(reply)
             case .failure(let error): result = .error(error)
@@ -398,6 +406,8 @@ public actor ServiceRuntime {
             result = await attestTTYRedemption(params, context: context)
         case .confirmOwnerAction(let params):
             result = await confirmOwnerAction(params, context: context)
+        case .mintAllowOnce(let params):
+            result = await mintAllowOnce(params, context: context)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -454,26 +464,29 @@ public actor ServiceRuntime {
         )
     }
 
-    /// Genuine-CLI TTY attestation handler. The matrix already restricted
-    /// this method to the pinned `.cli` role; re-validate every field
-    /// anyway (a buggy caller must plant nothing), then plant one memory
-    /// grant. The daemon writes no projection (the attesting CLI flips its
-    /// own). Double-attests report planted:false and create no second grant.
     /// The device owner approves `params.summary`: rvd verifies presence
     /// (see `OwnerPresence`), audits the outcome, and answers. The CLI
     /// performs the action only on `.approved`.
     private func confirmOwnerAction(
         _ params: ConfirmOwnerActionParams, context: AuthenticatedRequestContext
     ) async -> IPCResult {
-        let summary = String(params.summary.unicodeScalars
-            .filter { $0.properties.generalCategory != .control }
-            .prefix(ConfirmOwnerActionParams.maxSummaryBytes)
-            .map(Character.init))
-        guard summary.isEmpty == false else { return .error(.authorizationDenied) }
-        let verdict = await ownerPresence.verify(params.proof, context: context)
+        // The prompt is all the macOS owner reads before the CLI applies the
+        // full action: invisible, format and separator characters are shown
+        // escaped, and a summary too long to show whole is refused, never
+        // shortened (a cut could drop a destination or a data-loss warning).
+        let summary = DisplayedText.approvalField(params.summary)
+        guard summary.isEmpty == false,
+              summary.unicodeScalars.count <= ConfirmOwnerActionParams.maxSummaryBytes
+        else { return .error(.authorizationDenied) }
+        let verdict = await ownerPresence.confirm(summary, proof: params.proof, context: context)
         let reply: ConfirmOwnerActionReply
         switch verdict {
-        case .approved: reply = ConfirmOwnerActionReply(outcome: .approved)
+        case .approved:
+            // `confirm` approves only through rvd's prompt or, without one,
+            // a verified password: say which, so the CLI can tell this rvd
+            // from one that approved a pinned CLI unchecked.
+            reply = ConfirmOwnerActionReply(
+                outcome: .approved, presence: ownerPresence.promptsItself ? .daemonPrompt : .password)
         case .denied(let denied): reply = denied
         }
         OwnerPresence.audit(
@@ -482,27 +495,43 @@ public actor ServiceRuntime {
         return .confirmOwnerAction(reply)
     }
 
+    /// Allow-once redeem: plants one memory grant once the device owner
+    /// approves. The daemon writes no projection (the redeeming CLI flips
+    /// its own row). Double-attests report planted:false and create no
+    /// second grant.
+    ///
+    /// Who approves. The caller is an authenticated same-user peer and its
+    /// role confers nothing: on macOS rvd shows the LocalAuthentication
+    /// prompt itself (Touch ID or the login password), for the pinned `.cli`
+    /// and for the unsigned CLI of a one-click install alike; on Linux rvd
+    /// first answers a request without a password with its own description
+    /// of the code, which the CLI shows above the password prompt, then
+    /// checks the login password the CLI read from its terminal.
+    ///
+    /// Why a coding agent cannot redeem its own code. It sees the code in
+    /// the hook deny and runs as the same user, so it can reach rvd without
+    /// the CLI and without a TTY, and send this request itself (running
+    /// `rv allow-once` through its hook is already denied by the
+    /// self-protection guard). It still has to get past the prompt, and it
+    /// cannot: LocalAuthentication is answered at the console by the owner's
+    /// finger or login password, which a process cannot synthesise; with no
+    /// login session (headless, ssh) no prompt can be shown and the answer
+    /// is `unavailable`. The prompt names only what rvd itself issued and
+    /// matched against this request (the exact command text the hook
+    /// denied, cwd, payload digest, code), shown in full or not at all, so
+    /// the agent cannot dress a dangerous grant up as a harmless one through
+    /// the same-user pending file, and a code rvd never issued raises no
+    /// prompt at all. One prompt at a time, closed after 60 s, and five
+    /// declines in ten minutes lock owner checks for ten minutes, shared
+    /// with owner actions, so it cannot wear the owner down with prompts.
     private func attestTTYRedemption(
         _ params: AttestTTYRedemptionParams, context: AuthenticatedRequestContext = .unauthenticated
     ) async -> IPCResult {
         func denied() -> IPCResult { .error(.authorizationDenied) }
-        // The genuine macOS CLI ran LocalAuthentication itself (`.cli`).
-        // Other authenticated callers (Linux) prove presence with the
-        // owner's password, which rvd verifies before planting anything.
-        if context.componentRole != .cli {
-            guard case .approved = await ownerPresence.verify(params.ownerProof, context: context) else {
-                OwnerPresence.audit(
-                    summary: "redeem allow-once code", approved: false, outcome: "proofRejected",
-                    context: context, home: configHome)
-                return denied()
-            }
-            OwnerPresence.audit(
-                summary: "redeem allow-once code", approved: true, outcome: "approved",
-                context: context, home: configHome)
-        }
         // Shape re-checks for in-process callers: wire bytes already
         // passed validating decode, but a constructed value can carry
-        // any raw string. Same rule, same refusal as before.
+        // any raw string. Same rule, same refusal as before. They run
+        // before the owner check so garbage never reaches a prompt.
         guard GrantFingerprint(validatingHex: params.fingerprint.rawValue) != nil else {
             return denied()
         }
@@ -513,12 +542,54 @@ public actor ServiceRuntime {
             return denied()
         }
         // M-07: the attested payload digest binds the planted grant. Shape
-        // only — the daemon never sees exact text, so the genuine-CLI
-        // ceremony (same trust as the fingerprint) vouches the value.
+        // only here; it must also equal the digest rvd issued.
         if let digest = params.payloadDigest {
             guard ContentPayloadDigest(validatingHex: digest.rawValue) != nil else {
                 return denied()
             }
+        }
+        // Both platforms: only a code rvd issued, matching every field.
+        let description: String
+        switch await redemptionDescription(params) {
+        case .notIssued:
+            return .error(.allowOnceNotFound)
+        case .notShowable:
+            // Never a shortened command: the grant covers all of it.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString,
+                ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true))
+        case .found(_, redeemed: true):
+            // Already planted in this rvd lifetime: answer the retry
+            // without a second prompt.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString))
+        case .found(let text, redeemed: false):
+            description = text
+        }
+        let verdict = await ownerPresence.confirmRedemption(
+            description, proof: params.ownerProof, context: context)
+        if case .denied(let reply) = verdict, reply.outcome == .proofRequired {
+            // Linux, no password yet: no owner check ran. Hand back rvd's
+            // description for the CLI to show above the password prompt.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString, ownerCheck: reply,
+                promptText: description))
+        }
+        let approved = verdict == .approved
+        let outcome: String
+        switch verdict {
+        case .approved: outcome = ConfirmOwnerActionReply.Outcome.approved.rawValue
+        case .denied(let reply): outcome = reply.outcome.rawValue
+        }
+        // The audit names the redeem, never the command: the audit log is a
+        // same-user file, like the pending file that keeps only its head.
+        OwnerPresence.audit(
+            summary: "redeem allow-once code", approved: approved, outcome: outcome,
+            context: context, home: configHome)
+        if case .denied(let reply) = verdict {
+            // The owner check ran and refused: tell the CLI why.
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString, ownerCheck: reply))
         }
         let now = clock()
         switch await grants.plant(
@@ -529,19 +600,105 @@ public actor ServiceRuntime {
             payloadContentDigest: params.payloadDigest
         ) {
         case .planted:
+            await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)
             // Memory only. The attesting CLI flips its own display
             // projection after planted:true; the daemon never writes the
             // shared projection file (no cross-process append race).
             return .attestTTYRedemption(AttestTTYRedemptionReply(
-                planted: true, epoch: grants.epoch.uuidString
+                planted: true, epoch: grants.epoch.uuidString,
+                presence: ownerPresence.promptsItself ? .daemonPrompt : .password
             ))
         case .alreadyRedeemed:
+            await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)
             return .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: false, epoch: grants.epoch.uuidString
             ))
         case .refused:
             return denied()
         }
+    }
+
+    /// `rv allow-once mint`: pre-arms one code for the exact command the
+    /// owner typed, after the same owner check as redeem, with a prompt
+    /// naming the whole command and cwd (escaped, never cut). rvd remembers
+    /// the code in memory like a deny code, so the later redeem raises its
+    /// prompt naming the command; an rvd restart loses it. A coding agent
+    /// that reaches this request itself gets only a prompt the owner did
+    /// not ask for, and minting alone grants nothing. The audit names the
+    /// pre-arm, never the command.
+    private func mintAllowOnce(
+        _ params: MintAllowOnceParams, context: AuthenticatedRequestContext
+    ) async -> IPCResult {
+        let command = ShellCommand(rawValue: params.command)
+        let view = Normalize.matchingView(of: command)
+        guard view.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return .error(.authorizationDenied)
+        }
+        guard let shown = AllowOncePromptText.reason(command: params.command, cwd: params.cwd, ruleID: nil)
+        else {
+            return .mintAllowOnce(MintAllowOnceReply(
+                ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true))
+        }
+        let description = "pre-arm a code to " + shown
+        let verdict = await ownerPresence.confirmRedemption(
+            description, proof: params.ownerProof, context: context)
+        if case .denied(let reply) = verdict, reply.outcome == .proofRequired {
+            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: reply, promptText: description))
+        }
+        let outcome: String
+        switch verdict {
+        case .approved: outcome = ConfirmOwnerActionReply.Outcome.approved.rawValue
+        case .denied(let reply): outcome = reply.outcome.rawValue
+        }
+        OwnerPresence.audit(
+            summary: "pre-arm allow-once code", approved: verdict == .approved, outcome: outcome,
+            context: context, home: configHome)
+        if case .denied(let reply) = verdict {
+            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: reply))
+        }
+        do {
+            let code = try await allowOnce.mintPreArmed(
+                matchingView: view,
+                cwd: params.cwd,
+                now: clock(),
+                maskedSegments: Normalize.maskedSegments(of: command),
+                invocationPrefix: Normalize.invocationPrefix(of: command),
+                invocationDisplay: Normalize.invocationDisplay(of: command),
+                rawCommand: params.command)
+            return .mintAllowOnce(MintAllowOnceReply(code: code.rawValue))
+        } catch AllowOnceError.alreadyPending {
+            return .mintAllowOnce(MintAllowOnceReply(alreadyPending: true))
+        } catch {
+            return .error(.authorizationDenied)
+        }
+    }
+
+    private enum RedemptionLookup: Equatable {
+        /// rvd has nothing it can vouch for: no prompt is shown.
+        case notIssued
+        /// rvd knows the code but cannot show all of it: no prompt is shown.
+        case notShowable
+        case found(String, redeemed: Bool)
+    }
+
+    /// rvd's own prompt text for this redeem.
+    ///
+    /// The only source is a code rvd issued, on a hook deny or on an
+    /// owner-approved `rv allow-once mint`: rvd kept the exact command text
+    /// in memory, and every field of the request must match what it issued.
+    /// A row in the same-user pending file that rvd did not issue (written
+    /// by the agent, or from before an rvd restart) is not found, whatever
+    /// the caller's role: rvd cannot vouch for its text.
+    private func redemptionDescription(_ params: AttestTTYRedemptionParams) async -> RedemptionLookup {
+        guard let issued = await allowOnce.issued(codeHash: params.codeHash.rawValue, now: clock()),
+            issued.fingerprint == params.fingerprint, issued.cwd == params.cwd,
+            issued.payloadDigest == params.payloadDigest
+        else { return .notIssued }
+        guard let command = issued.command,
+            let text = AllowOncePromptText.reason(
+                command: command, cwd: issued.cwd, ruleID: issued.ruleID, code: issued.code.rawValue)
+        else { return .notShowable }
+        return .found(text, redeemed: issued.redeemed)
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
@@ -831,6 +988,8 @@ public actor ServiceRuntime {
             method = "attestTTYRedemption"
         case .confirmOwnerAction:
             method = "confirmOwnerAction"
+        case .mintAllowOnce:
+            method = "mintAllowOnce"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

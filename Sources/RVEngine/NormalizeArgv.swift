@@ -1,5 +1,81 @@
 import Foundation
 
+/// sudo short options whose value is the next word (`-u root`, `-p prompt`,
+/// BSD `-a type`). A superset of what any one sudo build accepts:
+/// consuming a word that was really argv0 only moves argv0 later, which
+/// never hides an operand.
+private let sudoValueLetters: Set<Character> = [
+    "u", "g", "h", "p", "C", "U", "T", "r", "t", "D", "R", "c", "a",
+]
+
+/// True when a short sudo option (or cluster ending in one) takes the next
+/// word as its value.
+func sudoFlagTakesValue(_ option: String) -> Bool {
+    shortClusterConsumesValue(option, valueLetters: sudoValueLetters)
+}
+
+/// How one `env` option word shapes the words after it.
+enum EnvOptionShape: Equatable {
+    /// No value, or its value is attached (`-i`, `--unset=NAME`, `-uNAME`).
+    case flag
+    /// The next word is the value (`-u NAME`, `--ch DIR`, `-a NAME`).
+    case valueNext(chdir: Bool)
+    /// A working-directory change whose directory is attached.
+    case chdirAttached(String)
+    /// `-S`/`--split-string`: the rest is a command string env splits.
+    case splitString
+    /// Not an option env accepts unambiguously. Which later word is argv0
+    /// is unknown, so callers must not guess (no masking, no stripping).
+    case unknown
+}
+
+/// GNU and BSD env short options. Value letters take the next word (or the
+/// rest of the cluster): `-a` argv0, `-C` dir, `-S` string, `-u` name,
+/// BSD `-P` path, `-L`/`-U` user.
+private let envValueLetters: Set<Character> = ["a", "C", "S", "u", "P", "L", "U"]
+private let envFlagLetters: Set<Character> = ["i", "0", "v"]
+
+/// GNU env long options. getopt accepts any unambiguous prefix (`--un`).
+private let envValueLongOptions = ["argv0", "chdir", "split-string", "unset"]
+private let envFlagLongOptions = [
+    "block-signal", "debug", "default-signal", "help", "ignore-environment",
+    "ignore-signal", "list-signal-handling", "null", "version",
+]
+
+/// Classifies one env word that starts with `-` (`-` alone means `-i`).
+func envOptionShape(_ option: String) -> EnvOptionShape {
+    if option == "-" { return .flag }
+    if option.hasPrefix("--") { return envLongOptionShape(option) }
+    guard option.hasPrefix("-") else { return .unknown }
+    var letters = option.dropFirst()[...]
+    while let letter = letters.first {
+        letters = letters.dropFirst()
+        if envFlagLetters.contains(letter) { continue }
+        guard envValueLetters.contains(letter) else { return .unknown }
+        if letter == "S" { return .splitString }
+        if letters.isEmpty { return .valueNext(chdir: letter == "C") }
+        return letter == "C" ? .chdirAttached(String(letters)) : .flag
+    }
+    return .flag
+}
+
+private func envLongOptionShape(_ option: String) -> EnvOptionShape {
+    let body = option.dropFirst(2)
+    let spelled = String(body.prefix { $0 != "=" })
+    let attached = body.firstIndex(of: "=").map { String(body[body.index(after: $0)...]) }
+    let all = envValueLongOptions + envFlagLongOptions
+    let candidates = all.contains(spelled) ? [spelled] : all.filter { $0.hasPrefix(spelled) }
+    guard spelled.isEmpty == false, candidates.count == 1, let name = candidates.first else {
+        return .unknown
+    }
+    if envFlagLongOptions.contains(name) { return .flag }
+    if name == "split-string" { return .splitString }
+    if let attached {
+        return name == "chdir" ? .chdirAttached(attached) : .flag
+    }
+    return .valueNext(chdir: name == "chdir")
+}
+
 func stripSudo(_ text: String) -> String? {
     let (word, rest) = firstWord(text)
     guard basename(word) == "sudo" else { return nil }
@@ -15,6 +91,10 @@ func stripSudo(_ text: String) -> String? {
             return nil
         }
         remaining = after
+        if sudoFlagTakesValue(option) {
+            guard remaining.isEmpty == false else { return nil }
+            remaining = firstWord(remaining).rest
+        }
     }
     return remaining.isEmpty ? nil : remaining
 }
@@ -25,7 +105,25 @@ func stripEnv(_ text: String) -> String? {
     var remaining = rest
     while !remaining.isEmpty {
         let (option, after) = firstWord(remaining)
-        if option.contains("=") {
+        if option.hasPrefix("-") {
+            switch envOptionShape(option) {
+            case .unknown:
+                // Which word is argv0 is unknown: leave the view unstripped.
+                return nil
+            case .splitString:
+                // `-S STR` is the command itself, split by env: the view
+                // shows its words, so skipping one would hide the argv0.
+                break
+            case .valueNext:
+                guard after.isEmpty == false else { return nil }
+                remaining = firstWord(after).rest
+                continue
+            case .flag, .chdirAttached:
+                remaining = after
+                continue
+            }
+        }
+        if option.contains("="), option.hasPrefix("-") == false {
             remaining = after
             continue
         }

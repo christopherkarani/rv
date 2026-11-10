@@ -27,19 +27,60 @@ public enum SecretGitHook {
     static let listingBytes = 64 * 1024 * 1024
     private static let shells: Set<String> = ["sh", "bash", "zsh", "dash", "ksh"]
 
-    static func block(rvPath: String) -> String {
-        """
-        \(beginMarker)
-        # Managed by rv; `rv secrets hook uninstall` removes only this block.
-        # Scans staged content and prints path:line:rule, never a value.
-        if [ "$(git config --bool \(killSwitch))" = "false" ]; then
-          echo "rv secrets: staged-content scan skipped (git config \(killSwitch) is false)" >&2
-        else
-          \(shellQuote(rvPath)) secrets hook run || exit $?
-        fi
-        \(endMarker)
+    /// Printed, once, when the hook runs where rv is not installed. The
+    /// commit goes on: a teammate without rv must not be blocked by a
+    /// scanner they never installed.
+    static let missingNotice =
+        "rv secrets: rv not found, so staged files were not scanned; reinstall rv, "
+        + "or remove this check with `rv secrets hook uninstall` or by deleting the lines between the rv secrets markers in this hook"
 
-        """
+    /// rv is found on PATH when the hook runs, then at `rvPath` (where
+    /// install ran from). `rvPath` nil writes the PATH lookup only, for a
+    /// hooks directory other people check out. `|| true` keeps a missing
+    /// rv from tripping `sh -e` (husky) before the notice.
+    static func block(rvPath: String?) -> String {
+        let fallback = rvPath.map {
+            "\n  if [ -z \"$rv_secrets_bin\" ] && [ -x \(shellQuote($0)) ]; then rv_secrets_bin=\(shellQuote($0)); fi"
+        } ?? ""
+        return """
+            \(beginMarker)
+            # Managed by rv; `rv secrets hook uninstall` removes only this block.
+            # Scans staged content and prints path:line:rule, never a value.
+            if [ "$(git config --bool \(killSwitch))" = "false" ]; then
+              echo "rv secrets: staged-content scan skipped (git config \(killSwitch) is false)" >&2
+            else
+              rv_secrets_bin="$(command -v rv 2>/dev/null || true)"\(fallback)
+              if [ -n "$rv_secrets_bin" ]; then
+                "$rv_secrets_bin" secrets hook run || exit $?
+              else
+                echo \(shellQuote(missingNotice)) >&2
+              fi
+            fi
+            \(endMarker)
+
+            """
+    }
+
+    /// True when git would run hooks from a directory inside the work
+    /// tree (husky's `.husky/`), which is committed and shared.
+    static func hooksAreShared(_ hooks: URL, workTree: URL) -> Bool {
+        guard let configured = gitOutput(workTree, ["config", "--get", "core.hooksPath"]), configured.isEmpty == false,
+            let top = gitOutput(workTree, ["rev-parse", "--show-toplevel"])
+        else { return false }
+        func real(_ path: String) -> String {
+            guard let resolved = realpath(path, nil) else { return URL(fileURLWithPath: path).standardizedFileURL.path }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        func inside(_ path: String, _ root: String) -> Bool { path == root || path.hasPrefix(root + "/") }
+        let directory = real(hooks.path)
+        guard inside(directory, real(top)) else { return false }
+        if let gitDirectory = gitOutput(workTree, ["rev-parse", "--absolute-git-dir"]),
+            inside(directory, real(gitDirectory))
+        {
+            return false
+        }
+        return true
     }
 
     public static func install(workTree: URL, rvPath: String) -> Result<String, SecretGitHookError> {
@@ -61,8 +102,9 @@ public enum SecretGitHook {
             case .success(let text): existing = text
             }
         }
+        let shared = hooksAreShared(hooks, workTree: workTree)
         let updated: String
-        switch insert(block(rvPath: rvPath), into: existing) {
+        switch insert(block(rvPath: shared ? nil : rvPath), into: existing) {
         case .failure(let error): return .failure(error)
         case .success(let text): updated = text
         }
@@ -72,7 +114,9 @@ public enum SecretGitHook {
         chmod(hook.path, 0o755)
         if legacy { unlink(saved.path) }
         let configured = (gitOutput(workTree, ["config", "--get", "core.hooksPath"]) ?? "").isEmpty == false
-        let location = configured ? " (core.hooksPath)" : ""
+        let location = shared
+            ? " (core.hooksPath, inside the repository: the block finds rv on PATH and writes no local path)"
+            : configured ? " (core.hooksPath)" : ""
         return .success("installed rv's block in \(hook.path)\(location). `rv secrets hook uninstall` removes only that block.\n")
     }
 

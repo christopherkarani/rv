@@ -163,6 +163,37 @@ not `rvd`, performs the change after approval. On Linux rv reads your login pass
 ten minutes lock checks for ten minutes. Every attempt is recorded as an
 `owner.action` event in the audit log.
 
+## Locked out?
+
+When rv can't decide (the daemon `rvd` is down or slow, or the `rv` binary
+is gone), every hook fails closed: the agent's tool call is blocked, never
+quietly allowed. The block message says which of these it was:
+
+| Message starts with | What it means | What to do |
+| --- | --- | --- |
+| `RV daemon is not reachable` | `rvd` isn't running | `rv doctor`; `rv setup` repairs the service |
+| `RV daemon did not answer in time`, `rv did not answer within 15s` | `rvd` is busy or hung | Retry; then `rv service status`, `rv service restart` |
+| `RV daemon identity check failed`, `RV daemon sent an unexpected reply` | a stale `rvd` after an upgrade | `rv service restart`; if that doesn't fix it, `rv setup` |
+| `rv is not installed at <path>` | the hook points at a binary that's gone | Reinstall rv, then `rv setup` |
+| `rv at <path> could not be started`, `rv exited with code N` | `rv` is broken or crashed | `rv doctor` |
+| `Laya judge is still loading` | the on-device judge is still loading after `rvd` started | Retry in a few seconds |
+| `Laya judge queue is full` | too many commands are waiting for the judge | Retry shortly |
+| `Laya judge unavailable; failing closed` | the judge couldn't score this command | `rv doctor` |
+
+Run these from your own terminal, not through the agent:
+
+```sh
+rv doctor                 # what's broken and how to fix it
+rv service status         # is rvd running, down, or skewed?
+rv service restart        # restart rvd
+rv setup                  # repair the rvd service and host hooks
+rv host list              # each host's mode and hook wiring
+rv host mode claude off   # stop guarding one host (asks for owner authentication)
+rv uninstall              # remove rv's hooks, config, and rvd (asks for owner authentication)
+```
+
+`rv host mode <host> block` turns guarding back on.
+
 ## Beyond the shell
 
 rv is one binary, 25 commands. The rest of the surface:
@@ -224,7 +255,14 @@ rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health
 rv uninstall                # remove everything rv owns (owner-auth)
+rv uninstall --remove-models  # ...and the judge weights in ~/.config/rv/models
 ```
+
+`rv uninstall` removes rv's hooks, stops the service, then deletes every
+file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`.
+If rvd is not running, you confirm at the terminal with your login password
+(or Touch ID) instead; without a local owner check it refuses and says how
+to start rvd.
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with

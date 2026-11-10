@@ -174,7 +174,7 @@ private func makeAnalyticsFixture() throws -> AnalyticsFixture {
         productVersion: "1.0.0",
         platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
     )
-    let runtime = ServiceRuntime(
+    let runtime = hookTestRuntime(
         home: home,
         allowOnceDirectory: allowOnceURL,
         analytics: coordinator

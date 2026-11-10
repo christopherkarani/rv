@@ -39,6 +39,10 @@ enum CLIProcess: Sendable {
         /// When set, `CommandContext.writeStdout/writeStderr` send text here
         /// instead of writing to the process file descriptors.
         var output: CLIOutputSink?
+        /// Seams for the daemon-down owner fallback (`rv uninstall`, loosening
+        /// `rv host mode`). Nil assumes rvd reachable, so `ownerAuthOutcome`
+        /// alone decides and tests never probe rvd or read a terminal.
+        var daemonDownConfirmation: DaemonDownOwnerConfirmation.Seams?
 
         init(
             home: HomeDirectory? = nil,

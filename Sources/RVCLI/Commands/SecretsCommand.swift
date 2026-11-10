@@ -749,8 +749,9 @@ enum SecretsRun {
         }
         let findings = report.findings
         var lines = findings.map { "\(DisplayedText.field($0.path)):\($0.line):\($0.secret)" }
+        let gaps = report.tooLarge.isEmpty == false || skipped.isEmpty == false
         if findings.isEmpty {
-            lines.append("No secrets in staged files.")
+            lines.append(gaps ? "No secrets in the staged files that were scanned." : "No secrets in staged files.")
         } else {
             lines.append(
                 "commit blocked. A false positive: add an `rv-secrets:allow` comment on the line, or "
@@ -758,7 +759,17 @@ enum SecretsRun {
         }
         lines += report.tooLarge.map(notScanned)
         lines += skipped
+        if gaps { lines.append(hookGapSummary(files: report.tooLarge.count, secrets: skipped.count)) }
         return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
+    }
+
+    /// The hook lets a commit through past files it could not read and
+    /// secrets it could not resolve; this line says so in one place.
+    static func hookGapSummary(files: Int, secrets: Int) -> String {
+        var parts: [String] = []
+        if files > 0 { parts.append("\(files) \(files == 1 ? "file" : "files") not scanned") }
+        if secrets > 0 { parts.append("\(secrets) \(secrets == 1 ? "secret" : "secrets") not checked") }
+        return "warning: " + parts.joined(separator: ", ") + "; the commit is not blocked for these"
     }
 
     static func rvPath() -> String {

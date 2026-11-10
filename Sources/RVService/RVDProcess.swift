@@ -49,7 +49,7 @@ public enum RVDProcess {
             try listeners.unix.start()
         } catch {
             FileHandle.standardError.write(
-                Data("rvd: unix socket unavailable (\(error)); continuing with XPC only\n".utf8)
+                Data(RVDLogFile.line("rvd: unix socket unavailable (\(error)); continuing with XPC only").utf8)
             )
         }
         listeners.xpc.start()

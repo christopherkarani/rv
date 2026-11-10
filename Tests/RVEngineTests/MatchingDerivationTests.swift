@@ -96,7 +96,7 @@ import RVDomain
         ("sudo\ngit push", "\ngit push", [], ["sudo"], "sudo"),
         ("command -v git", "command -v git", [], [], nil),
         ("\\git reset --hard", "git reset --hard", [], ["\\"], "\\"),
-        ("sudo -u root git reset --hard", "root git reset --hard", [], ["sudo -u"], "sudo"),
+        ("sudo -u root git reset --hard", "git reset --hard", [], ["sudo -u root"], "sudo"),
         ("$'sudo' git reset --hard", "git reset --hard", [], ["sudo"], "sudo"),
     ]
     for golden in goldens {

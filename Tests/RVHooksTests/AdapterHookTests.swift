@@ -350,8 +350,9 @@ func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: S
     )
     #expect(json["permission"] as? String == "deny")
     #expect(json["permission"] as? String != "allow")
-    #expect(json["user_message"] as? String == "rv failed")
-    #expect(json["agent_message"] as? String == "rv failed")
+    #expect((json["user_message"] as? String)?.contains("exited with code 0") == true)
+    #expect((json["user_message"] as? String)?.contains("`rv doctor`") == true)
+    #expect(json["agent_message"] as? String == json["user_message"] as? String)
     #expect(json["permissionDecision"] == nil)
     #expect(json["decision"] == nil)
     #expect(result.stdout.contains("\"permission\":\"allow\"") == false)
@@ -392,7 +393,7 @@ func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: S
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["permission"] as? String == "deny")
-    #expect(json["user_message"] as? String == "rv missing")
+    #expect((json["user_message"] as? String)?.hasPrefix("rv is not installed at ") == true)
     #expect(result.exitCode == 0)
 }
 
@@ -418,7 +419,7 @@ func cursorWrapper_preToolUseFileToolMissingRvDenies(_ tool: String) async throw
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["permission"] as? String == "deny")
-    #expect(json["user_message"] as? String == "rv missing")
+    #expect((json["user_message"] as? String)?.hasPrefix("rv is not installed at ") == true)
     #expect(json["permission"] as? String != "allow")
     #expect(result.exitCode == 0)
 }
@@ -478,7 +479,7 @@ func cursorWrapper_preToolUseForeignMissingRvAllows(_ tool: String) async throws
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["permission"] as? String == "deny")
-    #expect(json["user_message"] as? String == "rv missing")
+    #expect((json["user_message"] as? String)?.hasPrefix("rv is not installed at ") == true)
     #expect(result.exitCode == 0)
 }
 
@@ -494,7 +495,7 @@ func cursorWrapper_preToolUseForeignMissingRvAllows(_ tool: String) async throws
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["permission"] as? String == "deny")
-    #expect(json["user_message"] as? String == "rv missing")
+    #expect((json["user_message"] as? String)?.hasPrefix("rv is not installed at ") == true)
     #expect(result.exitCode == 0)
 }
 
@@ -587,7 +588,7 @@ func antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_ stubStdout: String) asy
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["decision"] as? String == "deny")
-    #expect(json["reason"] as? String == "rv failed")
+    #expect((json["reason"] as? String)?.contains("exited with code 0") == true)
     #expect(result.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(result.exitCode == 0)
 }
@@ -608,7 +609,7 @@ func antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_ stubStdout: String) asy
         JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
     )
     #expect(json["decision"] as? String == "deny")
-    #expect(json["reason"] as? String == "rv missing")
+    #expect((json["reason"] as? String)?.hasPrefix("rv is not installed at ") == true)
     #expect(result.exitCode == 0)
 }
 
@@ -1509,17 +1510,18 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
         stub: .missing
     )
     #expect(pi.block == true)
-    #expect(pi.reason == "rv missing")
+    #expect(pi.reason?.hasPrefix("rv is not installed at ") == true)
+    #expect(pi.reason?.contains("`rv setup`") == true)
 
     let openCode = try await runOpenCodeAdapter(
         event: ["tool": "bash", "args": ["command": "git status"]],
         stub: .missing
     )
-    #expect(openCode.threw == "rv missing")
+    #expect(openCode.threw?.hasPrefix("rv is not installed at ") == true)
     #expect(openCode.toastTitle == "RV · Blocked")
     let missingMessage = openCode.toastMessage ?? ""
     #expect(missingMessage.contains("Why"))
-    #expect(missingMessage.contains("rv missing"))
+    #expect(missingMessage.contains("rv is not installed at"))
     #expect(missingMessage.contains("Cmd"))
 }
 
@@ -1545,20 +1547,23 @@ func piAdapter_malformedBashPayloadBlocks(eventJSON: String) async throws {
     #expect(emptyReason.reason == "")
 }
 
-@Test func adapters_startedRvTimeoutOrCrashBlocksWithRvFailed() async throws {
+@Test func adapters_startedRvTimeoutOrCrashBlocksWithActionableReason() async throws {
     let crashed = try await runPiAdapter(
         event: ["toolName": "bash", "input": ["command": "git status"]],
         stub: .stdout("not-json", exit: 99)
     )
     #expect(crashed.block == true)
-    #expect(crashed.reason == "rv failed")
+    #expect(crashed.reason == "rv exited with code 99 without a usable decision. Run `rv doctor`.")
 
     let timedOut = try await runOpenCodeAdapter(
         event: ["tool": "bash", "args": ["command": "git status"]],
         stub: .sleep(seconds: 1),
         timeoutMs: 50
     )
-    #expect(timedOut.threw == "rv failed")
+    #expect(
+        timedOut.threw
+            == "rv did not answer within 0.05s; the daemon may be busy or stopped. Run `rv doctor`."
+    )
 }
 
 @Test(arguments: [
@@ -1601,7 +1606,7 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
             #expect(result.reason == nil, Comment(rawValue: "\(host) \(kind)"))
         } else {
             #expect(result.block == true, Comment(rawValue: "\(host) \(kind)"))
-            #expect(result.reason == "rv failed", Comment(rawValue: "\(host) \(kind)"))
+            #expect(result.reason == expectedFailure(kind), Comment(rawValue: "\(host) \(kind)"))
         }
         return
     }
@@ -1618,12 +1623,18 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
         #expect(result.threw == nil, Comment(rawValue: "\(host) \(kind)"))
         #expect(result.toastCount == 0, Comment(rawValue: "\(host) \(kind)"))
     } else {
-        #expect(result.threw == "rv failed", Comment(rawValue: "\(host) \(kind)"))
+        #expect(result.threw == expectedFailure(kind), Comment(rawValue: "\(host) \(kind)"))
         #expect(result.toastTitle == "RV · Blocked", Comment(rawValue: "\(host) \(kind)"))
         let failedMessage = result.toastMessage ?? ""
         #expect(failedMessage.contains("Why"), Comment(rawValue: "\(host) \(kind)"))
-        #expect(failedMessage.contains("rv failed"), Comment(rawValue: "\(host) \(kind)"))
+        #expect(failedMessage.contains("`rv doctor`"), Comment(rawValue: "\(host) \(kind)"))
     }
+}
+
+private func expectedFailure(_ kind: String) -> String {
+    kind == "timeout"
+        ? "rv did not answer within 0.05s; the daemon may be busy or stopped. Run `rv doctor`."
+        : "rv exited with code 99 without a usable decision. Run `rv doctor`."
 }
 
 private let missingShellCommandReason =

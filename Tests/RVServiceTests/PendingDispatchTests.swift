@@ -878,7 +878,9 @@ struct PendingDispatchTests {
         // Policy verdict is ASK (the row below proves it); the wire renders
         // deny because no host can pause for a human.
         #expect(json["decision"] as? String == "deny")
-        #expect(await approvals.createCalls.count == 1)
+        // The reply names the verdict: a timeout or indeterminate deny
+        // also renders "deny" but creates no row.
+        #expect(await approvals.createCalls.count == 1, "reply: \(reply.stdout)")
         let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList), context: peerServiceContext()))
         #expect(listed.items.count == 1)
         let item = try #require(listed.items.first)
@@ -965,7 +967,7 @@ struct PendingDispatchTests {
     ) throws -> ServiceRuntime {
         let homeURL = try homeURL ?? isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
-        return ServiceRuntime(
+        return hookTestRuntime(
             home: home,
             allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
             log: log,

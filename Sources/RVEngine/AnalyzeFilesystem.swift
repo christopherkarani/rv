@@ -1,6 +1,24 @@
 import RVDomain
 
 /// Pure filesystem classifier. Unknown or unsupported syntax is `.unknown`.
+/// Moving, deleting or chmod-ing a directory that holds rv's wiring
+/// (`~/.claude`, `~/.local/bin`, `~/Library/LaunchAgents`) unhooks rv as
+/// surely as editing the file inside: protected, like the file.
+private func protectingWiringAncestor(
+    _ target: FilesystemTarget,
+    context: FilesystemAnalysisContext
+) -> FilesystemTarget {
+    guard target.protectedMatch == nil, let home = context.homeDirectory?.rawValue else { return target }
+    let lexical = lexicalFilesystemPath(
+        target.apparent, workingDirectory: context.workingDirectory, homeDirectory: context.homeDirectory
+    )
+    guard [target.canonical, lexical].contains(where: { RVWiringPaths.matchesAncestor($0, home: home) })
+    else { return target }
+    var protected = target
+    protected.scope = .protectedPath(rvWiringMatch)
+    return protected
+}
+
 public func analyzeFilesystem(
     _ command: ExecutingCommand,
     context: FilesystemAnalysisContext = .empty
@@ -112,9 +130,12 @@ private func filesystemAction(
     if parsed.operation == .read, parsed.paths.contains(where: isDynamicToken) {
         return nil
     }
-    let targets = parsed.paths.map {
+    var targets = parsed.paths.map {
         dynamicOutsideTarget($0, context: context)
             ?? classifyFilesystemTarget($0, context: context)
+    }
+    if [.delete, .move, .chmod].contains(parsed.operation) {
+        targets = targets.map { protectingWiringAncestor($0, context: context) }
     }
     switch parsed.operation {
     case .delete:
