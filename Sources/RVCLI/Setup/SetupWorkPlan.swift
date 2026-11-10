@@ -51,7 +51,7 @@ enum SetupWorkPlanBuilder {
             }
             if let interpreter = AdapterRuntime.interpreter(for: host),
                missingInterpreters.contains(interpreter),
-               installations.installation(for: host).wouldWire
+               installations.installation(for: host).wouldWrite(force: force)
             {
                 steps.append(.skipRuntimeMissing(host, interpreter: interpreter))
                 continue

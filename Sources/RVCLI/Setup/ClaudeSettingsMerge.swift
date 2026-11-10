@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.claude/settings.json` (REQ-012..015).
-/// Command is `python3` on the exclusive adapter; baked rv stays in `RV_BINARY=`
+/// Command is the baked interpreter (`AdapterCommand`) on the exclusive adapter; baked rv stays in `RV_BINARY=`
 /// so `HostAdapterInstallation.inspect` can require sibling `rv-cli` for `.wired`.
 /// Occupied is a foreign/tampered `rv-guard.py` that is not current. Stale
 /// `hook --host claude` is outdated rv: setup rewrites without `--force`.
@@ -30,7 +30,7 @@ enum ClaudeSettingsMerge {
         hookType: hookType,
         isFingerprintedCommand: { isFingerprinted(command: $0) },
         buildEntry: { context, _ in
-            hookEntry(rvPath: context.rvPath ?? "", adapterPath: context.adapterPath)
+            hookEntry(rvPath: context.rvPath ?? "", interpreter: context.interpreter, adapterPath: context.adapterPath)
         }
     )
 
@@ -48,8 +48,8 @@ enum ClaudeSettingsMerge {
         SettingsMergePolicy.adapterPath(configPath: settingsPath, descriptor: mergeDescriptor)
     }
 
-    static func hookCommand(rvPath: String, adapterPath: String) -> String {
-        SettingsMergePolicy.hookCommand(rvPath: rvPath, adapterPath: adapterPath)
+    static func hookCommand(rvPath: String, interpreter: String, adapterPath: String) -> String {
+        SettingsMergePolicy.hookCommand(rvPath: rvPath, interpreter: interpreter, adapterPath: adapterPath)
     }
 
     static func isFingerprinted(command: String) -> Bool {
@@ -77,17 +77,19 @@ enum ClaudeSettingsMerge {
         SettingsMergePolicy.isStaleLegacyHook(hook, descriptor: mergeDescriptor)
     }
 
-    static func hookEntry(rvPath: String, adapterPath: String) -> HookEntry {
+    static func hookEntry(rvPath: String, interpreter: String, adapterPath: String) -> HookEntry {
         SettingsMergePolicy.hookEntry(
             rvPath: rvPath,
+            interpreter: interpreter,
             adapterPath: adapterPath,
             descriptor: mergeDescriptor
         )
     }
 
-    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> JSONValue {
+    static func rvEntry(rvPath: String, interpreter: String, adapterPath: String, matcher: String) -> JSONValue {
         SettingsMergePolicy.rvEntry(
             rvPath: rvPath,
+            interpreter: interpreter,
             adapterPath: adapterPath,
             matcher: matcher,
             descriptor: mergeDescriptor
@@ -103,6 +105,7 @@ enum ClaudeSettingsMerge {
     static func merge(
         existingData: Data?,
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         force: Bool
     ) throws -> (data: Data, wrote: Bool) {
@@ -111,6 +114,7 @@ enum ClaudeSettingsMerge {
                 existingData: existingData,
                 descriptor: mergeDescriptor,
                 rvPath: rvPath,
+                interpreter: interpreter,
                 adapterPath: adapterPath,
                 force: force
             )

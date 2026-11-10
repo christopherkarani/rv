@@ -170,7 +170,7 @@ struct ResidualLinuxCoverageTests {
         #expect(
             CursorHooksMerge.matchesCurrentHook(
                 .object([
-                    "command": .string(CursorHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
+                    "command": .string(CursorHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/tmp/rv-guard.py")),
                     "timeout": .number(18),
                     "failClosed": .bool(true),
                 ]),
@@ -185,7 +185,7 @@ struct ResidualLinuxCoverageTests {
         )
         #expect(CursorHooksMerge.isFingerprintedHook(.object([:])) == false)
         #expect(throws: CursorHooksMergeError.unreadable) {
-            _ = try CursorHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/tmp/rv-guard.py")
+            _ = try CursorHooksMerge.merge(existingData: Data("[]".utf8), interpreter: "/usr/bin/python3", adapterPath: "/tmp/rv-guard.py")
         }
 
         #expect(CodexHooksMerge.adapterPath(in: "python3 /tmp/rv-guard.py") == "/tmp/rv-guard.py")
@@ -193,7 +193,7 @@ struct ResidualLinuxCoverageTests {
             CodexHooksMerge.matchesCurrentHook(
                 .object([
                     "type": .string(CodexHooksMerge.hookType),
-                    "command": .string(CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
+                    "command": .string(CodexHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/tmp/rv-guard.py")),
                     "timeout": .number(Double(CodexHooksMerge.timeout)),
                     "statusMessage": .string(CodexHooksMerge.statusMessage),
                 ]),
@@ -204,7 +204,7 @@ struct ResidualLinuxCoverageTests {
             CodexHooksMerge.matchesCurrentHook(
                 .object([
                     "type": .string(CodexHooksMerge.hookType),
-                    "command": .string(CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
+                    "command": .string(CodexHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/tmp/rv-guard.py")),
                     "timeout": .number(Double(CodexHooksMerge.timeout)),
                 ]),
                 adapterPath: "/tmp/rv-guard.py"
@@ -212,7 +212,7 @@ struct ResidualLinuxCoverageTests {
         )
         #expect(CodexHooksMerge.matchesCurrentHook(.object([:]), adapterPath: "/tmp/x") == false)
         #expect(throws: CodexHooksMergeError.unreadable) {
-            _ = try CodexHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/tmp/rv-guard.py")
+            _ = try CodexHooksMerge.merge(existingData: Data("[]".utf8), interpreter: "/usr/bin/python3", adapterPath: "/tmp/rv-guard.py")
         }
 
         #expect(throws: OpenCodeConfigMergeError.invalidJSON) {
@@ -222,6 +222,7 @@ struct ResidualLinuxCoverageTests {
             _ = try ClaudeSettingsMerge.merge(
                 existingData: Data("[]".utf8),
                 rvPath: "/tmp/rv",
+                interpreter: "/usr/bin/python3",
                 adapterPath: "/tmp/adapter.py",
                 force: true
             )

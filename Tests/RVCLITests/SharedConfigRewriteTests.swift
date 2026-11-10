@@ -30,6 +30,7 @@ private func offsets(of needles: [String], in haystack: String) -> [String.Index
     let merged = try ClaudeSettingsMerge.merge(
         existingData: Data(userClaudeSettings.utf8),
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: claudeAdapter,
         force: false
     )
@@ -45,6 +46,7 @@ private func offsets(of needles: [String], in haystack: String) -> [String.Index
     let merged = try ClaudeSettingsMerge.merge(
         existingData: Data(userClaudeSettings.utf8),
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: claudeAdapter,
         force: false
     )
@@ -59,12 +61,14 @@ private func offsets(of needles: [String], in haystack: String) -> [String.Index
     let first = try ClaudeSettingsMerge.merge(
         existingData: Data(userClaudeSettings.utf8),
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: claudeAdapter,
         force: false
     )
     let second = try ClaudeSettingsMerge.merge(
         existingData: first.data,
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: claudeAdapter,
         force: false
     )
@@ -76,6 +80,7 @@ private func offsets(of needles: [String], in haystack: String) -> [String.Index
     let merged = try ClaudeSettingsMerge.merge(
         existingData: Data(userClaudeSettings.utf8),
         rvPath: "/usr/local/bin/rv",
+        interpreter: "/usr/bin/python3",
         adapterPath: claudeAdapter,
         force: false
     )
@@ -109,6 +114,7 @@ private func offsets(of needles: [String], in haystack: String) -> [String.Index
         try ClaudeSettingsMerge.merge(
             existingData: existing,
             rvPath: "/usr/local/bin/rv",
+            interpreter: "/usr/bin/python3",
             adapterPath: claudeAdapter,
             force: false
         )

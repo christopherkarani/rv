@@ -166,7 +166,8 @@ enum DoctorRun {
             leftovers: environment.leftovers,
             problems: environment.install.map {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
-                    + DoctorInstallChecks.adapterRuntime(hosts: snapshot.hosts, probes: $0)
+                    + DoctorInstallChecks.adapterRuntime(
+                        hosts: snapshot.hosts, paths: paths, fileManager: environment.fileManager, probes: $0)
             } ?? []
         )
     }

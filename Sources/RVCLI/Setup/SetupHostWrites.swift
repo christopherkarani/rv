@@ -32,12 +32,16 @@ extension SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> Bool {
+        // Before any write: a host whose interpreter does not resolve keeps
+        // whatever it had.
+        let interpreter = try hookInterpreter(for: write.host, env: env)
         let wroteAdapter: Bool
         switch write.adapter {
         case .claudeSettingsMerge(let force):
             wroteAdapter = try writeClaudeSettings(
                 path: write.destination,
                 rvPath: env.rvPath,
+                interpreter: interpreter ?? "",
                 existingData: existingData,
                 force: force,
                 files: files
@@ -46,6 +50,7 @@ extension SetupRun {
             wroteAdapter = try writeAntigravityHooks(
                 path: write.destination,
                 rvPath: env.rvPath,
+                interpreter: interpreter ?? "",
                 existingData: existingData,
                 force: force,
                 files: files
@@ -62,6 +67,7 @@ extension SetupRun {
             let wroteCompanions = try writeCompanions(
                 write.companions,
                 host: write.host,
+                interpreter: interpreter,
                 layout: layout,
                 files: files
             )
@@ -69,6 +75,17 @@ extension SetupRun {
         } catch {
             throw SetupError.hostHookWriteFailed(write.host)
         }
+    }
+
+    /// The absolute interpreter this host's hook command bakes, nil for a
+    /// host that starts none. A Python host whose interpreter does not
+    /// resolve is not wired: its hook would fail open.
+    private static func hookInterpreter(for host: HookHost, env: SetupEnvironment) throws(SetupError) -> String? {
+        guard let name = AdapterRuntime.interpreter(for: host) else { return nil }
+        guard let path = env.resolveInterpreter(name), path.hasPrefix("/") else {
+            throw SetupError.hostHookWriteFailed(host)
+        }
+        return path
     }
 
     private static func writeOwnedHost(
@@ -113,6 +130,7 @@ extension SetupRun {
     private static func writeCompanions(
         _ companions: [HostCompanionWrite],
         host: HookHost,
+        interpreter: String?,
         layout: OwnedPaths,
         files: FileOps
     ) throws -> Bool {
@@ -147,13 +165,17 @@ extension SetupRun {
             case .openCodeAskPackage:
                 wrote = try writeOpenCodeTuiAskPackage(layout: layout, files: files)
             case .codexHooksJSON(let adapterPath, let hooksPath):
+                guard let interpreter else { throw SetupError.hostHookWriteFailed(host) }
                 wrote = try writeCodexHooksJSON(
+                    interpreter: interpreter,
                     adapterPath: adapterPath,
                     hooksPath: hooksPath,
                     files: files
                 )
             case .cursorHooksJSON(let adapterPath, let hooksPath):
+                guard let interpreter else { throw SetupError.hostHookWriteFailed(host) }
                 wrote = try writeCursorHooksJSON(
+                    interpreter: interpreter,
                     adapterPath: adapterPath,
                     hooksPath: hooksPath,
                     files: files
@@ -233,6 +255,7 @@ extension SetupRun {
 
     /// Merges the Codex PreToolUse registration for `adapterPath` into `hooks.json`.
     private static func writeCodexHooksJSON(
+        interpreter: String,
         adapterPath: String,
         hooksPath: String,
         files: FileOps
@@ -244,6 +267,7 @@ extension SetupRun {
         do {
             merged = try CodexHooksMerge.merge(
                 existingData: files.readData(hooksPath),
+                interpreter: interpreter,
                 adapterPath: adapterPath
             )
         } catch {
@@ -262,6 +286,7 @@ extension SetupRun {
 
     /// Merges the Cursor beforeShellExecution registration for `adapterPath` into `hooks.json`.
     private static func writeCursorHooksJSON(
+        interpreter: String,
         adapterPath: String,
         hooksPath: String,
         files: FileOps
@@ -273,6 +298,7 @@ extension SetupRun {
         do {
             let applied = try HostWiring.applyCursor(
                 existing: files.readData(hooksPath),
+                interpreter: interpreter,
                 adapterPath: adapterPath
             )
             merged = (applied.data, applied.wrote)
@@ -321,6 +347,7 @@ extension SetupRun {
     static func writeClaudeSettings(
         path: String,
         rvPath: String,
+        interpreter: String,
         existingData: Data?,
         force: Bool,
         files: FileOps
@@ -337,6 +364,7 @@ extension SetupRun {
                 let applied = try HostWiring.applyClaude(
                     existing: existing,
                     rvPath: rvPath,
+                    interpreter: interpreter,
                     adapterPath: adapterPath,
                     force: force
                 )
@@ -350,6 +378,7 @@ extension SetupRun {
     static func writeAntigravityHooks(
         path: String,
         rvPath: String,
+        interpreter: String,
         existingData: Data?,
         force: Bool,
         files: FileOps
@@ -366,6 +395,7 @@ extension SetupRun {
                 let applied = try HostWiring.applyAntigravity(
                     existing: existing,
                     rvPath: rvPath,
+                    interpreter: interpreter,
                     adapterPath: adapterPath,
                     force: force
                 )

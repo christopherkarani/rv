@@ -26,40 +26,58 @@ import RVPolicy
 
 @Suite struct HookCommandQuotingTests {
     private let rv = "/Users/a b/.local/bin/rv"
+    private let interpreter = "/Users/a b/py/bin/python3"
     private let adapter = "/Users/a b/.claude/hooks/rv-guard.py"
 
-    @Test func claudeCommandQuotesBothPathsAndParsesBack() {
-        let command = SettingsMergePolicy.hookCommand(rvPath: rv, adapterPath: adapter)
-        #expect(command == "RV_BINARY='/Users/a b/.local/bin/rv' python3 '/Users/a b/.claude/hooks/rv-guard.py'")
+    @Test func claudeCommandQuotesEveryPathAndParsesBack() {
+        let command = SettingsMergePolicy.hookCommand(rvPath: rv, interpreter: interpreter, adapterPath: adapter)
+        #expect(command
+            == "RV_BINARY='/Users/a b/.local/bin/rv' '/Users/a b/py/bin/python3' -I -S '/Users/a b/.claude/hooks/rv-guard.py'")
         #expect(ClaudeSettingsMerge.bakedRvPath(in: command) == rv)
         #expect(SettingsMergePolicy.adapterPath(in: command) == adapter)
+        #expect(SettingsMergePolicy.bakedInterpreter(in: command) == interpreter)
     }
 
-    @Test func codexAndCursorQuoteTheAdapter() {
-        #expect(CodexHooksMerge.hookCommand(adapterPath: "/h x/.codex/hooks/rv-guard.py")
-            == "python3 '/h x/.codex/hooks/rv-guard.py'")
-        #expect(CursorHooksMerge.hookCommand(adapterPath: "/h x/.cursor/hooks/rv-guard.py")
-            == "python3 '/h x/.cursor/hooks/rv-guard.py'")
+    @Test func codexAndCursorBakeTheInterpreterAndQuoteTheAdapter() {
+        #expect(CodexHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/h x/.codex/hooks/rv-guard.py")
+            == "/usr/bin/python3 -I -S '/h x/.codex/hooks/rv-guard.py'")
+        #expect(CursorHooksMerge.hookCommand(interpreter: "/usr/bin/python3", adapterPath: "/h x/.cursor/hooks/rv-guard.py")
+            == "/usr/bin/python3 -I -S '/h x/.cursor/hooks/rv-guard.py'")
+        #expect(CodexHooksMerge.adapterPath(in: "/usr/bin/python3 -I -S '/h x/.codex/hooks/rv-guard.py'")
+            == "/h x/.codex/hooks/rv-guard.py")
         #expect(CodexHooksMerge.adapterPath(in: "python3 '/h x/.codex/hooks/rv-guard.py'")
             == "/h x/.codex/hooks/rv-guard.py")
     }
 
     @Test func cursorKeepsFailClosed() {
-        let entry = CursorHooksMerge.hookEntry(adapterPath: "/h/.cursor/hooks/rv-guard.py")
+        let entry = CursorHooksMerge.hookEntry(interpreter: "/usr/bin/python3", adapterPath: "/h/.cursor/hooks/rv-guard.py")
         #expect(entry.failClosed == true)
     }
 
-    @Test func earlierUnquotedCommandIsOursAndOutdated() {
-        let legacy = SettingsMergePolicy.unquotedHookCommand(rvPath: rv, adapterPath: adapter)
-        let hook: JSONValue = .object([
-            "type": .string("command"),
-            "command": .string(legacy),
-            "timeout": .number(Double(ClaudeSettingsMerge.mergeDescriptor.timeout)),
-        ])
+    @Test(arguments: [
+        "RV_BINARY=/Users/a b/.local/bin/rv python3 /Users/a b/.claude/hooks/rv-guard.py",
+        "RV_BINARY='/Users/a b/.local/bin/rv' python3 '/Users/a b/.claude/hooks/rv-guard.py'",
+    ])
+    func earlierPathCommandIsOursAndOutdated(_ legacy: String) {
+        let hook = claudeHook(legacy)
         let descriptor = ClaudeSettingsMerge.mergeDescriptor
         #expect(SettingsMergePolicy.matchesCurrentCommand(hook, descriptor: descriptor))
         #expect(SettingsMergePolicy.matchesCurrentHook(hook, descriptor: descriptor) == false)
         #expect(ClaudeSettingsMerge.bakedRvPath(in: legacy) == rv)
+        #expect(SettingsMergePolicy.bakedInterpreter(in: legacy) == nil)
+    }
+
+    @Test(arguments: [
+        "RV_BINARY=/r /usr/bin/python3 /c/.claude/hooks/rv-guard.py",
+        "RV_BINARY=/r python3 -I -S /c/.claude/hooks/rv-guard.py",
+        "RV_BINARY=/r /usr/bin/python3 -I /c/.claude/hooks/rv-guard.py",
+        "RV_BINARY=/r /usr/bin/python3 -S -I /c/.claude/hooks/rv-guard.py",
+    ])
+    func otherInterpreterFormsAreNotOurs(_ command: String) {
+        let hook = claudeHook(command)
+        #expect(SettingsMergePolicy.matchesCurrentCommand(hook, descriptor: ClaudeSettingsMerge.mergeDescriptor) == false)
+        #expect(CodexHooksMerge.isCurrentCommand(
+            String(command.dropFirst("RV_BINARY=/r ".count)), adapterPath: "/c/.claude/hooks/rv-guard.py") == false)
     }
 
     @Test func setupInAHomeWithASpaceWritesARunnableClaudeHook() throws {
@@ -74,6 +92,15 @@ import RVPolicy
         let outcome = SetupRun.setup(env(home: root, launchctl: RecordingLaunchctl(), rvPath: rvPath))
         #expect(outcome.exitCode == 0, "\(outcome.stderr)")
         let settings = try String(contentsOfFile: layout.claudeSettings, encoding: .utf8)
-        #expect(settings.contains("RV_BINARY='\(rvPath)' python3 '\(root.path)/.claude/hooks/rv-guard.py'"))
+        #expect(settings.contains(
+            "RV_BINARY='\(rvPath)' /usr/bin/python3 -I -S '\(root.path)/.claude/hooks/rv-guard.py'"))
+    }
+
+    private func claudeHook(_ command: String) -> JSONValue {
+        .object([
+            "type": .string("command"),
+            "command": .string(command),
+            "timeout": .number(Double(ClaudeSettingsMerge.mergeDescriptor.timeout)),
+        ])
     }
 }
