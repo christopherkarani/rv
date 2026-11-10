@@ -334,12 +334,39 @@ struct OwnerPresenceTests {
         // Only a current rvd says how it checked the owner; a CLI refuses
         // an approval without this.
         #expect(reply.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved, presence: .daemonPrompt)))
-        // The prompt shows rvd's sanitized copy of the summary.
-        #expect(prompt.reasons.withLock { $0 } == ["set safety to strict"])
+        // The prompt shows rvd's escaped copy of the summary: an invisible
+        // character is shown, never dropped.
+        #expect(prompt.reasons.withLock { $0 } == ["set safety to\\u0007 strict"])
         let lines = try auditLines(home)
         #expect(lines.count == 1)
         #expect(lines.first?.contains("\"owner.action\"") == true)
-        #expect(lines.first?.contains("set safety to strict") == true)
+        #expect(lines.first?.contains("set safety to") == true)
+    }
+
+    /// The prompt is the only text the macOS owner reads before the CLI
+    /// applies the full action, so it is never shortened (a long path must
+    /// not cut the destination or a data-loss warning) and format or
+    /// separator characters cannot reorder or hide what it says.
+    @Test func ownerSummaryIsEscapedAndNeverTruncated() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let (runtime, _, url) = try runtime(checker: FakeChecker(accepted: "secret"), authenticator: prompt)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let spoofed = await runtime.dispatch(
+            IPCRequest(method: .confirmOwnerAction(ConfirmOwnerActionParams(
+                summary: "export policy to /tmp/\u{202E}txt.exe\u{2028}discarding nothing", proof: nil,
+                clientSemver: "1.0.0"))),
+            context: Self.unroledXPCContext())
+        #expect(spoofed.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved, presence: .daemonPrompt)))
+        #expect(prompt.reasons.withLock { $0 } == ["export policy to /tmp/\\u202etxt.exe\\u2028discarding nothing"])
+
+        let tail = ", discarding its unpublished changes"
+        let long = "abandon workspace /" + String(repeating: "a", count: ConfirmOwnerActionParams.maxSummaryBytes) + tail
+        let refused = await runtime.dispatch(
+            IPCRequest(method: .confirmOwnerAction(ConfirmOwnerActionParams(
+                summary: long, proof: nil, clientSemver: "1.0.0"))),
+            context: Self.unroledXPCContext())
+        #expect(refused.result == .error(.authorizationDenied))
+        #expect(prompt.promptCount == 1, "an over-long summary raises no prompt")
     }
 
     private func auditLines(_ home: HomeDirectory) throws -> [String] {

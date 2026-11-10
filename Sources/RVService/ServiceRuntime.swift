@@ -470,11 +470,14 @@ public actor ServiceRuntime {
     private func confirmOwnerAction(
         _ params: ConfirmOwnerActionParams, context: AuthenticatedRequestContext
     ) async -> IPCResult {
-        let summary = String(params.summary.unicodeScalars
-            .filter { $0.properties.generalCategory != .control }
-            .prefix(ConfirmOwnerActionParams.maxSummaryBytes)
-            .map(Character.init))
-        guard summary.isEmpty == false else { return .error(.authorizationDenied) }
+        // The prompt is all the macOS owner reads before the CLI applies the
+        // full action: invisible, format and separator characters are shown
+        // escaped, and a summary too long to show whole is refused, never
+        // shortened (a cut could drop a destination or a data-loss warning).
+        let summary = DisplayedText.approvalField(params.summary)
+        guard summary.isEmpty == false,
+              summary.unicodeScalars.count <= ConfirmOwnerActionParams.maxSummaryBytes
+        else { return .error(.authorizationDenied) }
         let verdict = await ownerPresence.confirm(summary, proof: params.proof, context: context)
         let reply: ConfirmOwnerActionReply
         switch verdict {
