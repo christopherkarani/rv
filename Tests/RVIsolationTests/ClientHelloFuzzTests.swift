@@ -74,18 +74,18 @@ struct ClientHelloFuzzTests {
 
     /// Properties of one parse that hold for any bytes.
     static func violations(parsing bytes: [UInt8]) -> [String] {
-        guard let name = EgressProxy.tlsServerName(bytes) else { return [] }
+        guard let name = EgressWire.tlsServerName(bytes) else { return [] }
         var broken: [String] = []
         if name.isEmpty { broken.append("empty server name") }
         if bytes.count < 9 || bytes[0] != 0x16 || bytes[5] != 0x01 { broken.append("name from a non-ClientHello") }
         // Bytes past the record are never read: appending must not change the answer.
-        if EgressProxy.tlsServerName(bytes + [0x00, 0x00, 0x00, 0x05, 0x00]) != name {
+        if EgressWire.tlsServerName(bytes + [0x00, 0x00, 0x00, 0x05, 0x00]) != name {
             broken.append("trailing bytes changed the name")
         }
         // A record one byte short is not a ClientHello.
         if bytes.count >= 5 {
             let recordEnd = 5 + (Int(bytes[3]) << 8 | Int(bytes[4]))
-            if recordEnd <= bytes.count, EgressProxy.tlsServerName(Array(bytes.prefix(recordEnd - 1))) != nil {
+            if recordEnd <= bytes.count, EgressWire.tlsServerName(Array(bytes.prefix(recordEnd - 1))) != nil {
                 broken.append("truncated record still named a server")
             }
         }
@@ -112,7 +112,7 @@ struct ClientHelloFuzzTests {
                 extensions: Self.randomExtensions(using: &random)
                     + [Self.serverName(leading + [(0, Array(host.utf8)), (0, Array("decoy.example".utf8))])]
                     + Self.randomExtensions(using: &random))
-            let parsed = EgressProxy.tlsServerName(hello)
+            let parsed = EgressWire.tlsServerName(hello)
             if parsed != host { failures.append("\(host) parsed as \(parsed ?? "nil")") }
             if EgressAdmission.checkSNI(expectedHost: host.uppercased() + ".", serverName: parsed) != nil {
                 failures.append("checkSNI refused \(host)")
@@ -188,7 +188,7 @@ struct ClientHelloFuzzTests {
                 seeds.randomElement(using: &random)!, seeds: seeds, dictionary: dictionary,
                 maxLength: 1_024, using: &random)
             let header = String(decoding: bytes, as: UTF8.self)
-            for target in [EgressProxy.parseCONNECT(header: header), EgressProxy.parseAbsoluteHTTP(header: header)] {
+            for target in [EgressWire.parseCONNECT(header: header), EgressWire.parseAbsoluteHTTP(header: header)] {
                 guard let target else { continue }
                 if target.host.isEmpty || target.host.utf8.count > 253 || (1...65535).contains(target.port) == false
                     || target.host.contains(where: { "@[]/ ".contains($0) })
