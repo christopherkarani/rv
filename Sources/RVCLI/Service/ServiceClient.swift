@@ -295,7 +295,8 @@ public struct ServiceClient: Sendable {
                 AttestTTYRedemptionCall(params: params),
                 using: transport,
                 // rvd holds the reply until the owner answers its prompt.
-                timeoutMs: Self.confirmOwnerActionTimeoutMs
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
             )
             return .success(reply)
         } catch let error as IPCCallError {
@@ -317,7 +318,8 @@ public struct ServiceClient: Sendable {
                 MintAllowOnceCall(params: params),
                 using: transport,
                 // rvd holds the reply until the owner answers its prompt.
-                timeoutMs: Self.confirmOwnerActionTimeoutMs
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
             )
             return .success(reply)
         } catch let error as IPCCallError {
@@ -328,6 +330,12 @@ public struct ServiceClient: Sendable {
     }
 
     /// Asks rvd to confirm the device owner approves `params.summary`.
+    ///
+    /// Owner calls (this, `mintAllowOnce`, `attestTTYRedemption`) verify
+    /// rvd over the hook-consult session, as hooks do: the peer-trust
+    /// manifest when one is installed (a tampered one fails closed),
+    /// otherwise the pinned sibling `rvd`. The manifest-only session would
+    /// refuse every manifest-free install before the owner saw a prompt.
     public func confirmOwnerAction(_ params: ConfirmOwnerActionParams) async -> Result<
         ConfirmOwnerActionReply, ServiceCommandError
     > {
@@ -338,7 +346,8 @@ public struct ServiceClient: Sendable {
             let reply = try await send(
                 ConfirmOwnerActionCall(params: params),
                 using: transport,
-                timeoutMs: Self.confirmOwnerActionTimeoutMs
+                timeoutMs: Self.confirmOwnerActionTimeoutMs,
+                hookConsult: true
             )
             return .success(reply)
         } catch let error as IPCCallError {

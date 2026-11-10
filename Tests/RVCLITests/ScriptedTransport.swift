@@ -18,6 +18,7 @@ final class ScriptedTransport: ServiceTransport {
     private let sendTimeouts = Mutex<[Int]>([])
     private let helloCalls = Mutex(0)
     private let invalidations = Mutex(0)
+    private let hookConsults = Mutex(0)
 
     init(
         ack: HelloAckView,
@@ -49,6 +50,10 @@ final class ScriptedTransport: ServiceTransport {
 
     var invalidationCount: Int { invalidations.withLock { $0 } }
 
+    /// Sends that went over the hook-consult session (daemon verified the
+    /// way hooks verify it: manifest when installed, else the sibling pin).
+    var hookConsultCount: Int { hookConsults.withLock { $0 } }
+
     func hello(clientSemver: String) async throws -> HelloAckView {
         helloCalls.withLock { $0 += 1 }
         if let helloError {
@@ -79,6 +84,11 @@ final class ScriptedTransport: ServiceTransport {
     func send(_ body: Data, timeoutMs: Int) async throws -> Data {
         sendTimeouts.withLock { $0.append(timeoutMs) }
         return try await send(body)
+    }
+
+    func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        hookConsults.withLock { $0 += 1 }
+        return try await send(body, timeoutMs: timeoutMs)
     }
 
     func invalidate() {
