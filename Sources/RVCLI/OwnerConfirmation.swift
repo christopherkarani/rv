@@ -11,8 +11,9 @@ import RVIPC
 /// safety, allowlist, policy, egress review, workspace abandon).
 ///
 /// The command runs only after rvd confirms the device owner approved it:
-/// - macOS: this genuine, code-pinned CLI runs LocalAuthentication (Touch ID
-///   or the login password); rvd accepts it by its `.cli` role.
+/// - macOS: rvd itself shows the LocalAuthentication prompt (Touch ID or the
+///   login password) with this summary. The CLI sends no proof and shows no
+///   prompt of its own, so no peer-trust manifest is needed.
 /// - Linux: the owner types their login password at the controlling
 ///   terminal; rvd verifies it with `unix_chkpwd`.
 ///
@@ -35,11 +36,7 @@ enum OwnerConfirmation {
             return
         }
         #if canImport(LocalAuthentication)
-        do {
-            try await CLIOwnerAuth.requireAuthenticated(reason: "rv wants to \(summary).")
-        } catch {
-            throw ValidationError("rv: \(summary) was not approved (owner authentication failed or was cancelled)")
-        }
+        FileHandle.standardError.write(Data("rv: approve \"\(summary)\" with Touch ID or your password\n".utf8))
         try await confirm(summary, proof: nil, client: client)
         #else
         guard let password = readOwnerPassword(prompt: "rv: \(summary)\nPassword for \(UserName.current ?? "your account"): ") else {
@@ -60,16 +57,23 @@ enum OwnerConfirmation {
                 return
             case .wrongPassword:
                 throw ValidationError("rv: wrong password; \(summary) was not done")
+            case .declined:
+                throw ValidationError(
+                    "rv: \(summary) was not approved (the prompt was cancelled, failed or timed out)")
             case .lockedOut:
                 let wait = answer.retryAfterSeconds.map { " Try again in \($0 / 60 + 1) min." } ?? ""
-                throw ValidationError("rv: too many wrong passwords; owner actions are locked.\(wait)")
+                throw ValidationError("rv: too many failed owner checks; owner actions are locked.\(wait)")
             case .busy:
                 throw ValidationError("rv: another owner approval is in progress; try again when it finishes")
             case .proofRequired:
-                throw ValidationError(
-                    "rv: rvd did not accept this caller for owner actions (on macOS use the installed, signed rv)")
+                throw ValidationError("rv: rvd could not identify this caller, so \(summary) was not done")
             case .unavailable:
+                #if canImport(LocalAuthentication)
+                throw ValidationError(
+                    "rv: rvd cannot show a Touch ID or password prompt here (no passcode set or no login session)")
+                #else
                 throw ValidationError("rv: rvd could not check the password (unix_chkpwd missing or not answering)")
+                #endif
             }
         case .failure(let error):
             switch error {

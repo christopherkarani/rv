@@ -31,7 +31,8 @@ struct Uninstall: AsyncParsableCommand {
         // never locked out of removing rv (DaemonDownOwnerConfirmation).
         do {
             try await CLIOwnerAuth.requireAuthenticatedOrLocalWhenDaemonDown(
-                reason: CLIOwnerAuth.reason, action: .uninstall)
+                reason: "Authenticate to uninstall rv (removes its hooks, config and background service).",
+                action: .uninstall)
         } catch {
             let output = setupFailureOutput(.ownerAuthenticationRequired, command: .uninstall)
             try CeremonyCLI.emit(SetupOutcome(

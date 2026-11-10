@@ -4,6 +4,7 @@ import Testing
 import RVDomain
 import RVIPC
 import RVPolicy
+import Synchronization
 @testable import RVCLI
 
 struct AllowOnceCommandRunTests {
@@ -311,15 +312,19 @@ struct AllowOnceCommandRunTests {
         }
     }
 
-    @Test func mint_succeedsOnTTY() async throws {
+    @Test func mint_withoutRvdFailsOnTTYAndWritesNoCode() async throws {
+        // Only rvd mints: with no rvd reachable there is no local code.
         let home = try isolatedHome()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
             ownerAuthOutcome: .authenticated
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
-            try await command.run()
+            await #expect(throws: ExitCode(2)) {
+                try await command.run()
+            }
         }
+        #expect(await AllowOnceCLI.store(home: home).list(now: Date()).isEmpty)
     }
 
     @Test func mint_storeUnavailable() async throws {
@@ -559,5 +564,176 @@ struct AllowOnceCommandRunTests {
         #expect(text.contains("cwd=/tmp/work"))
         let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
         #expect(lines.contains(sentence) == false)
+    }
+
+    // MARK: rvd's owner check
+
+    private func pendingRedeem(
+        result: IPCResult
+    ) async throws -> (store: AllowOnceStore, transport: ScriptedTransport, outcome: Result<Void, any Error>) {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now)
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: result)
+        let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
+        do {
+            _ = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.redeem(
+                    code: code.rawValue, tty: tty, robot: false, store: store, now: now, client: client)
+            }
+            return (store, transport, .success(()))
+        } catch {
+            return (store, transport, .failure(error))
+        }
+    }
+
+    @Test func redeem_ownerCheckRefusalIsReportedAndKeepsThePendingCode() async throws {
+        let refused = ConfirmOwnerActionReply(outcome: .declined)
+        let run = try await pendingRedeem(result: .attestTTYRedemption(
+            AttestTTYRedemptionReply(planted: false, epoch: "e", ownerCheck: refused)))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("a refused owner check must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notApproved(refused))
+        // Not reconciled as an already-planted retry: the code stays live.
+        let rows = await run.store.list(now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(rows.allSatisfy { $0.kind == .pending })
+    }
+
+    @Test func redeem_aCommandRvdCannotShowIsReportedAsTooLong() async throws {
+        let run = try await pendingRedeem(result: .attestTTYRedemption(AttestTTYRedemptionReply(
+            planted: false, epoch: "e", ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable),
+            notShowable: true)))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("an unshowable command must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notShowable)
+        #expect(AllowOnceCLI.notShowableMessage.contains("too long to approve in a prompt"))
+    }
+
+    @Test func redeem_aCodeRvdDidNotIssueIsReportedAsSuch() async throws {
+        let run = try await pendingRedeem(result: .error(.allowOnceNotFound))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("an unknown code must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notIssuedByService)
+    }
+
+    @Test func redeem_waitsForTheOwnerToAnswerRvdsPrompt() async throws {
+        let run = try await pendingRedeem(result: .attestTTYRedemption(
+            AttestTTYRedemptionReply(planted: true, epoch: "e")))
+        #expect(run.transport.lastSendTimeoutMs == ServiceClient.confirmOwnerActionTimeoutMs)
+    }
+
+    @Test func notApprovedMessagesNameWhatHappened() {
+        func text(_ outcome: ConfirmOwnerActionReply.Outcome, retry: Int? = nil) -> String {
+            AllowOnceCLI.notApprovedMessage(ConfirmOwnerActionReply(outcome: outcome, retryAfterSeconds: retry))
+        }
+        #expect(text(.declined).contains("cancelled, failed or timed out"))
+        #expect(text(.wrongPassword).contains("wrong password"))
+        #expect(text(.lockedOut, retry: 600).contains("Try again in 11 min"))
+        // A prompt the owner did not start may be the agent's: decline it.
+        #expect(text(.busy).contains("did not start"))
+        #expect(text(.busy).contains("decline it"))
+        for outcome in [ConfirmOwnerActionReply.Outcome.declined, .wrongPassword, .lockedOut, .busy, .unavailable] {
+            #expect(text(outcome).contains("RVOperatorUI") == false)
+            #expect(text(outcome).contains("rv setup") == false)
+        }
+    }
+
+    @Test func redeemNoticeNamesTheOnlyPromptToApprove() {
+        let notice = CLIOwnerAuth.redeemPromptNotice(code: "abc123")
+        #expect(notice.contains("approve only the Touch ID or password prompt for code abc123"))
+        #expect(notice.contains("decline any other"))
+    }
+
+    // MARK: Linux: rvd's description above the password prompt
+
+    private func linuxRedeem(
+        replies: [IPCResult]
+    ) async throws -> (transport: ScriptedTransport, shown: [String], outcome: Result<Void, any Error>) {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now)
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResults: replies)
+        let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
+        let shown = ReasonLog()
+        let outcome: Result<Void, any Error>
+        do {
+            _ = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.redeem(
+                    code: code.rawValue, tty: tty, robot: false, store: store, now: now, client: client,
+                    readOwnerProof: { reason in
+                        shown.reasons.withLock { $0.append(reason) }
+                        return OwnerProof(password: "pw")
+                    })
+            }
+            outcome = .success(())
+        } catch {
+            outcome = .failure(error)
+        }
+        return (transport, shown.reasons.withLock { $0 }, outcome)
+    }
+
+    private final class ReasonLog: Sendable {
+        let reasons = Mutex<[String]>([])
+    }
+
+    private func sentProofs(_ transport: ScriptedTransport) throws -> [OwnerProof?] {
+        try transport.sends.compactMap { body in
+            guard case .attestTTYRedemption(let params) = try IPCJSON.decode(IPCRequest.self, from: body).method
+            else { return nil }
+            return .some(params.ownerProof)
+        }
+    }
+
+    @Test func redeem_linuxShowsRvdsDescriptionThenSendsThePassword() async throws {
+        let described = "allow once \"LD_PRELOAD=/tmp/x.so git reset --hard\" in /tmp/a"
+        let run = try await linuxRedeem(replies: [
+            .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: "e", ownerCheck: ConfirmOwnerActionReply(outcome: .proofRequired),
+                promptText: described)),
+            .attestTTYRedemption(AttestTTYRedemptionReply(planted: true, epoch: "e")),
+        ])
+        if case .failure(let error) = run.outcome { Issue.record("redeem must succeed: \(error)") }
+        // rvd's text, not the pending file's redacted head.
+        #expect(run.shown == [described])
+        #expect(try sentProofs(run.transport) == [nil, OwnerProof(password: "pw")])
+    }
+
+    @Test func redeem_aPasswordRequestWithoutRvdsDescriptionAsksForNothing() async throws {
+        // An rvd that names nothing gets no password: the owner would be
+        // approving text rvd did not vouch for.
+        let run = try await linuxRedeem(replies: [
+            .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: "e", ownerCheck: ConfirmOwnerActionReply(outcome: .proofRequired))),
+        ])
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("no description must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notApproved(ConfirmOwnerActionReply(outcome: .proofRequired)))
+        #expect(run.shown.isEmpty)
+        #expect(try sentProofs(run.transport) == [nil])
+    }
+
+    @Test func redeem_macOSSendsNoPasswordAndShowsNothingItself() async throws {
+        let run = try await linuxRedeem(replies: [
+            .attestTTYRedemption(AttestTTYRedemptionReply(planted: true, epoch: "e")),
+        ])
+        if case .failure(let error) = run.outcome { Issue.record("redeem must succeed: \(error)") }
+        #expect(run.shown.isEmpty)
+        #expect(try sentProofs(run.transport) == [nil])
     }
 }

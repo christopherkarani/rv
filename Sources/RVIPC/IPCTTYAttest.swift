@@ -1,16 +1,15 @@
 import Foundation
 import RVDomain
 
-/// Step 8B.1 TTY attestation: the genuine pinned CLI proved a human typed
-/// this code, reviewed this exact row (fingerprint bound pre-LA and
-/// re-checked under the redeem lock), and passed device-owner
-/// LocalAuthentication. The daemon plants one memory grant.
-///
-/// Trust anchor: `.cli` component role (manifest-pinned code identity +
-/// hardened runtime + in-binary ceremony order). Same-user code cannot mint
-/// the identity; driving the genuine binary forces the human through LA.
-/// The daemon still re-validates every field and enforces per-epoch code
-/// single-use, so a buggy caller cannot plant garbage or doubles.
+/// Allow-once redeem: asks rvd to plant one memory grant for a pending
+/// code. The caller is an authenticated same-user peer and gets no
+/// authority from its role: rvd plants only after the device owner
+/// approves, on macOS in rvd's own LocalAuthentication prompt naming the
+/// code rvd issued, on Linux with the login password in `ownerProof`
+/// (asked for after a first request without one returns rvd's
+/// description; see `ServiceRuntime.attestTTYRedemption`). rvd re-validates every field
+/// and enforces per-epoch code single-use, so a buggy caller cannot plant
+/// garbage or doubles.
 ///
 /// The CLI sends the action DIGEST, never the view: pending rows store
 /// fingerprints (views would leak secret-bearing commands into a
@@ -31,9 +30,9 @@ public struct AttestTTYRedemptionParams: Sendable, Equatable, Codable {
     /// clients omit the key and decode to nil. Decode rejects
     /// non-64-hex bytes.
     public var payloadDigest: ContentPayloadDigest?
-    /// Owner presence proof for callers without the pinned `.cli` role
-    /// (Linux). rvd verifies it before planting; the genuine macOS CLI
-    /// sends none. Optional for wire compatibility.
+    /// Linux: the owner's login password, which rvd verifies before
+    /// planting. macOS sends none (rvd prompts itself). Optional for wire
+    /// compatibility.
     public var ownerProof: OwnerProof?
 
     public init(
@@ -54,13 +53,36 @@ public struct AttestTTYRedemptionParams: Sendable, Equatable, Codable {
 }
 
 public struct AttestTTYRedemptionReply: Sendable, Equatable, Codable {
-    /// False when this ceremony already planted this epoch (no second grant).
+    /// False when this ceremony already planted this epoch (no second
+    /// grant), or when `ownerCheck` says the owner did not approve.
     public var planted: Bool
     /// Issuing table epoch (audit correlation).
     public var epoch: String
+    /// Set only when the owner check refused (declined or failed prompt,
+    /// wrong password, lockout, a prompt already open, no prompt
+    /// possible) or, on Linux, still needs the password
+    /// (`proofRequired`); nothing was planted. Nil on a plant or an
+    /// already-planted retry.
+    public var ownerCheck: ConfirmOwnerActionReply?
+    /// True with an `unavailable` owner check when rvd refused to prompt
+    /// because it cannot show the whole command and cwd (too long once
+    /// escaped). rvd never shows a shortened command for approval.
+    public var notShowable: Bool?
+    /// Linux: rvd's own description of the code it issued (exact command,
+    /// cwd, rule; already escaped), set with a `proofRequired` owner check
+    /// when the request carried no password. The CLI shows it above the
+    /// password prompt and asks again with the password, so the owner reads
+    /// what rvd will grant, not the same-user pending file.
+    public var promptText: String?
 
-    public init(planted: Bool, epoch: String) {
+    public init(
+        planted: Bool, epoch: String, ownerCheck: ConfirmOwnerActionReply? = nil, notShowable: Bool? = nil,
+        promptText: String? = nil
+    ) {
         self.planted = planted
         self.epoch = epoch
+        self.ownerCheck = ownerCheck
+        self.notShowable = notShowable
+        self.promptText = promptText
     }
 }

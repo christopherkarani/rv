@@ -18,6 +18,10 @@ public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
     private let store: FileLockedJSONLStore<AllowOnceRecord>
     private var liveUnlockCodes: [UnlockCacheKey: AllowOnceUnlockCode] = [:]
+    /// Deny codes this instance issued, by code hash. Memory only: rvd's
+    /// instance is the one that issues them, and it reads them back to name
+    /// the whole command in the owner's redeem prompt. See `IssuedAllowOnce`.
+    private var issuedCodes: [String: IssuedAllowOnce] = [:]
 
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
@@ -56,6 +60,48 @@ public actor AllowOnceStore {
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
+        return try mintLocked(
+            matchingView: matchingView, cwd: cwd, ruleID: ruleID, now: now, ttl: ttl,
+            maskedSegments: maskedSegments, invocationPrefix: invocationPrefix,
+            invocationDisplay: invocationDisplay, issuedCommand: nil)
+    }
+
+    /// rvd's pre-arm (`rv allow-once mint`), run only after the owner
+    /// approved it in rvd. Like a deny code, the new code is remembered in
+    /// memory with `rawCommand`, the exact text the owner typed, so a later
+    /// redeem raises rvd's prompt naming it; the pending row keeps only the
+    /// redacted head. A live pending row for the same command returns the
+    /// code rvd already holds for it, or throws `alreadyPending`. The code
+    /// is lost with this instance (an rvd restart).
+    package func mintPreArmed(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        now: Date,
+        ttl: TimeInterval = 24 * 60 * 60,
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil,
+        rawCommand: String
+    ) throws -> AllowOnceUnlockCode {
+        try mintLocked(
+            matchingView: matchingView, cwd: cwd, ruleID: nil, now: now, ttl: ttl,
+            maskedSegments: maskedSegments, invocationPrefix: invocationPrefix,
+            invocationDisplay: invocationDisplay, issuedCommand: rawCommand)
+    }
+
+    /// Shared by `mint` and `mintPreArmed`. A non-nil `issuedCommand`
+    /// records the new code as issued by this instance.
+    private func mintLocked(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        ruleID: RuleID?,
+        now: Date,
+        ttl: TimeInterval,
+        maskedSegments: [String]?,
+        invocationPrefix: [String],
+        invocationDisplay: String?,
+        issuedCommand: String?
+    ) throws -> AllowOnceUnlockCode {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
         let view = MatchingView(trimmed)
@@ -92,6 +138,18 @@ public actor AllowOnceStore {
                     case let .appended(records):
                         let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        if let issuedCommand {
+                            issuedCodes[hash] = IssuedAllowOnce(
+                                fingerprint: fingerprint,
+                                cwd: cwd,
+                                payloadDigest: payloadDigest,
+                                command: issuedCommand,
+                                ruleID: ruleID,
+                                code: code,
+                                expiresAt: now.addingTimeInterval(ttl),
+                                redeemed: false
+                            )
+                        }
                         pruneLiveUnlockCodes(against: written, now: now)
                         return code
                     }
@@ -108,7 +166,9 @@ public actor AllowOnceStore {
     /// Writes `kind: .pending` only. Never plants a granted row. A live pending
     /// for the same command+cwd+payload is reused instead of minting a new code.
     /// TTL matches the pending-row TTL: the wire-delivered code is visible
-    /// to the gated agent, so its bearer window stays short.
+    /// to the gated agent, so its bearer window stays short. `rawCommand`
+    /// is the exact denied text; it is kept in memory only (see
+    /// `IssuedAllowOnce.command`) and never written.
     package func mintFromDeny(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
@@ -117,7 +177,8 @@ public actor AllowOnceStore {
         ttl: TimeInterval = 15 * 60,
         maskedSegments: [String]? = nil,
         invocationPrefix: [String] = [],
-        invocationDisplay: String? = nil
+        invocationDisplay: String? = nil,
+        rawCommand: String? = nil
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
@@ -159,6 +220,16 @@ public actor AllowOnceStore {
                     case let .appended(records):
                         let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        issuedCodes[hash] = IssuedAllowOnce(
+                            fingerprint: fingerprint,
+                            cwd: cwd,
+                            payloadDigest: payloadDigest,
+                            command: rawCommand,
+                            ruleID: ruleID,
+                            code: code,
+                            expiresAt: now.addingTimeInterval(ttl),
+                            redeemed: false
+                        )
                         pruneLiveUnlockCodes(against: written, now: now)
                         return .code(code)
                     }
@@ -233,6 +304,25 @@ public actor AllowOnceStore {
                     payloadDigest: record.payloadDigest?.rawValue
                 )
             }
+        }
+    }
+
+    /// The deny code this instance issued for `codeHash`, while it is live.
+    package func issued(codeHash: String, now: Date) -> IssuedAllowOnce? {
+        guard let entry = issuedCodes[codeHash], entry.expiresAt > now else { return nil }
+        return entry
+    }
+
+    /// rvd planted the grant for this issued code. The code is spent, so a
+    /// later deny for the same command must not hand it out again.
+    package func markIssuedRedeemed(codeHash: String) {
+        guard let issued = issuedCodes[codeHash] else { return }
+        issuedCodes[codeHash]?.redeemed = true
+        let key = UnlockCacheKey(
+            fingerprint: issued.fingerprint.rawValue, cwd: issued.cwd.rawValue,
+            payloadDigest: issued.payloadDigest?.rawValue)
+        if liveUnlockCodes[key] == issued.code {
+            liveUnlockCodes.removeValue(forKey: key)
         }
     }
 
@@ -333,6 +423,7 @@ public actor AllowOnceStore {
             ))
         }
         liveUnlockCodes = liveUnlockCodes.filter { liveKeys.contains($0.key) }
+        pruneIssuedCodes(against: written, now: now)
         guard liveUnlockCodes.count > Self.maxLiveUnlockCodes else { return }
         let victims = liveUnlockCodes.keys
             .sorted {
@@ -342,6 +433,27 @@ public actor AllowOnceStore {
             .dropFirst(Self.maxLiveUnlockCodes)
         for key in victims {
             liveUnlockCodes.removeValue(forKey: key)
+        }
+    }
+
+    /// Keeps issued codes whose pending row is still live, plus redeemed
+    /// ones until they expire (a retried redeem then answers "already
+    /// planted" without a second prompt). Capped like the live-code cache,
+    /// soonest expiry first out.
+    private func pruneIssuedCodes(against written: [AllowOnceRecord], now: Date) {
+        let livePending = Set(written.compactMap { record -> String? in
+            guard case .pending = record.lifecycle, record.expiresAt > now else { return nil }
+            return record.codeHash.rawValue
+        })
+        issuedCodes = issuedCodes.filter { hash, entry in
+            entry.expiresAt > now && (entry.redeemed || livePending.contains(hash))
+        }
+        guard issuedCodes.count > Self.maxLiveUnlockCodes else { return }
+        let victims = issuedCodes
+            .sorted { ($0.value.expiresAt, $0.key) < ($1.value.expiresAt, $1.key) }
+            .prefix(issuedCodes.count - Self.maxLiveUnlockCodes)
+        for (hash, _) in victims {
+            issuedCodes.removeValue(forKey: hash)
         }
     }
 

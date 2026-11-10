@@ -29,6 +29,46 @@ struct OwnerPresenceTests {
         }
     }
 
+    /// Stands in for rvd's LocalAuthentication prompt: answers `approve`,
+    /// records each reason, can block until released or cancelled.
+    final class FakeAuthenticator: OwnerAuthenticating, @unchecked Sendable {
+        let approve: Bool
+        let available: Bool
+        let hangs: Bool
+        let reasons = Mutex<[String]>([])
+        init(approve: Bool, available: Bool = true, hangs: Bool = false) {
+            self.approve = approve
+            self.available = available
+            self.hangs = hangs
+        }
+        func isAvailable() -> Bool { available }
+        func authenticate(reason: String) async -> Bool {
+            reasons.withLock { $0.append(reason) }
+            if hangs {
+                // Returns early only when the prompt is cancelled.
+                try? await Task.sleep(for: .seconds(60))
+                return false
+            }
+            return approve
+        }
+        var promptCount: Int { reasons.withLock { $0.count } }
+    }
+
+    /// An XPC peer rvd authenticated but gave no role: a macOS one-click
+    /// install has no peer-trust manifest, so this is the installed rv-cli.
+    static func unroledXPCContext() -> AuthenticatedRequestContext {
+        let code = PeerCodeIdentity(identifier: "rv-cli", teamIdentifier: nil, cdHash: Data([9]),
+            executablePath: "/Users/me/.local/bin/rv-cli", isAdHoc: true, hardenedRuntime: false,
+            injectionExceptions: [])
+        let id = UUID()
+        return .captured(
+            peer: AuthenticatedPeer(
+                evidence: PlatformPeerEvidence(processID: 9, effectiveUserID: 501, auditToken: Data([9]),
+                    codeIdentity: code, componentRole: nil),
+                connectionID: id),
+            connectionID: id)
+    }
+
     static func socketContext() -> AuthenticatedRequestContext {
         let id = UUID()
         return .captured(peer: .socketPeer(processID: 4242, effectiveUserID: 501, connectionID: id), connectionID: id)
@@ -119,17 +159,141 @@ struct OwnerPresenceTests {
         #expect(String(reflecting: proof).contains("hunter2") == false)
     }
 
+    // MARK: owner actions with rvd's own prompt (macOS)
+
+    @Test func ownerActionOnAnUnroledInstallIsApprovedByRvdsPrompt() async {
+        let checker = FakeChecker(accepted: "secret")
+        let prompt = FakeAuthenticator(approve: true)
+        let presence = OwnerPresence(checker: checker, authenticator: prompt)
+        #expect(await presence.confirm("set safety to strict", proof: nil, context: Self.unroledXPCContext())
+            == .approved)
+        #expect(prompt.reasons.withLock { $0 } == ["set safety to strict"])
+        #expect(checker.calls.withLock { $0 } == 0)
+    }
+
+    @Test func theCLIRoleNoLongerSkipsTheOwnersPrompt() async {
+        let prompt = FakeAuthenticator(approve: false)
+        let presence = OwnerPresence(checker: FakeChecker(accepted: "secret"), authenticator: prompt)
+        #expect(await presence.confirm("enable packs cloud.aws", proof: nil, context: Self.cliContext())
+            == .denied(.init(outcome: .declined)))
+        #expect(prompt.promptCount == 1)
+    }
+
+    @Test func aPasswordIsNoSubstituteForRvdsPrompt() async {
+        let prompt = FakeAuthenticator(approve: false)
+        let checker = FakeChecker(accepted: "secret")
+        let presence = OwnerPresence(checker: checker, authenticator: prompt)
+        #expect(await presence.confirm("set safety to normal", proof: OwnerProof(password: "secret"),
+            context: Self.socketContext()) == .denied(.init(outcome: .declined)))
+        #expect(checker.calls.withLock { $0 } == 0)
+    }
+
+    @Test func unauthenticatedCallerNeverRaisesAPrompt() async {
+        let prompt = FakeAuthenticator(approve: true)
+        let presence = OwnerPresence(checker: FakeChecker(accepted: "secret"), authenticator: prompt)
+        #expect(await presence.confirm("set safety to normal", proof: nil, context: .unauthenticated)
+            == .denied(.init(outcome: .proofRequired)))
+        #expect(prompt.promptCount == 0)
+    }
+
+    @Test func noPromptAvailableIsReportedUnavailable() async {
+        let prompt = FakeAuthenticator(approve: true, available: false)
+        let presence = OwnerPresence(checker: FakeChecker(accepted: "secret"), authenticator: prompt)
+        #expect(await presence.confirm("set safety to normal", proof: nil, context: Self.unroledXPCContext())
+            == .denied(.init(outcome: .unavailable)))
+        #expect(prompt.promptCount == 0)
+    }
+
+    @Test func fiveDeclinedPromptsLockOwnerActionsOut() async {
+        let now = Mutex(Date(timeIntervalSince1970: 1_800_000_000))
+        let prompt = FakeAuthenticator(approve: false)
+        let presence = OwnerPresence(
+            checker: FakeChecker(accepted: "secret"), authenticator: prompt, clock: { now.withLock { $0 } })
+        let context = Self.unroledXPCContext()
+        for _ in 0..<(OwnerPresence.maxFailures - 1) {
+            #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .declined)))
+        }
+        guard case .denied(let locked) = await presence.confirm("x", proof: nil, context: context) else {
+            Issue.record("fifth decline must lock")
+            return
+        }
+        #expect(locked.outcome == .lockedOut)
+        // While locked, no prompt is shown at all: an agent cannot keep one on screen.
+        guard case .denied(let still) = await presence.confirm("x", proof: nil, context: context) else {
+            Issue.record("locked checks must refuse")
+            return
+        }
+        #expect(still.outcome == .lockedOut)
+        #expect(prompt.promptCount == OwnerPresence.maxFailures)
+    }
+
+    @Test func aSecondPromptWhileOneIsOpenIsRefused() async throws {
+        let prompt = FakeAuthenticator(approve: false, hangs: true)
+        let presence = OwnerPresence(
+            checker: FakeChecker(accepted: "secret"), authenticator: prompt, promptTimeout: .seconds(5))
+        let context = Self.unroledXPCContext()
+        let first = Task { await presence.confirm("first", proof: nil, context: context) }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await presence.confirm("second", proof: nil, context: context) == .denied(.init(outcome: .busy)))
+        first.cancel()
+        _ = await first.value
+        #expect(prompt.reasons.withLock { $0 } == ["first"])
+    }
+
+    @Test func anUnansweredPromptTimesOutAndFreesTheSlot() async {
+        let prompt = FakeAuthenticator(approve: false, hangs: true)
+        let presence = OwnerPresence(
+            checker: FakeChecker(accepted: "secret"), authenticator: prompt, promptTimeout: .milliseconds(200))
+        let context = Self.unroledXPCContext()
+        let started = ContinuousClock.now
+        #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .declined)))
+        #expect(ContinuousClock.now - started < .seconds(10))
+        // The slot is free again: the next request reaches the prompt.
+        #expect(await presence.confirm("y", proof: nil, context: context) == .denied(.init(outcome: .declined)))
+        #expect(prompt.promptCount == 2)
+    }
+
+    @Test func withoutAPromptProviderOwnerActionsUseThePassword() async {
+        // Linux: no LocalAuthentication, so rvd checks the login password.
+        let presence = OwnerPresence(checker: FakeChecker(accepted: "secret"), authenticator: nil)
+        let context = Self.socketContext()
+        #expect(await presence.confirm("x", proof: nil, context: context) == .denied(.init(outcome: .proofRequired)))
+        #expect(await presence.confirm("x", proof: OwnerProof(password: "guess"), context: context)
+            == .denied(.init(outcome: .wrongPassword)))
+        #expect(await presence.confirm("x", proof: OwnerProof(password: "secret"), context: context) == .approved)
+    }
+
     // MARK: dispatch
 
-    private func runtime(checker: FakeChecker) throws -> (ServiceRuntime, HomeDirectory, URL) {
+    private func runtime(
+        checker: FakeChecker, authenticator: (any OwnerAuthenticating)? = nil
+    ) throws -> (ServiceRuntime, HomeDirectory, URL) {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
         let runtime = ServiceRuntime(
             snapshots: nil, catalog: nil, home: home, allowOnce: nil,
             allowOnceDirectory: try isolatedAllowOnceDirectory(), idleExitSeconds: IdleWatchdog.defaultSeconds,
             log: nil, analytics: nil, clock: { Date() }, pendingApprovals: .automatic,
-            ceremonies: WorkspaceOperatorCeremonyService(), ownerPresence: OwnerPresence(checker: checker))
+            ceremonies: WorkspaceOperatorCeremonyService(),
+            ownerPresence: OwnerPresence(checker: checker, authenticator: authenticator))
         return (runtime, home, homeURL)
+    }
+
+    @Test func confirmOwnerActionOverXPCPromptsInRvdAndAudits() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let (runtime, home, url) = try runtime(checker: FakeChecker(accepted: "secret"), authenticator: prompt)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let reply = await runtime.dispatch(
+            IPCRequest(method: .confirmOwnerAction(ConfirmOwnerActionParams(
+                summary: "set safety to\u{07} strict", proof: nil, clientSemver: "1.0.0"))),
+            context: Self.unroledXPCContext())
+        #expect(reply.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .approved)))
+        // The prompt shows rvd's sanitized copy of the summary.
+        #expect(prompt.reasons.withLock { $0 } == ["set safety to strict"])
+        let lines = try auditLines(home)
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("\"owner.action\"") == true)
+        #expect(lines.first?.contains("set safety to strict") == true)
     }
 
     private func auditLines(_ home: HomeDirectory) throws -> [String] {
@@ -167,32 +331,8 @@ struct OwnerPresenceTests {
         #expect(reply.result == .error(.authorizationDenied))
     }
 
-    private func attest(_ proof: OwnerProof?) -> IPCMethod {
-        .attestTTYRedemption(AttestTTYRedemptionParams(
-            fingerprint: GrantFingerprint(rawValue: String(repeating: "a", count: 64)),
-            cwd: wd("/tmp/ws"),
-            codeHash: CodeHash(rawValue: String(repeating: "b", count: 64)),
-            clientSemver: ProtocolVersion.serviceSemver,
-            ownerProof: proof))
-    }
-
-    @Test func linuxAllowOncePlantsOnlyWithTheOwnersPassword() async throws {
-        let (runtime, _, url) = try runtime(checker: FakeChecker(accepted: "secret"))
-        defer { try? FileManager.default.removeItem(at: url) }
-        let context = Self.socketContext()
-        let none = await runtime.dispatch(IPCRequest(method: attest(nil)), context: context, sameUIDSocket: true)
-        #expect(none.result == .error(.authorizationDenied))
-        let wrong = await runtime.dispatch(
-            IPCRequest(method: attest(OwnerProof(password: "nope"))), context: context, sameUIDSocket: true)
-        #expect(wrong.result == .error(.authorizationDenied))
-        let right = await runtime.dispatch(
-            IPCRequest(method: attest(OwnerProof(password: "secret"))), context: context, sameUIDSocket: true)
-        guard case .attestTTYRedemption(let reply) = right.result else {
-            Issue.record("the owner's password must let a Linux peer redeem, got \(right.result)")
-            return
-        }
-        #expect(reply.planted)
-    }
+    // Linux allow-once redeem: see AllowOnceOwnerPromptTests (it needs a
+    // code rvd issued).
 
     @Test func realUnixChkpwdRejectsAWrongPassword() {
         // Runs against the system helper when present; a random password
