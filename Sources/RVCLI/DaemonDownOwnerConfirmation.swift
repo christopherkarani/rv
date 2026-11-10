@@ -142,7 +142,7 @@ extension DaemonDownOwnerConfirmation.Seams {
             stdinIsTTY: { isatty(STDIN_FILENO) != 0 },
             stdoutIsTTY: { isatty(STDOUT_FILENO) != 0 },
             localOwnerCheck: { reason in await DaemonDownOwnerConfirmation.liveLocalCheck(reason: reason) },
-            notice: { line in FileHandle.standardError.write(Data("\(line)\n".utf8)) }
+            notice: { line in CommandContext.writeStderr("\(line)\n") }
         )
     }
 

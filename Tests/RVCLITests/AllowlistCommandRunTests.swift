@@ -367,12 +367,12 @@ struct AllowlistCommandRunTests {
 
         """
         try toml.write(to: file, atomically: true, encoding: .utf8)
-        let text = try await captureStdout {
-            try await withCLIProcess(home: home) {
-                var command = try AllowlistList.parse([])
-                try await command.run()
-            }
+        let capture = CLIOutputCapture()
+        try await withCLIProcess(home: home, output: capture) {
+            var command = try AllowlistList.parse([])
+            try await command.run()
         }
+        let text = capture.stdout
         #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
         #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)

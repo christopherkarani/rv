@@ -73,7 +73,7 @@ enum CLIOwnerAuth {
             return
         }
         #if canImport(LocalAuthentication)
-        FileHandle.standardError.write(Data((notice + "\n").utf8))
+        CommandContext.writeStderr(notice + "\n")
         #endif
     }
 

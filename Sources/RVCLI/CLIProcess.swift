@@ -9,6 +9,16 @@ import RVIPC
 import RVPolicy
 import RVTheme
 
+/// Redirect target for command stdout/stderr. Installed on
+/// `CLIProcess.Context` so command output goes to these closures instead of
+/// the process file descriptors. Reached through the task-local context, so
+/// child tasks inherit it; `Task.detached` work and direct `FileHandle`/`print`
+/// writes bypass it.
+struct CLIOutputSink: Sendable {
+    let stdout: @Sendable (String) -> Void
+    let stderr: @Sendable (String) -> Void
+}
+
 /// In-process overrides for operator HOME / TTY / env. Production reads the
 /// process; tests install a `Context` so `run()` never touches live `$HOME`.
 enum CLIProcess: Sendable {
@@ -26,6 +36,9 @@ enum CLIProcess: Sendable {
         /// Stand-in for `rv policy draft`'s English compiler. Nil uses the
         /// live chain, which reaches Apple Intelligence where it is enabled.
         var englishCompiler: (any EnglishCompiler)?
+        /// When set, `CommandContext.writeStdout/writeStderr` send text here
+        /// instead of writing to the process file descriptors.
+        var output: CLIOutputSink?
         /// Seams for the daemon-down owner fallback (`rv uninstall`, loosening
         /// `rv host mode`). Nil assumes rvd reachable, so `ownerAuthOutcome`
         /// alone decides and tests never probe rvd or read a terminal.
@@ -41,6 +54,7 @@ enum CLIProcess: Sendable {
             stdinText: String? = nil,
             ownerAuthOutcome: UIAuthenticationOutcome? = nil,
             englishCompiler: (any EnglishCompiler)? = nil,
+            output: CLIOutputSink? = nil,
             includeProcessEnvironment: Bool = false
         ) {
             self.home = home
@@ -63,6 +77,7 @@ enum CLIProcess: Sendable {
             self.stdinText = stdinText
             self.ownerAuthOutcome = ownerAuthOutcome
             self.englishCompiler = englishCompiler
+            self.output = output
         }
     }
 

@@ -36,7 +36,7 @@ enum OwnerConfirmation {
             return
         }
         #if canImport(LocalAuthentication)
-        FileHandle.standardError.write(Data("rv: approve \"\(summary)\" with Touch ID or your password\n".utf8))
+        CommandContext.writeStderr("rv: approve \"\(summary)\" with Touch ID or your password\n")
         try await confirm(summary, proof: nil, client: client)
         #else
         guard let password = readOwnerPassword(prompt: "rv: \(summary)\nPassword for \(UserName.current ?? "your account"): ") else {
