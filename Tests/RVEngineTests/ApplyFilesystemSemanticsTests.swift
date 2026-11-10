@@ -153,6 +153,16 @@ struct ApplyFilesystemSemanticsTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
     }
 
+    @Test func dynamicVerbSingle_doorDeniesRatherThanAsks() throws {
+        // The unresolved-invocation ask must not stand in for the boundary deny.
+        let result = try runFilesystemDoor("$CMD -o /outside/x http://h") { _ in repo }
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("dynamic-verb single must deny at the door, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
     @Test func globCdChain_isDeniedByBoundary() throws {
         let command = "[c]d /tmp && touch evil"
         let pack = try runFilesystemPack(command)
@@ -756,12 +766,16 @@ private func runFilesystemPack(
     secrets: SecretPathCatalog = .dayOne
 ) throws -> EvaluationResult {
     let world = try filesystemSampleWorld()
-    return evaluate(
+    // The pack pass as the semantic door runs it: the unresolved-invocation
+    // ask is the door's last step, so semantic denies still apply here.
+    return evaluateGated(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: world.packs,
         secretPaths: SecretPathDecider(catalog: secrets),
         engine: world.engine,
-        compiled: world.compiled
+        compiled: world.compiled,
+        patternBudget: PatternBudget(),
+        floorUnresolved: false
     )
 }
 

@@ -17,7 +17,8 @@ public func evaluateWithSemantics<E: PatternEngine>(
     workingDirectory: WorkingDirectory? = nil,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
-    policy: EffectiveActionPolicy = .empty
+    policy: EffectiveActionPolicy = .empty,
+    patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluateSemanticsOnce(
@@ -29,12 +30,13 @@ public func evaluateWithSemantics<E: PatternEngine>(
             workingDirectory: workingDirectory,
             gitProbe: gitProbe,
             filesystemProbe: filesystemProbe,
-            policy: policy
+            policy: policy,
+            patternBudget: patternBudget
         )
     }
     // An alias body is judged by the same door: `git -c alias.p=push p`
     // is a remote push only the semantic stage can see.
-    return gateAliases(judge(request), command: request.command, packs: packs) { expansion in
+    return gateAliases(judge(request), command: request.command, packs: packs, enabledPacks: request.enabledPacks) { expansion in
         var inner = request
         inner.command = expansion
         return judge(inner)
@@ -50,14 +52,19 @@ private func evaluateSemanticsOnce<E: PatternEngine>(
     workingDirectory: WorkingDirectory?,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
-    policy: EffectiveActionPolicy
+    policy: EffectiveActionPolicy,
+    patternBudget: PatternBudget
 ) -> EvaluationResult {
-    let pack = evaluate(
+    // The unresolved-invocation ask waits for the door's own gate, so a
+    // semantic deny below still wins over it.
+    let pack = evaluateGated(
         request,
         packs: packs,
         secretPaths: secretPaths,
         engine: engine,
-        compiled: compiled
+        compiled: compiled,
+        patternBudget: patternBudget,
+        floorUnresolved: false
     )
     let unwrapped = unwrapCommand(
         request.command,

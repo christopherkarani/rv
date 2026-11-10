@@ -31,10 +31,10 @@
     {
       "id": "semantic.git-alias",
       "command": "git myalias",
-      "expected": "allow",
+      "expected": "indeterminate",
       "kind": "semantic_only",
       "pattern_name": "git-alias-semantic-unverified",
-      "notes": "Pattern is (?!); ICU text match must not deny."
+      "notes": "Pattern is (?!); ICU text match must not deny. An unknown subcommand is an alias defined off the line: unresolvedInvocation (ask)."
     },
     {
       "id": "semantic.branch-dynamic",
