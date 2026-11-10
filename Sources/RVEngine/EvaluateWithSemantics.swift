@@ -7,8 +7,7 @@ import RVDomain
 /// allow. Path / cwd / repo I/O stays outside the Engine: callers inject
 /// filesystem facts through `filesystemProbe`, and git facts through
 /// `gitProbe`, each called once with the unwrapped outcome. Defaults are
-/// unprobed. rvd's running pids come the same way, through `rvdPIDs` (see
-/// `evaluate`). The Policy gate is downstream of this door, never inside it.
+/// unprobed. The Policy gate is downstream of this door, never inside it.
 public func evaluateWithSemantics<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
@@ -19,8 +18,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty,
-    patternBudget: PatternBudget = PatternBudget(),
-    rvdPIDs: () -> Set<Int32>? = { nil }
+    patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
     var budget = patternBudget
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
@@ -34,8 +32,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
             gitProbe: gitProbe,
             filesystemProbe: filesystemProbe,
             policy: policy,
-            patternBudget: &budget,
-            rvdPIDs: rvdPIDs
+            patternBudget: &budget
         )
     }
     // An alias body is judged by the same door: `git -c alias.p=push p`
@@ -57,8 +54,7 @@ private func evaluateSemanticsOnce<E: PatternEngine>(
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
     policy: EffectiveActionPolicy,
-    patternBudget: inout PatternBudget,
-    rvdPIDs: () -> Set<Int32>?
+    patternBudget: inout PatternBudget
 ) -> EvaluationResult {
     // The unresolved-invocation ask waits for the door's own gate, so a
     // semantic deny below still wins over it.
@@ -69,7 +65,6 @@ private func evaluateSemanticsOnce<E: PatternEngine>(
         engine: engine,
         compiled: compiled,
         patternBudget: &patternBudget,
-        rvdPIDs: rvdPIDs,
         floorUnresolved: false
     )
     let unwrapped = unwrapCommand(

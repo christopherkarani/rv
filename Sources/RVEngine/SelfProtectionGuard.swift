@@ -9,23 +9,17 @@ import RVDomain
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
-/// (`rv host mode <host> observe|off`), switching rv to observe
-/// (`rv setup --observe`), or retuning/stopping rv's service
-/// (`launchctl setenv RV_*`, `launchctl bootout dev.rv.*`, `pkill rvd`;
-/// see `retunesOrStopsRVService`). `evaluate` floors such a command at indeterminate
+/// (`rv host mode <host> observe|off`), or switching rv to observe
+/// (`rv setup --observe`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
 public enum SelfProtectionGuard {
-    /// `rvdPIDs` names rvd's running pids (nil: unknown), read only when a
-    /// literal-pid `kill` is judged. The caller reads the process table;
-    /// absent that, any literal pid is flagged (fail closed).
-    public static func weakensPolicy(_ command: ShellCommand, rvdPIDs: () -> Set<Int32>? = { nil }) -> Bool {
-        let launched = launchedCommandHeads(command.rawValue)
-        return launched.contains { launched in
+    public static func weakensPolicy(_ command: ShellCommand) -> Bool {
+        launchedCommandHeads(command.rawValue).contains { launched in
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
             // or glob head may resolve to rv: judged as rv (fail closed).
             launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
-        } || retunesOrStopsRVService(launched, rvdPIDs: rvdPIDs)
+        }
     }
 }
 

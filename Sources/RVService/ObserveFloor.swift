@@ -13,7 +13,7 @@ import RVPolicy
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
 ///
-/// Observe alone also floors stopping rvd (`RVDStopGuard`) and writing
+/// Observe alone also floors stopping or retuning rvd (`RVDStopGuard`) and writing
 /// rv's install (`RVInstallPathGuard`): with rvd absent an observe hook
 /// allows every later call unchecked. In enforce a stopped rvd fails
 /// closed, so those floors would only add false positives there.
@@ -59,7 +59,7 @@ enum ObserveFloor {
         home: HomeDirectory?,
         cwd: WorkingDirectory?
     ) -> Bool {
-        if holds(result) || SelfProtectionGuard.weakensPolicy(command, rvdPIDs: runningRVDaemonPIDs) { return true }
+        if holds(result) || SelfProtectionGuard.weakensPolicy(command) { return true }
         let rvConfig = SecretPathDecider(
             catalog: catalog,
             safety: store.safety,
@@ -95,7 +95,7 @@ enum ObserveFloor {
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        guard RVDStopGuard.stopsRVD(command.rawValue)
+        guard RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
             || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
         return floored(result)
     }

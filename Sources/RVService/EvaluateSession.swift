@@ -139,8 +139,7 @@ private func engineEvaluate(
         packs: packs,
         secretPaths: secretPaths,
         engine: engine,
-        compiled: compiled,
-        rvdPIDs: runningRVDaemonPIDs
+        compiled: compiled
     )
 }
 
@@ -164,7 +163,6 @@ private func engineEvaluateWithSemantics(
         workingDirectory: workingDirectory,
         gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,
-        policy: policy,
-        rvdPIDs: runningRVDaemonPIDs
+        policy: policy
     )
 }

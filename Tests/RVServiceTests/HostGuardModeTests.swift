@@ -218,6 +218,7 @@ struct HostGuardModeTests {
         "launchctl bootout gui/501/dev.rv.evaluate",
         "systemctl --user stop dev.rv.evaluate.service",
         "pkill -f rvd",
+        "launchctl setenv RV_GUARD_MODE observe",
         "rm ~/.local/bin/rvd",
         "mv /tmp/evil ~/.local/bin/rvd",
         "echo x > ~/Library/LaunchAgents/dev.rv.evaluate.plist",
@@ -242,7 +243,9 @@ struct HostGuardModeTests {
     // newly floored, and the everyday commands these resemble stay allowed.
     @Test("enforce host: install-adjacent everyday commands stay allowed", arguments: [
         "export PATH=\"$HOME/.local/bin:$PATH\"",
-        "PATH=$HOME/.local/bin:$PATH npm test",
+        // Not `npm test`: with no cwd its script graph is unresolved, so the
+        // package-script gate asks on every host.
+        "PATH=$HOME/.local/bin:$PATH swift test",
         "open ~/.local/bin",
         "rg foo ~",
         "git -C ~ status",
