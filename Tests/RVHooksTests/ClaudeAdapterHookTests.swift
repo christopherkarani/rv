@@ -175,7 +175,7 @@ struct ClaudeAdapterHookTests {
             first: (leftover, 0),
             confirm: "yes"
         )
-        try expectClaudeDeny(result)
+        try expectClaudeDeny(result, reason: "once?")
         #expect(result.spawnCount == 1)
     }
 
@@ -216,7 +216,7 @@ struct ClaudeAdapterHookTests {
             spend: ("", 0),
             confirm: "yes"
         )
-        try expectClaudeDeny(result)
+        try expectClaudeDeny(result, reason: "once?")
         #expect(result.spawnCount == 1)
         #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     }
@@ -266,6 +266,94 @@ struct ClaudeAdapterHookTests {
         #expect(result.stdout.contains("permissionDecision") == false)
         #expect(result.spawnCount == 0)
     }
+
+    // MARK: failure classes not covered by AdapterFailureMessageTests — each blocks.
+
+    /// Every down class the C hook can render as Claude `ask` reaches the human verbatim.
+    @Test(arguments: [cUnreachableReason, cTimeoutReason, cConnectionReason])
+    func daemonDownAsk_deniesWithTheCHookReason(_ reason: String) async throws {
+        let result = try await runClaudeWrapper(
+            event: resetHardEvent(),
+            first: (cDownAskJSON(reason: reason), 0),
+            confirm: "yes"
+        )
+        try expectClaudeDeny(result, reason: reason)
+        #expect(result.spawnCount == 1)
+    }
+
+    /// The copies above must be the C hook's real text, not stale duplicates.
+    @Test func cDownReasons_matchHookFallbackSource() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/rv-c/hook_fallback.c")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        for (name, text) in [
+            ("kUnreachableMessage", cUnreachableReason),
+            ("kTimeoutMessage", cTimeoutReason),
+            ("kConnectionMessage", cConnectionReason),
+        ] {
+            #expect(
+                source.contains("static const char \(name)[] =\n    \"\(text)\";"),
+                "\(name) in hook_fallback.c drifted from this test's copy"
+            )
+        }
+    }
+
+    @Test(arguments: ["Bash", "Read"])
+    func daemonDownAskWithoutReason_deniesWithGuidance(_ tool: String) async throws {
+        let bare = "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}\n"
+        let result = try await runClaudeWrapper(
+            event: tool == "Bash" ? resetHardEvent() : fileToolEvent(tool),
+            first: (bare, 0),
+            confirm: "yes"
+        )
+        try expectClaudeDeny(
+            result,
+            reason: "rv blocked this action without giving a reason. Run `rv doctor`."
+        )
+    }
+
+    @Test func killedBySignal_denies() async throws {
+        let result = try await runClaudeWrapper(
+            event: resetHardEvent(),
+            stub: .calls(first: ("", 0), spend: nil),
+            confirm: "yes",
+            killSignal: 9
+        )
+        try expectClaudeDeny(result)
+        #expect(result.stdout.contains("exited with code -9"), "\(result.stdout)")
+        #expect(result.stdout.contains("`rv doctor`"), "\(result.stdout)")
+    }
+
+    /// Exit 0 with a reply that is not JSON, not an object, or an unknown shape never allows.
+    @Test(arguments: ["not-json\n", "[1,2]\n", "{\"decision\":\"maybe\"}\n"])
+    func unusableReplyWithExitZero_denies(_ stdout: String) async throws {
+        let result = try await runClaudeWrapper(
+            event: resetHardEvent(),
+            first: (stdout, 0),
+            confirm: "yes"
+        )
+        try expectClaudeDeny(
+            result,
+            reason: "rv exited with code 0 without a usable decision. Run `rv doctor`."
+        )
+    }
+}
+
+/// `kUnreachableMessage` / `kTimeoutMessage` / `kConnectionMessage` in `Sources/rv-c/hook_fallback.c`
+/// (pinned by `cDownReasons_matchHookFallbackSource`).
+private let cUnreachableReason =
+    "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
+private let cTimeoutReason =
+    "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
+private let cConnectionReason =
+    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
+
+/// The C hook's `RV_HOOK_WHEN_DOWN=ask` reply for Claude (`render_ask`).
+private func cDownAskJSON(reason: String) -> String {
+    "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"\(reason)\"},\"systemMessage\":\"\(reason)\"}\n"
 }
 
 private func resetHardEvent() -> [String: Any] {
@@ -354,7 +442,8 @@ private func runClaudeWrapper(
 private func runClaudeWrapper(
     event: [String: Any],
     stub: ClaudeStubRV,
-    confirm: String?
+    confirm: String?,
+    killSignal: Int32? = nil
 ) async throws -> ClaudeWrapperRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-claude-\(UUID().uuidString)", isDirectory: true)
@@ -383,6 +472,8 @@ private func runClaudeWrapper(
         n += 1
         (root / "count").write_text(str(n))
         (root / "last-stdin").write_text(stdin)
+        if os.environ.get("RV_STUB_SIGNAL"):
+            os.kill(os.getpid(), int(os.environ["RV_STUB_SIGNAL"]))
         is_spend = False
         try:
             parsed = json.loads(stdin)
@@ -409,6 +500,9 @@ private func runClaudeWrapper(
     var environment = ProcessInfo.processInfo.environment
     environment["HOME"] = root.path
     environment["RV_STUB_DIR"] = stubDir.path
+    if let killSignal {
+        environment["RV_STUB_SIGNAL"] = String(killSignal)
+    }
     if let confirm {
         environment["RV_ASK_CONFIRM"] = confirm
     } else {
