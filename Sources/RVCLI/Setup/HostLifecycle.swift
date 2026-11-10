@@ -36,6 +36,7 @@ enum HostLifecycle {
             wrote: []
         )
         var serviceSkippedMissingRvd: String?
+        var runtimeMissing: [String: [HookHost]] = [:]
 
         for step in plan.steps {
             switch step {
@@ -46,22 +47,23 @@ enum HostLifecycle {
                     throw SetupError.configDirectoryCreateFailed
                 }
             case .skipLaunchAgent:
-                serviceSkippedMissingRvd = env.rvdPath
+                // Only a run that owns the real supervisor can prove rvd
+                // answers; an isolated HOME keeps the warning instead.
+                guard env.managesService else {
+                    serviceSkippedMissingRvd = env.rvdPath
+                    break
+                }
+                throw SetupError.serviceDown(.rvdMissing(env.rvdPath), alreadyWired: plan.alreadyWired)
             case .writeLaunchAgent:
-                switch env.supervisor {
-                case .launchd:
-                    try SetupRun.writeLaunchAgent(
-                        env: env,
-                        layout: layout,
-                        files: files,
-                        keepAlive: env.companionPresence.presence().keepAlive
-                    )
-                    try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
-                case .systemdUser:
-                    try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
+                do {
+                    try startService(env: env, layout: layout, files: files)
+                } catch {
+                    throw SetupError.serviceDown(error, alreadyWired: plan.alreadyWired)
                 }
             case .skipUndetected, .skipOff:
                 break
+            case .skipRuntimeMissing(let host, let interpreter):
+                runtimeMissing[interpreter, default: []].append(host)
             case .skipOccupied(let host):
                 slots.assign(.occupied, to: host)
             case .forceClearThenWrite(let write), .write(let write):
@@ -91,8 +93,34 @@ enum HostLifecycle {
             wrote: slots.wrote
         )
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
+        report.unwiredForMissingInterpreter = runtimeMissing
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
+    }
+
+    /// Installs and starts the service, then waits (bounded) for rvd to
+    /// answer. Throws before any host is wired when it does not.
+    private static func startService(
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) {
+        switch env.supervisor {
+        case .launchd:
+            try SetupRun.writeLaunchAgent(
+                env: env,
+                layout: layout,
+                files: files,
+                keepAlive: env.companionPresence.presence().keepAlive
+            )
+            try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
+        case .systemdUser:
+            try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
+        }
+        guard env.managesService else { return }
+        guard env.serviceAnswers() else {
+            throw SetupError.serviceNotAnswering(env.supervisor)
+        }
     }
 
     static func perform(

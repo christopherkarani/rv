@@ -33,14 +33,18 @@ struct DoctorInstallProbes {
     var trustManifest: TrustManifestState
     /// Would hooks trust the installed `rvd`? Nil when not evaluated.
     var daemonTrust: DoctorServiceTrust? = nil
+    /// Does a hook interpreter (`python3`) run? Asked only for an
+    /// interpreter some hooked host needs. Default true (tests).
+    var interpreterRunnable: (String) -> Bool = { _ in true }
 
     static func live(
         home: HomeDirectory,
+        pathEntries: [String] = [],
         userID: uid_t = getuid(),
         launchctl: any LaunchctlApplying = ProcessLaunchctl()
     ) -> DoctorInstallProbes {
 #if os(macOS)
-        DoctorInstallProbes(
+        var probes = DoctorInstallProbes(
             userID: userID,
             launchd: LaunchAgentProbe.observe(
                 label: SetupRun.launchAgentLabel,
@@ -51,8 +55,10 @@ struct DoctorInstallProbes {
             daemonTrust: DaemonTrustProbe.live(OwnedPaths(home: home).localRvd)
         )
 #else
-        DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
+        var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
 #endif
+        probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
+        return probes
     }
 
 #if os(macOS)
@@ -132,6 +138,29 @@ enum DoctorInstallChecks {
             launchdDomain(probes.launchd, paths: paths, userID: probes.userID),
             configDirectory(paths: paths, userID: probes.userID),
         ].compactMap { $0 }
+    }
+
+    /// One failing row per hooked host whose hook interpreter does not run:
+    /// that hook exits 127 and the host lets the tool call through.
+    static func adapterRuntime(
+        hosts: HostAdapterInstallationSnapshot,
+        probes: DoctorInstallProbes
+    ) -> [DoctorProblem] {
+        var runnable: [String: Bool] = [:]
+        return AdapterRuntime.hooked(hosts).compactMap { host in
+            guard let interpreter = AdapterRuntime.interpreter(for: host) else { return nil }
+            if runnable[interpreter] == nil {
+                runnable[interpreter] = probes.interpreterRunnable(interpreter)
+            }
+            guard runnable[interpreter] == false else { return nil }
+            return DoctorProblem(
+                id: "adapter-runtime-\(host.rawValue)",
+                severity: .fail,
+                summary: "\(host.rawValue) hook runs \(interpreter), which is not runnable; "
+                    + "\(host.rawValue) treats the failed hook as non-blocking, so its tool calls run unguarded",
+                fix: "\(AdapterRuntime.installHint(interpreter)), then rv setup"
+            )
+        }
     }
 
     private static func setupFix(_ paths: OwnedPaths) -> String {

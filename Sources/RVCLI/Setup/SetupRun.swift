@@ -36,10 +36,14 @@ enum SetupRun {
                 animate: animate,
                 write: write
             )
+            let refusals = report.unwiredForMissingInterpreter.keys.sorted().map { interpreter in
+                AdapterRuntime.setupRefusal(
+                    hosts: report.unwiredForMissingInterpreter[interpreter] ?? [], interpreter: interpreter)
+            }
             return SetupOutcome(
                 stdout: formatted.text,
-                stderr: serviceWarning(report),
-                exitCode: 0,
+                stderr: serviceWarning(report) + refusals.joined(),
+                exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
                 emitted: formatted.emitted
             )
         } catch {
@@ -109,9 +113,26 @@ enum SetupRun {
             layout: layout,
             force: force,
             rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath),
-            offHosts: offHosts
+            offHosts: offHosts,
+            missingInterpreters: missingInterpreters(installations: installations, offHosts: offHosts, env: env)
         )
         return try HostLifecycle.attach(plan, env: env, layout: layout, files: files)
+    }
+
+    /// Interpreters a detected host's hook needs that do not run. Each is
+    /// probed once, and only when some detected host needs it.
+    private static func missingInterpreters(
+        installations: HostAdapterInstallationSnapshot,
+        offHosts: Set<HookHost>,
+        env: SetupEnvironment
+    ) -> Set<String> {
+        let needed = Set(HookHost.setupSlotOrder.compactMap { host -> String? in
+            guard offHosts.contains(host) == false, installations.installation(for: host).wouldWire else {
+                return nil
+            }
+            return AdapterRuntime.interpreter(for: host)
+        })
+        return needed.filter { env.interpreterRunnable($0) == false }
     }
 
     static func inspectInstallations(
@@ -133,6 +154,7 @@ enum SetupRun {
 
     static func uninstall(
         _ env: SetupEnvironment,
+        removeModels: Bool = false,
         appearance: CLIAppearance = .robot,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
@@ -141,6 +163,7 @@ enum SetupRun {
         do {
             let formatted = try uninstallPerform(
                 env,
+                removeModels: removeModels,
                 appearance: appearance,
                 clock: clock,
                 animate: animate,
@@ -148,6 +171,8 @@ enum SetupRun {
             )
             return SetupOutcome(
                 stdout: formatted.text,
+                stderr: keptModelsNote(
+                    layout: OwnedPaths(home: env.home), files: FileOps(fileManager: env.fileManager)),
                 exitCode: 0,
                 emitted: formatted.emitted
             )

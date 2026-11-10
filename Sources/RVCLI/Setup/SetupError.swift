@@ -68,6 +68,13 @@ enum SetupError: Error, Equatable, Sendable {
     /// Hooks would reject the installed `rvd` (trust manifest or sibling
     /// pin), so wiring them would deny every tool call.
     case daemonUntrusted(reason: String, fix: String)
+    /// The service was started but rvd did not answer a health round-trip
+    /// within `ServiceReadiness.deadline`.
+    case serviceNotAnswering(EvaluateSupervisor)
+    /// The service step failed, so setup wired no hooks: wired hooks with no
+    /// answering rvd deny every agent tool call. `alreadyWired` names hosts
+    /// wired before this run; they were left as they were.
+    indirect case serviceDown(SetupError, alreadyWired: [HookHost])
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -84,6 +91,15 @@ func setupFailureOutput(
     _ error: SetupError,
     command: SetupFailureCommand
 ) -> (stderr: String, exitCode: Int32) {
+    let parts = setupFailureParts(error, command: command)
+    let lines = ["rv \(command.rawValue) failed: \(parts.phrase)"] + parts.detail
+    return (lines.joined(separator: "\n") + "\n", parts.exitCode)
+}
+
+private func setupFailureParts(
+    _ error: SetupError,
+    command: SetupFailureCommand
+) -> (phrase: String, exitCode: Int32, detail: [String]) {
     let phrase: String
     let exitCode: Int32
     var detail: [String] = []
@@ -121,9 +137,6 @@ func setupFailureOutput(
     case .launchctlApplyFailed(.bootstrap):
         phrase = "unable to load LaunchAgent"
         exitCode = EX_UNAVAILABLE
-        if command == .setup {
-            detail.append("hooks are wired but rvd is not loaded, so agent tool calls will be denied")
-        }
         detail.append(
             "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause"
         )
@@ -159,7 +172,38 @@ func setupFailureOutput(
         exitCode = EX_CONFIG
         detail.append("no hooks were wired: wired hooks would deny every agent tool call")
         detail.append("fix: \(fix)")
+    case .serviceNotAnswering(let supervisor):
+        phrase = "rvd did not answer within \(Int(ServiceReadiness.deadline)) seconds of starting the service"
+        exitCode = EX_UNAVAILABLE
+        switch supervisor {
+        case .launchd:
+            detail.append(
+                "fix: rv service restart from a logged-in desktop session (not SSH); rv doctor shows the cause"
+            )
+        case .systemdUser:
+            detail.append(
+                "fix: systemctl --user restart \(SystemdUserTemplate.unitName); "
+                    + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
+            )
+        }
+    case .serviceDown(let cause, let alreadyWired):
+        let inner = setupFailureParts(cause, command: command)
+        phrase = inner.phrase
+        exitCode = inner.exitCode
+        detail.append(serviceDownConsequence(alreadyWired: alreadyWired))
+        detail.append(contentsOf: inner.detail)
+        detail.append("then rerun rv setup to wire agent hooks")
     }
-    let lines = ["rv \(command.rawValue) failed: \(phrase)"] + detail
-    return (lines.joined(separator: "\n") + "\n", exitCode)
+    return (phrase, exitCode, detail)
+}
+
+/// What a failed service step left behind. Setup never wires a hook it
+/// cannot prove rvd answers, but hooks from an earlier run stay put.
+private func serviceDownConsequence(alreadyWired: [HookHost]) -> String {
+    guard alreadyWired.isEmpty == false else {
+        return "no hooks were wired: rv wires agent hooks only once rvd answers"
+    }
+    let names = alreadyWired.map(\.rawValue).joined(separator: ", ")
+    return "no new hooks were wired; hooks already wired before this run (\(names)) were left in place, "
+        + "so those agents are blocked until rvd answers"
 }

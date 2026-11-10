@@ -223,7 +223,12 @@ rv scan                     # audit past agent sessions
 rv audit verify             # check the audit hash chain
 rv doctor                   # service, packs, hosts, judge health
 rv uninstall                # remove everything rv owns (owner-auth)
+rv uninstall --remove-models  # ...and the judge weights in ~/.config/rv/models
 ```
+
+`rv uninstall` removes rv's hooks, stops the service, then deletes every
+file install.sh put in `~/.local/bin` and `~/Applications/RVApprovals.app`.
+If rvd is not answering, it asks you to confirm at the terminal instead.
 
 All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
 Anonymous usage counters are on by default; opt out with

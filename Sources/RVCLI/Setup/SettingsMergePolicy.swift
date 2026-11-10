@@ -36,8 +36,16 @@ enum SettingsMergePolicy {
         case wired(bakedPath: String)
     }
 
-    /// The single `RV_BINARY=` hook-command construction site.
+    /// The single `RV_BINARY=` hook-command construction site. Both paths
+    /// are shell-quoted when needed (a HOME with a space), since the host
+    /// runs the command through a shell.
     static func hookCommand(rvPath: String, adapterPath: String) -> String {
+        "RV_BINARY=\(ShellWord.quote(rvPath)) python3 \(ShellWord.quote(adapterPath))"
+    }
+
+    /// The form rv wrote before paths were quoted. Still rv's own command:
+    /// setup rewrites it without `--force`.
+    static func unquotedHookCommand(rvPath: String, adapterPath: String) -> String {
         "RV_BINARY=\(rvPath) python3 \(adapterPath)"
     }
 
@@ -51,11 +59,28 @@ enum SettingsMergePolicy {
             || (descriptor.legacyFingerprint.map { command.contains($0) } ?? false)
     }
 
-    static func adapterPath(in command: String) -> String? {
+    /// The rv and adapter paths an `RV_BINARY=` command names, quoted
+    /// (current) or unquoted (earlier rv).
+    static func parseCommand(_ command: String) -> (rvPath: String, adapterPath: String)? {
+        let envPrefix = "RV_BINARY="
+        guard command.hasPrefix(envPrefix) else { return nil }
         let marker = " python3 "
-        if let range = command.range(of: marker) {
-            let path = String(command[range.upperBound...])
-            return path.hasPrefix("/") ? path : nil
+        if let rv = ShellWord.leadingWord(command.dropFirst(envPrefix.count)),
+           rv.rest.hasPrefix(marker),
+           let adapter = ShellWord.leadingWord(rv.rest.dropFirst(marker.count)),
+           adapter.rest.isEmpty
+        {
+            return (rv.word, adapter.word)
+        }
+        guard let split = command.range(of: marker, options: .backwards) else { return nil }
+        let rvStart = command.index(command.startIndex, offsetBy: envPrefix.count)
+        guard rvStart <= split.lowerBound else { return nil }
+        return (String(command[rvStart..<split.lowerBound]), String(command[split.upperBound...]))
+    }
+
+    static func adapterPath(in command: String) -> String? {
+        if let parsed = parseCommand(command) {
+            return parsed.adapterPath.hasPrefix("/") ? parsed.adapterPath : nil
         }
         let prefix = "python3 "
         guard command.hasPrefix(prefix) else { return nil }
@@ -64,12 +89,9 @@ enum SettingsMergePolicy {
     }
 
     static func bakedRvPath(in command: String, descriptor: SettingsMergeDescriptor) -> String? {
-        let envPrefix = "RV_BINARY="
-        if command.hasPrefix(envPrefix) {
-            let rest = command.dropFirst(envPrefix.count)
-            guard let space = rest.firstIndex(of: " ") else { return nil }
-            let path = String(rest[..<space])
-            return path.hasPrefix("/") && path.isEmpty == false ? path : nil
+        if command.hasPrefix("RV_BINARY=") {
+            guard let path = parseCommand(command)?.rvPath else { return nil }
+            return path.hasPrefix("/") ? path : nil
         }
         guard let legacy = descriptor.legacyFingerprint else { return nil }
         let suffix = " " + legacy
@@ -81,33 +103,46 @@ enum SettingsMergePolicy {
         return path.hasPrefix("/") && path.isEmpty == false ? path : nil
     }
 
+    /// rv's current hook, quoting and timeout included.
     static func matchesCurrentHook(
         _ hook: JSONValue,
         descriptor: SettingsMergeDescriptor
     ) -> Bool {
-        matchesCurrentCommand(hook, descriptor: descriptor)
+        ownCommand(hook, descriptor: descriptor, acceptUnquoted: false)
             && hook["timeout"]?.int == descriptor.timeout
     }
 
-    /// rv's own current command whatever its timeout. An entry that differs
-    /// from the current hook only in its timeout was written by an older rv
-    /// (timeouts were raised so rvd always gives up before the host): it is
-    /// outdated, not a foreign guard, and setup rewrites it without --force.
+    /// rv's own command whatever its timeout or quoting. An entry that
+    /// differs from the current hook only in its timeout (raised so rvd
+    /// always gives up before the host) or in path quoting was written by
+    /// an older rv: it is outdated, not a foreign guard, and setup rewrites
+    /// it without --force.
     static func matchesCurrentCommand(
         _ hook: JSONValue,
         descriptor: SettingsMergeDescriptor
     ) -> Bool {
+        ownCommand(hook, descriptor: descriptor, acceptUnquoted: true)
+    }
+
+    private static func ownCommand(
+        _ hook: JSONValue,
+        descriptor: SettingsMergeDescriptor,
+        acceptUnquoted: Bool
+    ) -> Bool {
         guard let type = hook["type"]?.string, type == descriptor.hookType,
               let command = hook["command"]?.string,
-              let path = bakedRvPath(in: command, descriptor: descriptor),
-              path.hasPrefix("/"),
-              let adapter = adapterPath(in: command),
-              adapter.hasPrefix("/"),
-              adapter.hasSuffix("/hooks/" + descriptor.fingerprint)
+              let parsed = parseCommand(command),
+              parsed.rvPath.hasPrefix("/"),
+              parsed.adapterPath.hasPrefix("/"),
+              parsed.adapterPath.hasSuffix("/hooks/" + descriptor.fingerprint)
         else {
             return false
         }
-        return command == hookCommand(rvPath: path, adapterPath: adapter)
+        if command == hookCommand(rvPath: parsed.rvPath, adapterPath: parsed.adapterPath) {
+            return true
+        }
+        return acceptUnquoted
+            && command == unquotedHookCommand(rvPath: parsed.rvPath, adapterPath: parsed.adapterPath)
     }
 
     static func isFingerprintedHook(

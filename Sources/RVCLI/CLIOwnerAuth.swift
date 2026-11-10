@@ -124,3 +124,11 @@ enum CLIOwnerAuth {
         #endif
     }
 }
+
+extension CLIOwnerAuth {
+    /// The live LocalAuthentication outcome, which needs no rvd. Used by
+    /// `DaemonDownOwnerConfirmation` when rvd is down. `.unavailable` off macOS.
+    static func localDeviceOwnerOutcome(reason: String) async -> UIAuthenticationOutcome {
+        await liveOutcome(reason: reason)
+    }
+}
