@@ -25,8 +25,12 @@
 
 static int bind_at(const char *path) {
     struct sockaddr_un addr;
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0 || strlen(path) >= sizeof addr.sun_path) {
+    int fd;
+    if (strlen(path) >= sizeof addr.sun_path) {
+        return -1;
+    }
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
         return -1;
     }
     memset(&addr, 0, sizeof addr);
@@ -56,14 +60,21 @@ static int read_exact(int fd, unsigned char *p, size_t n) {
 
 int main(int argc, char **argv) {
     unsigned char header[4];
-    unsigned char *body;
+    unsigned char *body = NULL;
     uint32_t len;
-    int server;
-    int conn;
+    int server = -1;
+    int conn = -1;
+    int status = 1;
     FILE *record;
 
     if (argc == 3 && strcmp(argv[1], "stale") == 0) {
-        return bind_at(argv[2]) < 0 ? 1 : 0;
+        /* Closing keeps the bound socket file; nothing listens on it. */
+        server = bind_at(argv[2]);
+        if (server < 0) {
+            return 1;
+        }
+        close(server);
+        return 0;
     }
     if (argc != 4 || strcmp(argv[1], "drop") != 0) {
         fprintf(stderr, "usage: fake_rvd drop <socket> <record> | stale <socket>\n");
@@ -72,27 +83,33 @@ int main(int argc, char **argv) {
     alarm(20); /* never hang the suite */
     server = bind_at(argv[2]);
     if (server < 0 || listen(server, 1) != 0) {
-        return 1;
+        goto out;
     }
     conn = accept(server, NULL, NULL);
     unlink(argv[2]);
     if (conn < 0 || read_exact(conn, header, 4) != 0) {
-        return 1;
+        goto out;
     }
     len = ((uint32_t)header[0] << 24) | ((uint32_t)header[1] << 16)
         | ((uint32_t)header[2] << 8) | (uint32_t)header[3];
     body = malloc(len == 0 ? 1 : len);
     if (body == NULL || read_exact(conn, body, len) != 0) {
-        return 1;
+        goto out;
     }
     record = fopen(argv[3], "w");
     if (record == NULL) {
-        return 1;
+        goto out;
     }
     fprintf(record, "%lu\n", (unsigned long)len + 4);
     fclose(record);
-    close(conn);
-    close(server);
+    status = 0;
+out:
     free(body);
-    return 0;
+    if (conn >= 0) {
+        close(conn);
+    }
+    if (server >= 0) {
+        close(server);
+    }
+    return status;
 }
