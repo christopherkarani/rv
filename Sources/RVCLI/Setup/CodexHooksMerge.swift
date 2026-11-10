@@ -27,8 +27,10 @@ enum CodexHooksMerge {
         }
     )
 
+    /// The adapter path is shell-quoted when needed (a HOME with a space):
+    /// the host runs the command through a shell.
     static func hookCommand(adapterPath: String) -> String {
-        "python3 \(adapterPath)"
+        "python3 \(ShellWord.quote(adapterPath))"
     }
 
     static func isFingerprinted(command: String) -> Bool {
@@ -39,7 +41,9 @@ enum CodexHooksMerge {
         guard isFingerprinted(command: command) else { return nil }
         let prefix = "python3 "
         guard command.hasPrefix(prefix) else { return nil }
-        let path = String(command.dropFirst(prefix.count))
+        let operand = command.dropFirst(prefix.count)
+        let quoted = ShellWord.leadingWord(operand).flatMap { $0.rest.isEmpty ? $0.word : nil }
+        let path = quoted ?? String(operand)
         return path.hasPrefix("/") ? path : nil
     }
 
