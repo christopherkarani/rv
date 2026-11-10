@@ -88,7 +88,12 @@ agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-d
   blocks` marks what observe would have blocked with `"observed": true`.
   `rv setup --observe` (or `RV_INSTALL_MODE=observe` for the installer)
   starts there. Observe never relaxes rv's own protection (rv admin
-  commands, rv's config) while `rvd` is running. When `rvd` is not
+  commands, rv's config) while `rvd` is running, and an agent cannot
+  stop or replace `rvd` to get around it: `launchctl`/`systemctl` stops
+  of rv's job, `pkill`/`killall rvd`, and writes to rv's binaries,
+  LaunchAgent, systemd unit or socket dir are "run it in Terminal" on
+  every host. Residual: `kill <pid>` with a numeric pid (or one held in a
+  variable or file) is not resolved. When `rvd` is not
   running at all, hooks under observe let the call run unchecked and
   unlogged (with a notice on stderr) instead of prompting; a slow `rvd`, a
   daemon that fails its identity check, or a malformed reply still asks or
