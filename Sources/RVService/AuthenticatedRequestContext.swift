@@ -92,7 +92,7 @@ public enum ServiceMethodAuthorization {
             return .ownerMutation
         case .proposeWorkspaceLaunch, .launchProposalStatus:
             return .launchProposal
-        case .attestTTYRedemption:
+        case .attestTTYRedemption, .mintAllowOnce:
             return .ttyAttestation
         case .confirmOwnerAction:
             return .ownerConfirm
@@ -136,9 +136,10 @@ public enum ServiceMethodAuthorization {
                 return false
             }
         case .ttyAttestation:
-            // Allow-once redeem. The matrix only admits the caller; the
-            // owner approves in the handler (`attestTTYRedemption`), so no
-            // role here is authority. Admitted: the pinned CLI and role-less
+            // Allow-once redeem and pre-arm. The matrix only admits the
+            // caller; the owner approves in the handler
+            // (`attestTTYRedemption`, `mintAllowOnce`), so no role here is
+            // authority. Admitted: the pinned CLI and role-less
             // peers. Other pinned components have no business redeeming and
             // unauthenticated peers never get in.
             guard context.peer != nil else { return false }

@@ -304,6 +304,8 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .confirmOwnerAction(let params):
             return params.clientSemver
+        case .mintAllowOnce(let params):
+            return params.clientSemver
         }
     }
 
@@ -398,6 +400,8 @@ public actor ServiceRuntime {
             result = await attestTTYRedemption(params, context: context)
         case .confirmOwnerAction(let params):
             result = await confirmOwnerAction(params, context: context)
+        case .mintAllowOnce(let params):
+            result = await mintAllowOnce(params, context: context)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -599,6 +603,61 @@ public actor ServiceRuntime {
         }
     }
 
+    /// `rv allow-once mint`: pre-arms one code for the exact command the
+    /// owner typed, after the same owner check as redeem, with a prompt
+    /// naming the whole command and cwd (escaped, never cut). rvd remembers
+    /// the code in memory like a deny code, so the later redeem raises its
+    /// prompt naming the command; an rvd restart loses it. A coding agent
+    /// that reaches this request itself gets only a prompt the owner did
+    /// not ask for, and minting alone grants nothing. The audit names the
+    /// pre-arm, never the command.
+    private func mintAllowOnce(
+        _ params: MintAllowOnceParams, context: AuthenticatedRequestContext
+    ) async -> IPCResult {
+        let command = ShellCommand(rawValue: params.command)
+        let view = Normalize.matchingView(of: command)
+        guard view.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return .error(.authorizationDenied)
+        }
+        guard let shown = AllowOncePromptText.reason(command: params.command, cwd: params.cwd, ruleID: nil)
+        else {
+            return .mintAllowOnce(MintAllowOnceReply(
+                ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true))
+        }
+        let description = "pre-arm a code to " + shown
+        let verdict = await ownerPresence.confirmRedemption(
+            description, proof: params.ownerProof, context: context)
+        if case .denied(let reply) = verdict, reply.outcome == .proofRequired {
+            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: reply, promptText: description))
+        }
+        let outcome: String
+        switch verdict {
+        case .approved: outcome = ConfirmOwnerActionReply.Outcome.approved.rawValue
+        case .denied(let reply): outcome = reply.outcome.rawValue
+        }
+        OwnerPresence.audit(
+            summary: "pre-arm allow-once code", approved: verdict == .approved, outcome: outcome,
+            context: context, home: configHome)
+        if case .denied(let reply) = verdict {
+            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: reply))
+        }
+        do {
+            let code = try await allowOnce.mintPreArmed(
+                matchingView: view,
+                cwd: params.cwd,
+                now: clock(),
+                maskedSegments: Normalize.maskedSegments(of: command),
+                invocationPrefix: Normalize.invocationPrefix(of: command),
+                invocationDisplay: Normalize.invocationDisplay(of: command),
+                rawCommand: params.command)
+            return .mintAllowOnce(MintAllowOnceReply(code: code.rawValue))
+        } catch AllowOnceError.alreadyPending {
+            return .mintAllowOnce(MintAllowOnceReply(alreadyPending: true))
+        } catch {
+            return .error(.authorizationDenied)
+        }
+    }
+
     private enum RedemptionLookup: Equatable {
         /// rvd has nothing it can vouch for: no prompt is shown.
         case notIssued
@@ -609,12 +668,12 @@ public actor ServiceRuntime {
 
     /// rvd's own prompt text for this redeem.
     ///
-    /// The only source is the code rvd issued on a hook deny: rvd kept the
-    /// exact denied text in memory, and every field of the request must
-    /// match what it issued. A row in the same-user pending file that rvd
-    /// did not issue (pre-armed with `rv allow-once mint`, or written by the
-    /// agent) is not found, whatever the caller's role: rvd cannot vouch
-    /// for its text.
+    /// The only source is a code rvd issued, on a hook deny or on an
+    /// owner-approved `rv allow-once mint`: rvd kept the exact command text
+    /// in memory, and every field of the request must match what it issued.
+    /// A row in the same-user pending file that rvd did not issue (written
+    /// by the agent, or from before an rvd restart) is not found, whatever
+    /// the caller's role: rvd cannot vouch for its text.
     private func redemptionDescription(_ params: AttestTTYRedemptionParams) async -> RedemptionLookup {
         guard let issued = await allowOnce.issued(codeHash: params.codeHash.rawValue, now: clock()),
             issued.fingerprint == params.fingerprint, issued.cwd == params.cwd,
@@ -914,6 +973,8 @@ public actor ServiceRuntime {
             method = "attestTTYRedemption"
         case .confirmOwnerAction:
             method = "confirmOwnerAction"
+        case .mintAllowOnce:
+            method = "mintAllowOnce"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

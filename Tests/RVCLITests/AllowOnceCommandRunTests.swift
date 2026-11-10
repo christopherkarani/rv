@@ -312,15 +312,19 @@ struct AllowOnceCommandRunTests {
         }
     }
 
-    @Test func mint_succeedsOnTTY() async throws {
+    @Test func mint_withoutRvdFailsOnTTYAndWritesNoCode() async throws {
+        // Only rvd mints: with no rvd reachable there is no local code.
         let home = try isolatedHome()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
             ownerAuthOutcome: .authenticated
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
-            try await command.run()
+            await #expect(throws: ExitCode(2)) {
+                try await command.run()
+            }
         }
+        #expect(await AllowOnceCLI.store(home: home).list(now: Date()).isEmpty)
     }
 
     @Test func mint_storeUnavailable() async throws {

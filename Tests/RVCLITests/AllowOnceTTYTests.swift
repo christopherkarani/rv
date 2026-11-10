@@ -6,6 +6,7 @@ import RVEngine
 import RVIPC
 @testable import RVPolicy
 @testable import RVCLI
+import Synchronization
 
 struct AllowOnceTTYTests {
     @Test func nonTTYMintRefuses() async throws {
@@ -19,7 +20,8 @@ struct AllowOnceTTYTests {
                 tty: tty,
                 robot: false,
                 store: store,
-                now: now
+                now: now,
+                client: noRvd(store)
             )
         }
         #expect(
@@ -59,16 +61,8 @@ struct AllowOnceTTYTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
-            try await AllowOnceCLI.mint(
-                command: ShellCommand(rawValue: "git reset --hard"),
-                cwd: wd("/tmp/a"),
-                tty: tty,
-                robot: false,
-                store: store,
-                now: now
-            )
-        }
+        let code = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now)
         await #expect(throws: AllowOnceAttestError.serviceUnavailable) {
             try await withCLIProcess(ownerAuthOutcome: .authenticated) {
                 try await AllowOnceCLI.redeem(
@@ -76,7 +70,8 @@ struct AllowOnceTTYTests {
                     tty: tty,
                     robot: false,
                     store: store,
-                    now: now
+                    now: now,
+                    client: noRvd(store)
                 )
             }
         }
@@ -117,7 +112,8 @@ struct AllowOnceTTYTests {
                     tty: tty,
                     robot: false,
                     store: store,
-                    now: now
+                    now: now,
+                    client: noRvd(store)
                 )
             }
         }
@@ -130,16 +126,8 @@ struct AllowOnceTTYTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
-            try await AllowOnceCLI.mint(
-                command: ShellCommand(rawValue: "git reset --hard"),
-                cwd: wd("/tmp/a"),
-                tty: tty,
-                robot: false,
-                store: store,
-                now: now
-            )
-        }
+        let code = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now)
         for outcome in [UIAuthenticationOutcome.failed, .cancelled, .timedOut] {
             await #expect(throws: AllowOnceAuthError.required) {
                 try await withCLIProcess(ownerAuthOutcome: outcome) {
@@ -167,7 +155,8 @@ struct AllowOnceTTYTests {
                 tty: tty,
                 robot: true,
                 store: store,
-                now: now
+                now: now,
+                client: noRvd(store)
             )
         }
     }
@@ -199,6 +188,7 @@ struct AllowOnceTTYTests {
                     robot: false,
                     store: store,
                     now: now,
+                    client: noRvd(store),
                     peek: { _, _ in pinned }
                 )
             }
@@ -216,6 +206,7 @@ struct AllowOnceTTYTests {
             outcome: .indeterminate(.commandTooLarge),
             matchingView: "git reset --hard"
         )
+        let (transport, client) = scriptedRvd([.mintAllowOnce(MintAllowOnceReply(code: "abc123"))], store: store)
         let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
             try await AllowOnceCLI.mint(
                 command: ShellCommand(rawValue: "git reset --hard"),
@@ -224,11 +215,12 @@ struct AllowOnceTTYTests {
                 robot: false,
                 store: store,
                 now: now,
+                client: client,
                 peek: { _, _ in uncertain }
             )
         }
-        #expect((await store.list(now: now)).contains { $0.kind == .pending })
-        #expect(code.rawValue.count == 6)
+        #expect(code.rawValue == "abc123")
+        #expect(transport.sendCount == 1)
     }
 
     @Test func mintRefusesLivePinnedCommand() async throws {
@@ -247,7 +239,8 @@ struct AllowOnceTTYTests {
                     tty: tty,
                     robot: false,
                     store: store,
-                    now: now
+                    now: now,
+                    client: noRvd(store)
                 )
             }
         }
@@ -302,36 +295,116 @@ struct AllowOnceTTYTests {
         }
     }
 
-    @Test func mintWrappedCommandBindsInvocation() async throws {
-        // B1: the minted row binds the erased invocation prefix in its
-        // fingerprint and names it in the display tag.
+    @Test func mintSendsTheExactCommandToRvdAndWritesNothingItself() async throws {
+        // rvd mints, binds the invocation prefix and writes the pending
+        // row; the CLI sends the exact typed text and keeps no local copy.
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let command = ShellCommand(rawValue: "sudo git reset --hard")
+        let (transport, client) = scriptedRvd([.mintAllowOnce(MintAllowOnceReply(code: "abc123"))], store: store)
         let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
             try await AllowOnceCLI.mint(
-                command: command,
+                command: ShellCommand(rawValue: "sudo -u deploy git reset --hard"),
                 cwd: wd("/tmp/a"),
                 tty: tty,
                 robot: false,
                 store: store,
-                now: now
+                now: now,
+                client: client,
+                peek: { _, _ in EvaluationResult(outcome: .plain, matchingView: "git reset --hard") }
             )
         }
-        let peeked = try #require(await store.validatePending(code: code.rawValue, now: now))
-        #expect(peeked.row.invocationDisplay == "sudo")
-        #expect(
-            peeked.fingerprint
-                == grantFingerprint(
-                    Normalize.matchingView(of: command),
-                    invocationPrefix: Normalize.invocationPrefix(of: command)
-                ).rawValue
-        )
-        #expect(
-            peeked.fingerprint
-                != grantFingerprint(Normalize.matchingView(of: command), invocationPrefix: []).rawValue
-        )
+        #expect(code.rawValue == "abc123")
+        let sent = try sentMints(transport)
+        #expect(sent.map(\.command) == ["sudo -u deploy git reset --hard"])
+        #expect(sent.map(\.cwd) == [wd("/tmp/a")])
+        #expect(sent.map(\.ownerProof) == [nil])
+        #expect(await store.list(now: now).isEmpty)
+    }
+
+    @Test func mintWithoutRvdFailsWithoutALocalCode() async throws {
+        // A code rvd did not issue can never be redeemed, so there is no
+        // local fallback.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        await #expect(throws: AllowOnceAttestError.serviceUnavailable) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.mint(
+                    command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/a"), tty: tty,
+                    robot: false, store: store, now: now, client: noRvd(store),
+                    peek: { _, _ in EvaluationResult(outcome: .plain, matchingView: "git reset --hard") })
+            }
+        }
+        #expect(await store.list(now: now).isEmpty)
+        #expect(AllowOnceCLI.mintServiceUnavailableMessage.contains("nothing was minted"))
+    }
+
+    @Test func mintLinuxShowsRvdsDescriptionThenSendsThePassword() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let described = "pre-arm a code to allow once \"git reset --hard\" in /tmp/a"
+        let (transport, client) = scriptedRvd([
+            .mintAllowOnce(MintAllowOnceReply(
+                ownerCheck: ConfirmOwnerActionReply(outcome: .proofRequired), promptText: described)),
+            .mintAllowOnce(MintAllowOnceReply(code: "abc123")),
+        ], store: store)
+        let shown = ShownReasons()
+        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.mint(
+                command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/a"), tty: tty,
+                robot: false, store: store, now: now, client: client,
+                peek: { _, _ in EvaluationResult(outcome: .plain, matchingView: "git reset --hard") },
+                readOwnerProof: { reason in
+                    shown.reasons.withLock { $0.append(reason) }
+                    return OwnerProof(password: "pw")
+                })
+        }
+        #expect(code.rawValue == "abc123")
+        #expect(shown.reasons.withLock { $0 } == [described])
+        #expect(try sentMints(transport).map(\.ownerProof) == [nil, OwnerProof(password: "pw")])
+    }
+
+    @Test func mintRefusalsFromRvdMintNothing() async throws {
+        let cases: [(IPCResult, AllowOnceAttestError?, AllowOnceError?)] = [
+            (.mintAllowOnce(MintAllowOnceReply(
+                ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true)), .notShowable, nil),
+            (.mintAllowOnce(MintAllowOnceReply(alreadyPending: true)), nil, .alreadyPending),
+            (.mintAllowOnce(MintAllowOnceReply(ownerCheck: ConfirmOwnerActionReply(outcome: .declined))),
+             .notApproved(ConfirmOwnerActionReply(outcome: .declined)), nil),
+            (.mintAllowOnce(MintAllowOnceReply(code: "not-a-code")), .serviceDenied, nil),
+            (.mintAllowOnce(MintAllowOnceReply()), .serviceDenied, nil),
+            (.error(.authorizationDenied), .serviceDenied, nil),
+            (.error(.unknownMethod), .serviceDenied, nil),
+        ]
+        for (reply, attestError, storeError) in cases {
+            let store = try isolatedStore()
+            let now = Date(timeIntervalSince1970: 1_700_000_000)
+            let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+            let (_, client) = scriptedRvd([reply], store: store)
+            do {
+                _ = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                    try await AllowOnceCLI.mint(
+                        command: ShellCommand(rawValue: "git reset --hard"), cwd: wd("/tmp/a"), tty: tty,
+                        robot: false, store: store, now: now, client: client,
+                        peek: { _, _ in EvaluationResult(outcome: .plain, matchingView: "git reset --hard") })
+                }
+                Issue.record("\(reply) must not hand out a code")
+            } catch let error as AllowOnceAttestError {
+                #expect(error == attestError, "\(reply)")
+            } catch let error as AllowOnceError {
+                #expect(error == storeError, "\(reply)")
+            }
+            #expect(await store.list(now: now).isEmpty)
+        }
+    }
+
+    @Test func theMintedMessageSaysTheCodeDiesWithRvd() {
+        let text = AllowOnceCLI.mintedMessage(code: "abc123")
+        #expect(text.hasPrefix("allow-once code: abc123\nrv allow-once abc123\n"))
+        #expect(text.contains("lost if rvd restarts"))
+        #expect(text.contains("24 hours"))
     }
 
     @Test func mintThrottlesPastLAPromptBudget() async throws {
@@ -352,7 +425,8 @@ struct AllowOnceTTYTests {
                     tty: tty,
                     robot: false,
                     store: store,
-                    now: now
+                    now: now,
+                    client: noRvd(store)
                 )
             }
         }
@@ -362,17 +436,9 @@ struct AllowOnceTTYTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
-            try await AllowOnceCLI.mint(
-                command: ShellCommand(rawValue: "git reset --hard"),
-                cwd: wd("/tmp/a"),
-                tty: tty,
-                robot: false,
-                store: store,
-                now: now
-            )
-        }
-        for _ in 1..<AllowOnceStore.maxLAPromptsPerWindow {
+        let code = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now)
+        for _ in 0..<AllowOnceStore.maxLAPromptsPerWindow {
             #expect(await store.reserveLAPrompt(now: now))
         }
         await #expect(throws: AllowOnceAuthError.throttled) {
@@ -537,6 +603,31 @@ struct OperatorHomeStoreTests {
         #expect(second.baseDirectory.path.contains("rv-allow-once-nohome") == false)
         #expect(first.baseDirectory != second.baseDirectory)
     }
+}
+
+/// No rvd: mint and redeem must fail closed, never reach a live daemon.
+private func noRvd(_ store: AllowOnceStore) -> ServiceClient {
+    ServiceClient(transport: nil, allowOnceDirectory: store.baseDirectory)
+}
+
+/// An rvd that answers with `replies`, in order.
+private func scriptedRvd(_ replies: [IPCResult], store: AllowOnceStore) -> (ScriptedTransport, ServiceClient) {
+    let transport = ScriptedTransport(
+        ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+        responseResults: replies)
+    return (transport, ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory))
+}
+
+private func sentMints(_ transport: ScriptedTransport) throws -> [MintAllowOnceParams] {
+    try transport.sends.compactMap { body in
+        guard case .mintAllowOnce(let params) = try IPCJSON.decode(IPCRequest.self, from: body).method
+        else { return nil }
+        return params
+    }
+}
+
+private final class ShownReasons: Sendable {
+    let reasons = Mutex<[String]>([])
 }
 
 private func isolatedStore() throws -> AllowOnceStore {

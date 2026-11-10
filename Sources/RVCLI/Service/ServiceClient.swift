@@ -305,6 +305,28 @@ public struct ServiceClient: Sendable {
         }
     }
 
+    /// `rv allow-once mint`: asks rvd to pre-arm a code after its owner check.
+    public func mintAllowOnce(_ params: MintAllowOnceParams) async -> Result<
+        MintAllowOnceReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                MintAllowOnceCall(params: params),
+                using: transport,
+                // rvd holds the reply until the owner answers its prompt.
+                timeoutMs: Self.confirmOwnerActionTimeoutMs
+            )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
     /// Asks rvd to confirm the device owner approves `params.summary`.
     public func confirmOwnerAction(_ params: ConfirmOwnerActionParams) async -> Result<
         ConfirmOwnerActionReply, ServiceCommandError

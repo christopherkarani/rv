@@ -15,9 +15,9 @@ enum AllowOnceAttestError: Error, Equatable {
     /// rvd refused the request itself (an unidentified caller, or a
     /// malformed or non-redeemable grant).
     case serviceDenied
-    /// rvd has no record of issuing this code: it was pre-armed with
-    /// `rv allow-once mint`, or rvd restarted since the deny. rvd shows its
-    /// owner prompt only for codes it issued.
+    /// rvd has no record of issuing this code: rvd restarted since it
+    /// issued it (on a deny or `rv allow-once mint`), or the row was written
+    /// by someone else. rvd shows its owner prompt only for codes it issued.
     case notIssuedByService
     /// rvd ran the owner check and it refused (declined, wrong password,
     /// locked out, another prompt open, no prompt possible).
@@ -242,10 +242,41 @@ enum AllowOnceCLI {
         }
     }
 
-    /// Pre-arms one unlock code for a command. Minting alone grants
-    /// nothing — the printed code must still clear the redeem tripwire —
-    /// but minting is LA-gated anyway so an agent cannot farm codes from a
-    /// pty to social-engineer a later redeem.
+    static let mintServiceUnavailableMessage =
+        "rvd is not reachable, and only rvd can pre-arm a code (one it did not issue can never be redeemed); nothing was minted. Start rvd and run this again"
+    static let mintServiceDeniedMessage =
+        "rvd refused to pre-arm a code (it could not identify the caller, or it is older than this rv: restart it); nothing was minted"
+
+    /// Why rvd's owner check refused a pre-arm. Nothing was minted.
+    static func mintNotApprovedMessage(_ refused: ConfirmOwnerActionReply) -> String {
+        switch refused.outcome {
+        case .declined:
+            return "not approved (the Touch ID or password prompt was cancelled, failed or timed out); nothing was minted"
+        case .wrongPassword:
+            return "wrong password; nothing was minted"
+        case .lockedOut, .busy, .unavailable, .proofRequired, .approved:
+            return notApprovedMessage(refused)
+        }
+    }
+
+    /// Printed with every pre-armed code: rvd holds it in memory only.
+    static func mintedMessage(code: String) -> String {
+        """
+        allow-once code: \(code)
+        rv allow-once \(code)
+        This code lives only in rvd's memory: it is lost if rvd restarts, and expires in 24 hours.
+
+        """
+    }
+
+    /// Pre-arms one unlock code for a command, through rvd. Minting alone
+    /// grants nothing (the code must still be redeemed through rvd's
+    /// prompt), but rvd mints only after the same owner check as redeem,
+    /// naming the whole command and cwd, so an agent cannot farm codes to
+    /// social-engineer a later redeem. rvd remembers the code with the
+    /// exact command, which is what lets the later redeem name it; there is
+    /// no local fallback, because a code rvd did not issue can never be
+    /// redeemed.
     static func mint(
         command: ShellCommand,
         cwd: WorkingDirectory,
@@ -253,7 +284,9 @@ enum AllowOnceCLI {
         robot: Bool,
         store: AllowOnceStore,
         now: Date,
-        peek: (@Sendable (ShellCommand, WorkingDirectory) async -> EvaluationResult)? = nil
+        client: ServiceClient? = nil,
+        peek: (@Sendable (ShellCommand, WorkingDirectory) async -> EvaluationResult)? = nil,
+        readOwnerProof: @Sendable (String) async throws -> OwnerProof? = CLIOwnerAuth.ownerProofForAttestation(reason:)
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -292,21 +325,39 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        guard let shown = AllowOncePromptText.reason(command: command.rawValue, cwd: cwd, ruleID: nil) else {
+        // rvd refuses too; checked here so the owner is not prompted at all.
+        guard AllowOncePromptText.reason(command: command.rawValue, cwd: cwd, ruleID: nil) != nil else {
             throw AllowOnceAttestError.notShowable
         }
-        try await CLIOwnerAuth.requireAuthenticated(reason: "Authenticate to pre-arm a code to " + shown)
-        return try await store.mint(
-            matchingView: view,
-            cwd: cwd,
-            ruleID: nil,
-            tty: tty,
-            now: now,
-            robot: robot,
-            maskedSegments: Normalize.maskedSegments(of: command),
-            invocationPrefix: Normalize.invocationPrefix(of: command),
-            invocationDisplay: Normalize.invocationDisplay(of: command)
-        )
+        try CLIOwnerAuth.beginMint()
+        // Under a test context with no client, no transport: a test never
+        // reaches a live rvd.
+        let service = client
+            ?? (CLIProcess.context == nil ? OwnerConfirmation.defaultClient() : ServiceClient(transport: nil))
+        var params = MintAllowOnceParams(
+            command: command.rawValue, cwd: cwd, clientSemver: ProtocolVersion.serviceSemver)
+        var minted = await service.mintAllowOnce(params)
+        // Linux: rvd answers the first ask with its own description; the
+        // owner reads it above the password prompt and rvd checks the password.
+        if case .success(let first) = minted, first.ownerCheck?.outcome == .proofRequired,
+            let described = first.promptText {
+            params.ownerProof = try await readOwnerProof(described)
+            minted = await service.mintAllowOnce(params)
+        }
+        switch minted {
+        case .success(let reply):
+            if reply.notShowable == true { throw AllowOnceAttestError.notShowable }
+            if reply.alreadyPending == true { throw AllowOnceError.alreadyPending }
+            if let refused = reply.ownerCheck { throw AllowOnceAttestError.notApproved(refused) }
+            guard let code = reply.code.flatMap(AllowOnceUnlockCode.init(validating:)) else {
+                throw AllowOnceAttestError.serviceDenied
+            }
+            return code
+        case .failure(.noTransport), .failure(.transport):
+            throw AllowOnceAttestError.serviceUnavailable
+        case .failure(.service):
+            throw AllowOnceAttestError.serviceDenied
+        }
     }
 }
 
@@ -397,7 +448,7 @@ struct AllowOnceRedeem: AsyncParsableCommand {
             )
         } catch AllowOnceAttestError.notIssuedByService {
             try ctx.fail(
-                "rv allow-once: rvd did not issue this code (pre-armed with `rv allow-once mint`, or rvd restarted since the deny); rerun the command for a fresh code\n",
+                "rv allow-once: rvd did not issue this code (rvd restarted since it issued it, or the pending file was edited); rerun the command for a fresh code\n",
                 exitCode: 2
             )
         } catch AllowOnceAttestError.notShowable {
@@ -450,9 +501,7 @@ struct AllowOnceMint: AsyncParsableCommand {
                 store: AllowOnceCLI.store(home: try ctx.requireHome()),
                 now: Date()
             )
-            ctx.writeStdout(
-                "allow-once code: \(code.rawValue)\nrv allow-once \(code.rawValue)\n"
-            )
+            ctx.writeStdout(AllowOnceCLI.mintedMessage(code: code.rawValue))
         } catch AllowOnceError.ttyRequired {
             try ctx.fail(
                 "rv allow-once: requires an interactive TTY (stdin and stdout)\n",
@@ -467,6 +516,12 @@ struct AllowOnceMint: AsyncParsableCommand {
             try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
         } catch AllowOnceAttestError.notShowable {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
+        } catch AllowOnceAttestError.serviceUnavailable {
+            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceUnavailableMessage)\n", exitCode: 2)
+        } catch AllowOnceAttestError.serviceDenied, AllowOnceAttestError.notIssuedByService {
+            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceDeniedMessage)\n", exitCode: 2)
+        } catch AllowOnceAttestError.notApproved(let refused) {
+            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintNotApprovedMessage(refused))\n", exitCode: 2)
         } catch AllowOnceError.notUnlockable {
             try ctx.fail(
                 "rv allow-once mint: no one-shot unlock is possible for this command\n",

@@ -282,9 +282,9 @@ struct AllowOnceOwnerPromptTests {
     }
 
     @Test func aPreArmedOrForgedFileRowNeverRaisesAPromptEvenForThePinnedCLI() async throws {
-        // `rv allow-once mint` runs in the CLI, so rvd never saw the
-        // command, and anyone same-user can write the pending file. rvd
-        // prompts only for codes it issued, whatever the caller's role.
+        // A row another process minted into the same-user pending file
+        // (anyone same-user can write it): rvd never saw the command, so
+        // it prompts only for codes it issued, whatever the caller's role.
         let prompt = FakeAuthenticator(approve: true)
         let rig = try rig(prompt)
         defer { try? FileManager.default.removeItem(at: rig.homeURL) }
@@ -529,5 +529,159 @@ struct AllowOnceOwnerPromptTests {
         #expect(await linuxAttest(forged, rig, password: nil, context: OwnerPresenceTests.cliContext())
             == .error(.allowOnceNotFound))
         #expect(isAllow(await evaluate("rm -rf ~", rig)) == false)
+    }
+
+    // MARK: `rv allow-once mint`: pre-armed through rvd's owner check
+
+    private func mint(
+        _ command: String, _ rig: Rig, password: String? = nil,
+        context: AuthenticatedRequestContext = OwnerPresenceTests.unroledXPCContext()
+    ) async -> IPCResult {
+        let params = MintAllowOnceParams(
+            command: command, cwd: wd("/tmp/ws"), clientSemver: ProtocolVersion.serviceSemver,
+            ownerProof: password.map { OwnerProof(password: $0) })
+        return await rig.runtime.dispatch(IPCRequest(method: .mintAllowOnce(params)), context: context).result
+    }
+
+    /// The attest the CLI sends for a pre-armed `code`, read back from the
+    /// pending row rvd wrote.
+    private func attestParams(forCode code: String, _ rig: Rig) async throws -> AttestTTYRedemptionParams {
+        let pending = try #require(await rig.store.validatePending(code: code, now: now))
+        return AttestTTYRedemptionParams(
+            fingerprint: GrantFingerprint(rawValue: pending.fingerprint), cwd: pending.row.cwd,
+            codeHash: CodeHash(rawValue: sha256Hex(code)), clientSemver: ProtocolVersion.serviceSemver,
+            payloadDigest: pending.payloadDigest.map(ContentPayloadDigest.init(rawValue:)))
+    }
+
+    @Test func aPreArmedCodeNamesTheWholeCommandAndRedeemsThroughRvdsPrompt() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        guard case .mintAllowOnce(let minted) = await mint("git push --force origin main", rig),
+            let code = minted.code
+        else {
+            Issue.record("the owner's approval must mint a code")
+            return
+        }
+        #expect(minted.ownerCheck == nil)
+        let params = try await attestParams(forCode: code, rig)
+        guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
+            Issue.record("a pre-armed code must redeem through rvd's prompt")
+            return
+        }
+        #expect(reply.planted)
+        #expect(prompt.reasons.withLock { $0 } == [
+            "pre-arm a code to allow once \"git push --force origin main\" in /tmp/ws",
+            "allow once \"git push --force origin main\" in /tmp/ws (code \(code))",
+        ])
+        #expect(isAllow(await evaluate("git push --force origin main", rig)))
+        #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
+    }
+
+    @Test func thePreArmPromptShowsTheExactTextEscaped() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let command = #"LD_PRELOAD=/tmp/x.so git push --force origin "main" in /tmp (rule x, code 000000)"#
+        guard case .mintAllowOnce(let minted) = await mint(command, rig), let code = minted.code else {
+            Issue.record("the owner's approval must mint a code")
+            return
+        }
+        let issued = try #require(await rig.store.issued(codeHash: sha256Hex(code), now: now))
+        #expect(issued.command == command)
+        #expect(prompt.reasons.withLock { $0 } == [
+            #"pre-arm a code to allow once "LD_PRELOAD=/tmp/x.so git push --force origin \"main\" in /tmp (rule x, code 000000)" in /tmp/ws"#,
+        ])
+        // The pending row binds the wrapper prefix, as a deny code does.
+        let pending = try #require(await rig.store.validatePending(code: code, now: now))
+        #expect(pending.row.invocationDisplay != nil)
+        #expect(issued.fingerprint.rawValue == pending.fingerprint)
+    }
+
+    @Test func aDeclinedPreArmMintsNothing() async throws {
+        let prompt = FakeAuthenticator(approve: false)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        guard case .mintAllowOnce(let reply) = await mint("git reset --hard", rig) else {
+            Issue.record("a declined pre-arm must answer with the owner check")
+            return
+        }
+        #expect(reply.ownerCheck?.outcome == .declined)
+        #expect(reply.code == nil)
+        #expect(await rig.store.list(now: now).isEmpty)
+    }
+
+    @Test func aPreArmTooLongToShowIsRefusedWithoutAPrompt() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let long = "git push --force origin " + String(repeating: "b", count: 400)
+        guard case .mintAllowOnce(let reply) = await mint(long, rig) else {
+            Issue.record("a too-long pre-arm must answer")
+            return
+        }
+        #expect(reply.notShowable == true)
+        #expect(reply.code == nil)
+        #expect(prompt.promptCount == 0)
+        #expect(await rig.store.list(now: now).isEmpty)
+    }
+
+    @Test func thePreArmAuditNamesThePreArmButNotTheCommand() async throws {
+        let rig = try rig(FakeAuthenticator(approve: true))
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        _ = await mint("git push --force origin main", rig)
+        let url = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: rig.home))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("pre-arm allow-once code"))
+        #expect(text.contains("origin main") == false)
+    }
+
+    @Test func preArmIsAdmittedLikeRedeemAndNeverOnTheSameUserSocketSession() async throws {
+        let method = IPCMethod.mintAllowOnce(MintAllowOnceParams(
+            command: "git reset --hard", cwd: wd("/tmp/ws"), clientSemver: ProtocolVersion.serviceSemver))
+        #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.unroledXPCContext()))
+        #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.socketContext()))
+        #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.cliContext()))
+        #expect(ServiceMethodAuthorization.permits(method, context: peerOperatorUIContext()) == false)
+        #expect(ServiceMethodAuthorization.permits(method, context: .unauthenticated) == false)
+        #expect(ServiceRuntime.sameUIDSocketSession(method, enabled: true) == false)
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        #expect(await mint("git reset --hard", rig, context: .unauthenticated) == .error(.authorizationDenied))
+        #expect(prompt.promptCount == 0)
+    }
+
+    @Test func linuxPreArmShowsRvdsDescriptionThenNeedsTheOwnersPassword() async throws {
+        let rig = try rig(nil)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let socket = OwnerPresenceTests.socketContext()
+        guard case .mintAllowOnce(let first) = await mint("git reset --hard", rig, context: socket) else {
+            Issue.record("a pre-arm without a password must answer with rvd's description")
+            return
+        }
+        #expect(first.ownerCheck?.outcome == .proofRequired)
+        #expect(first.promptText == "pre-arm a code to allow once \"git reset --hard\" in /tmp/ws")
+        #expect(first.code == nil)
+        guard case .mintAllowOnce(let wrong) = await mint("git reset --hard", rig, password: "nope", context: socket)
+        else {
+            Issue.record("a wrong password must answer with the owner check")
+            return
+        }
+        #expect(wrong.ownerCheck == ConfirmOwnerActionReply(outcome: .wrongPassword))
+        #expect(await rig.store.list(now: now).isEmpty)
+        guard case .mintAllowOnce(let minted) = await mint("git reset --hard", rig, password: "secret", context: socket),
+            let code = minted.code
+        else {
+            Issue.record("the owner's password must mint a code")
+            return
+        }
+        let params = try await attestParams(forCode: code, rig)
+        guard case .attestTTYRedemption(let reply) = await linuxAttest(params, rig, password: "secret") else {
+            Issue.record("the pre-armed code must redeem with the password")
+            return
+        }
+        #expect(reply.planted)
+        #expect(isAllow(await evaluate("git reset --hard", rig)))
     }
 }

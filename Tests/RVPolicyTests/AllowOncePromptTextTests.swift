@@ -152,6 +152,31 @@ struct AllowOncePromptTextTests {
         #expect(await restarted.issued(codeHash: sha256Hex(code.rawValue), now: now) == nil)
     }
 
+    @Test func aPreArmedMintIsRememberedWithTheTypedCommandUntilRvdRestarts() async throws {
+        let store = try promptStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let typed = "LD_PRELOAD=/tmp/x.so git push --force origin main"
+        let code = try await store.mintPreArmed(
+            matchingView: "git push --force origin main", cwd: wd("/tmp/ws"), now: now,
+            maskedSegments: [], invocationPrefix: ["LD_PRELOAD=/tmp/x.so"], invocationDisplay: "LD_PRELOAD=…",
+            rawCommand: typed)
+        let issued = try #require(await store.issued(codeHash: sha256Hex(code.rawValue), now: now))
+        #expect(issued.command == typed)
+        #expect(issued.ruleID == nil)
+        #expect(issued.fingerprint
+            == grantFingerprint(MatchingView("git push --force origin main"), invocationPrefix: ["LD_PRELOAD=/tmp/x.so"]))
+        // Pre-armed codes keep the 24 h window of a manual mint.
+        #expect(await store.issued(codeHash: sha256Hex(code.rawValue), now: now.addingTimeInterval(23 * 3600)) != nil)
+        let pending = try #require(await store.validatePending(code: code.rawValue, now: now))
+        #expect(pending.fingerprint == issued.fingerprint.rawValue)
+        #expect(pending.row.invocationDisplay == "LD_PRELOAD=…")
+        let disk = try String(
+            contentsOf: RVPolicyPaths.allowOnceFile(inConfigDir: store.baseDirectory), encoding: .utf8)
+        #expect(disk.contains("/tmp/x.so") == false)
+        let restarted = AllowOnceStore(baseDirectory: store.baseDirectory)
+        #expect(await restarted.issued(codeHash: sha256Hex(code.rawValue), now: now) == nil)
+    }
+
     @Test func anIssuedCodeExpiresWithItsPendingRow() async throws {
         let store = try promptStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)

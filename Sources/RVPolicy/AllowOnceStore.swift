@@ -60,6 +60,48 @@ public actor AllowOnceStore {
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
+        return try mintLocked(
+            matchingView: matchingView, cwd: cwd, ruleID: ruleID, now: now, ttl: ttl,
+            maskedSegments: maskedSegments, invocationPrefix: invocationPrefix,
+            invocationDisplay: invocationDisplay, issuedCommand: nil)
+    }
+
+    /// rvd's pre-arm (`rv allow-once mint`), run only after the owner
+    /// approved it in rvd. Like a deny code, the new code is remembered in
+    /// memory with `rawCommand`, the exact text the owner typed, so a later
+    /// redeem raises rvd's prompt naming it; the pending row keeps only the
+    /// redacted head. A live pending row for the same command returns the
+    /// code rvd already holds for it, or throws `alreadyPending`. The code
+    /// is lost with this instance (an rvd restart).
+    package func mintPreArmed(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        now: Date,
+        ttl: TimeInterval = 24 * 60 * 60,
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil,
+        rawCommand: String
+    ) throws -> AllowOnceUnlockCode {
+        try mintLocked(
+            matchingView: matchingView, cwd: cwd, ruleID: nil, now: now, ttl: ttl,
+            maskedSegments: maskedSegments, invocationPrefix: invocationPrefix,
+            invocationDisplay: invocationDisplay, issuedCommand: rawCommand)
+    }
+
+    /// Shared by `mint` and `mintPreArmed`. A non-nil `issuedCommand`
+    /// records the new code as issued by this instance.
+    private func mintLocked(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        ruleID: RuleID?,
+        now: Date,
+        ttl: TimeInterval,
+        maskedSegments: [String]?,
+        invocationPrefix: [String],
+        invocationDisplay: String?,
+        issuedCommand: String?
+    ) throws -> AllowOnceUnlockCode {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
         let view = MatchingView(trimmed)
@@ -96,6 +138,18 @@ public actor AllowOnceStore {
                     case let .appended(records):
                         let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        if let issuedCommand {
+                            issuedCodes[hash] = IssuedAllowOnce(
+                                fingerprint: fingerprint,
+                                cwd: cwd,
+                                payloadDigest: payloadDigest,
+                                command: issuedCommand,
+                                ruleID: ruleID,
+                                code: code,
+                                expiresAt: now.addingTimeInterval(ttl),
+                                redeemed: false
+                            )
+                        }
                         pruneLiveUnlockCodes(against: written, now: now)
                         return code
                     }
