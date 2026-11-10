@@ -259,9 +259,17 @@ public actor AllowOnceStore {
         return entry
     }
 
-    /// rvd planted the grant for this issued code.
+    /// rvd planted the grant for this issued code. The code is spent, so a
+    /// later deny for the same command must not hand it out again.
     package func markIssuedRedeemed(codeHash: String) {
+        guard let issued = issuedCodes[codeHash] else { return }
         issuedCodes[codeHash]?.redeemed = true
+        let key = UnlockCacheKey(
+            fingerprint: issued.fingerprint.rawValue, cwd: issued.cwd.rawValue,
+            payloadDigest: issued.payloadDigest?.rawValue)
+        if liveUnlockCodes[key] == issued.code {
+            liveUnlockCodes.removeValue(forKey: key)
+        }
     }
 
     /// Daemon projection write: records a memory-table plant/consume as a

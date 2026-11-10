@@ -159,6 +159,22 @@ struct AllowOncePromptTextTests {
         await store.markIssuedRedeemed(codeHash: hash)
         #expect(await store.issued(codeHash: hash, now: now)?.redeemed == true)
     }
+
+    @Test func aRedeemedCodeIsNotHandedOutAgainForTheSameCommand() async throws {
+        // Before the CLI flips its row the pending row still matches, so a
+        // second deny used to reuse the cached code, already spent.
+        let store = try promptStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let code = try #require(await store.mintFromDeny(
+            matchingView: "git push --force", cwd: wd("/tmp/ws"), ruleID: nil, now: now)?.code)
+        let again = await store.mintFromDeny(
+            matchingView: "git push --force", cwd: wd("/tmp/ws"), ruleID: nil, now: now)
+        #expect(again?.code == code)
+        await store.markIssuedRedeemed(codeHash: sha256Hex(code.rawValue))
+        let afterPlant = await store.mintFromDeny(
+            matchingView: "git push --force", cwd: wd("/tmp/ws"), ruleID: nil, now: now)
+        #expect(afterPlant?.code != code)
+    }
 }
 
 private func promptStore() throws -> AllowOnceStore {
