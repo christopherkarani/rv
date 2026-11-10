@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 import RVIsolation
 import RVPolicy
+import RVService
 
 /// `rv managed`: inspect, prepare, and sign the organization policy bundle.
 enum ManagedRun {
@@ -130,6 +131,11 @@ enum ManagedRun {
         if let forward = policy.auditForward { lines.append("audit forwarded to \(forward.url)") }
         if policy.gate.requirePacks.isEmpty == false {
             lines.append("gate: packs required: \(policy.gate.requirePacks.map(\.rawValue).joined(separator: ", "))")
+            let unknown = ManagedGate.unknownRequiredPacks(policy.gate.requirePacks)
+            if unknown.isEmpty == false {
+                lines.append(
+                    "gate: warning: not bundled packs, so not enforced: \(unknown.map(\.rawValue).joined(separator: ", "))")
+            }
         }
         if policy.gate.requireStrictSafety { lines.append("gate: strict safety required") }
         return lines

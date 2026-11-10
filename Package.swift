@@ -78,6 +78,7 @@ let coreLibraryTargets: [Target] = [
         exclude: [
             "landlock_apply.c",
             "include",
+            "README.md",
         ]
     ),
     .target(name: "RVTheme"),

@@ -1,4 +1,3 @@
-import Dispatch
 import Synchronization
 
 /// Idle-exit policy for `rvd`.
@@ -24,12 +23,7 @@ public final class IdleWatchdog: Sendable {
     public static let defaultStaleCheckInterval: Duration = .seconds(5)
 
     private struct State {
-        var inFlight = 0
-        /// Bumped on every admitted request and every (re)arm; a timer only
-        /// acts if the generation it was armed with is still current.
-        var generation: UInt64 = 0
-        var draining = false
-        var exiting = false
+        var phase = IdleExitPolicy.initial
         var requestCount = 0
     }
 
@@ -39,7 +33,7 @@ public final class IdleWatchdog: Sendable {
     private let hasLiveGrants: @Sendable () async -> Bool
     private let executableChanged: @Sendable () -> Bool
     private let onFire: @Sendable () -> Void
-    private let queue = DispatchQueue(label: "rv.idle-watchdog", qos: .utility)
+    private let scheduler: IdleExitScheduler
 
     public convenience init(
         seconds: Int = IdleWatchdog.defaultSeconds,
@@ -62,8 +56,10 @@ public final class IdleWatchdog: Sendable {
         staleCheckInterval: Duration = IdleWatchdog.defaultStaleCheckInterval,
         hasLiveGrants: @escaping @Sendable () async -> Bool = { false },
         executableChanged: @escaping @Sendable () -> Bool = { false },
-        onFire: @escaping @Sendable () -> Void = {}
+        onFire: @escaping @Sendable () -> Void = {},
+        scheduler: IdleExitScheduler = .dispatch(label: "rv.idle-watchdog")
     ) {
+        self.scheduler = scheduler
         self.interval = interval
         self.staleCheckInterval = staleCheckInterval
         self.hasLiveGrants = hasLiveGrants
@@ -72,128 +68,77 @@ public final class IdleWatchdog: Sendable {
     }
 
     /// True once the exit decision was taken.
-    public var hasFired: Bool { state.withLock { $0.exiting } }
-    var inFlight: Int { state.withLock { $0.inFlight } }
+    public var hasFired: Bool { state.withLock { $0.phase == .exited } }
+    var inFlight: Int {
+        state.withLock {
+            switch $0.phase {
+            case .serving(let inFlight, _), .draining(let inFlight): inFlight
+            case .exited: 0
+            }
+        }
+    }
     var requestCount: Int { state.withLock { $0.requestCount } }
 
     /// Boot: arm the idle timer before the first request arrives.
-    public func start() {
-        let generation = state.withLock { state -> UInt64? in
-            guard state.exiting == false, state.inFlight == 0 else { return nil }
-            state.generation &+= 1
-            return state.generation
-        }
-        if let generation { schedule(generation) }
-        scheduleStaleCheck()
-    }
+    public func start() { send(.start) }
 
     /// Admits one request. Call synchronously on receipt, before any work.
     /// False once the daemon is exiting or draining: drop the request (the
     /// client reconnects to the relaunched daemon).
-    public func beginRequest() -> Bool {
-        state.withLock { state in
-            guard state.exiting == false, state.draining == false else { return false }
-            state.inFlight += 1
-            state.requestCount += 1
-            state.generation &+= 1
-            return true
-        }
-    }
+    public func beginRequest() -> Bool { send(.begin) }
 
     /// Ends one admitted request, after its reply was handed to the transport.
     public func endRequest() {
-        let stale = executableChanged()
-        enum Next { case none, arm(UInt64), exit }
-        let next = state.withLock { state -> Next in
-            state.inFlight = max(0, state.inFlight - 1)
-            if stale { state.draining = true }
-            guard state.inFlight == 0, state.exiting == false else { return .none }
-            if state.draining {
-                state.exiting = true
-                return .exit
+        send(.end(stale: executableChanged()))
+    }
+
+    /// Applies `event` under the lock, then runs the effects outside it, so
+    /// `onFire` and the grants check may re-enter the watchdog. Returns
+    /// whether the daemon was admitting work when the event arrived.
+    @discardableResult
+    private func send(_ event: IdleExitPolicy.Event) -> Bool {
+        let (admitted, effects) = state.withLock { state -> (Bool, [IdleExitPolicy.Effect]) in
+            let admitted = IdleExitPolicy.admits(state.phase)
+            let (next, effects) = IdleExitPolicy.reduce(state.phase, event)
+            state.phase = next
+            if event == .begin, admitted { state.requestCount += 1 }
+            return (admitted, effects)
+        }
+        for effect in effects { run(effect) }
+        return admitted
+    }
+
+    private func run(_ effect: IdleExitPolicy.Effect) {
+        switch effect {
+        case .armIdle(let generation):
+            scheduler.after(interval) { [self] in idleTimerFired(generation) }
+        case .armStaleCheck:
+            // A stat every few seconds; stops once the daemon is exiting or
+            // the watchdog is gone. Clients verify the peer before sending a
+            // frame, so a stale daemon may never be asked anything again and
+            // must notice the replaced binary on its own.
+            scheduler.after(staleCheckInterval) { [weak self] in self?.staleCheckFired() }
+        case .checkGrants(let generation):
+            scheduler.detach { [self] in
+                let live = await hasLiveGrants()
+                send(.grantsChecked(generation, live: live))
             }
-            state.generation &+= 1
-            return .arm(state.generation)
-        }
-        switch next {
-        case .none: break
-        case .arm(let generation): schedule(generation)
-        case .exit: onFire()
+        case .exit:
+            onFire()
         }
     }
 
-    private func schedule(_ generation: UInt64) {
-        queue.asyncAfter(deadline: .now() + dispatchInterval(interval)) { [self] in
-            timerFired(generation)
-        }
-    }
-
-    /// Clients verify the peer before sending a frame, so a stale daemon may
-    /// never be asked anything again; it must notice the replaced binary on
-    /// its own. A stat every few seconds; stops once the daemon is exiting
-    /// or the watchdog is gone.
-    private func scheduleStaleCheck() {
-        queue.asyncAfter(deadline: .now() + dispatchInterval(staleCheckInterval)) { [weak self] in
-            self?.staleCheckFired()
-        }
+    private func idleTimerFired(_ generation: UInt64) {
+        let phase = state.withLock { $0.phase }
+        // Sample the binary only if the timer is still current.
+        let stale = IdleExitPolicy.idleTimerReadsStale(phase, generation: generation)
+            && executableChanged()
+        send(.idleTimer(generation, stale: stale))
     }
 
     private func staleCheckFired() {
-        guard state.withLock({ $0.exiting }) == false else { return }
-        guard executableChanged() else {
-            scheduleStaleCheck()
-            return
-        }
-        let exit = state.withLock { state -> Bool in
-            state.draining = true
-            guard state.inFlight == 0, state.exiting == false else { return false }
-            state.exiting = true
-            return true
-        }
-        // With work in flight, the last `endRequest` exits (draining).
-        if exit { onFire() }
-    }
-
-    private func timerFired(_ generation: UInt64) {
-        guard isIdle(at: generation) else { return }
-        if executableChanged() {
-            exitIfStillIdle(at: generation)
-            return
-        }
-        Task.detached(priority: .utility) { [self] in
-            if await hasLiveGrants() {
-                rearmIfStillIdle(at: generation)
-            } else {
-                exitIfStillIdle(at: generation)
-            }
-        }
-    }
-
-    private func isIdle(at generation: UInt64) -> Bool {
-        state.withLock { $0.generation == generation && $0.inFlight == 0 && $0.exiting == false }
-    }
-
-    /// The decision is atomic with `beginRequest`: a request admitted after
-    /// the timer was armed bumped the generation, so this stands down.
-    private func exitIfStillIdle(at generation: UInt64) {
-        let decided = state.withLock { state -> Bool in
-            guard state.generation == generation, state.inFlight == 0, state.exiting == false else {
-                return false
-            }
-            state.exiting = true
-            return true
-        }
-        if decided { onFire() }
-    }
-
-    private func rearmIfStillIdle(at generation: UInt64) {
-        let next = state.withLock { state -> UInt64? in
-            guard state.generation == generation, state.inFlight == 0, state.exiting == false else {
-                return nil
-            }
-            state.generation &+= 1
-            return state.generation
-        }
-        if let next { schedule(next) }
+        let phase = state.withLock { $0.phase }
+        let stale = IdleExitPolicy.staleTickReadsStale(phase) && executableChanged()
+        send(.staleTick(stale: stale))
     }
 }

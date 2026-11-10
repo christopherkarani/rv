@@ -60,6 +60,32 @@ public enum UnixSocketPath {
         return socket
     }
 
+    /// systemd's per-user runtime root: rvd's unit runs with
+    /// `XDG_RUNTIME_DIR=/run/user/<uid>`.
+    public static let userRuntimeRoot = "/run/user"
+
+    /// The socket a Linux client dials, and whether a connect miss there
+    /// proves rvd is absent.
+    public struct ClientSocket: Sendable, Equatable {
+        public let url: URL
+        /// True only for the uid-derived runtime directory. An agent can set
+        /// XDG_RUNTIME_DIR through project-scoped host config, so a miss
+        /// under any other directory proves nothing about rvd.
+        public let isOwnerRuntime: Bool
+    }
+
+    /// Mirrors `unix_socket_path` in Sources/rv-c/rv.c:
+    /// `$XDG_RUNTIME_DIR/rv/evaluate.sock`, or the uid-derived
+    /// `/run/user/<uid>/rv/evaluate.sock` when XDG_RUNTIME_DIR is unset.
+    /// `isOwnerRuntime` holds when XDG is unset or exactly the uid-derived
+    /// directory. Nil when XDG is set but empty, or the path is too long.
+    public static func clientSocket(xdgRuntimeDir: String?, uid: UInt32) -> ClientSocket? {
+        let ownerDirectory = "\(userRuntimeRoot)/\(uid)"
+        let directory = xdgRuntimeDir ?? ownerDirectory
+        guard directory.isEmpty == false, let url = try? resolve(xdgRuntimeDir: directory) else { return nil }
+        return ClientSocket(url: url, isOwnerRuntime: directory == ownerDirectory)
+    }
+
     public static func production(
         environment: [String: String]? = nil
     ) throws -> URL {

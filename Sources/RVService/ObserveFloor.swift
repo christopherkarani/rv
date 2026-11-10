@@ -11,6 +11,11 @@ import RVPolicy
 /// guards rv's own state) stays enforced. `GatedEvaluate.posture` is the
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
+///
+/// Observe alone also floors stopping rvd (`RVDStopGuard`) and writing
+/// rv's install (`RVInstallPathGuard`): with rvd absent an observe hook
+/// allows every later call unchecked. In enforce a stopped rvd fails
+/// closed, so those floors would only add false positives there.
 enum ObserveFloor {
     static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config")]
 
@@ -56,6 +61,34 @@ enum ObserveFloor {
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
         return words.contains { rvConfig.filePathHit($0) != nil }
+    }
+
+    /// Observe only: nil unless the command stops rvd or writes rv's
+    /// install. Then an allow becomes "run it in Terminal"; anything else
+    /// (a deny, an indeterminate) is kept, so the floor never weakens.
+    static func lifecycleFloor(
+        _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
+    ) -> EvaluationResult? {
+        guard RVDStopGuard.stopsRVD(command.rawValue)
+            || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
+        return floored(result)
+    }
+
+    /// File door: a write or edit of rv's install, typed or resolved.
+    static func lifecycleFloor(
+        _ result: EvaluationResult, action: FileToolAction, home: HomeDirectory?, cwd: WorkingDirectory?
+    ) -> EvaluationResult? {
+        guard action.kind != .read else { return nil }
+        let resolution = SecretPathCandidateResolver.resolution(home: home, cwd: cwd)
+        guard RVInstallPathGuard.writesInstall(action.path.rawValue, resolution: resolution, home: home) else {
+            return nil
+        }
+        return floored(result)
+    }
+
+    private static func floored(_ result: EvaluationResult) -> EvaluationResult {
+        guard result.decision == .allow else { return result }
+        return EvaluationResult(outcome: .indeterminate(.selfProtection), matchingView: result.matchingView)
     }
 
     private static let wordBreaks: Set<Character> = [

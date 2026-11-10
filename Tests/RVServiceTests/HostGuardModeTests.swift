@@ -10,7 +10,8 @@ import RVPolicy
 @Suite("Per-host guard mode")
 struct HostGuardModeTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
-    private static let packDeny = ShellCommand(rawValue: "rm -rf ~")
+    // Not `rm -rf ~`: that also removes rv's install, which observe never relaxes.
+    private static let packDeny = ShellCommand(rawValue: "rm -rf ~/Documents")
 
     private static func config(_ json: String) throws -> [String: Any] {
         try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
@@ -207,6 +208,97 @@ struct HostGuardModeTests {
             inputs: EvaluationInputs.gather(home: home, cwd: nil, environment: [:], host: .hook(.claude))
         )
         #expect(agent.decision != .allow, "agent door: \(command)")
+    }
+
+    // An agent that stops or replaces rvd makes every later call
+    // unreachable, which observe allows unchecked: these stay enforced.
+    @Test("observe host: stopping or replacing rvd stays enforced", arguments: [
+        "launchctl bootout gui/501/dev.rv.evaluate",
+        "systemctl --user stop dev.rv.evaluate.service",
+        "pkill -f rvd",
+        "rm ~/.local/bin/rvd",
+        "mv /tmp/evil ~/.local/bin/rvd",
+        "echo x > ~/Library/LaunchAgents/dev.rv.evaluate.plist",
+        "git reset --hard; rm ~/.local/bin/rvd",
+        "git reset --hard && launchctl bootout gui/501/dev.rv.evaluate",
+        "rv setup --observe",
+        "rm -rf ~",
+    ])
+    func observeHostShellKeepsRVDLifecycle(command: String) async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision != .allow, "\(command)")
+        #expect(ledgerRows(home).allSatisfy { $0.observed == false }, "\(command)")
+    }
+
+    // The stop/install floors are observe-only: an enforce host must not be
+    // newly floored, and the everyday commands these resemble stay allowed.
+    @Test("enforce host: install-adjacent everyday commands stay allowed", arguments: [
+        "export PATH=\"$HOME/.local/bin:$PATH\"",
+        "PATH=$HOME/.local/bin:$PATH npm test",
+        "open ~/.local/bin",
+        "rg foo ~",
+        "git -C ~ status",
+        "pkill -f 'rails s'",
+        "pkill -P $$",
+        "git commit -m 'fix: pkill rvd bug'",
+        "swift build --product rv",
+    ])
+    func enforceHostEverydayAllowed(command: String) async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"block"}}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(result.decision == .allow, "\(command)")
+    }
+
+    // On an enforce host stopping rvd fails closed on its own; the floor is
+    // not added there, so these keep their base (non-floored) verdict.
+    @Test("enforce host: stopping or replacing rvd is not a self-protection floor", arguments: [
+        "launchctl bootout gui/501/dev.rv.evaluate",
+        "pkill -f rvd",
+    ])
+    func enforceHostNoLifecycleFloor(command: String) async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"block"}}}"#)
+        defer { remove(home) }
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: command), cwd: nil, home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        if case .indeterminate(.selfProtection) = result.decision {
+            Issue.record("enforce host newly floored: \(command)")
+        }
+    }
+
+    @Test("observe host: file door never allows writing rv's install; reads are observed allows", arguments: [
+        "/.local/bin/rvd",
+        "/.local/bin/rv",
+        "/Library/LaunchAgents/dev.rv.evaluate.plist",
+        "/.config/systemd/user/dev.rv.evaluate.service",
+    ])
+    func observeHostFileDoorKeepsInstall(suffix: String) throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        defer { remove(home) }
+        let path = FileToolPath(rawValue: home.rawValue + suffix)
+        for kind in [FileToolKind.write, .edit] {
+            let result = GatedEvaluate().runFile(
+                FileToolAction(kind: kind, path: path), home: home, host: .hook(.claude), now: Self.now
+            )
+            #expect(result.decision != .allow, "\(kind) \(suffix)")
+        }
+        let read = GatedEvaluate().runFile(
+            FileToolAction(kind: .read, path: path), home: home, host: .hook(.claude), now: Self.now
+        )
+        #expect(read.decision == .allow, "read \(suffix)")
     }
 
     @Test("global guard.mode observe keeps the same floor")

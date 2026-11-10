@@ -296,6 +296,36 @@ struct MCPHostSetupTests {
         #expect(try MCPHostSetup.undo(host: .claudeCode, servers: nil, configDirectory: box.config).get().changed.isEmpty)
     }
 
+    @Test func setupRoutesUserAndProjectScopesInOneClaudeJSON() throws {
+        let box = Sandbox()
+        let project = box.root.appendingPathComponent("proj", isDirectory: true)
+        let projectPath = project.standardizedFileURL.path
+        let original = """
+            {"mcpServers": {"wax": {"command": "wax-mcp"}}, "projects": {"\(projectPath)": {"mcpServers": {"oc": {"command": "bun"}}, "other": 1}}}
+            """
+        let file = try box.write(".claude.json", original)
+        let files = MCPHostFile.all(home: box.home, project: project, environment: [:])
+            .filter { $0.host == .claudeCode && $0.path == file }
+        #expect(files.count == 2)
+
+        let result = try MCPHostSetup.setup(
+            files: files, configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: box.config
+        ).get()
+        #expect(result.changed.count == 2)
+        #expect(result.backups.count == 1)
+        let rewritten = try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64)
+        #expect(rewritten["mcpServers"]?["wax"]?["command"] == .string("/opt/rv"))
+        #expect(rewritten["projects"]?[projectPath]?["mcpServers"]?["oc"]?["command"] == .string("/opt/rv"))
+        #expect(rewritten["projects"]?[projectPath]?["other"] == .int(1))
+        #expect(MCPHostSetup.loadManifest(box.config).count == 2)
+
+        let undone = try MCPHostSetup.undo(host: .claudeCode, servers: nil, configDirectory: box.config).get()
+        #expect(undone.changed.count == 2)
+        #expect(try JSONValue.parse(Data(contentsOf: file), maximumDepth: 64) == JSONValue.parse(Data(original.utf8), maximumDepth: 64))
+        #expect(MCPHostSetup.loadManifest(box.config).isEmpty)
+    }
+
     @Test func setupMusePreservesTransportAndMode() throws {
         // Muse entries carry host metadata rv does not model; the
         // gateway rewrite must change the command and nothing else, and
@@ -426,6 +456,34 @@ struct MCPHostSetupTests {
         return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
     }
 
+    @Test func undoAfterPartialSetupRestoresOnlyTheWrittenFile() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let claude = try box.write(".claude.json", text)
+        let cursor = try box.write(".cursor/mcp.json", text)
+        // Directory cannot take the temp file, so the second write fails after the first landed.
+        chmod(cursor.deletingLastPathComponent().path, 0o555)
+        defer { chmod(cursor.deletingLastPathComponent().path, 0o755) }
+        guard geteuid() != 0 else { return }
+
+        let outcome = MCPHostSetup.setup(
+            files: box.files(.claudeCode) + box.files(.cursor), configuration: configuration, servers: nil,
+            rvPath: "/opt/rv", configDirectory: box.config)
+        guard case .failure(.partial(let applied, let cause)) = outcome else {
+            Issue.record("expected partial, got \(outcome)")
+            return
+        }
+        #expect(cause == .writeFailed(cursor.path))
+        #expect(applied.changed.count == 1)
+        #expect(applied.backups.count == 1)
+        #expect(MCPHostSetup.loadManifest(box.config).map(\.host) == ["claude-code"])
+        #expect(try String(contentsOf: cursor, encoding: .utf8) == text)
+
+        let undone = try MCPHostSetup.undo(host: nil, servers: nil, configDirectory: box.config).get()
+        #expect(undone.changed.count == 1)
+        #expect(try JSONValue.parse(Data(contentsOf: claude), maximumDepth: 64) == JSONValue.parse(Data(text.utf8), maximumDepth: 64))
+    }
+
     @Test func setupRefusesASymlinkedHostConfig() throws {
         let box = Sandbox()
         let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
@@ -446,6 +504,24 @@ struct MCPHostSetupTests {
         #expect(MCPHostSetup.loadManifest(box.config).isEmpty)
         guard case .failure(let error) = outcome else { return }
         #expect(error.message.contains("symbolic link"))
+    }
+
+    @Test func setupWritesNothingWhenALaterFileIsASymlink() throws {
+        let box = Sandbox()
+        let text = #"{"mcpServers": {"wax": {"command": "wax-mcp"}}}"#
+        let claude = try box.write(".claude.json", text)
+        let target = try box.write("dotfiles/mcp.json", text)
+        let link = box.home.appendingPathComponent(".cursor/mcp.json")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let outcome = MCPHostSetup.setup(
+            files: box.files(.claudeCode) + box.files(.cursor), configuration: configuration, servers: nil,
+            rvPath: "/opt/rv", configDirectory: box.config)
+        #expect(outcome == .failure(.symbolicLink(link.path)))
+        #expect(try String(contentsOf: claude, encoding: .utf8) == text)
+        #expect(MCPHostSetup.loadManifest(box.config).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: MCPHostSetup.backupDirectory(box.config)) == false)
     }
 
     @Test func undoRefusesASymlinkedHostConfig() throws {

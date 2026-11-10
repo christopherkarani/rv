@@ -26,3 +26,27 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 **Observe floor** — what observe never relaxes: rv's own self-protection (an agent-issued rv command that weakens rv, `SelfProtectionGuard`) and rv's config dir (`core.secrets:home-rv-config`). On every door those stay enforced, so an observe host cannot loosen another host or the global guard. `ObserveFloor`.
 
 **Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked.
+
+## Isolation
+
+The module map is [`Sources/RVIsolation/README.md`](Sources/RVIsolation/README.md).
+
+**Workspace** — one protected project folder while rv has it open. The agent writes to a private copy (on macOS, a disk-image volume mounted over the folder); nothing reaches the real folder until the workspace closes. `WorkspaceSessionID`, `WorkspaceSessionSupervisor`.
+
+**Runtime** — one contained process tree inside a workspace, with its own process group, admission pipes and egress proxy. A workspace can host several; one runtime ending does not close the workspace. `RuntimeSessionID`.
+
+**Backend** — what builds the walls for a runtime. `IsolationBackendFamily` has `.none`, `.seatbelt` (macOS), `.landlock` (Linux, compiled but refused before exec) and `.microvm`. Both VM guests are `.microvm`; `MicroVMGuest` picks `.linux` (`rv-microvm`) or `.macOS` (`rv-macvm`).
+
+**Control path** — a workspace path that rv or git reads or runs later, outside any cage: `.git/hooks`, `.git/config`, `.rv`, `.config/rv`. `workspaceControlDenies`.
+
+**Run-later path** — agent and editor config in the workspace that a host tool runs or trusts later, outside any cage: `.claude/settings.json`, `.mcp.json`, `.vscode/tasks.json`, `.envrc` and the like. `WorkspaceRunLaterPaths`.
+
+Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all stop a runtime from writing control paths and run-later paths. Seatbelt and the macOS guest also match case variants (`.MCP.json`); the Linux guest matches exact names only. Each backend also pins the directories on the way to a protected path (`.claude`, `.gemini/config`), so the cage cannot rename one aside and swap in a replacement.
+
+**Publish** — copying the private copy back to the real folder when the workspace closes. All names are checked first; one rejected name publishes nothing. `WorkspacePublishOutcome`, `WorkspacePublishRejection`.
+
+**Recovery** — finishing, on the next start, a close that a crash interrupted: publish, detach the volume, restore the original folder, each step recorded in the lifecycle log. `WorkspaceRecovery`, `WorkspaceRecoveryPlan`.
+
+**Admission** — a runtime asking rv to run one command or one HTTPS GET on its behalf, over pipes only that runtime holds. `RuntimeAdmissionSession`.
+
+**Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission` against `EgressHostPolicy`. `EgressProxy`, `EgressWire`.
