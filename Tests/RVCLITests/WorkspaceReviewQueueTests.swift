@@ -123,6 +123,8 @@ struct WorkspaceReviewQueueTests {
     @Test func refusalWordingCoversEveryCeremonyError() {
         #expect(WorkspaceReviewQueue.refusal(AllowOnceError.ttyRequired)
             == "requires an interactive TTY (stdin and stdout)")
+        #expect(WorkspaceReviewQueue.refusal(AllowOnceError.robotRefused) == "--json/--robot refused")
+        #expect(WorkspaceReviewQueue.refusal(EgressReviewError.storeUnavailable) == "store unavailable")
         #expect(WorkspaceReviewQueue.refusal(AllowOnceError.redemptionChanged)
             == "proposal changed during review; retry")
         #expect(WorkspaceReviewQueue.refusal(EgressReviewError.notAwaiting("expired")) == "proposal is expired")

@@ -487,8 +487,8 @@ struct EgressPending: AsyncParsableCommand {
                     configDirectory: RVPolicyPaths.configDirectory(home: home))
                 ctx.writeStdout(EgressReviewRun.prettyPending(views, loaded: loaded))
             }
-        } catch EgressReviewError.storeUnavailable {
-            try ctx.fail("rv egress pending: store unavailable\n", exitCode: 2)
+        } catch {
+            try ctx.failOwnerGate(error, command: "egress pending", subject: .proposal)
         }
     }
 }
@@ -558,39 +558,14 @@ struct EgressApprove: AsyncParsableCommand {
             ctx.writeStdout(
                 "approved \(DisplayedText.field(view.host)):\(view.port) (live within seconds; no restart)\n"
             )
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail(
-                "rv egress approve: requires an interactive TTY (stdin and stdout)\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.robotRefused {
-            try ctx.fail(
-                "rv egress approve: --json/--robot refused for approve\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.redemptionChanged {
-            try ctx.fail(
-                "rv egress approve: proposal changed during review; retry\n",
-                exitCode: 2
-            )
         } catch EgressReviewError.unknownProposal {
             try ctx.fail("rv egress approve: unknown proposal\n", exitCode: 2)
         } catch EgressReviewError.notNetworkProposal {
             try ctx.fail("rv egress approve: not a network proposal\n", exitCode: 2)
         } catch EgressReviewError.notAwaiting(let state) {
             try ctx.fail("rv egress approve: proposal is \(state)\n", exitCode: 2)
-        } catch EgressReviewError.storeUnavailable {
-            try ctx.fail("rv egress approve: store unavailable\n", exitCode: 2)
-        } catch AllowOnceAuthError.required {
-            try ctx.fail(
-                "rv egress approve: device-owner authentication required\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAuthError.throttled {
-            try ctx.fail(
-                "rv egress approve: too many authentication prompts; wait and retry\n",
-                exitCode: 2
-            )
+        } catch {
+            try ctx.failOwnerGate(error, command: "egress approve", subject: .proposal)
         }
     }
 }
@@ -620,21 +595,6 @@ struct EgressDeny: AsyncParsableCommand {
                 id: ApprovalID(rawValue: id), reason: reason, ctx: ctx
             )
             ctx.writeStdout("denied \(DisplayedText.field(view.host)):\(view.port)\n")
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail(
-                "rv egress deny: requires an interactive TTY (stdin and stdout)\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.robotRefused {
-            try ctx.fail(
-                "rv egress deny: --json/--robot refused for deny\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.redemptionChanged {
-            try ctx.fail(
-                "rv egress deny: proposal changed during review; retry\n",
-                exitCode: 2
-            )
         } catch EgressReviewError.reasonRequired {
             try ctx.fail(
                 "rv egress deny: --reason is required (one line, 500 chars)\n",
@@ -646,18 +606,8 @@ struct EgressDeny: AsyncParsableCommand {
             try ctx.fail("rv egress deny: not a network proposal\n", exitCode: 2)
         } catch EgressReviewError.notAwaiting(let state) {
             try ctx.fail("rv egress deny: proposal is \(state)\n", exitCode: 2)
-        } catch EgressReviewError.storeUnavailable {
-            try ctx.fail("rv egress deny: store unavailable\n", exitCode: 2)
-        } catch AllowOnceAuthError.required {
-            try ctx.fail(
-                "rv egress deny: device-owner authentication required\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAuthError.throttled {
-            try ctx.fail(
-                "rv egress deny: too many authentication prompts; wait and retry\n",
-                exitCode: 2
-            )
+        } catch {
+            try ctx.failOwnerGate(error, command: "egress deny", subject: .proposal)
         }
     }
 }

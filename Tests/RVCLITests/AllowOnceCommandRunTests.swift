@@ -28,17 +28,20 @@ struct AllowOnceCommandRunTests {
 
     @Test func redeem_requiresTTY() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, output: out) {
             var command = try AllowOnceRedeem.parse(["abcdef"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once: requires an interactive TTY (stdin and stdout)\n")
     }
 
     @Test func redeem_robotRefused() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: out) {
             var command = try AllowOnceRedeem.parse(["--json", "abcdef"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
@@ -48,6 +51,7 @@ struct AllowOnceCommandRunTests {
                 try await robot.run()
             }
         }
+        #expect(out.stderr == String(repeating: "rv allow-once: --json/--robot refused\n", count: 2))
     }
 
     @Test func redeem_unknownCode() async throws {
@@ -278,15 +282,17 @@ struct AllowOnceCommandRunTests {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .authenticated
+            ownerAuthOutcome: .authenticated, output: out
         ) {
             var command = try AllowOnceRedeem.parse(["abcdef"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once: store unavailable\n")
     }
 
     @Test func mint_missingCommand() async throws {
@@ -301,18 +307,22 @@ struct AllowOnceCommandRunTests {
 
     @Test func mint_requiresTTYAndRefusesRobot() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        let ttyOut = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, output: ttyOut) {
             var tty = try AllowOnceMint.parse(["git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        #expect(ttyOut.stderr == "rv allow-once mint: requires an interactive TTY (stdin and stdout)\n")
+        let robotOut = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: robotOut) {
             var robot = try AllowOnceMint.parse(["--robot", "git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await robot.run()
             }
         }
+        #expect(robotOut.stderr == "rv allow-once mint: --json/--robot refused\n")
     }
 
     @Test func mint_withoutRvdFailsOnTTYAndWritesNoCode() async throws {
@@ -330,19 +340,41 @@ struct AllowOnceCommandRunTests {
         #expect(await AllowOnceCLI.store(home: home).list(now: Date()).isEmpty)
     }
 
+    @Test func mint_tooLongToShowRefusesThroughTheGateTable() async throws {
+        // #566's notShowable refusal, worded by OwnerGateRefusal for mint.
+        let home = try isolatedHome()
+        let out = CLIOutputCapture()
+        let long = "echo " + String(repeating: "a", count: AllowOncePromptText.maxCommandScalars + 1)
+        try await withCLIProcess(
+            home: home, stdinIsTTY: true, stdoutIsTTY: true,
+            ownerAuthOutcome: .authenticated, output: out
+        ) {
+            var command = try AllowOnceMint.parse(long.split(separator: " ").map(String.init))
+            await #expect(throws: ExitCode(2)) {
+                try await command.run()
+            }
+        }
+        #expect(out.stderr == "rv allow-once mint: \(AllowOnceCLI.notShowableMessage)\n")
+        #expect(out.stdout.isEmpty)
+    }
+
     @Test func mint_storeUnavailable() async throws {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .authenticated
+            ownerAuthOutcome: .authenticated, output: out
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        // The LA-prompt reservation runs before the mint write and fails
+        // closed on the broken lock, so the refusal reads as throttled.
+        #expect(out.stderr == "rv allow-once mint: too many authentication prompts; wait and retry\n")
     }
 
     @Test func list_emptyPrettyAndRobot() async throws {
@@ -385,12 +417,14 @@ struct AllowOnceCommandRunTests {
 
     @Test func clear_requiresTTYThenSucceeds() async throws {
         let home = try isolatedHome()
-        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: false, stdoutIsTTY: false, output: out) {
             var tty = try AllowOnceClear.parse([])
             await #expect(throws: ExitCode(2)) {
                 try await tty.run()
             }
         }
+        #expect(out.stderr == "rv allow-once clear: requires an interactive TTY (stdin and stdout)\n")
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
             var ok = try AllowOnceClear.parse([])
             try await ok.run()
@@ -401,12 +435,14 @@ struct AllowOnceCommandRunTests {
         let home = try isolatedHome()
         let lock = allowOnceLockURL(home: home)
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true, output: out) {
             var command = try AllowOnceClear.parse([])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once clear: store unavailable\n")
     }
 
     @Test func redeem_authenticationCancelledRefusesWithoutGrant() async throws {
@@ -420,15 +456,17 @@ struct AllowOnceCommandRunTests {
             tty: tty,
             now: Date()
         )
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .cancelled
+            ownerAuthOutcome: .cancelled, output: out
         ) {
             var command = try AllowOnceRedeem.parse([code.rawValue])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once: device-owner authentication required\n")
         let rows = await store.list(now: Date())
         #expect(rows.allSatisfy { $0.kind != .granted })
     }
@@ -458,15 +496,17 @@ struct AllowOnceCommandRunTests {
 
     @Test func mint_authenticationFailedWritesNoRow() async throws {
         let home = try isolatedHome()
+        let out = CLIOutputCapture()
         try await withCLIProcess(
             home: home, stdinIsTTY: true, stdoutIsTTY: true,
-            ownerAuthOutcome: .failed
+            ownerAuthOutcome: .failed, output: out
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
             await #expect(throws: ExitCode(2)) {
                 try await command.run()
             }
         }
+        #expect(out.stderr == "rv allow-once mint: device-owner authentication required\n")
         let rows = await AllowOnceCLI.store(home: home).list(now: Date())
         #expect(rows.isEmpty)
     }

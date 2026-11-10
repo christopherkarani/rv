@@ -425,23 +425,8 @@ struct AllowOnceRedeem: AsyncParsableCommand {
             ctx.writeStdout(
                 "granted \(DisplayedText.field(redeemed.row.commandRedacted)) (cwd \(DisplayedText.field(redeemed.row.cwd.rawValue)))\n"
             )
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail(
-                "rv allow-once: requires an interactive TTY (stdin and stdout)\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.robotRefused {
-            try ctx.fail(
-                "rv allow-once: --json/--robot refused for redeem\n",
-                exitCode: 2
-            )
         } catch AllowOnceError.unknownCode, AllowOnceError.expired, AllowOnceError.alreadySpent {
             try ctx.fail("rv allow-once: code not redeemable\n", exitCode: 2)
-        } catch AllowOnceError.redemptionChanged {
-            try ctx.fail(
-                "rv allow-once: grant changed during review; retry with a fresh code\n",
-                exitCode: 2
-            )
         } catch AllowOnceAttestError.serviceUnavailable {
             try ctx.fail(
                 "rv allow-once: RV service unavailable; approval not recorded (code stays live, retry later)\n",
@@ -452,32 +437,8 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 "rv allow-once: rvd refused this request (it could not identify the caller); nothing was allowed\n",
                 exitCode: 2
             )
-        } catch AllowOnceAttestError.notIssuedByService {
-            try ctx.fail(
-                "rv allow-once: rvd did not issue this code (rvd restarted since it issued it, or the pending file was edited); rerun the command for a fresh code\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAttestError.notShowable {
-            try ctx.fail("rv allow-once: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
-        } catch AllowOnceAttestError.ownerCheckUnconfirmed {
-            try ctx.fail(
-                "rv allow-once: rvd did not say it checked the owner (an older rvd still running after an upgrade?); nothing was allowed. Run rv service restart and try again\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAttestError.notApproved(let refused) {
-            try ctx.fail("rv allow-once: \(AllowOnceCLI.notApprovedMessage(refused))\n", exitCode: 2)
-        } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
-            try ctx.fail("rv allow-once: store unavailable\n", exitCode: 2)
-        } catch AllowOnceAuthError.required {
-            try ctx.fail(
-                "rv allow-once: device-owner authentication required\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAuthError.throttled {
-            try ctx.fail(
-                "rv allow-once: too many authentication prompts; wait and retry\n",
-                exitCode: 2
-            )
+        } catch {
+            try ctx.failOwnerGate(error, command: "allow-once", subject: .grant)
         }
     }
 }
@@ -513,26 +474,12 @@ struct AllowOnceMint: AsyncParsableCommand {
                 now: Date()
             )
             ctx.writeStdout(AllowOnceCLI.mintedMessage(code: code.rawValue))
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail(
-                "rv allow-once: requires an interactive TTY (stdin and stdout)\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.robotRefused {
-            try ctx.fail(
-                "rv allow-once mint: --json/--robot refused\n",
-                exitCode: 2
-            )
         } catch AllowOnceError.emptyCommand {
             try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
-        } catch AllowOnceAttestError.notShowable {
-            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
         } catch AllowOnceAttestError.serviceUnavailable {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceUnavailableMessage)\n", exitCode: 2)
-        } catch AllowOnceAttestError.serviceDenied, AllowOnceAttestError.notIssuedByService {
+        } catch AllowOnceAttestError.serviceDenied {
             try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintServiceDeniedMessage)\n", exitCode: 2)
-        } catch AllowOnceAttestError.notApproved(let refused) {
-            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.mintNotApprovedMessage(refused))\n", exitCode: 2)
         } catch AllowOnceError.notUnlockable {
             try ctx.fail(
                 "rv allow-once mint: no one-shot unlock is possible for this command\n",
@@ -543,18 +490,8 @@ struct AllowOnceMint: AsyncParsableCommand {
                 "rv allow-once mint: a pending unlock already exists for this command\n",
                 exitCode: 2
             )
-        } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed, AllowOnceError.collision {
-            try ctx.fail("rv allow-once mint: store unavailable\n", exitCode: 2)
-        } catch AllowOnceAuthError.required {
-            try ctx.fail(
-                "rv allow-once mint: device-owner authentication required\n",
-                exitCode: 2
-            )
-        } catch AllowOnceAuthError.throttled {
-            try ctx.fail(
-                "rv allow-once mint: too many authentication prompts; wait and retry\n",
-                exitCode: 2
-            )
+        } catch {
+            try ctx.failOwnerGate(error, command: "allow-once mint", subject: .newCode)
         }
     }
 }
@@ -609,13 +546,8 @@ struct AllowOnceClear: AsyncParsableCommand {
             try await AllowOnceCLI.store(home: try ctx.requireHome())
                 .clear(tty: ctx.tty, now: Date())
             ctx.writeStdout("cleared allow-once rows\n")
-        } catch AllowOnceError.ttyRequired {
-            try ctx.fail(
-                "rv allow-once clear: requires an interactive TTY\n",
-                exitCode: 2
-            )
-        } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
-            try ctx.fail("rv allow-once clear: store unavailable\n", exitCode: 2)
+        } catch {
+            try ctx.failOwnerGate(error, command: "allow-once clear", subject: .grant)
         }
     }
 }
