@@ -20,6 +20,9 @@ struct Uninstall: AsyncParsableCommand {
     @Flag(name: .customLong("no-color"), help: "Disable color.")
     var noColor = false
 
+    @Flag(name: .customLong("remove-models"), help: "Also delete the downloaded judge weights (~/.config/rv/models).")
+    var removeModels = false
+
     func run() async throws {
         // Uninstall sheds oversight (hooks, config, LaunchAgent): a
         // same-user agent must not run it unattended. One fresh
@@ -44,7 +47,8 @@ struct Uninstall: AsyncParsableCommand {
             SetupIntent(
                 kind: .uninstall,
                 appearance: resolved.appearance,
-                animate: resolved.animate
+                animate: resolved.animate,
+                removeModels: removeModels
             ),
             clock: LiveSetupCeremonyClock(),
             write: CeremonyCLI.stdoutWriter()

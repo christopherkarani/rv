@@ -24,6 +24,8 @@ struct SetupIntent {
     var appearance: CLIAppearance = .robot
     var animate: Bool = false
     var ceremonyKind: SetupCeremonyKind = .setup
+    /// Uninstall only: also delete the downloaded judge weights.
+    var removeModels: Bool = false
 }
 
 /// The single deep entry into setup/uninstall. Owns environment construction;
@@ -63,6 +65,7 @@ struct SetupFlow {
         case .uninstall:
             return SetupRun.uninstall(
                 env,
+                removeModels: intent.removeModels,
                 appearance: intent.appearance,
                 clock: clock,
                 animate: intent.animate,

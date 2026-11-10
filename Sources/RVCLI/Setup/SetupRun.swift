@@ -154,6 +154,7 @@ enum SetupRun {
 
     static func uninstall(
         _ env: SetupEnvironment,
+        removeModels: Bool = false,
         appearance: CLIAppearance = .robot,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
@@ -162,6 +163,7 @@ enum SetupRun {
         do {
             let formatted = try uninstallPerform(
                 env,
+                removeModels: removeModels,
                 appearance: appearance,
                 clock: clock,
                 animate: animate,
@@ -169,6 +171,8 @@ enum SetupRun {
             )
             return SetupOutcome(
                 stdout: formatted.text,
+                stderr: keptModelsNote(
+                    layout: OwnedPaths(home: env.home), files: FileOps(fileManager: env.fileManager)),
                 exitCode: 0,
                 emitted: formatted.emitted
             )
