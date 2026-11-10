@@ -29,7 +29,7 @@ struct UnixSocketServiceTransport: ServiceTransport {
 
     func hello(clientSemver: String) async throws -> HelloAckView {
         let body = try IPCJSON.encode(Hello(protocolName: ProtocolVersion.name, clientSemver: clientSemver))
-        let reply = try connection.roundTrip(body, timeoutMs: UnixServiceConnection.connectTimeoutMs)
+        let reply = try roundTripReportingAbsence(body, timeoutMs: UnixServiceConnection.connectTimeoutMs)
         return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
     }
 
@@ -45,10 +45,15 @@ struct UnixSocketServiceTransport: ServiceTransport {
         try connection.roundTrip(body, timeoutMs: timeoutMs)
     }
 
-    /// A connect miss (ENOENT / ECONNREFUSED) on the uid-derived socket is the
-    /// only failure reported as `.connectFailed`, the hook's positive-absence
-    /// signal; everything else propagates for `HookDaemonFallback.classify`.
     func sendHookConsult(_ body: Data, timeoutMs: Int) async throws -> Data {
+        try roundTripReportingAbsence(body, timeoutMs: timeoutMs)
+    }
+
+    /// A connect miss (ENOENT / ECONNREFUSED) on the uid-derived socket is the
+    /// only failure reported as `.connectFailed`, the positive-absence signal
+    /// (the hook's observe step-aside, diagnostics' "down"); everything else
+    /// propagates for `HookDaemonFallback.classify`.
+    private func roundTripReportingAbsence(_ body: Data, timeoutMs: Int) throws -> Data {
         do {
             return try connection.roundTrip(body, timeoutMs: timeoutMs)
         } catch UnixServiceConnection.TransportFailure.connect(let code)
