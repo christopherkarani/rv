@@ -28,30 +28,19 @@ extension XPCOperatorUIClient: OperatorUIBridge {}
 @Observable
 @MainActor
 public final class OperatorReviewModel {
-    public enum Connection: Equatable, Sendable {
-        case disconnected
-        case connecting
-        case connected
-        case failed(String)
-    }
+    public typealias Connection = ReviewConnection
 
-    public private(set) var connection: Connection = .disconnected
-    public private(set) var items: [UIReviewItemDTO] = []
-    public private(set) var selectedID: UUID?
-    public private(set) var bound: UIChallengeBundleDTO?
-    public private(set) var lastStatus: WorkspaceOperationStatus?
-    public private(set) var notice: String?
-    public private(set) var authenticating = false
-
+    private var session = ReviewSession<LaunchReview>()
     private let bridge: any OperatorUIBridge
     private let authenticator: OperatorAuthenticator
-    /// Bumped whenever the selection changes or clears. A bind reply is
-    /// applied only if the epoch it started under is still current, so a
-    /// slow reply for an earlier selection can never become `bound`.
-    private var selectionEpoch = 0
-    /// True while `deny()` is in flight: blocks select/authorize/deny so the
-    /// selection cannot move under the cancel it is addressing.
-    private var denying = false
+
+    public var connection: Connection { session.connection }
+    public var items: [UIReviewItemDTO] { session.items }
+    public var selectedID: UUID? { session.selectedID }
+    public var bound: UIChallengeBundleDTO? { session.bound }
+    public var lastStatus: WorkspaceOperationStatus? { session.lastStatus }
+    public var notice: String? { session.notice }
+    public var authenticating: Bool { session.isAuthorizing }
 
     public init(
         bridge: any OperatorUIBridge,
@@ -61,140 +50,79 @@ public final class OperatorReviewModel {
         self.authenticator = authenticator
     }
 
-    public func connect() async {
-        guard connection != .connecting, connection != .connected else { return }
-        connection = .connecting
-        notice = nil
-        do {
-            try await bridge.connect()
-            connection = .connected
-            await refresh()
-        } catch {
-            connection = .failed(describe(error))
-        }
-    }
+    public func connect() async { await send(.connectRequested) }
 
-    public func refresh() async {
-        guard connection == .connected else { return }
-        do {
-            items = try await bridge.list().items
-            if let selectedID, !items.contains(where: { $0.operationID == selectedID }) {
-                clearSelection()
-            } else if let current = bound,
-                !items.contains(where: { $0.operationID == current.item.operationID }) {
-                bound = nil
-            }
-            notice = nil
-        } catch {
-            notice = describe(error)
-        }
-    }
+    public func refresh() async { await send(.refreshRequested) }
 
     /// Selects an operation and binds its review challenge. Binding is
     /// server-idempotent: re-selecting returns the same live challenge.
-    public func select(_ id: UUID?) async {
-        guard id != selectedID, !authenticating, !denying else { return }
-        clearSelection()
-        guard let id, connection == .connected else { return }
-        selectedID = id
-        let epoch = selectionEpoch
-        do {
-            let bundle = try await bridge.bind(operationID: id)
-            guard epoch == selectionEpoch else { return }
-            bound = bundle
-            notice = nil
-        } catch {
-            guard epoch == selectionEpoch else { return }
-            notice = describe(error)
-        }
-    }
+    public func select(_ id: UUID?) async { await send(.selectTapped(id)) }
 
     /// Explicit Authorize tap: one fresh device-owner authentication, then
     /// completion echoes the EXACT retained challenge and operation IDs.
     /// Anything else (mismatch, tamper, replay) fails closed in rvd.
-    public func authorize() async {
-        guard let bound, !authenticating, !denying,
-            bound.item.operationID == selectedID
-        else { return }
-        authenticating = true
-        defer { authenticating = false }
-        let outcome = await authenticator.authenticate(reason: reason(for: bound.item))
-        do {
-            let status = try await bridge.complete(UIOperatorCompletion(
-                challengeID: bound.challenge.challengeID,
-                operationID: bound.item.operationID,
-                outcome: outcome))
-            lastStatus = status.status
-            if Self.isTerminal(status.status) {
-                clearSelection()
-            }
-            await refresh()
-        } catch {
-            notice = describe(error)
-        }
-    }
+    public func authorize() async { await send(.allowTapped) }
 
     public func dismissNotice() {
-        notice = nil
+        _ = session.reduce(.dismissNotice)
     }
 
     /// Explicit Deny tap: cancels the selected review. Works bound or not.
-    public func deny() async {
-        guard let selectedID, !authenticating, !denying,
-            bound == nil || bound?.item.operationID == selectedID
-        else { return }
-        denying = true
-        defer { denying = false }
-        do {
-            let status = try await bridge.cancel(operationID: selectedID)
-            lastStatus = status.status
-            clearSelection()
-            await refresh()
-        } catch {
-            notice = describe(error)
+    public func deny() async { await send(.denyTapped) }
+
+    private func send(_ event: ReviewSession<LaunchReview>.Event) async {
+        var queue = session.reduce(event)
+        while !queue.isEmpty {
+            let reply = await run(queue.removeFirst())
+            queue += session.reduce(reply)
         }
     }
 
-    private func clearSelection() {
-        selectionEpoch += 1
-        selectedID = nil
-        bound = nil
-    }
-
-    private static func isTerminal(_ status: WorkspaceOperationStatus) -> Bool {
-        // Exhaustive: a new status breaks this switch until classified.
-        switch status {
-        case .authorized, .consumed, .cancelled, .expired, .invalidated, .failed:
-            return true
-        case .pendingReview, .awaitingAuthentication, .unknown:
-            return false
-        }
-    }
-
-    private func reason(for _: UIReviewItemDTO) -> String {
-        // Fixed wording: server-supplied display names must not shape the
-        // authentication prompt. The trusted review window already shows
-        // exactly what is under review; the prompt proves presence only.
-        "Authenticate to authorize the selected workspace launch."
-    }
-
-    private func describe(_ error: any Error) -> String {
-        #if canImport(XPC)
-        if let error = error as? XPCOperatorUIClientError {
-            switch error {
-            case .denied:
-                return "Denied: review is no longer valid. Refresh and rebind."
-            case .authenticationFailed:
-                return "Service identity check failed. Is rvd running?"
-            case .connectFailed:
-                return "Lost connection to rvd."
-            case .protocolMismatch:
-                return "Unexpected reply from rvd."
-            case .cancelled:
-                return "Cancelled."
+    private func run(_ command: ReviewSession<LaunchReview>.Command) async
+        -> ReviewSession<LaunchReview>.Event
+    {
+        switch command {
+        case .connect:
+            do {
+                try await bridge.connect()
+                return .connectReplied(nil)
+            } catch {
+                return .connectReplied(ReviewFailure(error))
             }
+        case .list(let gen):
+            do {
+                return .listReplied(gen: gen, .success(try await bridge.list().items))
+            } catch {
+                return .listReplied(gen: gen, .failure(ReviewFailure(error)))
+            }
+        case .bind(let id, let ticket):
+            do {
+                return .bindReplied(id, ticket: ticket, .success(try await bridge.bind(operationID: id)))
+            } catch {
+                return .bindReplied(id, ticket: ticket, .failure(ReviewFailure(error)))
+            }
+        case .authenticate(let bundle):
+            let outcome = await authenticator.authenticate(reason: LaunchReview.authenticationReason)
+            return .authenticated(challenge: bundle.challenge.challengeID, outcome)
+        case .complete(let bundle, let outcome):
+            let challenge = bundle.challenge.challengeID
+            do {
+                let status = try await bridge.complete(UIOperatorCompletion(
+                    challengeID: challenge, operationID: bundle.item.operationID,
+                    outcome: outcome))
+                return .completeReplied(challenge: challenge, .success(status.status))
+            } catch {
+                return .completeReplied(challenge: challenge, .failure(ReviewFailure(error)))
+            }
+        case .cancel(let id):
+            do {
+                return .denyReplied(id, .success(try await bridge.cancel(operationID: id).status))
+            } catch {
+                return .denyReplied(id, .failure(ReviewFailure(error)))
+            }
+        case .deny(let bundle):
+            // Unreachable: launch denies by cancel(ID).
+            return .denyReplied(bundle.item.operationID, .failure(.generic))
         }
-        #endif
-        return "Request failed."
     }
 }
