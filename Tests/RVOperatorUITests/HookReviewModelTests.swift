@@ -19,6 +19,9 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
         var denies: [UIHookDeny] = []
         var cancels: [String] = []
         var lastChallenge: [String: UUID] = [:]
+        var bindGates: [String: Gate] = [:]
+        var denyGate: Gate?
+        var listed: [UIHookReviewItemDTO]?
     }
 
     private let state = Mutex(State())
@@ -35,6 +38,26 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
         state.withLock { $0.connectThrows = shouldThrow }
     }
 
+    /// Overrides what `hookList()` reports while `hookBind` still resolves
+    /// from `items`: the review vanishes from the list but its bind reply lands.
+    func setListed(_ items: [UIHookReviewItemDTO]?) {
+        state.withLock { $0.listed = items }
+    }
+
+    /// Parks `hookBind(approvalID:)` for `id` until the returned gate is released.
+    func gateBind(_ id: String) -> Gate {
+        let gate = Gate()
+        state.withLock { $0.bindGates[id] = gate }
+        return gate
+    }
+
+    /// Parks `hookDeny(_:)` until the returned gate is released.
+    func gateDeny() -> Gate {
+        let gate = Gate()
+        state.withLock { $0.denyGate = gate }
+        return gate
+    }
+
     var snapshot: State {
         state.withLock { $0 }
     }
@@ -47,11 +70,14 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
     }
 
     func hookList() async throws -> UIHookReviewListDTO {
-        UIHookReviewListDTO(items: state.withLock { $0.items })
+        UIHookReviewListDTO(items: state.withLock { $0.listed ?? $0.items })
     }
 
     func hookBind(approvalID: String) async throws -> UIHookChallengeBundleDTO {
         state.withLock { $0.bindCalls += 1 }
+        if let gate = state.withLock({ $0.bindGates[approvalID] }) {
+            await gate.pass()
+        }
         let current = state.withLock { $0 }
         guard !current.bindRefused,
             let item = current.items.first(where: { $0.approvalID == approvalID })
@@ -81,6 +107,9 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
 
     func hookDeny(_ deny: UIHookDeny) async throws -> UIHookStatusDTO {
         state.withLock { $0.denies.append(deny) }
+        if let gate = state.withLock({ $0.denyGate }) {
+            await gate.pass()
+        }
         let status = state.withLock { $0.denyResult }
         return UIHookStatusDTO(approvalID: deny.approvalID, status: status)
     }
@@ -365,6 +394,103 @@ struct OperatorHookReviewModelTests {
         #expect(model.connection == .connected)
         #expect(model.items.count == 1)
         #expect(model.unseenApprovalIDs.isEmpty)
+    }
+
+    @Test func staleBindReplyNeverOverwritesNewerSelection() async {
+        let bridge = FakeHookBridge()
+        let first = "hook-a"
+        let second = "hook-b"
+        bridge.setItems([hookReviewItem(approvalID: first), hookReviewItem(approvalID: second)])
+        let gateA = bridge.gateBind(first)
+        let gateB = bridge.gateBind(second)
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        let selectA = Task { await model.select(first) }
+        await gateA.waitEntered()
+        let selectB = Task { await model.select(second) }
+        await gateB.waitEntered()
+        gateB.release()
+        await selectB.value
+        #expect(model.bound?.item.approvalID == second)
+        gateA.release()
+        await selectA.value
+        #expect(model.selectedID == second)
+        #expect(model.bound?.item.approvalID == second)
+        await model.allowOnce()
+        #expect(bridge.snapshot.completions.map(\.approvalID) == [second])
+    }
+
+    @Test func staleBindFailureNeverSurfacesOverNewerSelection() async {
+        let bridge = FakeHookBridge()
+        let first = "hook-a"
+        let second = "hook-b"
+        // `first` is not listed, so its bind fails once released.
+        bridge.setItems([hookReviewItem(approvalID: second)])
+        let gateA = bridge.gateBind(first)
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        let selectA = Task { await model.select(first) }
+        await gateA.waitEntered()
+        await model.select(second)
+        #expect(model.bound?.item.approvalID == second)
+        gateA.release()
+        await selectA.value
+        #expect(model.notice == nil)
+        #expect(model.bound?.item.approvalID == second)
+    }
+
+    @Test func denyInFlightBlocksAllowAndSelect() async {
+        let bridge = FakeHookBridge()
+        let first = "hook-a"
+        let second = "hook-b"
+        bridge.setItems([hookReviewItem(approvalID: first), hookReviewItem(approvalID: second)])
+        let gate = bridge.gateDeny()
+        let counter = AuthCounter()
+        let model = makeModel(bridge: bridge, counter: counter)
+        await model.connect()
+        await model.select(first)
+        let denial = Task { await model.deny() }
+        await gate.waitEntered()
+        await model.select(second)
+        await model.select(nil)
+        await model.allowOnce()
+        await model.deny()
+        #expect(model.selectedID == first)
+        #expect(counter.calls == 0)
+        #expect(bridge.snapshot.completions.isEmpty)
+        #expect(bridge.snapshot.denies.count == 1)
+        #expect(bridge.snapshot.bindCalls == 1)
+        gate.release()
+        await denial.value
+        #expect(model.selectedID == nil)
+        #expect(model.bound == nil)
+        #expect(model.lastStatus == .denied)
+    }
+
+    @Test func denyBindReplyForVanishedReviewSendsNoDeny() async {
+        let bridge = FakeHookBridge()
+        let id = "hook-a"
+        bridge.setItems([hookReviewItem(approvalID: id)])
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        // Selected but unbound: the first bind failed, so deny must bind first.
+        bridge.setBindRefused(true)
+        await model.select(id)
+        #expect(model.selectedID == id)
+        #expect(model.bound == nil)
+        bridge.setBindRefused(false)
+        let gate = bridge.gateBind(id)
+        let denial = Task { await model.deny() }
+        await gate.waitEntered()
+        // A refresh lands while deny is binding and drops the review.
+        bridge.setListed([])
+        await model.refresh()
+        #expect(model.selectedID == nil)
+        gate.release()
+        await denial.value
+        #expect(bridge.snapshot.denies.isEmpty)
+        #expect(model.selectedID == nil)
+        #expect(model.bound == nil)
     }
 }
 
