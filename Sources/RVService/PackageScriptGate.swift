@@ -36,9 +36,9 @@ import RVEngine
 /// will run after a mutation (TOCTOU), stays `.unresolved`.
 ///
 /// A missing package.json with nothing earlier in the chain is `.clear`
-/// only when the cwd is absolute and every directory up to `/` was read
-/// and holds no manifest of any kind: every runner then errors out
-/// before executing any script.
+/// only when the cwd is absolute, exists, and every physical directory up
+/// to `/` was read and holds no manifest of any kind: every runner then
+/// errors out before executing any script.
 enum PackageScriptGate {
     enum Verdict {
         /// Every body the command runs was read and allowed.
@@ -683,10 +683,11 @@ enum PackageScriptGate {
 
     static let alternateManifests = ["package.yaml", "package.json5"]
 
-    /// Walks up to the filesystem root, as the runners do.
+    /// Walks up to the filesystem root from the physical cwd, as the
+    /// runners do (`process.cwd()` is getcwd: symlinks resolved).
     static func locateManifest(from cwd: String) -> ManifestLookup {
-        guard cwd.hasPrefix("/") else { return .unknown }
-        var dir = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+        guard cwd.hasPrefix("/"), let physical = physicalDirectory(cwd) else { return .unknown }
+        var dir = URL(fileURLWithPath: physical, isDirectory: true)
         while true {
             let manifest = entry(dir.appendingPathComponent("package.json").path)
             if manifest == .unknown { return .unknown }
@@ -698,6 +699,26 @@ enum PackageScriptGate {
             if parent.path == dir.path { return .none }
             dir = parent
         }
+    }
+
+    /// The directory a runner started in `cwd` reports as its cwd, with
+    /// every symlink resolved. nil when it does not exist (yet), is not a
+    /// directory, cannot be resolved, or when a `..` reads differently to
+    /// the shell (lexical, `cd link/..`) and the kernel (physical).
+    static func physicalDirectory(_ cwd: String) -> String? {
+        // `standardized` is lexical; `standardizedFileURL` resolves a `..`
+        // through a symlink physically.
+        let lexical = URL(fileURLWithPath: cwd, isDirectory: true).standardized.path
+        guard let physical = realPath(cwd), realPath(lexical) == physical else { return nil }
+        var info = stat()
+        guard stat(physical, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        return physical
+    }
+
+    private static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     private enum Entry { case present, absent, unknown }
