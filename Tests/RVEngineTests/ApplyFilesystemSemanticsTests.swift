@@ -776,6 +776,7 @@ private func runFilesystemPack(
         engine: world.engine,
         compiled: world.compiled,
         patternBudget: &budget,
+        rvdPIDs: { nil },
         floorUnresolved: false
     )
 }

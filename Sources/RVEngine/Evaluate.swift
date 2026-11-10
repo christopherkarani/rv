@@ -7,18 +7,22 @@ public let commandByteCap = 65_536
 /// An allow is tightened by the alias bodies the command uses or defines.
 /// `patternBudget` bounds all pattern matching for the request: every pass
 /// (segments, full view, alias expansions) charges the same allowance.
+/// `rvdPIDs` reads rvd's running pids for the self-protection floor (nil:
+/// unknown, so any literal-pid `kill` is indeterminate); the engine does no
+/// process I/O, so the service injects it.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
     secretPaths: SecretPathDecider = .dayOne,
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
-    patternBudget: PatternBudget = PatternBudget()
+    patternBudget: PatternBudget = PatternBudget(),
+    rvdPIDs: () -> Set<Int32>? = { nil }
 ) -> EvaluationResult {
     var budget = patternBudget
     return evaluateGated(
         request, packs: packs, secretPaths: secretPaths, engine: engine,
-        compiled: compiled, patternBudget: &budget, floorUnresolved: true
+        compiled: compiled, patternBudget: &budget, rvdPIDs: rvdPIDs, floorUnresolved: true
     )
 }
 
@@ -30,12 +34,13 @@ func evaluateGated<E: PatternEngine>(
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
     patternBudget: inout PatternBudget,
+    rvdPIDs: () -> Set<Int32>?,
     floorUnresolved: Bool
 ) -> EvaluationResult {
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluatePacks(
             request, packs: packs, secretPaths: secretPaths, engine: engine,
-            compiled: compiled, timeBudget: &patternBudget
+            compiled: compiled, timeBudget: &patternBudget, rvdPIDs: rvdPIDs
         )
     }
     return gateAliases(
@@ -54,7 +59,8 @@ private func evaluatePacks<E: PatternEngine>(
     secretPaths: SecretPathDecider,
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
-    timeBudget: inout PatternBudget
+    timeBudget: inout PatternBudget,
+    rvdPIDs: () -> Set<Int32>?
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -76,7 +82,7 @@ private func evaluatePacks<E: PatternEngine>(
     let matchingView = Normalize.matchingView(of: request.command)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return floorSelfProtection(request.command, secretPaths.fold(
+        return floorSelfProtection(request.command, rvdPIDs: rvdPIDs, secretPaths.fold(
             EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
             command: request.command
         ))
@@ -130,9 +136,9 @@ private func evaluatePacks<E: PatternEngine>(
             return viewed
         }
         return floorExhaustion(exhausted, floorSelfProtection(
-            request.command, secretPaths.fold(viewed, command: request.command)))
+            request.command, rvdPIDs: rvdPIDs, secretPaths.fold(viewed, command: request.command)))
     }
-    return floorExhaustion(exhausted, floorSelfProtection(request.command, secretPaths.fold(
+    return floorExhaustion(exhausted, floorSelfProtection(request.command, rvdPIDs: rvdPIDs, secretPaths.fold(
         EvaluationResult(outcome: .plain, matchingView: matchingView),
         command: request.command
     )))
@@ -147,8 +153,12 @@ private func floorExhaustion(_ exhausted: Bool, _ result: EvaluationResult) -> E
 
 /// An allowed `rv` invocation that weakens rv is indeterminate: the owner
 /// runs rv administration in Terminal, never the agent it guards.
-private func floorSelfProtection(_ command: ShellCommand, _ result: EvaluationResult) -> EvaluationResult {
-    guard result.decision == .allow, SelfProtectionGuard.weakensPolicy(command) else { return result }
+private func floorSelfProtection(
+    _ command: ShellCommand,
+    rvdPIDs: () -> Set<Int32>?,
+    _ result: EvaluationResult
+) -> EvaluationResult {
+    guard result.decision == .allow, SelfProtectionGuard.weakensPolicy(command, rvdPIDs: rvdPIDs) else { return result }
     return EvaluationResult(
         outcome: .indeterminate(.selfProtection),
         matchingView: result.matchingView

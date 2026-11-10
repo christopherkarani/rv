@@ -130,8 +130,33 @@ struct ServiceSelfProtectionTests {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: "kill %1"), rvdPIDs: { nil }) == false)
     }
 
+    @Test("evaluate floors a literal kill of rvd's injected pid; no injected pids fails closed")
+    func evaluateUsesInjectedRVDPids() throws {
+        let packs = [
+            PackSnapshot(id: .coreGit, name: "git", description: "git", keywords: ["git"], safe: [], destructive: [
+                DestructiveRule(name: "reset-hard", pattern: #"git\s+reset\s+--hard"#, severity: .critical, reason: "g"),
+            ]),
+            PackSnapshot(id: .coreFilesystem, name: "fs", description: "fs", keywords: ["rm"], safe: [], destructive: [
+                DestructiveRule(name: "rm-rf", pattern: #"rm\s+-rf"#, severity: .high, reason: "r"),
+            ]),
+        ]
+        let engine = ICUPatternEngine()
+        let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
+        func decision(_ command: String, rvdPIDs: (() -> Set<Int32>?)? = nil) -> Decision {
+            let request = EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: [.coreFilesystem, .coreGit])
+            guard let rvdPIDs else {
+                return evaluate(request, packs: packs, engine: engine, compiled: compiled).decision
+            }
+            return evaluate(request, packs: packs, engine: engine, compiled: compiled, rvdPIDs: rvdPIDs).decision
+        }
+        #expect(decision("kill 4242", rvdPIDs: { [4242] }) == .indeterminate(.selfProtection))
+        #expect(decision("kill 1234", rvdPIDs: { [4242] }) == .allow)
+        #expect(decision("kill 1234", rvdPIDs: { nil }) == .indeterminate(.selfProtection))
+        #expect(decision("kill 1234") == .indeterminate(.selfProtection))
+    }
+
     @Test("unrelated service and process commands are not", arguments: harmless)
     func harmlessPass(command: String) {
-        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
+        #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command), rvdPIDs: { [4242] }) == false, "\(command)")
     }
 }

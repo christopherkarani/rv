@@ -7,7 +7,8 @@ import Glibc
 
 /// Pids of this user's running `rvd` processes, so a literal-pid `kill`
 /// of rvd is caught at evaluation time. Nil when the process table could
-/// not be read: callers fail closed.
+/// not be read: callers fail closed. The engine does no process I/O; the
+/// service injects this as the evaluation's `rvdPIDs` probe.
 package func runningRVDaemonPIDs() -> Set<Int32>? {
     var pids: Set<Int32> = []
     if ProcessInfo.processInfo.processName == "rvd" { pids.insert(getpid()) }

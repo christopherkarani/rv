@@ -54,7 +54,7 @@ enum ObserveFloor {
         home: HomeDirectory?,
         cwd: WorkingDirectory?
     ) -> Bool {
-        if holds(result) || SelfProtectionGuard.weakensPolicy(command) { return true }
+        if holds(result) || SelfProtectionGuard.weakensPolicy(command, rvdPIDs: runningRVDaemonPIDs) { return true }
         let rvConfig = SecretPathDecider(
             catalog: catalog,
             safety: store.safety,

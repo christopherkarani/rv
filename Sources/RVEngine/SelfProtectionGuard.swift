@@ -15,13 +15,10 @@ import RVDomain
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
 public enum SelfProtectionGuard {
-    public static func weakensPolicy(_ command: ShellCommand) -> Bool {
-        weakensPolicy(command, rvdPIDs: runningRVDaemonPIDs)
-    }
-
     /// `rvdPIDs` names rvd's running pids (nil: unknown), read only when a
-    /// literal-pid `kill` is judged.
-    package static func weakensPolicy(_ command: ShellCommand, rvdPIDs: () -> Set<Int32>?) -> Bool {
+    /// literal-pid `kill` is judged. The caller reads the process table;
+    /// absent that, any literal pid is flagged (fail closed).
+    public static func weakensPolicy(_ command: ShellCommand, rvdPIDs: () -> Set<Int32>? = { nil }) -> Bool {
         let launched = launchedCommandHeads(command.rawValue)
         return launched.contains { launched in
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
