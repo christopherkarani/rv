@@ -107,10 +107,17 @@ OBSERVE_CONFIG="$OBSERVE_CONFIG_DIR/config.json"
 OBSERVE_MANAGED="$OUT/observe-managed"
 rm -rf "$OBSERVE_CONFIG_DIR" "$OBSERVE_MANAGED"
 mkdir -p "$OBSERVE_CONFIG_DIR"
+# Linux: the uid-derived runtime root (/run/user in release builds) is
+# pinned to a short fixture too, so a live rvd is never poked and the
+# socket path fits sockaddr_un under deep checkouts.
+RUNTIME_ROOT="$(mktemp -d /tmp/rv-c-run.XXXXXX)"
+trap 'rm -rf "$RUNTIME_ROOT"' EXIT
+OWNER_RUNTIME="$RUNTIME_ROOT/$(id -u)"
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -DRV_HOOK_OBSERVE_CONFIG_PATH="\"$OBSERVE_CONFIG\"" \
   -DRV_HOOK_MANAGED_POLICY_DIR="\"$OBSERVE_MANAGED\"" \
+  -DRV_HOOK_USER_RUNTIME_ROOT="\"$RUNTIME_ROOT\"" \
   -o "$OUT/rv" \
   "$SRC/json_escape.c" \
   "$SRC/json_reply.c" \
@@ -285,6 +292,7 @@ PY
 REASON_INPUT="RV could not read this hook request"
 REASON_OVERSIZE="RV could not read this hook request"
 REASON_UNREACHABLE='RV daemon is not reachable'
+REASON_CONNECTION='RV daemon connection failed'
 REASON_REJECTED='RV daemon identity check failed'
 
 # Every host denies malformed input directly; an executable CLI sibling must
@@ -310,17 +318,15 @@ done
 
 # Well-formed input with no reachable daemon names the cause, never a
 # generic auth sentence. RV_HOOK_WHEN_DOWN=deny pins the deny wire on the
-# ask-capable hosts (Claude, Cursor) too. Linux pins an empty runtime dir (no socket);
-# Darwin has no test-controlled Mach service, so a live foreign rvd may
-# answer and be rejected by the identity check instead.
-DOWN_XDG="$OUT/no-daemon-xdg"
-rm -rf "$DOWN_XDG"
-mkdir -p "$DOWN_XDG"
+# ask-capable hosts (Claude, Cursor) too. Linux leaves XDG_RUNTIME_DIR unset,
+# so the hook uses the (empty) fixture uid-derived runtime dir; Darwin has no
+# test-controlled Mach service, so a live foreign rvd may answer and be
+# rejected by the identity check, or drop the connection, instead.
 for host in $HOSTS; do
   log="$OUT/down-$host.argv"
   rm -f "$log"
   set +e
-  printf '{}' | RV_HOOK_WHEN_DOWN=deny XDG_RUNTIME_DIR="$DOWN_XDG" RV_C_ARGV_LOG="$log" "$PROBE/rv" hook --host "$host" >"$OUT/down-$host.json" 2>"$OUT/down-$host.err"
+  printf '{}' | env -u XDG_RUNTIME_DIR RV_HOOK_WHEN_DOWN=deny RV_C_ARGV_LOG="$log" "$PROBE/rv" hook --host "$host" >"$OUT/down-$host.json" 2>"$OUT/down-$host.err"
   status=$?
   set -e
   if [[ -e "$log" ]]; then
@@ -331,7 +337,8 @@ for host in $HOSTS; do
     continue
   fi
   if [[ "$OS" == "Darwin" ]] \
-    && check_deny "$host" "$OUT/down-$host.json" "$OUT/down-$host.err" "$status" "$REASON_REJECTED" 2>/dev/null; then
+    && { check_deny "$host" "$OUT/down-$host.json" "$OUT/down-$host.err" "$status" "$REASON_REJECTED" 2>/dev/null \
+      || check_deny "$host" "$OUT/down-$host.json" "$OUT/down-$host.err" "$status" "$REASON_CONNECTION" 2>/dev/null; }; then
     continue
   fi
   printf 'rv-c tests: %s no-daemon deny must name the unreachable service\n' "$host" >&2
@@ -385,14 +392,14 @@ if ! grep -q "rv-cli not found" "$BROKEN/err"; then
 fi
 
 # Daemon down: RV_HOOK_WHEN_DOWN rendering at the process boundary. Linux
-# points XDG_RUNTIME_DIR at an empty dir (ENOENT); Darwin relies on
-# dev.rv.evaluate being unregistered for this user and skips otherwise —
-# a live service must never be poked by unit tests.
+# unsets XDG_RUNTIME_DIR so the hook uses the fixture uid-derived runtime
+# dir, which has no socket (ENOENT); Darwin relies on dev.rv.evaluate being
+# unregistered for this user and skips otherwise — a live service must
+# never be poked by unit tests.
 DOWN_ENV=()
 down_ready=1
 if [[ "$OS" == "Linux" ]]; then
-  mkdir -p "$OUT/empty-xdg"
-  DOWN_ENV=(XDG_RUNTIME_DIR="$OUT/empty-xdg")
+  DOWN_ENV=(-u XDG_RUNTIME_DIR)
 elif launchctl print "gui/$(id -u)/dev.rv.evaluate" >/dev/null 2>&1; then
   down_ready=0
   printf 'rv-c tests: dev.rv.evaluate is registered; skipping daemon-down cases\n'
@@ -400,6 +407,7 @@ fi
 
 expect_down() {
   local name="$1" host="$2" mode="$3" want_status="$4" marker="$5"
+  local reason="${6:-$REASON_UNREACHABLE}"
   local st
   rm -f "$OUT/down-$name.argv"
   set +e
@@ -419,8 +427,8 @@ expect_down() {
       exit 1
     fi
   elif ! grep -q "$marker" "$OUT/down-$name.json" \
-    || ! grep -q 'RV daemon is not reachable' "$OUT/down-$name.json"; then
-    printf 'rv-c tests: down %s missing %s / unreachable reason\n' "$name" "$marker" >&2
+    || ! grep -q "$reason" "$OUT/down-$name.json"; then
+    printf 'rv-c tests: down %s missing %s / %s\n' "$name" "$marker" "$reason" >&2
     cat "$OUT/down-$name.json" >&2
     exit 1
   fi
@@ -508,6 +516,81 @@ if [[ "$down_ready" -eq 1 ]]; then
   if ! grep -q '"permissionDecision":"ask"' "$OUT/observe-env.json"; then
     printf 'rv-c tests: RV_GUARD_MODE / RV_HOOK_WHEN_DOWN must not enable observe fallback\n' >&2
     exit 1
+  fi
+  printf '{"guard":{"mode":"observe"}}' > "$OBSERVE_CONFIG"
+  if [[ "$OS" == "Linux" ]]; then
+    # Only a miss on the uid-derived socket may step aside. An agent can set
+    # XDG_RUNTIME_DIR through project-scoped host config, so a miss anywhere
+    # else, an empty or over-long value, keeps the ask/deny fallback.
+    LINUX_DOWN_ENV=("${DOWN_ENV[@]}")
+    DOWN_ENV=(XDG_RUNTIME_DIR="$OWNER_RUNTIME")
+    expect_observe xdg-owner claude ''
+    DOWN_ENV=(XDG_RUNTIME_DIR="$OUT/no-such-runtime-dir")
+    expect_down xdg-foreign claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
+    expect_down xdg-foreign-codex codex "" 2 '"decision":"block"' "$REASON_CONNECTION"
+    DOWN_ENV=(XDG_RUNTIME_DIR="$OWNER_RUNTIME/")
+    expect_down xdg-owner-slash claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
+    DOWN_ENV=(XDG_RUNTIME_DIR=)
+    expect_down xdg-empty claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
+    DOWN_ENV=(XDG_RUNTIME_DIR="/tmp/$(printf 'x%.0s' $(seq 1 120))")
+    expect_down xdg-too-long claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
+
+    # Fake sibling rvd: the peer check accepts it, so failures are classified
+    # exactly as with the real daemon.
+    clang -Os -std=c11 -Wall -o "$PROBE/rvd" "$SRC/tests/fake_rvd.c"
+    mkdir -p "$OWNER_RUNTIME/rv"
+    # ECONNREFUSED (stale socket file, no listener) on the uid-derived path
+    # is an absent daemon.
+    "$PROBE/rvd" stale "$OWNER_RUNTIME/rv/evaluate.sock"
+    DOWN_ENV=("${LINUX_DOWN_ENV[@]}")
+    expect_observe stale-socket claude ''
+    # ... but not under an agent-chosen XDG_RUNTIME_DIR.
+    mkdir -p "$OUT/foreign-runtime/rv"
+    rm -f "$OUT/foreign-runtime/rv/evaluate.sock"
+    "$PROBE/rvd" stale "$OUT/foreign-runtime/rv/evaluate.sock"
+    DOWN_ENV=(XDG_RUNTIME_DIR="$OUT/foreign-runtime")
+    expect_down stale-foreign claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
+    rm -f "$OWNER_RUNTIME/rv/evaluate.sock" "$OUT/foreign-runtime/rv/evaluate.sock"
+
+    # Post-send drop: a verified daemon reads the whole request and closes
+    # without replying (rvd drains in-flight requests on shutdown, which an
+    # agent can trigger). That is never an absent daemon.
+    rm -f "$OUT/drop.record"
+    "$PROBE/rvd" drop "$OWNER_RUNTIME/rv/evaluate.sock" "$OUT/drop.record" &
+    drop_pid=$!
+    for _try in $(seq 1 50); do
+      [[ -S "$OWNER_RUNTIME/rv/evaluate.sock" ]] && break
+      sleep 0.1
+    done
+    DOWN_ENV=("${LINUX_DOWN_ENV[@]}")
+    expect_down post-send-drop claude "" 0 '"permissionDecision":"ask"' "$REASON_CONNECTION"
+    if ! wait "$drop_pid" || [[ ! -s "$OUT/drop.record" ]] || [[ "$(cat "$OUT/drop.record")" -le 4 ]]; then
+      printf 'rv-c tests: post-send drop must reach the fake daemon with a whole request\n' >&2
+      exit 1
+    fi
+    if grep -q 'observe' "$OUT/down-post-send-drop.err"; then
+      printf 'rv-c tests: post-send drop must not take the observe path\n' >&2
+      exit 1
+    fi
+    # A daemon that fails the peer check and is gone by the retry: the
+    # retry's ENOENT does not prove absence after a live (if unverified)
+    # daemon answered, so the untrusted deny stands.
+    cp "$PROBE/rvd" "$OUT/not-the-sibling"
+    "$OUT/not-the-sibling" drop "$OWNER_RUNTIME/rv/evaluate.sock" "$OUT/untrusted.record" &
+    untrusted_pid=$!
+    for _try in $(seq 1 50); do
+      [[ -S "$OWNER_RUNTIME/rv/evaluate.sock" ]] && break
+      sleep 0.1
+    done
+    expect_down untrusted-then-gone claude "" 0 '"permissionDecision":"deny"' "$REASON_REJECTED"
+    wait "$untrusted_pid" || true
+    if [[ -e "$OUT/untrusted.record" ]]; then
+      printf 'rv-c tests: hook sent request bytes to an unverified daemon\n' >&2
+      exit 1
+    fi
+    rm -f "$PROBE/rvd" "$OUT/not-the-sibling"
+    DOWN_ENV=("${LINUX_DOWN_ENV[@]}")
+    printf 'rv-c daemon-down fallback: Linux socket classification passed\n'
   fi
   rm -f "$OBSERVE_CONFIG"
   printf 'rv-c daemon-down fallback: observe rendering passed\n'
