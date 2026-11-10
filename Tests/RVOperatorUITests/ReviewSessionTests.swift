@@ -413,6 +413,19 @@ struct ReviewSessionTests {
         #expect(t.session.selection == .bound(bundle))
     }
 
+    @Test func launchBindReplyDuringDenyStillBinds() {
+        let item = reviewItem()
+        var s = Launch()
+        s.connect(items: [item])
+        let ticket = s.select(item.operationID)
+        s.send(.denyTapped)
+        let bundle = launchBundle(item)
+        #expect(s.send(.bindReplied(item.operationID, ticket: ticket, .success(bundle))).isEmpty)
+        #expect(s.session.selection == .denying(item.operationID, bundle))
+        s.send(.denyReplied(item.operationID, .failure(ReviewFailure(message: "Request failed."))))
+        #expect(s.session.selection == .bound(bundle))
+    }
+
     @Test func denyReplyForOtherIDDropped() {
         let item = reviewItem()
         var s = Launch()

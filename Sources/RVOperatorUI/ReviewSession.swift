@@ -302,6 +302,11 @@ struct ReviewSession<Mode: ReviewMode>: Equatable, Sendable {
                 notice = failure.message
                 return []
             }
+        case .denying(id, nil):
+            // Launch cancel-by-ID tapped while the select bind was pending:
+            // keep its bundle so a failed cancel returns to `.bound`.
+            if case .success(let bundle) = resolved { selection = .denying(id, bundle) }
+            return []
         default:
             return []
         }
