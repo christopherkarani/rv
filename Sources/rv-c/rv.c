@@ -7,10 +7,12 @@
 #include "evaluation_route.h"
 #include "daemon_trust.h"
 #include "hook_fallback.h"
+#include "observe_gate.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,6 +33,25 @@
 #endif
 
 extern char **environ;
+
+/* ManagedPolicyLocation.installedDirectory. Test builds may pin this and
+ * the config path to fixtures at compile time; release builds never do,
+ * and neither is ever read from the environment. */
+#ifndef RV_HOOK_MANAGED_POLICY_DIR
+#ifdef __APPLE__
+#define RV_HOOK_MANAGED_POLICY_DIR "/Library/Application Support/RV/managed"
+#else
+#define RV_HOOK_MANAGED_POLICY_DIR "/etc/rv/managed"
+#endif
+#endif
+
+/* systemd's per-user runtime root: rvd's unit gets
+ * XDG_RUNTIME_DIR=/run/user/<uid> and binds <that>/rv/evaluate.sock
+ * (UnixSocketPath.production). Test builds may pin a fixture root; release
+ * builds never do, and it is never read from the environment. */
+#ifndef RV_HOOK_USER_RUNTIME_ROOT
+#define RV_HOOK_USER_RUNTIME_ROOT "/run/user"
+#endif
 
 #define RV_MACH_SERVICE "dev.rv.evaluate"
 #define RV_IPC_KEY "rv.ipc"
@@ -279,13 +300,42 @@ static void exec_same_argv(char **argv) {
     _exit(2);
 }
 
+/* The owner's config.json puts this host in observe mode (observe_gate.h).
+ * The home comes from the passwd entry, never $HOME: hook environment can
+ * come from project-scoped host config an agent writes. */
+static int owner_chose_observe(const char *host) {
+#ifdef RV_HOOK_OBSERVE_CONFIG_PATH
+    return rv_observe_gate_applies(RV_HOOK_OBSERVE_CONFIG_PATH, RV_HOOK_MANAGED_POLICY_DIR, host);
+#else
+    char path[PATH_MAX];
+    struct passwd *pw = getpwuid(getuid());
+    int n;
+    if (pw == NULL || pw->pw_dir == NULL || pw->pw_dir[0] != '/') {
+        return 0;
+    }
+    n = snprintf(path, sizeof path, "%s/.config/rv/config.json", pw->pw_dir);
+    if (n <= 0 || (size_t)n >= sizeof path) {
+        return 0;
+    }
+    return rv_observe_gate_applies(path, RV_HOOK_MANAGED_POLICY_DIR, host);
+#endif
+}
+
 /* No CLI replay: neither a transport failure nor malformed input grants
  * authority. Renders the classified fallback (hook_fallback.h): input
  * failures always deny; daemon-unavailable classes follow
- * RV_HOOK_WHEN_DOWN (ask by default). */
+ * RV_HOOK_WHEN_DOWN (ask by default), except that an unreachable daemon
+ * steps aside when the owner chose observe mode and RV_HOOK_WHEN_DOWN is
+ * not deny. */
 static void fail_hook(const char *host, enum RvHookFailure failure) {
     struct RvHookFallback fallback;
     enum RvWhenDown mode = rv_when_down_parse(getenv(RV_HOOK_WHEN_DOWN_ENV));
+    /* Only an absent daemon (a slow one would still enforce rv's
+     * self-protection); an explicit RV_HOOK_WHEN_DOWN=deny is stricter and wins. */
+    if (mode == RV_WHEN_DOWN_ASK && failure == RV_HOOK_FAIL_UNREACHABLE
+        && owner_chose_observe(host)) {
+        mode = RV_WHEN_DOWN_OBSERVE;
+    }
     if (rv_hook_fallback_render(host, failure, mode, &fallback) != 0) {
         /* Unreachable for valid hosts; exit 2 blocks on Claude and Codex. */
         _exit(2);
@@ -455,7 +505,15 @@ struct XpcWait {
 
 /* One XPC request/reply round trip. Returns a retained, sender-verified
  * reply dictionary, or NULL with *failure set (and *retryable set when
- * the failure is transient: timeout, connection invalid/interrupted). */
+ * the failure is transient: timeout, connection invalid/interrupted).
+ *
+ * UNREACHABLE (the only class observe mode may step aside for) is
+ * reported only when `discovery` is set and launchd refuses the Mach
+ * service connection (XPC_ERROR_CONNECTION_INVALID: not registered for
+ * this user), so nothing reached rvd. Every other connection error is
+ * CONNECTION: an interrupted discovery means a live rvd went away, and
+ * after discovery the daemon's identity is verified, so a drop there may
+ * be rvd draining (which an agent can trigger), never proof of absence. */
 static xpc_object_t xpc_exchange(
     xpc_connection_t conn,
     const void *json,
@@ -463,6 +521,7 @@ static xpc_object_t xpc_exchange(
     const void *stdin_bytes,
     size_t stdin_len,
     int64_t timeout_ms,
+    int discovery,
     enum RvHookFailure *failure,
     int *retryable
 ) {
@@ -471,7 +530,7 @@ static xpc_object_t xpc_exchange(
     long timed_out;
     xpc_object_t reply;
 
-    *failure = RV_HOOK_FAIL_UNREACHABLE;
+    *failure = RV_HOOK_FAIL_CONNECTION;
     *retryable = 0;
     wait = (struct XpcWait *)calloc(1, sizeof *wait);
     if (wait == NULL) {
@@ -531,6 +590,9 @@ static xpc_object_t xpc_exchange(
          * mid-exchange (INTERRUPTED, e.g. an idle-exit race). */
         *retryable = reply == XPC_ERROR_CONNECTION_INVALID
             || reply == XPC_ERROR_CONNECTION_INTERRUPTED;
+        if (discovery && reply == XPC_ERROR_CONNECTION_INVALID) {
+            *failure = RV_HOOK_FAIL_UNREACHABLE;
+        }
         xpc_release(reply);
         return NULL;
     }
@@ -635,13 +697,13 @@ static int xpc_hook_evaluate(
     const void *data;
     size_t n = 0;
     char *copy;
-    enum RvHookFailure failure = RV_HOOK_FAIL_UNREACHABLE;
+    enum RvHookFailure failure = RV_HOOK_FAIL_CONNECTION;
     int ok = 0;
 
     *retryable = 0;
     discovery = xpc_connection_create_mach_service(RV_MACH_SERVICE, NULL, 0);
     if (discovery == NULL) {
-        return RV_HOOK_FAIL_UNREACHABLE;
+        return RV_HOOK_FAIL_CONNECTION;
     }
     xpc_connection_set_event_handler(discovery, ^(xpc_object_t event) {
         (void)event;
@@ -650,7 +712,7 @@ static int xpc_hook_evaluate(
 
     reply = xpc_exchange(
         discovery, kHelloJson, sizeof kHelloJson - 1, NULL, 0,
-        RV_HELLO_TIMEOUT_MS, &failure, retryable);
+        RV_HELLO_TIMEOUT_MS, 1, &failure, retryable);
     if (reply == NULL) {
         goto out;
     }
@@ -675,7 +737,7 @@ static int xpc_hook_evaluate(
     xpc_release(reply);
     reply = NULL;
     if (actions == NULL) {
-        failure = RV_HOOK_FAIL_UNREACHABLE;
+        failure = RV_HOOK_FAIL_CONNECTION;
         goto out;
     }
     xpc_connection_set_event_handler(actions, ^(xpc_object_t event) {
@@ -685,7 +747,7 @@ static int xpc_hook_evaluate(
 
     reply = xpc_exchange(
         actions, kHelloJson, sizeof kHelloJson - 1, NULL, 0,
-        RV_HELLO_TIMEOUT_MS, &failure, retryable);
+        RV_HELLO_TIMEOUT_MS, 0, &failure, retryable);
     if (reply == NULL) {
         goto out;
     }
@@ -710,7 +772,7 @@ static int xpc_hook_evaluate(
     }
     /* Point of no return: from here on nothing is retried. */
     reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len,
-                         RV_EVALUATE_TIMEOUT_MS, &failure, retryable);
+                         RV_EVALUATE_TIMEOUT_MS, 0, &failure, retryable);
     *retryable = 0;
     if (reply == NULL) {
         goto out;
@@ -782,6 +844,7 @@ static int send_nosig(int fd, const void *p, size_t n) {
             return -1;
         }
         if (w == 0) {
+            errno = ECONNRESET;
             return -1;
         }
         b += (size_t)w;
@@ -801,6 +864,9 @@ static int recv_exact(int fd, void *p, size_t n) {
             return -1;
         }
         if (r == 0) {
+            /* EOF: the peer closed. recv leaves errno untouched here, so set
+             * it, or io_failure would classify a stale value. */
+            errno = ECONNRESET;
             return -1;
         }
         b += (size_t)r;
@@ -821,17 +887,37 @@ static uint32_t read_be32(const unsigned char in[4]) {
         | ((uint32_t)in[2] << 8) | (uint32_t)in[3];
 }
 
-/* $XDG_RUNTIME_DIR/rv/evaluate.sock. Unset/empty XDG is miss (fail-closed). */
-static int unix_socket_path(char *out, size_t cap) {
+/* rvd's socket: $XDG_RUNTIME_DIR/rv/evaluate.sock, or the uid-derived
+ * RV_HOOK_USER_RUNTIME_ROOT/<uid>/rv/evaluate.sock when XDG_RUNTIME_DIR is
+ * unset. *owner_derived is 1 only when the directory is the uid-derived
+ * one (XDG unset, or exactly equal to it): only a miss there may count as
+ * an absent daemon. An agent can set XDG_RUNTIME_DIR through
+ * project-scoped host config, so a miss under any other directory proves
+ * nothing about rvd. Returns -1 (fail closed) when XDG is set but empty,
+ * or the path does not fit sockaddr_un. */
+static int unix_socket_path(char *out, size_t cap, int *owner_derived) {
     const char *xdg = getenv("XDG_RUNTIME_DIR");
+    char owner_dir[RV_UNIX_PATH_MAX];
+    const char *dir;
     int n;
-    if (xdg == NULL || xdg[0] == '\0') {
+    *owner_derived = 0;
+    n = snprintf(owner_dir, sizeof owner_dir, "%s/%lu",
+                 RV_HOOK_USER_RUNTIME_ROOT, (unsigned long)getuid());
+    if (n <= 0 || (size_t)n >= sizeof owner_dir) {
         return -1;
     }
-    n = snprintf(out, cap, "%s/rv/evaluate.sock", xdg);
+    if (xdg == NULL) {
+        dir = owner_dir;
+    } else if (xdg[0] == '\0') {
+        return -1;
+    } else {
+        dir = xdg;
+    }
+    n = snprintf(out, cap, "%s/rv/evaluate.sock", dir);
     if (n <= 0 || (size_t)n >= cap || (size_t)n + 1 > RV_UNIX_PATH_MAX) {
         return -1;
     }
+    *owner_derived = strcmp(dir, owner_dir) == 0;
     return 0;
 }
 
@@ -843,17 +929,22 @@ static void set_socket_timeouts(int fd, long ms) {
     (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 }
 
-/* errno after a failed send/recv: a socket timeout is TIMEOUT, anything
- * else (reset, EOF, broken pipe) means the daemon went away. */
+/* errno after a failed send/recv on a verified daemon: a socket timeout is
+ * TIMEOUT, anything else (reset, EOF, broken pipe) is CONNECTION. Never
+ * UNREACHABLE: the daemon was there, and rvd deliberately drops in-flight
+ * requests while draining, which an agent can trigger. */
 static int io_failure(void) {
     return (errno == EAGAIN || errno == EWOULDBLOCK)
         ? RV_HOOK_FAIL_TIMEOUT
-        : RV_HOOK_FAIL_UNREACHABLE;
+        : RV_HOOK_FAIL_CONNECTION;
 }
 
 /* Returns 0, or the failure class. *retryable is set only for transient
  * failures before any request byte is sent (missing socket, refused,
- * connect timeout); once sent the request is never resent. */
+ * connect timeout); once sent the request is never resent. UNREACHABLE
+ * only for ENOENT / ECONNREFUSED on the uid-derived socket; every other
+ * failure keeps the ask/deny fallback (CONNECTION, TIMEOUT, UNTRUSTED,
+ * PROTOCOL). */
 static int unix_hook_evaluate(
     const void *json,
     size_t json_len,
@@ -868,18 +959,19 @@ static int unix_hook_evaluate(
     uint32_t n;
     char *copy;
     int failure;
+    int owner_derived;
 
     *retryable = 0;
     if (json_len == 0 || json_len > RV_FRAME_MAX) {
         return RV_HOOK_FAIL_INPUT;
     }
-    if (unix_socket_path(path, sizeof path) != 0) {
-        return RV_HOOK_FAIL_UNREACHABLE;
+    if (unix_socket_path(path, sizeof path, &owner_derived) != 0) {
+        return RV_HOOK_FAIL_CONNECTION;
     }
 
     fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-        return RV_HOOK_FAIL_UNREACHABLE;
+        return RV_HOOK_FAIL_CONNECTION;
     }
     set_socket_timeouts(fd, RV_HELLO_TIMEOUT_MS);
 
@@ -891,13 +983,13 @@ static int unix_hook_evaluate(
         close(fd);
         if (err == ENOENT || err == ECONNREFUSED) {
             *retryable = 1;
-            return RV_HOOK_FAIL_UNREACHABLE;
+            return owner_derived ? RV_HOOK_FAIL_UNREACHABLE : RV_HOOK_FAIL_CONNECTION;
         }
         if (err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT || err == EINPROGRESS) {
             *retryable = 1;
             return RV_HOOK_FAIL_TIMEOUT;
         }
-        return RV_HOOK_FAIL_UNREACHABLE;
+        return RV_HOOK_FAIL_CONNECTION;
     }
     /* A socket path is not server identity. Verify the connected peer
      * is the sibling rvd before sending any action bytes. */
@@ -955,7 +1047,10 @@ static int unix_hook_evaluate(
 #endif
 
 /* One retry, only for transient failures before the hookEvaluate request
- * left this process (cold launchd spawn, idle-exit race). */
+ * left this process (cold launchd spawn, idle-exit race). A daemon that
+ * answered the first attempt in any way (untrusted, interrupted, slow) was
+ * live, so a retry that then finds none is not proof of absence: the first
+ * such failure is reported instead of UNREACHABLE. */
 static int hook_evaluate(
     const char *request,
     size_t request_len,
@@ -964,7 +1059,8 @@ static int hook_evaluate(
     size_t *reply_len
 ) {
     int attempt;
-    int failure = RV_HOOK_FAIL_UNREACHABLE;
+    int failure = RV_HOOK_FAIL_CONNECTION;
+    int seen_live = 0;
     for (attempt = 0; attempt < 2; attempt++) {
         int retryable = 0;
 #ifdef __APPLE__
@@ -976,6 +1072,11 @@ static int hook_evaluate(
         failure = unix_hook_evaluate(
             request, request_len, reply_json, reply_len, &retryable);
 #endif
+        if (failure == RV_HOOK_FAIL_UNREACHABLE && seen_live != 0) {
+            failure = seen_live;
+        } else if (failure != 0 && failure != RV_HOOK_FAIL_UNREACHABLE && seen_live == 0) {
+            seen_live = failure;
+        }
         if (failure == 0 || !retryable) {
             break;
         }

@@ -465,3 +465,14 @@ private struct ThrowingHelloTransport: ServiceTransport {
     #expect(ServiceDiagnosticFailure.daemonRejected.statusMessage == "daemon identity rejected")
 }
 #endif
+
+#if os(Linux)
+/// With XDG_RUNTIME_DIR unset the CLI dials the uid-derived socket; a miss
+/// there is rvd being down, not a failed request.
+@Test func diagnostics_ownerRuntimeSocketMissIsDown_notRequestFailed() async throws {
+    let missing = "/tmp/rv-miss-\(UUID().uuidString.prefix(8))/rv/evaluate.sock"
+    let transport = UnixSocketServiceTransport(socketPath: missing, ownerRuntimeSocket: true)
+    let result = try await isolatedClient(transport: transport).diagnostics()
+    #expect(result == .local(.init(cause: .down, corePacksReady: true)))
+}
+#endif

@@ -79,6 +79,21 @@ public struct HostModeStore: Sendable {
         }
     }
 
+    /// Writes the machine-wide `guard.mode: observe` (`rv setup --observe`).
+    /// Stored `guard.hosts` entries, and every other key, are kept; the
+    /// same `unreadableConfig` rule as `save` applies.
+    public func saveGlobalObserve() throws {
+        do {
+            try MachineConfigJSON.updateExistingObject(file: configFile) { root in
+                var guardObject = try Self.object(root["guard"])
+                guardObject["mode"] = .string("observe")
+                root["guard"] = .object(guardObject)
+            }
+        } catch MachineConfigJSONError.notAnObject {
+            throw HostModeStoreError.unreadableConfig
+        }
+    }
+
     private static func object(_ value: JSONValue?) throws(HostModeStoreError) -> [String: JSONValue] {
         guard let value else { return [:] }
         guard let object = value.asObject else { throw .unreadableConfig }

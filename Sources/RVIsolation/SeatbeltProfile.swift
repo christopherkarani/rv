@@ -1417,7 +1417,20 @@ func workspaceRunLaterDenies(workspacePath: String) -> String {
     let protected = (WorkspaceRunLaterPaths.files.map { regex($0) }
         + WorkspaceRunLaterPaths.trees.map { regex($0, tree: true) })
         .joined(separator: "\n")
-    let directories = WorkspaceRunLaterPaths.pinnedDirectories
+    // Pin the root directories and every directory between a root and a
+    // protected path (`.gemini/config` for `.gemini/config/hooks.json`):
+    // the protected path is matched by name, so renaming a directory above
+    // it aside and a replacement into place would bypass the deny.
+    var pinned = WorkspaceRunLaterPaths.pinnedDirectories
+    for path in WorkspaceRunLaterPaths.files + WorkspaceRunLaterPaths.trees {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count > 2 else { continue }
+        for depth in 2..<components.count {
+            let intermediate = components[..<depth].joined(separator: "/")
+            if pinned.contains(intermediate) == false { pinned.append(intermediate) }
+        }
+    }
+    let directories = pinned
         .map { regex($0) }
         .joined(separator: "\n")
     return """

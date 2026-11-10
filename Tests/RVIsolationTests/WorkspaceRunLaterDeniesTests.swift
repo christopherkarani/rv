@@ -114,6 +114,21 @@ struct WorkspaceRunLaterDeniesTests {
         }
     }
 
+    @Test func intermediateDirectoriesCannotBeSwappedByRename() {
+        // `.gemini/config/hooks.json` is protected by exact path, so without
+        // pinning `.gemini/config` a cage could build `.gemini/x/hooks.json`,
+        // rename `.gemini/config` aside and rename `x` into its place.
+        let denies = workspaceRunLaterDenies(workspacePath: workspace)
+        let parts = denies.components(separatedBy: "(deny file-write-unlink file-write-create")
+        #expect(parts.count == 2)
+        let geminiConfig = escapeSeatbeltSubpath(pattern(".gemini/config"))
+        #expect(parts[1].contains("(regex \"\(geminiConfig)\")"))
+        #expect(parts[0].contains("(regex \"\(geminiConfig)\")") == false)
+        #expect(matches(pattern(".gemini/config"), "\(workspace)/.Gemini/CONFIG"))
+        // No intermediate below `.claude/hooks`: the tree itself is denied.
+        #expect(parts[1].contains(escapeSeatbeltSubpath(pattern(".claude/hooks"))) == false)
+    }
+
     @Test func instructionFilesStayWritable() {
         // Agents edit these as ordinary work; they belong in publish review.
         for path in ["CLAUDE.md", "AGENTS.md", ".claude/skills/x/SKILL.md", ".claude/agents/a.md"] {
