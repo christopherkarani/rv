@@ -203,9 +203,6 @@ public actor NetworkReviewQueue {
             updatedAt: now
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(
-            to: RVPolicyPaths.egressLoadedSnapshotFile(inConfigDir: store.baseDirectory),
-            options: .atomic
-        )
+        _ = OwnerOnlyFile.write(data, to: RVPolicyPaths.egressLoadedSnapshotFile(inConfigDir: store.baseDirectory))
     }
 }

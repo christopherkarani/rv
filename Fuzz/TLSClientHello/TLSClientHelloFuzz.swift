@@ -17,7 +17,7 @@ public func rvFuzzTLSClientHello(_ data: UnsafePointer<UInt8>, _ size: Int) -> C
         checkRecordReader(initial: Array(rest.prefix(Int(first))), streamed: Array(rest.dropFirst(Int(first))))
     }
     let header = String(decoding: bytes, as: UTF8.self)
-    for target in [EgressProxy.parseCONNECT(header: header), EgressProxy.parseAbsoluteHTTP(header: header)] {
+    for target in [EgressWire.parseCONNECT(header: header), EgressWire.parseAbsoluteHTTP(header: header)] {
         guard let target else { continue }
         precondition(target.host.isEmpty == false && target.host.utf8.count <= 253)
         precondition((1...65535).contains(target.port))
@@ -26,10 +26,10 @@ public func rvFuzzTLSClientHello(_ data: UnsafePointer<UInt8>, _ size: Int) -> C
 }
 
 private func checkServerName(_ bytes: [UInt8]) {
-    guard let name = EgressProxy.tlsServerName(bytes) else { return }
+    guard let name = EgressWire.tlsServerName(bytes) else { return }
     precondition(name.isEmpty == false)
     precondition(bytes.count >= 9 && bytes[0] == 0x16 && bytes[5] == 0x01, "name from a non-ClientHello")
-    precondition(EgressProxy.tlsServerName(bytes + [0, 0, 0, 5, 0]) == name, "trailing bytes changed the name")
+    precondition(EgressWire.tlsServerName(bytes + [0, 0, 0, 5, 0]) == name, "trailing bytes changed the name")
     precondition(EgressAdmission.checkSNI(expectedHost: name, serverName: name) == nil)
 }
 

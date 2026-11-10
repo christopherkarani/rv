@@ -100,7 +100,7 @@ enum EgressAdmission {
     /// must match the CONNECT host. A missing name (no ClientHello, not TLS,
     /// or no SNI extension) fails closed.
     static func checkSNI(expectedHost: String, serverName: String?) -> EgressDenialReason? {
-        guard let serverName, EgressProxy.dnsNamesMatch(serverName, expectedHost) else {
+        guard let serverName, EgressWire.dnsNamesMatch(serverName, expectedHost) else {
             return .sniMismatch
         }
         return nil
