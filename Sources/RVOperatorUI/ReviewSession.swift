@@ -180,6 +180,7 @@ struct ReviewSession<Mode: ReviewMode>: Equatable, Sendable {
             if let text = Mode.notAuthenticatedNotice(outcome) {
                 notice = text
                 selection = .bound(bundle)
+                pruneSelection()
                 return []
             }
             return [.complete(bundle, outcome)]
@@ -196,6 +197,7 @@ struct ReviewSession<Mode: ReviewMode>: Equatable, Sendable {
             case .failure(let failure):
                 notice = failure.message
                 selection = .bound(bundle)
+                pruneSelection()
                 return []
             }
 
@@ -213,6 +215,7 @@ struct ReviewSession<Mode: ReviewMode>: Equatable, Sendable {
             case .failure(let failure):
                 notice = failure.message
                 selection = bundle.map(Selection.bound) ?? .unbound(id)
+                pruneSelection()
                 return []
             }
 
@@ -336,6 +339,8 @@ struct ReviewSession<Mode: ReviewMode>: Equatable, Sendable {
 
     /// Drops a selection whose review vanished server-side. Busy states keep
     /// theirs: the in-flight call addresses a bundle the user already chose.
+    /// A busy state that fails re-runs this, so a review that vanished during
+    /// it is not restored.
     private mutating func pruneSelection() {
         guard !isBusy, let id = selectedID else { return }
         if !items.contains(where: { Mode.id(of: $0) == id }) { selection = .none }
