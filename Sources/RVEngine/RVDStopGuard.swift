@@ -111,18 +111,27 @@ func foldHiddenMentions(_ raw: String) -> String {
     return out.folding(options: .caseInsensitive, locale: nil)
 }
 
-/// Quoted or `/…/`-delimited regexes in grep/awk/sed stages, to test
-/// against rvd's names. Bounded: only short words that look like patterns.
+/// The search regexes of grep/awk stages, to test against rvd's names. For
+/// `grep` the first non-option operand is the pattern; for `awk`/`sed` only
+/// `/…/`-delimited spans are patterns (an action body like `{print $2}` is
+/// not a regex, so it is never compiled and cannot fail closed).
 private func pipelinePatterns(_ raw: String) -> [String] {
     var patterns: [String] = []
     for segment in rawSegments(raw) where segment.isEmpty == false {
-        guard ["grep", "egrep", "fgrep", "awk", "sed", "rg"].contains(commandName(segment[0])) else { continue }
-        for word in segment.dropFirst() where word.hasPrefix("-") == false {
-            // An awk program `/pat/{…}`: take the first `/…/` slash span.
-            if let open = word.firstIndex(of: "/"), let close = word[word.index(after: open)...].firstIndex(of: "/") {
-                patterns.append(String(word[word.index(after: open)..<close]))
-            } else {
-                patterns.append(word)
+        let program = commandName(segment[0])
+        if ["grep", "egrep", "fgrep", "rg"].contains(program) {
+            // The first bare operand is the pattern; the rest are filenames.
+            if let pattern = segment.dropFirst().first(where: { $0.hasPrefix("-") == false }) {
+                patterns.append(pattern)
+            }
+        } else if program == "awk" || program == "sed" {
+            for word in segment.dropFirst() {
+                var rest = Substring(word)
+                while let open = rest.firstIndex(of: "/"),
+                      let close = rest[rest.index(after: open)...].firstIndex(of: "/") {
+                    patterns.append(String(rest[rest.index(after: open)..<close]))
+                    rest = rest[rest.index(after: close)...]
+                }
             }
         }
     }
