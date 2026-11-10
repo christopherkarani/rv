@@ -9,6 +9,9 @@ public struct PacksListRow: Equatable, Sendable {
     public var category: String
     public var description: String
     public var enabled: Bool
+    /// Enforced by the signed organization policy (`gate.requirePacks`)
+    /// whatever the user's config says; `enabled` is then true.
+    public var requiredByOrganization: Bool = false
     public var safePatternCount: Int
     public var destructivePatternCount: Int
     /// The bundled safe patterns, available to verbose pack presentation.
@@ -40,6 +43,9 @@ public enum PacksCommandError: Error, Equatable, Sendable {
     case unknownID(SelectionToken)
     case packNotFound(PackID)
     case configUnwritable
+    /// `config.toml` exists but cannot be read: refuse to rewrite it from an
+    /// empty config, which would discard the owner's pack choices.
+    case configUnreadable
     case criticalPatternUncompilable(RuleID)
 }
 
@@ -49,15 +55,15 @@ public enum PacksFacade {
         home: HomeDirectory,
         enabledOnly: Bool = false
     ) throws -> PacksListSnapshot {
-        let index = try PackRegistry.loadIndex()
         let documents = try PackRegistry.loadAllDocuments()
-        let config = (try? PacksConfigStore.load(home: home)) ?? .empty
-        let enabled = try PackSet.effectiveOrdered(
-            enabled: selectionTokens(config.enabled, index: index),
-            disabled: selectionTokens(config.disabled, index: index),
-            index: index
-        )
-        let on = Set(enabled)
+        // The same resolution the doors use (including the fail-closed
+        // answer for an unreadable config).
+        let enabled = try effectiveIDs(home: home)
+        // What every door enforces: the owner's packs plus the packs the
+        // organization requires (`ManagedGate`), so the listing never shows
+        // an enforced pack as off.
+        let required = Set(ManagedGate.requiredPacks(home: home))
+        let on = Set(enabled).union(required.intersection(Set(documents.map(\.id))))
         var rows = documents.map { doc in
             PacksListRow(
                 id: doc.id,
@@ -65,6 +71,7 @@ public enum PacksFacade {
                 category: doc.category,
                 description: doc.description,
                 enabled: on.contains(doc.id),
+                requiredByOrganization: required.contains(doc.id),
                 safePatternCount: doc.safe.count,
                 destructivePatternCount: doc.destructive.count,
                 safePatterns: doc.safe,
@@ -110,12 +117,24 @@ public enum PacksFacade {
     }
 
     public static func effectiveIDs(home: HomeDirectory) throws -> [PackID] {
-        let configURL = PacksConfigStore.configURL(home: home)
-        if FileManager.default.fileExists(atPath: configURL.path) == false {
+        // Only a definitely-absent file means day-one; a stat failure such as
+        // EACCES on a parent directory takes the fail-closed branch below.
+        if PacksConfigStore.isAbsent(home: home) {
             return dayOnePackIDs
         }
         let index = try PackRegistry.loadIndex()
-        let config = (try? PacksConfigStore.load(home: home)) ?? .empty
+        let config: PacksConfig
+        do {
+            config = try PacksConfigStore.load(home: home)
+        } catch {
+            // The file exists but cannot be read (permissions, invalid
+            // UTF-8). Falling back to the day-one defaults would silently
+            // drop every pack the owner enabled, at every door, without an
+            // owner action. Fail closed: every bundled pack, until the owner
+            // repairs the file (`rv doctor` reports the packs as broken, and
+            // `rv packs enable/disable` refuse to overwrite it).
+            return PackSet.order(Set(index.packIDs), index: index)
+        }
         return try PackSet.effectiveOrdered(
             enabled: selectionTokens(config.enabled, index: index),
             disabled: selectionTokens(config.disabled, index: index),
@@ -161,7 +180,12 @@ public enum PacksFacade {
             throw PacksCommandError.unknownID(token)
         }
 
-        var config = (try? PacksConfigStore.load(home: home)) ?? .empty
+        var config: PacksConfig
+        do {
+            config = try PacksConfigStore.load(home: home)
+        } catch {
+            throw PacksCommandError.configUnreadable
+        }
         let before = Set(
             try PackSet.effectiveOrdered(
                 enabled: selectionTokens(config.enabled, index: index),

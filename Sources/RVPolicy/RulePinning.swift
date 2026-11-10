@@ -14,6 +14,7 @@ public enum RuleHardStopKind: Sendable, Equatable {
     case outsideRepository
     case unresolvedPath
     case unwrapLimited
+    case forbiddenHTTPDestination
 }
 
 public struct RulePreview: Sendable, Equatable {
@@ -102,22 +103,22 @@ public enum RulePinning: Sendable {
             filesystemWorld: .probed(.empty)
         )
         if case .hardDeny(let deny) = verdict.decision {
-            if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
-                return .workingTreeDiscard
+            // Non-built-in hard denies (typed rules, other packs) keep the
+            // shared-branch label they always had.
+            guard let rule = BuiltinRule(deny.ruleID) else { return .protectedSharedBranch }
+            switch rule {
+            case .workingTreeDiscard: return .workingTreeDiscard
+            case .outOfRepoWrite: return .outsideRepository
+            case .unresolvedPath: return .unresolvedPath
+            case .protectedPathMutation: return .protectedPath
+            case .unwrapLimited: return .unwrapLimited
+            case .forbiddenHTTPDestination: return .forbiddenHTTPDestination
+            case .remoteSharedBranchMutation,
+                .remoteBranchMutation, .localBranchCreate, .inRepoWrite, .outOfRepoRead,
+                .uncovered, .secretRequestApproval, .packIncomplete, .publicHTTPSGet,
+                .leftoverAsk, .typedRulesInvalid:
+                return .protectedSharedBranch
             }
-            if deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID {
-                return .outsideRepository
-            }
-            if deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID {
-                return .unresolvedPath
-            }
-            if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
-                return .protectedPath
-            }
-            if deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID {
-                return .unwrapLimited
-            }
-            return .protectedSharedBranch
         }
         if secretPathOnStoredAction(action) {
             return .secretPath
@@ -204,6 +205,8 @@ public enum RulePinning: Sendable {
                 return "This action has an unresolved path. Always-allow cannot override that hard stop."
             case .unwrapLimited:
                 return "This action exceeded unwrap limits. Always-allow cannot override that hard stop."
+            case .forbiddenHTTPDestination:
+                return "This action targets a forbidden HTTP destination. Always-allow cannot override that hard stop."
             case .protectedSharedBranch, nil:
                 return "This action mutates a protected shared branch. Always-allow cannot override that hard stop."
             }

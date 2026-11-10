@@ -1239,6 +1239,11 @@ enum MCPRun {
                 configDirectory: environment.configDirectory)
         }
         switch outcome {
+        case .failure(.partial(let applied, let cause)):
+            var lines = applied.changed.map { (undo ? "restored " : "routed through rv: ") + $0 }
+            lines += applied.backups.map { "previous version kept at " + MCPDisplayedText.field($0) }
+            lines.append(cause.message)
+            return .failure(CommandFailure(lines.joined(separator: "\n")))
         case .failure(let error):
             return .failure(CommandFailure(error.message))
         case .success(let result):

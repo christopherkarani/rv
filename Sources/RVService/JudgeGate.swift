@@ -656,7 +656,7 @@ public enum JudgeRuntime {
             "Laya judge: \($0.choice.rawValue) (risk \(String(format: "%.2f", $0.risk)))"
         } ?? "Laya judge unavailable; failing closed"
         let deny = Deny(
-            ruleID: RuleID(pack: .coreJudge, pattern: isBlock ? "laya-block" : "laya-review"),
+            ruleID: (isBlock ? JudgeRule.block : JudgeRule.review).ruleID,
             reason: reason
         )
         return EvaluationResult(
