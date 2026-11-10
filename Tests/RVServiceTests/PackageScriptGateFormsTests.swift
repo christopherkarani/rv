@@ -136,7 +136,9 @@ struct PackageScriptGateFormsTests {
 
     @Test("verbs, flags and runners outside the exact grammar are unresolved", arguments: [
         "npm tes", "npm runScript test",
-        "corepack yarn test", "corepack pnpm run build",
+        "corepack yarn test", "corepack pnpm run build", "corepack yarn@1 test", "corepack pnpm@9 run build",
+        // Another script runner behind a bin runner reads a body the gate never sees.
+        "npx npm test", "npm exec -- npm test", "pnpm dlx yarn test", "bunx npm run build", "deno task build",
         "npm --pre /tmp test", "npm --scri=/x test", "npm test --script-sh=/x", "npm --frobnicate test",
         "npm -X test", "npm config set script-shell /x", "npm set script-shell /x",
         "npm pkg set scripts.test=x", "yarn config set x y", "pnpm config set x y",
@@ -161,7 +163,7 @@ struct PackageScriptGateFormsTests {
         "npm exec foo", "npm x foo", "npm exec tsc -- --noEmit", "npx foo", "npx tsc --noEmit",
         "npx --yes prettier --check .", "npx -p typescript tsc", "npx eslint -c .eslintrc.json src",
         "pnpx foo", "pnpm dlx foo", "pnpm dlx create-vite", "pnpm exec foo", "yarn dlx foo",
-        "bunx foo", "bun x foo", "corepack enable", "deno task build", "npm init vite",
+        "bunx foo", "bun x foo", "corepack enable", "corepack use pnpm@9", "npm init vite",
         "yarn eslint .", "pnpm tsc", "pnpm vitest", "bun eslint", "yarn notascript",
         "npm i -g typescript", "npm install -g @anthropic-ai/claude-code", "sudo npm install -g pnpm",
         "npm install --global typescript", "npm i --location=global typescript",

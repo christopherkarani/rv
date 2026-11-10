@@ -21,7 +21,11 @@ import Foundation
 /// named packages, `deno task`. No package script graph is read for them,
 /// so they go to the judge with the safe lane closed (`runsBin`), never to
 /// the safe lane. A bin runner given a shell string or preload flag
-/// (`npx -c …`, `--node-options`) stays unresolvable.
+/// (`npx -c …`, `--node-options`) stays unresolvable, and so does one that
+/// names another script runner anywhere in its words (`npx npm test`,
+/// `pnpm dlx yarn test`, `npx cross-env CI=1 npm test`): that runner reads
+/// a script body the gate never sees. `deno task` runs package.json scripts
+/// or deno.json tasks the gate does not read: unresolvable.
 enum PackageRunnerGrammar {
     struct Reading: Equatable {
         /// Script names run when they are `scripts` keys (absent: nothing).
@@ -37,6 +41,9 @@ enum PackageRunnerGrammar {
         /// `-g`/`--global`/`--location=global` was given (resolved by the
         /// verb: only a global install of named packages is a bin run).
         var global = false
+        /// Bare words whose words name another script runner
+        /// (`pnpm turbo run test`): unreadable when not a script key.
+        var implicitRunsRunner: [String] = []
 
         var runsNothing: Bool { explicit.isEmpty && implicit.isEmpty && !unresolvable && !runsBin }
 
@@ -50,6 +57,13 @@ enum PackageRunnerGrammar {
         /// a bin runner, or a bare word that is not a key.
         func runsBin(in scripts: [String: String]) -> Bool {
             runsBin || implicit.contains { scripts[$0] == nil }
+        }
+
+        /// A bare word that is not a script key yet runs a body the gate
+        /// cannot read: another script runner (`pnpm turbo run test`), or a
+        /// yarn >= 2 colon script from another workspace (`yarn build:web`).
+        func runsUnreadBody(in scripts: [String: String]) -> Bool {
+            implicit.contains { scripts[$0] == nil && ($0.contains(":") || implicitRunsRunner.contains($0)) }
         }
 
         /// Only a bin: no script name to read at all.
@@ -73,17 +87,55 @@ enum PackageRunnerGrammar {
         case "npx", "pnpx", "bunx":
             return readBinRun(words)
         case "corepack":
-            // `corepack pnpm test` runs a script through the named runner:
-            // not read here, so unresolvable. Anything else manages shims.
-            let runsRunner = words.contains { ["npm", "pnpm", "yarn", "yarnpkg", "npx", "pnpx"].contains(basename($0).lowercased()) }
-            return runsRunner ? Reading(unresolvable: true) : Reading(runsBin: true)
+            // Only corepack's own shim commands are read. `corepack pnpm@9
+            // run test` runs a script through the named runner (not read
+            // here), and so may anything else: unresolvable.
+            let command = words.first { !isFlag($0) }
+            guard command.map(corepackCommands.contains) ?? true else { return Reading(unresolvable: true) }
+            return Reading(runsBin: true)
         case "node":
             return readNodeRun(words)
         case "deno":
+            // `deno task` runs package.json scripts or deno.json tasks,
+            // neither of which is read.
             let positional = words.first { !$0.hasPrefix("-") }
-            return positional == "task" ? Reading(runsBin: true) : nil
+            return positional == "task" ? Reading(unresolvable: true) : nil
         default:
             return nil
+        }
+    }
+
+    static let corepackCommands: Set<String> = [
+        "enable", "disable", "prepare", "install", "use", "up", "pack", "cache", "hydrate", "help",
+    ]
+
+    /// Bins that run package scripts, or a command line that may: one
+    /// named anywhere in a bin run's words runs a body the gate never read.
+    static let scriptRunningBins: Set<String> = PackageScriptGate.runnerHeads.union([
+        "turbo", "lerna", "run-s", "run-p", "npm-run-all", "npm-run-all2", "nx", "concurrently", "wireit",
+    ])
+
+    /// Whether any word names a script-running bin, through a version
+    /// (`npm@10`, `@scope/x@1`), a path (`./node_modules/.bin/npm`), a
+    /// specifier or shorthand prefix (`npm:test`), a quoted command line
+    /// (`"npm test"`), or `node --run`. Over-claims, never under-claims.
+    static func mentionsScriptRunner(_ words: [String]) -> Bool {
+        let names = words.flatMap { PackageScriptGate.tokens(in: $0) }.flatMap(binNames)
+        for (index, name) in names.enumerated() {
+            if scriptRunningBins.contains(name) { return true }
+            if name == "node", names[(index + 1)...].contains(where: { $0.hasPrefix("--run") }) { return true }
+        }
+        return false
+    }
+
+    /// The bin names one word may stand for: each `:`-separated part with
+    /// any `@version` dropped (a leading scope `@` kept), reduced to its
+    /// basename.
+    static func binNames(_ token: String) -> [String] {
+        token.split(separator: ":").map { part in
+            var name = Substring(part)
+            if let at = name.dropFirst().firstIndex(of: "@") { name = name[..<at] }
+            return basename(String(name)).lowercased()
         }
     }
 
@@ -111,14 +163,16 @@ enum PackageRunnerGrammar {
         }
         let verb = words[index]
         let rest = Array(words[(index + 1)...])
+        // Bin runs read past `--`: the bin and its words may follow it.
+        let fullRest = Array(argv[(index + 1)...])
         // npm parses flags anywhere before `--`; yarn/pnpm/bun hand words
         // after the script name to the script, so only npm is rescanned.
         if runner == .npm { scanTrailingFlags(rest, into: &reading) }
         switch runner {
-        case .npm: readNpmVerb(verb, rest, into: &reading)
-        case .yarn: readYarnVerb(verb, rest, into: &reading)
-        case .pnpm: readPnpmVerb(verb, rest, into: &reading)
-        case .bun: readBunVerb(verb, rest, into: &reading)
+        case .npm: readNpmVerb(verb, rest, fullRest, into: &reading)
+        case .yarn: readYarnVerb(verb, rest, fullRest, into: &reading)
+        case .pnpm: readPnpmVerb(verb, rest, fullRest, into: &reading)
+        case .bun: readBunVerb(verb, rest, fullRest, into: &reading)
         }
         if reading.global { readGlobal(runner, verb: verb, rest, into: &reading) }
         return reading
@@ -153,8 +207,11 @@ enum PackageRunnerGrammar {
     /// runner's own flags before the bin are read; one that runs a shell
     /// string (`-c`/`--call`) or preloads code is unresolvable. A flag of
     /// unknown arity may take the next word, so scanning goes on past it.
+    /// `words` runs past `--`: a bin, `-p` package or later word naming
+    /// another script runner is unresolvable.
     private static func readBinRun(_ words: [String]) -> Reading {
         var reading = Reading(runsBin: true)
+        if mentionsScriptRunner(words) { reading.unresolvable = true }
         let words = Array(words.prefix { $0 != "--" })
         var index = 0
         var mayBeValue = false
@@ -200,7 +257,7 @@ enum PackageRunnerGrammar {
     ]
     static let runVerbs: Set<String> = ["run", "run-script", "rum", "urn"]
 
-    private static func readNpmVerb(_ verb: String, _ rest: [String], into reading: inout Reading) {
+    private static func readNpmVerb(_ verb: String, _ rest: [String], _ fullRest: [String], into reading: inout Reading) {
         // Only `run <name>` depends on which word is positional: an unknown
         // flag there may swallow the name. Elsewhere npm reads unknown
         // flags as config (`npm test --runInBand`); dangerous ones were
@@ -227,9 +284,12 @@ enum PackageRunnerGrammar {
             if first != "get" { reading.unresolvable = true }
         case _ where npmReadOnlyVerbs.contains(verb):
             break
-        case "exec", "x", "init", "create", "innit":
-            // A package bin (`init <x>` runs create-<x>). Dangerous flags
-            // anywhere were already caught by the trailing scan.
+        case "exec", "x":
+            // A package bin. Dangerous flags anywhere were already caught
+            // by the trailing scan.
+            merge(readBinRun(fullRest), into: &reading)
+        case "init", "create", "innit":
+            // `init <x>` runs the create-<x> bin.
             reading.runsBin = true
         default:
             // explore/edit/set, abbreviations, camelCase.
@@ -252,11 +312,11 @@ enum PackageRunnerGrammar {
     ]
     static let yarnBinVerbs: Set<String> = ["dlx", "exec", "create"]
 
-    private static func readYarnVerb(_ verb: String, _ rest: [String], into reading: inout Reading) {
+    private static func readYarnVerb(_ verb: String, _ rest: [String], _ fullRest: [String], into reading: inout Reading) {
         var probe = Reading()
         let first = firstPositional(rest, into: &probe)
         switch verb {
-        case "run": readRunName(rest, into: &reading)
+        case "run": readRunName(rest, fullRest, into: &reading)
         case _ where yarnInstallVerbs.contains(verb): reading.explicit += installLifecycle
         case "pack": reading.explicit += packLifecycle
         case "publish": reading.explicit += publishLifecycle
@@ -270,9 +330,9 @@ enum PackageRunnerGrammar {
             default: reading.unresolvable = true
             }
         case _ where yarnReadOnlyVerbs.contains(verb): break
-        case _ where yarnBinVerbs.contains(verb): merge(readBinRun(rest), into: &reading)
+        case _ where yarnBinVerbs.contains(verb): merge(readBinRun(fullRest), into: &reading)
         case _ where yarnUnresolvedVerbs.contains(verb): reading.unresolvable = true
-        default: reading.implicit.append(verb)
+        default: appendImplicit(verb, fullRest, into: &reading)
         }
     }
 
@@ -289,7 +349,7 @@ enum PackageRunnerGrammar {
     ]
     static let pnpmBinVerbs: Set<String> = ["exec", "dlx", "create", "x"]
 
-    private static func readPnpmVerb(_ verb: String, _ rest: [String], into reading: inout Reading) {
+    private static func readPnpmVerb(_ verb: String, _ rest: [String], _ fullRest: [String], into reading: inout Reading) {
         var probe = Reading()
         let first = firstPositional(rest, into: &probe)
         switch verb {
@@ -305,9 +365,9 @@ enum PackageRunnerGrammar {
         case "config", "c":
             if !["get", "list"].contains(first ?? "list") { reading.unresolvable = true }
         case _ where pnpmReadOnlyVerbs.contains(verb): break
-        case _ where pnpmBinVerbs.contains(verb): merge(readBinRun(rest), into: &reading)
+        case _ where pnpmBinVerbs.contains(verb): merge(readBinRun(fullRest), into: &reading)
         case _ where pnpmUnresolvedVerbs.contains(verb): reading.unresolvable = true
-        default: reading.implicit.append(verb)
+        default: appendImplicit(verb, fullRest, into: &reading)
         }
     }
 
@@ -316,18 +376,25 @@ enum PackageRunnerGrammar {
     static let bunUnresolvedVerbs: Set<String> = ["init", "upgrade", "pm", "repl", "patch"]
     static let bunBinVerbs: Set<String> = ["x", "exec", "create", "c"]
 
-    private static func readBunVerb(_ verb: String, _ rest: [String], into reading: inout Reading) {
+    private static func readBunVerb(_ verb: String, _ rest: [String], _ fullRest: [String], into reading: inout Reading) {
         switch verb {
-        case "run": readRunName(rest, into: &reading, filesAreNotScripts: true)
+        case "run": readRunName(rest, fullRest, into: &reading, filesAreNotScripts: true)
         case _ where bunInstallVerbs.contains(verb): reading.explicit += installLifecycle
         case "publish": reading.explicit += publishLifecycle
         case _ where bunReadOnlyVerbs.contains(verb): break
-        case _ where bunBinVerbs.contains(verb): merge(readBinRun(rest), into: &reading)
+        case _ where bunBinVerbs.contains(verb): merge(readBinRun(fullRest), into: &reading)
         case _ where bunUnresolvedVerbs.contains(verb): reading.unresolvable = true
         // `bun ./x.ts` runs a file, like `node x.js`: not a package script.
         case _ where looksLikeFile(verb): break
-        default: reading.implicit.append(verb)
+        default: appendImplicit(verb, fullRest, into: &reading)
         }
+    }
+
+    /// A bare word: a script when it is a key, otherwise a bin, which is
+    /// unreadable when its words name another script runner.
+    private static func appendImplicit(_ word: String, _ fullRest: [String], into reading: inout Reading) {
+        reading.implicit.append(word)
+        if mentionsScriptRunner([word] + fullRest) { reading.implicitRunsRunner.append(word) }
     }
 
     private static func merge(_ bin: Reading, into reading: inout Reading) {
@@ -337,10 +404,12 @@ enum PackageRunnerGrammar {
 
     /// `yarn run <name>` / `bun run <name>`: a script when it is a key,
     /// otherwise a package bin (unresolved). `bun run ./x.ts` is a file.
-    private static func readRunName(_ rest: [String], into reading: inout Reading, filesAreNotScripts: Bool = false) {
+    private static func readRunName(
+        _ rest: [String], _ fullRest: [String], into reading: inout Reading, filesAreNotScripts: Bool = false
+    ) {
         guard let name = firstPositional(rest, into: &reading) else { return }
         if filesAreNotScripts, looksLikeFile(name) { return }
-        reading.implicit.append(name)
+        appendImplicit(name, fullRest, into: &reading)
     }
 
     /// The first word after the verb that is not a flag or a flag's value.

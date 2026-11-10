@@ -207,6 +207,7 @@ enum PackageScriptGate {
                 packageDir: URL(fileURLWithPath: base, isDirectory: true), home: home) {
                 return .unresolved
             }
+            if invocation.runsUnreadBody(in: [:]) { return .unresolved }
             if invocation.runsBin || !invocation.implicit.isEmpty || priorWork || mutatedBefore {
                 return .needsJudge
             }
@@ -219,6 +220,7 @@ enum PackageScriptGate {
         guard let scripts = loadScripts(packageDir),
               let packageCwd = WorkingDirectory(rawValue: packageDir.path)
         else { return .unresolved }
+        if invocation.runsUnreadBody(in: scripts) { return .unresolved }
         let names = invocation.scriptNames(in: scripts)
         let runsBin = invocation.runsBin(in: scripts)
         // The graph never outlives this call.
