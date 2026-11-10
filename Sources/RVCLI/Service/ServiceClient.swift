@@ -369,24 +369,36 @@ public struct ServiceClient: Sendable {
     /// ~2 s failure delay.
     static let confirmOwnerActionTimeoutMs = 75_000
 
-    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`.
+    /// `hookEvaluate` with the daemon-miss posture read from `RV_HOOK_WHEN_DOWN`
+    /// and the owner's observe choice from their config file.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
         await hookEvaluate(
             host: host,
             stdin: stdin,
-            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey])
+            whenDown: HookWhenDown(environmentValue: CLIProcess.environment()[HookWhenDown.environmentKey]),
+            ownerObserves: HookObserveFallback.live
         )
     }
 
     /// Authority-bearing hooks never retry through the local evaluation door,
     /// and the request is never resent. A daemon miss is classified and
-    /// rendered per `whenDown` (`HookDaemonFallback`).
-    public func hookEvaluate(host: HookHost, stdin: String, whenDown: HookWhenDown) async -> HookWire {
+    /// rendered per `whenDown` (`HookDaemonFallback`); `ownerObserves` is
+    /// consulted only on an unreachable daemon, and only in `.ask` mode.
+    /// A missing transport (Linux: XDG_RUNTIME_DIR set but empty or too long)
+    /// never reached rvd, so it is `.connection`, not `.unreachable`.
+    public func hookEvaluate(
+        host: HookHost,
+        stdin: String,
+        whenDown: HookWhenDown,
+        ownerObserves: @Sendable (HookHost) -> Bool = { _ in false }
+    ) async -> HookWire {
         func unavailable(_ failure: HookDaemonFailure) -> HookWire {
-            HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown)
+            // Only an absent daemon; an explicit RV_HOOK_WHEN_DOWN=deny wins.
+            let observes = whenDown == .ask && failure == .unreachable && ownerObserves(host)
+            return HookDaemonFallback.wire(host: host, failure: failure, mode: whenDown, ownerObserves: observes)
         }
         guard let transport else {
-            return unavailable(.unreachable)
+            return unavailable(.connection)
         }
         do {
             let reply = try await send(
@@ -556,11 +568,11 @@ public struct ServiceClient: Sendable {
     private static func xpcClientFailure(_ error: Error) -> XPCClientFailure? {
 #if canImport(XPC)
         switch error as? XPCEvaluateClientError {
-        case .connectFailed, .cancelled:
+        case .connectFailed, .connectionLost, .cancelled:
             return .down
         case .authenticationFailed:
             return .daemonRejected
-        case nil:
+        case .malformedReply, nil:
             return nil
         }
 #else

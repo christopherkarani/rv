@@ -73,8 +73,16 @@ enum SetupError: Error, Equatable, Sendable {
     case serviceNotAnswering(EvaluateSupervisor)
     /// The service step failed, so setup wired no hooks: wired hooks with no
     /// answering rvd deny every agent tool call. `alreadyWired` names hosts
-    /// wired before this run; they were left as they were.
-    indirect case serviceDown(SetupError, alreadyWired: [HookHost])
+    /// wired before this run; they were left as they were. `observing`:
+    /// the configured mode is observe, so those hooks step aside (run
+    /// calls unchecked) rather than block while rvd is unreachable.
+    indirect case serviceDown(SetupError, alreadyWired: [HookHost], observing: Bool = false)
+    /// `rv setup --observe` while an organization gate pins enforce: rvd
+    /// would ignore the stored observe mode.
+    case observePinnedByOrganization
+    /// `config.json` (or its `guard` value) is not an object, or could not
+    /// be written, so `guard.mode: observe` was not stored.
+    case guardModeWriteFailed
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -191,24 +199,35 @@ private func setupFailureParts(
                     + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
             )
         }
-    case .serviceDown(let cause, let alreadyWired):
+    case .serviceDown(let cause, let alreadyWired, let observing):
         let inner = setupFailureParts(cause, command: command)
         phrase = inner.phrase
         exitCode = inner.exitCode
-        detail.append(serviceDownConsequence(alreadyWired: alreadyWired))
+        detail.append(serviceDownConsequence(alreadyWired: alreadyWired, observing: observing))
         detail.append(contentsOf: inner.detail)
         detail.append("then rerun rv setup to wire agent hooks")
+    case .observePinnedByOrganization:
+        phrase = "organization policy pins enforce, so observe mode would have no effect"
+        exitCode = EX_NOPERM
+        detail.append("nothing was changed")
+        detail.append("fix: run rv setup without --observe")
+    case .guardModeWriteFailed:
+        phrase = "unable to write guard.mode to config.json"
+        exitCode = EX_CANTCREAT
+        detail.append("no hooks were wired; config.json must be a JSON object whose \"guard\" value is an object")
     }
     return (phrase, exitCode, detail)
 }
 
 /// What a failed service step left behind. Setup never wires a hook it
 /// cannot prove rvd answers, but hooks from an earlier run stay put.
-private func serviceDownConsequence(alreadyWired: [HookHost]) -> String {
+private func serviceDownConsequence(alreadyWired: [HookHost], observing: Bool) -> String {
     guard alreadyWired.isEmpty == false else {
         return "no hooks were wired: rv wires agent hooks only once rvd answers"
     }
     let names = alreadyWired.map(\.rawValue).joined(separator: ", ")
-    return "no new hooks were wired; hooks already wired before this run (\(names)) were left in place, "
-        + "so those agents are blocked until rvd answers"
+    let effect = observing
+        ? "so in observe mode those agents' tool calls run unchecked until rvd answers"
+        : "so those agents are blocked until rvd answers"
+    return "no new hooks were wired; hooks already wired before this run (\(names)) were left in place, " + effect
 }

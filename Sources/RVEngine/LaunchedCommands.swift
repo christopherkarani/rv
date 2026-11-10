@@ -49,6 +49,8 @@ struct LaunchedCommand {
     let argv: [String]
     /// argv without structural redirects, for judging positional arguments.
     let guardArgv: [String]
+    /// The structural redirect words alone (operators and targets).
+    var redirects: [String] = []
     var headIsDynamic = false
     var speculative = false
     var truncated = false
@@ -69,20 +71,21 @@ struct LaunchedCommand {
 
     /// A command from a program name and operands that may carry redirect marks.
     static func make(head: String, program: String, args: [String], headIsDynamic: Bool, speculative: Bool = false) -> LaunchedCommand {
-        LaunchedCommand(
+        var command = LaunchedCommand(
             head: head,
             argv: [program] + args.map(unmarkedWord),
             guardArgv: [program] + args.filter { isRedirectWord($0) == false },
             headIsDynamic: headIsDynamic,
             speculative: speculative
         )
+        command.redirects = args.filter(isRedirectWord).map(unmarkedWord)
+        return command
     }
 
     var asSpeculative: LaunchedCommand {
-        LaunchedCommand(
-            head: head, argv: argv, guardArgv: guardArgv,
-            headIsDynamic: headIsDynamic, speculative: true, truncated: truncated
-        )
+        var copy = self
+        copy.speculative = true
+        return copy
     }
 }
 
@@ -556,7 +559,7 @@ private func isShellCommandFlag(_ word: String, shell: String) -> Bool {
 /// Launchers whose next non-flag word is the real command.
 let plainLaunchers: Set<String> = ["command", "exec", "nohup", "time", "builtin", "nice", "doas"]
 
-private func isAssignmentWord(_ word: String) -> Bool {
+func isAssignmentWord(_ word: String) -> Bool {
     guard let equals = word.firstIndex(of: "="), equals != word.startIndex else { return false }
     let name = word[..<equals]
     guard let first = name.first, assignmentNameStart.contains(first) else { return false }

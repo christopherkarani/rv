@@ -1411,6 +1411,29 @@ final class GuiMissUserOKLaunchctl: LaunchctlApplying {
     }
 }
 
+@Test func setup_rvdDownUnderObserveSaysEarlierHooksRunUnchecked() throws {
+    // An observe hook steps aside while rvd is unreachable, so "blocked"
+    // would be false: the already-wired agents run unchecked instead.
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let rv = home.appendingPathComponent(".local/bin/rv")
+        try makeExecutable(rv, contents: "#!/bin/sh\n")
+        try makeExecutable(home.appendingPathComponent(".local/bin/rv-cli"), contents: "#!/bin/sh\n")
+        #expect(SetupRun.setup(env(home: home, launchctl: launchctl, rvPath: rv.path)).exitCode == 0)
+        try HostModeStore(configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true))
+            .saveGlobalObserve()
+
+        var environment = env(home: home, launchctl: launchctl, rvPath: rv.path)
+        environment.serviceAnswers = { false }
+        let outcome = SetupRun.setup(environment)
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stderr.contains(
+            "hooks already wired before this run (grok) were left in place, "
+                + "so in observe mode those agents' tool calls run unchecked until rvd answers"))
+        #expect(!outcome.stderr.contains("blocked until rvd answers"))
+    }
+}
+
 @Test func serviceReadiness_pollsUntilTheProbeAnswers() {
     var probes = 0
     var slept: [TimeInterval] = []

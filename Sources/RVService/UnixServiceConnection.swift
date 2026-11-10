@@ -17,7 +17,9 @@ import Synchronization
 /// and the next request reconnects.
 public final class UnixServiceConnection: Sendable {
     public enum TransportFailure: Error {
-        case noSocketPath, connect(Int32), untrustedDaemon, io, frameTooLarge
+        /// `io` carries the errno of the failed send/recv (ECONNRESET for EOF),
+        /// so a socket timeout (EAGAIN) is told apart from a dropped peer.
+        case noSocketPath, connect(Int32), untrustedDaemon, io(Int32), frameTooLarge
     }
 
     static let maxFrameBytes = 16 * 1024 * 1024
@@ -148,10 +150,10 @@ public final class UnixServiceConnection: Sendable {
         try frame.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
-                guard let base = raw.baseAddress else { throw TransportFailure.io }
+                guard let base = raw.baseAddress else { throw TransportFailure.io(EINVAL) }
                 let written = Glibc.send(fd, base + offset, raw.count - offset, Int32(MSG_NOSIGNAL))
                 if written < 0, errno == EINTR { continue }
-                guard written > 0 else { throw TransportFailure.io }
+                guard written > 0 else { throw TransportFailure.io(written < 0 ? errno : ECONNRESET) }
                 offset += written
             }
         }
@@ -169,10 +171,11 @@ public final class UnixServiceConnection: Sendable {
         var offset = 0
         try data.withUnsafeMutableBytes { raw in
             while offset < count {
-                guard let base = raw.baseAddress else { throw TransportFailure.io }
+                guard let base = raw.baseAddress else { throw TransportFailure.io(EINVAL) }
                 let got = recv(fd, base + offset, count - offset, 0)
                 if got < 0, errno == EINTR { continue }
-                guard got > 0 else { throw TransportFailure.io }
+                // EOF leaves errno untouched: report it as a reset, never a stale value.
+                guard got > 0 else { throw TransportFailure.io(got < 0 ? errno : ECONNRESET) }
                 offset += got
             }
         }

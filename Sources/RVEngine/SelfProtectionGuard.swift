@@ -9,7 +9,8 @@ import RVDomain
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
-/// (`rv host mode <host> observe|off`), or retuning/stopping rv's service
+/// (`rv host mode <host> observe|off`), switching rv to observe
+/// (`rv setup --observe`), or retuning/stopping rv's service
 /// (`launchctl setenv RV_*`, `launchctl bootout dev.rv.*`, `pkill rvd`;
 /// see `retunesOrStopsRVService`). `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
@@ -60,6 +61,10 @@ private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bo
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
+    // `setup --observe` sheds oversight; a variable or glob may carry the flag.
+    if verb == "setup" {
+        return args[(verbIndex + 1)...].contains { $0 == "--observe" || isUnmodelledWord($0) }
+    }
     guard subcommandVerbs.contains(verb) else { return false }
     let rest = Array(args[(verbIndex + 1)...])
     let flags = Set(rest.filter { $0.hasPrefix("-") })

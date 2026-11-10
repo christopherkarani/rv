@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVPresentation
+import RVService
 
 enum HostAttachOutcome: Equatable, Sendable {
     case occupied
@@ -53,12 +54,13 @@ enum HostLifecycle {
                     serviceSkippedMissingRvd = env.rvdPath
                     break
                 }
-                throw SetupError.serviceDown(.rvdMissing(env.rvdPath), alreadyWired: plan.alreadyWired)
+                throw SetupError.serviceDown(
+                    .rvdMissing(env.rvdPath), alreadyWired: plan.alreadyWired, observing: observing(env))
             case .writeLaunchAgent:
                 do {
                     try startService(env: env, layout: layout, files: files)
                 } catch {
-                    throw SetupError.serviceDown(error, alreadyWired: plan.alreadyWired)
+                    throw SetupError.serviceDown(error, alreadyWired: plan.alreadyWired, observing: observing(env))
                 }
             case .skipUndetected, .skipOff:
                 break
@@ -96,6 +98,10 @@ enum HostLifecycle {
         report.unwiredForMissingInterpreter = runtimeMissing
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
+    }
+
+    private static func observing(_ env: SetupEnvironment) -> Bool {
+        JudgeRuntime.configuredGuardMode(home: env.home) == .observe
     }
 
     /// Installs and starts the service, then waits (bounded) for rvd to
