@@ -6,24 +6,32 @@ import RVDomain
 /// so `git push --force origin main` and `git push --force origin feature`
 /// read differently.
 ///
-/// Every field goes through `DisplayedText.field`, so control, escape and
-/// bidi characters show as visible `\uXXXX` escapes instead of rewriting the
-/// line. Long values are cut with a visible `…`: the command keeps its head
-/// (the program and its first arguments), the directory keeps its tail
-/// (the repo name).
+/// Every field goes through `DisplayedText.approvalField`, so control,
+/// escape, bidi, invisible and blank-looking characters show as visible
+/// `\uXXXX` escapes instead of rewriting or hiding part of the line.
+///
+/// Nothing is ever cut. The grant covers the whole command and cwd, so a
+/// shortened prompt would hide exactly the part that runs
+/// (`git status ; : <padding> ; rm -rf ~/work`). A value that does not fit,
+/// measured in unicode scalars after escaping, makes `reason` nil, and the
+/// caller must refuse to prompt.
 ///
 /// Phrased as a verb phrase because macOS puts the asking process in front
 /// of it ("rvd is trying to allow once …").
 public enum AllowOncePromptText {
-    public static let maxCommandCharacters = 240
-    public static let maxCwdCharacters = 120
+    public static let maxCommandScalars = 300
+    public static let maxCwdScalars = 256
 
-    public static func reason(command: String, cwd: WorkingDirectory, ruleID: RuleID?) -> String {
-        let shownCommand = keepingHead(DisplayedText.field(command), max: maxCommandCharacters)
-        let shownCwd = keepingTail(DisplayedText.field(cwd.rawValue), max: maxCwdCharacters)
+    /// Nil when the command or cwd is too long to show in full.
+    public static func reason(command: String, cwd: WorkingDirectory, ruleID: RuleID?) -> String? {
+        let shownCommand = DisplayedText.approvalField(command)
+        let shownCwd = DisplayedText.approvalField(cwd.rawValue)
+        guard shownCommand.unicodeScalars.count <= maxCommandScalars,
+            shownCwd.unicodeScalars.count <= maxCwdScalars
+        else { return nil }
         let base = "allow once \"\(shownCommand)\" in \(shownCwd)"
         guard let ruleID else { return base }
-        return "\(base) (rule \(DisplayedText.field(ruleID.rawValue)))"
+        return "\(base) (rule \(DisplayedText.approvalField(ruleID.rawValue)))"
     }
 
     /// The command as invoked: the wrapper tag the normalized view erases
@@ -33,15 +41,6 @@ public enum AllowOncePromptText {
         return "\(invocationDisplay) \(view)"
     }
 
-    private static func keepingHead(_ text: String, max: Int) -> String {
-        guard text.count > max else { return text }
-        return String(text.prefix(max - 1)) + "…"
-    }
-
-    private static func keepingTail(_ text: String, max: Int) -> String {
-        guard text.count > max else { return text }
-        return "…" + String(text.suffix(max - 1))
-    }
 }
 
 /// What rvd saw when it issued one deny code. Memory only, held by rvd's

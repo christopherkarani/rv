@@ -22,29 +22,52 @@ struct AllowOncePromptTextTests {
             == "allow once \"git push --force\" in /tmp/ws (rule core.git:push-force)")
     }
 
-    @Test func controlBidiAndEscapeCharactersAreShownEscapedNotRaw() {
-        let text = AllowOncePromptText.reason(
-            command: "rm -rf x\u{1B}[2K\u{202E}niam\u{0A}ok", cwd: wd("/tmp/ws"), ruleID: nil)
+    @Test func controlBidiAndEscapeCharactersAreShownEscapedNotRaw() throws {
+        let text = try #require(AllowOncePromptText.reason(
+            command: "rm -rf x\u{1B}[2K\u{202E}niam\u{0A}ok", cwd: wd("/tmp/ws"), ruleID: nil))
         #expect(text.unicodeScalars.contains { DisplayedText.needsEscape($0) } == false)
         #expect(text.contains("\\u001b"))
         #expect(text.contains("\\u202e"))
         #expect(text.contains("\\n"))
     }
 
-    @Test func aLongCommandIsCappedWithAVisibleEllipsis() {
-        let long = "curl " + String(repeating: "a", count: 1_000)
-        let text = AllowOncePromptText.reason(command: long, cwd: wd("/tmp/ws"), ruleID: nil)
-        #expect(text.contains("curl aaaa"))
-        #expect(text.contains("…\" in /tmp/ws"))
-        #expect(text.count < AllowOncePromptText.maxCommandCharacters + 40)
+    @Test func blankLookingAndIgnorableCharactersAreShownEscaped() throws {
+        // Hangul fillers, braille blank, halfwidth filler, no-break and
+        // ideographic spaces, zero-width space, joiner, variation selector:
+        // each renders as nothing or as a plain space.
+        let hidden: [Unicode.Scalar] = [
+            "\u{3164}", "\u{115F}", "\u{1160}", "\u{2800}", "\u{FFA0}", "\u{00A0}", "\u{3000}",
+            "\u{200B}", "\u{200D}", "\u{FE0F}", "\u{2060}",
+        ]
+        for scalar in hidden {
+            let text = try #require(AllowOncePromptText.reason(
+                command: "git status \(Character(scalar)) rm -rf ~", cwd: wd("/tmp/ws"), ruleID: nil))
+            #expect(text.unicodeScalars.allSatisfy { $0.isASCII || $0 == "…" }, "U+\(String(scalar.value, radix: 16))")
+            #expect(text.contains(String(format: "\\u%04x", scalar.value)))
+        }
     }
 
-    @Test func aLongCwdKeepsItsTail() {
+    @Test func aCommandThatDoesNotFitIsRefusedNotCut() {
+        // The grant covers the whole command, so a cut prompt would hide
+        // the part that runs: `git status ; : <fillers> ; rm -rf ~/work`.
+        let padded = "git status ; : " + String(repeating: "\u{3164}", count: 230) + " ; rm -rf ~/work"
+        #expect(AllowOncePromptText.reason(command: padded, cwd: wd("/tmp/ws"), ruleID: nil) == nil)
+        let long = "curl " + String(repeating: "a", count: 1_000)
+        #expect(AllowOncePromptText.reason(command: long, cwd: wd("/tmp/ws"), ruleID: nil) == nil)
+        let fits = "curl " + String(repeating: "a", count: AllowOncePromptText.maxCommandScalars - 5)
+        #expect(AllowOncePromptText.reason(command: fits, cwd: wd("/tmp/ws"), ruleID: nil)?.contains(fits) == true)
+    }
+
+    @Test func theCapCountsUnicodeScalarsNotCharacters() {
+        // 200 characters, 400 scalars: combining marks stack on one glyph.
+        let stacked = String(repeating: "e\u{0301}", count: 200)
+        #expect(stacked.count == 200)
+        #expect(AllowOncePromptText.reason(command: stacked, cwd: wd("/tmp/ws"), ruleID: nil) == nil)
+    }
+
+    @Test func aCwdThatDoesNotFitIsRefusedNotCut() {
         let deep = "/tmp/" + String(repeating: "d/", count: 200) + "repo"
-        let text = AllowOncePromptText.reason(command: "ls", cwd: wd(deep), ruleID: nil)
-        #expect(text.hasSuffix("/repo"))
-        #expect(text.contains(" in …"))
-        #expect(text.count < AllowOncePromptText.maxCwdCharacters + 40)
+        #expect(AllowOncePromptText.reason(command: "ls", cwd: wd(deep), ruleID: nil) == nil)
     }
 
     @Test func invokedCommandPrefixesTheWrapperTag() {

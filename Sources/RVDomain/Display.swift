@@ -25,7 +25,34 @@ public enum DisplayedText {
         }
     }
 
+    /// Stricter than `needsEscape`, for text the device owner approves:
+    /// every non-ASCII scalar that can render as nothing or as a plain
+    /// space is escaped too, including the joiners and variation selectors
+    /// `needsEscape` lets through for ordinary display. Covers every
+    /// Default_Ignorable code point, every non-ASCII whitespace, and the
+    /// blank-looking letters (Hangul fillers, the braille blank, the
+    /// halfwidth filler) that are neither.
+    public static func needsApprovalEscape(_ scalar: Unicode.Scalar) -> Bool {
+        if needsEscape(scalar) { return true }
+        guard scalar.isASCII == false else { return false }
+        let properties = scalar.properties
+        if properties.isDefaultIgnorableCodePoint || properties.isWhitespace { return true }
+        switch scalar.value {
+        case 0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0: return true
+        default: return false
+        }
+    }
+
     public static func field(_ text: String) -> String {
+        escaped(text, needsEscape: needsEscape)
+    }
+
+    /// `field` with `needsApprovalEscape`: for approval prompts.
+    public static func approvalField(_ text: String) -> String {
+        escaped(text, needsEscape: needsApprovalEscape)
+    }
+
+    private static func escaped(_ text: String, needsEscape: (Unicode.Scalar) -> Bool) -> String {
         var escaped = ""
         for scalar in text.unicodeScalars {
             if scalar.value == 0x5C {

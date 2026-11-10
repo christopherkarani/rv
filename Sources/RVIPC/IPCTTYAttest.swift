@@ -62,10 +62,17 @@ public struct AttestTTYRedemptionReply: Sendable, Equatable, Codable {
     /// possible); nothing was planted. Nil on a plant or an
     /// already-planted retry.
     public var ownerCheck: ConfirmOwnerActionReply?
+    /// True with an `unavailable` owner check when rvd refused to prompt
+    /// because it cannot show the whole command and cwd (too long once
+    /// escaped). rvd never shows a shortened command for approval.
+    public var notShowable: Bool?
 
-    public init(planted: Bool, epoch: String, ownerCheck: ConfirmOwnerActionReply? = nil) {
+    public init(
+        planted: Bool, epoch: String, ownerCheck: ConfirmOwnerActionReply? = nil, notShowable: Bool? = nil
+    ) {
         self.planted = planted
         self.epoch = epoch
         self.ownerCheck = ownerCheck
+        self.notShowable = notShowable
     }
 }

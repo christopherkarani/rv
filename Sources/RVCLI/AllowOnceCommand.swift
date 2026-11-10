@@ -22,6 +22,10 @@ enum AllowOnceAttestError: Error, Equatable {
     /// rvd ran the owner check and it refused (declined, wrong password,
     /// locked out, another prompt open, no prompt possible).
     case notApproved(ConfirmOwnerActionReply)
+    /// The command or cwd is too long to show in full in a prompt, so it
+    /// cannot be approved there. Nothing is ever approved from a shortened
+    /// description.
+    case notShowable
 }
 
 enum AllowOnceCLI {
@@ -100,13 +104,16 @@ enum AllowOnceCLI {
     /// the rule and cwd too; on macOS rvd's own prompt names the whole
     /// command from what rvd issued. B1: the invocation tag names erased
     /// wrappers (`sudo`, `FOO=…`) the normalized redaction hides.
-    static func redeemReason(row: AllowOnceListRow) -> String {
+    static func redeemReason(row: AllowOnceListRow) -> String? {
         AllowOncePromptText.reason(
             command: AllowOncePromptText.invoked(
                 view: row.commandRedacted, invocationDisplay: row.invocationDisplay),
             cwd: row.cwd,
             ruleID: row.ruleID)
     }
+
+    static let notShowableMessage =
+        "this command is too long to approve in a prompt (it cannot be shown in full, and nothing is approved from a shortened view); nothing was allowed. Run it yourself in a terminal instead"
 
     /// Why rvd's owner check refused a redeem. The pending code stays live.
     static func notApprovedMessage(_ refused: ConfirmOwnerActionReply) -> String {
@@ -170,7 +177,8 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        let ownerProof = try await CLIOwnerAuth.ownerProofForAttestation(reason: redeemReason(row: peeked.row))
+        guard let reason = redeemReason(row: peeked.row) else { throw AllowOnceAttestError.notShowable }
+        let ownerProof = try await CLIOwnerAuth.ownerProofForAttestation(reason: reason)
         let service = client ?? OwnerConfirmation.defaultClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
             Self.redemptionUnchanged(before: peeked, after: rechecked)
@@ -193,6 +201,9 @@ enum AllowOnceCLI {
         switch attested {
         case .success(let response):
             reply = response
+            if response.notShowable == true {
+                throw AllowOnceAttestError.notShowable
+            }
             if let refused = response.ownerCheck {
                 // Nothing planted; the pending code stays live.
                 throw AllowOnceAttestError.notApproved(refused)
@@ -288,11 +299,10 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        try await CLIOwnerAuth.requireAuthenticated(
-            reason: "Authenticate to pre-arm a code to " + AllowOncePromptText.reason(
-                command: AllowOncePromptText.invoked(
-                    view: view.rawValue, invocationDisplay: Normalize.invocationDisplay(of: command)),
-                cwd: cwd, ruleID: nil))
+        guard let shown = AllowOncePromptText.reason(command: command.rawValue, cwd: cwd, ruleID: nil) else {
+            throw AllowOnceAttestError.notShowable
+        }
+        try await CLIOwnerAuth.requireAuthenticated(reason: "Authenticate to pre-arm a code to " + shown)
         return try await store.mint(
             matchingView: view,
             cwd: cwd,
@@ -397,6 +407,8 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 "rv allow-once: rvd did not issue this code (pre-armed with `rv allow-once mint`, or rvd restarted since the deny); rerun the command for a fresh code\n",
                 exitCode: 2
             )
+        } catch AllowOnceAttestError.notShowable {
+            try ctx.fail("rv allow-once: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
         } catch AllowOnceAttestError.notApproved(let refused) {
             try ctx.fail("rv allow-once: \(AllowOnceCLI.notApprovedMessage(refused))\n", exitCode: 2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
@@ -460,6 +472,8 @@ struct AllowOnceMint: AsyncParsableCommand {
             )
         } catch AllowOnceError.emptyCommand {
             try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
+        } catch AllowOnceAttestError.notShowable {
+            try ctx.fail("rv allow-once mint: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
         } catch AllowOnceError.notUnlockable {
             try ctx.fail(
                 "rv allow-once mint: no one-shot unlock is possible for this command\n",

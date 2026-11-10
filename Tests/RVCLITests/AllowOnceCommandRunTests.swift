@@ -600,6 +600,18 @@ struct AllowOnceCommandRunTests {
         #expect(rows.allSatisfy { $0.kind == .pending })
     }
 
+    @Test func redeem_aCommandRvdCannotShowIsReportedAsTooLong() async throws {
+        let run = try await pendingRedeem(result: .attestTTYRedemption(AttestTTYRedemptionReply(
+            planted: false, epoch: "e", ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable),
+            notShowable: true)))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("an unshowable command must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notShowable)
+        #expect(AllowOnceCLI.notShowableMessage.contains("too long to approve in a prompt"))
+    }
+
     @Test func redeem_aCodeRvdDidNotIssueIsReportedAsSuch() async throws {
         let run = try await pendingRedeem(result: .error(.allowOnceNotFound))
         guard case .failure(let error) = run.outcome else {

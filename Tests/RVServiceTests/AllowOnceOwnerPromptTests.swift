@@ -99,6 +99,23 @@ struct AllowOnceOwnerPromptTests {
         #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
     }
 
+    @Test func aCommandTooLongToShowIsRefusedWithoutAPrompt() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let long = "git push --force origin " + String(repeating: "b", count: 400)
+        let params = try await issue(long, store: rig.store)
+        guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
+            Issue.record("an unshowable command must answer with the owner check")
+            return
+        }
+        #expect(reply.planted == false)
+        #expect(reply.notShowable == true)
+        #expect(reply.ownerCheck?.outcome == .unavailable)
+        #expect(prompt.promptCount == 0)
+        #expect(isAllow(await evaluate(long, rig)) == false)
+    }
+
     @Test func aDeclinedPromptPlantsNothing() async throws {
         let rig = try rig(FakeAuthenticator(approve: false))
         defer { try? FileManager.default.removeItem(at: rig.homeURL) }

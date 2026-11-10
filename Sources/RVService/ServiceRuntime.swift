@@ -529,16 +529,22 @@ public actor ServiceRuntime {
         }
         var description = ""
         if ownerPresence.promptsInRvd {
-            guard let found = await redemptionDescription(params, context: context) else {
+            switch await redemptionDescription(params, context: context) {
+            case .notIssued:
                 return .error(.allowOnceNotFound)
-            }
-            if found.redeemed {
+            case .notShowable:
+                // Never a shortened command: the grant covers all of it.
+                return .attestTTYRedemption(AttestTTYRedemptionReply(
+                    planted: false, epoch: grants.epoch.uuidString,
+                    ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable), notShowable: true))
+            case .found(_, redeemed: true):
                 // Already planted in this rvd lifetime: answer the retry
                 // without a second prompt.
                 return .attestTTYRedemption(AttestTTYRedemptionReply(
                     planted: false, epoch: grants.epoch.uuidString))
+            case .found(let text, redeemed: false):
+                description = text
             }
-            description = found.text
         }
         let verdict = await ownerPresence.confirmRedemption(
             description, proof: params.ownerProof, context: context)
@@ -586,8 +592,15 @@ public actor ServiceRuntime {
         }
     }
 
-    /// rvd's own prompt text for this redeem, or nil when rvd has nothing it
-    /// can vouch for (no prompt is shown then).
+    private enum RedemptionLookup: Equatable {
+        /// rvd has nothing it can vouch for: no prompt is shown.
+        case notIssued
+        /// rvd knows the code but cannot show all of it: no prompt is shown.
+        case notShowable
+        case found(String, redeemed: Bool)
+    }
+
+    /// rvd's own prompt text for this redeem.
     ///
     /// The code rvd issued on a hook deny is the source: rvd kept the whole
     /// command in memory, and every field of the request must match it.
@@ -597,26 +610,28 @@ public actor ServiceRuntime {
     /// for anyone else such a code is not found.
     private func redemptionDescription(
         _ params: AttestTTYRedemptionParams, context: AuthenticatedRequestContext
-    ) async -> (text: String, redeemed: Bool)? {
+    ) async -> RedemptionLookup {
         let now = clock()
         let hash = params.codeHash.rawValue
         if let issued = await allowOnce.issued(codeHash: hash, now: now) {
             guard issued.fingerprint == params.fingerprint, issued.cwd == params.cwd,
                 issued.payloadDigest == params.payloadDigest
-            else { return nil }
-            return (
-                AllowOncePromptText.reason(command: issued.command, cwd: issued.cwd, ruleID: issued.ruleID),
-                issued.redeemed
-            )
+            else { return .notIssued }
+            guard let text = AllowOncePromptText.reason(
+                command: issued.command, cwd: issued.cwd, ruleID: issued.ruleID)
+            else { return .notShowable }
+            return .found(text, redeemed: issued.redeemed)
         }
         guard context.componentRole == .cli, context.peer != nil,
             let pending = await allowOnce.pendingRow(codeHash: hash, now: now),
             pending.fingerprint == params.fingerprint.rawValue, pending.row.cwd == params.cwd,
             pending.payloadDigest == params.payloadDigest?.rawValue
-        else { return nil }
+        else { return .notIssued }
         let command = AllowOncePromptText.invoked(
             view: pending.row.commandRedacted, invocationDisplay: pending.row.invocationDisplay)
-        return (AllowOncePromptText.reason(command: command, cwd: pending.row.cwd, ruleID: pending.row.ruleID), false)
+        guard let text = AllowOncePromptText.reason(command: command, cwd: pending.row.cwd, ruleID: pending.row.ruleID)
+        else { return .notShowable }
+        return .found(text, redeemed: false)
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
