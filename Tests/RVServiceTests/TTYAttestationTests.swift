@@ -34,6 +34,9 @@ struct TTYAttestationTests {
         }
         #expect(reply.planted)
         #expect(reply.epoch.isEmpty == false)
+        // Says how the owner was checked, so the CLI can tell this rvd from
+        // one that planted for a pinned CLI unchecked.
+        #expect(reply.presence != nil)
 
         let allowed = await runtime.evaluate(
             EvaluationRequest(

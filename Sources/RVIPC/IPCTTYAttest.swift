@@ -74,15 +74,19 @@ public struct AttestTTYRedemptionReply: Sendable, Equatable, Codable {
     /// password prompt and asks again with the password, so the owner reads
     /// what rvd will grant, not the same-user pending file.
     public var promptText: String?
+    /// Set with `planted: true`: how rvd checked the owner before planting.
+    /// The CLI refuses a plant without the presence this platform's rvd uses.
+    public var presence: ConfirmOwnerActionReply.Presence?
 
     public init(
         planted: Bool, epoch: String, ownerCheck: ConfirmOwnerActionReply? = nil, notShowable: Bool? = nil,
-        promptText: String? = nil
+        promptText: String? = nil, presence: ConfirmOwnerActionReply.Presence? = nil
     ) {
         self.planted = planted
         self.epoch = epoch
         self.ownerCheck = ownerCheck
         self.notShowable = notShowable
         self.promptText = promptText
+        self.presence = presence
     }
 }

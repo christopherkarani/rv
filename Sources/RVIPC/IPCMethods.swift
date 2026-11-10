@@ -71,7 +71,12 @@ extension IPCMethod: Codable {
         case ruleSave
         case proposeWorkspaceLaunch
         case launchProposalStatus
-        case attestTTYRedemption
+        /// Not the old "attestTTYRedemption": an rvd from before rvd showed
+        /// its own owner prompt planted for a pinned CLI with no owner check,
+        /// and plants before it replies. It cannot decode this key, so it
+        /// refuses ("unknown IPCMethod") and plants nothing; a current rvd
+        /// refuses the old key the same way.
+        case attestTTYRedemption = "redeemAllowOnceOwnerChecked"
         case confirmOwnerAction
         case mintAllowOnce
     }

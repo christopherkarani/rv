@@ -605,7 +605,8 @@ public actor ServiceRuntime {
             // projection after planted:true; the daemon never writes the
             // shared projection file (no cross-process append race).
             return .attestTTYRedemption(AttestTTYRedemptionReply(
-                planted: true, epoch: grants.epoch.uuidString
+                planted: true, epoch: grants.epoch.uuidString,
+                presence: ownerPresence.promptsItself ? .daemonPrompt : .password
             ))
         case .alreadyRedeemed:
             await allowOnce.markIssuedRedeemed(codeHash: params.codeHash.rawValue)

@@ -135,7 +135,8 @@ struct AllowOnceCommandRunTests {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .attestTTYRedemption(
-                AttestTTYRedemptionReply(planted: true, epoch: "test-epoch"))
+                AttestTTYRedemptionReply(
+                    planted: true, epoch: "test-epoch", presence: OwnerConfirmation.expectedPresence))
         )
         let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
         let redeemed = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
@@ -185,7 +186,9 @@ struct AllowOnceCommandRunTests {
             let transport = ScriptedTransport(
                 ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
                 responseResult: .attestTTYRedemption(
-                    AttestTTYRedemptionReply(planted: planted, epoch: epoch))
+                    AttestTTYRedemptionReply(
+                        planted: planted, epoch: epoch,
+                        presence: planted ? OwnerConfirmation.expectedPresence : nil))
             )
             return ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
         }
@@ -628,8 +631,42 @@ struct AllowOnceCommandRunTests {
 
     @Test func redeem_waitsForTheOwnerToAnswerRvdsPrompt() async throws {
         let run = try await pendingRedeem(result: .attestTTYRedemption(
-            AttestTTYRedemptionReply(planted: true, epoch: "e")))
+            AttestTTYRedemptionReply(planted: true, epoch: "e", presence: OwnerConfirmation.expectedPresence)))
         #expect(run.transport.lastSendTimeoutMs == ServiceClient.confirmOwnerActionTimeoutMs)
+    }
+
+    /// Version skew: an rvd that plants without saying how it checked the
+    /// owner (an older rvd approved a pinned CLI unchecked) is not believed.
+    /// Nothing is reported as granted and the code stays pending.
+    @Test(arguments: [
+        ConfirmOwnerActionReply.Presence?.none,
+        OwnerConfirmation.expectedPresence == .daemonPrompt ? .password : .daemonPrompt,
+    ])
+    func redeem_aPlantWithoutThisPlatformsOwnerCheckIsRefused(
+        presence: ConfirmOwnerActionReply.Presence?
+    ) async throws {
+        let run = try await pendingRedeem(result: .attestTTYRedemption(
+            AttestTTYRedemptionReply(planted: true, epoch: "e", presence: presence)))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("a plant with no owner check must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .ownerCheckUnconfirmed)
+        let rows = await run.store.list(now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(rows.allSatisfy { $0.kind == .pending })
+    }
+
+    /// An rvd that cannot decode the request (an older rvd, which does not
+    /// know the owner-checked redeem key) answers an error: no grant.
+    @Test func redeem_anRvdThatDoesNotKnowTheRequestGrantsNothing() async throws {
+        let run = try await pendingRedeem(result: .error(.unknownMethod))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("an unknown method must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .serviceDenied)
+        let rows = await run.store.list(now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(rows.allSatisfy { $0.kind == .pending })
     }
 
     @Test func notApprovedMessagesNameWhatHappened() {
@@ -704,7 +741,8 @@ struct AllowOnceCommandRunTests {
             .attestTTYRedemption(AttestTTYRedemptionReply(
                 planted: false, epoch: "e", ownerCheck: ConfirmOwnerActionReply(outcome: .proofRequired),
                 promptText: described)),
-            .attestTTYRedemption(AttestTTYRedemptionReply(planted: true, epoch: "e")),
+            .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: true, epoch: "e", presence: OwnerConfirmation.expectedPresence)),
         ])
         if case .failure(let error) = run.outcome { Issue.record("redeem must succeed: \(error)") }
         // rvd's text, not the pending file's redacted head.
@@ -730,7 +768,8 @@ struct AllowOnceCommandRunTests {
 
     @Test func redeem_macOSSendsNoPasswordAndShowsNothingItself() async throws {
         let run = try await linuxRedeem(replies: [
-            .attestTTYRedemption(AttestTTYRedemptionReply(planted: true, epoch: "e")),
+            .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: true, epoch: "e", presence: OwnerConfirmation.expectedPresence)),
         ])
         if case .failure(let error) = run.outcome { Issue.record("redeem must succeed: \(error)") }
         #expect(run.shown.isEmpty)

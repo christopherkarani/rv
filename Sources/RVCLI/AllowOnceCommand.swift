@@ -26,6 +26,9 @@ enum AllowOnceAttestError: Error, Equatable {
     /// cannot be approved there. Nothing is ever approved from a shortened
     /// description.
     case notShowable
+    /// rvd said it planted but not that it checked the owner the way this
+    /// platform's rvd does. Not believed: nothing is reported as allowed.
+    case ownerCheckUnconfirmed
 }
 
 enum AllowOnceCLI {
@@ -200,6 +203,9 @@ enum AllowOnceCLI {
             if let refused = response.ownerCheck {
                 // Nothing planted; the pending code stays live.
                 throw AllowOnceAttestError.notApproved(refused)
+            }
+            if response.planted, response.presence != OwnerConfirmation.expectedPresence {
+                throw AllowOnceAttestError.ownerCheckUnconfirmed
             }
             guard response.planted else {
                 // m1: double-attest — this code already planted this epoch
@@ -453,6 +459,11 @@ struct AllowOnceRedeem: AsyncParsableCommand {
             )
         } catch AllowOnceAttestError.notShowable {
             try ctx.fail("rv allow-once: \(AllowOnceCLI.notShowableMessage)\n", exitCode: 2)
+        } catch AllowOnceAttestError.ownerCheckUnconfirmed {
+            try ctx.fail(
+                "rv allow-once: rvd did not say it checked the owner (an older rvd still running after an upgrade?); nothing was allowed. Run rv service restart and try again\n",
+                exitCode: 2
+            )
         } catch AllowOnceAttestError.notApproved(let refused) {
             try ctx.fail("rv allow-once: \(AllowOnceCLI.notApprovedMessage(refused))\n", exitCode: 2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
