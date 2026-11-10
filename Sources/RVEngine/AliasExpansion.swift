@@ -9,60 +9,92 @@ import RVDomain
 ///
 /// The expansion is an extra command the gate evaluates next to the
 /// original (it can only tighten). A body or name rv cannot read
-/// statically (shell expansion, a cycle, nesting past the bound) is
-/// `.unverifiable`, which denies.
-enum AliasExpansion: Sendable, Equatable {
-    /// No alias construct is used or defined.
-    case none
+/// statically (shell expansion, a cycle, nesting past the bound), config
+/// handed through the environment, and config that includes files or
+/// names a program are `unverifiable`, which denies.
+///
+/// An invocation whose program or git subcommand is not statically known
+/// (a same-line shell function, a variable head, a dynamic `eval`, a
+/// command after `source`, an unknown git subcommand such as an alias
+/// defined in an earlier call) is `unresolved`, which asks.
+struct AliasExpansion: Sendable, Equatable {
     /// The commands the aliases expand to, `;`-joined, with the line's
     /// `cd` segments kept in order so relative paths resolve the same.
-    case expanded(String)
-    /// An alias construct whose body cannot be resolved statically.
-    case unverifiable
+    var expansion: String?
+    /// An alias or config construct that cannot be resolved statically.
+    var unverifiable = false
+    /// An invocation whose program or git subcommand is unknown.
+    var unresolved = false
+
+    static let unverifiableConstruct = AliasExpansion(unverifiable: true)
 }
 
 /// Nesting bound for alias chains (`a` → `b` → body) and re-expansion.
 private let maxAliasDepth = 8
 
 func expandAliases(_ command: String) -> AliasExpansion {
-    // Config keys are case-insensitive (`ALIAS.z`), so is the fast path.
-    guard command.lowercased().contains("alias") else { return .none }
-    var resolver = AliasResolver()
+    if gitEnvironmentInjection(command) { return .unverifiableConstruct }
+    // A same-line function whose body reads no call arguments runs exactly
+    // the body text, which every pass already judges as its own segments.
+    // One that does (`g(){ git "$@"; }; g reset --hard`) runs a command no
+    // pass ever saw.
+    let functions = readsPositionalParameters(command) ? shellFunctionNames(in: command) : []
+    var resolver = AliasResolver(functionNames: functions)
     var out: [String] = []
     var expandedAny = false
+    var afterSource = false
     for segment in aliasSegments(command) {
-        guard let resolved = resolver.resolve(segment, depth: 0) else { return .unverifiable }
+        // A sourced file may define the functions and aliases every later
+        // command on the line runs.
+        if afterSource { resolver.unresolved = true }
+        guard let resolved = resolver.resolve(segment, depth: 0) else { return .unverifiableConstruct }
         if resolved.expanded {
             expandedAny = true
             out.append(contentsOf: resolved.commands)
         } else if isDirectoryChange(segment) {
             out.append(segment)
         }
+        let head = firstWord(segment).word
+        if head == "source" || head == "." { afterSource = true }
     }
-    return expandedAny ? .expanded(out.joined(separator: " ; ")) : .none
+    return AliasExpansion(
+        expansion: expandedAny ? out.joined(separator: " ; ") : nil,
+        unresolved: resolver.unresolved
+    )
 }
 
-/// Tightens an allowed `result` for `command` by the alias bodies it uses
-/// or defines: an unverifiable alias denies, and an expansion `judge` does
-/// not allow replaces the allow. Any other verdict passes through.
+/// Tightens an allowed `result` for `command`: an unverifiable alias or
+/// config construct denies, an expansion `judge` does not allow replaces
+/// the allow, and (with core.git enabled) an unresolved invocation is
+/// indeterminate. Any other verdict passes through.
+///
+/// `floorUnresolved` is false for a pass whose allow later stages may still
+/// turn into a deny (the pack pass inside the semantic door): the ask is
+/// applied once, last, so it never stands in for a deny.
 func gateAliases(
     _ result: EvaluationResult,
     command: ShellCommand,
     packs: [PackSnapshot],
+    enabledPacks: [PackID],
+    floorUnresolved: Bool = true,
     judge: (ShellCommand) -> EvaluationResult
 ) -> EvaluationResult {
     guard result.decision == .allow else { return result }
-    switch expandAliases(command.rawValue) {
-    case .none:
-        return result
-    case .unverifiable:
+    let analysis = expandAliases(command.rawValue)
+    if analysis.unverifiable {
         return aliasUnverifiableDeny(searchText: result.matchingView.rawValue, packs: packs)
-    case .expanded(let text):
-        var inner = judge(ShellCommand(rawValue: text))
-        guard inner.decision != .allow else { return result }
-        inner.matchingView = result.matchingView
-        return inner
     }
+    if let text = analysis.expansion {
+        var inner = judge(ShellCommand(rawValue: text))
+        if inner.decision != .allow {
+            inner.matchingView = result.matchingView
+            return inner
+        }
+    }
+    if floorUnresolved, analysis.unresolved, enabledPacks.contains(.coreGit) {
+        return EvaluationResult(outcome: .indeterminate(.unresolvedInvocation), matchingView: result.matchingView)
+    }
+    return result
 }
 
 private let aliasUnverifiablePattern = "git-alias-semantic-unverified"
@@ -90,6 +122,12 @@ private func aliasUnverifiableDeny(searchText: String, packs: [PackSnapshot]) ->
 /// same view the git segment parser reads (`sudo git …`, `bash -c '…'`).
 private func aliasSegments(_ command: String) -> [String] {
     splitSegments(command)
+        // A bare assignment (`x=$(…)`) runs no program; a substitution in
+        // it is its own segment already.
+        .filter { segment in
+            let words = ShellPipeline.tokenize(segment).filter { $0.isNewline == false }
+            return words.isEmpty || words.contains { isShellAssignmentWord($0.lexeme) == false }
+        }
         .flatMap { splitSegments(ShellPipeline.stripLeadingAssignmentPrefixes($0)) }
         .flatMap(peeledSegments)
 }
@@ -104,9 +142,17 @@ private func isDirectoryChange(_ segment: String) -> Bool {
 private let maxAliasSteps = 256
 
 private struct AliasResolver {
+    /// Shell functions the line defines.
+    let functionNames: Set<String>
     /// Same-line shell aliases, in definition order.
     var shellAliases: [String: String] = [:]
+    /// Set once any resolved command's program or git subcommand is unknown.
+    var unresolved = false
     private var steps = 0
+
+    init(functionNames: Set<String>) {
+        self.functionNames = functionNames
+    }
 
     /// The commands `segment` runs once aliases resolve, plus whether any
     /// alias was involved. Nil when an alias cannot be verified.
@@ -121,7 +167,20 @@ private struct AliasResolver {
         if let value = shellAliases[head] {
             return resolveExpansion(shellAliasExpansion(value, rest: Array(words.dropFirst())), depth: depth)
         }
-        guard unescapeBackslashPairs(basename(head)).lowercased() == "git" else {
+        let program = unescapeBackslashPairs(basename(head))
+        if functionNames.contains(head) || isDynamicWord(program) {
+            unresolved = true
+            return ([segment], false)
+        }
+        if program == "eval" {
+            let body = Array(words.dropFirst())
+            if body.contains(where: isDynamicWord) {
+                unresolved = true
+                return ([segment], false)
+            }
+            return resolveExpansion(body.joined(separator: " "), depth: depth)
+        }
+        guard program.lowercased() == "git" else {
             return ([segment], false)
         }
         return resolveGit(words, segment: segment, depth: depth)
@@ -174,7 +233,11 @@ private struct AliasResolver {
             return resolveExpansion(aliasBodyCommand(body, gitPrefix: prefix, args: args), depth: depth)
         }
         if isDynamicWord(subcommand), globals.aliases.isEmpty == false { return nil }
-        guard subcommand.lowercased() == "config" else { return ([segment], false) }
+        guard knownGitSubcommands.contains(subcommand) else {
+            unresolved = true
+            return ([segment], false)
+        }
+        guard subcommand == "config" else { return ([segment], false) }
         switch gitConfigAliasDefinition(args) {
         case .notADefinition:
             return ([segment], false)
@@ -212,14 +275,15 @@ private let gitValueGlobals: Set<String> = [
 ]
 
 /// Parses `git` global options. Nil when an alias definition is dynamic or
-/// comes from the environment (`--config-env=alias.x=VAR`).
+/// comes from the environment (`--config-env=alias.x=VAR`), or a `-c` /
+/// `--config-env` key includes config or names a program.
 private func parseGitAliasGlobals(_ words: [String]) -> GitAliasGlobals? {
     var globals = GitAliasGlobals()
     var index = 1
     while index < words.count, words[index].hasPrefix("-") {
         let word = words[index]
         if word.hasPrefix("--config-env=") {
-            if word.dropFirst("--config-env=".count).lowercased().hasPrefix("alias.") { return nil }
+            if hidesConfig(String(word.dropFirst("--config-env=".count)), fromEnvironment: true) { return nil }
         }
         guard gitValueGlobals.contains(word) else {
             globals.words.append(word)
@@ -228,7 +292,8 @@ private func parseGitAliasGlobals(_ words: [String]) -> GitAliasGlobals? {
         }
         guard index + 1 < words.count else { break }
         let value = words[index + 1]
-        if word == "--config-env", value.lowercased().hasPrefix("alias.") { return nil }
+        if word == "--config-env", hidesConfig(value, fromEnvironment: true) { return nil }
+        if word == "-c", hidesConfig(value, fromEnvironment: false) { return nil }
         if word == "-c", value.lowercased().hasPrefix("alias.") {
             let entry = value.dropFirst("alias.".count)
             let name = String(entry.prefix { $0 != "=" }).lowercased()
@@ -241,6 +306,19 @@ private func parseGitAliasGlobals(_ words: [String]) -> GitAliasGlobals? {
     }
     globals.subcommandIndex = index
     return globals
+}
+
+/// A `KEY=VALUE` config entry whose effect rv cannot judge: a dynamic
+/// key, an include, a program-running key, or an alias whose body comes
+/// from the environment.
+private func hidesConfig(_ entry: String, fromEnvironment: Bool) -> Bool {
+    let key = String(entry.prefix { $0 != "=" })
+    if fromEnvironment, key.lowercased().hasPrefix("alias.") { return true }
+    if isDynamicWord(key) { return true }
+    guard isProgramOrIncludeConfigKey(key) else { return false }
+    // `--config-env` takes the value from a variable rv cannot see.
+    guard fromEnvironment == false, let eq = entry.firstIndex(of: "=") else { return true }
+    return isInertProgramSetting(key, value: String(entry[entry.index(after: eq)...])) == false
 }
 
 private enum GitConfigAliasDefinition {
@@ -281,6 +359,9 @@ private func gitConfigAliasDefinition(_ args: [String]) -> GitConfigAliasDefinit
     guard positionals.count >= 2 else { return .notADefinition }
     let key = positionals[0]
     if isDynamicWord(key), positionals[1].isEmpty == false { return .dynamic }
+    if isProgramOrIncludeConfigKey(key), isInertProgramSetting(key, value: positionals[1]) == false {
+        return .dynamic
+    }
     guard key.lowercased().hasPrefix("alias.") else { return .notADefinition }
     let body = positionals[1]
     if isDynamicWord(body) { return .dynamic }

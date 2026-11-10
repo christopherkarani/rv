@@ -250,7 +250,7 @@ struct SelfProtectionCaseTests {
             "rvm use 3.3", "./server --port 80", "cargo run --bin rvx", "grep -i rv notes.txt", "echo rv uninstall", "rv --version", "rv status",
             "ls {src,Tests}", "echo {a,b}", "cp f{,.bak}", "mkdir -p a/{b,c}", "git diff {main,HEAD}", "touch {1..3}.txt", "rv packs list '>' x",
             "rv policy draft --english x", "rv packs list 2>&1", "echo {a,b}", "ls {src,Tests}", "echo hi \\\nthere",
-            "rv packs list $X", "$HOME/bin/tool \"$1\"", "eval \"$(direnv hook bash)\"", "bash -lc 'make test'", "env -i PATH=/usr/bin make", "</dev/null swift test", "rv mcp check \"$s\"", "rv policy show $X",
+            "rv packs list $X", "$HOME/bin/tool \"$1\"", "bash -lc 'make test'", "env -i PATH=/usr/bin make", "</dev/null swift test", "rv mcp check \"$s\"", "rv policy show $X",
             "rv host list", "RV host mode claude block", "rv host mode cursor block --json"] {
             #expect(try runEngine(command).decision == .allow, "\(command)")
         }

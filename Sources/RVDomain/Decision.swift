@@ -23,6 +23,11 @@ public enum IndeterminateReason: String, Sendable, Equatable, Codable {
     /// (untracked cd, workspace run, malformed package.json, ...) and no
     /// judge was available to score it.
     case packageScriptUnresolved
+    /// The program or git subcommand a command runs is not statically
+    /// known: a same-line shell function, a variable head, a dynamic
+    /// `eval`, a command after `source`, or an unknown git subcommand
+    /// (an alias or extension defined outside the command line).
+    case unresolvedInvocation
 }
 
 /// Pack-door evaluate result: allow, deny, or indeterminate. Never Ask.

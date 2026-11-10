@@ -51,7 +51,6 @@ struct GitAliasBypassTests {
         arguments: [
             "git config alias.st status",
             "git config --global alias.co checkout",
-            "git st",
             "git -c alias.st=status st",
             "alias ll='ls -la'; ll",
             "git config --get alias.z",

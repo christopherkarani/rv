@@ -15,13 +15,32 @@ public func evaluate<E: PatternEngine>(
     compiled: CompiledPacks<E.Compiled>,
     patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
+    evaluateGated(
+        request, packs: packs, secretPaths: secretPaths, engine: engine,
+        compiled: compiled, patternBudget: patternBudget, floorUnresolved: true
+    )
+}
+
+/// `evaluate`, with the unresolved-invocation ask optional (see `gateAliases`).
+func evaluateGated<E: PatternEngine>(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    secretPaths: SecretPathDecider,
+    engine: E,
+    compiled: CompiledPacks<E.Compiled>,
+    patternBudget: PatternBudget,
+    floorUnresolved: Bool
+) -> EvaluationResult {
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluatePacks(
             request, packs: packs, secretPaths: secretPaths, engine: engine,
             compiled: compiled, timeBudget: patternBudget
         )
     }
-    return gateAliases(judge(request), command: request.command, packs: packs) { expansion in
+    return gateAliases(
+        judge(request), command: request.command, packs: packs,
+        enabledPacks: request.enabledPacks, floorUnresolved: floorUnresolved
+    ) { expansion in
         var inner = request
         inner.command = expansion
         return judge(inner)
