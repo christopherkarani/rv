@@ -143,6 +143,7 @@ struct PackageScriptGateFormsTests {
         // A bin runner that runs a shell string or preloads code is not a bin run.
         "npx -c 'rm -rf ~'", "npx --call='rm -rf ~'", "npm exec -c 'rm -rf ~'", "npm exec foo --call=x",
         "pnpm dlx -c 'rm -rf ~'", "pnpm exec -c 'rm -rf ~'", "npx --node-options=--require=/x tsc",
+        #"yarn node -e "require('child_process').execSync('id')""#,
         // Global flags that are not a plain global install of named packages.
         "npm install -g .", "npm i -g ./tool", "npm install --global ../x", "npm -g run evil",
         "npm test -g", "npm i -g --prefix /tmp x", "npm install -g",

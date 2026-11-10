@@ -246,10 +246,11 @@ enum PackageRunnerGrammar {
         "login", "logout", "audit", "check", "tag", "autoclean", "generate-lock-entry", "explain",
     ]
     static let yarnUnresolvedVerbs: Set<String> = [
-        "plugin", "set", "workspace", "workspaces", "patch",
+        // `yarn node -e …` is an inline program, not a package bin.
+        "node", "plugin", "set", "workspace", "workspaces", "patch",
         "patch-commit", "unplug", "constraints", "global", "policies", "init", "stage", "sdks",
     ]
-    static let yarnBinVerbs: Set<String> = ["dlx", "exec", "node", "create"]
+    static let yarnBinVerbs: Set<String> = ["dlx", "exec", "create"]
 
     private static func readYarnVerb(_ verb: String, _ rest: [String], into reading: inout Reading) {
         var probe = Reading()
