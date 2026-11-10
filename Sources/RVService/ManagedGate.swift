@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIsolation
+import RVPacks
 import RVPolicy
 import Synchronization
 
@@ -75,8 +76,17 @@ public enum ManagedGate {
     /// still contributes the packs its signed policy names when only the
     /// user-owned serial check failed; it also forces strict safety (see
     /// `safety`).
-    static func requiredPacks(home: HomeDirectory?) -> [PackID] {
+    public static func requiredPacks(home: HomeDirectory?) -> [PackID] {
         loaded(home: home).signedPacks
+    }
+
+    /// Required pack IDs that name no bundled pack. The policy parser checks
+    /// only their syntax, so a typo (`cloud.aw`) or a category name
+    /// (`cloud`) would read as enforced while nothing compiles for it.
+    public static func unknownRequiredPacks(_ ids: [PackID]) -> [PackID] {
+        guard ids.isEmpty == false, let index = try? PackRegistry.loadIndex() else { return [] }
+        let known = Set(index.packIDs)
+        return ids.filter { known.contains($0) == false }
     }
 
     /// `mode` forced to `.enforce` while an organization gate applies (or a

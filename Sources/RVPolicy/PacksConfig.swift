@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 
@@ -27,12 +32,23 @@ public enum PacksConfigStore {
             .appendingPathComponent("config.toml", isDirectory: false)
     }
 
-    public static func load(home: HomeDirectory, fileManager: FileManager = .default) throws -> PacksConfig {
-        let url = configURL(home: home)
-        guard fileManager.fileExists(atPath: url.path) else {
+    /// True only when `config.toml` is definitely absent (`stat` fails with
+    /// ENOENT). Any other failure, such as EACCES on a parent directory,
+    /// means the file may exist but cannot be read; callers must fail closed.
+    /// (`FileManager.fileExists` returns false for both.)
+    public static func isAbsent(home: HomeDirectory) -> Bool {
+        var status = stat()
+        if stat(configURL(home: home).path, &status) == 0 {
+            return false
+        }
+        return errno == ENOENT
+    }
+
+    public static func load(home: HomeDirectory) throws -> PacksConfig {
+        if isAbsent(home: home) {
             return .empty
         }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+        guard let text = try? String(contentsOf: configURL(home: home), encoding: .utf8) else {
             throw PacksConfigError.unreadable
         }
         return parse(text)
@@ -46,7 +62,16 @@ public enum PacksConfigStore {
         let url = configURL(home: home)
         let directory = url.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        // Never rewrite an existing file this store cannot read: merging into
+        // "" would discard its other sections and the owner's pack choices.
+        let existing: String
+        if isAbsent(home: home) {
+            existing = ""
+        } else if let text = try? String(contentsOf: url, encoding: .utf8) {
+            existing = text
+        } else {
+            throw PacksConfigError.unreadable
+        }
         let body = mergePacksSection(existing: existing, config: config)
         guard let data = body.data(using: .utf8) else {
             throw PacksConfigError.unwritable

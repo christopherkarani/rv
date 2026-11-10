@@ -98,6 +98,82 @@ import RVService
         #expect(try PacksFacade.effectiveIDs(home: home) == dayOnePackIDs)
     }
 
+    @Test func effectiveIDs_unreadableConfigFailsClosedToEveryPack() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        try PacksConfigStore.save(
+            PacksConfig(enabled: ["cloud.aws"], disabled: []),
+            home: home
+        )
+        // Invalid UTF-8: the store cannot read it. That must not drop the
+        // owner's packs back to day-one.
+        try Data([0xFF, 0xFE, 0x5B, 0x70]).write(to: PacksConfigStore.configURL(home: home))
+        let ids = try PacksFacade.effectiveIDs(home: home)
+        #expect(ids.contains(PackID(rawValue: "cloud.aws")))
+        #expect(ids.count == 95)
+        let snapshot = try PacksFacade.list(home: home)
+        #expect(snapshot.enabledCount == 95)
+    }
+
+    @Test func effectiveIDs_permissionDeniedParentFailsClosedToEveryPack() throws {
+        let home = try temporaryHome()
+        try PacksConfigStore.save(
+            PacksConfig(enabled: ["cloud.aws"], disabled: []),
+            home: home
+        )
+        let directory = PacksConfigStore.configURL(home: home).deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(atPath: home.rawValue)
+        }
+        // stat fails with EACCES, not ENOENT: the config exists but cannot be
+        // read. That must not read as "no config" (day-one).
+        let ids = try PacksFacade.effectiveIDs(home: home)
+        #expect(ids.contains(PackID(rawValue: "cloud.aws")))
+        #expect(ids.count == 95)
+        #expect(throws: PacksConfigError.unreadable) {
+            _ = try PacksConfigStore.load(home: home)
+        }
+    }
+
+    @Test func mutate_unreadableConfigRefusesToOverwrite() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let url = PacksConfigStore.configURL(home: home)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = Data([0xFF, 0xFE, 0x5B, 0x70])
+        try bytes.write(to: url)
+
+        #expect(throws: PacksCommandError.configUnreadable) {
+            _ = try PacksFacade.disable(home: home, ids: ["core.git"])
+        }
+        #expect(throws: PacksCommandError.configUnreadable) {
+            _ = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
+        }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
+    @Test func save_unreadableExistingConfigThrowsWithoutWriting() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let url = PacksConfigStore.configURL(home: home)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = Data([0xFF, 0xFE, 0x5B, 0x70])
+        try bytes.write(to: url)
+
+        #expect(throws: PacksConfigError.unreadable) {
+            try PacksConfigStore.save(PacksConfig(disabled: ["core.git"]), home: home)
+        }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
     @Test func effectiveIDs_configTomlExtraPackIsIncluded() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }

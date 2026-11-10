@@ -32,7 +32,7 @@ public enum HookAuthorization: Sendable, Equatable {
     /// Judge block denies pin by rule ID, with or without `boundReview`.
     static func isJudgeBlock(_ result: EvaluationResult) -> Bool {
         guard case .deny(let deny) = result.decision else { return false }
-        return deny.ruleID.pack == .coreJudge && deny.ruleID.pattern == "laya-block"
+        return JudgeRule(deny.ruleID) == .block
     }
 
     /// Pinned when no human transport may ever allow it.
