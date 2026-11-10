@@ -22,6 +22,17 @@ struct AllowOncePromptTextTests {
             == "allow once \"git push --force\" in /tmp/ws (rule core.git:push-force)")
     }
 
+    @Test func namesTheCodeSoTheOwnerCanTellPromptsApart() {
+        // The CLI says which code to approve; a prompt the agent raised for
+        // another code reads differently.
+        let rule = RuleID(pack: .coreGit, pattern: "push-force")
+        #expect(AllowOncePromptText.reason(
+            command: "git push --force", cwd: wd("/tmp/ws"), ruleID: rule, code: "abc123")
+            == "allow once \"git push --force\" in /tmp/ws (rule core.git:push-force, code abc123)")
+        #expect(AllowOncePromptText.reason(command: "ls", cwd: wd("/tmp/ws"), ruleID: nil, code: "abc123")
+            == "allow once \"ls\" in /tmp/ws (code abc123)")
+    }
+
     @Test func controlBidiAndEscapeCharactersAreShownEscapedNotRaw() throws {
         let text = try #require(AllowOncePromptText.reason(
             command: "rm -rf x\u{1B}[2K\u{202E}niam\u{0A}ok", cwd: wd("/tmp/ws"), ruleID: nil))
@@ -86,6 +97,7 @@ struct AllowOncePromptTextTests {
         // The exact text the hook denied, not the matching view: env
         // values and wrapper flags the view drops are all there.
         #expect(issued.command == "LD_PRELOAD=/tmp/x.so sudo -u deploy git push --force origin main")
+        #expect(issued.code == code)
         #expect(issued.cwd == wd("/tmp/ws"))
         #expect(issued.ruleID == rule)
         #expect(issued.fingerprint

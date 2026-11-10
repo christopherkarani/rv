@@ -621,7 +621,8 @@ public actor ServiceRuntime {
             issued.payloadDigest == params.payloadDigest
         else { return .notIssued }
         guard let command = issued.command,
-            let text = AllowOncePromptText.reason(command: command, cwd: issued.cwd, ruleID: issued.ruleID)
+            let text = AllowOncePromptText.reason(
+                command: command, cwd: issued.cwd, ruleID: issued.ruleID, code: issued.code.rawValue)
         else { return .notShowable }
         return .found(text, redeemed: issued.redeemed)
     }

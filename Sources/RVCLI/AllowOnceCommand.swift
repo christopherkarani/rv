@@ -112,7 +112,7 @@ enum AllowOnceCLI {
             let wait = refused.retryAfterSeconds.map { " Try again in \($0 / 60 + 1) min." } ?? ""
             return "too many failed owner checks; owner approvals are locked.\(wait)"
         case .busy:
-            return "another owner approval is in progress; try again when it finishes"
+            return "another owner prompt is already open. If you did not start it, decline it: your coding agent may have opened it. Then run this again"
         case .unavailable:
             #if canImport(LocalAuthentication)
             return "rvd cannot show a Touch ID or password prompt here (no passcode set or no login session)"
@@ -164,7 +164,7 @@ enum AllowOnceCLI {
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
         }
-        try CLIOwnerAuth.beginRedeem()
+        try CLIOwnerAuth.beginRedeem(code: normalized)
         let service = client ?? OwnerConfirmation.defaultClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
             Self.redemptionUnchanged(before: peeked, after: rechecked)

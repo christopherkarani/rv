@@ -635,11 +635,19 @@ struct AllowOnceCommandRunTests {
         #expect(text(.declined).contains("cancelled, failed or timed out"))
         #expect(text(.wrongPassword).contains("wrong password"))
         #expect(text(.lockedOut, retry: 600).contains("Try again in 11 min"))
-        #expect(text(.busy).contains("another owner approval"))
+        // A prompt the owner did not start may be the agent's: decline it.
+        #expect(text(.busy).contains("did not start"))
+        #expect(text(.busy).contains("decline it"))
         for outcome in [ConfirmOwnerActionReply.Outcome.declined, .wrongPassword, .lockedOut, .busy, .unavailable] {
             #expect(text(outcome).contains("RVOperatorUI") == false)
             #expect(text(outcome).contains("rv setup") == false)
         }
+    }
+
+    @Test func redeemNoticeNamesTheOnlyPromptToApprove() {
+        let notice = CLIOwnerAuth.redeemPromptNotice(code: "abc123")
+        #expect(notice.contains("approve only the Touch ID or password prompt for code abc123"))
+        #expect(notice.contains("decline any other"))
     }
 
     // MARK: Linux: rvd's description above the password prompt

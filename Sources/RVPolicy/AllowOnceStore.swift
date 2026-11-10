@@ -172,6 +172,7 @@ public actor AllowOnceStore {
                             payloadDigest: payloadDigest,
                             command: rawCommand,
                             ruleID: ruleID,
+                            code: code,
                             expiresAt: now.addingTimeInterval(ttl),
                             redeemed: false
                         )

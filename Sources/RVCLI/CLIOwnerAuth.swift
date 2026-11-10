@@ -56,7 +56,7 @@ enum CLIOwnerAuth {
 
     /// Before allow-once redeem asks rvd. macOS: no prompt here; rvd shows
     /// its own Touch ID or password prompt, so the owner sees exactly one.
-    static func beginRedeem() throws {
+    static func beginRedeem(code: String) throws {
         if let context = CLIProcess.context {
             guard context.ownerAuthOutcome == .authenticated else {
                 throw AllowOnceAuthError.required
@@ -64,9 +64,15 @@ enum CLIOwnerAuth {
             return
         }
         #if canImport(LocalAuthentication)
-        FileHandle.standardError.write(Data(
-            "rv allow-once: approve in the Touch ID or password prompt from rvd, which names the full command\n".utf8))
+        FileHandle.standardError.write(Data((redeemPromptNotice(code: code) + "\n").utf8))
         #endif
+    }
+
+    /// The agent holds the code too and can raise rvd's prompt itself, so
+    /// the owner is told which prompt is theirs.
+    static func redeemPromptNotice(code: String) -> String {
+        "rv allow-once: approve only the Touch ID or password prompt for code \(code) "
+            + "(it names the full command); decline any other"
     }
 
     /// Owner proof for allow-once redeem on Linux, asked for once rvd has

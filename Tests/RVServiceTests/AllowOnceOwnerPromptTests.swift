@@ -75,6 +75,11 @@ struct AllowOnceOwnerPromptTests {
         await rig.runtime.dispatch(IPCRequest(method: .attestTTYRedemption(params)), context: context).result
     }
 
+    /// The code rvd issued for `params`, as the prompt names it.
+    private func issuedCode(of params: AttestTTYRedemptionParams, _ rig: Rig) async throws -> String {
+        try #require(await rig.store.issued(codeHash: params.codeHash.rawValue, now: now)).code.rawValue
+    }
+
     private func evaluate(_ command: String, _ rig: Rig) async -> Decision {
         await rig.runtime.evaluate(
             EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
@@ -92,6 +97,7 @@ struct AllowOnceOwnerPromptTests {
         let rig = try rig(prompt)
         defer { try? FileManager.default.removeItem(at: rig.homeURL) }
         let params = try await issue("git push --force origin main", store: rig.store, rule: pushRule)
+        let code = try await issuedCode(of: params, rig)
         guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
             Issue.record("the owner's approval must plant")
             return
@@ -99,7 +105,7 @@ struct AllowOnceOwnerPromptTests {
         #expect(reply.planted)
         #expect(reply.ownerCheck == nil)
         #expect(prompt.reasons.withLock { $0 }
-            == ["allow once \"git push --force origin main\" in /tmp/ws (rule core.git:push-force)"])
+            == ["allow once \"git push --force origin main\" in /tmp/ws (rule core.git:push-force, code \(code))"])
         #expect(isAllow(await evaluate("git push --force origin main", rig)))
         #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
     }
@@ -134,7 +140,7 @@ struct AllowOnceOwnerPromptTests {
         }
         #expect(reply.planted)
         #expect(prompt.reasons.withLock { $0 }
-            == ["allow once \"sudo -u root git reset --hard\" in /tmp/ws (rule core.git:reset-hard)"])
+            == ["allow once \"sudo -u root git reset --hard\" in /tmp/ws (rule core.git:reset-hard, code \(code))"])
         guard case .hookEvaluate(let allowed) = await rig.runtime.dispatch(hook, context: peerHookContext()).result
         else {
             Issue.record("the hook must answer")
@@ -230,12 +236,14 @@ struct AllowOnceOwnerPromptTests {
             "LD_PRELOAD=/tmp/x.so sudo -u root git push --force origin main",
             "python3 -c 'import shutil; shutil.rmtree(\"/Users\")'",
         ]
+        var expected: [String] = []
         for command in commands {
             let params = try await issue(command, store: rig.store)
+            expected.append("allow once \"\(command)\" in /tmp/ws (code \(try await issuedCode(of: params, rig)))")
             let result = await attest(params, rig)
             #expect(result != .error(.allowOnceNotFound), "\(command): \(result) \(params)")
         }
-        #expect(prompt.reasons.withLock { $0 } == commands.map { "allow once \"\($0)\" in /tmp/ws" })
+        #expect(prompt.reasons.withLock { $0 } == expected)
     }
 
     @Test func aCodeIssuedWithoutTheExactTextIsNotShown() async throws {
@@ -397,7 +405,8 @@ struct AllowOnceOwnerPromptTests {
         }
         #expect(reply.planted == false)
         #expect(reply.ownerCheck?.outcome == .proofRequired)
-        #expect(reply.promptText == "allow once \"\(command)\" in /tmp/ws (rule core.git:push-force)")
+        let code = try await issuedCode(of: params, rig)
+        #expect(reply.promptText == "allow once \"\(command)\" in /tmp/ws (rule core.git:push-force, code \(code))")
         #expect(isAllow(await evaluate(command, rig)) == false)
     }
 

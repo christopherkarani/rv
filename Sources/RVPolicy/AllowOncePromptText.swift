@@ -22,16 +22,24 @@ public enum AllowOncePromptText {
     public static let maxCommandScalars = 300
     public static let maxCwdScalars = 256
 
-    /// Nil when the command or cwd is too long to show in full.
-    public static func reason(command: String, cwd: WorkingDirectory, ruleID: RuleID?) -> String? {
+    /// Nil when the command or cwd is too long to show in full. `code` is
+    /// the unlock code being redeemed: the CLI tells the owner which code to
+    /// approve, so a prompt raised for another code reads differently.
+    public static func reason(
+        command: String, cwd: WorkingDirectory, ruleID: RuleID?, code: String? = nil
+    ) -> String? {
         let shownCommand = DisplayedText.approvalField(command)
         let shownCwd = DisplayedText.approvalField(cwd.rawValue)
         guard shownCommand.unicodeScalars.count <= maxCommandScalars,
             shownCwd.unicodeScalars.count <= maxCwdScalars
         else { return nil }
+        let tags = [
+            ruleID.map { "rule \(DisplayedText.approvalField($0.rawValue))" },
+            code.map { "code \(DisplayedText.approvalField($0))" },
+        ].compactMap { $0 }
         let base = "allow once \"\(shownCommand)\" in \(shownCwd)"
-        guard let ruleID else { return base }
-        return "\(base) (rule \(DisplayedText.approvalField(ruleID.rawValue)))"
+        guard tags.isEmpty == false else { return base }
+        return "\(base) (\(tags.joined(separator: ", ")))"
     }
 }
 
@@ -53,6 +61,9 @@ public struct IssuedAllowOnce: Sendable, Equatable {
     /// the view: rvd cannot show what the grant covers and will not prompt.
     public let command: String?
     public let ruleID: RuleID?
+    /// The code itself, named in the prompt (the agent already has it from
+    /// the deny text; the pending file keeps only its hash).
+    public let code: AllowOnceUnlockCode
     public let expiresAt: Date
     /// rvd planted a grant for this code in this lifetime.
     public internal(set) var redeemed: Bool
