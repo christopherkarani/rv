@@ -267,9 +267,10 @@ struct ClaudeAdapterHookTests {
         #expect(result.spawnCount == 0)
     }
 
-    // MARK: failure classes — each names its cause; none emits ask or allows.
+    // MARK: failure classes not covered by AdapterFailureMessageTests — each blocks.
 
-    @Test(arguments: [cUnreachableReason, cTimeoutReason])
+    /// Every down class the C hook can render as Claude `ask` reaches the human verbatim.
+    @Test(arguments: [cUnreachableReason, cTimeoutReason, cConnectionReason])
     func daemonDownAsk_deniesWithTheCHookReason(_ reason: String) async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
@@ -280,92 +281,75 @@ struct ClaudeAdapterHookTests {
         #expect(result.spawnCount == 1)
     }
 
+    /// The copies above must be the C hook's real text, not stale duplicates.
+    @Test func cDownReasons_matchHookFallbackSource() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/rv-c/hook_fallback.c")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        for (name, text) in [
+            ("kUnreachableMessage", cUnreachableReason),
+            ("kTimeoutMessage", cTimeoutReason),
+            ("kConnectionMessage", cConnectionReason),
+        ] {
+            #expect(
+                source.contains("static const char \(name)[] =\n    \"\(text)\";"),
+                "\(name) in hook_fallback.c drifted from this test's copy"
+            )
+        }
+    }
+
     @Test(arguments: ["Bash", "Read"])
-    func daemonDownAskWithoutReason_deniesAsDaemonDown(_ tool: String) async throws {
+    func daemonDownAskWithoutReason_deniesWithGuidance(_ tool: String) async throws {
         let bare = "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}\n"
         let result = try await runClaudeWrapper(
             event: tool == "Bash" ? resetHardEvent() : fileToolEvent(tool),
             first: (bare, 0),
             confirm: "yes"
         )
-        try expectClaudeDeny(result, reason: shimDaemonDownReason)
-    }
-
-    @Test func shimTimeout_deniesWithItsOwnReason() async throws {
-        let result = try await runClaudeWrapper(
-            event: resetHardEvent(),
-            stub: .calls(first: ("", 0), spend: nil),
-            confirm: "yes",
-            sleepSeconds: 5,
-            shimTimeoutSeconds: 1
-        )
-        try expectClaudeDeny(result, reason: shimTimeoutReason(seconds: 1))
-    }
-
-    @Test func shimTimeoutReason_namesTheShippedBudget() throws {
-        let source = try adapterSource(rvPath: "/opt/rv")
-        #expect(source.contains("RV_HOOK_TIMEOUT_S = 15\n"))
-        #expect(source.contains("did not finish within {RV_HOOK_TIMEOUT_S} s"))
-    }
-
-    @Test(arguments: [Int32(1), Int32(70)])
-    func nonZeroExitWithoutOutput_deniesWithExitStatus(_ code: Int32) async throws {
-        let result = try await runClaudeWrapper(
-            event: resetHardEvent(),
-            first: ("", code),
-            confirm: "yes"
-        )
         try expectClaudeDeny(
             result,
-            reason: "RV hook exited with status \(code) without a decision. Run `rv doctor`; `rv setup` repairs the install."
+            reason: "rv blocked this action without giving a reason. Run `rv doctor`."
         )
     }
 
-    @Test func killedBySignal_deniesWithTheSignal() async throws {
+    @Test func killedBySignal_denies() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             stub: .calls(first: ("", 0), spend: nil),
             confirm: "yes",
             killSignal: 9
         )
-        try expectClaudeDeny(
-            result,
-            reason: "RV hook was killed by signal 9 without a decision. Run `rv doctor`; `rv setup` repairs the install."
-        )
+        try expectClaudeDeny(result)
+        #expect(result.stdout.contains("exited with code -9"), "\(result.stdout)")
+        #expect(result.stdout.contains("`rv doctor`"), "\(result.stdout)")
     }
 
+    /// Exit 0 with a reply that is not JSON, not an object, or an unknown shape never allows.
     @Test(arguments: ["not-json\n", "[1,2]\n", "{\"decision\":\"maybe\"}\n"])
-    func unreadableReply_deniesAsBadReply(_ stdout: String) async throws {
+    func unusableReplyWithExitZero_denies(_ stdout: String) async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             first: (stdout, 0),
             confirm: "yes"
         )
-        try expectClaudeDeny(result, reason: shimBadReplyReason)
-    }
-
-    @Test func failureReasons_areDistinct() {
-        let reasons: Set<String> = [
-            cUnreachableReason, cTimeoutReason, shimDaemonDownReason,
-            shimTimeoutReason(seconds: 15), shimBadReplyReason, "rv missing",
-        ]
-        #expect(reasons.count == 6)
+        try expectClaudeDeny(
+            result,
+            reason: "rv exited with code 0 without a usable decision. Run `rv doctor`."
+        )
     }
 }
 
-/// `kUnreachableMessage` / `kTimeoutMessage` in `Sources/rv-c/hook_fallback.c`.
+/// `kUnreachableMessage` / `kTimeoutMessage` / `kConnectionMessage` in `Sources/rv-c/hook_fallback.c`
+/// (pinned by `cDownReasons_matchHookFallbackSource`).
 private let cUnreachableReason =
     "RV daemon is not reachable (dev.rv.evaluate). Run `rv doctor`; `rv setup` repairs the service."
 private let cTimeoutReason =
     "RV daemon did not answer in time. Retry; if it persists run `rv doctor`."
-private let shimDaemonDownReason =
-    "RV daemon is not reachable or did not answer in time. Run `rv doctor`."
-private let shimBadReplyReason =
-    "RV hook sent an unreadable reply (version skew after an upgrade?). Run `rv doctor`; `rv setup` repairs the install."
-
-private func shimTimeoutReason(seconds: Int) -> String {
-    "RV hook did not finish within \(seconds) s (rvd busy or hung?). Retry; if it persists run `rv doctor`."
-}
+private let cConnectionReason =
+    "RV daemon connection failed or dropped before a verdict. Retry; if it persists run `rv doctor`."
 
 /// The C hook's `RV_HOOK_WHEN_DOWN=ask` reply for Claude (`render_ask`).
 private func cDownAskJSON(reason: String) -> String {
@@ -459,8 +443,6 @@ private func runClaudeWrapper(
     event: [String: Any],
     stub: ClaudeStubRV,
     confirm: String?,
-    sleepSeconds: Int = 0,
-    shimTimeoutSeconds: Int? = nil,
     killSignal: Int32? = nil
 ) async throws -> ClaudeWrapperRun {
     let root = FileManager.default.temporaryDirectory
@@ -490,9 +472,6 @@ private func runClaudeWrapper(
         n += 1
         (root / "count").write_text(str(n))
         (root / "last-stdin").write_text(stdin)
-        if os.environ.get("RV_STUB_SLEEP"):
-            import time
-            time.sleep(int(os.environ["RV_STUB_SLEEP"]))
         if os.environ.get("RV_STUB_SIGNAL"):
             os.kill(os.getpid(), int(os.environ["RV_STUB_SIGNAL"]))
         is_spend = False
@@ -511,12 +490,7 @@ private func runClaudeWrapper(
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
     }
 
-    var source = try adapterSource(rvPath: rvPath)
-    if let shimTimeoutSeconds {
-        let shipped = "RV_HOOK_TIMEOUT_S = 15\n"
-        #expect(source.contains(shipped))
-        source = source.replacingOccurrences(of: shipped, with: "RV_HOOK_TIMEOUT_S = \(shimTimeoutSeconds)\n")
-    }
+    let source = try adapterSource(rvPath: rvPath)
     let adapter = root.appendingPathComponent("rv-guard.py")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 
@@ -526,9 +500,6 @@ private func runClaudeWrapper(
     var environment = ProcessInfo.processInfo.environment
     environment["HOME"] = root.path
     environment["RV_STUB_DIR"] = stubDir.path
-    if sleepSeconds > 0 {
-        environment["RV_STUB_SLEEP"] = String(sleepSeconds)
-    }
     if let killSignal {
         environment["RV_STUB_SIGNAL"] = String(killSignal)
     }
