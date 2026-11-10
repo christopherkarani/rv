@@ -6,18 +6,19 @@ import RVPolicy
 ///
 /// An observe host allows and records what enforcement would deny, but it
 /// must not be able to loosen another host or the global guard. So an rv
-/// admin command that weakens rv (`SelfProtectionGuard`) or a touch of rv's
+/// admin command that weakens rv (`SelfProtectionGuard`), a touch of rv's
 /// config dir (`core.secrets:home-rv-config`, the only catalog rule that
-/// guards rv's own state) stays enforced. `GatedEvaluate.posture` is the
+/// guards rv's own state) or of rv's wiring files (`RVWiringPaths`) stays
+/// enforced. `GatedEvaluate.posture` is the
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
 ///
-/// Observe alone also floors stopping rvd (`RVDStopGuard`) and writing
+/// Observe alone also floors stopping or retuning rvd (`RVDStopGuard`) and writing
 /// rv's install (`RVInstallPathGuard`): with rvd absent an observe hook
 /// allows every later call unchecked. In enforce a stopped rvd fails
 /// closed, so those floors would only add false positives there.
 enum ObserveFloor {
-    static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config")]
+    static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config"), RVWiringPaths.ruleID]
 
     private static let catalog = SecretPathCatalog(
         rules: SecretPathCatalog.dayOne.rules.filter { ruleIDs.contains(SecretPathMatch($0).ruleID) }
@@ -29,9 +30,18 @@ enum ObserveFloor {
         case .indeterminate(.selfProtection):
             true
         case .deny(let deny):
-            ruleIDs.contains(deny.ruleID)
+            ruleIDs.contains(deny.ruleID) || hitsFloorTarget(result.analysis)
         case .allow, .indeterminate:
             false
+        }
+    }
+
+    /// The shell door reports a wiring or rv-config write as the generic
+    /// protected-path rule; the analysis still names the target's match.
+    private static func hitsFloorTarget(_ analysis: SemanticAnalysis) -> Bool {
+        guard let action = analysis.filesystemAction, action.operationKind != .read else { return false }
+        return action.targets.contains { target in
+            target.protectedMatch.map { ruleIDs.contains($0.ruleID) } ?? false
         }
     }
 
@@ -57,10 +67,26 @@ enum ObserveFloor {
             home: home,
             resolution: SecretPathCandidateResolver.resolution(home: home, cwd: cwd)
         )
-        let words = Set([command.rawValue, result.matchingView.rawValue].flatMap { text in
+        // Also the command with quotes removed, so `"$HOME"/.claude/x`
+        // reads as one word.
+        let unquoted = command.rawValue.filter { $0 != "'" && $0 != "\"" }
+        let words = Set([command.rawValue, unquoted, result.matchingView.rawValue].flatMap { text in
             text.split(whereSeparator: { wordBreaks.contains($0) }).map(String.init)
         })
-        return words.contains { rvConfig.filePathHit($0) != nil }
+        return words.contains { rvConfig.filePathHit($0) != nil || namesWiring($0, home: home, cwd: cwd) }
+    }
+
+    /// A word naming one of rv's wiring files (`RVWiringPaths`): the shell
+    /// door enforces writes there, so an observe host must too. Reads are
+    /// allowed under enforce anyway.
+    /// The word is normalised first (`~`/`$HOME`/`~user` expanded, joined
+    /// to the cwd, `.`/`..` collapsed). Host settings files at any scope
+    /// count: a project one can disable hooks for every host.
+    private static func namesWiring(_ word: String, home: HomeDirectory?, cwd: WorkingDirectory?) -> Bool {
+        if RVWiringPaths.isHostSettingsFile(word) { return true }
+        guard let home else { return false }
+        let path = lexicalFilesystemPath(word, workingDirectory: cwd, homeDirectory: home)
+        return RVWiringPaths.matches(path, home: home.rawValue)
     }
 
     /// Observe only: nil unless the command stops rvd or writes rv's
@@ -69,7 +95,7 @@ enum ObserveFloor {
     static func lifecycleFloor(
         _ result: EvaluationResult, command: ShellCommand, home: HomeDirectory?, cwd: WorkingDirectory?
     ) -> EvaluationResult? {
-        guard RVDStopGuard.stopsRVD(command.rawValue)
+        guard RVDStopGuard.stopsRVD(command.rawValue, rvdPIDs: runningRVDaemonPIDs)
             || RVInstallPathGuard.touchesInstall(command, home: home, cwd: cwd) else { return nil }
         return floored(result)
     }

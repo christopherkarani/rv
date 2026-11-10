@@ -4,6 +4,18 @@
 /// must reuse the same predicate to avoid drift between the filesystem guard and the
 /// allowlist hard-stop. This file owns the closed matching table.
 
+import Foundation
+
+/// A path component as the filesystem compares it: Unicode case-folded on
+/// Darwin (default APFS is case-insensitive), as written elsewhere.
+public func foldedPathComponent(_ component: String) -> String {
+    #if canImport(Darwin)
+    component.folding(options: .caseInsensitive, locale: nil)
+    #else
+    component
+    #endif
+}
+
 // MARK: - Home alias
 
 /// Whether `path` is exactly a home alias or has a trailing slash form.
@@ -14,19 +26,49 @@ public func isHomeAliasPath(_ path: String) -> Bool {
         || path == "${HOME}" || path.hasPrefix("${HOME}/")
 }
 
+/// How a shell expands a `~name` / `~name/...` word.
+public enum TildeUserExpansion: Sendable, Equatable {
+    /// Not a `~name` word (`~`, `~/x` and `a/~b` are not).
+    case notTildeUser
+    /// `name`'s home directory joined with the rest.
+    case expanded(String)
+    /// No such user: the shell leaves the word literal, but the target is
+    /// not one the guard can place, so callers treat it as outside.
+    case unknownUser
+}
+
+/// Expand `~name/...` through the user database, as the shell does.
+public func expandTildeUser(_ path: String) -> TildeUserExpansion {
+    guard path.hasPrefix("~"), isHomeAliasPath(path) == false else { return .notTildeUser }
+    let body = path.dropFirst()
+    let name = String(body.prefix { $0 != "/" })
+    let rest = body.dropFirst(name.count)
+    guard let entry = getpwnam(name), let dir = entry.pointee.pw_dir else { return .unknownUser }
+    let home = String(cString: dir)
+    if rest.isEmpty || rest == "/" { return .expanded(home) }
+    return .expanded((home.hasSuffix("/") ? String(home.dropLast()) : home) + rest)
+}
+
 // MARK: - Kind matching (Sendable pure)
 
 extension SecretPathKind {
     /// Returns whether `path` matches this catalog kind. Used by
     /// `SecretPathCatalog.firstMatch` and `RulePinning`. No I/O, no `Date()`.
+    ///
+    /// Case-insensitive on Darwin (`foldedPathComponent`): the default APFS
+    /// volume opens `~/.SSH/authorized_keys` as `~/.ssh/authorized_keys`,
+    /// and a Write to a not-yet-existing leaf has no realpath to fall back
+    /// on. User allow-path exemptions are matched elsewhere and stay
+    /// case-sensitive, so a variant spelling is never exempted by accident.
     public func matches(_ path: String) -> Bool {
+        let path = foldedPathComponent(path)
         switch self {
         case .basename(let name):
-            return lastPathComponent(path) == name
+            return lastPathComponent(path) == foldedPathComponent(name)
         case .envVariant:
             return isEnvVariant(lastPathComponent(path))
         case .homeSuffix(let parts), .hostAuth(let parts):
-            return matchesHomeSuffix(path, parts: parts)
+            return matchesHomeSuffix(path, parts: parts.map(foldedPathComponent))
         }
     }
 }
@@ -85,8 +127,10 @@ private func matchesHomeSuffix(_ candidate: String, parts: [String]) -> Bool {
     if parts == rvConfigParts, isCageScratchPath(candidate) { return false }
     let joined = parts.joined(separator: "/")
     if hasPathPrefix(candidate, prefix: "~/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "$HOME/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "${HOME}/" + joined) { return true }
+    for home in ["$HOME/", "${HOME}/"].map(foldedPathComponent)
+    where hasPathPrefix(candidate, prefix: home + joined) {
+        return true
+    }
     let components = candidate.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
     return containsContiguous(components, parts)
 }

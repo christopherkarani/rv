@@ -548,7 +548,10 @@ struct OperatorRedemptionTests {
             .attestTTYRedemption,
             // Answers whether the device owner approved an action; it
             // touches no workspace permit.
-            .confirmOwnerAction:
+            .confirmOwnerAction,
+            // Pre-arms an allow-once code after the owner check; writes a
+            // pending row, never consumes a permit.
+            .mintAllowOnce:
             return false
         }
     }

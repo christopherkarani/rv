@@ -153,6 +153,16 @@ struct ApplyFilesystemSemanticsTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
     }
 
+    @Test func dynamicVerbSingle_doorDeniesRatherThanAsks() throws {
+        // The unresolved-invocation ask must not stand in for the boundary deny.
+        let result = try runFilesystemDoor("$CMD -o /outside/x http://h") { _ in repo }
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("dynamic-verb single must deny at the door, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
     @Test func globCdChain_isDeniedByBoundary() throws {
         let command = "[c]d /tmp && touch evil"
         let pack = try runFilesystemPack(command)
@@ -756,12 +766,17 @@ private func runFilesystemPack(
     secrets: SecretPathCatalog = .dayOne
 ) throws -> EvaluationResult {
     let world = try filesystemSampleWorld()
-    return evaluate(
+    var budget = PatternBudget()
+    // The pack pass as the semantic door runs it: the unresolved-invocation
+    // ask is the door's last step, so semantic denies still apply here.
+    return evaluateGated(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: world.packs,
         secretPaths: SecretPathDecider(catalog: secrets),
         engine: world.engine,
-        compiled: world.compiled
+        compiled: world.compiled,
+        patternBudget: &budget,
+        floorUnresolved: false
     )
 }
 
@@ -777,4 +792,128 @@ private func runFilesystemDoor(
         compiled: world.compiled,
         filesystemProbe: filesystemProbe
     )
+}
+
+/// rv's wiring (`RVWiringPaths`) is a protected path for shell writes even
+/// inside a repository rooted at `$HOME`, where the outside-repo boundary
+/// does not apply. Reads are untouched.
+@Suite("ApplyFilesystemSemantics: rv wiring")
+struct ApplyFilesystemWiringTests {
+    private let homeRepo = FilesystemAnalysisWorld.probed(
+        FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/Users/me"),
+            repositoryRoot: RepositoryRoot(validating: "/Users/me"),
+            homeDirectory: HomePath(validating: "/Users/me")
+        )
+    )
+
+    private func composed(_ command: String) throws -> EvaluationResult {
+        applyFilesystemSemantics(
+            pack: try runFilesystemPack(command),
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: homeRepo
+        )
+    }
+
+    @Test("writes to wiring deny as protected paths", arguments: [
+        "echo '{}' > .claude/settings.json",
+        "echo x > ~/.local/bin/rvd",
+        "touch Library/LaunchAgents/dev.rv.evaluate.plist",
+    ])
+    func wiringWriteDenies(command: String) throws {
+        let result = try composed(command)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("\(command) must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID, "\(command)")
+    }
+
+    @Test("ordinary home-repo writes stay allowed")
+    func ordinaryWriteAllowed() throws {
+        #expect(try composed("echo hi > notes.txt").decision == .allow)
+    }
+
+    private func isProtectedDeny(_ result: EvaluationResult) -> Bool {
+        if case .deny(let deny) = result.decision { return deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID }
+        return false
+    }
+
+    @Test("a hard link whose source is wiring or a secret is a write to the source", arguments: [
+        "ln ~/.claude/settings.json evil.json",
+        "ln .claude/settings.json evil.json",
+        "ln -f .local/bin/rvd x",
+        "ln ~/.ssh/id_ed25519 key",
+        "ln -t links .claude/settings.json",
+    ])
+    func hardLinkSourceDenies(command: String) throws {
+        guard case .deny = try composed(command).decision else {
+            Issue.record("\(command) must deny")
+            return
+        }
+    }
+
+    @Test("moving, deleting or chmod-ing an ancestor of wiring denies", arguments: [
+        "mv .claude claude-old",
+        "mv ~/.claude /tmp/x",
+        "rm -r ~/.local/bin",
+        "rm -r .local",
+        "mv Library/LaunchAgents la",
+        "rm -r .config/systemd/user",
+        "rm -r .config",
+        "chmod 000 .claude",
+        "chmod -R a-r .codex",
+    ])
+    func ancestorMutationDenies(command: String) throws {
+        #expect(isProtectedDeny(try composed(command)), "\(command)")
+    }
+
+    @Test("project and local host settings files are protected", arguments: [
+        "echo '{}' > src/app/.claude/settings.json",
+        "cp x src/app/.claude/settings.local.json",
+        "echo x > src/app/.codex/config.toml",
+        "tee src/app/.cursor/hooks.json < x",
+        "echo x > src/app/.gemini/settings.json",
+        "echo x > .claude/settings.local.json",
+    ])
+    func hostSettingsDeny(command: String) throws {
+        #expect(isProtectedDeny(try composed(command)), "\(command)")
+    }
+
+    @Test("ordinary links, moves, deletes and host-dir files stay allowed", arguments: [
+        "rm notes.txt",
+        "rmdir src/empty",
+        "mv notes.txt notes2.txt",
+        "echo x > src/app/.claude/commands/foo.md",
+        "ln -s notes.txt link.txt",
+        "ln notes.txt notes-link.txt",
+        "touch .claude/CLAUDE.md",
+    ])
+    func ordinaryAllowed(command: String) throws {
+        #expect(try composed(command).decision == .allow, "\(command)")
+    }
+
+    @Test("~user expands through the user database; an unknown user is outside the repo")
+    func tildeUser() throws {
+        let user = NSUserName()
+        let home = try #require(FileManager.default.homeDirectory(forUser: user)).path
+        let world = FilesystemAnalysisWorld.probed(
+            FilesystemAnalysisContext(
+                workingDirectory: WorkingDirectory(validating: home + "/src"),
+                repositoryRoot: RepositoryRoot(validating: home),
+                homeDirectory: HomePath(validating: home)
+            )
+        )
+        func run(_ command: String) throws -> EvaluationResult {
+            applyFilesystemSemantics(
+                pack: try runFilesystemPack(command), command: ShellCommand(rawValue: command), filesystemWorld: world
+            )
+        }
+        #expect(isProtectedDeny(try run("echo x > ~\(user)/.claude/settings.json")))
+        #expect(try run("echo x > ~\(user)/notes.txt").decision == .allow)
+        guard case .deny = try run("echo x > ~no-such-user-rv-test/notes.txt").decision else {
+            Issue.record("~unknown must not classify inside the repository")
+            return
+        }
+    }
 }

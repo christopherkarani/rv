@@ -59,19 +59,21 @@ struct Setup: AsyncParsableCommand {
         try CeremonyCLI.emit(outcome)
     }
 
-    /// Setup flow plus the post-setup service warning, without emitting:
-    /// tests assert the outcome fields directly instead of capturing fds,
-    /// which deadlocks under parallel test execution.
+    /// The setup flow, without emitting: tests assert the outcome fields
+    /// directly instead of capturing fds, which deadlocks under parallel
+    /// test execution. `SetupFlow` asks for the owner (observe over an
+    /// enforcing install) and then runs the blocking flow off the pool.
     func setupOutcome(
         intent: SetupIntent,
         clock: LiveSetupCeremonyClock,
         write: @escaping (String) -> Void,
+        flow: SetupFlow = .live(),
         probeService: (HomeDirectory) async -> Bool = Setup.liveServiceProbe,
         authenticate: () async throws -> Void = {
             try await CLIOwnerAuth.requireAuthenticated(reason: "Authenticate to switch rv to observe mode.")
         }
     ) async -> SetupOutcome {
-        var outcome = await SetupFlow.live().run(intent, clock: clock, write: write, authenticate: authenticate)
+        var outcome = await flow.run(intent, clock: clock, write: write, authenticate: authenticate)
         await appendHookServiceWarningIfNeeded(to: &outcome, probeService: probeService)
         return outcome
     }

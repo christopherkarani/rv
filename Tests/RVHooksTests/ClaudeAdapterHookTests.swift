@@ -161,7 +161,8 @@ struct ClaudeAdapterHookTests {
             stub: .missing,
             confirm: "yes"
         )
-        try expectClaudeDeny(result, reason: "rv missing")
+        try expectClaudeDeny(result)
+        #expect(result.stdout.contains("rv is not installed at "))
         #expect(result.spawnCount == 0)
     }
 
@@ -185,7 +186,8 @@ struct ClaudeAdapterHookTests {
             stub: .missing,
             confirm: "yes"
         )
-        try expectClaudeDeny(result, reason: "rv missing")
+        try expectClaudeDeny(result)
+        #expect(result.stdout.contains("rv is not installed at "))
         #expect(result.spawnCount == 0)
     }
 

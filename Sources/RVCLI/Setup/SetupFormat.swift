@@ -8,6 +8,9 @@ struct SetupReport: Equatable, Sendable {
     /// Set when the service step was skipped because `rvd` is missing at
     /// this path: hooks are wired but nothing can answer them.
     var serviceSkippedMissingRvd: String?
+    /// Detected hosts left unwired because their hook interpreter does not
+    /// run, keyed by interpreter. Non-empty fails setup.
+    var unwiredForMissingInterpreter: [String: [HookHost]] = [:]
 
     init(
         grok: SetupSlotKind,

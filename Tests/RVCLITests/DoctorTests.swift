@@ -115,6 +115,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: executable.path,
+            interpreter: "/usr/bin/python3",
             adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: paths.claudeSettings),
             force: false
         )
@@ -144,6 +145,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try AntigravityHooksMerge.merge(
             existingData: nil,
             rvPath: executable.path,
+            interpreter: "/usr/bin/python3",
             adapterPath: AntigravityHooksMerge.adapterPath(hooksPath: paths.antigravityHooksJSON),
             force: false
         )
@@ -218,6 +220,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         try body.write(toFile: paths.cursorHook, atomically: true, encoding: .utf8)
         let merged = try CursorHooksMerge.merge(
             existingData: nil,
+            interpreter: "/usr/bin/python3",
             adapterPath: paths.cursorHook
         )
         try merged.data.write(to: URL(fileURLWithPath: paths.cursorHooksJSON))
@@ -349,6 +352,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: "/nonexistent/rv",
+            interpreter: "/usr/bin/python3",
             adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: paths.claudeSettings),
             force: false
         )

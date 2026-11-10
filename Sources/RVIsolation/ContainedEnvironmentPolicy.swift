@@ -182,11 +182,10 @@ public struct ContainedCredentialDelivery: Sendable, Equatable {
 
 extension ContainedEnvironmentPolicy {
     /// Exact names (uppercased) that never cross into the cage.
-    static let deniedExactNames: Set<String> = [
+    static let deniedExactNames: Set<String> = Set<String>([
         // Privilege / agent sockets and helpers.
         "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO",
         "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS",
-        "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
         // Host proxy configuration. RV sets its own proxy variables; a
         // host proxy (possibly with embedded credentials, possibly on
         // loopback where the sandbox admits direct connects) must never
@@ -216,12 +215,12 @@ extension ContainedEnvironmentPolicy {
         // whose unreadable entries simply miss.
         "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
-    ]
+    ]).union(GitConfigEnvironment.configFileNames)
 
     /// Name prefixes (uppercased) that never cross into the cage.
     static let deniedPrefixes = [
         "DYLD_",
-        "GIT_CONFIG_",
+        GitConfigEnvironment.configPrefix,
         "NODE_DEBUG",
     ]
 

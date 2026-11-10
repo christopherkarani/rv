@@ -3,7 +3,7 @@ import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.gemini/config/hooks.json`.
 /// Global Antigravity hooks file (verified: settings.json embedding does not
-/// load). Command is `python3` on the exclusive adapter; baked rv stays in
+/// load). Command is the baked interpreter (`AdapterCommand`) on the exclusive adapter; baked rv stays in
 /// `RV_BINARY=` so `HostAdapterInstallation.inspect` can require sibling
 /// `rv-cli` for `.wired`. Occupied is a foreign/tampered `rv-guard.py`.
 ///
@@ -30,7 +30,7 @@ enum AntigravityHooksMerge {
         hookType: hookType,
         isFingerprintedCommand: { isFingerprinted(command: $0) },
         buildEntry: { context, _ in
-            hookEntry(rvPath: context.rvPath ?? "", adapterPath: context.adapterPath)
+            hookEntry(rvPath: context.rvPath ?? "", interpreter: context.interpreter, adapterPath: context.adapterPath)
         }
     )
 
@@ -48,8 +48,8 @@ enum AntigravityHooksMerge {
         SettingsMergePolicy.adapterPath(configPath: hooksPath, descriptor: mergeDescriptor)
     }
 
-    static func hookCommand(rvPath: String, adapterPath: String) -> String {
-        SettingsMergePolicy.hookCommand(rvPath: rvPath, adapterPath: adapterPath)
+    static func hookCommand(rvPath: String, interpreter: String, adapterPath: String) -> String {
+        SettingsMergePolicy.hookCommand(rvPath: rvPath, interpreter: interpreter, adapterPath: adapterPath)
     }
 
     static func isFingerprinted(command: String) -> Bool {
@@ -72,17 +72,19 @@ enum AntigravityHooksMerge {
         SettingsMergePolicy.isFingerprintedHook(hook, descriptor: mergeDescriptor)
     }
 
-    static func hookEntry(rvPath: String, adapterPath: String) -> HookEntry {
+    static func hookEntry(rvPath: String, interpreter: String, adapterPath: String) -> HookEntry {
         SettingsMergePolicy.hookEntry(
             rvPath: rvPath,
+            interpreter: interpreter,
             adapterPath: adapterPath,
             descriptor: mergeDescriptor
         )
     }
 
-    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> JSONValue {
+    static func rvEntry(rvPath: String, interpreter: String, adapterPath: String, matcher: String) -> JSONValue {
         SettingsMergePolicy.rvEntry(
             rvPath: rvPath,
+            interpreter: interpreter,
             adapterPath: adapterPath,
             matcher: matcher,
             descriptor: mergeDescriptor
@@ -98,6 +100,7 @@ enum AntigravityHooksMerge {
     static func merge(
         existingData: Data?,
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         force: Bool
     ) throws -> (data: Data, wrote: Bool) {
@@ -106,6 +109,7 @@ enum AntigravityHooksMerge {
                 existingData: existingData,
                 descriptor: mergeDescriptor,
                 rvPath: rvPath,
+                interpreter: interpreter,
                 adapterPath: adapterPath,
                 force: force
             )

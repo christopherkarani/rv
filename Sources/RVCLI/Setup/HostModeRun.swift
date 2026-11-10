@@ -187,7 +187,7 @@ enum HostModeRun {
         case .write(let write), .forceClearThenWrite(let write):
             _ = try HostLifecycle.perform(write, env: env, layout: layout, files: files)
         case .createConfigDirectory, .writeLaunchAgent, .skipLaunchAgent,
-            .skipUndetected, .skipOccupied, .skipOff:
+            .skipUndetected, .skipOccupied, .skipOff, .skipRuntimeMissing:
             break
         }
     }

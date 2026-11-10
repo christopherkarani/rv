@@ -61,12 +61,14 @@ enum HostWiring {
     static func applyClaude(
         existing existingData: Data?,
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         force: Bool = false
     ) throws -> (data: Data, wrote: Bool, fileTools: DoctorFileToolsState) {
         let merged = try ClaudeSettingsMerge.merge(
             existingData: existingData,
             rvPath: rvPath,
+            interpreter: interpreter,
             adapterPath: adapterPath,
             force: force
         )
@@ -81,12 +83,14 @@ enum HostWiring {
     static func applyAntigravity(
         existing existingData: Data?,
         rvPath: String,
+        interpreter: String,
         adapterPath: String,
         force: Bool = false
     ) throws -> (data: Data, wrote: Bool, fileTools: DoctorFileToolsState) {
         let merged = try AntigravityHooksMerge.merge(
             existingData: existingData,
             rvPath: rvPath,
+            interpreter: interpreter,
             adapterPath: adapterPath,
             force: force
         )
@@ -101,10 +105,12 @@ enum HostWiring {
     /// the returned companion bytes with the adapter treated as present.
     static func applyCursor(
         existing existingData: Data?,
+        interpreter: String,
         adapterPath: String
     ) throws -> (data: Data, wrote: Bool, fileTools: DoctorFileToolsState) {
         let merged = try CursorHooksMerge.merge(
             existingData: existingData,
+            interpreter: interpreter,
             adapterPath: adapterPath
         )
         return (

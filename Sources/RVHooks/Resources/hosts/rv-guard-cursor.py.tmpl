@@ -19,20 +19,30 @@ import sys
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
 
-# Failure reasons the user can act on; wording matches rv-guard-claude so
-# every host says the same. The C hook's own deny reasons pass through.
-RV_SHIM_TIMEOUT_REASON = (
-    f"RV hook did not finish within {RV_HOOK_TIMEOUT_S} s (rvd busy or hung?). "
-    "Retry; if it persists run `rv doctor`."
-)
-RV_BAD_REPLY_REASON = (
-    "RV hook sent an unreadable reply (version skew after an upgrade?). "
-    "Run `rv doctor`; `rv setup` repairs the install."
-)
-RV_SPAWN_FAILED_REASON = (
-    "RV hook could not be started. Run `rv doctor`; `rv setup` repairs the install."
-)
-RV_DOWN_REASON = "RV daemon is not reachable or did not answer in time. Run `rv doctor`."
+# Every block says what broke and what to run; never a bare "rv failed".
+_NO_REASON = "rv blocked this action without giving a reason. Run `rv doctor`."
+_BAD_REQUEST = "rv could not read the hook request from the host. Run `rv doctor`."
+_ADAPTER_ERROR = "The rv hook adapter hit an unexpected error. Run `rv doctor`."
+
+
+def _missing_reason():
+    return "rv is not installed at %s. Reinstall rv or run `rv setup`." % RV_BINARY
+
+
+def _spawn_failed_reason(error):
+    why = getattr(error, "strerror", None) or error.__class__.__name__
+    return "rv at %s could not be started: %s. Run `rv doctor`." % (RV_BINARY, why)
+
+
+def _timeout_reason():
+    return (
+        "rv did not answer within %gs; the daemon may be busy or stopped. Run `rv doctor`."
+        % RV_HOOK_TIMEOUT_S
+    )
+
+
+def _bad_output_reason(exit_code):
+    return "rv exited with code %s without a usable decision. Run `rv doctor`." % exit_code
 
 
 def main():
@@ -49,7 +59,7 @@ def main():
             _emit_allow()
         return
     except Exception:
-        _emit_deny("rv failed")
+        _emit_deny(_ADAPTER_ERROR)
 
 
 _SHELL_TOOLS = ("Shell", "Bash")
@@ -59,7 +69,7 @@ _FILE_TOOLS = ("Read", "Edit", "Write", "read_file", "edit_file", "write_file", 
 def _guard(raw):
     envelope = _parse(raw)
     if envelope is None:
-        return {"action": "block", "reason": "rv failed"}
+        return {"action": "block", "reason": _BAD_REQUEST}
     event = envelope.get("hook_event_name") or ""
     if event == "afterShellExecution":
         return {"action": "allow"}
@@ -95,11 +105,11 @@ def _spawn_rv_hook(host, stdin):
             timeout=RV_HOOK_TIMEOUT_S,
         )
     except FileNotFoundError:
-        return {"action": "block", "reason": "rv missing"}
+        return {"action": "block", "reason": _missing_reason()}
     except subprocess.TimeoutExpired:
-        return {"action": "block", "reason": RV_SHIM_TIMEOUT_REASON}
-    except OSError:
-        return {"action": "block", "reason": RV_SPAWN_FAILED_REASON}
+        return {"action": "block", "reason": _timeout_reason()}
+    except OSError as error:
+        return {"action": "block", "reason": _spawn_failed_reason(error)}
     return _map_rv_hook_result(completed.stdout, completed.returncode)
 
 
@@ -112,17 +122,9 @@ def _map_rv_hook_result(stdout, exit_code):
                 permission = parsed.get("permission")
                 if permission == "allow":
                     return {"action": "allow"}
-                # The C hook's RV_HOOK_WHEN_DOWN=ask fallback (rvd
-                # unreachable or slow): deny with its reason, never ask.
-                if permission == "ask":
-                    return {
-                        "action": "block",
-                        "reason": _blocking_reason(
-                            parsed.get("user_message") or parsed.get("agent_message"),
-                            RV_DOWN_REASON,
-                        ),
-                    }
-                if permission == "deny":
+                # rv's own native ask (daemon down or slow) denies like a
+                # deny but keeps rv's message, which names the repair.
+                if permission in ("ask", "deny"):
                     user = parsed.get("user_message")
                     agent = parsed.get("agent_message")
                     return {
@@ -139,30 +141,15 @@ def _map_rv_hook_result(stdout, exit_code):
                     }
         except (ValueError, TypeError):
             pass
-        return {"action": "block", "reason": RV_BAD_REPLY_REASON}
-    if exit_code != 0:
-        return {"action": "block", "reason": _exit_reason(exit_code)}
-    # rv always answers Cursor with an explicit permission, so silence is unreadable.
-    return {"action": "block", "reason": RV_BAD_REPLY_REASON}
+    return {"action": "block", "reason": _bad_output_reason(exit_code)}
 
 
-def _exit_reason(exit_code):
-    if exit_code < 0:
-        status = f"was killed by signal {-exit_code}"
-    else:
-        status = f"exited with status {exit_code}"
-    return (
-        f"RV hook {status} without a decision. "
-        "Run `rv doctor`; `rv setup` repairs the install."
-    )
-
-
-def _blocking_reason(reason, fallback="rv failed"):
+def _blocking_reason(reason):
     if isinstance(reason, str):
         text = reason.strip()
         if text:
             return text
-    return fallback
+    return _NO_REASON
 
 
 def _emit_allow():

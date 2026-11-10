@@ -64,8 +64,11 @@ struct HostModeCommand: AsyncParsableCommand {
         let outcome = await HostModeRun.setMode(
             hostMode, for: hookHost, env: env, json: format.json || format.robot,
             authenticate: {
-                try await CLIOwnerAuth.requireAuthenticated(
-                    reason: "Authenticate to set rv to \(hostMode.rawValue) for \(hookHost.rawValue).")
+                // Only loosening calls this; with rvd down the human confirms
+                // locally at a TTY (DaemonDownOwnerConfirmation).
+                try await CLIOwnerAuth.requireAuthenticatedOrLocalWhenDaemonDown(
+                    reason: "Authenticate to set rv to \(hostMode.rawValue) for \(hookHost.rawValue).",
+                    action: .hostMode(hostMode, host: hookHost))
             }
         )
         try CeremonyCLI.emit(outcome)
