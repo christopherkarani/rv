@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVPolicy
+import Synchronization
 
 /// Proves rvd answers after setup starts the service: a real health
 /// round-trip over the same hook-consult door hooks use (XPC on macOS, the
@@ -42,22 +43,14 @@ enum ServiceReadiness {
     }
 
     private static func blockingProbe(_ client: ServiceClient) -> Bool {
-        let answer = ProbeAnswer()
+        let answer = Mutex(false)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            answer.set(await client.verifyHookService(attempts: 1, retryDelayNanoseconds: 0))
+            let answered = await client.verifyHookService(attempts: 1, retryDelayNanoseconds: 0)
+            answer.withLock { $0 = answered }
             done.signal()
         }
         guard done.wait(timeout: .now() + probeTimeout) == .success else { return false }
-        return answer.value
+        return answer.withLock { $0 }
     }
-}
-
-private final class ProbeAnswer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var answered = false
-
-    var value: Bool { lock.withLock { answered } }
-
-    func set(_ value: Bool) { lock.withLock { answered = value } }
 }
