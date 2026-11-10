@@ -75,11 +75,10 @@ enum PackageScriptGate {
             }
             let wrapperMovesCwd = wrapperChangesDirectory(unitTokens)
             // Order inside one unit is not modelled (`npm test $(git
-            // checkout x)` runs the substitution first), so any mutation in
-            // the unit counts against every runner in it.
-            let unitMutates = launched.contains { argv in
-                isTreeMutating(argv) || (scriptInvocation(in: argv) == nil && touchesPackageManifest(argv))
-            }
+            // checkout x)` runs the substitution first), so any command in
+            // the unit outside the read-only allowlist counts against every
+            // runner in it. Its own redirects only count for later units.
+            let unitMutates = !launchedCommandsAsWritten(unit.text).allSatisfy(isReadOnly)
             if changesDirectory(launched, unitTokens) {
                 // A cd inside a group, subshell, payload or launcher: its
                 // scope is not modelled, so the cwd is now unknown.
@@ -109,7 +108,7 @@ enum PackageScriptGate {
                 case .unresolved: unresolved = true
                 }
             }
-            if unitMutates { treeMutated = true }
+            if unitMutates || !unitIsReadOnly(unit.text) { treeMutated = true }
             if setsOverride(unitTokens, launched) { chainOverride = true }
             priorWork = true
         }
@@ -277,25 +276,97 @@ enum PackageScriptGate {
         }
     }
 
-    /// Segments that rewrite the working tree: after one of these, a
-    /// package.json read is not evidence about what a later runner in
-    /// the same chain executes.
-    static func isTreeMutating(_ argv: [String]) -> Bool {
-        guard argv.first.map(basename) == "git" else { return false }
-        let rest = argv.dropFirst().filter { !$0.hasPrefix("-") }
-        guard let sub = rest.first else { return false }
-        if sub == "stash" { return rest.dropFirst().first.map { ["pop", "apply", "drop"].contains($0) } ?? false }
-        return ["switch", "checkout", "pull", "merge", "rebase", "reset", "clean", "restore"].contains(sub)
+    /// A chain unit after which a package.json read still describes what
+    /// a later runner executes: every launched command is read-only, no
+    /// output redirect other than an fd dup or `/dev/null`, and nothing
+    /// the launcher parser could not follow. Anything else may rewrite a
+    /// manifest (TOCTOU), so later runners are unresolved.
+    static func unitIsReadOnly(_ text: String) -> Bool {
+        !launchIsTruncated(text) && dynamicHeadLaunches(text).isEmpty
+            && !writesOutput(text) && launchedCommandsAsWritten(text).allSatisfy(isReadOnly)
     }
 
-    /// A command naming package.json (or a glob that may match it) may
-    /// rewrite it before a later runner reads it.
-    static func touchesPackageManifest(_ argv: [String]) -> Bool {
-        argv.dropFirst().contains { word in
-            let lowered = word.lowercased()
-            return lowered.contains("package.json") || lowered.contains(".npmrc")
-                || (lowered.contains("pack") && lowered.contains(where: { "*?[".contains($0) }))
+    /// Heads that read or print only. A path head (`./ls`) is not one.
+    static let readOnlyHeads: Set<String> = [
+        "ls", "pwd", "true", "false", ":", "echo", "printf", "cat", "head", "tail", "wc", "grep", "egrep",
+        "fgrep", "which", "type", "date", "whoami", "uname", "printenv", "test", "[", "sleep", "stat", "du",
+        "df", "realpath", "readlink", "basename", "dirname", "set", "export",
+    ]
+    static let readOnlyGitSubcommands: Set<String> = [
+        "status", "log", "diff", "show", "rev-parse", "describe", "ls-files",
+    ]
+    static let versionFlags: Set<String> = ["--version", "-V"]
+
+    /// One launched argv (head as written, no redirects) that cannot write
+    /// the tree. A recognised runner counts: its bodies are evaluated
+    /// themselves (an unresolvable one already leaves the graph unresolved).
+    static func isReadOnly(_ argv: [String]) -> Bool {
+        guard let raw = argv.first.map(dequote) else { return true }
+        if scriptInvocation(in: argv) != nil { return true }
+        if isEnvAssignment(raw) { return argv.count == 1 }
+        if raw.contains("/") && !(raw.hasPrefix("/bin/") || raw.hasPrefix("/usr/bin/")) { return false }
+        let head = basename(raw)
+        let rest = Array(argv.dropFirst())
+        if rest.count == 1, versionFlags.contains(rest[0]) { return true }
+        switch head {
+        case "env": return rest.isEmpty
+        case "rg": return !rest.contains { $0.hasPrefix("--pre") }
+        case "git": return isReadOnlyGit(rest)
+        default: return readOnlyHeads.contains(head)
         }
+    }
+
+    /// `git <read-only subcommand>` with no global option (`-c` can run a
+    /// configured program) and no `--output`; `branch`, `remote` and
+    /// `config` only in their listing forms.
+    static func isReadOnlyGit(_ args: [String]) -> Bool {
+        guard let sub = args.first, !sub.hasPrefix("-") else { return false }
+        let rest = args.dropFirst()
+        if rest.contains(where: { $0.hasPrefix("--output") || $0 == "-o" }) { return false }
+        switch sub {
+        case _ where readOnlyGitSubcommands.contains(sub): return true
+        case "branch":
+            let listing: Set<String> = ["-a", "-r", "-v", "-vv", "-l", "--list", "--all", "--remotes",
+                                        "--verbose", "--show-current", "--no-color"]
+            return rest.allSatisfy { listing.contains($0) }
+        case "remote": return rest.allSatisfy { $0 == "-v" || $0 == "--verbose" }
+        case "config":
+            return rest.first.map { ["--get", "--get-all", "--get-regexp", "--list", "-l"].contains($0) } ?? false
+        default: return false
+        }
+    }
+
+    /// An output redirect to anything but an fd dup (`2>&1`, `>&-`) or
+    /// `/dev/null`. Only single quotes hide a `>`: inside double quotes a
+    /// `$(… > f)` still runs, so a quoted `>` over-claims.
+    static func writesOutput(_ text: String) -> Bool {
+        let chars = Array(text)
+        var index = 0
+        var inSingle = false
+        while index < chars.count {
+            let char = chars[index]
+            if char == "'" { inSingle.toggle() }
+            guard char == ">", !inSingle else { index += 1; continue }
+            var next = index + 1
+            if next < chars.count, chars[next] == "(" { return true }
+            if next < chars.count, chars[next] == ">" || chars[next] == "|" { next += 1 }
+            if next < chars.count, chars[next] == "&" {
+                next += 1
+                var digits = next
+                while digits < chars.count, chars[digits].isNumber { digits += 1 }
+                let end = digits == next && digits < chars.count && chars[digits] == "-" ? digits + 1 : digits
+                if end > next, end == chars.count || " \t;|&)".contains(chars[end]) {
+                    index = end
+                    continue
+                }
+            }
+            while next < chars.count, chars[next] == " " || chars[next] == "\t" { next += 1 }
+            var target = ""
+            while next < chars.count, !" \t;|&()<>".contains(chars[next]) { target.append(chars[next]); next += 1 }
+            if dequote(target) != "/dev/null" { return true }
+            index = next
+        }
+        return false
     }
 
     // MARK: - Chain units
@@ -463,23 +534,32 @@ enum PackageScriptGate {
                 || PackageScriptGate.wrapperChangesDirectory(bodyTokens)
             var unresolved = launchIsTruncated(body)
             if PackageScriptGate.hidesRunner(body, launched) { unresolved = true }
-            for argv in launched {
-                guard let invocation = PackageScriptGate.scriptInvocation(in: argv) else { continue }
-                if invocation.runsNothing { continue }
-                guard !invocation.unresolvable, invocation.prefixDir == nil, !movesCwd, !overrides,
-                      depth < PackageScriptGate.maxDepth,
-                      let names = invocation.names(in: scripts)
-                else {
-                    unresolved = true
-                    continue
-                }
-                for name in names {
-                    switch check(name, depth: depth + 1) {
-                    case .clear: continue
-                    case .deny(let hit): return .deny(hit)
-                    case .unresolved: unresolved = true
+            // As at the top level: a unit outside the read-only allowlist
+            // may rewrite the manifest before a nested runner in it or
+            // after it reads one.
+            var treeMutated = false
+            for unit in PackageScriptGate.chainUnits(body) {
+                let unitLaunched = launchedCommands(unit.text)
+                let unitMutates = !launchedCommandsAsWritten(unit.text).allSatisfy(PackageScriptGate.isReadOnly)
+                for argv in unitLaunched {
+                    guard let invocation = PackageScriptGate.scriptInvocation(in: argv) else { continue }
+                    if invocation.runsNothing { continue }
+                    guard !invocation.unresolvable, invocation.prefixDir == nil, !movesCwd, !overrides,
+                          !treeMutated, !unitMutates, depth < PackageScriptGate.maxDepth,
+                          let names = invocation.names(in: scripts)
+                    else {
+                        unresolved = true
+                        continue
+                    }
+                    for name in names {
+                        switch check(name, depth: depth + 1) {
+                        case .clear: continue
+                        case .deny(let hit): return .deny(hit)
+                        case .unresolved: unresolved = true
+                        }
                     }
                 }
+                if unitMutates || !PackageScriptGate.unitIsReadOnly(unit.text) { treeMutated = true }
             }
             return unresolved ? .unresolved : .clear(allBodiesSafe: true)
         }

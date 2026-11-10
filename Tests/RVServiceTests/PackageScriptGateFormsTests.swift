@@ -340,6 +340,61 @@ struct PackageScriptGateFormsTests {
         #expect(Self.isUnresolved(Self.evaluate(rewrite, cwd: dir)))
     }
 
+    @Test("an earlier unit outside the read-only allowlist makes later runners unresolved", arguments: [
+        "make && npm test",
+        "tee package.json < evil.json && npm test",
+        "cat evil.json | tee pkg && npm test",
+        "sed -i s/a/b/ pkg && npm test",
+        "cp evil.json manifest && npm test",
+        "jq . a > b && npm test",
+        "echo $(cp evil.json package.json) && npm test",
+        "echo x >| out; npm test",
+        "echo x <>out; npm test",
+        "echo x &>out; npm test",
+        "echo x >&out; npm test",
+        "./ls && npm test",
+        "git -c core.fsmonitor=x status && npm test",
+        "git diff --output=pkg && npm test",
+        "git branch topic && npm test",
+        "git config core.hooksPath x && npm test",
+        "rg --pre ./x foo && npm test",
+        "python3 tool.py && npm test",
+    ])
+    func earlierMutatingUnitUnresolved(command: String) throws {
+        let dir = try Self.makeDir(["test": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isUnresolved(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("read-only earlier units keep the graph resolvable", arguments: [
+        "git status && npm test",
+        "git log --oneline -5 && git diff --stat && npm test",
+        "npm run build && npm test",
+        "ls 2>/dev/null && npm test",
+        "echo hi 2>&1 && npm test",
+        "pwd; date; npm test",
+        "node --version && npm test",
+        "git branch --show-current && npm test",
+        "set -e; npm test",
+        "npm test 2>&1 | tail -20",
+        "npm test > test.log 2>&1",
+    ])
+    func readOnlyEarlierUnitsClear(command: String) throws {
+        let dir = try Self.makeDir(["test": "node ok.js", "build": "node ok.js"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isClear(Self.evaluate(command, cwd: dir)), "\(command)")
+    }
+
+    @Test("a write inside a body before a nested runner is unresolved")
+    func nestedMutationUnresolved() throws {
+        let dir = try Self.makeDir([
+            "test": #"cp evil.json package.json && npm run lint"#,
+            "lint": "node ok.js",
+        ])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(Self.isUnresolved(Self.evaluate("npm test", cwd: dir)))
+    }
+
     @Test("a cd that does not persist leaves the cwd untracked", arguments: [
         "cd sub & npm test",
         "cd sub | npm test",
