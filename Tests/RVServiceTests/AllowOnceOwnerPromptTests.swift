@@ -8,6 +8,7 @@ import RVIPC
 @testable import RVIsolation
 import RVPolicy
 @testable import RVService
+import Synchronization
 
 /// `rv allow-once <code>` on a macOS install with no peer-trust manifest:
 /// rvd shows the owner prompt itself, with its own description of the code
@@ -22,7 +23,7 @@ struct AllowOnceOwnerPromptTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
     private let pushRule = RuleID(pack: .coreGit, pattern: "push-force")
 
-    private struct Rig {
+    private struct Rig: Sendable {
         let runtime: ServiceRuntime
         let store: AllowOnceStore
         let home: HomeDirectory
@@ -31,17 +32,29 @@ struct AllowOnceOwnerPromptTests {
 
     /// `prompt` nil is Linux: no LocalAuthentication, the login password
     /// ("secret") is the owner check.
-    private func rig(_ prompt: FakeAuthenticator?) throws -> Rig {
+    private func rig(
+        _ prompt: FakeAuthenticator?,
+        promptTimeout: Duration = OwnerPresence.defaultPromptTimeout,
+        clock: TestClock? = nil
+    ) throws -> Rig {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
         let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
-        let now = self.now
+        let clock = clock ?? TestClock(now)
         let runtime = ServiceRuntime(
             snapshots: nil, catalog: nil, home: home, allowOnce: store, allowOnceDirectory: nil,
-            idleExitSeconds: IdleWatchdog.defaultSeconds, log: nil, analytics: nil, clock: { now },
+            idleExitSeconds: IdleWatchdog.defaultSeconds, log: nil, analytics: nil, clock: { clock.now },
             pendingApprovals: .automatic, ceremonies: WorkspaceOperatorCeremonyService(),
-            ownerPresence: OwnerPresence(checker: FakeChecker(accepted: "secret"), authenticator: prompt))
+            ownerPresence: OwnerPresence(
+                checker: FakeChecker(accepted: "secret"), authenticator: prompt, promptTimeout: promptTimeout))
         return Rig(runtime: runtime, store: store, home: home, homeURL: homeURL)
+    }
+
+    final class TestClock: Sendable {
+        private let value: Mutex<Date>
+        init(_ now: Date) { value = Mutex(now) }
+        var now: Date { value.withLock { $0 } }
+        func advance(by seconds: TimeInterval) { value.withLock { $0 = $0.addingTimeInterval(seconds) } }
     }
 
     /// rvd's hook path issuing a deny code for `command`, plus the attest
@@ -377,6 +390,75 @@ struct AllowOnceOwnerPromptTests {
         #expect(ServiceMethodAuthorization.permits(method, context: OwnerPresenceTests.cliContext()))
         #expect(ServiceMethodAuthorization.permits(method, context: peerOperatorUIContext()) == false)
         #expect(ServiceMethodAuthorization.permits(method, context: .unauthenticated) == false)
+    }
+
+    // MARK: one prompt at a time, closed on timeout, only while issued
+
+    private func waitForPrompt(_ prompt: FakeAuthenticator) async throws {
+        for _ in 0..<1_000 where prompt.promptCount == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(prompt.promptCount == 1)
+    }
+
+    @Test func aSecondRedeemWhileAPromptIsOpenIsBusyAndRaisesNoPrompt() async throws {
+        let prompt = FakeAuthenticator(approve: false, hangs: true)
+        let rig = try rig(prompt, promptTimeout: .seconds(3))
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let first = try await issue("git reset --hard", store: rig.store)
+        let second = try await issue("git push --force origin main", store: rig.store)
+        let open = Task { await attest(first, rig) }
+        try await waitForPrompt(prompt)
+        guard case .attestTTYRedemption(let busy) = await attest(second, rig) else {
+            Issue.record("a redeem during an open prompt must answer with the owner check")
+            return
+        }
+        #expect(busy.ownerCheck?.outcome == .busy)
+        #expect(busy.planted == false)
+        #expect(prompt.promptCount == 1)
+        _ = await open.value
+        #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
+    }
+
+    @Test func aPromptNobodyAnswersClosesAsDeclinedAndPlantsNothing() async throws {
+        let prompt = FakeAuthenticator(approve: true, hangs: true)
+        let rig = try rig(prompt, promptTimeout: .milliseconds(200))
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let params = try await issue("git reset --hard", store: rig.store)
+        guard case .attestTTYRedemption(let reply) = await attest(params, rig) else {
+            Issue.record("a timed-out prompt must answer with the owner check")
+            return
+        }
+        #expect(reply.ownerCheck?.outcome == .declined)
+        #expect(reply.planted == false)
+        #expect(isAllow(await evaluate("git reset --hard", rig)) == false)
+    }
+
+    @Test func anExpiredIssuedCodeIsNotFoundAndRaisesNoPrompt() async throws {
+        let prompt = FakeAuthenticator(approve: true)
+        let clock = TestClock(now)
+        let rig = try rig(prompt, clock: clock)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let params = try await issue("git reset --hard", store: rig.store)
+        clock.advance(by: 15 * 60 + 1)
+        #expect(await attest(params, rig) == .error(.allowOnceNotFound))
+        #expect(prompt.promptCount == 0)
+    }
+
+    @Test func anIssuedCodeWhoseRowIsGoneIsPrunedAndNotFound() async throws {
+        // The pending row was flipped (spent elsewhere); the next rvd write
+        // prunes the issued record, and the code raises no prompt.
+        let prompt = FakeAuthenticator(approve: true)
+        let rig = try rig(prompt)
+        defer { try? FileManager.default.removeItem(at: rig.homeURL) }
+        let params = try await issue("git reset --hard", store: rig.store)
+        let code = try await issuedCode(of: params, rig)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await rig.store.redeem(code: code, tty: tty, now: now)
+        _ = try await issue("git push --force origin main", store: rig.store)
+        #expect(await rig.store.issued(codeHash: params.codeHash.rawValue, now: now) == nil)
+        #expect(await attest(params, rig) == .error(.allowOnceNotFound))
+        #expect(prompt.promptCount == 0)
     }
 
     // MARK: Linux: the login password, checked by rvd
