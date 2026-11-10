@@ -8,17 +8,22 @@ import RVDomain
 /// applying or saving policy, approving egress/MCP calls, trusting an
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
-/// managed policy, or setting a host to anything but `block`
-/// (`rv host mode <host> observe|off`). `evaluate` floors such a command at indeterminate
+/// managed policy, setting a host to anything but `block`
+/// (`rv host mode <host> observe|off`), or switching rv to observe
+/// (`rv setup --observe`). It is also true for a command that stops rvd
+/// (`RVDStopGuard`): an unreachable rvd lets an observe host allow every
+/// later call unchecked. That floor holds in every mode; in enforce a
+/// stopped rvd only locks the agent out. `evaluate` floors such a command at indeterminate
 /// ("run it in Terminal"): the owner runs rv administration, never the
 /// agent. Reads of rv's config dir are a separate secret-path rule.
 public enum SelfProtectionGuard {
     public static func weakensPolicy(_ command: ShellCommand) -> Bool {
-        launchedCommandHeads(command.rawValue).contains { launched in
+        let weakensRV = launchedCommandHeads(command.rawValue).contains { launched in
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
             // or glob head may resolve to rv: judged as rv (fail closed).
             launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
         }
+        return weakensRV || RVDStopGuard.stopsRVD(command.rawValue)
     }
 }
 
@@ -54,6 +59,10 @@ private func isWeakeningInvocation(_ rawArgv: [String], headMayBeRV: Bool) -> Bo
 private func isWeakeningVerb(_ args: [String], at verbIndex: Int) -> Bool {
     let verb = args[verbIndex]
     if isUnmodelledWord(verb) || verb == "uninstall" { return true }
+    // `setup --observe` sheds oversight; a variable or glob may carry the flag.
+    if verb == "setup" {
+        return args[(verbIndex + 1)...].contains { $0 == "--observe" || isUnmodelledWord($0) }
+    }
     guard subcommandVerbs.contains(verb) else { return false }
     let rest = Array(args[(verbIndex + 1)...])
     let flags = Set(rest.filter { $0.hasPrefix("-") })
