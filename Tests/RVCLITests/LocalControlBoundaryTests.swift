@@ -212,43 +212,21 @@ struct LocalControlBoundaryTests {
         #expect(transport.sendCount == 3)
     }
 
-    @Test func setupServiceWarningGating() {
-        #expect(SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: false) == true)
-        #expect(SetupServiceWarning.needed(hasWiredHosts: true, serviceUp: true) == false)
-        #expect(SetupServiceWarning.needed(hasWiredHosts: false, serviceUp: false) == false)
-        #expect(SetupServiceWarning.needed(hasWiredHosts: false, serviceUp: true) == false)
-        #expect(SetupServiceWarning.text.contains("rv doctor"))
-    }
-
-    @Test func setupWarnsWhenWiredHostsOutliveTheService() async throws {
-        // A wired slot with no daemon is the block-or-prompt-everything trap:
-        // setup stays green (files are written) but the outcome must carry
-        // the service warning on stderr, where robot stdout stays parseable.
-        // The probe is injected so the result never depends on a real rvd.
-        let outcome = try await wiredSetupOutcome(serviceUp: false)
+    @Test func setupOutcomeRunsTheFlowWithTheCallersContext() async throws {
+        // The flow runs on its own thread (its readiness wait blocks); the
+        // test seam must cross with it so setup never sees the live HOME.
+        // An isolated HOME does not own the real service, so no probe runs.
+        let (outcome, home) = try await wiredSetupOutcome()
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stderr.contains("rv doctor"))
+        let settings = try String(
+            contentsOfFile: home.rawValue + "/.config/muse/settings.json", encoding: .utf8)
+        #expect(settings != #"{"schema_version":1}"#, "setup wired the isolated HOME's muse")
     }
 
-    @Test func setupStaysQuietWhenWiredHostsHaveALiveService() async throws {
-        let outcome = try await wiredSetupOutcome(serviceUp: true)
-        #expect(outcome.exitCode == 0)
-        #expect(!outcome.stderr.contains("rv doctor"))
-    }
-
-    #if !canImport(XPC)
-    @Test func linuxServiceProbeNeverClaimsTheServiceIsDown() async throws {
-        // Linux hooks use a unix socket the Swift client cannot probe, so the
-        // live probe must report "not down" rather than warn falsely.
-        let home = try isolatedHome()
-        #expect(await Setup.liveServiceProbe(home: home) == true)
-    }
-    #endif
-
-    /// Runs setup against a home with one wired host and a stubbed probe.
+    /// Runs setup against a home with one wired host.
     /// Asserted on the outcome, not a captured fd: fd capture deadlocks
     /// under parallel test execution.
-    private func wiredSetupOutcome(serviceUp: Bool) async throws -> SetupOutcome {
+    private func wiredSetupOutcome() async throws -> (SetupOutcome, HomeDirectory) {
         let home = try isolatedHome()
         let museDir = URL(fileURLWithPath: home.rawValue).appendingPathComponent(".config/muse")
         try FileManager.default.createDirectory(at: museDir, withIntermediateDirectories: true)
@@ -261,7 +239,7 @@ struct LocalControlBoundaryTests {
         try writeExecutableScript(at: binDir.appendingPathComponent("rv"), source: "#!/bin/sh\nexit 0\n")
         try writeExecutableScript(at: binDir.appendingPathComponent("rv-cli"), source: "#!/bin/sh\nexit 0\n")
         let environment = ["HOME": home.rawValue, "PATH": "/usr/bin:/bin"]
-        return try await withCLIProcess(environment: environment) {
+        let outcome = try await withCLIProcess(environment: environment) {
             await Setup().setupOutcome(
                 intent: SetupIntent(
                     kind: .install,
@@ -271,10 +249,10 @@ struct LocalControlBoundaryTests {
                     ceremonyKind: .setup
                 ),
                 clock: LiveSetupCeremonyClock(),
-                write: CeremonyCLI.stdoutWriter(),
-                probeService: { _ in serviceUp }
+                write: { _ in }
             )
         }
+        return (outcome, home)
     }
 
 }

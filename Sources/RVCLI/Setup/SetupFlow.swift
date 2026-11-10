@@ -111,6 +111,7 @@ extension SetupEnvironment {
             runningExecutable: executable?.path
         )
         setup.daemonTrust = DaemonTrustProbe.live
+        setup.serviceAnswers = ServiceReadiness.live(home: home)
         return setup
     }
 }

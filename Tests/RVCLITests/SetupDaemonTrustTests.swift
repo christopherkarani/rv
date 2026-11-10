@@ -59,13 +59,15 @@ func setup_untrustedRvd_refusesBeforeWritingAnything(force: Bool) throws {
     }
 }
 
-/// Missing rvd keeps its own, existing path (warning + skipped service).
+/// Missing rvd keeps its own failure (rvd not found, nothing wired), not
+/// the untrusted-daemon one.
 @Test func setup_missingRvd_doesNotConsultTrust() throws {
     try withTempHome { home, _, launchctl in
         var environment = env(home: home, launchctl: launchctl, rvdPath: home.appendingPathComponent("absent-rvd").path)
         environment.daemonTrust = { _ in untrusted }
         let outcome = SetupRun.setup(environment)
-        #expect(outcome.exitCode == 0)
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
         #expect(outcome.stderr.contains("rvd not found"))
+        #expect(outcome.stderr.contains("hooks would reject") == false)
     }
 }

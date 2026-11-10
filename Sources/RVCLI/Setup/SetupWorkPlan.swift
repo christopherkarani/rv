@@ -3,6 +3,9 @@ import RVDomain
 
 struct SetupWorkPlan: Equatable, Sendable {
     var steps: [SetupWorkStep]
+    /// Hosts already wired before this run. A failed service step leaves
+    /// them as they were; the failure output names them.
+    var alreadyWired: [HookHost] = []
 }
 
 enum SetupWorkStep: Equatable, Sendable {
@@ -25,20 +28,26 @@ enum SetupWorkPlanBuilder {
         rvdIsExecutable: Bool,
         offHosts: Set<HookHost> = []
     ) -> SetupWorkPlan {
-        var steps: [SetupWorkStep] = [.createConfigDirectory]
+        // Service before hosts: rvd must answer before setup leaves any new
+        // hook in place, because a hook with no answering rvd denies every
+        // agent tool call. A failed service step therefore wires nothing.
+        var steps: [SetupWorkStep] = [
+            .createConfigDirectory,
+            rvdIsExecutable ? .writeLaunchAgent : .skipLaunchAgent,
+        ]
+        var alreadyWired: [HookHost] = []
         for owned in layout.hostAdapters {
             let host = owned.host
+            if case .wired = installations.installation(for: host) {
+                alreadyWired.append(host)
+            }
             if offHosts.contains(host) {
                 steps.append(.skipOff(host))
                 continue
             }
             steps.append(step(for: host, installation: installations.installation(for: host), layout: layout, force: force))
         }
-        // Hosts before LaunchAgent: a launchctl miss must not skip hook wiring.
-        // There is no in-process fallback: with rvd down every hook denies, so
-        // setup reports a failed or skipped service step with a fix line.
-        steps.append(rvdIsExecutable ? .writeLaunchAgent : .skipLaunchAgent)
-        return SetupWorkPlan(steps: steps)
+        return SetupWorkPlan(steps: steps, alreadyWired: alreadyWired)
     }
 
     /// The wiring step for one host. `rv setup` folds it per host; `rv host
