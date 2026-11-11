@@ -174,6 +174,7 @@ import RVPolicy
                 hosts: hosts, paths: layout, fileManager: .default, probes: probes)
             #expect(swappable.map(\.id) == ["adapter-runtime-replaceable-claude", "adapter-runtime-replaceable-codex"])
             #expect(swappable.allSatisfy { $0.severity == .warn })
+            #expect(swappable.allSatisfy { $0.fix == DoctorInstallChecks.replaceableFix(python.path, name: "python3", userID: getuid()) })
             if getuid() != 0 {
                 #expect(AdapterRuntime.userCanReplace("/bin/sh") == false)
             }
@@ -184,5 +185,20 @@ import RVPolicy
             #expect(problems.map(\.id) == ["adapter-runtime-claude", "adapter-runtime-codex"])
             #expect(problems.allSatisfy { $0.severity == .fail && $0.summary.contains(python.path) })
         }
+    }
+
+    /// The fix must not tell the user to use the interpreter they already
+    /// use: root can replace /usr/bin/python3 itself.
+    @Test func replaceableFixFitsWhoCanReplaceWhat() {
+        let root = DoctorInstallChecks.replaceableFix("/usr/bin/python3", name: "python3", userID: 0)
+        #expect(root.contains("not root"))
+        #expect(root.contains("first on PATH") == false)
+        let rootElsewhere = DoctorInstallChecks.replaceableFix("/home/u/py/bin/python3", name: "python3", userID: 0)
+        #expect(rootElsewhere == root)
+        let user = DoctorInstallChecks.replaceableFix("/home/u/py/bin/python3", name: "python3", userID: 1000)
+        #expect(user == "put a system python3 (e.g. /usr/bin/python3) first on PATH, then rv setup")
+        let writableSystem = DoctorInstallChecks.replaceableFix("/usr/bin/python3", name: "python3", userID: 1000)
+        #expect(writableSystem.contains("first on PATH") == false)
+        #expect(writableSystem.contains("writable only by root"))
     }
 }

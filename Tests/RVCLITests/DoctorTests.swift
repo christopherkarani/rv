@@ -693,7 +693,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.exitCode == 1)
         #expect(object["ok"] as? Bool == false)
         let service = try #require(object["service"] as? [String: Any])
-        #expect(service["fallback_ready"] as? Bool == false)
+        #expect(service["local_packs_ready"] as? Bool == false)
     }
 }
 
@@ -1039,7 +1039,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
         let service = try #require(object["service"] as? [String: Any])
         #expect(service["state"] as? String == "down")
-        #expect(service["fallback_ready"] as? Bool == true)
+        #expect(service["local_packs_ready"] as? Bool == true)
         #expect(object["ok"] as? Bool == false)
         #expect(outcome.exitCode == 1)
     }

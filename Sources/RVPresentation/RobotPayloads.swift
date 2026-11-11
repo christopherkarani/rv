@@ -53,7 +53,9 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
         public var state: String
         public var protocolName: String
         public var serviceSemver: String?
-        public var fallbackReady: Bool
+        /// The core packs load locally. Not a hook fallback: hooks have
+        /// none, and deny or ask whenever rvd does not answer.
+        public var localPacksReady: Bool
         public var launchAgent: String
         public var warning: String?
         /// Installed-rvd trust verdict; omitted when not evaluated.
@@ -63,7 +65,7 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
             case state
             case protocolName = "protocol"
             case serviceSemver = "service_semver"
-            case fallbackReady = "fallback_ready"
+            case localPacksReady = "local_packs_ready"
             case launchAgent = "launch_agent"
             case warning
             case trust
@@ -240,7 +242,7 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
             state: model.service.state.rawValue,
             protocolName: model.service.protocolName,
             serviceSemver: model.service.serviceSemver,
-            fallbackReady: model.service.fallback == .ready,
+            localPacksReady: model.service.fallback == .ready,
             launchAgent: model.service.launchAgent.rawValue,
             warning: model.service.warning,
             trust: model.service.trust.map {

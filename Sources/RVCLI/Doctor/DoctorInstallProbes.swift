@@ -183,7 +183,7 @@ enum DoctorInstallChecks {
                     severity: .warn,
                     summary: "\(host.rawValue) hook runs \(replaceable), which this user can replace, "
                         + "so an agent could swap the interpreter to skip the guard",
-                    fix: "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+                    fix: replaceableFix(replaceable, name: name, userID: probes.userID)
                 )
             }
             return DoctorProblem(
@@ -230,6 +230,25 @@ enum DoctorInstallChecks {
                     + "\(supervised))"
             )
         }
+    }
+
+    /// System interpreter directories (`/usr/bin/python3` and the like).
+    static let systemInterpreterDirectories = ["/usr/bin/", "/bin/", "/usr/local/bin/", "/opt/homebrew/bin/"]
+
+    /// Moving to a system interpreter only helps when the replaceable one
+    /// is not already one. Root can replace every interpreter, so the cure
+    /// there is a non-root account; for anyone else a writable system
+    /// interpreter is a permissions problem.
+    static func replaceableFix(_ interpreter: String, name: String, userID: uid_t) -> String {
+        if userID == 0 {
+            return "run your agents as a regular user, not root: root can replace every \(name), "
+                + "system ones included, so no interpreter path is out of an agent's reach"
+        }
+        guard systemInterpreterDirectories.contains(where: { interpreter.hasPrefix($0) }) else {
+            return "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+        }
+        return "make \(interpreter) and the directories above it writable only by root "
+            + "(e.g. sudo chown root \(interpreter) && sudo chmod go-w \(interpreter))"
     }
 
     private static func setupFix(_ paths: OwnedPaths) -> String {
