@@ -70,12 +70,16 @@ def resolve_socket_path(explicit: str | None = None) -> str:
     raw = os.environ.get("XDG_RUNTIME_DIR")
     if raw is None:
         # Same fallback as rvd and the hooks: no login manager set it.
-        return _check_length(os.path.join(_USER_RUNTIME_ROOT, str(os.getuid()), "rv", "evaluate.sock"))
+        runtime = os.path.join(_USER_RUNTIME_ROOT, str(os.getuid()))
+        return _check_length(os.path.join(runtime, "rv", "evaluate.sock"))
     base = raw.strip()
     if not base:
         raise RuntimeNotFound(
             "XDG_RUNTIME_DIR is set but empty; cannot locate $XDG_RUNTIME_DIR/rv/evaluate.sock",
-            remediation="unset XDG_RUNTIME_DIR (rv then uses /run/user/<uid>) or point it at rvd's runtime dir",
+            remediation=(
+                "unset XDG_RUNTIME_DIR (rv then uses /run/user/<uid>) "
+                "or point it at rvd's runtime dir"
+            ),
         )
     return _check_length(os.path.join(base, "rv", "evaluate.sock"))
 
