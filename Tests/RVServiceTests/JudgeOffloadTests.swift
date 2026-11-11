@@ -13,34 +13,50 @@ struct JudgeOffloadTests {
         // are driven from private Dispatch queues (overcommit) so a starved
         // pool still ends the test: global queues share the pool's
         // constrained thread budget and would starve with it.
+        //
+        // The invariant, not a latency bound: once every judge wait is
+        // blocked, an unrelated task spawned then runs before those waits
+        // are released. The release waits for exactly that (or a long cap),
+        // so CPU-bound suites sharing this process can delay the probe
+        // without failing it, while a starved pool still fails: its probe
+        // can only run after the capped release.
         let waiters = ProcessInfo.processInfo.activeProcessorCount * 3
         let release = DispatchSemaphore(value: 0)
-        // The invariant, not a latency bound: an unrelated task spawned while
-        // every judge wait is blocked runs before those waits are released.
-        // A starved pool could only run it after the release. Other suites in
-        // this process can delay it (seconds on a small CI runner), so the
-        // 5 s gap leaves room for noise without hiding real starvation.
+        let blocked = Mutex(0)
         let probeRan = Mutex<ContinuousClock.Instant?>(nil)
         let releasedAt = Mutex<ContinuousClock.Instant?>(nil)
-        DispatchQueue(label: "test.probe").asyncAfter(deadline: .now() + .milliseconds(300)) {
-            Task.detached {
-                probeRan.withLock { $0 = ContinuousClock.now }
+        let allBlocked = Mutex(false)
+        let cap: Duration = .seconds(60)
+        DispatchQueue(label: "test.release").async {
+            let started = ContinuousClock.now
+            var probeSpawned = false
+            while ContinuousClock.now - started < cap {
+                if probeSpawned == false, blocked.withLock({ $0 }) == waiters {
+                    allBlocked.withLock { $0 = true }
+                    probeSpawned = true
+                    Task.detached { probeRan.withLock { $0 = ContinuousClock.now } }
+                }
+                if probeRan.withLock({ $0 }) != nil { break }
+                Thread.sleep(forTimeInterval: 0.02)
             }
-        }
-        DispatchQueue(label: "test.release").asyncAfter(deadline: .now() + .milliseconds(5300)) {
             releasedAt.withLock { $0 = ContinuousClock.now }
             for _ in 0..<waiters { release.signal() }
         }
         let finished = await withTaskGroup(of: Int.self) { group in
             for _ in 0..<waiters {
                 group.addTask {
-                    await JudgeOffload.run { release.wait() }
+                    await JudgeOffload.run {
+                        blocked.withLock { $0 += 1 }
+                        release.wait()
+                    }
                     return 1
                 }
             }
             return await group.reduce(0, +)
         }
         #expect(finished == waiters)
+        #expect(allBlocked.withLock { $0 }, "the \(waiters) judge waits never all blocked at once: they starved the pool")
+        guard allBlocked.withLock({ $0 }) else { return }
         while probeRan.withLock({ $0 }) == nil {
             try? await Task.sleep(for: .milliseconds(20))
         }
