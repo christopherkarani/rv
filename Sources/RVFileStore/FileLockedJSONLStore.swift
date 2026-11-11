@@ -98,24 +98,77 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
     /// Concurrent saves without the lock race on the shared `<file>.tmp`.
     /// Full-file rewrite per call: sized for small rule stores, not append-heavy logs.
     public func save(_ records: [Record]) throws(FileLockedJSONLStoreError) {
-        try prepareDirectory()
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
+        let encoder = Self.lineEncoder()
         var lines: [String] = []
         lines.reserveCapacity(records.count)
         for record in records {
-            let data: Data
-            do {
-                data = try encoder.encode(record)
-            } catch {
-                throw FileLockedJSONLStoreError.encodeFailed
-            }
-            guard let line = String(data: data, encoding: .utf8) else {
-                throw FileLockedJSONLStoreError.encodeFailed
-            }
-            lines.append(line)
+            lines.append(try Self.encodeLine(record, encoder: encoder))
         }
+        try save(lines: lines)
+    }
+
+    /// The encoder `save` uses: iso8601 dates, sorted keys.
+    public static func lineEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+
+    /// One record as the exact line `save` would write for it (no newline).
+    /// Callers that keep these lines can rewrite a large file without
+    /// re-encoding rows that did not change (`save(lines:)`).
+    public static func encodeLine(
+        _ record: Record,
+        encoder: JSONEncoder = lineEncoder()
+    ) throws(FileLockedJSONLStoreError) -> String {
+        let data: Data
+        do {
+            data = try encoder.encode(record)
+        } catch {
+            throw FileLockedJSONLStoreError.encodeFailed
+        }
+        guard let line = String(data: data, encoding: .utf8) else {
+            throw FileLockedJSONLStoreError.encodeFailed
+        }
+        return line
+    }
+
+    /// Identity of the rows file: device, inode, size, and modification
+    /// and status-change times. Every `save` replaces the file by rename,
+    /// so it changes this; nil when the file cannot be stat'ed.
+    public func stamp() -> FileStamp? {
+        var info = stat()
+        let status = fileURL.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return stat(path, &info)
+        }
+        guard status == 0 else { return nil }
+        return FileStamp(info)
+    }
+
+    /// Appends one line produced by `encodeLine` to the existing rows file
+    /// in a single `write(2)`. Only for a caller that holds `withLock` and
+    /// knows the file is exactly what its own last `save(lines:)` wrote
+    /// (same `stamp()`), so the file ends in a newline. A torn append (a
+    /// crash mid-write) leaves a partial last line, which `load` skips.
+    public func append(line: String) throws(FileLockedJSONLStoreError) {
+        let fd = fileURL.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return open(path, O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard fd >= 0 else { throw FileLockedJSONLStoreError.ioFailed }
+        let written = Data((line + "\n").utf8).withUnsafeBytes { raw in
+            writeAll(fd: fd, bytes: raw)
+        }
+        let closed = close(fd) == 0
+        guard written, closed else { throw FileLockedJSONLStoreError.ioFailed }
+    }
+
+    /// `save` with lines produced by `encodeLine`. Each line must be one
+    /// complete JSON record without a newline.
+    public func save(lines: [String]) throws(FileLockedJSONLStoreError) {
+        try prepareDirectory()
         let body = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
         let temp = Self.tempURL(for: fileURL)
         // Created 0600 from the first byte (no default-permission window) and
@@ -227,4 +280,34 @@ private func writeAll(fd: Int32, bytes: UnsafeRawBufferPointer) -> Bool {
         offset += written
     }
     return true
+}
+
+/// What `FileLockedJSONLStore.stamp()` reports about the rows file. Two
+/// equal stamps mean no `save` replaced the file in between: a save
+/// renames a new inode into place and sets fresh times.
+public struct FileStamp: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let modifiedSeconds: Int64
+    let modifiedNanoseconds: Int64
+    let changedSeconds: Int64
+    let changedNanoseconds: Int64
+
+    init(_ info: stat) {
+        device = UInt64(info.st_dev)
+        inode = UInt64(info.st_ino)
+        size = Int64(info.st_size)
+#if canImport(Darwin)
+        modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
+        modifiedNanoseconds = Int64(info.st_mtimespec.tv_nsec)
+        changedSeconds = Int64(info.st_ctimespec.tv_sec)
+        changedNanoseconds = Int64(info.st_ctimespec.tv_nsec)
+#else
+        modifiedSeconds = Int64(info.st_mtim.tv_sec)
+        modifiedNanoseconds = Int64(info.st_mtim.tv_nsec)
+        changedSeconds = Int64(info.st_ctim.tv_sec)
+        changedNanoseconds = Int64(info.st_ctim.tv_nsec)
+#endif
+    }
 }

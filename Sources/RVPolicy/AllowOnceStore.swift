@@ -386,24 +386,110 @@ public actor AllowOnceStore {
         var payloadDigest: String?
     }
 
+    /// The rows as this instance last read or wrote them, valid while the
+    /// file's stamp is unchanged. Every deny mints through this file, and
+    /// it holds up to `maxStoredRows` rows: decoding and re-encoding all of
+    /// them per deny made deny latency grow with the ledger (15 ms at 40
+    /// rows, ~300 ms at 1 900). Any other writer (the CLI's redeem, another
+    /// instance) saves by rename, which changes the stamp and forces a
+    /// fresh read. Writes reuse the cached lines, and a mint that only adds
+    /// a row appends one line. The file is a projection, never an
+    /// authority, so a cache can at worst show a stale row, never grant one.
+    private struct LedgerCache {
+        var stamp: FileStamp
+        var records: [AllowOnceRecord]
+        /// `lines[i]` is `records[i]` as saved, when known.
+        var lines: [String]?
+    }
+
+    private var ledgerCache: LedgerCache?
+
     private func loadRecords() -> [AllowOnceRecord] {
-        store.load().filter { $0.schemaVersion == 1 }
+        let stamp = store.stamp()
+        if let stamp, let cache = ledgerCache, cache.stamp == stamp {
+            return cache.records
+        }
+        let records = store.load().filter { $0.schemaVersion == 1 }
+        // Stamp taken before the read: a write racing the read changes the
+        // stamp, so the next load reads again rather than trusting this one.
+        ledgerCache = stamp.map { LedgerCache(stamp: $0, records: records, lines: nil) }
+        return records
     }
 
     /// Saves through the row cap; returns exactly what was written so
-    /// callers prune the live-code cache against on-disk truth.
+    /// callers prune the live-code cache against on-disk truth. A row set
+    /// identical to the cached file content is not rewritten.
     private func writeRecords(_ records: [AllowOnceRecord]) throws -> [AllowOnceRecord] {
         let written = AllowOnceLedger.capped(records: records, maxRows: Self.maxStoredRows)
+        let current = store.stamp()
         do {
-            try store.save(written)
+            if let current, let cache = ledgerCache, cache.stamp == current {
+                if cache.records == written {
+                    return written
+                }
+                // A fresh deny appends one row to the file this instance
+                // last wrote: append that line instead of rewriting them all.
+                if var lines = cache.lines, lines.count == cache.records.count,
+                   written.count == cache.records.count + 1,
+                   written.dropLast().elementsEqual(cache.records),
+                   let added = written.last
+                {
+                    let line = try FileLockedJSONLStore<AllowOnceRecord>.encodeLine(added)
+                    ledgerCache = nil
+                    try store.append(line: line)
+                    lines.append(line)
+                    ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: written, lines: lines) }
+                    return written
+                }
+            }
+            let lines = try encodedLines(for: written, reusing: ledgerCache)
+            try store.save(lines: lines)
+            ledgerCache = store.stamp().map { LedgerCache(stamp: $0, records: written, lines: lines) }
         } catch is FileLockedJSONLStoreError {
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
             // lock-acquisition or lock-setup failures (FileLockedJSONLStoreError),
             // never untranslated save failures.
+            ledgerCache = nil
             throw AllowOnceError.encodeFailed
         }
         return written
+    }
+
+    /// Saved lines for `records`, re-encoding only rows the cache does not
+    /// already hold verbatim (matched by full record equality). Ledger
+    /// transitions keep row order (they drop, flip or append rows), so a
+    /// forward merge against the cached rows finds each reusable line; a
+    /// row it does not find nearby is simply encoded again.
+    private func encodedLines(
+        for records: [AllowOnceRecord],
+        reusing cache: LedgerCache?
+    ) throws(FileLockedJSONLStoreError) -> [String] {
+        let cachedRecords = cache?.records ?? []
+        let cachedLines = cache?.lines ?? []
+        let reusable = cachedLines.count == cachedRecords.count ? cachedRecords.count : 0
+        let encoder = FileLockedJSONLStore<AllowOnceRecord>.lineEncoder()
+        var lines: [String] = []
+        lines.reserveCapacity(records.count)
+        var cursor = 0
+        for record in records {
+            var hit: Int?
+            var probe = cursor
+            while probe < min(reusable, cursor + 64) {
+                if cachedRecords[probe] == record {
+                    hit = probe
+                    break
+                }
+                probe += 1
+            }
+            if let hit {
+                lines.append(cachedLines[hit])
+                cursor = hit + 1
+            } else {
+                lines.append(try FileLockedJSONLStore<AllowOnceRecord>.encodeLine(record, encoder: encoder))
+            }
+        }
+        return lines
     }
 
     /// Drops cached codes with no live pending row in the just-written
