@@ -386,7 +386,10 @@ set +e
 st=$?
 set -e
 [[ "$st" -eq 0 ]] || fail "rv setup failed (exit $st) stderr=$(cat "$PROOF_ROOT/setup.err")"
-grep -q "Setup complete" "$PROOF_ROOT/setup.out" \
+# `rv setup --robot` prints one rv.setup.v1 JSON document; a fresh proof
+# HOME must report it complete and ok.
+"$PYTHON3" -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("schema")=="rv.setup.v1" and d.get("ok") is True and d.get("outcome")=="complete" else 1)' \
+  "$PROOF_ROOT/setup.out" \
   || fail "setup robot did not complete: $(cat "$PROOF_ROOT/setup.out") $(cat "$PROOF_ROOT/setup.err")"
 
 GROK_JSON="$PROOF_HOME/.grok/hooks/rv.json"
