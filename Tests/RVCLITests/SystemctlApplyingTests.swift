@@ -14,6 +14,35 @@ struct SystemctlApplyingTests {
         #expect(ProcessLaunchctl().executableURL.path.contains("launchctl"))
     }
 
+    /// Non-merged-/usr distros keep systemctl in /bin only.
+    @Test func processSystemctl_locatesUsrBinThenBin() {
+        #expect(ProcessSystemctl.locate(isExecutable: { _ in true }).path == "/usr/bin/systemctl")
+        #expect(ProcessSystemctl.locate(isExecutable: { $0 == "/bin/systemctl" }).path == "/bin/systemctl")
+        #expect(ProcessSystemctl.locate(isExecutable: { _ in false }).path == "/usr/bin/systemctl")
+    }
+
+    @Test func processSystemctl_userManagerReachableFollowsShowEnvironment() throws {
+        let ok = try fakeProcessTool(exit: 0)
+        defer { try? FileManager.default.removeItem(at: ok) }
+        #expect(ProcessSystemctl(executableURL: ok).userManagerReachable())
+        let noBus = try fakeProcessTool(exit: 1)
+        defer { try? FileManager.default.removeItem(at: noBus) }
+        #expect(ProcessSystemctl(executableURL: noBus).userManagerReachable() == false)
+        let missing = URL(fileURLWithPath: "/tmp/rv-missing-systemctl-\(UUID().uuidString)")
+        #expect(ProcessSystemctl(executableURL: missing).userManagerReachable() == false)
+    }
+
+    @Test func processSystemctl_restartMapsNonZeroToError() throws {
+        let ok = try fakeProcessTool(exit: 0)
+        defer { try? FileManager.default.removeItem(at: ok) }
+        try ProcessSystemctl(executableURL: ok).restart(unit: SystemdUserTemplate.unitName, onlyIfStopped: false)
+        let failing = try fakeProcessTool(exit: 5)
+        defer { try? FileManager.default.removeItem(at: failing) }
+        #expect(throws: SystemctlError.nonZeroExit(5)) {
+            try ProcessSystemctl(executableURL: failing).restart(unit: SystemdUserTemplate.unitName, onlyIfStopped: true)
+        }
+    }
+
     @Test func processSystemctl_enableSucceedsWhenToolExitsZero() throws {
         let tool = try fakeProcessTool(exit: 0)
         defer { try? FileManager.default.removeItem(at: tool) }

@@ -11,6 +11,9 @@ struct SetupReport: Equatable, Sendable {
     /// Detected hosts left unwired because their hook interpreter does not
     /// run, keyed by interpreter. Non-empty fails setup.
     var unwiredForMissingInterpreter: [String: [HookHost]] = [:]
+    /// Linux with no systemd user manager: rvd was started unsupervised,
+    /// so it will not survive logout or reboot.
+    var serviceStartedDirectly = false
 
     init(
         grok: SetupSlotKind,

@@ -51,10 +51,15 @@ enum SetupRun {
                 AdapterRuntime.setupRefusal(
                     hosts: report.unwiredForMissingInterpreter[interpreter] ?? [], interpreter: interpreter)
             }
+            let observing = JudgeRuntime.configuredGuardMode(home: env.home) == .observe
+            let direct = report.serviceStartedDirectly
+                ? DirectRvd.notice(command: "setup", rvPath: env.rvPath, rvdPath: env.rvdPath, observing: observing)
+                : ""
             return SetupOutcome(
                 stdout: formatted.text,
                 stderr: observeNotice(guardRequest, env: env)
-                    + serviceWarning(report, observing: JudgeRuntime.configuredGuardMode(home: env.home) == .observe)
+                    + serviceWarning(report, observing: observing)
+                    + direct
                     + refusals.joined(),
                 exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
                 emitted: formatted.emitted

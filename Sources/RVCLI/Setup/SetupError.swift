@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVHooks
+import RVService
 
 /// Which command a setup-lifecycle failure belongs to. Selects the stderr
 /// prefix only; the failure phrase and exit code come from the error case.
@@ -8,6 +9,7 @@ enum SetupFailureCommand: String {
     case setup
     case uninstall
     case serviceRestart = "service restart"
+    case serviceStart = "service start"
     case hostList = "host list"
     case hostMode = "host mode"
 }
@@ -71,6 +73,12 @@ enum SetupError: Error, Equatable, Sendable {
     /// The service was started but rvd did not answer a health round-trip
     /// within `ServiceReadiness.deadline`.
     case serviceNotAnswering(EvaluateSupervisor)
+    /// Linux without a systemd user manager: rvd could not be started
+    /// directly (spawn failed).
+    case directStartFailed(rvdPath: String)
+    /// Linux without a systemd user manager: the directly started rvd did
+    /// not answer within `ServiceReadiness.deadline`.
+    case directRvdNotAnswering(rvdPath: String, logPath: String)
     /// The service step failed, so setup wired no hooks: wired hooks with no
     /// answering rvd deny every agent tool call. `alreadyWired` names hosts
     /// wired before this run; they were left as they were. `observing`:
@@ -165,6 +173,13 @@ private func setupFailureParts(
     case .systemdApplyFailed(.disable):
         phrase = "unable to disable systemd unit"
         exitCode = EX_UNAVAILABLE
+    case .systemdApplyFailed(.restart):
+        phrase = "unable to restart systemd unit"
+        exitCode = EX_UNAVAILABLE
+        detail.append(
+            "fix: rv setup installs \(SystemdUserTemplate.unitName); "
+                + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
+        )
     case .ownedPathStillExists:
         phrase = "owned path still exists"
         exitCode = EX_SOFTWARE
@@ -199,6 +214,18 @@ private func setupFailureParts(
                     + "journalctl --user -u \(SystemdUserTemplate.unitName) and rv doctor show the cause"
             )
         }
+    case .directStartFailed(let rvdPath):
+        phrase = "unable to start rvd (no systemd user manager is running, so rv starts rvd itself)"
+        exitCode = EX_UNAVAILABLE
+        detail.append("fix: run \(DirectRvd.command(rvdPath: rvdPath)) in a terminal to see why; rv doctor shows the cause")
+    case .directRvdNotAnswering(let rvdPath, let logPath):
+        phrase = "rvd did not answer within \(Int(ServiceReadiness.deadline)) seconds of starting it "
+            + "(no systemd user manager is running, so rv starts rvd itself)"
+        exitCode = EX_UNAVAILABLE
+        detail.append(
+            "fix: read \(logPath), or run \(DirectRvd.command(rvdPath: rvdPath)) "
+                + "in a terminal to see why; rv doctor shows the cause"
+        )
     case .serviceDown(let cause, let alreadyWired, let observing):
         let inner = setupFailureParts(cause, command: command)
         phrase = inner.phrase

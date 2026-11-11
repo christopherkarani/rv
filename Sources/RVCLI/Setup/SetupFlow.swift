@@ -193,6 +193,10 @@ extension SetupEnvironment {
         )
         setup.daemonTrust = DaemonTrustProbe.live
         setup.serviceAnswers = ServiceReadiness.live(home: home)
+        setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
+#if os(Linux)
+        setup.directRvd = ProcessDirectRvd()
+#endif
         setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
         return setup
     }

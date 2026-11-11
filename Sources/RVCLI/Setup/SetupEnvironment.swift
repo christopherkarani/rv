@@ -65,6 +65,12 @@ struct SetupEnvironment {
     /// is started. Setup wires no hook until it returns true. Blocking.
     /// Default true for isolated test HOMEs; live: `ServiceReadiness.live`.
     var serviceAnswers: () -> Bool = { true }
+    /// One immediate health round-trip, no wait: does a trusted rvd answer
+    /// right now? Default false; live: `ServiceReadiness.liveOnce`.
+    var serviceAnswersNow: () -> Bool = { false }
+    /// Starts and stops an unsupervised rvd when Linux has no systemd user
+    /// manager. Default touches no process; live: `ProcessDirectRvd`.
+    var directRvd: any DirectRvdLaunching = SilentDirectRvd()
     /// The absolute path of a runnable interpreter (`python3`), baked into
     /// the hook command; nil when none runs. Setup will not wire a host
     /// whose hook command needs one that does not. Default

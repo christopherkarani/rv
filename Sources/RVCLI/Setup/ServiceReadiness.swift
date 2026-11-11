@@ -42,6 +42,13 @@ enum ServiceReadiness {
         }
     }
 
+    /// One probe, no polling: is a trusted rvd answering right now?
+    static func liveOnce(home: HomeDirectory) -> () -> Bool {
+        {
+            blockingProbe(ServiceClient.probing(home: home))
+        }
+    }
+
     private static func blockingProbe(_ client: ServiceClient) -> Bool {
         let answer = Mutex(false)
         let done = DispatchSemaphore(value: 0)

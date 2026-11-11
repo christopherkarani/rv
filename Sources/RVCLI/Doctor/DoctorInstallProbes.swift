@@ -40,6 +40,9 @@ struct DoctorInstallProbes {
     /// Can this user replace a baked interpreter (its file or a directory
     /// above it, through symlinks)? Default false (tests).
     var interpreterReplaceable: (String) -> Bool = { _ in false }
+    /// Linux: does a systemd user manager answer `systemctl --user`? Nil
+    /// off Linux or when not evaluated (tests).
+    var systemdUserManagerReachable: Bool? = nil
 
     static func live(
         home: HomeDirectory,
@@ -60,6 +63,7 @@ struct DoctorInstallProbes {
         )
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
+        probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
 #endif
         probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
         probes.interpreterReplaceable = AdapterRuntime.userCanReplace
@@ -188,6 +192,42 @@ enum DoctorInstallChecks {
                 summary: "\(host.rawValue) hook runs \(interpreter), which is not runnable; "
                     + "\(host.rawValue) treats the failed hook as non-blocking, so its tool calls run unguarded",
                 fix: "\(AdapterRuntime.installHint(name)), then rv setup"
+            )
+        }
+    }
+
+    /// Linux without a systemd user manager (WSL without systemd, a
+    /// container, OpenRC/runit, a login without logind): nothing
+    /// supervises rvd, so `rv setup` / `rv service start` run it directly
+    /// and it does not survive logout or reboot. Not reported before setup
+    /// ran (the service row already says to run it).
+    static func systemdUserManager(
+        _ reachable: Bool?,
+        health: ServiceHealth,
+        paths: OwnedPaths
+    ) -> DoctorProblem? {
+        guard reachable == false else { return nil }
+        let start = "\(ShellWord.quote(paths.localRv)) service start"
+        let supervised = "or have your process supervisor run \(DirectRvd.command(rvdPath: paths.localRvd))"
+        switch health {
+        case .notInstalled:
+            return nil
+        case .reachable:
+            return DoctorProblem(
+                id: "systemd-user-manager",
+                severity: .warn,
+                summary: "no systemd user manager is running, so rvd runs without a supervisor "
+                    + "and will not survive logout or reboot",
+                fix: "add \"\(start) >/dev/null\" to your shell profile (e.g. ~/.profile), \(supervised)"
+            )
+        case .down, .skew, .requestFailed:
+            return DoctorProblem(
+                id: "systemd-user-manager",
+                severity: .fail,
+                summary: "rvd is not running and no systemd user manager is running to start it "
+                    + "(systemctl --user cannot reach one)",
+                fix: "\(start) (rvd then runs until logout or reboot; add that line to your shell profile, "
+                    + "\(supervised))"
             )
         }
     }

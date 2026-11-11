@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- Linux without a systemd user manager (WSL without systemd, containers, OpenRC/runit, logins without logind): `rv setup` no longer fails with "unable to enable systemd unit". It starts `rvd` directly in its own session, says plainly that it will not survive logout or reboot, and names the line to add to a shell profile (`rv service start >/dev/null`) or the command for a process supervisor. `rv service restart` restarts that `rvd` (or the systemd unit through `systemctl --user` where a user manager runs), new `rv service start` starts it only when it is not answering, `rv uninstall` stops it, and `rv doctor` adds a `systemd-user-manager` problem row with the fix. `systemctl` is found in `/usr/bin` or `/bin`.
 - `rvd` on Linux binds `/run/user/<uid>/rv/evaluate.sock` when `XDG_RUNTIME_DIR` is unset, the path the C hook and the Swift CLI already dialled, instead of refusing to start; it creates `/run/user/<uid>` (0700) when missing and refuses one that is not owner-only, with a message that names the fix. The Python SDK resolves the same path.
 - Action fingerprints now use an injective encoding. Pending runtime-HTTP asks, and pending asks for commands containing `:`, `,` or `\`, created before upgrade are re-asked after upgrade. Existing grants are unaffected. (#510)
 - Hooks that cannot reach `rvd` now name the cause. (#441)

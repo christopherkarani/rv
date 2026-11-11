@@ -216,10 +216,12 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv service"),
                 HelpRow(name: "rv service status"),
+                HelpRow(name: "rv service start"),
                 HelpRow(name: "rv service restart"),
             ]),
             HelpSection(heading: "Subcommands", rows: [
                 HelpRow(name: "status", description: "Print whether rvd is running, down, or skewed (default)"),
+                HelpRow(name: "start", description: "Start rvd unless it already answers"),
                 HelpRow(name: "restart", description: "Restart rvd (after an upgrade or repair)"),
             ]),
         ],
@@ -254,16 +256,31 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv service restart"),
+                HelpRow(name: "rv service start"),
             ]),
-            HelpSection(heading: "Behavior", rows: [
-                HelpRow(name: "loaded", description: "launchctl kickstart -k the rvd LaunchAgent"),
-                HelpRow(name: "not loaded", description: "Rewrite the LaunchAgent for ~/.local/bin/rvd and load it"),
-            ]),
+            HelpSection(heading: "Behavior", rows: serviceRestartBehavior),
         ],
         examples: [
             "rv service restart",
         ]
     )
+
+    #if os(Linux)
+    static let serviceRestartBehavior = [
+        HelpRow(name: "systemd", description: "systemctl --user restart (start) dev.rv.evaluate.service"),
+        HelpRow(
+            name: "no systemd",
+            description: "No systemd user manager: run ~/.local/bin/rvd directly; it stops at logout or reboot"
+        ),
+        HelpRow(name: "start", description: "Does nothing when rvd already answers"),
+    ]
+    #else
+    static let serviceRestartBehavior = [
+        HelpRow(name: "loaded", description: "launchctl kickstart -k the rvd LaunchAgent"),
+        HelpRow(name: "not loaded", description: "Rewrite the LaunchAgent for ~/.local/bin/rvd and load it"),
+        HelpRow(name: "start", description: "Does nothing when rvd already answers"),
+    ]
+    #endif
 
     /// Host stdin is adapter-owned — no fake file Examples.
     static let hook = HelpViewModel(

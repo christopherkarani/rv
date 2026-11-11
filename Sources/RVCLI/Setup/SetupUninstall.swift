@@ -129,6 +129,9 @@ extension SetupRun {
             } catch {
                 throw SetupError.systemdApplyFailed(.disable)
             }
+            // An rvd setup started without a supervisor (no systemd user
+            // manager); a no-op once systemd stopped its own.
+            env.directRvd.stop(rvdPath: env.rvdPath)
         }
     }
 

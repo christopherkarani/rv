@@ -168,19 +168,17 @@ enum DoctorRun {
                 DoctorInstallChecks.problems(paths: paths, fileManager: environment.fileManager, probes: $0)
                     + DoctorInstallChecks.adapterRuntime(
                         hosts: snapshot.hosts, paths: paths, fileManager: environment.fileManager, probes: $0)
+                    + [DoctorInstallChecks.systemdUserManager(
+                        $0.systemdUserManagerReachable, health: snapshot.health, paths: paths)].compactMap { $0 }
             } ?? []
         )
     }
 
     /// One-line repair for a service that is not running cleanly. Hooks have
     /// no in-process fallback, so every non-running state needs one.
-    /// The restart a `fix:` line may name. `rv service restart` drives
-    /// launchd only; under systemd it refuses and points at systemctl.
-    #if os(macOS)
+    /// `rv service restart` drives launchd on macOS and systemctl --user on
+    /// Linux, or starts rvd directly where no systemd user manager runs.
     static let restartCommand = "rv service restart"
-    #else
-    static let restartCommand = "systemctl --user restart \(SystemdUserTemplate.unitName)"
-    #endif
 
     static func serviceFix(_ health: ServiceHealth, paths: OwnedPaths) -> String? {
         let setup = "run \(paths.localRv) setup"
