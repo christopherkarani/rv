@@ -2509,3 +2509,274 @@ func installSh_linuxAcceptsGlibcAtOrAboveTheReleaseFloor(_ version: String) thro
     #expect(workflow.contains("libstdc++-13-dev") == false)
 }
 
+// MARK: - SHA256SUMS release signature
+
+private let hostSSHKeygen = "/usr/bin/ssh-keygen"
+private let hostHasSSHKeygen = FileManager.default.isExecutableFile(atPath: hostSSHKeygen)
+
+private struct ReleaseKey {
+    let privateKey: URL
+    /// The allowed_signers line install.sh pins (`rv-release <type> <key>`).
+    let signersLine: String
+}
+
+private func runTool(_ path: String, _ arguments: [String], stdin: URL? = nil) throws -> (Int32, String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    if let stdin { process.standardInput = try FileHandle(forReadingFrom: stdin) }
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = out
+    try process.run()
+    let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    return (process.terminationStatus, text)
+}
+
+private func makeReleaseKey(in directory: URL) throws -> ReleaseKey {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let key = directory.appendingPathComponent("release-key-\(UUID().uuidString)")
+    let (status, output) = try runTool(hostSSHKeygen, ["-q", "-t", "ed25519", "-N", "", "-C", "", "-f", key.path])
+    try #require(status == 0, "\(output)")
+    let publicKey = try String(contentsOf: URL(fileURLWithPath: key.path + ".pub"), encoding: .utf8)
+    let fields = publicKey.split(whereSeparator: { $0 == " " || $0 == "\n" }).prefix(2).joined(separator: " ")
+    return ReleaseKey(privateKey: key, signersLine: "rv-release \(fields)")
+}
+
+private func signSums(in assets: URL, with key: ReleaseKey, namespace: String = "rv-release") throws {
+    let sig = assets.appendingPathComponent("SHA256SUMS.sig")
+    try? FileManager.default.removeItem(at: sig)
+    let (status, output) = try runTool(
+        hostSSHKeygen,
+        ["-q", "-Y", "sign", "-f", key.privateKey.path, "-n", namespace, assets.appendingPathComponent("SHA256SUMS").path])
+    try #require(status == 0, "\(output)")
+}
+
+/// install.sh with `signers` pinned as release_ssh_allowed_signers.
+private func pinnedReleaseKeyScript(_ signers: String) throws -> URL {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let empty = "\nrelease_ssh_allowed_signers=\"\"\n"
+    try #require(text.contains(empty), "install.sh must ship with an empty release key pin")
+    let pinned = text.replacingOccurrences(of: empty, with: "\nrelease_ssh_allowed_signers=\"\(signers)\"\n")
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-pinned-\(UUID().uuidString).sh")
+    try pinned.write(to: url, atomically: true, encoding: .utf8)
+    return url
+}
+
+private func temporaryKeyDirectory() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("rv-keys-\(UUID().uuidString)", isDirectory: true)
+}
+
+private let unverifiedWarning = "release signatures are not verified on Linux yet"
+
+@Test func installSh_linuxWarnsOnceThatReleaseSignaturesAreNotVerified() throws {
+    let run = try runChecksumInstall()
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.components(separatedBy: unverifiedWarning).count - 1 == 1, "\(run.stderr)")
+    #expect(run.curlLog.contains("SHA256SUMS.sig") == false)
+}
+
+@Test func installSh_localStageDoesNotWarnAboutReleaseSignatures() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-sig-local-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+    try writeDummyTrio(in: src)
+    try writeLinuxShims(in: shim)
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0, "\(result.stderr)")
+    #expect(result.stderr.contains(unverifiedWarning) == false)
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_pinnedReleaseKeyInstallsAValidlySignedRelease() throws {
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let key = try makeReleaseKey(in: keys)
+    let script = try pinnedReleaseKeyScript(key.signersLine)
+    defer { try? FileManager.default.removeItem(at: script) }
+    let run = try runChecksumInstall(script: script) { assets in try signSums(in: assets, with: key) }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.curlLog.contains("/download/v1.2.3/SHA256SUMS.sig"))
+    #expect(run.stderr.contains(unverifiedWarning) == false, "\(run.stderr)")
+    #expect(run.stderr.contains("signature") == false, "\(run.stderr)")
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_pinnedReleaseKeyAcceptsEitherOfTwoPinnedKeys() throws {
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let old = try makeReleaseKey(in: keys)
+    let new = try makeReleaseKey(in: keys)
+    let script = try pinnedReleaseKeyScript(old.signersLine + "\n" + new.signersLine)
+    defer { try? FileManager.default.removeItem(at: script) }
+    let run = try runChecksumInstall(script: script) { assets in try signSums(in: assets, with: new) }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_pinnedReleaseKeyRefusesAMissingSignatureUnlessAllowed() throws {
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let key = try makeReleaseKey(in: keys)
+    let script = try pinnedReleaseKeyScript(key.signersLine)
+    defer { try? FileManager.default.removeItem(at: script) }
+
+    let refused = try runChecksumInstall(script: script)
+    defer { try? FileManager.default.removeItem(at: refused.root) }
+    #expect(refused.status != 0)
+    #expect(refused.stderr.contains("SHA256SUMS.sig"), "\(refused.stderr)")
+    #expect(refused.stderr.contains("RV_INSTALL_ALLOW_UNSIGNED=1"), "\(refused.stderr)")
+    try expectOldInstallIntact(refused)
+
+    let allowed = try runChecksumInstall(environment: ["RV_INSTALL_ALLOW_UNSIGNED": "1"], script: script)
+    defer { try? FileManager.default.removeItem(at: allowed.root) }
+    #expect(allowed.status == 0, "\(allowed.stderr)")
+    #expect(allowed.stderr.contains("NOT verified against rv's release key"), "\(allowed.stderr)")
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_pinnedReleaseKeyRefusesAnotherKeysSignatureEvenWhenAllowed() throws {
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let pinned = try makeReleaseKey(in: keys)
+    let attacker = try makeReleaseKey(in: keys)
+    let script = try pinnedReleaseKeyScript(pinned.signersLine)
+    defer { try? FileManager.default.removeItem(at: script) }
+    let run = try runChecksumInstall(environment: ["RV_INSTALL_ALLOW_UNSIGNED": "1"], script: script) { assets in
+        try signSums(in: assets, with: attacker)
+    }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("not a valid signature by rv's release key"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_pinnedReleaseKeyRefusesAWrongNamespace() throws {
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let key = try makeReleaseKey(in: keys)
+    let script = try pinnedReleaseKeyScript(key.signersLine)
+    defer { try? FileManager.default.removeItem(at: script) }
+    // A signature the same key made for another purpose (git commits) is
+    // not a release signature.
+    let run = try runChecksumInstall(script: script) { assets in
+        try signSums(in: assets, with: key, namespace: "git")
+    }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("not a valid signature"), "\(run.stderr)")
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func installSh_pinnedReleaseKeyRefusesSumsRewrittenAfterSigning() throws {
+    let keys = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: keys) }
+    let key = try makeReleaseKey(in: keys)
+    let script = try pinnedReleaseKeyScript(key.signersLine)
+    defer { try? FileManager.default.removeItem(at: script) }
+    // A swapped asset with a matching, re-generated SHA256SUMS: the checksum
+    // check alone would pass, the signature does not.
+    let run = try runChecksumInstall(script: script) { assets in
+        try signSums(in: assets, with: key)
+        try corrupt(assets, "rv-cli-linux-x86_64")
+        try writeChecksums(in: assets)
+    }
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("not a valid signature"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+private func runSignSums(
+    assets: URL, installScript: URL, key: ReleaseKey?, require: Bool = false
+) throws -> (Int32, String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/bash")
+    process.arguments = [
+        repoRootURL().appendingPathComponent("Scripts/release-sign-sums.sh").path, assets.path, installScript.path,
+    ]
+    var env = ["PATH": "/usr/bin:/bin", "HOME": assets.path]
+    if let key { env["RV_RELEASE_SSH_SIGNING_KEY"] = try String(contentsOf: key.privateKey, encoding: .utf8) }
+    if require { env["RV_REQUIRE_SIGNED_RELEASE"] = "1" }
+    process.environment = env
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = out
+    try process.run()
+    let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    return (process.terminationStatus, text)
+}
+
+@Test(.enabled(if: hostHasSSHKeygen, "needs /usr/bin/ssh-keygen"))
+func releaseSignSums_signsWhatThePinnedInstallerAccepts() throws {
+    let root = temporaryKeyDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let assets = root.appendingPathComponent("assets")
+    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+    try "0000  rv-linux-x86_64\n".write(
+        to: assets.appendingPathComponent("SHA256SUMS"), atomically: true, encoding: .utf8)
+    let key = try makeReleaseKey(in: root)
+    let other = try makeReleaseKey(in: root)
+    let pinned = try pinnedReleaseKeyScript(key.signersLine)
+    defer { try? FileManager.default.removeItem(at: pinned) }
+    let sig = assets.appendingPathComponent("SHA256SUMS.sig")
+
+    // No key, no pin: skipped, nothing published; unless signing is required.
+    var (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: nil)
+    #expect(status == 0, "\(output)")
+    #expect(FileManager.default.fileExists(atPath: sig.path) == false)
+    (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: nil, require: true)
+    #expect(status != 0, "\(output)")
+
+    // A key with no pin signs, and prints the line to pin.
+    (status, output) = try runSignSums(assets: assets, installScript: installScriptURL(), key: key)
+    #expect(status == 0, "\(output)")
+    #expect(FileManager.default.fileExists(atPath: sig.path))
+    #expect(output.contains("release_ssh_allowed_signers=\"\(key.signersLine)\""), "\(output)")
+
+    // Pinned: the matching key signs and the signature verifies.
+    (status, output) = try runSignSums(assets: assets, installScript: pinned, key: key)
+    #expect(status == 0, "\(output)")
+    let signers = root.appendingPathComponent("allowed_signers")
+    try (key.signersLine + "\n").write(to: signers, atomically: true, encoding: .utf8)
+    let (verified, verifyOutput) = try runTool(
+        hostSSHKeygen,
+        ["-Y", "verify", "-f", signers.path, "-I", "rv-release", "-n", "rv-release", "-s", sig.path],
+        stdin: assets.appendingPathComponent("SHA256SUMS"))
+    #expect(verified == 0, "\(verifyOutput)")
+
+    // Pinned: no key, or another key, fails and leaves no signature behind.
+    (status, output) = try runSignSums(assets: assets, installScript: pinned, key: nil)
+    #expect(status != 0, "\(output)")
+    #expect(FileManager.default.fileExists(atPath: sig.path) == false)
+    (status, output) = try runSignSums(assets: assets, installScript: pinned, key: other)
+    #expect(status != 0, "\(output)")
+    #expect(output.contains("does not match"), "\(output)")
+    #expect(FileManager.default.fileExists(atPath: sig.path) == false)
+}
+
+@Test func releaseSigning_principalAndNamespaceMatchTheInstaller() throws {
+    let install = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    let signer = try String(
+        contentsOf: repoRootURL().appendingPathComponent("Scripts/release-sign-sums.sh"), encoding: .utf8)
+    #expect(install.contains("\nrelease_sig_principal=\"rv-release\"\n"))
+    #expect(install.contains("\nrelease_sig_namespace=\"rv-release\"\n"))
+    #expect(signer.contains("\nPRINCIPAL=\"rv-release\"\n"))
+    #expect(signer.contains("\nNAMESPACE=\"rv-release\"\n"))
+    let workflow = try String(
+        contentsOf: repoRootURL().appendingPathComponent(".github/workflows/release.yml"), encoding: .utf8)
+    #expect(workflow.contains("Scripts/release-sign-sums.sh assets install.sh"))
+    #expect(workflow.contains("secrets.RV_RELEASE_SSH_SIGNING_KEY"))
+}

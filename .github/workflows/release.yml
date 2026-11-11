@@ -389,6 +389,21 @@ jobs:
           set -euo pipefail
           cp install.sh assets/install.sh
           (cd assets && sha256sum -- * > SHA256SUMS)
+
+      # Linux downloads carry no code signature, so SHA256SUMS is signed with
+      # an SSH key (ssh-keygen -Y, namespace rv-release) from the
+      # RV_RELEASE_SSH_SIGNING_KEY secret, published as SHA256SUMS.sig.
+      # install.sh pins the public half (release_ssh_allowed_signers); once
+      # it does, this step fails without the secret or with another key, so
+      # no release ships that every installer would refuse. Without the
+      # secret and the pin it is skipped with a notice.
+      - name: Sign SHA256SUMS
+        env:
+          RV_RELEASE_SSH_SIGNING_KEY: ${{ secrets.RV_RELEASE_SSH_SIGNING_KEY }}
+          RV_REQUIRE_SIGNED_RELEASE: ${{ vars.RV_REQUIRE_SIGNED_RELEASE }}
+        run: |
+          set -euo pipefail
+          Scripts/release-sign-sums.sh assets install.sh
           ls -l assets
 
       - name: Create or update GitHub release

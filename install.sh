@@ -8,6 +8,9 @@
 # redirect) and every asset, SHA256SUMS included, comes from that tag. Every
 # downloaded asset is checked against SHA256SUMS on all OSes before anything
 # is unpacked or staged; RV_INSTALL_SKIP_CHECKSUMS=1 skips that (loudly).
+# Once release_ssh_allowed_signers is pinned below, SHA256SUMS itself must
+# carry a valid SHA256SUMS.sig from rv's release key; until then Linux
+# downloads (which have no code signature) warn that nothing is signed.
 # Linux downloads also need glibc 2.35+ (no musl), libcurl and libsqlite3.
 # Downloaded macOS files are signature-checked before anything is staged. A
 # file counts as signed only with a valid, notarized Developer ID signature
@@ -97,6 +100,17 @@ esac
 # then on an unsigned download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1.
 signed_releases=0
 release_team_id=""
+# Release key for SHA256SUMS: one `rv-release <key-type> <base64-key>` line
+# per key (ssh allowed_signers format, no quotes), the public half of the
+# RV_RELEASE_SSH_SIGNING_KEY secret release.yml signs with. While it is
+# empty nothing is verified and Linux installs warn (macOS still has
+# codesign). Once pinned, every download needs a SHA256SUMS.sig that
+# `ssh-keygen -Y verify` accepts (namespace rv-release) before any asset is
+# trusted: a bad signature always refuses, a missing one refuses unless
+# RV_INSTALL_ALLOW_UNSIGNED=1. Like the team pin, only this script sets it.
+release_ssh_allowed_signers=""
+release_sig_principal="rv-release"
+release_sig_namespace="rv-release"
 tmp_fetch=""
 tmp_rv=""
 tmp_cli=""
@@ -313,6 +327,48 @@ fetch_checksums() {
   sums_file="$tmp_fetch/SHA256SUMS"
   if ! curl -fsSL "$release_base/SHA256SUMS" -o "$sums_file"; then
     echo "rv: refusing to install: failed to download $release_base/SHA256SUMS" >&2
+    exit 1
+  fi
+}
+
+# Check SHA256SUMS against the pinned release key (see
+# release_ssh_allowed_signers). Absolute ssh-keygen paths: one earlier on
+# PATH must not decide this check.
+verify_checksums_signature() {
+  [ -n "$sums_file" ] || return 0
+  if [ -z "$release_ssh_allowed_signers" ]; then
+    if [ "$os" = "Linux" ]; then
+      echo "rv: warning: release signatures are not verified on Linux yet; downloads are checked only against this release's SHA256SUMS" >&2
+    fi
+    return 0
+  fi
+  sig_file="$tmp_fetch/SHA256SUMS.sig"
+  if ! curl -fsSL "$release_base/SHA256SUMS.sig" -o "$sig_file"; then
+    rm -f "$sig_file"
+    if [ "${RV_INSTALL_ALLOW_UNSIGNED:-}" = "1" ]; then
+      echo "rv: WARNING: this release has no SHA256SUMS.sig; RV_INSTALL_ALLOW_UNSIGNED=1 set, so its checksums are NOT verified against rv's release key" >&2
+      return 0
+    fi
+    echo "rv: refusing to install: failed to download $release_base/SHA256SUMS.sig, so SHA256SUMS cannot be checked against rv's release key" >&2
+    echo "rv: set RV_INSTALL_ALLOW_UNSIGNED=1 to install it anyway" >&2
+    exit 1
+  fi
+  keygen=""
+  for candidate in /usr/bin/ssh-keygen /bin/ssh-keygen; do
+    if [ -x "$candidate" ]; then
+      keygen="$candidate"
+      break
+    fi
+  done
+  if [ -z "$keygen" ]; then
+    echo "rv: refusing to install: ssh-keygen is not installed, so the release signature cannot be checked (install openssh-client)" >&2
+    exit 1
+  fi
+  signers_file="$tmp_fetch/allowed_signers"
+  printf '%s\n' "$release_ssh_allowed_signers" > "$signers_file"
+  if ! "$keygen" -Y verify -f "$signers_file" -I "$release_sig_principal" -n "$release_sig_namespace" \
+    -s "$sig_file" < "$sums_file" >/dev/null 2>&1; then
+    echo "rv: refusing to install: SHA256SUMS.sig is not a valid signature by rv's release key" >&2
     exit 1
   fi
 }
@@ -1085,6 +1141,7 @@ else
   tmp_fetch="$(mktemp -d "${TMPDIR:-/tmp}/rv-install.XXXXXX")"
   resolve_release_tag
   fetch_checksums
+  verify_checksums_signature
 
   size_rv="$(normalize_size "$(content_length "$release_base/rv-$target")")"
   size_cli="$(normalize_size "$(content_length "$release_base/rv-cli-$target")")"

@@ -90,7 +90,24 @@ fi
 want='RV_FROM_INSTALL=1 exec "$bin/rv" setup'
 [ "$(tail -n 1 "$install_path")" = "$want" ] \
   || die "unexpected installer tail (expected: $want)"
-sed '$ s/.*/echo SMOKE-STAGE-OK/' "$install_path" > "$WORK/install.sh"
+sed '$ s/.*/echo SMOKE-STAGE-OK/' "$install_path" > "$WORK/neutered.sh"
+# --local serves a SHA256SUMS this smoke wrote, which no release key signed
+# (publish signs the real one later), so its copy unpins the release key.
+# The signature check is proven by InstallScriptTests and by --live.
+if [ "$mode" = "local" ]; then
+  awk '
+    open { if (index($0, "\"")) open = 0; next }
+    index($0, "release_ssh_allowed_signers=\"") == 1 {
+      print "release_ssh_allowed_signers=\"\""
+      if (index(substr($0, 30), "\"") == 0) open = 1
+      next
+    }
+    { print }' "$WORK/neutered.sh" > "$WORK/install.sh"
+  grep -qx 'release_ssh_allowed_signers=""' "$WORK/install.sh" \
+    || die "cannot find release_ssh_allowed_signers in $install_path"
+else
+  cp "$WORK/neutered.sh" "$WORK/install.sh"
+fi
 
 SMOKE_PATH="$PATH"
 smoke_tag=""
