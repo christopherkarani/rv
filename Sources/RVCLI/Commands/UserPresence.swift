@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVIPC
 #if canImport(LocalAuthentication)
 import LocalAuthentication
 #endif
@@ -13,7 +14,8 @@ enum PresenceChallenge: Sendable {
     /// Type a code that was not printed by this process. A pseudo-terminal
     /// cannot complete this: the caller could read and write the same pty.
     case printedCode(@Sendable (String) -> Bool)
-    /// Touch ID or the login password. A code on this terminal is not accepted.
+    /// Touch ID or the login password on macOS; on Linux the login password,
+    /// checked by rvd (`OwnerConfirmation`). A code on this terminal is not accepted.
     case deviceOwner
 }
 
@@ -66,9 +68,38 @@ struct UserPresence: Sendable {
         case .deviceOwner:
             #if canImport(LocalAuthentication)
             if let outcome = await deviceOwner(reason) { return outcome }
-            #endif
             return terminal(reason, challenge)
+            #else
+            return await ownerPassword(reason) { summary in try await OwnerConfirmation.require(summary) }
+            #endif
         }
+    }
+
+    /// Linux device owner: the route every other owner action takes
+    /// (`OwnerConfirmation`): the login password typed at the terminal and
+    /// checked by rvd with `unix_chkpwd`, under rvd's lockout and audit. A
+    /// password this process merely read would prove nothing. The caller
+    /// has already shown the full review; rvd gets its first line, which
+    /// names the action and the digest of what was shown.
+    static func ownerPassword(
+        _ reason: String, require: @Sendable (String) async throws -> Void
+    ) async -> PresenceOutcome {
+        do {
+            try await require(ownerSummary(reason))
+            return .confirmed(method: "login password (checked by rvd)")
+        } catch {
+            var why = "\(error)"
+            if why.hasPrefix("rv: ") { why.removeFirst(4) }
+            return .refused(why)
+        }
+    }
+
+    /// The first line of a presence reason, without the `rv: ` prefix the
+    /// password prompt adds again, clipped to what rvd accepts.
+    static func ownerSummary(_ reason: String) -> String {
+        var line = String(reason.prefix { $0 != "\n" })
+        if line.hasPrefix("rv: ") { line.removeFirst(4) }
+        return String(String.UnicodeScalarView(line.unicodeScalars.prefix(ConfirmOwnerActionParams.maxSummaryBytes)))
     }
 
     #if canImport(LocalAuthentication)
