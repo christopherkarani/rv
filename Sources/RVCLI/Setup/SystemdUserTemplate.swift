@@ -35,8 +35,9 @@ enum SystemdUserTemplate {
     }
 
     /// One `ExecStart=` word for `path`: double-quoted so a HOME with spaces
-    /// stays one argument, with `\` and `"` escaped and `%` doubled so systemd
-    /// does not expand it as a specifier. A newline cannot be expressed in a
+    /// stays one argument, with `\` and `"` escaped, `%` doubled so systemd
+    /// does not expand it as a specifier, and `$` doubled so it does not
+    /// substitute an environment variable. A newline cannot be expressed in a
     /// unit line at all, so it is refused rather than written torn.
     static func execStartQuoted(_ path: String) throws(SetupError) -> String {
         guard path.contains(where: { $0.isNewline }) == false else {
@@ -48,6 +49,7 @@ enum SystemdUserTemplate {
             case "\\": quoted += "\\\\"
             case "\"": quoted += "\\\""
             case "%": quoted += "%%"
+            case "$": quoted += "$$"
             default: quoted.append(character)
             }
         }

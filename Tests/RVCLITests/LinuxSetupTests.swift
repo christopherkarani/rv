@@ -92,6 +92,8 @@ import Testing
 @Test func systemdExecStart_quotesSpacesAndEscapesSpecifiers() throws {
     #expect(try SystemdUserTemplate.execStartQuoted("/home/a b/.local/bin/rvd") == "\"/home/a b/.local/bin/rvd\"")
     #expect(try SystemdUserTemplate.execStartQuoted("/home/100%/rvd") == "\"/home/100%%/rvd\"")
+    // systemd substitutes `$VAR` / `${VAR}` in ExecStart, quoted or not.
+    #expect(try SystemdUserTemplate.execStartQuoted("/home/a$HOME${X}/rvd") == "\"/home/a$$HOME$${X}/rvd\"")
     #expect(try SystemdUserTemplate.execStartQuoted("/h/q\"\\/rvd") == "\"/h/q\\\"\\\\/rvd\"")
     #expect(throws: SetupError.systemdUnitWriteFailed) {
         try SystemdUserTemplate.execStartQuoted("/home/x\ny/rvd")
