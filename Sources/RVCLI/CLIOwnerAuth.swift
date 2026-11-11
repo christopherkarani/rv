@@ -103,6 +103,10 @@ enum CLIOwnerAuth {
         #if canImport(LocalAuthentication)
         return nil
         #else
+        if let locked = OwnerAccountPassword.refusalIfLocked() {
+            FileHandle.standardError.write(Data("rv: \(locked)\n".utf8))
+            throw AllowOnceAuthError.required
+        }
         guard let password = OwnerConfirmation.readOwnerPassword(
             prompt: "\(reason)\nPassword for \(UserName.current ?? "your account"): ")
         else {
