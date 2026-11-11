@@ -65,6 +65,11 @@ struct OpenCode: AsyncParsableCommand {
 
     func run() throws {
         guard Task.isCancelled == false else { throw ExitCode(130) }
+        #if !os(macOS)
+        // Refuse before the macOS cage notice or the executable lookup: on
+        // Linux neither applies, and a missing opencode is not the reason.
+        throw ValidationError(ContainedRuntimeRefusal.message)
+        #else
         let arguments = agentArguments.first == "--" ? Array(agentArguments.dropFirst()) : agentArguments
         FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
         let project = workspace ?? CLIProcess.workspacePath()
@@ -83,9 +88,6 @@ struct OpenCode: AsyncParsableCommand {
         if resourceProfile == nil {
             FileHandle.standardError.write(Data(OpenCodeRun.missingProfileWarning.utf8))
         }
-        #if !os(macOS)
-        throw ValidationError(ContainedRuntimeRefusal.message)
-        #else
         try WorkspaceCommandRun.runInteractive(
             project: WorkspaceCommandRun.requireProject(
                 workspace,

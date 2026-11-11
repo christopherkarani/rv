@@ -233,9 +233,20 @@ enum InitRun {
         } else if wrote {
             lines.append("wrote runtime-resources.json")
         }
-        lines.append(
-            "next: rv opencode --workspace \(shellWord(project)) --resource-profile \(plan.profile.id) -- run '...'")
+        lines.append(nextLine(project: project, profileID: plan.profile.id))
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The suggested next command. `rv opencode` (the contained runtime that
+    /// uses this profile) is macOS-only, so Linux suggests the hook guard,
+    /// which works there.
+    static func nextLine(project: String, profileID: String) -> String {
+        #if os(macOS)
+        "next: rv opencode --workspace \(shellWord(project)) --resource-profile \(profileID) -- run '...'"
+        #else
+        "next: rv setup (guards your agents through their hooks; rv opencode, which uses this profile, "
+            + "runs only on macOS today)"
+        #endif
     }
 
     /// Quotes a word for the suggested next command when pasting it raw
