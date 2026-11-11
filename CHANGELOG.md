@@ -51,6 +51,15 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- Linux: hooks no longer deny every call 30 minutes after login. The systemd user unit was `Restart=no` and nothing relaunched an idle-exited `rvd`; it now keeps `rvd` resident (`--idle-exit-seconds=31536000`) with `Restart=always`, which also picks up an upgraded binary. `ExecStart` quotes the `rvd` path, so a HOME with a space or `%` no longer breaks the unit.
+- Linux: `rv setup` no longer fails its readiness check on every systemd login, and `rv uninstall` / loosening `rv host mode` are no longer refused while `rvd` runs. The hook-door probes now say hello before their snapshot, which `rvd`'s socket requires; setup also warns when `rvd` is not answering.
+- Linux: `rvd` no longer deadlocks under a burst of hook calls (each socket connection is served on its own thread instead of a dispatch worker blocked on its evaluation).
+- A command with thousands of unmatched `$(`/`<(` openers was quadratic to scan (a 40 KB hook payload pinned `rvd`'s CPU for minutes, and was allowed); past 16 the segment fails closed.
+- `cmd 2>/dev/null` and other output redirects to exactly `/dev/null` no longer deny as a write outside the repository.
+- `rv doctor` on Linux: accepts `rv_RVPacks.bundle` (what Swift 6.4 emits) beside `rvd`, and reads a stopped `rvd` with its systemd unit installed as "down", not "not-installed".
+- Linux owner checks: only `unix_chkpwd`'s wrong-password status counts toward the lockout; an account the helper cannot check (SSSD/LDAP/AD, systemd-homed, unreadable shadow) answers "cannot check". The helper is also found in `/run/wrappers/bin` (NixOS). Linux wording no longer mentions Touch ID, the RV approval app or the LaunchAgent.
+- `swift-crypto` (a Linux-only dependency the Darwin-generated `Package.resolved` never pins) is pinned exactly.
+
 - Linux release binaries are built on Ubuntu 22.04 (glibc 2.35) instead of 24.04 (glibc 2.39), so Ubuntu 22.04, Debian 12 and other glibc 2.35+ systems can run them; the release fails if a build needs newer glibc symbols. `install.sh` refuses up front, before downloading, on musl (Alpine), on glibc older than 2.35, and when libcurl or libsqlite3 is missing (naming the package to install); `RV_INSTALL_SKIP_LINUX_CHECKS=1` skips the glibc and library probes.
 - Linux: `rv secrets set`, `rv login connect` and `rv mcp import` with credentials store values in the Secret Service keyring through `secret-tool` (libsecret-tools), and launches read `keychain` sources from it; without `secret-tool` or a session bus the refusal names what is missing. An agent's `secret-tool` and Secret Service D-Bus calls are denied (`core.secrets:secret-service`, kept enforced in observe mode).
 - Linux: `rv mcp trust` and `rv mcp import` with credentials ask for the login password through `rvd` like other owner actions instead of refusing outright.
@@ -74,6 +83,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Heredoc masking blanks the body where it was parsed, not the first copy of its text, so a body repeating an earlier word (`git reset --hard` then `cat <<EOF` / `git` / `EOF`) no longer hides that word from the gate. Bodies whose position is ambiguous (no terminator, CR, oddly quoted delimiter, `\` or `#` before the operator) stay visible.
 
 ### Security
+
+- Linux self-protection: the file-tool door now protects the Swift runtime libraries `rv-cli` and `rvd` load from `~/.local/bin` (`*.so`, `*.so.*`) and install.sh's `.rv*` files, as the shell guard already did, plus `~/.config/environment.d` (read into every user service, `rvd` included) and `rvd`'s `default.target.wants` link.
+- `system.disk` denies Linux drive-destroying tools it missed: `mke2fs`/`mkntfs`/`mkdosfs`, `blkdiscard`, `sgdisk --zap-all`/`--clear`/`--delete`, `sfdisk` writes, `gdisk`, `nvme format`/`sanitize`, `sg_format`, `hdparm --security-erase`, `cryptsetup luksFormat`/`erase`, `ddrescue -f`, `badblocks -w`, `zpool destroy`, `zfs destroy`.
 
 - Releases can sign `SHA256SUMS` (`SHA256SUMS.sig`, `ssh-keygen -Y`, namespace `rv-release`) with the `RV_RELEASE_SSH_SIGNING_KEY` secret. Once `install.sh` pins the public key, installs refuse a missing (unless `RV_INSTALL_ALLOW_UNSIGNED=1`) or invalid signature; until then Linux installs warn that release signatures are not verified.
 
