@@ -45,7 +45,7 @@ public let approvalPendingLine =
     "This action requires human approval: open RV to approve it, then retry the exact command."
 #else
 public let approvalPendingLine =
-    "This action requires human approval: redeem the rv allow-once code in Terminal, then retry the exact command."
+    "This action requires human approval: the owner redeems its rv allow-once code, then retry the exact command."
 #endif
 
 /// Ask-denial suffix when the pending row could not be recorded (M-25).

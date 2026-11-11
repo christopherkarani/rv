@@ -9,7 +9,7 @@ import RVTheme
 struct Setup: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "setup",
-        abstract: "Wire rv-owned host hooks and the rvd LaunchAgent."
+        abstract: "Wire rv-owned host hooks and the rvd service (LaunchAgent on macOS, systemd user unit on Linux)."
     )
 
     @Flag(name: .customLong("json"), help: "One line, no circles (same as --robot).")
@@ -78,16 +78,12 @@ struct Setup: AsyncParsableCommand {
         return outcome
     }
 
-    /// Liveness of the service the installed hooks talk to. Only the XPC
-    /// door can be probed from the Swift client; Linux hooks reach rvd over
-    /// a unix socket this client does not speak, so liveness is unknown
-    /// there and "unknown" must not print a false "rvd is down" warning.
+    /// Liveness of the service the installed hooks talk to, over the same
+    /// door they use (XPC on macOS, rvd's Unix socket on Linux), so a setup
+    /// that wired hooks to a daemon that is not answering says so instead of
+    /// a bare "Setup complete".
     static func liveServiceProbe(home: HomeDirectory) async -> Bool {
-        #if canImport(XPC)
-        return await ServiceClient.probing(home: home).verifyHookService()
-        #else
-        return true
-        #endif
+        await ServiceClient.probing(home: home).verifyHookService()
     }
 
     /// After a green setup, a wired slot with a dead service blocks or prompts

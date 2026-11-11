@@ -256,11 +256,32 @@ struct LocalControlBoundaryTests {
     }
 
     #if !canImport(XPC)
-    @Test func linuxServiceProbeNeverClaimsTheServiceIsDown() async throws {
-        // Linux hooks use a unix socket the Swift client cannot probe, so the
-        // live probe must report "not down" rather than warn falsely.
-        let home = try isolatedHome()
-        #expect(await Setup.liveServiceProbe(home: home) == true)
+    /// rvd's Unix socket answers only a hello on a fresh connection, so the
+    /// hook-door probe must say hello before its snapshot (as `route()`
+    /// does); without it a running rvd read as silent and `rv setup`'s
+    /// readiness wait failed on every systemd login.
+    @Test func linuxHookProbesSayHelloFirst() async throws {
+        let ack = HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .ok)
+        let snapshot = IPCResult.doctorSnapshot(DoctorSnapshotReply(
+            serviceSemver: "1.0.0", state: .running, idleExitSeconds: 300, packsEnabled: [], checks: []
+        ))
+        let verified = ScriptedTransport(ack: ack, responseResult: snapshot)
+        #expect(await try isolatedClient(transport: verified).verifyHookService(attempts: 1, retryDelayNanoseconds: 0))
+        #expect(verified.helloCount == 1)
+        let probed = ScriptedTransport(ack: ack, responseResult: snapshot)
+        #expect(await try isolatedClient(transport: probed).probeHookService() == nil)
+        #expect(probed.helloCount == 1)
+        // A daemon that is gone fails the hello itself: positive absence.
+        let absent = ScriptedTransport(ack: ack, helloError: .connectFailed)
+        #expect(await try isolatedClient(transport: absent).probeHookService() == .unreachable)
+        #expect(absent.sendCount == 0)
+        // A skewed rvd answered, but hooks would not trust it.
+        let skewed = ScriptedTransport(
+            ack: HelloAckView(protocolName: ProtocolVersion.name, serviceSemver: "1.0.0", status: .skew(.majorVersion)),
+            responseResult: snapshot
+        )
+        #expect(await try isolatedClient(transport: skewed).probeHookService() == .protocol)
+        #expect(await try isolatedClient(transport: skewed).verifyHookService(attempts: 1, retryDelayNanoseconds: 0) == false)
     }
     #endif
 

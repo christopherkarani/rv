@@ -5,7 +5,7 @@ import RVTheme
 struct Uninstall: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "uninstall",
-        abstract: "Remove rv-owned hook files, config, and the rvd LaunchAgent."
+        abstract: "Remove rv-owned hook files, config, and the rvd service (LaunchAgent or systemd user unit)."
     )
 
     @Flag(name: .customLong("json"), help: "One line, no circles (same as --robot).")

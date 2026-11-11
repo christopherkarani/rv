@@ -77,7 +77,7 @@ enum HelpCatalog {
                 HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
-                HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
+                HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and the rvd service"),
                 HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
                 HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
                 HelpRow(name: "report", description: "Governance posture of this machine (MDM, --json)"),
@@ -774,7 +774,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "storage",
-                    description: "Kept in the Keychain as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
+                    description: "Kept in the Keychain (macOS; Linux has no secret store yet) as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
                 ),
                 HelpRow(name: "check", description: "Resolves the named (default: connected) logins and shows fingerprints, never values; exit 1 if any fails"),
                 HelpRow(name: "logout", description: "Removes the login definition and the rv-stored Keychain value"),
