@@ -5,6 +5,9 @@ import RVDomain
 
 // Strict-policy parity: each codec must match today's exact wire spellings
 // through the T3a vocabulary. Loose-only spellings stay foreign here.
+// A near-variant of a guarded spelling (case, whitespace, `_`/`-` only)
+// is guarded too (`HookWireName`), and a missing or blank pre-tool event
+// is the pre-tool event: both used to decode foreign, which allows.
 
 private func shellCommand(of outcome: HookDecodeOutcome) -> String? {
     guard case .request(let request) = outcome,
@@ -28,7 +31,10 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
 @Test func strictParity_piAdmitsOnlyBash() {
     let codec = PiHostCodec()
     #expect(shellCommand(of: codec.decode(#"{"toolName":"bash","input":{"command":"git status"}}"#)) == "git status")
-    for tool in ["Bash", "shell", "Shell", "exec", "", "run_command"] {
+    for tool in ["Bash", " bash", "BASH\\t"] {
+        #expect(shellCommand(of: codec.decode(#"{"toolName":"\#(tool)","input":{"command":"git status"}}"#)) == "git status")
+    }
+    for tool in ["shell", "Shell", "exec", "", "run_command", "bashx"] {
         #expect(codec.decode(#"{"toolName":"\#(tool)","input":{"command":"git status"}}"#) == .foreign)
     }
     #expect(codec.decode(#"{"input":{"command":"git status"}}"#) == .foreign)
@@ -38,7 +44,8 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
     let codec = OpenCodeHostCodec()
     #expect(shellCommand(of: codec.decode(#"{"tool":"bash","args":{"command":"git status"}}"#)) == "git status")
     #expect(shellCommand(of: codec.decode(#"{"tool":"session.shell","args":{"command":"git status"}}"#)) == "git status")
-    for tool in ["Bash", "shell", "exec", "session.bash", ""] {
+    #expect(shellCommand(of: codec.decode(#"{"tool":"Bash","args":{"command":"git status"}}"#)) == "git status")
+    for tool in ["shell", "exec", "session.bash", ""] {
         #expect(codec.decode(#"{"tool":"\#(tool)","args":{"command":"git status"}}"#) == .foreign)
     }
     #expect(codec.decode(#"{"args":{"command":"git status"}}"#) == .foreign)
@@ -56,13 +63,24 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
     let shell = shellCommand(of: codec.decode(
         #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#))
     #expect(shell == "git status")
-    for event in ["pre_tool_use", "preToolUse", "PostToolUse", ""] {
+    // Near-variants of PreToolUse, a blank event and a missing one are the
+    // pre-tool event; a different event stays foreign.
+    for event in ["pre_tool_use", "preToolUse", " PreToolUse", ""] {
+        #expect(shellCommand(of: codec.decode(
+            #"{"hook_event_name":"\#(event)","tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    }
+    #expect(shellCommand(of: codec.decode(#"{"tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    for event in ["PostToolUse", "UserPromptSubmit", "Stop"] {
         #expect(codec.decode(
             #"{"hook_event_name":"\#(event)","tool_name":"Bash","tool_input":{"command":"git status"}}"#) == .foreign)
     }
-    #expect(codec.decode(#"{"tool_name":"Bash","tool_input":{"command":"git status"}}"#) == .foreign)
-    // Loose-only spellings stay foreign under the strict policy.
-    for tool in ["bash", "Shell", "shell", "local_shell", "Grep"] {
+    // Case and whitespace variants of Bash are guarded.
+    for tool in ["bash", "Bash ", "BASH", "\\u200bBash"] {
+        #expect(shellCommand(of: codec.decode(
+            #"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#)) == "git status")
+    }
+    // Other loose-only spellings and distinct real tools stay foreign.
+    for tool in ["Shell", "shell", "local_shell", "Grep", "BashOutput", "KillShell"] {
         #expect(codec.decode(
             #"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#) == .foreign)
     }
@@ -85,6 +103,7 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
         #"{"toolName":"exec","toolKind":"shell","params":{"command":"git status"}}"#)) == "git status")
     #expect(codec.decode(
         #"{"toolName":"exec","toolKind":"code_mode_exec","params":{"command":"git status"}}"#) == .foreign)
+    #expect(shellCommand(of: codec.decode(#"{"toolName":"Exec","params":{"command":"git status"}}"#)) == "git status")
     for tool in ["bash", "Bash", "run_command", ""] {
         #expect(codec.decode(#"{"toolName":"\#(tool)","params":{"command":"git status"}}"#) == .foreign)
     }
@@ -93,7 +112,8 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
 @Test func strictParity_hermesAdmitsOnlyTerminal() {
     let codec = HermesHostCodec()
     #expect(shellCommand(of: codec.decode(#"{"toolName":"terminal","args":{"command":"git status"}}"#)) == "git status")
-    for tool in ["bash", "exec", "shell", "Terminal", ""] {
+    #expect(shellCommand(of: codec.decode(#"{"toolName":"Terminal","args":{"command":"git status"}}"#)) == "git status")
+    for tool in ["bash", "exec", "shell", ""] {
         #expect(codec.decode(#"{"toolName":"\#(tool)","args":{"command":"git status"}}"#) == .foreign)
     }
 }
@@ -104,12 +124,16 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
         #expect(shellCommand(of: codec.decode(
             #"{"hookEventName":"pre_tool_use","toolName":"\#(tool)","toolInput":{"command":"git status"}}"#)) == "git status")
     }
-    for event in ["PreToolUse", "preToolUse", "post_tool_use", ""] {
-        #expect(codec.decode(
-            #"{"hookEventName":"\#(event)","toolName":"Bash","toolInput":{"command":"git status"}}"#) == .foreign)
+    for event in ["PreToolUse", "preToolUse", ""] {
+        #expect(shellCommand(of: codec.decode(
+            #"{"hookEventName":"\#(event)","toolName":"Bash","toolInput":{"command":"git status"}}"#)) == "git status")
     }
-    #expect(codec.decode(#"{"toolName":"Bash","toolInput":{"command":"git status"}}"#) == .foreign)
-    for tool in ["bash", "shell", "run_command", "Grep"] {
+    #expect(codec.decode(
+        #"{"hookEventName":"post_tool_use","toolName":"Bash","toolInput":{"command":"git status"}}"#) == .foreign)
+    #expect(shellCommand(of: codec.decode(#"{"toolName":"Bash","toolInput":{"command":"git status"}}"#)) == "git status")
+    #expect(shellCommand(of: codec.decode(
+        #"{"hookEventName":"pre_tool_use","toolName":"bash","toolInput":{"command":"git status"}}"#)) == "git status")
+    for tool in ["shell", "run_command", "Grep"] {
         #expect(codec.decode(
             #"{"hookEventName":"pre_tool_use","toolName":"\#(tool)","toolInput":{"command":"git status"}}"#) == .foreign)
     }
@@ -127,11 +151,15 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
     let codec = CodexHostCodec()
     #expect(shellCommand(of: codec.decode(
         #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    #expect(shellCommand(of: codec.decode(
+        #"{"hook_event_name":"pre_tool_use","tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    #expect(shellCommand(of: codec.decode(#"{"tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
     #expect(codec.decode(
-        #"{"hook_event_name":"pre_tool_use","tool_name":"Bash","tool_input":{"command":"git status"}}"#) == .foreign)
-    #expect(codec.decode(#"{"tool_name":"Bash","tool_input":{"command":"git status"}}"#) == .foreign)
+        #"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#) == .foreign)
+    #expect(shellCommand(of: codec.decode(
+        #"{"hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"git status"}}"#)) == "git status")
     // Loose-only rollout spellings stay foreign under the strict policy.
-    for tool in ["bash", "shell", "local_shell", "Shell"] {
+    for tool in ["shell", "local_shell", "Shell"] {
         #expect(codec.decode(
             #"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#) == .foreign)
     }
@@ -141,14 +169,18 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
     let codec = MuseHostCodec()
     #expect(shellCommand(of: codec.decode(
         #"{"hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"git status"}}"#)) == "git status")
-    for event in ["pre_tool_use", "preToolUse", "PostToolUse", ""] {
-        #expect(codec.decode(
-            #"{"hook_event_name":"\#(event)","tool_name":"bash","tool_input":{"command":"git status"}}"#) == .foreign)
+    for event in ["pre_tool_use", "preToolUse", ""] {
+        #expect(shellCommand(of: codec.decode(
+            #"{"hook_event_name":"\#(event)","tool_name":"bash","tool_input":{"command":"git status"}}"#)) == "git status")
     }
-    #expect(codec.decode(#"{"tool_name":"bash","tool_input":{"command":"git status"}}"#) == .foreign)
-    // The observed shell spelling is lowercase only; file tools and the
-    // capitalized Claude spelling stay foreign under the strict policy.
-    for tool in ["Bash", "Shell", "shell", "read_file", "submit_reminder_decision"] {
+    #expect(codec.decode(
+        #"{"hook_event_name":"PostToolUse","tool_name":"bash","tool_input":{"command":"git status"}}"#) == .foreign)
+    #expect(shellCommand(of: codec.decode(#"{"tool_name":"bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    // The observed shell spelling is lowercase; its case variant is guarded.
+    #expect(shellCommand(of: codec.decode(
+        #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    // File tools and other spellings stay foreign under the strict policy.
+    for tool in ["Shell", "shell", "read_file", "submit_reminder_decision"] {
         #expect(codec.decode(
             #"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#) == .foreign)
     }
@@ -166,13 +198,16 @@ private func sessionOf(_ outcome: HookDecodeOutcome) -> String? {
         #expect(shellCommand(of: codec.decode(
             #"{"hook_event_name":"preToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#)) == "git status")
     }
-    // Loose-only spellings and the capitalized event stay foreign under strict.
-    for tool in ["shell", "bash", "Grep"] {
-        #expect(codec.decode(
-            #"{"hook_event_name":"preToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#) == .foreign)
+    // Case variants of the shell tools and of the event are guarded.
+    for tool in ["shell", "bash", "BASH "] {
+        #expect(shellCommand(of: codec.decode(
+            #"{"hook_event_name":"preToolUse","tool_name":"\#(tool)","tool_input":{"command":"git status"}}"#)) == "git status")
     }
+    #expect(shellCommand(of: codec.decode(
+        #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#)) == "git status")
+    #expect(shellCommand(of: codec.decode(#"{"hook_event_name":"  ","command":"git status"}"#)) == "git status")
     #expect(codec.decode(
-        #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#) == .foreign)
+        #"{"hook_event_name":"preToolUse","tool_name":"Grep","tool_input":{"command":"git status"}}"#) == .foreign)
     #expect(codec.decode(
         #"{"hook_event_name":"afterShellExecution","command":"git status"}"#) == .foreign)
 }

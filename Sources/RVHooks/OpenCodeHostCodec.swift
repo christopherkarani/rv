@@ -9,14 +9,17 @@ public struct OpenCodeHostCodec: HostCodec {
     /// Creates an OpenCode adapter codec.
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = ["bash", "session.shell"]
+
     /// Decodes adapter stdin into a classified outcome.
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(OpenCodeEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
-        guard let tool = envelope.tool,
+        guard let tool = HookWireName.canonical(envelope.tool, among: Self.guardedTools),
               OpenCodeToolName(wireValue: tool).strictMatch == .shell
         else {
             return .foreign

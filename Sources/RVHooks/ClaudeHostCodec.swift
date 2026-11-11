@@ -6,20 +6,23 @@ public struct ClaudeHostCodec: HostCodec {
 
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools =
+        ["Bash"] + HookWireName.fileTools + ["Grep", "Glob", "NotebookEdit", "MultiEdit"]
+
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(ClaudeEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
-        guard let eventName = envelope.hookEventName,
-              ClaudeEventName(wireValue: eventName).strictMatch
-        else {
+        guard HookWireName.isPreToolEvent(envelope.hookEventName, preToolEvent: "PreToolUse") else {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
-        if let toolName = envelope.toolName,
+        let toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools)
+        if let toolName,
            ClaudeToolName(wireValue: toolName).strictMatch == .shell {
             return HookRequest.decoded(
                 host: .claude,
@@ -29,7 +32,7 @@ public struct ClaudeHostCodec: HostCodec {
             )
         }
         if let file = FileToolAction.make(
-            toolName: envelope.toolName,
+            toolName: toolName,
             filePath: envelope.toolInput?.filePath,
             path: envelope.toolInput?.path,
             targetFile: envelope.toolInput?.targetFile,
@@ -44,7 +47,7 @@ public struct ClaudeHostCodec: HostCodec {
             )
         }
         if let search = ClaudeSearchTarget.action(
-            toolName: envelope.toolName,
+            toolName: toolName,
             input: envelope.toolInput?.searchInput ?? ClaudeSearchInput()
         ) {
             return HookRequest.decoded(

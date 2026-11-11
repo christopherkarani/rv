@@ -9,14 +9,17 @@ public struct PiHostCodec: HostCodec {
     /// Creates a Pi adapter codec.
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = ["bash"]
+
     /// Decodes adapter stdin into a classified outcome.
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(PiEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
-        guard let toolName = envelope.toolName,
+        guard let toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools),
               PiToolName(wireValue: toolName).strictMatch == .shell
         else {
             return .foreign

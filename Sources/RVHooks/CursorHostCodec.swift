@@ -9,13 +9,24 @@ public struct CursorHostCodec: HostCodec {
     /// Creates a Cursor adapter codec.
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedEvents = ["beforeShellExecution", "preToolUse", "beforeReadFile"]
+    static let guardedTools = ["Shell", "Bash", "Grep"] + HookWireName.fileTools
+
     /// Decodes adapter stdin into a classified outcome.
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
-              let envelope = try? JSONDecoder().decode(CursorEnvelope.self, from: data)
+        guard let data = StrictHookJSON.screenedData(stdin),
+              var envelope = try? JSONDecoder().decode(CursorEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
+        // Near-variant names read as the guarded spelling (`HookWireName`);
+        // a blank event is no event, which classifies as a shell hook.
+        if let event = envelope.hookEventName, HookWireName.key(event).isEmpty {
+            envelope.hookEventName = nil
+        }
+        envelope.hookEventName = HookWireName.canonical(envelope.hookEventName, among: Self.guardedEvents)
+        envelope.toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools)
         let cwdText = firstNonEmpty(
             envelope.toolInput?.workingDirectory,
             envelope.cwd,

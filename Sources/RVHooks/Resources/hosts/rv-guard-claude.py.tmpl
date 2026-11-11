@@ -13,6 +13,7 @@ rv stdout).
 import json
 import subprocess
 import sys
+import unicodedata
 
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 15
@@ -41,6 +42,54 @@ def _timeout_reason():
 
 def _bad_output_reason(exit_code):
     return "rv exited with code %s without a usable decision. Run `rv doctor`." % exit_code
+
+
+def _reject_duplicate_keys(pairs):
+    # A repeated key reads as its LAST value here and in Node, but as its
+    # FIRST in other parsers: refuse the document instead of picking one.
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate JSON key")
+        seen[key] = value
+    return seen
+
+
+def _wire_key(name):
+    # Same key as rv's HookWireName: case-folded, without whitespace,
+    # control or format characters, "_" or "-".
+    kept = []
+    for ch in name:
+        if ch in "_-" or ch.isspace():
+            continue
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zs", "Zl", "Zp"):
+            continue
+        kept.append(ch)
+    return "".join(kept).lower()
+
+
+def _canonical(name, known):
+    # A near-variant of a guarded spelling ("bash", "Bash ") reads as it,
+    # so it is still sent to rv. Non-strings go to rv, which refuses them.
+    if not isinstance(name, str):
+        return name
+    if name in known:
+        return name
+    key = _wire_key(name)
+    if not key:
+        return name
+    for spelling in known:
+        if _wire_key(spelling) == key:
+            return spelling
+    return name
+
+
+def _is_pre_tool_event(event, pre_tool_event):
+    # rv is registered for the pre-tool event only: a missing, blank or
+    # non-string event is that event, never a reason to skip rv.
+    if not isinstance(event, str) or not _wire_key(event):
+        return True
+    return _canonical(event, (pre_tool_event,)) == pre_tool_event
 
 
 def main():
@@ -73,10 +122,10 @@ def _guard(raw):
     envelope = _parse(raw)
     if envelope is None:
         return {"action": "block", "reason": _BAD_REQUEST}
-    if envelope.get("hook_event_name") != "PreToolUse":
+    if not _is_pre_tool_event(envelope.get("hook_event_name"), "PreToolUse"):
         return {"action": "allow"}
-    tool = envelope.get("tool_name")
-    if tool in _FILE_TOOLS:
+    tool = _canonical(envelope.get("tool_name"), ("Bash",) + _FILE_TOOLS)
+    if tool in _FILE_TOOLS or not isinstance(tool, str):
         mapped = _spawn_rv_hook("claude", raw)
         if mapped["action"] == "allow":
             return mapped
@@ -103,8 +152,8 @@ def _guard(raw):
 
 def _parse(raw):
     try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
+        parsed = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, TypeError, RecursionError):
         return None
     if isinstance(parsed, dict):
         return parsed

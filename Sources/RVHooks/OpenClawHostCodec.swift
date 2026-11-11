@@ -9,9 +9,12 @@ public struct OpenClawHostCodec: HostCodec {
     /// Creates an OpenClaw adapter codec.
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = ["exec"]
+
     /// Decodes adapter stdin into a classified outcome.
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(OpenClawEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
@@ -20,7 +23,7 @@ public struct OpenClawHostCodec: HostCodec {
            OpenClawToolKind(wireValue: toolKind).isExcludedCodeMode {
             return .foreign
         }
-        guard let toolName = envelope.toolName,
+        guard let toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools),
               OpenClawToolName(wireValue: toolName).strictMatch == .shell
         else {
             return .foreign

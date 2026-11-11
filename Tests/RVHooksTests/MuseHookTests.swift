@@ -88,11 +88,17 @@ func museDecode_extractsBashCommand(_ file: String, expected: String) throws {
     #expect(codec.decode(try museFixture("allow-non-shell-read.json")) == .foreign)
 }
 
-@Test func museDecode_capitalBashIsForeign() {
+/// A case variant of Muse's `bash` is still the shell tool (`HookWireName`):
+/// reading it as foreign would allow it unchecked.
+@Test func museDecode_capitalBashIsGuarded() {
     let stdin = """
     {"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}
     """
-    #expect(codec.decode(stdin) == .foreign)
+    guard case .request(.shell(_, let command, _, _)) = codec.decode(stdin) else {
+        Issue.record("capital Bash decoded foreign")
+        return
+    }
+    #expect(command.rawValue == "git status")
 }
 
 @Test func museDecode_nonPreToolUseIsForeign() {

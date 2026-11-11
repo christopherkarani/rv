@@ -9,14 +9,17 @@ public struct HermesHostCodec: HostCodec {
     /// Creates a Hermes adapter codec.
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = ["terminal"]
+
     /// Decodes adapter stdin into a classified outcome.
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(HermesEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
-        guard let toolName = envelope.toolName,
+        guard let toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools),
               HermesToolName(wireValue: toolName).strictMatch == .shell
         else {
             return .foreign
