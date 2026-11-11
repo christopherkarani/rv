@@ -846,7 +846,10 @@ public struct GatedEvaluate: Sendable {
                         homeDirectory: home
                     )
                 },
-                policy: policy
+                policy: policy,
+                // The hook client's deadline (bound by `JudgeOffload`): an
+                // evaluation it has given up on stops pattern search.
+                patternBudget: PatternBudget(hardDeadline: JudgeAdmission.deadline)
             )
         }
         // First pass without resolution: packs and semantics own their

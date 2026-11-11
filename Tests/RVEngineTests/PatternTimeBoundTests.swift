@@ -81,6 +81,26 @@ struct PatternTimeBoundTests {
         #expect(deniedRule(result) == "core.git:reset-hard")
     }
 
+    /// rvd passes the hook client's deadline: past it no search starts, so
+    /// an abandoned evaluation stops early and cannot end in an allow.
+    @Test func hardDeadline_pullsTheWallCeilingIn() throws {
+        #expect(PatternBudget(hardDeadline: .now - .seconds(1)).isSpent)
+        #expect(PatternBudget(hardDeadline: .now + .seconds(60)).isSpent == false)
+        let engine = ICUPatternEngine()
+        let compiled = try engine.compile(catastrophic)
+        var budget = PatternBudget(perSearchCPU: .seconds(30), hardDeadline: .now + .milliseconds(50))
+        let started = ContinuousClock.now
+        #expect(engine.search(compiled, in: nearMiss, budget: &budget) == .exhausted)
+        #expect(ContinuousClock.now - started < .seconds(5))
+    }
+
+    @Test func evaluate_pastHardDeadline_isNotAllow() throws {
+        let result = try evaluateWithSinglePack(
+            safe: [], destructive: [#"rm\s+-rf"#], command: "rm a",
+            budget: PatternBudget(hardDeadline: .now - .seconds(1)))
+        #expect(result.decision == .indeterminate(.budgetExhausted))
+    }
+
     private func deniedRule(_ result: EvaluationResult) -> String? {
         guard case .deny(let deny) = result.decision else { return nil }
         return deny.ruleID.rawValue
@@ -89,7 +109,8 @@ struct PatternTimeBoundTests {
     private func evaluateWithSinglePack(
         safe: [String],
         destructive: [String],
-        command: String
+        command: String,
+        budget: PatternBudget = PatternBudget(perSearchCPU: .milliseconds(50))
     ) throws -> EvaluationResult {
         var packs = [PackSnapshot(
             id: .coreGit,
@@ -116,7 +137,7 @@ struct PatternTimeBoundTests {
             packs: packs,
             engine: engine,
             compiled: compiled,
-            patternBudget: PatternBudget(perSearchCPU: .milliseconds(50))
+            patternBudget: budget
         )
     }
 }

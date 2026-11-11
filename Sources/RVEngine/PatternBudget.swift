@@ -22,14 +22,24 @@ public struct PatternBudget: Sendable {
     private let wallDeadline: ContinuousClock.Instant
     private var spentCPU: Double = 0
 
+    /// `hardDeadline` pulls the wall ceiling in to an absolute instant: rvd
+    /// passes the hook client's deadline, so an evaluation the client has
+    /// already given up on stops searching (and can then only end
+    /// indeterminate or deny, never allow) instead of running on.
     public init(
         totalCPU: Duration = PatternBudget.defaultTotalCPU,
         perSearchCPU: Duration = PatternBudget.defaultPerSearchCPU,
-        wallCeiling: Duration = PatternBudget.defaultWallCeiling
+        wallCeiling: Duration = PatternBudget.defaultWallCeiling,
+        hardDeadline: ContinuousClock.Instant? = nil
     ) {
         self.totalCPU = totalCPU.seconds
         self.perSearchCPU = perSearchCPU.seconds
-        self.wallDeadline = ContinuousClock.now + wallCeiling
+        let ceiling = ContinuousClock.now + wallCeiling
+        if let hardDeadline {
+            self.wallDeadline = min(ceiling, hardDeadline)
+        } else {
+            self.wallDeadline = ceiling
+        }
     }
 
     /// True once no further search may start.
