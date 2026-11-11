@@ -4,7 +4,7 @@
   "id": "system.disk",
   "name": "Disk Operations",
   "version": "0.11.0",
-  "description": "Protects against destructive disk operations like dd to devices, \\ mkfs, partition table modifications, RAID management, \\ btrfs/LVM/device-mapper operations, network block devices, \\ and macOS diskutil erase/partition/APFS deletion",
+  "description": "Protects against destructive disk operations like dd to devices, \\ mkfs, partition table modifications, RAID management, \\ btrfs/LVM/device-mapper operations, network block devices, \\ Linux drive erase/discard tools (blkdiscard, nvme, sg_format, hdparm, cryptsetup, ZFS), \\ and macOS diskutil erase/partition/APFS deletion",
   "category": "system",
   "enabled_by_default": true,
   "keywords": [
@@ -27,7 +27,24 @@
     "vgreduce",
     "lvreduce",
     "lvresize",
-    "pvmove"
+    "pvmove",
+    "blkdiscard",
+    "sgdisk",
+    "sfdisk",
+    "gdisk",
+    "mke2fs",
+    "mkntfs",
+    "mkdosfs",
+    "mkexfatfs",
+    "nvme",
+    "sg_format",
+    "sg_sanitize",
+    "hdparm",
+    "cryptsetup",
+    "ddrescue",
+    "badblocks",
+    "zpool",
+    "zfs"
   ],
   "safe_patterns": [
     {
@@ -451,6 +468,84 @@
       "severity": "critical",
       "description": "diskutil apfs delete/erase operations permanently remove APFS containers, volumes, or snapshots.",
       "explanation": "Deleting an APFS container destroys every volume inside it; deleting or erasing a volume destroys that volume's data; deleting a snapshot removes a restore point. None of these are recoverable without backups.\n\nList APFS structure first: diskutil apfs list"
+    },
+    {
+      "name": "mkfs-variants",
+      "pattern": "(?:^|[^\\w./-])(?:mke2fs|mkntfs|mkdosfs|mkexfatfs|mkexfat|mkudffs|mkreiserfs|mkfatfs|mkhfs)\\s+",
+      "severity": "high",
+      "description": "This formatter writes a new filesystem over a partition or device and ERASES all existing data."
+    },
+    {
+      "name": "blkdiscard",
+      "pattern": "(?:^|[^\\w./-])blkdiscard\\s+",
+      "severity": "high",
+      "description": "blkdiscard discards every block on a device: the data is gone immediately and cannot be recovered."
+    },
+    {
+      "name": "sgdisk-destroy",
+      "pattern": "(?:^|[^\\w./-])sgdisk\\b[^\\n;&|]*\\s(?:-[A-Za-z]*[ZzodnNlR][A-Za-z]*|--(?:zap|zap-all|clear|delete|new|largest-new|load-backup|replicate))(?=[\\s=]|$)",
+      "severity": "high",
+      "description": "sgdisk with --zap-all/--clear/--delete/--new rewrites or destroys the partition table."
+    },
+    {
+      "name": "sfdisk-write",
+      "pattern": "(?:^|[^\\w./-])sfdisk\\b(?![^\\n;&|]*\\s(?:-l|--list|-d|--dump|-J|--json|-s|--show-size|-g|--show-geometry|-V|--verify|-T|--list-types|-F|--list-free|-h|--help|-v|--version)(?=\\s|$))[^\\n;&|]*\\s['\\\"]?/dev/",
+      "severity": "high",
+      "description": "sfdisk without a read-only flag writes (or deletes) the partition table on a device."
+    },
+    {
+      "name": "gdisk-edit",
+      "pattern": "(?:^|[^\\w./-])gdisk\\s+(?!-l\\b)['\\\"]?/dev/",
+      "severity": "high",
+      "description": "gdisk edits the GPT partition table on a device and can destroy it."
+    },
+    {
+      "name": "nvme-erase",
+      "pattern": "(?:^|[^\\w./-])nvme\\s+(?:format|sanitize|delete-ns|detach-ns)\\b",
+      "severity": "high",
+      "description": "nvme format/sanitize/delete-ns erases an NVMe namespace or the whole drive."
+    },
+    {
+      "name": "sg-format",
+      "pattern": "(?:^|[^\\w./-])sg_(?:format|sanitize)\\b",
+      "severity": "high",
+      "description": "sg_format/sg_sanitize low-level formats or sanitizes a SCSI/SAS drive, erasing everything on it."
+    },
+    {
+      "name": "hdparm-erase",
+      "pattern": "(?:^|[^\\w./-])hdparm\\b[^\\n;&|]*\\s--(?:security-erase(?:-enhanced)?|trim-sector-ranges(?:-stdin)?|write-sector|make-bad-sector|dco-restore|dco-setmax)\\b",
+      "severity": "high",
+      "description": "hdparm security-erase/trim/write-sector destroys data on the drive."
+    },
+    {
+      "name": "cryptsetup-destroy",
+      "pattern": "(?:^|[^\\w./-])cryptsetup\\b[^\\n;&|]*\\s(?:luksFormat|erase|luksErase|luksKillSlot)\\b",
+      "severity": "high",
+      "description": "cryptsetup luksFormat/erase destroys the encrypted volume's keys; its data becomes unrecoverable."
+    },
+    {
+      "name": "ddrescue-force",
+      "pattern": "(?:^|[^\\w./-])ddrescue\\b[^\\n;&|]*\\s(?:-[A-Za-z]*f[A-Za-z]*|--force)(?=\\s|$)",
+      "severity": "high",
+      "description": "ddrescue --force overwrites a block device as its output."
+    },
+    {
+      "name": "badblocks-write",
+      "pattern": "(?:^|[^\\w./-])badblocks\\b[^\\n;&|]*\\s-[A-Za-z]*w",
+      "severity": "high",
+      "description": "badblocks -w runs a destructive write test that overwrites the whole device."
+    },
+    {
+      "name": "zpool-destroy",
+      "pattern": "(?:^|[^\\w./-])zpool\\s+(?:destroy|labelclear)\\b",
+      "severity": "high",
+      "description": "zpool destroy/labelclear destroys a ZFS pool and every dataset in it."
+    },
+    {
+      "name": "zfs-destroy",
+      "pattern": "(?:^|[^\\w./-])zfs\\s+destroy\\b",
+      "severity": "high",
+      "description": "zfs destroy permanently deletes a dataset, volume or snapshot."
     }
   ]
 }

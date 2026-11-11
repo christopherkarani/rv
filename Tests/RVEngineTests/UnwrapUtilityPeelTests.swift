@@ -147,3 +147,31 @@ private func expectNotWrapper(_ raw: String) {
     }
     #expect(unwrapped.layers.isEmpty, "\(raw)")
 }
+
+/// Each unmatched `$(` cost a scan to the end of the text, so a payload of
+/// thousands of them was quadratic (a 40 KB hook payload pinned rvd's CPU
+/// for minutes). Past `maxUnmatchedSubstitutionOpeners` the segment is
+/// unscannable and fails closed; a few unmatched openers are unchanged.
+@Test func manyUnmatchedSubstitutionOpenersFailClosedQuickly() {
+    let few = "echo " + String(repeating: "$(", count: maxUnmatchedSubstitutionOpeners) + "x"
+    #expect(splitSegments(few).contains(unscannableSegment) == false)
+
+    let many = "echo " + String(repeating: "$(", count: 20_000) + "x"
+    let started = ContinuousClock.now
+    let segments = splitSegments(many)
+    #expect(segments.contains(unscannableSegment))
+    #expect(ContinuousClock.now - started < .seconds(10))
+
+    let process = "cat " + String(repeating: "<(", count: 5_000) + "x"
+    #expect(splitSegments(process).contains(unscannableSegment))
+}
+
+/// Discarding output to `/dev/null` writes nothing, so it is no redirect
+/// target; every other destination, near-miss spellings included, still is.
+@Test func devNullOutputIsNotAWriteTarget() {
+    #expect(parseRedirectOnly(["ls", "2>/dev/null"]) == nil)
+    #expect(parseRedirectOnly(["make", ">", "/dev/null", "2>&1"]) == nil)
+    #expect(parseRedirectOnly(["echo", "x", ">", "/dev/nul"])?.paths == ["/dev/nul"])
+    #expect(parseRedirectOnly(["echo", "x", ">/dev/null", ">", "out.txt"])?.paths == ["out.txt"])
+    #expect(parseRedirectOnly(["ls", ">/dev/sda"])?.paths == ["/dev/sda"])
+}

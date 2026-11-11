@@ -43,6 +43,19 @@
     {"id": "disk.lvconvert-merge", "rule_id": "system.disk:lvconvert-merge"},
     {"id": "disk.diskutil-erase", "rule_id": "system.disk:diskutil-erase"},
     {"id": "disk.diskutil-partition", "rule_id": "system.disk:diskutil-partition"},
-    {"id": "disk.diskutil-apfs-delete", "rule_id": "system.disk:diskutil-apfs-delete"}
+    {"id": "disk.diskutil-apfs-delete", "rule_id": "system.disk:diskutil-apfs-delete"},
+    {"id": "disk.mkfs-variants", "rule_id": "system.disk:mkfs-variants", "command": "mke2fs -t ext4 /dev/sdb1", "expected": "deny"},
+    {"id": "disk.blkdiscard", "rule_id": "system.disk:blkdiscard", "command": "blkdiscard /dev/nvme0n1", "expected": "deny"},
+    {"id": "disk.sgdisk-destroy", "rule_id": "system.disk:sgdisk-destroy", "command": "sgdisk --zap-all /dev/sda", "expected": "deny"},
+    {"id": "disk.sfdisk-write", "rule_id": "system.disk:sfdisk-write", "command": "sfdisk --delete /dev/sda", "expected": "deny"},
+    {"id": "disk.gdisk-edit", "rule_id": "system.disk:gdisk-edit", "command": "gdisk /dev/sda", "expected": "deny"},
+    {"id": "disk.nvme-erase", "rule_id": "system.disk:nvme-erase", "command": "nvme format /dev/nvme0n1", "expected": "deny"},
+    {"id": "disk.sg-format", "rule_id": "system.disk:sg-format", "command": "sg_format --format /dev/sg0", "expected": "deny"},
+    {"id": "disk.hdparm-erase", "rule_id": "system.disk:hdparm-erase", "command": "hdparm --security-erase pass /dev/sda", "expected": "deny"},
+    {"id": "disk.cryptsetup-destroy", "rule_id": "system.disk:cryptsetup-destroy", "command": "cryptsetup luksFormat /dev/sdb1", "expected": "deny"},
+    {"id": "disk.ddrescue-force", "rule_id": "system.disk:ddrescue-force", "command": "ddrescue -f /dev/zero /dev/sda", "expected": "deny"},
+    {"id": "disk.badblocks-write", "rule_id": "system.disk:badblocks-write", "command": "badblocks -wsv /dev/sdb", "expected": "deny"},
+    {"id": "disk.zpool-destroy", "rule_id": "system.disk:zpool-destroy", "command": "zpool destroy tank", "expected": "deny"},
+    {"id": "disk.zfs-destroy", "rule_id": "system.disk:zfs-destroy", "command": "zfs destroy -r tank/data", "expected": "deny"}
   ]
 }

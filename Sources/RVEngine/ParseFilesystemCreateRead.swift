@@ -261,14 +261,24 @@ private func redirectTargets(_ tokens: [String]) -> [String]? {
             {
                 continue
             }
+            if isDiscardSink(dest) { continue }
             targets.append(dest)
             continue
         }
-        if let attached = RedirectOperatorLexer.attachedTarget(token) {
+        if let attached = RedirectOperatorLexer.attachedTarget(token), isDiscardSink(attached) == false {
             targets.append(attached)
         }
     }
     return targets
+}
+
+/// `/dev/null` as an output target discards the bytes: nothing is created,
+/// truncated or changed, so it is no write. Without this every
+/// `cmd 2>/dev/null` and `cmd >/dev/null 2>&1` (agents use them constantly)
+/// denied as a write outside the repository. Exact spelling only: any
+/// other device, or a path that merely resolves there, is still a target.
+func isDiscardSink(_ dest: String) -> Bool {
+    dest == "/dev/null"
 }
 
 func isFdDup(_ token: String) -> Bool {
