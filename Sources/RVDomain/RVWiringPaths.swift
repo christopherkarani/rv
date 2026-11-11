@@ -48,6 +48,12 @@ public enum RVWiringPaths {
         // environment, rvd included: an `LD_PRELOAD=` line here runs agent
         // code inside rvd at the next login.
         [".config", "environment.d"],
+        // The same for systemd itself: `DefaultEnvironment=` in the user
+        // manager's config, and drop-ins under `service.d` that apply to
+        // every user service (`Environment=`, a replaced `ExecStart=`).
+        [".config", "systemd", "user.conf"],
+        [".config", "systemd", "user.conf.d"],
+        [".config", "systemd", "user", "service.d"],
     ]
 
     /// Home-relative directories whose `dev.rv.*` entries are rv's units.

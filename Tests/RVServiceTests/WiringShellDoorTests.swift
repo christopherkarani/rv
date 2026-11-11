@@ -57,6 +57,10 @@ struct WiringShellDoorTests {
         "cp x ~/a/../.claude/settings.json",
         "cp x ../.claude/./settings.json",
         "cp x app/.claude/settings.local.json",
+        // systemd environment and drop-ins that reach rvd's unit.
+        "cp x ../.config/environment.d/50-x.conf",
+        "cp x ../.config/systemd/user.conf",
+        "cp x ../.config/systemd/user/service.d/env.conf",
     ])
     func observeHoldsWiring(command: String) throws {
         try Self.withRepo { _, home, cwd in
