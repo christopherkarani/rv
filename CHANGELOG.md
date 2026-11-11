@@ -84,7 +84,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Security
 
-- Linux self-protection: the file-tool door now protects the Swift runtime libraries `rv-cli` and `rvd` load from `~/.local/bin` (`*.so`, `*.so.*`) and install.sh's `.rv*` files, as the shell guard already did, plus `~/.config/environment.d` (read into every user service, `rvd` included) and `rvd`'s `default.target.wants` link.
+- Linux self-protection: the file-tool door now protects the Swift runtime libraries `rv-cli` and `rvd` load from `~/.local/bin` (`*.so`, `*.so.*`) and install.sh's `.rv*` files, as the shell guard already did, plus `~/.config/environment.d` (read into every user service, `rvd` included), systemd's `~/.config/systemd/user.conf`(`.d`) and `~/.config/systemd/user/service.d` drop-ins, and `rvd`'s `default.target.wants` link. An `rvd` that `rv setup`/`rv service start` runs directly (no systemd user manager) no longer inherits the caller's `LD_*` and other loader variables.
+- A comment on an inert command (`ls # …`) is kept, and judged, when the same command can redefine that command name (an alias, function, `hash`, `eval`, `source`, `trap`, or a dynamic command word).
 - `system.disk` denies Linux drive-destroying tools it missed: `mke2fs`/`mkntfs`/`mkdosfs`, `blkdiscard`, `sgdisk --zap-all`/`--clear`/`--delete`, `sfdisk` writes, `gdisk`, `nvme format`/`sanitize`, `sg_format`, `hdparm --security-erase`, `cryptsetup luksFormat`/`erase`, `ddrescue -f`, `badblocks -w`, `zpool destroy`, `zfs destroy`.
 
 - Releases can sign `SHA256SUMS` (`SHA256SUMS.sig`, `ssh-keygen -Y`, namespace `rv-release`) with the `RV_RELEASE_SSH_SIGNING_KEY` secret. Once `install.sh` pins the public key, installs refuse a missing (unless `RV_INSTALL_ALLOW_UNSIGNED=1`) or invalid signature; until then Linux installs warn that release signatures are not verified.
