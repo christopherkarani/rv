@@ -24,6 +24,13 @@ struct SecretServiceGuardTests {
         "dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets x",
         "python3 -c 'import dbus; dbus.SessionBus().get_object(\"org.freedesktop.secrets\", \"/\")'",
         "gdbus call --session --dest 'org.freedesktop.'\"secrets\" --object-path / --method x",
+        // Spellings the cheap pre-screen must still hand to the full parse.
+        "sec\"ret\"-tool lookup service rv.secrets",
+        "secret-t[o]ol lookup service rv.secrets",
+        "$'\\x73ecret-tool' lookup service rv.secrets",
+        "SECRET-TOOL lookup service rv.secrets",
+        "X=secret-tool; $X lookup service rv.secrets",
+        "`echo secret-tool` search service rv.secrets",
     ]
 
     static let harmless: [String] = [
@@ -46,6 +53,17 @@ struct SecretServiceGuardTests {
     @Test(arguments: harmless)
     func leavesOtherCommandsAlone(_ command: String) {
         #expect(SecretServiceGuard.touchesSecretService(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    /// The pre-screen skips the second full parse for long ordinary
+    /// commands (the corpus CPU bound on `rm -r -r …` tripped on it) and
+    /// never for anything that could launch `secret-tool`.
+    @Test func preScreenSkipsOnlyTextThatCannotNameTheTool() {
+        #expect(SecretServiceGuard.mayLaunchSecretTool("rm " + String(repeating: "-r ", count: 2000)) == false)
+        #expect(SecretServiceGuard.mayLaunchSecretTool("git status") == false)
+        for text in ["secret-tool", "secret-\\\ntool", "s\\ecret-tool", "$x", "`x`", "a lookup b", "x store y"] {
+            #expect(SecretServiceGuard.mayLaunchSecretTool(text), "\(text)")
+        }
     }
 
     @Test func foldDeniesAnAllowedKeyringReadAsCoreSecrets() {

@@ -29,6 +29,7 @@ public enum SecretServiceGuard {
     public static func touchesSecretService(_ command: ShellCommand) -> Bool {
         let folded = foldHiddenMentions(command.rawValue)
         if busMentions.contains(where: { folded.contains($0) }) { return true }
+        guard mayLaunchSecretTool(folded) else { return false }
         return launchedCommandHeads(command.rawValue).contains { launched in
             if launched.truncated { return folded.contains(toolName) }
             guard let head = launched.guardArgv.first else { return false }
@@ -36,6 +37,21 @@ public enum SecretServiceGuard {
             guard launched.headIsDynamic else { return false }
             return launched.guardArgv.dropFirst().contains { toolVerbs.contains(foldedWord($0)) }
         }
+    }
+
+    /// Cheap screen before parsing every launched command (a second full
+    /// tokenize, linear in the command: a 2,000-word `rm -r -r …` paid it on
+    /// every evaluation). False only when no launched head could be
+    /// `secret-tool` and no dynamic head could be given one of its verbs:
+    /// the text, with quotes, `[x]` classes, line continuations and
+    /// backslashes folded away and case-folded like `commandName`, names
+    /// neither, and has no `$` or backtick that could build either.
+    static func mayLaunchSecretTool(_ folded: String) -> Bool {
+        let plain = folded
+            .replacingOccurrences(of: "\\\n", with: "")
+            .replacingOccurrences(of: "\\", with: "")
+        if plain.contains("$") || plain.contains("`") || plain.contains(toolName) { return true }
+        return toolVerbs.contains { plain.contains($0) }
     }
 
     static func match(searchText: String) -> RuleMatch {
