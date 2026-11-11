@@ -65,7 +65,7 @@ enum OwnerConfirmation {
         // A locked or empty password can never match: say so instead of
         // prompting for a check that only adds a lockout strike.
         if let locked = OwnerAccountPassword.refusalIfLocked() {
-            throw ValidationError("rv: \(summary) was not done: \(locked)")
+            throw Refused("rv: \(summary) was not done: \(locked)")
         }
         guard let password = readOwnerPassword(prompt: "rv: \(summary)\nPassword for \(UserName.current ?? "your account"): ") else {
             throw Refused("rv: \(summary) needs your login password at an interactive terminal")
