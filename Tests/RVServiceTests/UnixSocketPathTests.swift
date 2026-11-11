@@ -64,16 +64,79 @@ struct UnixSocketPathTests {
         #expect(socket.lastPathComponent == UnixSocketPath.socketFileName)
     }
 
-    @Test func productionUnsetXDGThrowsWithoutCreatingTmpSocket() throws {
+    /// rvd binds where every client dials: unset XDG_RUNTIME_DIR is the
+    /// uid-derived runtime directory, never a /tmp fallback.
+    @Test func productionUnsetXDGUsesTheUidRuntimeDirLikeClients() throws {
         let previous = liveXDG()
         unsetenv("XDG_RUNTIME_DIR")
         defer { restoreXDG(previous) }
 
-        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
-            try UnixSocketPath.production()
-        }
+        let socket = try UnixSocketPath.production()
+        #expect(socket.path == "/run/user/\(getuid())/rv/evaluate.sock")
+        #expect(socket == UnixSocketPath.clientSocket(xdgRuntimeDir: nil, uid: getuid())?.url)
         #expect(FileManager.default.fileExists(atPath: "/tmp/rv.sock") == false)
         #expect(FileManager.default.fileExists(atPath: "/tmp/evaluate.sock") == false)
+    }
+
+    @Test func serverSocketMatchesClientSocketForEveryXDGShape() throws {
+        for xdg in [nil, "/run/user/1000", "/tmp/agent-dir"] as [String?] {
+            let server = try UnixSocketPath.serverSocket(xdgRuntimeDir: xdg, uid: 1000)
+            #expect(server == UnixSocketPath.clientSocket(xdgRuntimeDir: xdg, uid: 1000)?.url)
+        }
+        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
+            try UnixSocketPath.serverSocket(xdgRuntimeDir: "", uid: 1000)
+        }
+        let fixture = try UnixSocketPath.serverSocket(xdgRuntimeDir: nil, uid: 7, userRuntimeRoot: "/x/user")
+        #expect(fixture.path == "/x/user/7/rv/evaluate.sock")
+    }
+
+    /// No logind: rvd makes `<root>/<uid>` itself (one level, 0700) when
+    /// the root exists, and refuses one that is not owner-only.
+    @Test func prepareRuntimeCreatesTheUidRuntimeDirOnlyUnderAnExistingRoot() throws {
+        let root = shortRuntimeDir("u")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let uid = getuid()
+        let socket = try UnixSocketPath.serverSocket(xdgRuntimeDir: nil, uid: uid, userRuntimeRoot: root.path)
+        try UnixSocketPath.prepareRuntime(for: socket, userRuntimeRoot: root.path, uid: uid)
+        let owner = root.appendingPathComponent("\(uid)")
+        #expect(try UnixSocketPath.posixMode(of: owner) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: owner.path)
+        #expect(throws: UnixSocketPathError.userRuntimeDirectoryUnavailable(owner.path)) {
+            try UnixSocketPath.prepareRuntime(for: socket, userRuntimeRoot: root.path, uid: uid)
+        }
+        #expect(try UnixSocketPath.posixMode(of: owner) & 0o777 == 0o777)
+    }
+
+    @Test func prepareRuntimeRefusesAUidRuntimeDirThatIsASymlink() throws {
+        let root = shortRuntimeDir("s")
+        let target = shortRuntimeDir("t")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: target)
+        }
+        let uid = getuid()
+        let owner = root.appendingPathComponent("\(uid)")
+        try FileManager.default.createSymbolicLink(at: owner, withDestinationURL: target)
+        let socket = try UnixSocketPath.serverSocket(xdgRuntimeDir: nil, uid: uid, userRuntimeRoot: root.path)
+        #expect(throws: UnixSocketPathError.userRuntimeDirectoryUnavailable(owner.path)) {
+            try UnixSocketPath.prepareRuntime(for: socket, userRuntimeRoot: root.path, uid: uid)
+        }
+        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent("rv").path) == false)
+    }
+
+    @Test func prepareRuntimeNeverCreatesAMissingRootForANonRootUid() throws {
+        let root = shortRuntimeDir("m")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socket = try UnixSocketPath.serverSocket(xdgRuntimeDir: nil, uid: 4242, userRuntimeRoot: root.path)
+        #expect(throws: UnixSocketPathError.userRuntimeDirectoryUnavailable(root.path + "/4242")) {
+            try UnixSocketPath.prepareRuntime(for: socket, userRuntimeRoot: root.path, uid: 4242)
+        }
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
 
     @Test func productionEmptyXDGThrows() throws {

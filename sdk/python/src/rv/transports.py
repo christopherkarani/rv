@@ -1,6 +1,8 @@
 """Socket transport for ``rv.ipc.v1``. See ``sdk/WIRE.md`` §1-§2, §6.
 
-Linux resolves ``$XDG_RUNTIME_DIR/rv/evaluate.sock``; macOS resolves
+Linux resolves ``$XDG_RUNTIME_DIR/rv/evaluate.sock``, or
+``/run/user/<uid>/rv/evaluate.sock`` when ``XDG_RUNTIME_DIR`` is unset (the
+rule rvd, the C hook and the Swift CLI share); macOS resolves
 ``$HOME/.config/rv/evaluate.sock`` — the same rules as
 ``Sources/RVService/UnixSocketPath.swift``, including fail-closed base dirs,
 ``sockaddr_un`` length caps, and owner-only mode *checks* (the SDK never
@@ -23,6 +25,7 @@ CONNECT_TIMEOUT = 0.2
 DEFAULT_CALL_TIMEOUT = 0.7
 _LINUX_MAX_PATH = 108
 _DARWIN_MAX_PATH = 104
+_USER_RUNTIME_ROOT = "/run/user"
 _INSTALL_HINT = "install RV: curl -fsSL https://rykanv.com/install | sh (then `rv setup`)"
 
 
@@ -64,11 +67,15 @@ def resolve_socket_path(explicit: str | None = None) -> str:
                 remediation=_INSTALL_HINT,
             )
         return _check_length(os.path.join(base, ".config", "rv", "evaluate.sock"))
-    base = (os.environ.get("XDG_RUNTIME_DIR") or "").strip()
+    raw = os.environ.get("XDG_RUNTIME_DIR")
+    if raw is None:
+        # Same fallback as rvd and the hooks: no login manager set it.
+        return _check_length(os.path.join(_USER_RUNTIME_ROOT, str(os.getuid()), "rv", "evaluate.sock"))
+    base = raw.strip()
     if not base:
         raise RuntimeNotFound(
-            "XDG_RUNTIME_DIR is unset or empty; cannot locate $XDG_RUNTIME_DIR/rv/evaluate.sock",
-            remediation=_INSTALL_HINT,
+            "XDG_RUNTIME_DIR is set but empty; cannot locate $XDG_RUNTIME_DIR/rv/evaluate.sock",
+            remediation="unset XDG_RUNTIME_DIR (rv then uses /run/user/<uid>) or point it at rvd's runtime dir",
         )
     return _check_length(os.path.join(base, "rv", "evaluate.sock"))
 

@@ -168,7 +168,11 @@ struct LinuxUnixSocketTests {
         #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
     }
 
-    @Test func rvdSocketWithUnsetXDGExitsWithoutTmpSocket() throws {
+    /// Unset XDG_RUNTIME_DIR now means the uid-derived `/run/user/<uid>`
+    /// (`UnixSocketPathTests` covers that against a fixture root; a process
+    /// test must never bind the real one). Set but empty still fails closed,
+    /// with no /tmp fallback.
+    @Test func rvdSocketWithEmptyXDGExitsWithoutTmpSocket() throws {
         let rvd = try #require(findRVDExecutable(), "rvd binary must be built with the Linux graph")
         let home = try isolatedHomeDirectory()
         defer { try? FileManager.default.removeItem(at: home) }
@@ -176,6 +180,7 @@ struct LinuxUnixSocketTests {
         process.executableURL = rvd
         process.arguments = ["--socket"]
         process.environment = [
+            "XDG_RUNTIME_DIR": "",
             "HOME": home.path,
             "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "",
         ]
@@ -186,7 +191,7 @@ struct LinuxUnixSocketTests {
         process.waitUntilExit()
         #expect(process.terminationStatus == 1)
         let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        #expect(err.contains("XDG_RUNTIME_DIR is required"))
+        #expect(err.contains("XDG_RUNTIME_DIR is set but empty"))
         #expect(FileManager.default.fileExists(atPath: "/tmp/rv.sock") == false)
         #expect(FileManager.default.fileExists(atPath: "/tmp/evaluate.sock") == false)
     }

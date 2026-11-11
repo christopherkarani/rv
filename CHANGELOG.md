@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- `rvd` on Linux binds `/run/user/<uid>/rv/evaluate.sock` when `XDG_RUNTIME_DIR` is unset, the path the C hook and the Swift CLI already dialled, instead of refusing to start; it creates `/run/user/<uid>` (0700) when missing and refuses one that is not owner-only, with a message that names the fix. The Python SDK resolves the same path.
 - Action fingerprints now use an injective encoding. Pending runtime-HTTP asks, and pending asks for commands containing `:`, `,` or `\`, created before upgrade are re-asked after upgrade. Existing grants are unaffected. (#510)
 - Hooks that cannot reach `rvd` now name the cause. (#441)
 - `rvd` started by launchd (stderr on /dev/null) now writes its launch failures, with the cause, and transport warnings to an owner-only `~/Library/Logs/rv/rvd.log` (rotated at 1 MiB on startup). Under systemd they stay in the journal.
