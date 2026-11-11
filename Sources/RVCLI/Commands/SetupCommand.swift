@@ -12,10 +12,10 @@ struct Setup: AsyncParsableCommand {
         abstract: "Wire rv-owned host hooks and the rvd service (LaunchAgent on macOS, systemd user unit on Linux)."
     )
 
-    @Flag(name: .customLong("json"), help: "One line, no circles (same as --robot).")
+    @Flag(name: .customLong("json"), help: "One rv.setup.v1 JSON document (same as --robot).")
     var json = false
 
-    @Flag(name: .customLong("robot"), help: "One line, no circles.")
+    @Flag(name: .customLong("robot"), help: "One rv.setup.v1 JSON document.")
     var robot = false
 
     @Flag(name: .customLong("plain"), help: "Disable color.")
@@ -51,7 +51,8 @@ struct Setup: AsyncParsableCommand {
                 appearance: resolved.appearance,
                 animate: resolved.animate,
                 ceremonyKind: .fromInstallEnvironment(),
-                observe: observe
+                observe: observe,
+                json: json || robot
             ),
             clock: LiveSetupCeremonyClock(),
             write: CeremonyCLI.stdoutWriter()

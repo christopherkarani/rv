@@ -113,9 +113,9 @@ import RVTheme
     #expect(text.contains("rv allow-once 'git reset --hard'") == false)
 }
 
-@Test func helpText_setup_keepsOneLineCopy() {
+@Test func helpText_setup_namesTheJSONDocument() {
     let text = HelpDispatch.text(.setup, palette: colorOffPalette)
-    #expect(text.contains("One line, no circles"))
+    #expect(text.contains("One rv.setup.v1 JSON document"))
     #expect(text.contains("Robot JSON") == false)
 }
 
@@ -171,6 +171,7 @@ import RVTheme
     let status = HelpDispatch.text(.serviceStatus, palette: colorOffPalette)
     #expect(status.contains("→ rv service status"))
     #expect(status.contains("→ rv service status --robot"))
+    #expect(status.contains("JSON document (same as --robot)"))
     #expect(status.contains("key=value lines"))
     #expect(status.contains("Robot JSON") == false)
     #expect(status.contains("Next") == false)

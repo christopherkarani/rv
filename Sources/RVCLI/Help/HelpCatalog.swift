@@ -238,8 +238,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv service status [--json] [--robot] [--plain] [--no-color]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--json", description: "key=value lines (same as --robot)"),
-                HelpRow(name: "--robot", description: "key=value lines"),
+                HelpRow(name: "--json", description: "JSON document (same as --robot)"),
+                HelpRow(name: "--robot", description: "JSON document; piped or CI output without a flag is key=value lines"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
@@ -309,8 +309,8 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--force", description: "Replace occupied owned hooks (backup *.bak)"),
                 HelpRow(name: "--observe", description: "Log what rv would block instead of blocking"),
-                HelpRow(name: "--json", description: "One line, no circles (same as --robot)"),
-                HelpRow(name: "--robot", description: "One line, no circles"),
+                HelpRow(name: "--json", description: "One rv.setup.v1 JSON document (same as --robot)"),
+                HelpRow(name: "--robot", description: "One rv.setup.v1 JSON document"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),

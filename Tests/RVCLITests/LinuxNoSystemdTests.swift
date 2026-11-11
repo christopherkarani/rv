@@ -99,6 +99,20 @@ import Testing
         }
     }
 
+    @Test func setupJSONReportsTheDirectService() throws {
+        try withTempHome { home, _, launchctl in
+            let environment = linuxEnv(
+                home: home, launchctl: launchctl, systemctl: RecordingSystemctl(reachable: false),
+                direct: RecordingDirectRvd())
+            let outcome = SetupRun.setup(environment, json: true)
+            #expect(outcome.exitCode == 0)
+            let object = try #require(
+                JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any])
+            #expect(object["schema"] as? String == "rv.setup.v1")
+            #expect(object["service"] as? String == "direct")
+        }
+    }
+
     @Test func uninstallStopsADirectRvd() throws {
         try withTempHome { home, _, launchctl in
             let direct = RecordingDirectRvd()

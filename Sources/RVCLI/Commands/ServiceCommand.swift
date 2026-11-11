@@ -24,7 +24,8 @@ struct Status: AsyncParsableCommand {
         let report = await ServiceClient.probing(home: ctx.home).status()
         let text = try ServiceStatusCommand.text(
             report,
-            appearance: ctx.appearance
+            appearance: ctx.appearance,
+            explicitRobot: ctx.explicitRobot
         )
         ctx.writeStdout(text + "\n")
     }

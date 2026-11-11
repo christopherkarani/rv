@@ -35,7 +35,8 @@ enum SetupRun {
         guardRequest: SetupGuardRequest = .keep,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
-        write: ((String) -> Void)? = nil
+        write: ((String) -> Void)? = nil,
+        json: Bool = false
     ) -> SetupOutcome {
         do {
             let report = try perform(env, force: force, guardRequest: guardRequest)
@@ -56,17 +57,68 @@ enum SetupRun {
                 ? DirectRvd.notice(command: "setup", rvPath: env.rvPath, rvdPath: env.rvdPath, observing: observing)
                 : ""
             return SetupOutcome(
-                stdout: formatted.text,
+                stdout: json ? robotDocument(report, env: env) : formatted.text,
                 stderr: observeNotice(guardRequest, env: env)
                     + serviceWarning(report, observing: observing)
                     + direct
                     + refusals.joined(),
                 exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
-                emitted: formatted.emitted
+                emitted: json ? false : formatted.emitted
             )
         } catch {
-            return failureOutcome(error, command: .setup)
+            let output = setupFailureOutput(error, command: .setup)
+            return failureOutcome(stderr: output.stderr, exitCode: output.exitCode, json: json)
         }
+    }
+
+    /// `rv.setup.v1` for `rv setup --json`, newline-terminated.
+    static func robotDocument(_ report: SetupReport, env: SetupEnvironment) -> String {
+        let slots = report.slots
+        let outcome: String
+        switch slots.closer {
+        case .quiet: outcome = "unchanged"
+        case .hostless: outcome = "no_hosts"
+        case .complete: outcome = "complete"
+        case .skipped: outcome = "skipped"
+        }
+        let service: String
+        if report.serviceSkippedMissingRvd != nil {
+            service = "rvd_missing"
+        } else if env.managesService == false {
+            service = "not_managed"
+        } else if report.serviceStartedDirectly {
+            service = "direct"
+        } else {
+            service = env.supervisor == .launchd ? "launchd" : "systemd"
+        }
+        let missing = report.unwiredForMissingInterpreter.mapValues { $0.map(\.rawValue) }
+        let payload = SetupRobotPayload(
+            ok: missing.isEmpty,
+            outcome: outcome,
+            hosts: Dictionary(uniqueKeysWithValues: slots.detected.map { host in
+                (host.rawValue, slots.kind(for: host) == .occupied ? "occupied" : "wired")
+            }),
+            wrote: slots.wrote.map(\.rawValue).sorted(),
+            service: service,
+            unwiredMissingInterpreter: missing.isEmpty ? nil : missing,
+            error: nil
+        )
+        return robotJSON(payload)
+    }
+
+    private static func robotJSON(_ payload: SetupRobotPayload) -> String {
+        // Plain Codable payload: encoding cannot fail (see RobotDocument).
+        ((try? RobotDocument.setup(payload).render()) ?? "{}") + "\n"
+    }
+
+    /// A failed setup: stderr carries the failure; under `--json` stdout
+    /// also carries it as an `ok: false` document.
+    static func failureOutcome(stderr: String, exitCode: Int32, json: Bool) -> SetupOutcome {
+        SetupOutcome(
+            stdout: json ? robotJSON(.failure(stderr)) : "",
+            stderr: stderr,
+            exitCode: exitCode
+        )
     }
 
     /// Hooks wired with no service behind them deny every tool call (under
