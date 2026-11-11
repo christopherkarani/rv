@@ -1020,7 +1020,7 @@ enum MCPRun {
             let cleared = rollback()
             let tail = cleared
                 ? "nothing imported"
-                : "could not remove secrets this import already stored in the Keychain"
+                : "could not remove secrets this import already stored in \(SecretKeychain.storeName)"
             return CommandFailure("could not store \(name) \(SecretKeychainWriter.storeFailureSuffix); \(tail)")
         }
         for secret in plan.secrets {
@@ -1034,7 +1034,7 @@ enum MCPRun {
             updatedSecrets.secrets += plan.secrets.map(\.definition)
             if case .failure(let error) = updatedSecrets.write(configDirectory: environment.configDirectory) {
                 let cleared = rollback()
-                let message = cleared ? error.message : "\(error.message); could not remove secrets this import already stored in the Keychain"
+                let message = cleared ? error.message : "\(error.message); could not remove secrets this import already stored in \(SecretKeychain.storeName)"
                 return .failure(CommandFailure(message))
             }
         }
@@ -1068,7 +1068,7 @@ enum MCPRun {
         guard fileMatches(updated, configDirectory: environment.configDirectory) else {
             return .failure(CommandFailure("mcp.json changed while it was being signed"))
         }
-        lines.append("wrote mcp.json\(plan.secrets.isEmpty ? "" : " and secrets.json (values in the Keychain, service \(SecretKeychain.service))")")
+        lines.append("wrote mcp.json\(plan.secrets.isEmpty ? "" : " and secrets.json (values in \(SecretKeychain.storeName), service \(SecretKeychain.service))")")
         if toolModeForFreshConfig != nil, configuration.servers.isEmpty {
             lines.append("tool mode search: clients see only rv_search_tools and rv_call_tool")
         }
@@ -1520,7 +1520,7 @@ extension MCPHost: ExpressibleByArgument {}
 struct MCPImportCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "import",
-        abstract: "Copy a host's MCP servers into mcp.json; literal credentials move into the Keychain.")
+        abstract: "Copy a host's MCP servers into mcp.json; literal credentials move into the Keychain (Linux: the Secret Service keyring).")
 
     @Option(help: "Host to import from: \(MCPHost.allCases.map(\.rawValue).joined(separator: ", ")).") var host: MCPHost
     @Option(name: .customLong("server"), help: "Only this server (repeatable).") var servers: [String] = []

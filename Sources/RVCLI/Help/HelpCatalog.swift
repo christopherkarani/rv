@@ -791,7 +791,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "storage",
-                    description: "Kept in the Keychain (macOS; Linux has no secret store yet) as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
+                    description: "Kept in the Keychain (macOS) or the Secret Service keyring via secret-tool (Linux) as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
                 ),
                 HelpRow(name: "check", description: "Resolves the named (default: connected) logins and shows fingerprints, never values; exit 1 if any fails"),
                 HelpRow(name: "logout", description: "Removes the login definition and the rv-stored Keychain value"),

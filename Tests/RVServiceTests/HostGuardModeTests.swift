@@ -193,6 +193,9 @@ struct HostGuardModeTests {
         "git reset --hard && rv host mode cursor off",
         "echo '{}' > ~/.config/rv/config.json",
         "git reset --hard; echo '{}' > ~/.config/rv/config.json",
+        // rv's Linux secret store (core.secrets:secret-service).
+        "secret-tool lookup service rv.secrets account OPENAI_API_KEY",
+        "git reset --hard; secret-tool lookup service rv.secrets account K",
     ])
     func observeHostShellKeepsSelfProtection(command: String) async throws {
         let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)

@@ -322,8 +322,10 @@ struct LoginConnect: AsyncParsableCommand {
             from stdin when piped:
               rv login connect vercel
               printf %s "$VERCEL_TOKEN" | rv login connect vercel --stdin
-            The value is stored in the Keychain as the provider's secret
-            with gateway delivery; agents receive a placeholder, never it.
+            The value is stored in the Keychain (macOS) or the Secret
+            Service keyring through secret-tool (Linux) as the provider's
+            secret with gateway delivery; agents receive a placeholder,
+            never it.
             """
     )
 
