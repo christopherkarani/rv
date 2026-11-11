@@ -94,9 +94,39 @@ struct ProcessDirectRvd: DirectRvdLaunching {
         let argv = [rvdPath] + DirectRvd.arguments
         var cArgs: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
         defer { for pointer in cArgs { free(pointer) } }
+        var entries: [String] = []
+        var cursor = environ
+        while let entry = cursor.pointee {
+            entries.append(String(cString: entry))
+            cursor += 1
+        }
+        var cEnv: [UnsafeMutablePointer<CChar>?] = Self.daemonEnvironment(entries).map { strdup($0) } + [nil]
+        defer { for pointer in cEnv { free(pointer) } }
         var pid: pid_t = 0
-        let status = posix_spawn(&pid, rvdPath, &actions, &attributes, &cArgs, environ)
+        let status = posix_spawn(&pid, rvdPath, &actions, &attributes, &cArgs, &cEnv)
         guard status == 0 else { throw DirectRvdError.spawnFailed(status) }
+    }
+
+    /// Variables that load code into, or redirect files of, the process
+    /// that reads them: the dynamic loader's (`LD_*`), glibc's list of
+    /// variables it drops for setuid programs, and the Swift runtime's
+    /// crash backtracer path.
+    static let loaderVariables: Set<String> = [
+        "GCONV_PATH", "GETCONF_DIR", "GLIBC_TUNABLES", "HOSTALIASES", "LOCALDOMAIN", "LOCPATH",
+        "MALLOC_TRACE", "NIS_PATH", "NLSPATH", "RESOLV_HOST_CONF", "RES_OPTIONS", "TMPDIR", "TZDIR",
+        "SWIFT_BACKTRACE",
+    ]
+
+    /// The environment the detached rvd starts with: the caller's, minus
+    /// `loaderVariables`. `rv service start|restart` is an ordinary command
+    /// an agent may run, and a systemd user manager or launchd would never
+    /// hand rvd the caller's environment: `LD_PRELOAD=x.so rv service
+    /// restart` must not run agent code inside the rvd it starts.
+    static func daemonEnvironment(_ entries: [String]) -> [String] {
+        entries.filter { entry in
+            let name = entry.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+            return name.hasPrefix("LD_") == false && loaderVariables.contains(name) == false
+        }
     }
 
     /// Processes of `uid` whose executable is `rvdPath`, or the deleted

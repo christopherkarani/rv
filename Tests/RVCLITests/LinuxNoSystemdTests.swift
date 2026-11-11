@@ -214,6 +214,21 @@ import Testing
         #expect(ProcessDirectRvd.matchingPIDs(rvdPath: rvd, procRoot: root.path, uid: getuid() + 1).isEmpty)
     }
 
+    /// The caller's environment reaches rvd without the variables that
+    /// load code into it: an agent's `LD_PRELOAD=x.so rv service restart`
+    /// must not run its library inside rvd.
+    @Test func directRvdDropsLoaderVariables() {
+        let kept = ProcessDirectRvd.daemonEnvironment([
+            "HOME=/home/u", "PATH=/usr/bin:/bin", "LD_PRELOAD=/tmp/x.so", "LD_LIBRARY_PATH=/tmp",
+            "LD_AUDIT=/tmp/a.so", "GCONV_PATH=/tmp", "GLIBC_TUNABLES=x", "SWIFT_BACKTRACE=swift-backtrace=/tmp/b",
+            "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8", "OLD_LD_PRELOAD=kept", "=odd",
+        ])
+        #expect(kept == [
+            "HOME=/home/u", "PATH=/usr/bin:/bin", "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8",
+            "OLD_LD_PRELOAD=kept", "=odd",
+        ])
+    }
+
     /// The spawned daemon gets its own session (it outlives the terminal)
     /// and rvd's resident arguments.
     @Test func directRvdStartsInItsOwnSessionWithTheResidentArguments() throws {
