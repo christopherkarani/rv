@@ -57,6 +57,39 @@ struct ShellCommentsTests {
         }
     }
 
+    /// An inert head is only inert while nothing in the text can make it
+    /// run something else. A same-line alias, function, hash entry, eval,
+    /// sourced file, trap or dynamic command word can, and a literal `#`
+    /// would then hand the comment words to that program
+    /// (`alias echo=rm` then `echo # -rf ~` runs `rm -rf '#' ~`).
+    @Test func headsTheTextCanRedefineAreNotInert() {
+        for input in [
+            "alias echo=rm\necho # -rf /home/user",
+            "alias ls='git reset'; ls # --hard",
+            "\\alias echo=rm\necho # -rf x",
+            "'ali'as echo=rm\necho # -rf x",
+            "\"ali\"as echo=rm\necho # -rf x",
+            "builtin alias echo=rm\necho # -rf x",
+            "command alias echo=rm\necho # -rf x",
+            "if true; then alias echo=rm; fi\necho # -rf x",
+            "eval 'alias echo=rm'\necho # -rf x",
+            "function ls { rm \"$@\"; }\nls # -rf x",
+            "hash -p /bin/rm ls; ls # -rf x",
+            "enable -f ./x.so echo; echo # -rf x",
+            "source ./aliases.sh; ls # -rf x",
+            ". ./aliases.sh; ls # -rf x",
+            "trap 'eval rm $BASH_COMMAND' DEBUG; ls # -rf x",
+            "X=alias; $X echo=rm\necho # -rf x",
+            "$'\\x61lias' echo=rm\necho # -rf x",
+            "$\"alias\" echo=rm\necho # -rf x",
+        ] {
+            #expect(ShellComments.strippingInertComments(input) == nil, "\(input)")
+        }
+        // Plain operands that merely look like those words do not count.
+        #expect(ShellComments.strippingInertComments("ls . # here") == "ls . ")
+        #expect(ShellComments.strippingInertComments("echo $HOME # x") == "echo $HOME ")
+    }
+
     @Test func stripCountsAsBashDoes() {
         // A comment ends at the newline: the next line still runs.
         #expect(ShellComments.strippingInertComments("ls # a\nls # b") == "ls \nls ")

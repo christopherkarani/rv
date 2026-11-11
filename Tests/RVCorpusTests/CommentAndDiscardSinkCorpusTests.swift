@@ -43,6 +43,11 @@ struct CommentAndDiscardSinkCorpusTests {
         "echo hi # <<EOF\nrm -rf ~\nEOF",
         "ls a#b ; rm -rf /",
         "ls \\#x ; rm -rf /",
+        // The text redefines the inert head: a literal `#` would hand the
+        // comment words to the program the alias names.
+        "alias ls='git reset'\nls # --hard",
+        "alias echo='git reset'\necho # --hard",
+        "eval \"alias echo='git reset'\"\necho # --hard",
     ])
     func commentNearMissesStillDeny(command: String) throws {
         // The product door; the pack-only pin never read `git reset # --hard`

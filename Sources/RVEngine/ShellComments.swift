@@ -25,6 +25,14 @@
 ///   here-strings, a backslash-newline, a `#` right after `< > ; & | ( )`,
 ///   unbalanced quotes — leaves the whole text unchanged.
 ///
+/// - Nothing in the text can make an inert head run something else: no
+///   word (quotes and backslashes removed) is `alias`, `function`, `hash`,
+///   `enable`, `eval`, `source`, `trap` or a zsh equivalent, no command
+///   word is `.` or dynamic (`$X`), and there is no `$'…'` quoting. A
+///   literal `#` hands the comment words to whatever `echo` or `ls` names
+///   by then (`alias echo=rm` then `echo # -rf ~` runs `rm -rf '#' ~`),
+///   and stripping would hide them from the alias resolver too.
+///
 /// If any comment in the text misses one of these, nothing is stripped and
 /// the text is evaluated as written (comment text included), as before.
 enum ShellComments {
@@ -144,7 +152,7 @@ enum ShellComments {
                 index += 1
             }
         }
-        guard comments.isEmpty == false else { return nil }
+        guard comments.isEmpty == false, mayRedefineCommands(bytes) == false else { return nil }
         var out: [UInt8] = []
         out.reserveCapacity(count)
         var cursor = 0
@@ -154,6 +162,65 @@ enum ShellComments {
         }
         out.append(contentsOf: bytes[cursor..<count])
         return String(decoding: out, as: UTF8.self)
+    }
+
+    /// Words that define or replace what a command name runs, or run
+    /// text this scan does not see, in bash or zsh.
+    static let redefiningWords: Set<String> = [
+        "alias", "function", "functions", "hash", "enable", "eval", "source", "trap", "autoload", "zmodload",
+    ]
+
+    /// Reserved words after which the next word is still a command word.
+    private static let leadingReservedWords: Set<String> = [
+        "if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "time", "fi", "done",
+    ]
+
+    /// True when the text might make an inert head run another program:
+    /// any word that, with quotes and backslashes removed, is one of
+    /// `redefiningWords`; a command word that is `.` or holds `$`; or any
+    /// `$'…'` (its escapes can spell any word). Over-approximate on purpose.
+    private static func mayRedefineCommands(_ bytes: [UInt8]) -> Bool {
+        var atCommandWord = true
+        var word: [UInt8] = []
+        var raw: [UInt8] = []
+        func finishWord() -> Bool {
+            defer {
+                word.removeAll(keepingCapacity: true)
+                raw.removeAll(keepingCapacity: true)
+            }
+            guard raw.isEmpty == false else { return false }
+            let text = String(decoding: word, as: UTF8.self)
+            if redefiningWords.contains(text) { return true }
+            guard atCommandWord else { return false }
+            if text == "." || raw.contains(UInt8(ascii: "$")) { return true }
+            if leadingReservedWords.contains(text) { return false }
+            // A prefix assignment (`X=1 cmd`) leaves the next word in command position.
+            if let equals = raw.firstIndex(of: UInt8(ascii: "=")), equals > 0 { return false }
+            atCommandWord = false
+            return false
+        }
+        var index = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == UInt8(ascii: "$"), index + 1 < bytes.count, bytes[index + 1] == UInt8(ascii: "'") {
+                return true
+            }
+            switch byte {
+            case UInt8(ascii: " "), UInt8(ascii: "\t"), UInt8(ascii: "<"), UInt8(ascii: ">"):
+                if finishWord() { return true }
+            case UInt8(ascii: "\n"), UInt8(ascii: ";"), UInt8(ascii: "&"), UInt8(ascii: "|"),
+                 UInt8(ascii: "("), UInt8(ascii: ")"):
+                if finishWord() { return true }
+                atCommandWord = true
+            case UInt8(ascii: "'"), UInt8(ascii: "\""), UInt8(ascii: "\\"):
+                raw.append(byte)
+            default:
+                raw.append(byte)
+                word.append(byte)
+            }
+            index += 1
+        }
+        return finishWord()
     }
 
     private static func isOperatorByte(_ byte: UInt8) -> Bool {
