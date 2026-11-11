@@ -123,10 +123,14 @@ enum DaemonTrustProbe {
 /// Install/runtime problems that make hooks deny even though rv "looks"
 /// installed. Each carries the exact repair command.
 enum DoctorInstallChecks {
-#if os(Linux)
-    static let packBundleName = "rv_RVPacks.resources"
-#else
+    /// Swift Build (the SwiftPM default since 6.4) names the bundle
+    /// `.bundle` on every platform; the legacy native build system still
+    /// emits `.resources` on Linux. Mirrors `PackRegistry`'s lookup.
     static let packBundleName = "rv_RVPacks.bundle"
+#if canImport(Darwin)
+    static let packBundleNames = [packBundleName]
+#else
+    static let packBundleNames = [packBundleName, "rv_RVPacks.resources"]
 #endif
     static let trustManifestPath = "/Library/Application Support/RV/peer-trust.json"
 
@@ -226,9 +230,13 @@ enum DoctorInstallChecks {
                 fix: SetupRun.reinstallHint
             )
         }
-        let bundle = (paths.localRvd as NSString).deletingLastPathComponent + "/" + packBundleName
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: bundle, isDirectory: &isDirectory), isDirectory.boolValue else {
+        let binDirectory = (paths.localRvd as NSString).deletingLastPathComponent
+        let present = packBundleNames.contains { name in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: binDirectory + "/" + name, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
+        guard present else {
             return DoctorProblem(
                 id: "pack-bundle",
                 severity: .fail,

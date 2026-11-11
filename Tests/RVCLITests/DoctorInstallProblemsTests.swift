@@ -206,6 +206,23 @@ private func doctorPretty(_ fixture: InstallHome, _ diagnostics: ServiceDiagnost
     }
 }
 
+#if !canImport(Darwin)
+/// Swift 6.4's default build system emits `rv_RVPacks.bundle` on Linux; the
+/// legacy native build system emits `rv_RVPacks.resources`. Either is a
+/// loadable install (PackRegistry accepts both), so neither may fail doctor.
+@Test func doctorInstall_linuxLegacyResourcesBundle_isAccepted() throws {
+    try withInstallHome { fixture in
+        try stageHealthyInstall(fixture)
+        let binDirectory = (fixture.paths.localRvd as NSString).deletingLastPathComponent
+        try FileManager.default.moveItem(
+            atPath: binDirectory + "/rv_RVPacks.bundle",
+            toPath: binDirectory + "/rv_RVPacks.resources"
+        )
+        #expect(problems(fixture).contains { $0.id == "pack-bundle" } == false)
+    }
+}
+#endif
+
 @Test func doctorInstall_rvdMissing_failsWithReinstall() throws {
     try withInstallHome { fixture in
         try stageHealthyInstall(fixture)

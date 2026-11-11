@@ -46,6 +46,15 @@ struct OwnedPaths: Equatable, Sendable {
         home.rawValue + "/Applications/RVApprovals.app/Contents/MacOS/rv-mcp-custodian"
     }
     var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
+    /// The file that registers rvd with this platform's supervisor: the
+    /// systemd user unit on Linux, the LaunchAgent plist elsewhere.
+    var evaluateServiceFile: String {
+#if os(Linux)
+        systemdUserUnit
+#else
+        launchAgent
+#endif
+    }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }

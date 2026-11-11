@@ -871,10 +871,10 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 @Test func doctor_downWithInstalledAgentIsDownNotNotInstalled() throws {
     try withDoctorHome { home, paths, environment in
         try FileManager.default.createDirectory(
-            atPath: (paths.launchAgent as NSString).deletingLastPathComponent,
+            atPath: (paths.evaluateServiceFile as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
-        try "plist".write(toFile: paths.launchAgent, atomically: true, encoding: .utf8)
+        try "plist".write(toFile: paths.evaluateServiceFile, atomically: true, encoding: .utf8)
         let before = try FileManager.default.contentsOfDirectory(atPath: home.path)
 
         let health = ServiceHealth.inspect(
@@ -897,7 +897,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("down"))
         #expect(outcome.stdout.contains("not installed") == false)
         #expect(outcome.stdout.contains("launch-agent installed"))
-        #expect(try String(contentsOfFile: paths.launchAgent, encoding: .utf8) == "plist")
+        #expect(try String(contentsOfFile: paths.evaluateServiceFile, encoding: .utf8) == "plist")
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
 }

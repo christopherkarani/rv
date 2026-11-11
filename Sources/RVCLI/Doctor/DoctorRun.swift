@@ -123,7 +123,7 @@ enum DoctorRun {
                 diagnostics: diagnostics,
                 launchAgent: .observed(
                     ServiceHealth.launchAgentState(
-                        installed: environment.fileManager.fileExists(atPath: paths.launchAgent),
+                        installed: environment.fileManager.fileExists(atPath: paths.evaluateServiceFile),
                         loaded: environment.launchAgentLoaded
                     )
                 ),
