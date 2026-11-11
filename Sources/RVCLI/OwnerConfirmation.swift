@@ -94,7 +94,7 @@ enum OwnerConfirmation {
                 throw ValidationError(
                     "rv: rvd cannot show a Touch ID or password prompt here (no passcode set or no login session)")
                 #else
-                throw ValidationError("rv: rvd could not check the password (unix_chkpwd missing or not answering)")
+                throw ValidationError("rv: rvd could not check your login password (unix_chkpwd missing or not answering, or this account has no local password, such as an SSSD, LDAP or systemd-homed account)")
                 #endif
             }
         case .failure(let error):

@@ -3,9 +3,16 @@ Description=rv evaluate service
 
 [Service]
 Type=simple
-ExecStart=@RVD_PATH@ --socket
-# Idle-exit is rvd IdleWatchdog (default 1800s; never while requests or allow-once grants are live). KeepAlive equivalent stays off.
-Restart=no
+# Resident on Linux. launchd relaunches an on-demand rvd when a client
+# connects; systemd can only do that by owning the listening socket, and then
+# the socket peer is systemd, not rvd, so the clients' SO_PEERCRED identity
+# check would refuse it. Instead rvd effectively never idle-exits (one year)
+# and systemd restarts it after a crash or after an upgrade replaced the
+# binary (rvd exits 0 once it sees that). Without this, every hook was denied
+# 30 idle minutes after login and stayed denied until a manual restart.
+ExecStart=@RVD_PATH@ --socket --idle-exit-seconds=31536000
+Restart=always
+RestartSec=1
 
 [Install]
 WantedBy=default.target

@@ -199,7 +199,7 @@ extension SetupRun {
     /// to `rv uninstall` (which removes owned files) to avoid accidental user use.
     /// Probe is performed by the caller via `env.companionPresence`; this helper
     /// just enforces the post-uninstall invariant (KeepAlive == false) when a
-    /// plist already exists. Linux is a no-op (systemd `Restart=no` is static).
+    /// plist already exists. Linux is a no-op (the systemd unit is static).
     static func restoreKeepAliveAfterCompanionUninstall(
         _ env: SetupEnvironment
     ) throws(SetupError) {

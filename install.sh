@@ -1179,9 +1179,10 @@ tmp_cli=""
 tmp_rvd=""
 tmp_host=""
 
-# Pack JSON lives next to the binaries (Scripts/release.sh). Darwin SPM emits
-# *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources. Bundle.module loads
-# whichever name this platform's accessor baked.
+# Pack JSON lives next to the binaries (Scripts/release.sh). Swift Build (the
+# SwiftPM default since 6.4) emits *_RVPacks.bundle on every platform; the
+# legacy native build system emits *_RVPacks.resources on Linux. PackRegistry
+# accepts either name.
 for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
   [ -d "$bundle" ] || continue
   name="$(basename "$bundle")"

@@ -504,8 +504,7 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(FileManager.default.fileExists(atPath: launchdPlist.path) == false)
     #expect(FileManager.default.fileExists(atPath: systemdUnit.path))
     let unit = try String(contentsOf: systemdUnit, encoding: .utf8)
-    #expect(unit.contains("Restart=no"))
-    #expect(unit.contains("Restart=always") == false)
+    #expect(unit.contains("Restart=always"))
     #expect(unit.contains("--socket"))
     #expect(unit.contains(destBin.appendingPathComponent("rvd").path))
 #endif

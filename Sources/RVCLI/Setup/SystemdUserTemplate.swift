@@ -31,6 +31,26 @@ enum SystemdUserTemplate {
         guard raw.contains(placeholder) else {
             throw SetupError.systemdUnitTemplateMissing
         }
-        return raw.replacingOccurrences(of: placeholder, with: value)
+        return raw.replacingOccurrences(of: placeholder, with: try execStartQuoted(value))
+    }
+
+    /// One `ExecStart=` word for `path`: double-quoted so a HOME with spaces
+    /// stays one argument, with `\` and `"` escaped and `%` doubled so systemd
+    /// does not expand it as a specifier. A newline cannot be expressed in a
+    /// unit line at all, so it is refused rather than written torn.
+    static func execStartQuoted(_ path: String) throws(SetupError) -> String {
+        guard path.contains(where: { $0.isNewline }) == false else {
+            throw SetupError.systemdUnitWriteFailed
+        }
+        var quoted = "\""
+        for character in path {
+            switch character {
+            case "\\": quoted += "\\\\"
+            case "\"": quoted += "\\\""
+            case "%": quoted += "%%"
+            default: quoted.append(character)
+            }
+        }
+        return quoted + "\""
     }
 }

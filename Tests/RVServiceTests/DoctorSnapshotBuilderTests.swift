@@ -17,7 +17,7 @@ struct DoctorSnapshotBuilderTests {
         #expect(packs.message == "core.filesystem, core.git, and system.disk loaded")
         let message = try launchdMessage(snapshot)
 #if os(Linux)
-        #expect(message == "template dev.rv.evaluate Restart=no idle-exit 300s")
+        #expect(message == "template dev.rv.evaluate Restart=always idle-exit 300s")
         #expect(message.contains("KeepAlive") == false)
 #else
         #expect(message == "template dev.rv.evaluate KeepAlive false idle-exit 300s")
@@ -54,7 +54,7 @@ struct DoctorSnapshotBuilderTests {
 #endif
 
 #if os(Linux)
-    @Test func linuxKeepAliveTrueStillReportsRestartNo() throws {
+    @Test func linuxKeepAliveTrueStillReportsRestartAlways() throws {
         let snapshot = DoctorSnapshotBuilder.make(
             catalog: PackCatalog(),
             corePacksReady: true,
@@ -63,7 +63,7 @@ struct DoctorSnapshotBuilderTests {
         )
         #expect(snapshot.keepAlive == false)
         let message = try launchdMessage(snapshot)
-        #expect(message == "template dev.rv.evaluate Restart=no idle-exit 300s")
+        #expect(message == "template dev.rv.evaluate Restart=always idle-exit 300s")
         #expect(message.contains("KeepAlive") == false)
     }
 
@@ -78,7 +78,7 @@ struct DoctorSnapshotBuilderTests {
         #expect(snapshot.idleExitSeconds == 42)
         #expect(
             try launchdMessage(snapshot)
-                == "template dev.rv.evaluate Restart=no idle-exit 42s"
+                == "template dev.rv.evaluate Restart=always idle-exit 42s"
         )
     }
 #endif

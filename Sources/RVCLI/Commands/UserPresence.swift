@@ -25,11 +25,24 @@ enum PresenceOutcome: Sendable, Equatable {
 /// Proof that a person, not an agent, is approving. macOS asks for Touch ID
 /// or the login password. A controlling terminal is not that proof: the
 /// agent can allocate a pseudo-terminal, read it, and answer it.
+/// How the owner proves presence, for user-facing text: Touch ID or the
+/// login password on macOS, the login password (checked by rvd with
+/// `unix_chkpwd`) on Linux, which has no Touch ID.
+enum OwnerAuthWording {
+    #if canImport(LocalAuthentication)
+    static let method = "Touch ID or your password"
+    static let prompt = "Touch ID or password prompt"
+    #else
+    static let method = "your login password"
+    static let prompt = "password prompt"
+    #endif
+}
+
 struct UserPresence: Sendable {
     var confirm: @Sendable (_ reason: String, _ challenge: PresenceChallenge) async -> PresenceOutcome
 
     static let deviceOwnerRefusal =
-        "this needs device owner authentication (Touch ID or your password); a terminal is not enough"
+        "this needs device owner authentication (\(OwnerAuthWording.method)); a terminal is not enough"
     static let pseudoTerminalRefusal = "a pseudo-terminal is not proof you are present"
     static let noTerminalRefusal =
         "this needs you present: run it yourself in a terminal (this process has no terminal)"

@@ -98,8 +98,20 @@ public struct SecretKeychainWriter: Sendable {
         }
     )
     #else
-    public static let live = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false })
+    /// No secret store off macOS: nothing is ever written, so a delete has
+    /// nothing to remove and succeeds (as macOS treats errSecItemNotFound).
+    public static let live = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in true })
     #endif
+
+    /// Why a store failed, for "could not store NAME …" messages. Off macOS
+    /// there is no store at all, which "in the Keychain" would hide.
+    public static var storeFailureSuffix: String {
+        #if canImport(Security)
+        "in the Keychain"
+        #else
+        "(this platform has no secret store yet; stored secret values need the macOS Keychain)"
+        #endif
+    }
 }
 
 extension SecretFingerprinter {

@@ -389,7 +389,7 @@ enum SecretsRun {
             return .failure(CommandFailure("organization policy: \(reason)"))
         }
         guard environment.keychain.store(SecretKeychain.service, name, value) else {
-            return .failure("could not store \(DisplayedText.field(name)) in the Keychain")
+            return .failure(CommandFailure("could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)"))
         }
         if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
             return .failure(CommandFailure(error.message))

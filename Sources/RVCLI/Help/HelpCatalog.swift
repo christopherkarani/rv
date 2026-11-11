@@ -658,7 +658,7 @@ enum HelpCatalog {
                 HelpRow(name: "missing", description: "A rule never matches an argument the call left out; keep a non-allow default"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
-                HelpRow(name: "approve", description: "Needs Touch ID or your password. A pseudo-terminal cannot approve"),
+                HelpRow(name: "approve", description: "Needs \(OwnerAuthWording.method). A pseudo-terminal cannot approve"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(
                     name: "sandbox",

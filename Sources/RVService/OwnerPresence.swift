@@ -24,7 +24,10 @@ protocol OwnerPasswordChecking: Sendable {
 /// The CLI also runs it directly for the daemon-down `rv uninstall` /
 /// `rv host mode` fallback, which unlocks only those local actions, never rvd.
 package struct UnixChkpwdChecker: OwnerPasswordChecking {
-    package static let candidates = ["/usr/sbin/unix_chkpwd", "/sbin/unix_chkpwd"]
+    /// NixOS keeps setuid/setgid helpers under its root-owned wrappers dir.
+    package static let candidates = ["/usr/sbin/unix_chkpwd", "/sbin/unix_chkpwd", "/run/wrappers/bin/unix_chkpwd"]
+    /// pam_unix's exit for a password that does not match (`PAM_AUTH_ERR`).
+    static let wrongPasswordStatus: Int32 = 7
     /// Longest password passed to the helper (its own limit is 512).
     static let maxPasswordBytes = 511
     /// Longest wait for the helper. pam_unix delays a failure by ~2 s, and
@@ -123,10 +126,24 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
             return nil
         }
         if process.terminationReason == .exit {
-            return process.terminationStatus == 0
+            return answer(forExitStatus: process.terminationStatus)
         }
         // Killed by a signal: ours after a cancel is no answer, any other a failure.
         return run.isCancelled ? nil : false
+    }
+
+    /// 0 is a match and `PAM_AUTH_ERR` a wrong password. Anything else means
+    /// the helper could not check this account at all: `PAM_AUTHINFO_UNAVAIL`
+    /// (9) for an SSSD/LDAP/AD or systemd-homed user with no local shadow
+    /// entry, or when the helper cannot read shadow (no-new-privileges);
+    /// `PAM_USER_UNKNOWN` and the like. Those answer nil ("cannot check",
+    /// still refused) so they never count toward the wrong-password lockout.
+    static func answer(forExitStatus status: Int32) -> Bool? {
+        switch status {
+        case 0: true
+        case wrongPasswordStatus: false
+        default: nil
+        }
     }
 
     static func userName() -> String? {

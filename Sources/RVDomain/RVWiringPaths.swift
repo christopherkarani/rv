@@ -44,12 +44,19 @@ public enum RVWiringPaths {
         [".config", "opencode", "rv-guard-tui-ask"],
         [".openclaw", "extensions", "rv-guard"],
         [".hermes", "plugins", "rv-guard"],
+        // systemd's user manager reads these into every user service's
+        // environment, rvd included: an `LD_PRELOAD=` line here runs agent
+        // code inside rvd at the next login.
+        [".config", "environment.d"],
     ]
 
     /// Home-relative directories whose `dev.rv.*` entries are rv's units.
     static let serviceDirectories: [[String]] = [
         ["Library", "LaunchAgents"],
         [".config", "systemd", "user"],
+        // `systemctl --user enable` links rvd's unit here; removing the link
+        // silently stops rvd from starting at login.
+        [".config", "systemd", "user", "default.target.wants"],
     ]
 
     static let binDirectory = [".local", "bin"]
@@ -149,11 +156,17 @@ public enum RVWiringPaths {
     }
 
     /// `rv`, `rvd`, `rv-cli`, every `rv-*` helper, the pack bundle beside
-    /// them, and the Swift runtime shim they load.
+    /// them, install.sh's `.rv*` temporaries and runtime-library list, and
+    /// the shared libraries they load: the macOS Swift shim and, on Linux,
+    /// the Swift runtime (`libswiftCore.so`, `libFoundation.so`, ...) that
+    /// rv-cli and rvd load from `$ORIGIN`. A replaced runtime library runs
+    /// inside rvd on its next start, so the file-tool door must refuse it
+    /// exactly as the shell guard (`RVInstallPathGuard`) already does.
     static func isRVBinaryName(_ raw: String) -> Bool {
         let name = raw.lowercased()
         return name == "rv" || name == "rvd" || name.hasPrefix("rv-") || name.hasPrefix("rv_")
-            || name.contains("_rvpacks.") || name == "libswiftcompatibilityspan.dylib"
+            || name.hasPrefix(".rv") || name.contains("_rvpacks.")
+            || name.hasSuffix(".dylib") || name.hasSuffix(".so") || name.contains(".so.")
     }
 
     private static func hasPrefix(_ parts: [String], _ prefix: [String]) -> Bool {

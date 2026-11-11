@@ -431,7 +431,7 @@ enum MCPRun {
         }
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
-            "approving needs you present: Touch ID or your password. A pseudo-terminal cannot approve",
+            "approving needs you present: \(OwnerAuthWording.method). A pseudo-terminal cannot approve",
         ])
             .joined(separator: "\n") + "\n"
     }
@@ -1021,7 +1021,7 @@ enum MCPRun {
             let tail = cleared
                 ? "nothing imported"
                 : "could not remove secrets this import already stored in the Keychain"
-            return CommandFailure("could not store \(name) in the Keychain; \(tail)")
+            return CommandFailure("could not store \(name) \(SecretKeychainWriter.storeFailureSuffix); \(tail)")
         }
         for secret in plan.secrets {
             guard environment.keychain.store(SecretKeychain.service, secret.definition.name, Data(secret.value.utf8)) else {

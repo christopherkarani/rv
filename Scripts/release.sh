@@ -23,7 +23,7 @@ Usage: Scripts/release.sh
   Darwin also stages rv-microvm + rv-guest-relay and rv-macvm +
     rv-macvm-agent (Scripts/build-microvm.sh; needs zig)
   Darwin also assembles RVApprovals.app (rv-mcp-custodian + Info.plist)
-  copy *_RVPacks.bundle (Darwin) or *_RVPacks.resources (Linux)
+  copy *_RVPacks.bundle (or *_RVPacks.resources from a legacy Linux build)
     into .build/release-stage (override with RV_RELEASE_STAGE)
 
 RV_RELEASE_SKIP_C_UNITS=1 skips the C unit run (CI runs it separately).
@@ -340,7 +340,8 @@ if [[ "$OS" == "Darwin" ]]; then
 fi
 
 copied=0
-# Darwin SPM emits *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources.
+# SwiftPM 6.4 emits *_RVPacks.bundle everywhere; the legacy native build
+# system emits *_RVPacks.resources on Linux. Copy whichever exists.
 # Bundle.module looks next to the relocated binary, then a baked .build path.
 for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue

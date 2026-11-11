@@ -107,8 +107,8 @@ struct OwnerGateRefusalTests {
                 (.ownerCheckUnconfirmed, subject, unconfirmedText),
                 (.notIssuedByService, subject, mint ? mintDeniedText : notIssuedText),
                 (.notApproved(declined), subject, mint
-                    ? "not approved (the Touch ID or password prompt was cancelled, failed or timed out); nothing was minted"
-                    : "not approved (the Touch ID or password prompt was cancelled, failed or timed out); the code stays live"),
+                    ? "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); nothing was minted"
+                    : "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); the code stays live"),
                 (.notApproved(ConfirmOwnerActionReply(outcome: .wrongPassword)), subject, mint
                     ? "wrong password; nothing was minted"
                     : "wrong password; nothing was allowed and the code stays live"),

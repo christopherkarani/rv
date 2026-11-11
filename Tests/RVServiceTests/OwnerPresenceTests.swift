@@ -435,16 +435,28 @@ struct OwnerPresenceTests {
         #expect(await checker.check("") == false)
     }
 
-    @Test func helperThatExitsWithoutReadingIsAWrongPasswordNotACrash() async {
+    @Test func helperThatExitsWithoutReadingIsRefusedNotACrash() async {
         // The password write must not raise SIGPIPE in rvd when the helper
-        // exits before reading its stdin.
+        // exits before reading its stdin. Exit 1 is not pam_unix's
+        // wrong-password status, so the answer is "cannot check" (refused,
+        // no lockout strike), never a match.
         guard let quitter = ["/bin/false", "/usr/bin/false"].first(where: {
             FileManager.default.isExecutableFile(atPath: $0)
         }) else { return }
         var checker = UnixChkpwdChecker()
         checker.helpers = [quitter]
         for _ in 0..<20 {
-            #expect(await checker.check(String(repeating: "x", count: 400)) == false)
+            #expect(await checker.check(String(repeating: "x", count: 400)) == nil)
+        }
+    }
+
+    @Test func unixChkpwdExitStatusesMapToMatchMismatchOrCannotCheck() {
+        #expect(UnixChkpwdChecker.answer(forExitStatus: 0) == true)
+        #expect(UnixChkpwdChecker.answer(forExitStatus: 7) == false)  // PAM_AUTH_ERR
+        // PAM_AUTHINFO_UNAVAIL (SSSD/LDAP/homed user, unreadable shadow),
+        // PAM_USER_UNKNOWN, a generic failure: never a lockout strike.
+        for status: Int32 in [1, 9, 10, 126, 127] {
+            #expect(UnixChkpwdChecker.answer(forExitStatus: status) == nil, "\(status)")
         }
     }
 
