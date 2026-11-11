@@ -46,9 +46,9 @@ enum CLIOwnerAuth {
         }
         #else
         do {
-            try await OwnerConfirmation.require(reason)
+            try await OwnerConfirmation.check(reason)
         } catch {
-            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            CommandContext.writeStderr("\(error)\n")
             throw AllowOnceAuthError.required
         }
         #endif

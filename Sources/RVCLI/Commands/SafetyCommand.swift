@@ -34,9 +34,10 @@ struct Safety: AsyncParsableCommand {
             }
             do {
                 try await SafetyRun.set(parsed, home: home)
-            } catch let refusal as ValidationError {
-                // Owner check refused: say why, not "could not write config".
-                try CommandContext.fail("\(refusal.message)\n")
+            } catch let refusal as ExitCode {
+                // Owner check refused (its line is already on stderr), not
+                // "could not write config".
+                throw refusal
             } catch {
                 try CommandContext.fail("rv safety: could not write config\n")
             }

@@ -368,7 +368,7 @@ struct AllowOnceCommandRunTests {
             ownerAuthOutcome: .authenticated, output: out
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await command.run()
             }
         }
@@ -462,7 +462,7 @@ struct AllowOnceCommandRunTests {
             ownerAuthOutcome: .cancelled, output: out
         ) {
             var command = try AllowOnceRedeem.parse([code.rawValue])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await command.run()
             }
         }
@@ -486,7 +486,7 @@ struct AllowOnceCommandRunTests {
         )
         try await withCLIProcess(home: home, stdinIsTTY: true, stdoutIsTTY: true) {
             var command = try AllowOnceRedeem.parse([code.rawValue])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await command.run()
             }
         }
@@ -502,7 +502,7 @@ struct AllowOnceCommandRunTests {
             ownerAuthOutcome: .failed, output: out
         ) {
             var command = try AllowOnceMint.parse(["git", "status"])
-            await #expect(throws: ExitCode(2)) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await command.run()
             }
         }

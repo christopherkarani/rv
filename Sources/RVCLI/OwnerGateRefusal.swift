@@ -36,8 +36,22 @@ enum OwnerGateRefusal: Sendable, Equatable {
         case allowlistEntry
     }
 
-    /// Exit code every gate refusal maps to.
+    /// Exit code of a gate refusal that is not an owner-check refusal
+    /// (TTY, format, store, a row that changed under review).
     static let exitCode: Int32 = 2
+
+    /// The owner check refused or could not confirm the owner: EX_NOPERM,
+    /// like every other owner-gated command (`OwnerConfirmation`). Other
+    /// gate refusals keep `exitCode`.
+    var exitCode: Int32 {
+        switch self {
+        case .authRequired, .throttled, .notApproved, .ownerCheckUnconfirmed:
+            OwnerConfirmation.refusalExitCode
+        case .ttyRequired, .robotRefused, .changedDuringReview, .storeUnavailable,
+            .notShowable, .notIssuedByService:
+            Self.exitCode
+        }
+    }
 
     init?(_ error: any Error) {
         switch error {
@@ -116,14 +130,15 @@ enum OwnerGateRefusal: Sendable, Equatable {
 }
 
 extension CommandContext {
-    /// Gate refusal: one stderr line plus exit 2. Anything else, `ExitCode`
-    /// included, is rethrown unchanged.
+    /// Gate refusal: one stderr line plus its exit code (EX_NOPERM for an
+    /// owner-check refusal, else 2). Anything else, `ExitCode` included, is
+    /// rethrown unchanged.
     func failOwnerGate(
         _ error: any Error,
         command: String,
         subject: OwnerGateRefusal.Subject
     ) throws -> Never {
         guard let refusal = OwnerGateRefusal(error) else { throw error }
-        try fail(refusal.message(command: command, subject: subject), exitCode: OwnerGateRefusal.exitCode)
+        try fail(refusal.message(command: command, subject: subject), exitCode: refusal.exitCode)
     }
 }

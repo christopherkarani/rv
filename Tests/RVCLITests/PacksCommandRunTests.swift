@@ -66,10 +66,10 @@ struct PacksCommandRunTests {
     }
 
     @Test func enable_missingHomeEmptyAndUnknown() async throws {
-        // The owner gate throws before any mutation path runs.
+        // The owner gate refuses (EX_NOPERM) before any mutation path runs.
         try await withCLIProcess(environment: [:]) {
             let home = try Packs.Enable.parse(["core.git"])
-            await #expect(throws: ValidationError.self) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await home.run()
             }
         }
@@ -77,11 +77,11 @@ struct PacksCommandRunTests {
         try await withCLIProcess(home: isolated) {
             var empty = Packs.Enable()
             empty.ids = []
-            await #expect(throws: ValidationError.self) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await empty.run()
             }
             let unknown = try Packs.Enable.parse(["not-a-pack"])
-            await #expect(throws: ValidationError.self) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await unknown.run()
             }
         }
@@ -112,7 +112,7 @@ struct PacksCommandRunTests {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
             let disable = try Packs.Disable.parse(["core.git"])
-            await #expect(throws: ValidationError.self) {
+            await #expect(throws: ExitCode(EX_NOPERM)) {
                 try await disable.run()
             }
         }

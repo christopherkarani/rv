@@ -41,15 +41,12 @@ struct UnavailableWorkspaceCommandTests {
     }
 
     @Test func abandonRefusalNamesMissingOwnerAuthentication() async throws {
-        var caught: ValidationError?
-        do {
-            try await withCLIProcess { try await WorkspaceCommandRun.abandon("/tmp/ws") }
-        } catch let error as ValidationError {
-            caught = error
+        let out = CLIOutputCapture()
+        await #expect(throws: ExitCode(EX_NOPERM)) {
+            try await withCLIProcess(output: out) { try await WorkspaceCommandRun.abandon("/tmp/ws") }
         }
-        let message = String(describing: try #require(caught))
-        #expect(message.contains("owner authentication"))
-        #expect(message.contains("abandon"))
+        #expect(out.stderr.contains("owner authentication"))
+        #expect(out.stderr.contains("abandon"))
     }
 
     #if os(macOS)

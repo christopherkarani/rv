@@ -107,7 +107,7 @@ struct LocalControlBoundaryTests {
         #expect(rows.isEmpty)
         // Without owner authentication the abandon gate refuses before any
         // workspace is touched.
-        await #expect(throws: ValidationError.self) {
+        await #expect(throws: ExitCode(EX_NOPERM)) {
             try await withCLIProcess { try await WorkspaceCommandRun.abandon("/tmp/ws") }
         }
     }
@@ -128,17 +128,17 @@ struct LocalControlBoundaryTests {
         var remove = try AllowlistRemove.parse(["core.git:reset-hard"])
         // No owner authentication given: every mutation refuses.
         try await withCLIProcess(home: try isolatedHome()) {
-            await #expect(throws: ValidationError.self) { try await add.run() }
-            await #expect(throws: ValidationError.self) { try await exact.run() }
-            await #expect(throws: ValidationError.self) { try await remove.run() }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await add.run() }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await exact.run() }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await remove.run() }
         }
     }
 
     @Test func safetyMutationRequiresOwnerAuthorization() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
-            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.normal, home: home) }
-            await #expect(throws: ValidationError.self) { try await SafetyRun.set(.strict, home: home) }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await SafetyRun.set(.normal, home: home) }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await SafetyRun.set(.strict, home: home) }
         }
         #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
     }
