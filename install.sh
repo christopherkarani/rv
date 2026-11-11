@@ -8,6 +8,7 @@
 # redirect) and every asset, SHA256SUMS included, comes from that tag. Every
 # downloaded asset is checked against SHA256SUMS on all OSes before anything
 # is unpacked or staged; RV_INSTALL_SKIP_CHECKSUMS=1 skips that (loudly).
+# Linux downloads also need glibc 2.35+ (no musl), libcurl and libsqlite3.
 # Downloaded macOS files are signature-checked before anything is staged. A
 # file counts as signed only with a valid, notarized Developer ID signature
 # from the pinned team. Ad-hoc and missing signatures, and Developer ID
@@ -980,6 +981,99 @@ refuse_untrusted_rvd_under_manifest() {
   exit 1
 }
 
+# Linux release binaries are built on Ubuntu 22.04 and link the system glibc,
+# libstdc++, libcurl and libsqlite3 (release.yml fails a build whose GLIBC_
+# symbol floor is above linux_glibc_min). Checked before anything downloads,
+# so an unsupported host gets a reason instead of binaries that cannot start.
+# musl (Alpine) is not supported and always refuses. A local stage
+# (RV_INSTALL_BIN) was built on this host and is not checked.
+# RV_INSTALL_SKIP_LINUX_CHECKS=1 skips the glibc and library probes (loudly),
+# for hosts whose loader layout the probes cannot read (e.g. NixOS nix-ld).
+linux_glibc_min="2.35"
+
+# 0 when shared library $1 for this architecture is installed. ldconfig's
+# cache answers when it can be read; otherwise the usual library dirs.
+linux_has_lib() {
+  case "$arch" in
+    x86_64) ld_tag="x86-64" ;;
+    *) ld_tag="AArch64" ;;
+  esac
+  ldconfig_bin=""
+  for candidate in "$(command -v ldconfig 2>/dev/null || true)" /sbin/ldconfig /usr/sbin/ldconfig; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      ldconfig_bin="$candidate"
+      break
+    fi
+  done
+  if [ -n "$ldconfig_bin" ]; then
+    cache="$("$ldconfig_bin" -p 2>/dev/null || true)"
+    if [ -n "$cache" ]; then
+      printf '%s\n' "$cache" | grep -F "$1 (libc6,$ld_tag" >/dev/null 2>&1
+      return
+    fi
+  fi
+  for dir in "/lib/$arch-linux-gnu" "/usr/lib/$arch-linux-gnu" /lib64 /usr/lib64 /lib /usr/lib; do
+    [ -e "$dir/$1" ] && return 0
+  done
+  return 1
+}
+
+check_linux_runtime() {
+  [ "$os" = "Linux" ] || return 0
+  libc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+  case "$libc" in
+    glibc\ *) ;;
+    *)
+      if ldd --version 2>&1 | grep -i musl >/dev/null 2>&1; then
+        echo "rv: refusing to install: this system uses musl libc (Alpine or similar)" >&2
+        echo "rv: rv's Linux release binaries need glibc $linux_glibc_min or newer; musl is not supported" >&2
+        exit 1
+      fi
+      if [ "${RV_INSTALL_SKIP_LINUX_CHECKS:-}" = "1" ]; then
+        echo "rv: WARNING: RV_INSTALL_SKIP_LINUX_CHECKS=1 set; not checking for glibc $linux_glibc_min+ or libcurl/libsqlite3" >&2
+        return 0
+      fi
+      echo "rv: refusing to install: cannot tell which C library this system uses (getconf GNU_LIBC_VERSION failed)" >&2
+      echo "rv: rv's Linux release binaries need glibc $linux_glibc_min or newer; musl is not supported" >&2
+      exit 1
+      ;;
+  esac
+  if [ "${RV_INSTALL_SKIP_LINUX_CHECKS:-}" = "1" ]; then
+    echo "rv: WARNING: RV_INSTALL_SKIP_LINUX_CHECKS=1 set; not checking for glibc $linux_glibc_min+ or libcurl/libsqlite3" >&2
+    return 0
+  fi
+  have="${libc#glibc }"
+  have_major="${have%%.*}"
+  have_minor="${have#*.}"
+  have_minor="${have_minor%%.*}"
+  want_major="${linux_glibc_min%%.*}"
+  want_minor="${linux_glibc_min#*.}"
+  case "$have_major:$have_minor" in
+    *[!0-9:]*|:*|*:)
+      echo "rv: refusing to install: cannot read the glibc version ($libc); rv needs glibc $linux_glibc_min or newer" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$have_major" -lt "$want_major" ] \
+    || { [ "$have_major" -eq "$want_major" ] && [ "$have_minor" -lt "$want_minor" ]; }; then
+    echo "rv: refusing to install: this system has glibc $have; rv's Linux release binaries need glibc $linux_glibc_min or newer" >&2
+    echo "rv: supported: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL/Rocky/Alma 10+ (or build from source)" >&2
+    exit 1
+  fi
+  missing=""
+  linux_has_lib libcurl.so.4 || missing="$missing libcurl.so.4"
+  linux_has_lib libsqlite3.so.0 || missing="$missing libsqlite3.so.0"
+  if [ -n "$missing" ]; then
+    echo "rv: refusing to install: rv-cli and rvd will not start without:$missing" >&2
+    echo "rv: install them first:" >&2
+    echo "rv:   Debian/Ubuntu: sudo apt-get install libcurl4 libsqlite3-0" >&2
+    echo "rv:   Fedora/RHEL:   sudo dnf install libcurl sqlite-libs" >&2
+    echo "rv:   openSUSE:      sudo zypper install libcurl4 libsqlite3-0" >&2
+    echo "rv:   Arch:          sudo pacman -S curl sqlite" >&2
+    exit 1
+  fi
+}
+
 if [ -n "${RV_INSTALL_BIN:-}" ]; then
   src="$RV_INSTALL_BIN"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
@@ -987,6 +1081,7 @@ if [ -n "${RV_INSTALL_BIN:-}" ]; then
     exit 1
   }
 else
+  check_linux_runtime
   tmp_fetch="$(mktemp -d "${TMPDIR:-/tmp}/rv-install.XXXXXX")"
   resolve_release_tag
   fetch_checksums

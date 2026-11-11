@@ -83,7 +83,18 @@ private func writeExecutable(_ url: URL, contents: String) throws {
     try writeExecutableScript(at: url, source: contents)
 }
 
-private func writeLinuxShims(in shim: URL, arch: String = "x86_64") throws {
+/// Linux-shaped host: `uname`, plus the C-library probes install.sh runs
+/// before a download (`getconf GNU_LIBC_VERSION`, `ldconfig -p`, `ldd
+/// --version`), so a macOS test host reads as a supported glibc system.
+/// `glibc: nil` makes getconf fail (a non-glibc host); `libraries` is what
+/// the loader cache lists.
+private func writeLinuxShims(
+    in shim: URL,
+    arch: String = "x86_64",
+    glibc: String? = "2.39",
+    libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
+    lddBanner: String = "ldd (GNU libc) 2.39"
+) throws {
     try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
     try writeExecutable(
         shim.appendingPathComponent("uname"),
@@ -93,6 +104,22 @@ private func writeLinuxShims(in shim: URL, arch: String = "x86_64") throws {
         if [ "$1" = "-m" ]; then echo \(arch); exit 0; fi
         echo Linux
         """
+    )
+    let getconf = glibc.map { "if [ \"$1\" = GNU_LIBC_VERSION ]; then echo 'glibc \($0)'; exit 0; fi\n" } ?? ""
+    try writeExecutable(
+        shim.appendingPathComponent("getconf"),
+        contents: "#!/bin/sh\n\(getconf)echo \"getconf: Unrecognized variable '$1'\" >&2\nexit 1\n"
+    )
+    let tag = arch == "x86_64" ? "x86-64" : "AArch64"
+    let cache = libraries.map { "\t\($0) (libc6,\(tag)) => /lib/\(arch)-linux-gnu/\($0)" }
+        .joined(separator: "\n")
+    try writeExecutable(
+        shim.appendingPathComponent("ldconfig"),
+        contents: "#!/bin/sh\ncat <<'EOF'\n\(libraries.count) libs found in cache `/etc/ld.so.cache'\n\(cache)\nEOF\n"
+    )
+    try writeExecutable(
+        shim.appendingPathComponent("ldd"),
+        contents: "#!/bin/sh\necho '\(lddBanner)' >&2\nexit 1\n"
     )
 }
 
@@ -2194,6 +2221,10 @@ private func runChecksumInstall(
     writeSums: Bool = true,
     environment: [String: String] = [:],
     servedTag: String? = nil,
+    script: URL? = nil,
+    glibc: String? = "2.39",
+    libraries: [String] = ["libcurl.so.4", "libsqlite3.so.0", "libc.so.6"],
+    lddBanner: String = "ldd (GNU libc) 2.39",
     afterSums: (URL) throws -> Void = { _ in }
 ) throws -> ChecksumRun {
     let root = FileManager.default.temporaryDirectory
@@ -2221,7 +2252,11 @@ private func runChecksumInstall(
     try afterSums(assets)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
-    if darwin { try writeDarwinShims(in: shim) } else { try writeLinuxShims(in: shim) }
+    if darwin {
+        try writeDarwinShims(in: shim)
+    } else {
+        try writeLinuxShims(in: shim, glibc: glibc, libraries: libraries, lddBanner: lddBanner)
+    }
     try writeCurlShim(in: shim, assets: assets, latestTag: "v1.2.3", servedTag: servedTag)
 
     var env = [
@@ -2232,7 +2267,7 @@ private func runChecksumInstall(
         "RV_INSTALL_NO_MODELS": "1",
     ]
     env.merge(environment) { $1 }
-    let (status, err) = try runInstallScript(script: installScriptURL(), environment: env)
+    let (status, err) = try runInstallScript(script: script ?? installScriptURL(), environment: env)
     return ChecksumRun(
         status: status, stderr: err, destBin: destBin,
         curlLog: (try? String(contentsOf: shim.appendingPathComponent("curl.log"), encoding: .utf8)) ?? "",
@@ -2375,3 +2410,102 @@ private func corrupt(_ assets: URL, _ name: String) throws {
     #expect(run.stderr.contains("NOT verified"))
     #expect(run.curlLog.contains("SHA256SUMS") == false)
 }
+
+// MARK: - Linux platform floor (glibc, musl, system libraries)
+
+@Test func installSh_linuxRefusesMuslBeforeDownloading() throws {
+    let run = try runChecksumInstall(glibc: nil, lddBanner: "musl libc (x86_64)")
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("musl libc"), "\(run.stderr)")
+    #expect(run.stderr.contains("musl is not supported"), "\(run.stderr)")
+    #expect(run.curlLog.isEmpty, "nothing may download on a musl host: \(run.curlLog)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_linuxRefusesMuslEvenWithSkipChecks() throws {
+    let run = try runChecksumInstall(
+        environment: ["RV_INSTALL_SKIP_LINUX_CHECKS": "1"], glibc: nil, lddBanner: "musl libc (aarch64)")
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("musl is not supported"), "\(run.stderr)")
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_linuxRefusesUnknownLibc() throws {
+    let run = try runChecksumInstall(glibc: nil, lddBanner: "ldd: unknown")
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("cannot tell which C library"), "\(run.stderr)")
+    #expect(run.curlLog.isEmpty)
+    try expectOldInstallIntact(run)
+}
+
+@Test(arguments: ["2.31", "2.34", "1.99"])
+func installSh_linuxRefusesGlibcBelowTheReleaseFloor(_ version: String) throws {
+    let run = try runChecksumInstall(glibc: version)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("this system has glibc \(version)"), "\(run.stderr)")
+    #expect(run.stderr.contains("need glibc 2.35 or newer"), "\(run.stderr)")
+    #expect(run.curlLog.isEmpty, "refuse before downloading: \(run.curlLog)")
+    try expectOldInstallIntact(run)
+}
+
+@Test(arguments: ["2.35", "2.36", "2.39", "3.0"])
+func installSh_linuxAcceptsGlibcAtOrAboveTheReleaseFloor(_ version: String) throws {
+    let run = try runChecksumInstall(glibc: version)
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+}
+
+@Test func installSh_linuxRefusesMissingSystemLibrariesAndNamesPackages() throws {
+    let run = try runChecksumInstall(libraries: ["libc.so.6"])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status != 0)
+    #expect(run.stderr.contains("libcurl.so.4"), "\(run.stderr)")
+    #expect(run.stderr.contains("libsqlite3.so.0"), "\(run.stderr)")
+    #expect(run.stderr.contains("apt-get install libcurl4 libsqlite3-0"), "\(run.stderr)")
+    #expect(run.stderr.contains("dnf install libcurl sqlite-libs"), "\(run.stderr)")
+    #expect(run.curlLog.isEmpty)
+    try expectOldInstallIntact(run)
+}
+
+@Test func installSh_linuxSkipChecksWarnsAndProceeds() throws {
+    let run = try runChecksumInstall(
+        environment: ["RV_INSTALL_SKIP_LINUX_CHECKS": "1"], glibc: "2.17", libraries: [])
+    defer { try? FileManager.default.removeItem(at: run.root) }
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("RV_INSTALL_SKIP_LINUX_CHECKS=1"), "\(run.stderr)")
+}
+
+@Test func installSh_linuxLocalStageSkipsTheReleaseFloor() throws {
+    // A local stage was built on this host against its own C library.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-floor-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+    try writeDummyTrio(in: src)
+    try writeLinuxShims(in: shim, glibc: "2.17", libraries: [])
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0, "\(result.stderr)")
+    #expect(result.stderr.contains("glibc") == false, "\(result.stderr)")
+}
+
+@Test func releaseWorkflow_glibcFloorMatchesInstallScript() throws {
+    let install = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    #expect(install.contains("\nlinux_glibc_min=\"2.35\"\n"))
+    let workflow = try String(
+        contentsOf: repoRootURL().appendingPathComponent(".github/workflows/release.yml"), encoding: .utf8)
+    // The Linux release jobs build on the oldest supported base, and the
+    // stage smoke reads the floor from install.sh rather than repeating it.
+    #expect(workflow.contains("runner: ubuntu-22.04\n"))
+    #expect(workflow.contains("runner: ubuntu-22.04-arm\n"))
+    #expect(workflow.contains("linux_glibc_min="))
+    #expect(workflow.contains("libstdc++-13-dev") == false)
+}
+

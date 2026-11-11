@@ -212,6 +212,11 @@ jobs:
             exit 1
           fi
 
+  # Built on Ubuntu 22.04 (glibc 2.35), the oldest base the official Swift
+  # tarball supports here: the binaries link the system glibc, libstdc++,
+  # libcurl and libsqlite3, so the build base sets the oldest distro that
+  # can run them. install.sh refuses below linux_glibc_min, and the stage
+  # smoke below fails a build whose GLIBC_ symbols need more than that.
   linux:
     name: linux ${{ matrix.target }}
     if: github.event_name != 'pull_request'
@@ -221,9 +226,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-22.04
             target: linux-x86_64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             target: linux-aarch64
     steps:
       - uses: actions/checkout@v4
@@ -232,7 +237,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/swift
-          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu22.04-${{ runner.arch }}
 
       - name: Cache SwiftPM packages
         uses: actions/cache@v4
@@ -249,8 +254,8 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             binutils gcc git gnupg2 libc6-dev libcurl4-openssl-dev \
-            libedit2 libgcc-13-dev libncurses-dev libpython3-dev \
-            libsqlite3-0 libsqlite3-dev libstdc++-13-dev libxml2-dev \
+            libedit2 libgcc-11-dev libncurses-dev libpython3-dev \
+            libsqlite3-0 libsqlite3-dev libstdc++-11-dev libxml2-dev \
             libz3-dev pkg-config tzdata zip unzip zlib1g-dev file
           if dpkg-query -W -f='${Status}\n' swift swiftlang 2>/dev/null \
             | grep -q 'install ok installed'; then
@@ -295,6 +300,32 @@ jobs:
             | HOME=/tmp XDG_RUNTIME_DIR="$tmp_run" "$stage/rv" hook --host claude > /tmp/hook-out.json
           grep -q 'deny' /tmp/hook-out.json
 
+      # The newest GLIBC_ symbol version any staged binary or library needs
+      # must not exceed install.sh's floor, or the installer would let a
+      # host install binaries its loader cannot run.
+      - name: glibc floor matches install.sh
+        run: |
+          set -euo pipefail
+          stage=.build/release-stage
+          floor="$(sed -n 's/^linux_glibc_min="\([0-9.]*\)"$/\1/p' install.sh)"
+          test -n "$floor"
+          needed="$(for f in "$stage"/rv "$stage"/rv-cli "$stage"/rvd "$stage"/rv-workspace-host \
+              "$stage"/rv-isolation-exec "$stage"/*.so; do objdump -T "$f"; done \
+            | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
+          cxx="$(for f in "$stage"/rv-cli "$stage"/rvd "$stage"/*.so; do objdump -T "$f"; done \
+            | { grep -o 'GLIBCXX_[0-9][0-9.]*' || true; } | sed 's/^GLIBCXX_//' | sort -uV | tail -n 1)"
+          {
+            echo "### Linux runtime requirements (${{ matrix.target }})"
+            echo ""
+            echo "- glibc: $needed (install.sh floor $floor)"
+            echo "- libstdc++ GLIBCXX: ${cxx:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          top="$(printf '%s\n%s\n' "$needed" "$floor" | sort -V | tail -n 1)"
+          if [ "$top" != "$floor" ]; then
+            echo "::error::staged binaries need glibc $needed, above install.sh linux_glibc_min=$floor"
+            exit 1
+          fi
+
       - name: Rename release assets
         run: Scripts/release-assets.sh .build/release-stage release-assets ${{ matrix.target }}
 
@@ -318,6 +349,9 @@ jobs:
             asset: linux-x86_64
           - runner: ubuntu-24.04-arm
             asset: linux-aarch64
+          # The build base itself: proves the floor by running on it.
+          - runner: ubuntu-22.04
+            asset: linux-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
