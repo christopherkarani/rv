@@ -51,6 +51,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- Linux release binaries are built on Ubuntu 22.04 (glibc 2.35) instead of 24.04 (glibc 2.39), so Ubuntu 22.04, Debian 12 and other glibc 2.35+ systems can run them; the release fails if a build needs newer glibc symbols. `install.sh` refuses up front, before downloading, on musl (Alpine), on glibc older than 2.35, and when libcurl or libsqlite3 is missing (naming the package to install); `RV_INSTALL_SKIP_LINUX_CHECKS=1` skips the glibc and library probes.
+- Linux: `rv secrets set`, `rv login connect` and `rv mcp import` with credentials store values in the Secret Service keyring through `secret-tool` (libsecret-tools), and launches read `keychain` sources from it; without `secret-tool` or a session bus the refusal names what is missing. An agent's `secret-tool` and Secret Service D-Bus calls are denied (`core.secrets:secret-service`, kept enforced in observe mode).
+- Linux: `rv mcp trust` and `rv mcp import` with credentials ask for the login password through `rvd` like other owner actions instead of refusing outright.
+- Linux: an account with a locked or empty password (SSH-key-only users, root in containers) is told it cannot approve owner actions instead of being prompted and counted toward the lockout.
+- Python SDK: falls back to `/run/user/<uid>` when `XDG_RUNTIME_DIR` is unset, like the Swift and C clients.
+
 - An unreadable `~/.config/rv/config.toml` (permissions, invalid UTF-8) no longer drops the owner's enabled packs back to day-one at every door; rv evaluates under every bundled pack until the file is repaired. This includes a config directory without search permission, which used to read as "no config". `rv doctor` reports the packs as broken, `rv packs` warns, and `rv packs enable/disable` refuse to overwrite the file. Malformed TOML that still decodes is not caught yet.
 - `rv packs` and `rv packs info` show packs the signed organization policy requires as enabled, `rv packs disable` says when a named pack stays enforced, and `rv scan` uses the org-required packs too. `rv managed status` warns when `gate.requirePacks` names an ID that is not a bundled pack, since nothing enforces it.
 - `rv uninstall` also removes the `dev.rv.audit-forward` LaunchAgent that `rv audit forward --install` writes.
@@ -68,6 +74,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Heredoc masking blanks the body where it was parsed, not the first copy of its text, so a body repeating an earlier word (`git reset --hard` then `cat <<EOF` / `git` / `EOF`) no longer hides that word from the gate. Bodies whose position is ambiguous (no terminator, CR, oddly quoted delimiter, `\` or `#` before the operator) stay visible.
 
 ### Security
+
+- Releases can sign `SHA256SUMS` (`SHA256SUMS.sig`, `ssh-keygen -Y`, namespace `rv-release`) with the `RV_RELEASE_SSH_SIGNING_KEY` secret. Once `install.sh` pins the public key, installs refuse a missing (unless `RV_INSTALL_ALLOW_UNSIGNED=1`) or invalid signature; until then Linux installs warn that release signatures are not verified.
 
 - OAuth refresh-token state (`secrets-oauth/*.json`) and the loaded egress snapshot (`egress-loaded.json`) are now written owner-only (0600) with fsync, instead of with the process umask.
 - Every hook and file-tool deny and every Policy-gate override (allow-once, allowlist, rebase recovery, contained delete) is now appended to the hash-chained `audit.jsonl` as `command.denied` or `command.override`, so `rv audit verify` covers the gate itself. Events carry the rule, host, tool and a home-redacted path, never command text. Plain allows and contained-workspace (`evaluateAgent`) decisions are not logged yet. The audit export and `rv audit forward` no longer send a deny twice when it is also in `blocks.jsonl`.
