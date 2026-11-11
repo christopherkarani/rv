@@ -25,8 +25,9 @@ func parseDd(_ argv: Argv) -> ParsedFilesystemCommand? {
             let target = String(word[word.index(after: equals)...])
             // `of=-` and `of=/dev/std{out,err,in}` write the process's own
             // stdio, not a file — except when the shell redirected that fd,
-            // which the fold's redirect union already collects.
-            if ddStdioTargets.contains(target) == false {
+            // which the fold's redirect union already collects. Exactly
+            // `/dev/null` discards the bytes (`isDiscardSink`).
+            if ddStdioTargets.contains(target) == false, isDiscardSink(target) == false {
                 dests.append(target)
             }
         }

@@ -175,3 +175,18 @@ private func expectNotWrapper(_ raw: String) {
     #expect(parseRedirectOnly(["echo", "x", ">/dev/null", ">", "out.txt"])?.paths == ["out.txt"])
     #expect(parseRedirectOnly(["ls", ">/dev/sda"])?.paths == ["/dev/sda"])
 }
+
+/// `tee` and `dd` writing exactly `/dev/null` write nothing; any other
+/// target is still a write (out of repo here: no working directory).
+@Test func devNullWriterTargets() {
+    #expect(parseTee(["/dev/null"]) == nil)
+    #expect(parseTee(["-a", "/dev/null"]) == nil)
+    #expect(parseTee(["/dev/null", "out.txt"])?.paths == ["out.txt"])
+    #expect(parseTee(["/dev/nul"])?.paths == ["/dev/nul"])
+    #expect(parseTee(["/dev/sda"])?.paths == ["/dev/sda"])
+    #expect(parseTee(["./dev/null"])?.paths == ["./dev/null"])
+    #expect(parseDd(["if=/dev/zero", "of=/dev/null", "count=1"]) == nil)
+    #expect(parseDd(["if=x", "of=/dev/null", "of=/tmp/y"])?.paths == ["/tmp/y"])
+    #expect(parseDd(["if=/dev/zero", "of=/dev/sda"])?.paths == ["/dev/sda"])
+    #expect(parseDd(["if=/dev/zero", "of=/dev//null"])?.paths == ["/dev//null"])
+}

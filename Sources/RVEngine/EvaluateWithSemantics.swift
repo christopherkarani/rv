@@ -21,6 +21,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     patternBudget: PatternBudget = PatternBudget()
 ) -> EvaluationResult {
     var budget = patternBudget
+    let request = request.strippingInertComments()
     func judge(_ request: EvaluationRequest) -> EvaluationResult {
         evaluateSemanticsOnce(
             request,

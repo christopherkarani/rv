@@ -241,7 +241,9 @@ func parseTee(_ argv: Argv) -> ParsedFilesystemCommand? {
     )
     var dests: [String] = []
     if scan.failed == false, scan.sawHelp == false {
-        dests += scan.operands + scan.candidates
+        // `tee /dev/null` copies stdin to stdout only: the exact discard
+        // sink is no write target, as for a `>/dev/null` redirect.
+        dests += (scan.operands + scan.candidates).filter { isDiscardSink($0) == false }
     }
     return writerParsed(operation: .overwrite, paths: dests)
 }
