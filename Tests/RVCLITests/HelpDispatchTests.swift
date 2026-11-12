@@ -113,9 +113,9 @@ import RVTheme
     #expect(text.contains("rv allow-once 'git reset --hard'") == false)
 }
 
-@Test func helpText_setup_keepsOneLineCopy() {
+@Test func helpText_setup_namesTheJSONDocument() {
     let text = HelpDispatch.text(.setup, palette: colorOffPalette)
-    #expect(text.contains("One line, no circles"))
+    #expect(text.contains("One rv.setup.v1 JSON document"))
     #expect(text.contains("Robot JSON") == false)
 }
 
@@ -171,6 +171,7 @@ import RVTheme
     let status = HelpDispatch.text(.serviceStatus, palette: colorOffPalette)
     #expect(status.contains("→ rv service status"))
     #expect(status.contains("→ rv service status --robot"))
+    #expect(status.contains("JSON document (same as --robot)"))
     #expect(status.contains("key=value lines"))
     #expect(status.contains("Robot JSON") == false)
     #expect(status.contains("Next") == false)
@@ -209,7 +210,16 @@ import RVTheme
     let restart = HelpDispatch.text(.serviceRestart, palette: colorOffPalette)
     #expect(restart.split(separator: "\n").first.map(String.init) == "Usage")
     #expect(restart.contains("rv service restart"))
+    #expect(restart.contains("rv service start"))
+    #if os(Linux)
+    #expect(restart.contains("systemctl --user restart"))
+    #expect(restart.contains("No systemd user manager"))
+    #expect(restart.contains("kickstart") == false)
+    #else
     #expect(restart.contains("kickstart"))
+    #endif
+    #expect(HelpDispatch.topic(arguments: ["service", "start", "--help"]) == .serviceRestart)
+    #expect(service.contains("start"))
 }
 
 @Test func helpText_root_listsEveryParserCommand() {

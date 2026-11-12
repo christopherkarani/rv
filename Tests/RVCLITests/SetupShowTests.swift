@@ -166,8 +166,6 @@ import RVTheme
         #expect(lines.count == 1)
         #expect(lines.first == "Skipped occupied grok hook., Skipped occupied pi hook.")
 
-        let help = Setup.helpText()
-        #expect(help.contains("One line, no circles"))
     }
 }
 
@@ -193,10 +191,10 @@ import RVTheme
     #expect(SetupCeremonyKind.fromInstallEnvironment(environment: [:]) == .setup)
 }
 
-@Test func setupHelp_jsonAndRobotAreOneLineNotJSON() {
+@Test func setupHelp_jsonAndRobotAreOneJSONDocument() {
     let help = Setup.helpText()
     #expect(help.contains("Robot JSON") == false)
-    #expect(help.contains("One line, no circles"))
+    #expect(help.contains("One rv.setup.v1 JSON document (same as --robot)"))
 }
 
 @Test func uninstall_pretty_removesWiredHostsAndCloser() throws {

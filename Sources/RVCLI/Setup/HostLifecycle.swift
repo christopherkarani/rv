@@ -37,6 +37,7 @@ enum HostLifecycle {
             wrote: []
         )
         var serviceSkippedMissingRvd: String?
+        var serviceStartedDirectly = false
         var runtimeMissing: [String: [HookHost]] = [:]
 
         for step in plan.steps {
@@ -58,7 +59,7 @@ enum HostLifecycle {
                     .rvdMissing(env.rvdPath), alreadyWired: plan.alreadyWired, observing: observing(env))
             case .writeLaunchAgent:
                 do {
-                    try startService(env: env, layout: layout, files: files)
+                    serviceStartedDirectly = try startService(env: env, layout: layout, files: files)
                 } catch {
                     throw SetupError.serviceDown(error, alreadyWired: plan.alreadyWired, observing: observing(env))
                 }
@@ -95,6 +96,7 @@ enum HostLifecycle {
             wrote: slots.wrote
         )
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
+        report.serviceStartedDirectly = serviceStartedDirectly
         report.unwiredForMissingInterpreter = runtimeMissing
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
@@ -105,12 +107,14 @@ enum HostLifecycle {
     }
 
     /// Installs and starts the service, then waits (bounded) for rvd to
-    /// answer. Throws before any host is wired when it does not.
+    /// answer. Throws before any host is wired when it does not. True when
+    /// rvd was started without a supervisor (Linux, no systemd user manager).
     private static func startService(
         env: SetupEnvironment,
         layout: OwnedPaths,
         files: FileOps
-    ) throws(SetupError) {
+    ) throws(SetupError) -> Bool {
+        var direct = false
         switch env.supervisor {
         case .launchd:
             try SetupRun.writeLaunchAgent(
@@ -121,12 +125,16 @@ enum HostLifecycle {
             )
             try SetupRun.writeCustodianLaunchAgent(env: env, layout: layout, files: files)
         case .systemdUser:
-            try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files)
+            direct = try SetupRun.writeSystemdUserUnit(env: env, layout: layout, files: files) == .direct
         }
-        guard env.managesService else { return }
+        guard env.managesService else { return direct }
         guard env.serviceAnswers() else {
-            throw SetupError.serviceNotAnswering(env.supervisor)
+            throw direct
+                ? SetupError.directRvdNotAnswering(
+                    rvdPath: env.rvdPath, logPath: RVDLogFile.path(home: env.home.rawValue))
+                : SetupError.serviceNotAnswering(env.supervisor)
         }
+        return direct
     }
 
     static func perform(

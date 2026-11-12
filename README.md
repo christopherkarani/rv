@@ -57,7 +57,12 @@ installer anytime to pick up the weights.
 Works with **Claude Code, Codex, Cursor, Grok, OpenCode, Pi, Hermes,
 OpenClaw, Antigravity, and Muse**. Hooks are only written for hosts already
 on your machine. Requires macOS 15+ (Apple Silicon) or Linux
-(aarch64/x86_64).
+(aarch64/x86_64) with glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 36+,
+RHEL 10+), libcurl and libsqlite3; the installer checks these first. musl
+(Alpine) is not supported. Linux downloads are checked against the release's
+`SHA256SUMS`; until rv's release key is pinned in the installer that file is
+not signature-checked, and the installer says so (see
+[SECURITY.md](SECURITY.md#release-integrity)).
 
 ## How it works
 
@@ -161,7 +166,11 @@ rv's hook guard refuses an agent's attempts to edit them, but the CLI,
 not `rvd`, performs the change after approval. On Linux rv reads your login password from the terminal and
 `rvd` checks it with the system's `unix_chkpwd`; five wrong passwords in
 ten minutes lock checks for ten minutes. Every attempt is recorded as an
-`owner.action` event in the audit log.
+`owner.action` event in the audit log. That needs an account with a local
+password: an SSH-key-only cloud user or root in a container usually has a
+locked one (`passwd -S` shows `L` or `NP`), which can never pass. rv says
+so up front instead of prompting; set a password (`sudo passwd $USER`) to
+approve rv owner actions.
 
 ## Locked out?
 
@@ -209,6 +218,11 @@ rv is one binary, 25 commands. The rest of the surface:
   GitHub login you already have (CLI auth file, token variable, or
   `gh auth token`; paste as fallback) into the Keychain as a gateway
   secret, so agents use it through rv instead of logging in again.
+  On Linux rv keeps stored values in the Secret Service keyring (GNOME
+  Keyring, KWallet, KeePassXC) through `secret-tool` (package
+  `libsecret-tools`), which needs a session bus and an unlocked keyring;
+  the hook guard refuses an agent's own `secret-tool` and Secret Service
+  D-Bus calls, since that keyring has no per-app prompt.
   `rv login list` / `check` report status and fingerprints, never values;
   `rv login logout <app>` removes it.
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one

@@ -472,20 +472,20 @@ enum BlockingHTTP {
 }
 
 /// Runs a provider CLI with a deadline and bounded output.
-enum BoundedProcess {
-    struct Outcome {
-        var status: Int32
-        var stdout: [UInt8]
-        var stderr: [UInt8]
+package enum BoundedProcess {
+    package struct Outcome {
+        package var status: Int32
+        package var stdout: [UInt8]
+        package var stderr: [UInt8]
 
-        var stderrSummary: String {
+        package var stderrSummary: String {
             let text = String(decoding: stderr.prefix(200), as: UTF8.self)
             let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
             return DisplayedText.field(line)
         }
     }
 
-    static func run(
+    package static func run(
         _ executable: String,
         _ arguments: [String],
         environment: [String: String],

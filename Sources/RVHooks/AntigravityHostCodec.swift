@@ -10,8 +10,13 @@ public struct AntigravityHostCodec: HostCodec {
 
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = [
+        "run_command", "view_file", "replace_file_content", "multi_replace_file_content", "write_to_file",
+    ]
+
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(AntigravityEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
@@ -26,7 +31,8 @@ public struct AntigravityHostCodec: HostCodec {
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.conversationId)
             .flatMap { SessionID(validating: $0) }
-        if let name = toolCall.name,
+        let toolName = HookWireName.canonical(toolCall.name, among: Self.guardedTools)
+        if let name = toolName,
            AntigravityToolName(wireValue: name).strictMatch == .shell {
             return HookRequest.decoded(
                 host: .antigravity,
@@ -35,7 +41,7 @@ public struct AntigravityHostCodec: HostCodec {
                 session: session
             )
         }
-        let mappedFileTool = toolCall.name.flatMap {
+        let mappedFileTool = toolName.flatMap {
             AntigravityToolName(wireValue: $0).fileKind?.ledgerName
         }
         if let file = FileToolAction.decoded(

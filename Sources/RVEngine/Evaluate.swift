@@ -17,9 +17,20 @@ public func evaluate<E: PatternEngine>(
 ) -> EvaluationResult {
     var budget = patternBudget
     return evaluateGated(
-        request, packs: packs, secretPaths: secretPaths, engine: engine,
+        request.strippingInertComments(), packs: packs, secretPaths: secretPaths, engine: engine,
         compiled: compiled, patternBudget: &budget, floorUnresolved: true
     )
+}
+
+extension EvaluationRequest {
+    /// The request with comments on inert commands removed
+    /// (`ShellComments`); unchanged when any comment is not provably inert.
+    func strippingInertComments() -> EvaluationRequest {
+        guard let stripped = ShellComments.strippingInertComments(command.rawValue) else { return self }
+        var request = self
+        request.command = ShellCommand(rawValue: stripped)
+        return request
+    }
 }
 
 /// `evaluate`, with the unresolved-invocation ask optional (see `gateAliases`).

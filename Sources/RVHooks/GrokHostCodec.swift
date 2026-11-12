@@ -6,20 +6,22 @@ public struct GrokHostCodec: HostCodec {
 
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = ["run_terminal_command", "run_terminal_cmd", "Bash"] + HookWireName.fileTools
+
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(GrokEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
-        guard let eventName = envelope.hookEventName,
-              GrokEventName(wireValue: eventName).strictMatch
-        else {
+        guard HookWireName.isPreToolEvent(envelope.hookEventName, preToolEvent: "pre_tool_use") else {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
-        if let toolName = envelope.toolName,
+        let toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools)
+        if let toolName,
            GrokToolName(wireValue: toolName).strictMatch == .shell {
             return HookRequest.decoded(
                 host: .grok,
@@ -29,7 +31,7 @@ public struct GrokHostCodec: HostCodec {
             )
         }
         if let file = FileToolAction.make(
-            toolName: envelope.toolName,
+            toolName: toolName,
             filePath: envelope.toolInput?.filePath,
             path: envelope.toolInput?.path,
             targetFile: envelope.toolInput?.targetFile,

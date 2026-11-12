@@ -21,17 +21,40 @@ import RVIPC
 /// no finger and does not know the password, and the hook guard refuses its
 /// attempts to run these commands in the first place.
 enum OwnerConfirmation {
-    struct Refused: Error, CustomStringConvertible {
+    /// The owner check refused or could not run. `message` is the whole
+    /// stderr line, without its newline.
+    struct Refused: Error, CustomStringConvertible, Equatable {
         let message: String
         var description: String { message }
+
+        init(_ message: String) {
+            self.message = message
+        }
     }
 
+    /// sysexits(3) EX_NOPERM: every owner-check refusal exits with it, with
+    /// one stderr line and no usage banner.
+    static let refusalExitCode = EX_NOPERM
+
+    /// Runs the owner check. A refusal prints its line on stderr and throws
+    /// `ExitCode(EX_NOPERM)`, so every command it gates exits the same way.
     static func require(_ summary: String, client: ServiceClient? = nil) async throws {
+        do {
+            try await check(summary, client: client)
+        } catch let refused as Refused {
+            CommandContext.writeStderr(refused.message + "\n")
+            throw ExitCode(refusalExitCode)
+        }
+    }
+
+    /// The owner check itself; throws `Refused` (callers that word the
+    /// refusal themselves use this).
+    static func check(_ summary: String, client: ServiceClient? = nil) async throws {
         if let context = CLIProcess.context {
             // Tests: an explicit `.authenticated` seam stands in for the
             // human; anything else fails closed and never prompts.
             guard context.ownerAuthOutcome == .authenticated else {
-                throw ValidationError("rv: \(summary) needs owner authentication, which was not given")
+                throw Refused("rv: \(summary) needs owner authentication, which was not given")
             }
             return
         }
@@ -39,8 +62,13 @@ enum OwnerConfirmation {
         CommandContext.writeStderr("rv: approve \"\(summary)\" with Touch ID or your password\n")
         try await confirm(summary, proof: nil, client: client)
         #else
+        // A locked or empty password can never match: say so instead of
+        // prompting for a check that only adds a lockout strike.
+        if let locked = OwnerAccountPassword.refusalIfLocked() {
+            throw Refused("rv: \(summary) was not done: \(locked)")
+        }
         guard let password = readOwnerPassword(prompt: "rv: \(summary)\nPassword for \(UserName.current ?? "your account"): ") else {
-            throw ValidationError("rv: \(summary) needs your login password at an interactive terminal")
+            throw Refused("rv: \(summary) needs your login password at an interactive terminal")
         }
         try await confirm(summary, proof: OwnerProof(password: password), client: client)
         #endif
@@ -71,38 +99,38 @@ enum OwnerConfirmation {
             switch answer.outcome {
             case .approved:
                 guard answer.presence == expectedPresence else {
-                    throw ValidationError(
+                    throw Refused(
                         "rv: rvd approved \(summary) without saying it checked the owner "
                             + "(an older rvd still running after an upgrade?); nothing was done. "
                             + "Run rv service restart and try again.")
                 }
                 return
             case .wrongPassword:
-                throw ValidationError("rv: wrong password; \(summary) was not done")
+                throw Refused("rv: wrong password; \(summary) was not done")
             case .declined:
-                throw ValidationError(
+                throw Refused(
                     "rv: \(summary) was not approved (the prompt was cancelled, failed or timed out)")
             case .lockedOut:
                 let wait = answer.retryAfterSeconds.map { " Try again in \($0 / 60 + 1) min." } ?? ""
-                throw ValidationError("rv: too many failed owner checks; owner actions are locked.\(wait)")
+                throw Refused("rv: too many failed owner checks; owner actions are locked.\(wait)")
             case .busy:
-                throw ValidationError("rv: another owner approval is in progress; try again when it finishes")
+                throw Refused("rv: another owner approval is in progress; try again when it finishes")
             case .proofRequired:
-                throw ValidationError("rv: rvd could not identify this caller, so \(summary) was not done")
+                throw Refused("rv: rvd could not identify this caller, so \(summary) was not done")
             case .unavailable:
                 #if canImport(LocalAuthentication)
-                throw ValidationError(
+                throw Refused(
                     "rv: rvd cannot show a Touch ID or password prompt here (no passcode set or no login session)")
                 #else
-                throw ValidationError("rv: rvd could not check the password (unix_chkpwd missing or not answering)")
+                throw Refused("rv: rvd could not check your login password (unix_chkpwd missing or not answering, or this account has no local password, such as an SSSD, LDAP or systemd-homed account)")
                 #endif
             }
         case .failure(let error):
             switch error {
             case .noTransport, .transport:
-                throw ValidationError("rv: rvd is not reachable, so \(summary) cannot be approved. Run rv doctor.")
+                throw Refused("rv: rvd is not reachable, so \(summary) cannot be approved. Run rv doctor.")
             case .service:
-                throw ValidationError("rv: rvd refused \(summary)")
+                throw Refused("rv: rvd refused \(summary)")
             }
         }
     }

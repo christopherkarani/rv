@@ -9,6 +9,7 @@ import FoundationNetworking
 #endif
 import RVDomain
 import RVHistory
+import RVIPC
 import RVIsolation
 import RVMCP
 import RVPolicy
@@ -4109,6 +4110,29 @@ struct MCPCommandTests {
         #expect(challenges.withLock { $0 }.contains { $0.contains(digest) })
         #expect(fixture.environment().integrity.isTrusted == false)
         #expect(UserPresence.terminal("rv: trust", .deviceOwner) == .refused(UserPresence.deviceOwnerRefusal))
+    }
+
+    @Test func linuxDeviceOwnerGoesThroughRvdsPasswordCheck() async {
+        // `rv mcp trust` / `rv mcp import` on Linux: the same rvd-checked
+        // login password as every other owner action, asked with the
+        // reason's first line (action + digest), never a local refusal.
+        let digest = String(repeating: "ab", count: 32)
+        let asked = Mutex<[String]>([])
+        let approved = await UserPresence.ownerPassword("rv: trust mcp.json sha256 \(digest)\nfs: fs-mcp") { summary in
+            asked.withLock { $0.append(summary) }
+        }
+        #expect(approved == .confirmed(method: "login password (checked by rvd)"))
+        #expect(asked.withLock { $0 } == ["trust mcp.json sha256 \(digest)"])
+
+        struct Refusal: Error, CustomStringConvertible { var description: String }
+        let wrong = await UserPresence.ownerPassword("rv: import sha256 \(digest)\nbody") { _ in
+            throw Refusal(description: "rv: wrong password; import sha256 \(digest) was not done")
+        }
+        #expect(wrong == .refused("wrong password; import sha256 \(digest) was not done"))
+
+        let long = "rv: " + String(repeating: "x", count: 2000) + "\nmore"
+        #expect(UserPresence.ownerSummary(long).unicodeScalars.count == ConfirmOwnerActionParams.maxSummaryBytes)
+        #expect(UserPresence.ownerSummary("no prefix\nsecond") == "no prefix")
     }
 
     @Test func pseudoTerminalCannotCompletePrintedCode() {

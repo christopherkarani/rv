@@ -389,13 +389,13 @@ enum SecretsRun {
             return .failure(CommandFailure("organization policy: \(reason)"))
         }
         guard environment.keychain.store(SecretKeychain.service, name, value) else {
-            return .failure("could not store \(DisplayedText.field(name)) in the Keychain")
+            return .failure(CommandFailure("could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)"))
         }
         if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
             return .failure(CommandFailure(error.message))
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
-        var text = "Stored \(DisplayedText.field(name)) in the Keychain (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
+        var text = "Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)
         if users.isEmpty {
             text += "Add \"\(DisplayedText.field(name))\" to a profile's \"secrets\" in runtime-resources.json to use it.\n"
@@ -420,9 +420,9 @@ enum SecretsRun {
         var lines: [String] = []
         if existing == nil || existing?.source == ownSource {
             guard environment.keychain.delete(SecretKeychain.service, name) else {
-                return .failure("could not delete \(DisplayedText.field(name)) from the Keychain")
+                return .failure(CommandFailure("could not delete \(DisplayedText.field(name)) from \(SecretKeychain.storeName)"))
             }
-            lines.append("Deleted \(DisplayedText.field(name)) from the Keychain (\(SecretKeychain.service)).")
+            lines.append("Deleted \(DisplayedText.field(name)) from \(SecretKeychain.storeName) (\(SecretKeychain.service)).")
         } else if let existing {
             lines.append("Left the value in place at \(existing.source.locator).")
         }
@@ -879,7 +879,7 @@ struct SecretsCheck: AsyncParsableCommand {
 struct SecretsSet: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "set",
-        abstract: "Store a secret value in the Keychain; define it on first use.",
+        abstract: "Store a secret value in the Keychain (Linux: the Secret Service keyring); define it on first use.",
         discussion: """
             The value is read from a hidden prompt, or from stdin when piped. Well-known names
             (OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN) default

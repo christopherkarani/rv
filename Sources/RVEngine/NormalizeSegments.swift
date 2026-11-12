@@ -466,11 +466,19 @@ private func peelGrouping(_ segment: String) -> String? {
 /// regions are literal; double-quoted and unquoted `$()`/backticks
 /// execute. Backslash pairs are skipped, so `\$(` is literal while
 /// `\\$(` still scans.
+/// Unmatched `$(` / `<(` / `>(` openers tolerated in one segment. Each one
+/// costs a scan to the end of the text, so thousands of them (`$($($(…`)
+/// made evaluation quadratic: a 40 KB hook payload kept rvd at full CPU for
+/// minutes after the client gave up. Bash rejects an unterminated
+/// substitution anyway, so past this many the segment fails closed.
+let maxUnmatchedSubstitutionOpeners = 16
+
 private func substitutionInners(_ segment: String) -> [String] {
     var inners: [String] = []
     let chars = Array(segment)
     var index = 0
     var quote: Character?
+    var unmatched = 0
     while index < chars.count {
         let char = chars[index]
         if let currentQuote = quote {
@@ -506,6 +514,10 @@ private func substitutionInners(_ segment: String) -> [String] {
                 index = next
                 continue
             }
+            unmatched += 1
+            if unmatched > maxUnmatchedSubstitutionOpeners {
+                return inners + [unscannableSegment]
+            }
             index += 1
             continue
         }
@@ -517,6 +529,10 @@ private func substitutionInners(_ segment: String) -> [String] {
                 inners.append(inner)
                 index = next
                 continue
+            }
+            unmatched += 1
+            if unmatched > maxUnmatchedSubstitutionOpeners {
+                return inners + [unscannableSegment]
             }
         }
         if char == "`" {

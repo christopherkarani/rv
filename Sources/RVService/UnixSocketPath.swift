@@ -9,11 +9,18 @@ public enum UnixSocketPathError: Error, Sendable, Equatable {
     case runtimeDirectoryMissing
     case pathTooLong
     case permission
+    /// Linux, XDG_RUNTIME_DIR unset: the uid-derived runtime directory
+    /// (`/run/user/<uid>`, carried here) is missing and could not be
+    /// created, or is not a directory this user owns that group and others
+    /// cannot write.
+    case userRuntimeDirectoryUnavailable(String)
 }
 
 /// Production socket path: `$XDG_RUNTIME_DIR/rv/evaluate.sock` on Linux,
-/// `$HOME/.config/rv/evaluate.sock` on macOS. Unset or empty base directory
-/// is fail-closed. There is no `/tmp` fallback on either platform.
+/// or `/run/user/<uid>/rv/evaluate.sock` when XDG_RUNTIME_DIR is unset
+/// (the same rule as every client: the C hook, `clientSocket`, the Python
+/// SDK); `$HOME/.config/rv/evaluate.sock` on macOS. An empty base is
+/// fail-closed. There is no `/tmp` fallback on either platform.
 public enum UnixSocketPath {
     public static let directoryName = "rv"
     public static let socketFileName = "evaluate.sock"
@@ -86,14 +93,24 @@ public enum UnixSocketPath {
         return ClientSocket(url: url, isOwnerRuntime: directory == ownerDirectory)
     }
 
+    /// The socket rvd binds on Linux: the directory every client dials
+    /// (`clientSocket`). XDG_RUNTIME_DIR unset means the uid-derived
+    /// `/run/user/<uid>`, so rvd runs without a systemd user manager (no
+    /// logind, containers, WSL); set but empty is fail-closed.
+    static func serverSocket(
+        xdgRuntimeDir: String?,
+        uid: UInt32,
+        userRuntimeRoot: String = userRuntimeRoot
+    ) throws -> URL {
+        try resolve(xdgRuntimeDir: xdgRuntimeDir ?? "\(userRuntimeRoot)/\(uid)")
+    }
+
     public static func production(
         environment: [String: String]? = nil
     ) throws -> URL {
         #if os(Linux)
-        if let environment {
-            return try resolve(xdgRuntimeDir: environment["XDG_RUNTIME_DIR"])
-        }
-        return try resolve(xdgRuntimeDir: liveXDGRuntimeDir())
+        let xdg = environment.map { $0["XDG_RUNTIME_DIR"] } ?? liveXDGRuntimeDir()
+        return try serverSocket(xdgRuntimeDir: xdg, uid: getuid())
         #else
         if let environment {
             return try resolve(homeDirectory: environment["HOME"])
@@ -124,12 +141,50 @@ public enum UnixSocketPath {
     /// 0700. The stale entry is unlinked only when it is a socket or a
     /// symlink; anything else fails closed so a directory or user file at the
     /// socket path is never deleted.
+    ///
+    /// The uid-derived base (`/run/user/<uid>`) is never created with
+    /// intermediates: rvd makes only that one directory, as logind would,
+    /// and only root may also make a missing `/run/user` (0755). Any
+    /// failure there is `userRuntimeDirectoryUnavailable`.
     public static func prepareRuntime(for socketURL: URL) throws {
+        try prepareRuntime(for: socketURL, userRuntimeRoot: userRuntimeRoot, uid: getuid())
+    }
+
+    static func prepareRuntime(for socketURL: URL, userRuntimeRoot: String, uid: UInt32) throws {
         let rvDir = socketURL.deletingLastPathComponent()
         let baseDir = rvDir.deletingLastPathComponent()
-        try prepareBaseDirectory(baseDir)
+        let ownerRuntime = "\(userRuntimeRoot)/\(uid)"
+        if baseDir.path == ownerRuntime {
+            do {
+                try prepareUserRuntimeDirectory(baseDir, root: userRuntimeRoot, uid: uid)
+            } catch {
+                throw UnixSocketPathError.userRuntimeDirectoryUnavailable(ownerRuntime)
+            }
+        } else {
+            try prepareBaseDirectory(baseDir)
+        }
         try createOwnerOnlyDirectory(rvDir)
         try removeStaleSocket(at: socketURL)
+    }
+
+    /// Creates `/run/user/<uid>` (one level, 0700) when missing; root may
+    /// also create a missing `/run/user` (0755). Then the base-directory
+    /// rules apply as to any other base.
+    private static func prepareUserRuntimeDirectory(_ url: URL, root: String, uid: UInt32) throws {
+        if lstatKind(url.path) == nil {
+            if lstatKind(root) == nil, uid == 0 {
+                guard mkdir(root, 0o755) == 0 || errno == EEXIST else { throw UnixSocketPathError.permission }
+            }
+            guard mkdir(url.path, 0o700) == 0 || errno == EEXIST else { throw UnixSocketPathError.permission }
+        }
+        guard lstatKind(url.path) == UInt32(S_IFDIR) else { throw UnixSocketPathError.permission }
+        try prepareBaseDirectory(url)
+    }
+
+    private static func lstatKind(_ path: String) -> UInt32? {
+        var status = stat()
+        guard lstat(path, &status) == 0 else { return nil }
+        return UInt32(status.st_mode) & UInt32(S_IFMT)
     }
 
     /// Unlinks `socketURL` when it names a socket. Anything else — including

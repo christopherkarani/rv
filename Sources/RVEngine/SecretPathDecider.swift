@@ -83,6 +83,14 @@ public struct SecretPathDecider: Sendable {
     public func fold(_ result: EvaluationResult, command: ShellCommand) -> EvaluationResult {
         let folded = fold(result)
         guard folded == result, escalatesToAliasPass(result) else { return folded }
+        // The Linux secret store is a keyring reached over D-Bus, not a path.
+        if catalog.rules.isEmpty == false, SecretServiceGuard.touchesSecretService(command) {
+            let matched = SecretServiceGuard.match(searchText: result.matchingView.rawValue)
+            return EvaluationResult(
+                outcome: .deny(Deny(ruleID: matched.ruleID, reason: matched.reason), matched: matched),
+                matchingView: result.matchingView
+            )
+        }
         // A pager set in the environment runs a command the view dropped.
         if var matched = pagerAssignmentHit(in: command) {
             matched.searchText = result.matchingView.rawValue

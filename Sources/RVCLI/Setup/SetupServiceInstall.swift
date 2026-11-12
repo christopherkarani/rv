@@ -124,23 +124,59 @@ extension SetupRun {
         }
     }
 
+    /// How setup got rvd running on Linux.
+    enum LinuxServiceStart: Equatable {
+        /// HOME is not the login home: the unit is written, nothing started.
+        case notTouched
+        /// `systemctl --user enable --now`.
+        case systemd
+        /// No systemd user manager: rvd runs unsupervised (`DirectRvd`).
+        case direct
+    }
+
+    /// Writes the unit, then starts it through the user manager, or, when
+    /// none answers, runs rvd directly so hooks work now. The unit stays
+    /// written either way, for a later login that has systemd.
+    @discardableResult
     static func writeSystemdUserUnit(
         env: SetupEnvironment,
         layout: OwnedPaths,
         files: FileOps
-    ) throws(SetupError) {
+    ) throws(SetupError) -> LinuxServiceStart {
         let body = try SystemdUserTemplate.rendered(rvdPath: env.rvdPath)
         do {
             try files.write(body, to: layout.systemdUserUnit)
         } catch {
             throw SetupError.systemdUnitWriteFailed
         }
-        if env.touchSystemd {
-            do {
-                try env.systemctl.enableNow(unit: SystemdUserTemplate.unitName)
-            } catch {
-                throw SetupError.systemdApplyFailed(.enable)
-            }
+        guard env.touchSystemd else { return .notTouched }
+        guard env.systemctl.userManagerReachable() else {
+            try startDirectRvd(env: env, onlyIfStopped: true)
+            return .direct
+        }
+        do {
+            try env.systemctl.enableNow(unit: SystemdUserTemplate.unitName)
+        } catch {
+            throw SetupError.systemdApplyFailed(.enable)
+        }
+        return .systemd
+    }
+
+    /// Starts rvd without a supervisor. A trusted rvd that already answers
+    /// is kept when `onlyIfStopped` (it may be the user's own supervisor's);
+    /// otherwise this user's copies of the installed rvd, including one an
+    /// upgrade replaced, are stopped first so two never fight over the
+    /// socket.
+    static func startDirectRvd(env: SetupEnvironment, onlyIfStopped: Bool) throws(SetupError) {
+        guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
+            throw SetupError.rvdMissing(env.rvdPath)
+        }
+        if onlyIfStopped, env.serviceAnswersNow() { return }
+        env.directRvd.stop(rvdPath: env.rvdPath)
+        do {
+            try env.directRvd.start(rvdPath: env.rvdPath)
+        } catch {
+            throw SetupError.directStartFailed(rvdPath: env.rvdPath)
         }
     }
 

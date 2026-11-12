@@ -8,8 +8,9 @@ import RVPolicy
 /// must not be able to loosen another host or the global guard. So an rv
 /// admin command that weakens rv (`SelfProtectionGuard`), a touch of rv's
 /// config dir (`core.secrets:home-rv-config`, the only catalog rule that
-/// guards rv's own state) or of rv's wiring files (`RVWiringPaths`) stays
-/// enforced. `GatedEvaluate.posture` is the
+/// guards rv's own state), of rv's Linux secret store
+/// (`core.secrets:secret-service`) or of rv's wiring files (`RVWiringPaths`)
+/// stays enforced. `GatedEvaluate.posture` is the
 /// only caller; it then runs the enforce branch, so the verdict is exactly
 /// what an enforced host would get.
 ///
@@ -18,7 +19,9 @@ import RVPolicy
 /// allows every later call unchecked. In enforce a stopped rvd fails
 /// closed, so those floors would only add false positives there.
 enum ObserveFloor {
-    static let ruleIDs: Set<RuleID> = [RuleID(pack: .coreSecrets, pattern: "home-rv-config"), RVWiringPaths.ruleID]
+    static let ruleIDs: Set<RuleID> = [
+        RuleID(pack: .coreSecrets, pattern: "home-rv-config"), RVWiringPaths.ruleID, SecretServiceGuard.ruleID,
+    ]
 
     private static let catalog = SecretPathCatalog(
         rules: SecretPathCatalog.dayOne.rules.filter { ruleIDs.contains(SecretPathMatch($0).ruleID) }
@@ -59,7 +62,11 @@ enum ObserveFloor {
         home: HomeDirectory?,
         cwd: WorkingDirectory?
     ) -> Bool {
-        if holds(result) || SelfProtectionGuard.weakensPolicy(command) { return true }
+        if holds(result) || SelfProtectionGuard.weakensPolicy(command)
+            || SecretServiceGuard.touchesSecretService(command)
+        {
+            return true
+        }
         let rvConfig = SecretPathDecider(
             catalog: catalog,
             safety: store.safety,

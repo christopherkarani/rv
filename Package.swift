@@ -3,9 +3,12 @@ import PackageDescription
 
 // Crypto / swift-crypto is Linux-only. Darwin RVPolicy keeps CryptoKit and
 // must not fetch swift-crypto + swift-asn1 (OPE-260 review).
+// Pinned exact: Package.resolved is generated on Darwin, where this
+// dependency does not exist, so it never carries a Linux pin. A range here
+// would float every Linux build (CI and release included) to the newest 4.x.
 #if os(Linux)
 let extraPackageDependencies: [Package.Dependency] = [
-    .package(url: "https://github.com/apple/swift-crypto", from: "4.5.1"),
+    .package(url: "https://github.com/apple/swift-crypto", exact: "4.5.2"),
 ]
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",

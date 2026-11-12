@@ -119,7 +119,7 @@ public enum HelpDispatch {
             if rest[0] == "status" {
                 return rest.dropFirst().allSatisfy(isFormatFlag) ? .serviceStatus : nil
             }
-            if rest[0] == "restart" {
+            if rest[0] == "restart" || rest[0] == "start" {
                 return rest.count == 1 ? .serviceRestart : nil
             }
             return rest.allSatisfy(isFormatFlag) ? .service : nil

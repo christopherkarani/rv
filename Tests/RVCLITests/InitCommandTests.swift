@@ -284,7 +284,12 @@ struct InitCommandTests {
         #expect(text.contains("staged at launch"))
         #expect(text.contains("`rv secrets set B_KEY`"))
         #expect(text.contains("wrote runtime-resources.json"))
-        #expect(text.contains("rv opencode --workspace /proj --resource-profile main"))
+        #if os(macOS)
+        #expect(text.contains("next: rv opencode --workspace /proj --resource-profile main"))
+        #else
+        #expect(text.contains("next: rv setup"))
+        #expect(text.contains("next: rv opencode") == false)
+        #endif
         let dry = InitRun.planText(
             plan, project: "/proj", secretDefined: [:], varlockLines: [], dryRun: true, wrote: false)
         #expect(dry.contains("dry run: nothing written"))

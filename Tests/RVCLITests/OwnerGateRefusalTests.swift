@@ -107,8 +107,8 @@ struct OwnerGateRefusalTests {
                 (.ownerCheckUnconfirmed, subject, unconfirmedText),
                 (.notIssuedByService, subject, mint ? mintDeniedText : notIssuedText),
                 (.notApproved(declined), subject, mint
-                    ? "not approved (the Touch ID or password prompt was cancelled, failed or timed out); nothing was minted"
-                    : "not approved (the Touch ID or password prompt was cancelled, failed or timed out); the code stays live"),
+                    ? "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); nothing was minted"
+                    : "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); the code stays live"),
                 (.notApproved(ConfirmOwnerActionReply(outcome: .wrongPassword)), subject, mint
                     ? "wrong password; nothing was minted"
                     : "wrong password; nothing was allowed and the code stays live"),
@@ -130,6 +130,15 @@ struct OwnerGateRefusalTests {
         #expect(refusal.text(subject: subject) == text)
         #expect(refusal.message(command: "allow-once mint", subject: subject) == "rv allow-once mint: \(text)\n")
         #expect(OwnerGateRefusal.exitCode == 2)
+    }
+
+    /// Owner-check refusals exit EX_NOPERM like every other owner-gated
+    /// command; the TTY/format/store refusals keep 2.
+    @Test func ownerCheckRefusalsExitNoPerm() {
+        let noPerm: [OwnerGateRefusal] = [.authRequired, .throttled, .notApproved(Self.declined), .ownerCheckUnconfirmed]
+        for refusal in Self.everyRefusal {
+            #expect(refusal.exitCode == (noPerm.contains(refusal) ? EX_NOPERM : 2))
+        }
     }
 
     @Test func goldenTableCoversEveryRefusalAndSubject() {
@@ -183,15 +192,19 @@ struct OwnerGateRefusalTests {
         ])
     }
 
-    @Test func failOwnerGateMapsGateErrorToExit2WithText() throws {
+    @Test func failOwnerGateMapsGateErrorToItsExitCodeWithText() throws {
         let out = CLIOutputCapture()
         try withCLIProcess(output: out) {
             let ctx = CommandContext.current(command: "egress approve", json: false, robot: false, plain: false, noColor: false)
-            #expect(throws: ExitCode(2)) {
+            #expect(throws: ExitCode(EX_NOPERM)) {
                 try ctx.failOwnerGate(AllowOnceAuthError.throttled, command: "egress approve", subject: .proposal)
             }
+            #expect(throws: ExitCode(2)) {
+                try ctx.failOwnerGate(AllowOnceError.ttyRequired, command: "egress approve", subject: .proposal)
+            }
         }
-        #expect(out.stderr == "rv egress approve: too many authentication prompts; wait and retry\n")
+        #expect(out.stderr == "rv egress approve: too many authentication prompts; wait and retry\n"
+            + "rv egress approve: requires an interactive TTY (stdin and stdout)\n")
     }
 
     @Test func failOwnerGateRethrowsOtherErrorsUnchanged() throws {

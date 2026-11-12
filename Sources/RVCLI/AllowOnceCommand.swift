@@ -108,7 +108,7 @@ enum AllowOnceCLI {
     static func notApprovedMessage(_ refused: ConfirmOwnerActionReply) -> String {
         switch refused.outcome {
         case .declined:
-            return "not approved (the Touch ID or password prompt was cancelled, failed or timed out); the code stays live"
+            return "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); the code stays live"
         case .wrongPassword:
             return "wrong password; nothing was allowed and the code stays live"
         case .lockedOut:
@@ -120,7 +120,7 @@ enum AllowOnceCLI {
             #if canImport(LocalAuthentication)
             return "rvd cannot show a Touch ID or password prompt here (no passcode set or no login session)"
             #else
-            return "rvd could not check the password (unix_chkpwd missing or not answering)"
+            return "rvd could not check your login password (unix_chkpwd missing or not answering, or this account has no local password, such as an SSSD, LDAP or systemd-homed account)"
             #endif
         case .proofRequired, .approved:
             return "rvd did not approve this request; nothing was allowed"
@@ -257,7 +257,7 @@ enum AllowOnceCLI {
     static func mintNotApprovedMessage(_ refused: ConfirmOwnerActionReply) -> String {
         switch refused.outcome {
         case .declined:
-            return "not approved (the Touch ID or password prompt was cancelled, failed or timed out); nothing was minted"
+            return "not approved (the \(OwnerAuthWording.prompt) was cancelled, failed or timed out); nothing was minted"
         case .wrongPassword:
             return "wrong password; nothing was minted"
         case .lockedOut, .busy, .unavailable, .proofRequired, .approved:

@@ -129,6 +129,9 @@ extension SetupRun {
             } catch {
                 throw SetupError.systemdApplyFailed(.disable)
             }
+            // An rvd setup started without a supervisor (no systemd user
+            // manager); a no-op once systemd stopped its own.
+            env.directRvd.stop(rvdPath: env.rvdPath)
         }
     }
 
@@ -199,7 +202,7 @@ extension SetupRun {
     /// to `rv uninstall` (which removes owned files) to avoid accidental user use.
     /// Probe is performed by the caller via `env.companionPresence`; this helper
     /// just enforces the post-uninstall invariant (KeepAlive == false) when a
-    /// plist already exists. Linux is a no-op (systemd `Restart=no` is static).
+    /// plist already exists. Linux is a no-op (the systemd unit is static).
     static func restoreKeepAliveAfterCompanionUninstall(
         _ env: SetupEnvironment
     ) throws(SetupError) {

@@ -133,7 +133,7 @@ private func object(from stdout: String) throws -> [String: Any] {
     #expect(doctorJSON["schema"] as? String == "rv.doctor.v1")
     #expect(Set(doctorJSON.keys) == ["schema", "service", "packs", "hosts", "config", "grade", "ok"])
     #expect(Set(service.keys) == [
-        "state", "protocol", "fallback_ready", "launch_agent", "warning",
+        "state", "protocol", "local_packs_ready", "launch_agent", "warning",
     ])
     #expect(Set(packs.keys) == ["registry", "day_one_ready", "enabled", "extras_enabled"])
 

@@ -158,8 +158,8 @@ struct Packs: AsyncParsableCommand {
                     try ctx.fail("unknown pack id: \(DisplayedText.field(id))\n")
                 }
                 row = try PacksFacade.info(home: home, id: packID)
-            } catch PacksCommandError.packNotFound {
-                throw ExitCode(1)
+            } catch PacksCommandError.packNotFound(let packID) {
+                try ctx.fail("unknown pack id: \(DisplayedText.field(packID.rawValue)) (rv packs lists every pack)\n")
             }
             if ctx.explicitRobot {
                 let text = try RobotDocument.packsInfo(packsRobotRow(row)).render()

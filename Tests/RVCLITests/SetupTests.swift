@@ -1166,6 +1166,31 @@ private func fixtureLoginHome() throws -> URL {
             "rv uninstall failed: unable to disable systemd unit\n"
         ),
         (
+            .systemdApplyFailed(.restart),
+            .serviceRestart,
+            EX_UNAVAILABLE,
+            "rv service restart failed: unable to restart systemd unit\n"
+                + "fix: rv setup installs dev.rv.evaluate.service; "
+                + "journalctl --user -u dev.rv.evaluate.service and rv doctor show the cause\n"
+        ),
+        (
+            .directStartFailed(rvdPath: "/h/.local/bin/rvd"),
+            .serviceStart,
+            EX_UNAVAILABLE,
+            "rv service start failed: unable to start rvd (no systemd user manager is running, so rv starts rvd itself)\n"
+                + "fix: run /h/.local/bin/rvd --socket --idle-exit-seconds=31536000 in a terminal to see why; "
+                + "rv doctor shows the cause\n"
+        ),
+        (
+            .directRvdNotAnswering(rvdPath: "/h/.local/bin/rvd", logPath: "/h/.local/state/rv/rvd.log"),
+            .setup,
+            EX_UNAVAILABLE,
+            "rv setup failed: rvd did not answer within 10 seconds of starting it "
+                + "(no systemd user manager is running, so rv starts rvd itself)\n"
+                + "fix: read /h/.local/state/rv/rvd.log, or run /h/.local/bin/rvd --socket --idle-exit-seconds=31536000 "
+                + "in a terminal to see why; rv doctor shows the cause\n"
+        ),
+        (
             .serviceDown(.serviceNotAnswering(.systemdUser), alreadyWired: [.claude, .codex]),
             .setup,
             EX_UNAVAILABLE,

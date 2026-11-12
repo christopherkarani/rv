@@ -46,7 +46,8 @@ extern char **environ;
 #endif
 
 /* systemd's per-user runtime root: rvd's unit gets
- * XDG_RUNTIME_DIR=/run/user/<uid> and binds <that>/rv/evaluate.sock
+ * XDG_RUNTIME_DIR=/run/user/<uid> and binds <that>/rv/evaluate.sock; an rvd
+ * started without XDG_RUNTIME_DIR binds the same uid-derived path
  * (UnixSocketPath.production). Test builds may pin a fixture root; release
  * builds never do, and it is never read from the environment. */
 #ifndef RV_HOOK_USER_RUNTIME_ROOT

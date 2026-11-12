@@ -465,12 +465,7 @@ public struct ServiceClient: Sendable {
         let tries = max(1, attempts)
         for attempt in 0..<tries {
             do {
-                _ = try await send(
-                    DoctorSnapshotCall(),
-                    using: transport,
-                    timeoutMs: transport.oneShotEvaluateTimeoutMs,
-                    hookConsult: true
-                )
+                try await hookConsultSnapshot(using: transport)
                 return true
             } catch {
                 if attempt + 1 < tries, retryDelayNanoseconds > 0 {
@@ -487,18 +482,35 @@ public struct ServiceClient: Sendable {
     func probeHookService() async -> HookDaemonFailure? {
         guard let transport else { return .connection }
         do {
-            _ = try await send(
-                DoctorSnapshotCall(),
-                using: transport,
-                timeoutMs: transport.oneShotEvaluateTimeoutMs,
-                hookConsult: true
-            )
+            try await hookConsultSnapshot(using: transport)
             return nil
         } catch is IPCCallError {
             return .protocol
         } catch {
             return HookDaemonFallback.classify(error)
         }
+    }
+
+    /// One read-only snapshot over the hook-consult session. rvd's Unix
+    /// socket serves nothing but a hello on a fresh connection (any other
+    /// first frame answers `handshake required`), so on Linux the probe says
+    /// hello first, exactly as `route()` does; without it setup's readiness
+    /// wait and the daemon-down owner check read a running rvd as silent.
+    /// A skewed hello is a protocol failure: hooks would not trust that rvd.
+    private func hookConsultSnapshot(using transport: any ServiceTransport) async throws {
+#if !canImport(XPC)
+        let ack = try await transport.helloHookConsult(clientSemver: ProtocolVersion.serviceSemver)
+        if skewReason(ack) != nil {
+            transport.invalidate()
+            throw IPCCallError.unexpectedResult
+        }
+#endif
+        _ = try await send(
+            DoctorSnapshotCall(),
+            using: transport,
+            timeoutMs: transport.oneShotEvaluateTimeoutMs,
+            hookConsult: true
+        )
     }
 
     public func status() async -> ServiceStatusReport {

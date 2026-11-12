@@ -96,13 +96,6 @@ public final class UnixEvaluateListener: Sendable {
     private let slots: UnixConnectionSlots
     private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-evaluate")
-    /// Connections serve here, never on `queue`: each `serve` loop blocks in
-    /// `recv` for the life of its connection, so serving on the serial accept
-    /// queue would starve every later accept behind the first connection.
-    private let connections = DispatchQueue(
-        label: "rv.unix-evaluate-connections",
-        attributes: .concurrent
-    )
 
     private struct ListenerState {
         var listenFD: Int32 = -1
@@ -193,10 +186,19 @@ public final class UnixEvaluateListener: Sendable {
             _ = Glibc.close(client)
             return
         }
-        connections.async {
-            defer { self.slots.release() }
-            self.serve(client)
+        // Each connection gets its own thread, never a dispatch worker:
+        // `serve` blocks in `recv` for the life of the connection and blocks
+        // again on each request's evaluation `Task`. On Linux, dispatch
+        // workers and the Swift concurrency pool share libdispatch's small
+        // root-queue pool and it does not add threads for blocked ones, so a
+        // cold burst parked every worker on a reply gate with none left to
+        // run the evaluations: every hook timed out. `slots` caps the count.
+        let thread = Thread { [self] in
+            defer { slots.release() }
+            serve(client)
         }
+        thread.name = "rv.unix-evaluate-connection"
+        thread.start()
     }
 
     private func serve(_ fd: Int32) {

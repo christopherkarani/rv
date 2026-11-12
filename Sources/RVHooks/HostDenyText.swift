@@ -38,8 +38,15 @@ public let cursorAgentStopLine =
 /// Ask-denial suffix on every host. The policy verdict stays ASK; the wire
 /// renders deny-with-guidance because no host can pause for a human.
 /// One sentence: `hostDenyWhy` keeps sentence 1 + sentence 2 only.
+/// Linux has no approval app (RVOperatorUI is macOS-only), so the unlock
+/// code redeemed in Terminal is the only way a human approves there.
+#if os(macOS)
 public let approvalPendingLine =
     "This action requires human approval: open RV to approve it, then retry the exact command."
+#else
+public let approvalPendingLine =
+    "This action requires human approval: the owner redeems its rv allow-once code, then retry the exact command."
+#endif
 
 /// Ask-denial suffix when the pending row could not be recorded (M-25).
 /// Promising RV approval then would be a lie — there is no row to approve —
@@ -49,8 +56,13 @@ public let approvalUnrecordedLine =
 
 /// Cursor `agent_message` on ask. Unlike a deny, the agent retries the
 /// exact command after the human approves it in RV.
+#if os(macOS)
 public let cursorAgentAskLine =
     "RV blocked this command because it requires approval. Wait for the human to approve it in RV, then retry the exact command."
+#else
+public let cursorAgentAskLine =
+    "RV blocked this command because it requires approval. Wait for the human to approve it with rv allow-once, then retry the exact command."
+#endif
 
 /// Cursor `agent_message` when the pending row could not be recorded: no
 /// retry can succeed, so the agent waits instead of looping.

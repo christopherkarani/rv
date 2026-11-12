@@ -47,7 +47,7 @@ struct EgressCommandRunTests {
             home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .failed, output: out
         ) {
             var command = try EgressApprove.parse([id])
-            await #expect(throws: ExitCode(2)) { try await command.run() }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await command.run() }
         }
         #expect(out.stderr == "rv egress approve: device-owner authentication required\n")
     }
@@ -82,7 +82,7 @@ struct EgressCommandRunTests {
             home: home, stdinIsTTY: true, stdoutIsTTY: true, ownerAuthOutcome: .failed, output: out
         ) {
             var command = try EgressDeny.parse([id, "--reason", "tracker"])
-            await #expect(throws: ExitCode(2)) { try await command.run() }
+            await #expect(throws: ExitCode(EX_NOPERM)) { try await command.run() }
         }
         #expect(out.stderr == "rv egress deny: device-owner authentication required\n")
     }

@@ -62,7 +62,10 @@ private func readKeychainItem(_ service: String, _ account: String) -> Data? {
     return data
 }
 #else
+/// Linux: the Secret Service item with these `service`/`account`
+/// attributes (`SecretServiceTool.lookup`); nil when there is no
+/// `secret-tool`, no session bus, no item, or the keyring is locked.
 private func readKeychainItem(_ service: String, _ account: String) -> Data? {
-    nil
+    SecretServiceTool.lookup(service: service, account: account)
 }
 #endif

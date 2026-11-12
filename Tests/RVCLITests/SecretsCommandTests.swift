@@ -92,7 +92,7 @@ struct SecretsCommandTests {
                                  placeholderPrefix: "sk-"),
             agents: ["codex"], description: "model calls", environment: environment
         ).get()
-        #expect(text.hasPrefix("Stored OPENAI_API_KEY in the Keychain (rv.secrets). Delivery: gateway → api.openai.com via $OPENAI_BASE_URL."))
+        #expect(text.hasPrefix("Stored OPENAI_API_KEY in \(SecretKeychain.storeName) (rv.secrets). Delivery: gateway → api.openai.com via $OPENAI_BASE_URL."))
         #expect(fixture.keychain.items.withLock { $0["rv.secrets/OPENAI_API_KEY"] } == Data("sk-real-value-123".utf8))
 
         var info = stat()
@@ -457,7 +457,7 @@ struct SecretsCommandTests {
         try fixture.writeProfiles(#"{"version":1,"profiles":[{"id":"ci","projects":["/tmp"],"executableLinks":[],"readFiles":[],"readTrees":[],"writeTrees":[],"credentials":[],"environment":[],"secrets":["GH_TOKEN"]}]}"#)
         let text = try SecretsRun.remove(name: "GH_TOKEN", environment: environment).get()
         #expect(text == """
-            Deleted GH_TOKEN from the Keychain (rv.secrets).
+            Deleted GH_TOKEN from \(SecretKeychain.storeName) (rv.secrets).
             Removed GH_TOKEN from secrets.json.
             warning: profiles ci still list GH_TOKEN; their launches will fail until you remove it.
 

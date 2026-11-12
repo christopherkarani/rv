@@ -28,6 +28,8 @@ struct SetupIntent {
     var removeModels: Bool = false
     /// `rv setup --observe`: store `guard.mode: observe` before wiring.
     var observe: Bool = false
+    /// Explicit `--json` / `--robot`: stdout is one `rv.setup.v1` document.
+    var json: Bool = false
 }
 
 /// The single deep entry into setup/uninstall. Owns environment construction;
@@ -90,9 +92,9 @@ struct SetupFlow {
                 }
             } catch let error as SetupError {
                 let output = setupFailureOutput(error, command: .setup)
-                return SetupOutcome(stdout: "", stderr: output.stderr, exitCode: output.exitCode)
+                return SetupRun.failureOutcome(stderr: output.stderr, exitCode: output.exitCode, json: intent.json)
             } catch {
-                return SetupOutcome(stdout: "", stderr: "rv setup failed: \(error)\n", exitCode: EX_SOFTWARE)
+                return SetupRun.failureOutcome(stderr: "rv setup failed: \(error)\n", exitCode: EX_SOFTWARE, json: intent.json)
             }
         }
         return await runOffPool(intent, env: env, ownerAuthenticated: ownerAuthenticated, clock: clock, write: write)
@@ -138,7 +140,8 @@ struct SetupFlow {
                 guardRequest: intent.observe ? .observe(ownerAuthenticated: ownerAuthenticated) : .keep,
                 clock: clock,
                 animate: intent.animate,
-                write: write
+                write: write,
+                json: intent.json
             )
         case .uninstall:
             return SetupRun.uninstall(
@@ -193,6 +196,10 @@ extension SetupEnvironment {
         )
         setup.daemonTrust = DaemonTrustProbe.live
         setup.serviceAnswers = ServiceReadiness.live(home: home)
+        setup.serviceAnswersNow = ServiceReadiness.liveOnce(home: home)
+#if os(Linux)
+        setup.directRvd = ProcessDirectRvd()
+#endif
         setup.resolveInterpreter = { AdapterRuntime.resolveRunnable($0, pathEntries: pathEntries) }
         return setup
     }

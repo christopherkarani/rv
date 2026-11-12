@@ -9,19 +9,20 @@ public struct CodexHostCodec: HostCodec {
     /// Creates a Codex adapter codec.
     public init() {}
 
+    /// Guarded spellings; near-variants read as these (`HookWireName`).
+    static let guardedTools = ["Bash"]
+
     /// Decodes adapter stdin into a classified outcome.
     public func decode(_ stdin: String) -> HookDecodeOutcome {
-        guard let data = stdin.data(using: .utf8),
+        guard let data = StrictHookJSON.screenedData(stdin),
               let envelope = try? JSONDecoder().decode(CodexEnvelope.self, from: data)
         else {
             return .malformed(.unreadable)
         }
-        guard let eventName = envelope.hookEventName,
-              CodexEventName(wireValue: eventName).strictMatch
-        else {
+        guard HookWireName.isPreToolEvent(envelope.hookEventName, preToolEvent: "PreToolUse") else {
             return .foreign
         }
-        guard let toolName = envelope.toolName,
+        guard let toolName = HookWireName.canonical(envelope.toolName, among: Self.guardedTools),
               CodexToolName(wireValue: toolName).strictMatch == .shell
         else {
             return .foreign

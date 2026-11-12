@@ -112,10 +112,15 @@ def test_resolve_linux_missing_base_fails_closed(monkeypatch):
         monkeypatch.setenv("XDG_RUNTIME_DIR", value)
         with pytest.raises(RuntimeNotFound):
             transports.resolve_socket_path()
-    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     with pytest.raises(RuntimeNotFound) as info:
         transports.resolve_socket_path()
-    assert "install" in info.value.remediation
+    assert "XDG_RUNTIME_DIR" in info.value.remediation
+
+
+def test_resolve_linux_unset_xdg_uses_uid_runtime_dir(monkeypatch):
+    monkeypatch.setattr(transports.sys, "platform", "linux")
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    assert transports.resolve_socket_path() == f"/run/user/{os.getuid()}/rv/evaluate.sock"
 
 
 def test_resolve_linux_too_long(monkeypatch):

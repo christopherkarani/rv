@@ -132,12 +132,12 @@ private let readyService = DoctorServiceView(
     #expect(Set(json.keys) == ["schema", "service", "packs", "hosts", "config", "grade", "ok"])
 
     #expect(Set(service.keys) == [
-        "state", "protocol", "service_semver", "fallback_ready", "launch_agent",
+        "state", "protocol", "service_semver", "local_packs_ready", "launch_agent",
     ])
     #expect(service["state"] as? String == "running")
     #expect(service["protocol"] as? String == "rv.ipc.v1")
     #expect(service["service_semver"] as? String == "1.0.0")
-    #expect(service["fallback_ready"] as? Bool == true)
+    #expect(service["local_packs_ready"] as? Bool == true)
     #expect(service["launch_agent"] as? String == "loaded")
     #expect(service["warning"] == nil)
 

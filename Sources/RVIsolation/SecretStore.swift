@@ -48,9 +48,19 @@ extension SecretDelivery {
     }
 }
 
-/// Values rv itself stores live in the login Keychain under this service.
+/// Values rv itself stores live in the login Keychain (macOS) or the
+/// Secret Service keyring (Linux, `SecretServiceTool`) under this service.
 public enum SecretKeychain {
     public static let service = "rv.secrets"
+
+    /// Where stored values live, for user-facing text.
+    public static var storeName: String {
+        #if canImport(Security)
+        "the Keychain"
+        #else
+        "the Secret Service keyring"
+        #endif
+    }
 }
 
 /// Keychain writes for `rv secrets set|remove`. Tests inject fakes.
@@ -98,8 +108,25 @@ public struct SecretKeychainWriter: Sendable {
         }
     )
     #else
-    public static let live = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false })
+    /// Linux: the Secret Service through `secret-tool` (`SecretServiceTool`).
+    /// Without `secret-tool` or a session bus nothing can be stored. A
+    /// delete without `secret-tool` succeeds (rv could not have stored
+    /// anything); without a bus it fails rather than claim the value is gone.
+    public static let live = SecretKeychainWriter(
+        store: { service, account, value in SecretServiceTool.store(service: service, account: account, value: value) },
+        delete: { service, account in SecretServiceTool.delete(service: service, account: account) }
+    )
     #endif
+
+    /// Why a store failed, for "could not store NAME …" messages. On Linux
+    /// it names what is missing (`secret-tool`, a session bus, a keyring).
+    public static var storeFailureSuffix: String {
+        #if canImport(Security)
+        "in the Keychain"
+        #else
+        SecretServiceTool.storeFailureSuffix()
+        #endif
+    }
 }
 
 extension SecretFingerprinter {

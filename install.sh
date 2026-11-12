@@ -8,6 +8,10 @@
 # redirect) and every asset, SHA256SUMS included, comes from that tag. Every
 # downloaded asset is checked against SHA256SUMS on all OSes before anything
 # is unpacked or staged; RV_INSTALL_SKIP_CHECKSUMS=1 skips that (loudly).
+# Once release_ssh_allowed_signers is pinned below, SHA256SUMS itself must
+# carry a valid SHA256SUMS.sig from rv's release key; until then Linux
+# downloads (which have no code signature) warn that nothing is signed.
+# Linux downloads also need glibc 2.35+ (no musl), libcurl and libsqlite3.
 # Downloaded macOS files are signature-checked before anything is staged. A
 # file counts as signed only with a valid, notarized Developer ID signature
 # from the pinned team. Ad-hoc and missing signatures, and Developer ID
@@ -96,6 +100,17 @@ esac
 # then on an unsigned download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1.
 signed_releases=0
 release_team_id=""
+# Release key for SHA256SUMS: one `rv-release <key-type> <base64-key>` line
+# per key (ssh allowed_signers format, no quotes), the public half of the
+# RV_RELEASE_SSH_SIGNING_KEY secret release.yml signs with. While it is
+# empty nothing is verified and Linux installs warn (macOS still has
+# codesign). Once pinned, every download needs a SHA256SUMS.sig that
+# `ssh-keygen -Y verify` accepts (namespace rv-release) before any asset is
+# trusted: a bad signature always refuses, a missing one refuses unless
+# RV_INSTALL_ALLOW_UNSIGNED=1. Like the team pin, only this script sets it.
+release_ssh_allowed_signers=""
+release_sig_principal="rv-release"
+release_sig_namespace="rv-release"
 tmp_fetch=""
 tmp_rv=""
 tmp_cli=""
@@ -312,6 +327,48 @@ fetch_checksums() {
   sums_file="$tmp_fetch/SHA256SUMS"
   if ! curl -fsSL "$release_base/SHA256SUMS" -o "$sums_file"; then
     echo "rv: refusing to install: failed to download $release_base/SHA256SUMS" >&2
+    exit 1
+  fi
+}
+
+# Check SHA256SUMS against the pinned release key (see
+# release_ssh_allowed_signers). Absolute ssh-keygen paths: one earlier on
+# PATH must not decide this check.
+verify_checksums_signature() {
+  [ -n "$sums_file" ] || return 0
+  if [ -z "$release_ssh_allowed_signers" ]; then
+    if [ "$os" = "Linux" ]; then
+      echo "rv: warning: release signatures are not verified on Linux yet; downloads are checked only against this release's SHA256SUMS" >&2
+    fi
+    return 0
+  fi
+  sig_file="$tmp_fetch/SHA256SUMS.sig"
+  if ! curl -fsSL "$release_base/SHA256SUMS.sig" -o "$sig_file"; then
+    rm -f "$sig_file"
+    if [ "${RV_INSTALL_ALLOW_UNSIGNED:-}" = "1" ]; then
+      echo "rv: WARNING: this release has no SHA256SUMS.sig; RV_INSTALL_ALLOW_UNSIGNED=1 set, so its checksums are NOT verified against rv's release key" >&2
+      return 0
+    fi
+    echo "rv: refusing to install: failed to download $release_base/SHA256SUMS.sig, so SHA256SUMS cannot be checked against rv's release key" >&2
+    echo "rv: set RV_INSTALL_ALLOW_UNSIGNED=1 to install it anyway" >&2
+    exit 1
+  fi
+  keygen=""
+  for candidate in /usr/bin/ssh-keygen /bin/ssh-keygen; do
+    if [ -x "$candidate" ]; then
+      keygen="$candidate"
+      break
+    fi
+  done
+  if [ -z "$keygen" ]; then
+    echo "rv: refusing to install: ssh-keygen is not installed, so the release signature cannot be checked (install openssh-client)" >&2
+    exit 1
+  fi
+  signers_file="$tmp_fetch/allowed_signers"
+  printf '%s\n' "$release_ssh_allowed_signers" > "$signers_file"
+  if ! "$keygen" -Y verify -f "$signers_file" -I "$release_sig_principal" -n "$release_sig_namespace" \
+    -s "$sig_file" < "$sums_file" >/dev/null 2>&1; then
+    echo "rv: refusing to install: SHA256SUMS.sig is not a valid signature by rv's release key" >&2
     exit 1
   fi
 }
@@ -980,6 +1037,99 @@ refuse_untrusted_rvd_under_manifest() {
   exit 1
 }
 
+# Linux release binaries are built on Ubuntu 22.04 and link the system glibc,
+# libstdc++, libcurl and libsqlite3 (release.yml fails a build whose GLIBC_
+# symbol floor is above linux_glibc_min). Checked before anything downloads,
+# so an unsupported host gets a reason instead of binaries that cannot start.
+# musl (Alpine) is not supported and always refuses. A local stage
+# (RV_INSTALL_BIN) was built on this host and is not checked.
+# RV_INSTALL_SKIP_LINUX_CHECKS=1 skips the glibc and library probes (loudly),
+# for hosts whose loader layout the probes cannot read (e.g. NixOS nix-ld).
+linux_glibc_min="2.35"
+
+# 0 when shared library $1 for this architecture is installed. ldconfig's
+# cache answers when it can be read; otherwise the usual library dirs.
+linux_has_lib() {
+  case "$arch" in
+    x86_64) ld_tag="x86-64" ;;
+    *) ld_tag="AArch64" ;;
+  esac
+  ldconfig_bin=""
+  for candidate in "$(command -v ldconfig 2>/dev/null || true)" /sbin/ldconfig /usr/sbin/ldconfig; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      ldconfig_bin="$candidate"
+      break
+    fi
+  done
+  if [ -n "$ldconfig_bin" ]; then
+    cache="$("$ldconfig_bin" -p 2>/dev/null || true)"
+    if [ -n "$cache" ]; then
+      printf '%s\n' "$cache" | grep -F "$1 (libc6,$ld_tag" >/dev/null 2>&1
+      return
+    fi
+  fi
+  for dir in "/lib/$arch-linux-gnu" "/usr/lib/$arch-linux-gnu" /lib64 /usr/lib64 /lib /usr/lib; do
+    [ -e "$dir/$1" ] && return 0
+  done
+  return 1
+}
+
+check_linux_runtime() {
+  [ "$os" = "Linux" ] || return 0
+  libc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+  case "$libc" in
+    glibc\ *) ;;
+    *)
+      if ldd --version 2>&1 | grep -i musl >/dev/null 2>&1; then
+        echo "rv: refusing to install: this system uses musl libc (Alpine or similar)" >&2
+        echo "rv: rv's Linux release binaries need glibc $linux_glibc_min or newer; musl is not supported" >&2
+        exit 1
+      fi
+      if [ "${RV_INSTALL_SKIP_LINUX_CHECKS:-}" = "1" ]; then
+        echo "rv: WARNING: RV_INSTALL_SKIP_LINUX_CHECKS=1 set; not checking for glibc $linux_glibc_min+ or libcurl/libsqlite3" >&2
+        return 0
+      fi
+      echo "rv: refusing to install: cannot tell which C library this system uses (getconf GNU_LIBC_VERSION failed)" >&2
+      echo "rv: rv's Linux release binaries need glibc $linux_glibc_min or newer; musl is not supported" >&2
+      exit 1
+      ;;
+  esac
+  if [ "${RV_INSTALL_SKIP_LINUX_CHECKS:-}" = "1" ]; then
+    echo "rv: WARNING: RV_INSTALL_SKIP_LINUX_CHECKS=1 set; not checking for glibc $linux_glibc_min+ or libcurl/libsqlite3" >&2
+    return 0
+  fi
+  have="${libc#glibc }"
+  have_major="${have%%.*}"
+  have_minor="${have#*.}"
+  have_minor="${have_minor%%.*}"
+  want_major="${linux_glibc_min%%.*}"
+  want_minor="${linux_glibc_min#*.}"
+  case "$have_major:$have_minor" in
+    *[!0-9:]*|:*|*:)
+      echo "rv: refusing to install: cannot read the glibc version ($libc); rv needs glibc $linux_glibc_min or newer" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$have_major" -lt "$want_major" ] \
+    || { [ "$have_major" -eq "$want_major" ] && [ "$have_minor" -lt "$want_minor" ]; }; then
+    echo "rv: refusing to install: this system has glibc $have; rv's Linux release binaries need glibc $linux_glibc_min or newer" >&2
+    echo "rv: supported: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL/Rocky/Alma 10+ (or build from source)" >&2
+    exit 1
+  fi
+  missing=""
+  linux_has_lib libcurl.so.4 || missing="$missing libcurl.so.4"
+  linux_has_lib libsqlite3.so.0 || missing="$missing libsqlite3.so.0"
+  if [ -n "$missing" ]; then
+    echo "rv: refusing to install: rv-cli and rvd will not start without:$missing" >&2
+    echo "rv: install them first:" >&2
+    echo "rv:   Debian/Ubuntu: sudo apt-get install libcurl4 libsqlite3-0" >&2
+    echo "rv:   Fedora/RHEL:   sudo dnf install libcurl sqlite-libs" >&2
+    echo "rv:   openSUSE:      sudo zypper install libcurl4 libsqlite3-0" >&2
+    echo "rv:   Arch:          sudo pacman -S curl sqlite" >&2
+    exit 1
+  fi
+}
+
 if [ -n "${RV_INSTALL_BIN:-}" ]; then
   src="$RV_INSTALL_BIN"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
@@ -987,9 +1137,11 @@ if [ -n "${RV_INSTALL_BIN:-}" ]; then
     exit 1
   }
 else
+  check_linux_runtime
   tmp_fetch="$(mktemp -d "${TMPDIR:-/tmp}/rv-install.XXXXXX")"
   resolve_release_tag
   fetch_checksums
+  verify_checksums_signature
 
   size_rv="$(normalize_size "$(content_length "$release_base/rv-$target")")"
   size_cli="$(normalize_size "$(content_length "$release_base/rv-cli-$target")")"
@@ -1179,9 +1331,10 @@ tmp_cli=""
 tmp_rvd=""
 tmp_host=""
 
-# Pack JSON lives next to the binaries (Scripts/release.sh). Darwin SPM emits
-# *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources. Bundle.module loads
-# whichever name this platform's accessor baked.
+# Pack JSON lives next to the binaries (Scripts/release.sh). Swift Build (the
+# SwiftPM default since 6.4) emits *_RVPacks.bundle on every platform; the
+# legacy native build system emits *_RVPacks.resources on Linux. PackRegistry
+# accepts either name.
 for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
   [ -d "$bundle" ] || continue
   name="$(basename "$bundle")"

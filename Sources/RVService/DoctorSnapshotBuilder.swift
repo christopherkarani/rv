@@ -104,7 +104,7 @@ public enum DoctorSnapshotBuilder {
             return "template \(label) KeepAlive true"
         }
 #if os(Linux)
-        return "template \(label) Restart=no idle-exit \(idleExitSeconds)s"
+        return "template \(label) Restart=always idle-exit \(idleExitSeconds)s"
 #else
         return "template \(label) KeepAlive false idle-exit \(idleExitSeconds)s"
 #endif

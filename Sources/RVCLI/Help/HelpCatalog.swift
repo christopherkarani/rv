@@ -77,7 +77,7 @@ enum HelpCatalog {
                 HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity / Muse)"),
-                HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
+                HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and the rvd service"),
                 HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
                 HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
                 HelpRow(name: "report", description: "Governance posture of this machine (MDM, --json)"),
@@ -216,10 +216,12 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv service"),
                 HelpRow(name: "rv service status"),
+                HelpRow(name: "rv service start"),
                 HelpRow(name: "rv service restart"),
             ]),
             HelpSection(heading: "Subcommands", rows: [
                 HelpRow(name: "status", description: "Print whether rvd is running, down, or skewed (default)"),
+                HelpRow(name: "start", description: "Start rvd unless it already answers"),
                 HelpRow(name: "restart", description: "Restart rvd (after an upgrade or repair)"),
             ]),
         ],
@@ -236,8 +238,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv service status [--json] [--robot] [--plain] [--no-color]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--json", description: "key=value lines (same as --robot)"),
-                HelpRow(name: "--robot", description: "key=value lines"),
+                HelpRow(name: "--json", description: "JSON document (same as --robot)"),
+                HelpRow(name: "--robot", description: "JSON document; piped or CI output without a flag is key=value lines"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
@@ -254,16 +256,31 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv service restart"),
+                HelpRow(name: "rv service start"),
             ]),
-            HelpSection(heading: "Behavior", rows: [
-                HelpRow(name: "loaded", description: "launchctl kickstart -k the rvd LaunchAgent"),
-                HelpRow(name: "not loaded", description: "Rewrite the LaunchAgent for ~/.local/bin/rvd and load it"),
-            ]),
+            HelpSection(heading: "Behavior", rows: serviceRestartBehavior),
         ],
         examples: [
             "rv service restart",
         ]
     )
+
+    #if os(Linux)
+    static let serviceRestartBehavior = [
+        HelpRow(name: "systemd", description: "systemctl --user restart (start) dev.rv.evaluate.service"),
+        HelpRow(
+            name: "no systemd",
+            description: "No systemd user manager: run ~/.local/bin/rvd directly; it stops at logout or reboot"
+        ),
+        HelpRow(name: "start", description: "Does nothing when rvd already answers"),
+    ]
+    #else
+    static let serviceRestartBehavior = [
+        HelpRow(name: "loaded", description: "launchctl kickstart -k the rvd LaunchAgent"),
+        HelpRow(name: "not loaded", description: "Rewrite the LaunchAgent for ~/.local/bin/rvd and load it"),
+        HelpRow(name: "start", description: "Does nothing when rvd already answers"),
+    ]
+    #endif
 
     /// Host stdin is adapter-owned — no fake file Examples.
     static let hook = HelpViewModel(
@@ -292,8 +309,8 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--force", description: "Replace occupied owned hooks (backup *.bak)"),
                 HelpRow(name: "--observe", description: "Log what rv would block instead of blocking"),
-                HelpRow(name: "--json", description: "One line, no circles (same as --robot)"),
-                HelpRow(name: "--robot", description: "One line, no circles"),
+                HelpRow(name: "--json", description: "One rv.setup.v1 JSON document (same as --robot)"),
+                HelpRow(name: "--robot", description: "One rv.setup.v1 JSON document"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
@@ -658,7 +675,7 @@ enum HelpCatalog {
                 HelpRow(name: "missing", description: "A rule never matches an argument the call left out; keep a non-allow default"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
-                HelpRow(name: "approve", description: "Needs Touch ID or your password. A pseudo-terminal cannot approve"),
+                HelpRow(name: "approve", description: "Needs \(OwnerAuthWording.method). A pseudo-terminal cannot approve"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(
                     name: "sandbox",
@@ -774,7 +791,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "storage",
-                    description: "Kept in the Keychain as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
+                    description: "Kept in the Keychain (macOS) or the Secret Service keyring via secret-tool (Linux) as the provider's secret; a new login gets gateway delivery, so agents get a placeholder, never the value"
                 ),
                 HelpRow(name: "check", description: "Resolves the named (default: connected) logins and shows fingerprints, never values; exit 1 if any fails"),
                 HelpRow(name: "logout", description: "Removes the login definition and the rv-stored Keychain value"),

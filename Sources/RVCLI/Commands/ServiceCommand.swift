@@ -4,8 +4,8 @@ import Foundation
 struct Service: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "service",
-        abstract: "Show rvd status or restart it.",
-        subcommands: [Status.self, Restart.self],
+        abstract: "Show rvd status, start it, or restart it.",
+        subcommands: [Status.self, Start.self, Restart.self],
         defaultSubcommand: Status.self
     )
 }
@@ -24,7 +24,8 @@ struct Status: AsyncParsableCommand {
         let report = await ServiceClient.probing(home: ctx.home).status()
         let text = try ServiceStatusCommand.text(
             report,
-            appearance: ctx.appearance
+            appearance: ctx.appearance,
+            explicitRobot: ctx.explicitRobot
         )
         ctx.writeStdout(text + "\n")
     }
@@ -33,7 +34,7 @@ struct Status: AsyncParsableCommand {
 struct Restart: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "restart",
-        abstract: "Restart rvd: launchctl kickstart -k, or reload the LaunchAgent when it is not loaded."
+        abstract: "Restart rvd (launchd on macOS; systemctl --user on Linux, or rvd directly without a systemd user manager)."
     )
 
     func run() throws {
@@ -42,5 +43,20 @@ struct Restart: ParsableCommand {
             throw ExitCode(1)
         }
         try CeremonyCLI.emit(ServiceRestart.run(env))
+    }
+}
+
+struct Start: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "start",
+        abstract: "Start rvd unless it already answers (safe to run from a shell profile)."
+    )
+
+    func run() throws {
+        guard let env = SetupEnvironment.live() else {
+            CommandContext.writeStderr(CommandContext.homeMissingText(command: "service start"))
+            throw ExitCode(1)
+        }
+        try CeremonyCLI.emit(ServiceRestart.run(env, onlyIfStopped: true))
     }
 }

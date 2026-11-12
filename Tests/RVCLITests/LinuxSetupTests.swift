@@ -19,9 +19,8 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
         #expect(FileManager.default.fileExists(atPath: layout.systemdUserUnit))
         let unit = try String(contentsOfFile: layout.systemdUserUnit, encoding: .utf8)
-        #expect(unit.contains("Restart=no"))
-        #expect(unit.contains("Restart=always") == false)
-        #expect(unit.contains("\(home.appendingPathComponent("rvd").path) --socket"))
+        #expect(unit.contains("Restart=always"))
+        #expect(unit.contains("ExecStart=\"\(home.appendingPathComponent("rvd").path)\" --socket"))
         #expect(systemctl.enabled == [SystemdUserTemplate.unitName])
         #expect(launchctl.bootstraps.isEmpty)
         #expect(launchctl.bootouts.isEmpty)
@@ -89,5 +88,17 @@ import Testing
         #expect(outcome.exitCode == EX_UNAVAILABLE)
         #expect(launchctl.bootstraps.isEmpty)
     }
+}
+@Test func systemdExecStart_quotesSpacesAndEscapesSpecifiers() throws {
+    #expect(try SystemdUserTemplate.execStartQuoted("/home/a b/.local/bin/rvd") == "\"/home/a b/.local/bin/rvd\"")
+    #expect(try SystemdUserTemplate.execStartQuoted("/home/100%/rvd") == "\"/home/100%%/rvd\"")
+    // systemd substitutes `$VAR` / `${VAR}` in ExecStart, quoted or not.
+    #expect(try SystemdUserTemplate.execStartQuoted("/home/a$HOME${X}/rvd") == "\"/home/a$$HOME$${X}/rvd\"")
+    #expect(try SystemdUserTemplate.execStartQuoted("/h/q\"\\/rvd") == "\"/h/q\\\"\\\\/rvd\"")
+    #expect(throws: SetupError.systemdUnitWriteFailed) {
+        try SystemdUserTemplate.execStartQuoted("/home/x\ny/rvd")
+    }
+    let unit = try SystemdUserTemplate.rendered(rvdPath: "/home/a b/.local/bin/rvd")
+    #expect(unit.contains("ExecStart=\"/home/a b/.local/bin/rvd\" --socket --idle-exit-seconds=31536000"))
 }
 #endif

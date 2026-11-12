@@ -100,7 +100,8 @@ public struct EvaluateSession: Sendable {
         workingDirectory: WorkingDirectory? = nil,
         gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
         filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
-        policy: EffectiveActionPolicy = .empty
+        policy: EffectiveActionPolicy = .empty,
+        patternBudget: PatternBudget = PatternBudget()
     ) -> EvaluationResult {
         let result = engineEvaluateWithSemantics(
             request,
@@ -111,7 +112,8 @@ public struct EvaluateSession: Sendable {
             workingDirectory: workingDirectory,
             gitProbe: gitProbe,
             filesystemProbe: filesystemProbe,
-            policy: policy
+            policy: policy,
+            patternBudget: patternBudget
         )
         guard corePacksReady else {
             return EvaluationResult(
@@ -152,7 +154,8 @@ private func engineEvaluateWithSemantics(
     workingDirectory: WorkingDirectory?,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
-    policy: EffectiveActionPolicy
+    policy: EffectiveActionPolicy,
+    patternBudget: PatternBudget
 ) -> EvaluationResult {
     evaluateWithSemantics(
         request,
@@ -163,6 +166,7 @@ private func engineEvaluateWithSemantics(
         workingDirectory: workingDirectory,
         gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,
-        policy: policy
+        policy: policy,
+        patternBudget: patternBudget
     )
 }

@@ -182,7 +182,12 @@ extension DaemonDownOwnerConfirmation {
         }
         // The password is the boundary: an agent at a pty has the TTYs but
         // not the password (see the type doc). A key-only account's empty
-        // answer fails `unix_chkpwd` and is refused.
+        // answer fails `unix_chkpwd` and is refused; one `passwd -S` shows
+        // locked is told so instead of being prompted.
+        if let locked = OwnerAccountPassword.refusalIfLocked() {
+            FileHandle.standardError.write(Data("rv: \(locked)\n".utf8))
+            return .unavailable
+        }
         guard let password = OwnerConfirmation.readOwnerPassword(
             prompt: "\(reason)\nPassword for \(UserName.current ?? "your account"): ")
         else { return .unavailable }

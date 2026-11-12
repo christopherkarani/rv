@@ -48,11 +48,19 @@ public enum ServiceStatusCommand {
         try RobotDocument.serviceStatus(report).render()
     }
 
+    /// `rv.service.status.v1` JSON, for an explicit `--json` / `--robot`.
+    public static func jsonText(_ report: ServiceStatusReport) throws -> String {
+        try RobotDocument.serviceStatusJSON(report).render()
+    }
+
     public static func plainText(_ report: ServiceStatusReport) -> String {
         report.plainLines.joined(separator: "\n")
     }
 
-    static func text(_ report: ServiceStatusReport, appearance: CLIAppearance) throws -> String {
+    /// An explicit `--json` / `--robot` prints JSON; automatic robot output
+    /// (piped, CI) keeps its key=value lines.
+    static func text(_ report: ServiceStatusReport, appearance: CLIAppearance, explicitRobot: Bool = false) throws -> String {
+        if explicitRobot { return try jsonText(report) }
         switch appearance {
         case .robot:
             return try robotText(report)

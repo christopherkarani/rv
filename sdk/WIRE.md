@@ -21,9 +21,13 @@ Protocol identity: `Sources/RVIPC/ProtocolVersion.swift`
 
 ### 1.1 Linux: AF_UNIX pathname socket
 
-- Path: `$XDG_RUNTIME_DIR/rv/evaluate.sock` (`Sources/RVService/UnixSocketPath.swift`).
-- Resolution (`UnixSocketPath.resolve`): trim ASCII whitespace/newlines; unset or empty
+- Path: `$XDG_RUNTIME_DIR/rv/evaluate.sock`, or `/run/user/<uid>/rv/evaluate.sock` when
+  `XDG_RUNTIME_DIR` is unset (`Sources/RVService/UnixSocketPath.swift`). rvd, the C hook,
+  the Swift CLI and the SDKs all use this rule.
+- Resolution (`UnixSocketPath.resolve`): trim ASCII whitespace/newlines; set but empty
   after trim fails closed (`runtimeDirectoryMissing`) — there is **no `/tmp` fallback**.
+  With `XDG_RUNTIME_DIR` unset, rvd creates `/run/user/<uid>` (one level, `0700`) when it
+  is missing and its parent exists; otherwise it refuses to start.
 - Length: `utf8.count + 1 <= 108` or `pathTooLong` (room for NUL in `sockaddr_un`).
 - Modes: the `rv` dir `0700` (create, chmod, verify), socket `0600`
   (chmod, verify). The base dir is created `0700` when missing. A pre-existing

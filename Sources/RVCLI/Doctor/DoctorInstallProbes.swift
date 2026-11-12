@@ -40,6 +40,9 @@ struct DoctorInstallProbes {
     /// Can this user replace a baked interpreter (its file or a directory
     /// above it, through symlinks)? Default false (tests).
     var interpreterReplaceable: (String) -> Bool = { _ in false }
+    /// Linux: does a systemd user manager answer `systemctl --user`? Nil
+    /// off Linux or when not evaluated (tests).
+    var systemdUserManagerReachable: Bool? = nil
 
     static func live(
         home: HomeDirectory,
@@ -60,6 +63,7 @@ struct DoctorInstallProbes {
         )
 #else
         var probes = DoctorInstallProbes(userID: userID, launchd: nil, trustManifest: .notApplicable)
+        probes.systemdUserManagerReachable = ProcessSystemctl().userManagerReachable()
 #endif
         probes.interpreterRunnable = { AdapterRuntime.liveRunnable($0, pathEntries: pathEntries) }
         probes.interpreterReplaceable = AdapterRuntime.userCanReplace
@@ -123,10 +127,14 @@ enum DaemonTrustProbe {
 /// Install/runtime problems that make hooks deny even though rv "looks"
 /// installed. Each carries the exact repair command.
 enum DoctorInstallChecks {
-#if os(Linux)
-    static let packBundleName = "rv_RVPacks.resources"
-#else
+    /// Swift Build (the SwiftPM default since 6.4) names the bundle
+    /// `.bundle` on every platform; the legacy native build system still
+    /// emits `.resources` on Linux. Mirrors `PackRegistry`'s lookup.
     static let packBundleName = "rv_RVPacks.bundle"
+#if canImport(Darwin)
+    static let packBundleNames = [packBundleName]
+#else
+    static let packBundleNames = [packBundleName, "rv_RVPacks.resources"]
 #endif
     static let trustManifestPath = "/Library/Application Support/RV/peer-trust.json"
 
@@ -175,7 +183,7 @@ enum DoctorInstallChecks {
                     severity: .warn,
                     summary: "\(host.rawValue) hook runs \(replaceable), which this user can replace, "
                         + "so an agent could swap the interpreter to skip the guard",
-                    fix: "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+                    fix: replaceableFix(replaceable, name: name, userID: probes.userID)
                 )
             }
             return DoctorProblem(
@@ -186,6 +194,61 @@ enum DoctorInstallChecks {
                 fix: "\(AdapterRuntime.installHint(name)), then rv setup"
             )
         }
+    }
+
+    /// Linux without a systemd user manager (WSL without systemd, a
+    /// container, OpenRC/runit, a login without logind): nothing
+    /// supervises rvd, so `rv setup` / `rv service start` run it directly
+    /// and it does not survive logout or reboot. Not reported before setup
+    /// ran (the service row already says to run it).
+    static func systemdUserManager(
+        _ reachable: Bool?,
+        health: ServiceHealth,
+        paths: OwnedPaths
+    ) -> DoctorProblem? {
+        guard reachable == false else { return nil }
+        let start = "\(ShellWord.quote(paths.localRv)) service start"
+        let supervised = "or have your process supervisor run \(DirectRvd.command(rvdPath: paths.localRvd))"
+        switch health {
+        case .notInstalled:
+            return nil
+        case .reachable:
+            return DoctorProblem(
+                id: "systemd-user-manager",
+                severity: .warn,
+                summary: "no systemd user manager is running, so rvd runs without a supervisor "
+                    + "and will not survive logout or reboot",
+                fix: "add \"\(start) >/dev/null\" to your shell profile (e.g. ~/.profile), \(supervised)"
+            )
+        case .down, .skew, .requestFailed:
+            return DoctorProblem(
+                id: "systemd-user-manager",
+                severity: .fail,
+                summary: "rvd is not running and no systemd user manager is running to start it "
+                    + "(systemctl --user cannot reach one)",
+                fix: "\(start) (rvd then runs until logout or reboot; add that line to your shell profile, "
+                    + "\(supervised))"
+            )
+        }
+    }
+
+    /// System interpreter directories (`/usr/bin/python3` and the like).
+    static let systemInterpreterDirectories = ["/usr/bin/", "/bin/", "/usr/local/bin/", "/opt/homebrew/bin/"]
+
+    /// Moving to a system interpreter only helps when the replaceable one
+    /// is not already one. Root can replace every interpreter, so the cure
+    /// there is a non-root account; for anyone else a writable system
+    /// interpreter is a permissions problem.
+    static func replaceableFix(_ interpreter: String, name: String, userID: uid_t) -> String {
+        if userID == 0 {
+            return "run your agents as a regular user, not root: root can replace every \(name), "
+                + "system ones included, so no interpreter path is out of an agent's reach"
+        }
+        guard systemInterpreterDirectories.contains(where: { interpreter.hasPrefix($0) }) else {
+            return "put a system \(name) (e.g. /usr/bin/\(name)) first on PATH, then rv setup"
+        }
+        return "make \(interpreter) and the directories above it writable only by root "
+            + "(e.g. sudo chown root \(interpreter) && sudo chmod go-w \(interpreter))"
     }
 
     private static func setupFix(_ paths: OwnedPaths) -> String {
@@ -226,9 +289,13 @@ enum DoctorInstallChecks {
                 fix: SetupRun.reinstallHint
             )
         }
-        let bundle = (paths.localRvd as NSString).deletingLastPathComponent + "/" + packBundleName
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: bundle, isDirectory: &isDirectory), isDirectory.boolValue else {
+        let binDirectory = (paths.localRvd as NSString).deletingLastPathComponent
+        let present = packBundleNames.contains { name in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: binDirectory + "/" + name, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
+        guard present else {
             return DoctorProblem(
                 id: "pack-bundle",
                 severity: .fail,

@@ -47,6 +47,27 @@ Out of scope:
   any agent session
 - denial of service against your own machine by your own user
 
+## Release integrity
+
+Every installer download is checked against the release's `SHA256SUMS`
+before anything is unpacked. On macOS each binary must also carry a valid
+Developer ID signature (warn-only until `signed_releases=1` in `install.sh`).
+Linux binaries carry no code signature, so the release workflow signs
+`SHA256SUMS` with an SSH key (`ssh-keygen -Y sign`, namespace `rv-release`)
+from the `RV_RELEASE_SSH_SIGNING_KEY` repository secret and publishes
+`SHA256SUMS.sig`. Once the public half is pinned in `install.sh`
+(`release_ssh_allowed_signers`), the installer refuses a release whose
+signature is missing (unless `RV_INSTALL_ALLOW_UNSIGNED=1`) or invalid. While
+the pin is empty, Linux installs warn that release signatures are not
+verified. To check a release by hand:
+
+```sh
+printf '%s\n' "<release_ssh_allowed_signers from install.sh>" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I rv-release -n rv-release \
+  -s SHA256SUMS.sig < SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
 ## Design notes
 
 The threat model, boundary decisions, and audit evidence live in
