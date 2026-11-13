@@ -608,9 +608,12 @@ public enum VarlockSchema {
         if domains.count > 1 {
             notes.append("rv sends to \(host) only; \(domains.count - 1) more @proxy domain\(domains.count == 2 ? " is" : "s are") not carried over")
         }
+        // The curated upstream brings its curated allow rules; any other host has none.
+        let allow = curated == nil ? [] : known?.allow ?? []
         if dropped.isEmpty == false {
+            let scope = allow.isEmpty ? "any method and path" : "only rv's curated methods and paths"
             notes.append(
-                "@proxy options \(dropped.sorted().joined(separator: ", ")) are not carried over; the gateway allows any method and path")
+                "@proxy options \(dropped.sorted().joined(separator: ", ")) are not carried over; the gateway allows \(scope)")
         }
         if item.decorators.contains(where: { $0.name == "placeholder" }) {
             notes.append("@placeholder is not carried over; rv makes a fresh placeholder each launch")
@@ -625,7 +628,10 @@ public enum VarlockSchema {
         if typeOption(item, "endsWith") != nil || typeOption(item, "isLength") != nil {
             notes.append("@type endsWith/isLength do not shape rv's placeholder")
         }
-        return (.gateway(SecretGatewayBinding(upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix)), notes)
+        return (
+            .gateway(SecretGatewayBinding(
+                upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, allow: allow)),
+            notes)
     }
 
     /// A lowercase DNS name of two or more labels. rv binds one https origin,

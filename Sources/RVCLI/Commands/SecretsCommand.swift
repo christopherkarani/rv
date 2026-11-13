@@ -135,8 +135,9 @@ enum SecretsRun {
     }
 
     /// Delivery for `rv secrets set`: explicit flags win; otherwise a new
-    /// secret with a well-known name inherits its curated gateway (an
-    /// explicit --placeholder-prefix still overrides the curated prefix).
+    /// secret with a well-known name inherits its curated gateway and allow
+    /// rules (an explicit --placeholder-prefix or --allow still overrides
+    /// the curated prefix or rules).
     /// Existing secrets and unknown names resolve to nil, preserving the
     /// established update-value and pass-a-delivery behaviors.
     static func definitionForSet(
@@ -157,11 +158,15 @@ enum SecretsRun {
         }
         guard isNew, let known = KnownSecretDefaults.gateway(for: name) else { return (nil, nil) }
         let prefix = placeholderPrefix.isEmpty ? known.placeholderPrefix : placeholderPrefix
+        let scoped = allow.isEmpty ? known.allow : allow
         let definition = Definition.gateway(
             upstream: known.upstream, baseURLEnv: known.baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
-            allow: allow)
-        let note =
+            allow: scoped)
+        var note =
             "Using known defaults for \(DisplayedText.field(name)): gateway \(known.upstream) via $\(known.baseURLEnv).\n"
+        if allow.isEmpty {
+            note += "Allowed: \(allowText(known.allow.map(\.text))). Pass --allow on first set, or edit secrets.json, to change it.\n"
+        }
         return (definition, note)
     }
 
