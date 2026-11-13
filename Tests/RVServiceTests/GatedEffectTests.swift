@@ -246,10 +246,81 @@ struct GatedEffectTests {
                 judgeLog,
                 .denialRow(GatedEffect.DenialRow(
                     at: Self.now, host: .hook(.claude), tool: .bash, ruleID: deny.ruleID,
-                    category: .pack(deny.ruleID.pack), path: "", observed: true
+                    category: .pack(deny.ruleID.pack), path: "", observed: true, wouldBe: .deny
                 )),
             ])
         }
+    }
+
+    /// `would_be` is what the enforced hook would have surfaced: the same
+    /// `HookAuthorization.project` the hook door runs over the enforced
+    /// apply result. An unlockable deny asks; a pinned one (secret) denies.
+    @Test("observe apply: the observed row's would_be matches the enforced hook projection", arguments: [
+        ("git reset --hard", LedgerWouldBe.ask),
+        ("cat ~/.aws/credentials", LedgerWouldBe.deny),
+    ])
+    func observeWouldBeMatchesEnforcedProjection(_ command: String, _ expected: LedgerWouldBe) async throws {
+        let cwd = try #require(WorkingDirectory(validating: "/nonexistent/rv-effects-ws"))
+        let shell = ShellCommand(rawValue: command)
+        let enforced = await Self.decide(.apply, shell, mode: .enforce, cwd: cwd)
+        guard case .deny = enforced.result.decision else {
+            Issue.record("\(command) must deny under enforce, got \(enforced.result.decision)")
+            return
+        }
+        let projected = HookAuthorization.project(result: enforced.result, cwd: cwd)
+        #expect(projected == (expected == .ask ? .ask : .denyPinned), "\(command)")
+        let observed = await Self.decide(.apply, shell, mode: .observe, cwd: cwd)
+        #expect(observed.result.decision == .allow)
+        let rows = observed.effects.compactMap { effect -> GatedEffect.DenialRow? in
+            if case .denialRow(let row) = effect { return row }
+            return nil
+        }
+        #expect(rows.count == 1, "\(command)")
+        #expect(rows.first?.observed == true)
+        #expect(rows.first?.wouldBe == expected, "\(command)")
+    }
+
+    /// The one case where observe `ask` depends on `boundReview == .mandatoryHuman`
+    /// surviving scriptScreen -> JudgeRuntime.observe -> the Policy-gate preview:
+    /// a plain push is a builtin-pack deny that only a carried mandatory-human bind
+    /// keeps unpinned (HookAuthorization.isPinned).
+    @Test("observe would-be ask survives a mandatory-human bind in a real git repo")
+    func observeWouldBeAskCarriesMandatoryHumanBind() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-wouldbe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        for args in [["init", "-q"], ["remote", "add", "origin", "https://example.invalid/r.git"]] {
+            let git = Process()
+            git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            git.arguments = ["-C", repo.path] + args
+            try git.run()
+            git.waitUntilExit()
+            try #require(git.terminationStatus == 0)
+        }
+        let cwd = try #require(WorkingDirectory(validating: repo.path))
+        let shell = ShellCommand(rawValue: "git push origin feature")
+
+        let enforced = await Self.decide(.apply, shell, mode: .enforce, cwd: cwd)
+        guard case .deny = enforced.result.decision else {
+            Issue.record("push must deny under enforce, got \(enforced.result.decision)")
+            return
+        }
+        guard case .mandatoryHuman = enforced.result.boundReview else {
+            Issue.record("expected a mandatory-human bind, got \(String(describing: enforced.result.boundReview))")
+            return
+        }
+        #expect(HookAuthorization.project(result: enforced.result, cwd: cwd) == .ask)
+
+        let observed = await Self.decide(.apply, shell, mode: .observe, cwd: cwd)
+        #expect(observed.result.decision == .allow)
+        let rows = observed.effects.compactMap { effect -> GatedEffect.DenialRow? in
+            if case .denialRow(let row) = effect { return row }
+            return nil
+        }
+        #expect(rows.count == 1)
+        #expect(rows.first?.observed == true)
+        #expect(rows.first?.wouldBe == .ask)
     }
 
     @Test("agent door never asks for a denial row")
@@ -303,7 +374,7 @@ struct GatedEffectTests {
         #expect(observe.effects == [
             .denialRow(GatedEffect.DenialRow(
                 at: Self.now, host: .hook(.claude), tool: .file(.read), ruleID: deny.ruleID,
-                category: .secret(.environment), path: path, observed: true
+                category: .secret(.environment), path: path, observed: true, wouldBe: .deny
             )),
         ])
     }

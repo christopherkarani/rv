@@ -140,6 +140,13 @@ extension LedgerCategory: Codable {
     }
 }
 
+/// What enforcement would have surfaced for an observed row: a deny, or an
+/// ask (a deny a human may approve). jsonl: `would_be`.
+public enum LedgerWouldBe: String, Sendable, Equatable, Codable {
+    case deny
+    case ask
+}
+
 /// One redacted denial. Path is already `$HOME` → `~`. No argv.
 public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     public var timestamp: Date
@@ -151,6 +158,9 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
     /// Observe mode: enforcement would have denied, the door allowed.
     /// Encoded only when true, so enforced rows keep their bytes.
     public var observed: Bool
+    /// Observed rows only: encoded with `observed`; a row without it
+    /// (written before it existed) was a would-be deny.
+    public var wouldBe: LedgerWouldBe
 
     public init(
         timestamp: Date,
@@ -159,7 +169,8 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         ruleID: RuleID,
         category: LedgerCategory,
         path: String,
-        observed: Bool = false
+        observed: Bool = false,
+        wouldBe: LedgerWouldBe = .deny
     ) {
         self.timestamp = timestamp
         self.host = host
@@ -168,6 +179,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         self.category = category
         self.path = path
         self.observed = observed
+        self.wouldBe = wouldBe
     }
 
     enum CodingKeys: String, CodingKey {
@@ -178,6 +190,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         case category
         case path
         case observed
+        case wouldBe = "would_be"
     }
 
     public init(from decoder: Decoder) throws {
@@ -197,6 +210,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         category = try container.decode(LedgerCategory.self, forKey: .category)
         path = try container.decode(String.self, forKey: .path)
         observed = try container.decodeIfPresent(Bool.self, forKey: .observed) ?? false
+        wouldBe = try container.decodeIfPresent(LedgerWouldBe.self, forKey: .wouldBe) ?? .deny
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -209,6 +223,7 @@ public struct DenialLedgerRecord: Sendable, Equatable, Codable {
         try container.encode(path, forKey: .path)
         if observed {
             try container.encode(true, forKey: .observed)
+            try container.encode(wouldBe, forKey: .wouldBe)
         }
     }
 }

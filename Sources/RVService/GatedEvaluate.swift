@@ -143,6 +143,8 @@ public struct GatedEvaluate: Sendable {
         }
         switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
+            // `would_be` stays deny: the hook's file wire never asks
+            // (`hookFileWire`).
             if let row = Self.denialRow(
                 for: wouldBe, path: action.path.rawValue, host: host, tool: .file(action.kind), now: now,
                 observed: true
@@ -419,7 +421,8 @@ public struct GatedEvaluate: Sendable {
                     now: now, allowlist: allowlist, safety: safety
                 )
                 if let row = Self.denialRow(
-                    for: previewed.result, path: nil, host: host, tool: tool, now: now, observed: true
+                    for: previewed.result, path: nil, host: host, tool: tool, now: now, observed: true,
+                    wouldBe: Self.wouldBe(previewed.result, cwd: cwd)
                 ) {
                     effects.append(row)
                 }
@@ -927,7 +930,8 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool,
         now: Date,
-        observed: Bool = false
+        observed: Bool = false,
+        wouldBe: LedgerWouldBe = .deny
     ) -> GatedEffect? {
         guard case .deny(let deny, let matched) = result.outcome else { return nil }
         let rawPath: String
@@ -950,8 +954,14 @@ public struct GatedEvaluate: Sendable {
         }
         return .denialRow(GatedEffect.DenialRow(
             at: now, host: host, tool: tool, ruleID: deny.ruleID, category: category, path: rawPath,
-            observed: observed
+            observed: observed, wouldBe: wouldBe
         ))
+    }
+
+    /// What the enforced shell hook would have surfaced for this Policy-gate
+    /// result: the same projection the hook door runs (`hookBody`).
+    private static func wouldBe(_ result: EvaluationResult, cwd: WorkingDirectory?) -> LedgerWouldBe {
+        HookAuthorization.project(result: result, cwd: cwd) == .ask ? .ask : .deny
     }
 
     /// The exemption-drops row for one evaluation's dropped repo literals;
@@ -994,6 +1004,7 @@ public struct GatedEvaluate: Sendable {
         var detail = ["host": row.host.rawValue, "tool": row.tool.rawValue, "category": row.category.rawValue]
         let path = DenialPathRedaction.redact(row.path, home: home)
         if path.isEmpty == false { detail["path"] = path }
+        if row.observed { detail["would_be"] = row.wouldBe.rawValue }
         AuditLog.append(
             AuditEvent(
                 time: row.at,
@@ -1035,7 +1046,8 @@ public struct GatedEvaluate: Sendable {
                 ruleID: row.ruleID,
                 category: row.category,
                 path: DenialPathRedaction.redact(row.path, home: home),
-                observed: row.observed
+                observed: row.observed,
+                wouldBe: row.wouldBe
             ),
             now: row.at
         )

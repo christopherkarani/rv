@@ -24,14 +24,25 @@ struct DenialLedgerTests {
         #expect(try encode(record) == LedgerJSONL.claudeReadEnv)
     }
 
-    @Test func observedRow_addsOnlyTheObservedKey() throws {
-        let record = try decode(LedgerJSONL.claudeObservedResetHard)
+    @Test func observedRow_addsOnlyTheObservedAndWouldBeKeys() throws {
+        let record = try decode(LedgerJSONL.claudeObservedAskResetHard)
         #expect(record.observed)
-        #expect(try encode(record) == LedgerJSONL.claudeObservedResetHard)
+        #expect(record.wouldBe == .ask)
+        #expect(try encode(record) == LedgerJSONL.claudeObservedAskResetHard)
         var enforced = record
         enforced.observed = false
-        #expect(try encode(enforced).contains("observed") == false)
+        let enforcedLine = try encode(enforced)
+        #expect(enforcedLine.contains("observed") == false)
+        #expect(enforcedLine.contains("would_be") == false)
         #expect(try decode(LedgerJSONL.grokBashResetHard).observed == false)
+    }
+
+    /// Observed rows written before `would_be` existed were would-be denies.
+    @Test func observedRowWithoutWouldBe_decodesAsDeny() throws {
+        let record = try decode(LedgerJSONL.claudeObservedResetHard)
+        #expect(record.observed)
+        #expect(record.wouldBe == .deny)
+        #expect(try encode(record) == LedgerJSONL.claudeObservedDenyResetHard)
     }
 
     @Test func ttyBashResetHard_jsonlBytesMatchToday() throws {
@@ -172,6 +183,10 @@ struct DenialLedgerTests {
 private enum LedgerJSONL {
     static let claudeObservedResetHard =
         #"{"category":"core.git","host":"claude","observed":true,"path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash"}"#
+    static let claudeObservedDenyResetHard =
+        #"{"category":"core.git","host":"claude","observed":true,"path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash","would_be":"deny"}"#
+    static let claudeObservedAskResetHard =
+        #"{"category":"core.git","host":"claude","observed":true,"path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash","would_be":"ask"}"#
     static let grokBashResetHard =
         #"{"category":"core.git","host":"grok","path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash"}"#
     static let claudeReadEnv =

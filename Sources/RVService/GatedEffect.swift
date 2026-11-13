@@ -79,6 +79,9 @@ enum GatedEffect: Sendable, Equatable {
         let path: String
         /// Observe mode: enforcement would have denied, the door allowed.
         var observed = false
+        /// Observed rows: whether that enforced deny would have surfaced
+        /// as an ask (`HookAuthorization.project`).
+        var wouldBe: LedgerWouldBe = .deny
     }
 
     struct OverrideRow: Sendable, Equatable {

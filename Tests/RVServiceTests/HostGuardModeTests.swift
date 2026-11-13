@@ -76,14 +76,37 @@ struct HostGuardModeTests {
         #expect(rows.count == 2)
         let observedRow = try #require(rows.first { $0.host == .hook(.claude) })
         #expect(observedRow.observed)
+        // No cwd: nothing to unlock, so enforcement would have denied.
+        #expect(observedRow.wouldBe == .deny)
         #expect(observedRow.ruleID == deny.ruleID)
         let enforcedRow = try #require(rows.first { $0.host == .hook(.cursor) })
         #expect(enforcedRow.observed == false)
         let events = AuditLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .events(AuditFilter(kinds: ["command"]))
         #expect(events.filter { $0.kind == .commandObserved }.map(\.decision) == [.info])
+        #expect(events.filter { $0.kind == .commandObserved }.map { $0.detail["would_be"] } == ["deny"])
+        #expect(events.filter { $0.kind == .commandDenied }.map { $0.detail["would_be"] } == [nil])
         #expect(events.filter { $0.kind == .commandDenied }.map(\.decision) == [.denied])
         #expect(events.allSatisfy { $0.source == AuditLedger.Source.audit.rawValue })
+    }
+
+    @Test("observe host: a would-be ask writes would_be ask to the ledger and the audit chain")
+    func observeHostApplyRecordsWouldAsk() async throws {
+        let home = try hostHome(#"{"guard":{"hosts":{"claude":"observe"}}}"#)
+        defer { remove(home) }
+        let observed = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: WorkingDirectory(validating: home.rawValue), home: home,
+            grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { .empty }, host: .hook(.claude)
+        )
+        #expect(observed.decision == .allow)
+        let row = try #require(ledgerRows(home).first)
+        #expect(row.observed)
+        #expect(row.wouldBe == .ask)
+        let events = AuditLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            .events(AuditFilter(kinds: ["command.observed"]))
+        #expect(events.map { $0.detail["would_be"] } == ["ask"])
     }
 
     @Test("a stored block outranks a global guard.mode observe")

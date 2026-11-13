@@ -19,11 +19,12 @@ enum BlocksRun {
     }
 
     /// Observe-mode rows (the agent was not blocked) carry an `observed`
-    /// column after the timestamp; a host name is never that word.
+    /// column after the timestamp (`observed ask` when enforcement would
+    /// have asked a human); a host name is never that word.
     private static func prettyLine(_ record: DenialLedgerRecord) -> String {
         [
             iso8601(record.timestamp),
-            record.observed ? "observed" : nil,
+            record.observed ? (record.wouldBe == .ask ? "observed ask" : "observed") : nil,
             record.host.rawValue,
             record.tool.rawValue,
             DisplayedText.field(record.ruleID.rawValue),

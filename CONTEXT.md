@@ -25,7 +25,7 @@ Terms the code and reviews use with one meaning. Add a term when a module is nam
 
 **Observe floor** — what observe never relaxes: rv's own self-protection (an agent-issued rv command that weakens rv, `SelfProtectionGuard`) and rv's config dir (`core.secrets:home-rv-config`). On every door those stay enforced, so an observe host cannot loosen another host or the global guard. `ObserveFloor`.
 
-**Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked.
+**Observed block** — a denial-ledger row for an observe-mode evaluation that enforcement would have denied (`"observed": true`; `command.observed` in the audit trail). The agent was not blocked. `"would_be"` says whether the enforced hook would have denied or asked for human approval (`HookAuthorization.project`).
 
 ## Isolation
 
