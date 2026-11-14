@@ -6,8 +6,11 @@ import RVPolicy
 struct Policy: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "policy",
-        abstract: "Show, list, draft, or share compiled typed rules.",
-        subcommands: [Show.self, List.self, PolicyDraftCommand.self, Validate.self, Export.self, Apply.self],
+        abstract: "Show, list, draft, share, or roll back compiled typed rules.",
+        subcommands: [
+            Show.self, List.self, PolicyDraftCommand.self, Validate.self, Export.self, Apply.self,
+            PolicyRollbackCommand.self,
+        ],
         defaultSubcommand: Show.self
     )
 
@@ -26,6 +29,21 @@ struct Policy: AsyncParsableCommand {
         @Flag(name: .customLong("effective"), help: "Show merged effective rules.")
         var effective = false
 
+        @Option(name: .customLong("revision"), help: "Print one revision's policy.toml from the revision log.")
+        var revision: PolicyRevisionNumber?
+
+        @Flag(name: .customLong("repo"), help: "With --revision: read the repo layer's log.")
+        var repo = false
+
+        func validate() throws {
+            if revision != nil, base || effective {
+                throw ValidationError("--revision cannot be combined with --base or --effective")
+            }
+            if repo, revision == nil {
+                throw ValidationError("--repo applies only with --revision")
+            }
+        }
+
         func run() async throws {
             let ctx = CommandContext.current(command: "policy show", format: format)
             let home = try ctx.requireHome()
@@ -33,6 +51,11 @@ struct Policy: AsyncParsableCommand {
                 fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
             )
+            if let revision {
+                ctx.writeStdout(try PolicyShowRun.revisionText(
+                    ctx, home: home, workspace: workspace, revision: revision.value, repo: repo))
+                return
+            }
             let showBase = base || effective == false
             let snapshot: PolicyShowSnapshot?
             do {
@@ -414,6 +437,36 @@ enum PolicyShowRun {
                 repo: snapshot.repo,
                 secretAllowPaths: exemptions
             ))
+    }
+
+    /// `policy show --revision <n>`: that revision's TOML (or its robot
+    /// line) from the verified log. Same refusals as `policy rollback`.
+    static func revisionText(
+        _ ctx: CommandContext,
+        home: HomeDirectory,
+        workspace: URL,
+        revision: Int,
+        repo: Bool
+    ) throws -> String {
+        let entries: [PolicyRevision]
+        do {
+            entries = try PolicyListRun.load(home: home, workspace: workspace, repo: repo)
+        } catch {
+            try ctx.fail(PolicyRollbackRun.failure(error, revision: revision, repo: repo, command: "policy show"))
+        }
+        guard let entry = entries.first(where: { $0.revision == revision }) else {
+            try ctx.fail(
+                PolicyRollbackRun.failure(
+                    TypedRuleStoreError.unknownRevision, revision: revision, repo: repo, command: "policy show"))
+        }
+        guard ctx.explicitRobot else {
+            return entry.toml.hasSuffix("\n") ? entry.toml : entry.toml + "\n"
+        }
+        do {
+            return try RobotJSON.encode(entry) + "\n"
+        } catch {
+            try ctx.fail("rv policy show: encode failed\n")
+        }
     }
 
     static func robotEffective(_ rules: [TypedRule]) throws -> String {

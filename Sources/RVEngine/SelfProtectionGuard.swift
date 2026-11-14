@@ -5,7 +5,7 @@ import RVDomain
 /// `weakensPolicy` is true when any launched command is an `rv` invocation
 /// that lowers protection: uninstalling, disabling packs, lowering safety,
 /// adding allowlist entries, redeeming or minting allow-once permits,
-/// applying or saving policy, approving egress/MCP calls, trusting an
+/// applying, saving, or rolling back policy, approving egress/MCP calls, trusting an
 /// edited mcp.json, writing secrets (`rv secrets set|remove|import|oauth-reset`),
 /// removing the secrets pre-commit hook, signing
 /// managed policy, setting a host to anything but `block`
@@ -89,8 +89,10 @@ private func isWeakeningSub(
     case "allow-once":
         return sub == "redeem" || sub == "mint" || isUnlockCode(sub)
     case "policy":
-        // `draft --save` writes the layer; a variable or glob may carry it.
-        return sub == "apply" || (sub == "draft" && (flags.contains("--save") || tail.contains(where: isUnmodelledWord)))
+        // `draft --save` and `rollback --save` write the layer; a variable
+        // or glob may carry the flag. Without it both are read-only previews.
+        let writesLayer = flags.contains("--save") || tail.contains(where: isUnmodelledWord)
+        return sub == "apply" || ((sub == "draft" || sub == "rollback") && writesLayer)
     case "egress", "mcp":
         return sub == "approve" || (verb == "mcp" && sub == "trust")
     case "secrets":

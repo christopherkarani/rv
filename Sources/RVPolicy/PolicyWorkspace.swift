@@ -143,6 +143,64 @@ public struct PolicyWorkspace: Sendable {
         }
     }
 
+    /// A layer rollback preview plus the effective rules before and after.
+    /// `currentEffective` is nil when a live layer file does not parse;
+    /// `restoredEffective` is nil when the other layer's file does not.
+    public struct RollbackPreview: Sendable, Equatable {
+        public var layer: PolicyDocumentLayer
+        public var target: PolicyRevision
+        public var head: PolicyRevision
+        public var liveParses: Bool
+        public var risk: PolicyDiffRiskReport
+        public var currentEffective: [TypedRule]?
+        public var restoredEffective: [TypedRule]?
+    }
+
+    /// Read-only: what `rollback(layer:to:)` would restore and whether its
+    /// gate would refuse. Writes nothing; same errors as the rollback.
+    public func previewRollback(
+        layer: PolicyDocumentLayer,
+        to revision: Int,
+        builtin: [TypedRule] = []
+    ) throws -> RollbackPreview {
+        let preview: PolicyRollbackPreview
+        switch layer {
+        case .machine:
+            guard let directory = machineDirectory else {
+                throw PolicyWorkspaceError.missingLayer(.machine)
+            }
+            preview = try TypedRuleStore(baseDirectory: directory).previewMachineRollback(to: revision)
+        case .repo:
+            guard let workspace else {
+                throw PolicyWorkspaceError.missingLayer(.repo)
+            }
+            preview = try revisionRepoStore(workspace: workspace)
+                .previewRepoRollback(to: revision, workspace: workspace)
+        }
+        let restoredRules = preview.target.document.typedRules(origin: layer == .machine ? .machine : .repo)
+        let otherRules: [TypedRule]?
+        switch layer {
+        case .machine:
+            otherRules = try? loadRepoDocument().typedRules(origin: .repo)
+        case .repo:
+            otherRules = try? loadMachineDocument().typedRules(origin: .machine)
+        }
+        let restoredEffective = otherRules.map { other in
+            layer == .machine
+                ? TypedRuleStore.merge(builtin: builtin, machine: restoredRules, repo: other)
+                : TypedRuleStore.merge(builtin: builtin, machine: other, repo: restoredRules)
+        }
+        return RollbackPreview(
+            layer: layer,
+            target: preview.target,
+            head: preview.head,
+            liveParses: preview.live != nil,
+            risk: preview.risk,
+            currentEffective: try? loadEffectiveRules(builtin: builtin),
+            restoredEffective: restoredEffective
+        )
+    }
+
     public func upsert(_ rule: PolicyDocumentRule, layer: PolicyDocumentLayer) throws {
         _ = try mergeIncoming(PolicyDocument(rules: [rule]), layer: layer, save: true)
     }
