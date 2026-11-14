@@ -40,9 +40,18 @@ public actor NetworkReviewQueue {
     private let store: PendingApprovalStore
     private let ceremonies: EphemeralAllowOnceTable
     private let channel: NetworkRuleLiveChannel
-    /// Live-rule fingerprint to the proposal id minted for it. Rebuilt
-    /// through ledger dedupe after a restart (see noteDenial).
-    private var knownIDs: [String: String] = [:]
+    /// Intake key: the ledger dedupes on workspace identity plus
+    /// fingerprint, so the in-memory map does too. Keyed by fingerprint
+    /// alone, a second workspace blocked on the same host would be handed
+    /// the first workspace's proposal id and file none of its own.
+    private struct IntakeKey: Hashable {
+        var workspace: WorkspaceSessionID
+        var fingerprint: String
+    }
+
+    /// Intake key to the proposal id minted for it. Rebuilt through ledger
+    /// dedupe after a restart (see noteDenial).
+    private var knownIDs: [IntakeKey: String] = [:]
     private var appliedIDs: Set<String> = []
 
     public init(configDirectory: URL) {
@@ -78,26 +87,31 @@ public actor NetworkReviewQueue {
     /// `knownIDs` after a restart by returning the awaiting row. A full
     /// store drops the proposal (spam protection, mirroring HookDoor):
     /// the denial still stands and the human path is unaffected.
+    ///
+    /// Returns the id of the proposal now awaiting a human for this rule
+    /// (freshly minted or deduped onto), which the proxy's refusal body
+    /// names; nil when no awaiting proposal exists for it.
+    @discardableResult
     public func noteDenial(
         _ denial: EgressProxyDenial,
         workspace: WorkspaceSessionID,
         workspaceDirectory: WorkingDirectory,
         now: Date
-    ) async {
-        guard denial.reason == .deniedPolicy else { return }
-        guard let rule = LiveNetworkRule(host: denial.host, port: denial.port) else { return }
-        if channel.contains(rule) { return }
-        let fingerprint = EgressProposal.fingerprint(for: rule).rawValue
-        if let known = knownIDs[fingerprint],
+    ) async -> ApprovalID? {
+        guard denial.reason == .deniedPolicy else { return nil }
+        guard let rule = LiveNetworkRule(host: denial.host, port: denial.port) else { return nil }
+        if channel.contains(rule) { return nil }
+        let key = IntakeKey(workspace: workspace, fingerprint: EgressProposal.fingerprint(for: rule).rawValue)
+        if let known = knownIDs[key],
             let record = try? await store.load(id: ApprovalID(rawValue: known), now: now)
         {
             switch record.state {
             case .awaitingHuman:
-                return
+                return record.id
             case .resolved(let resolution) where resolution.decision.authorizesExactAction:
-                return
+                return nil
             case .consumed(let resolution, _) where resolution.decision.authorizesExactAction:
-                return
+                return nil
             case .resolved, .consumed, .expired, .canceled, .timedOut:
                 break
             }
@@ -110,15 +124,16 @@ public actor NetworkReviewQueue {
                 workspaceDirectory: workspaceDirectory
             )
         else {
-            return
+            return nil
         }
         do {
             let created = try await store.create(request, now: now)
-            knownIDs[fingerprint] = created.id.rawValue
+            knownIDs[key] = created.id.rawValue
+            return created.id
         } catch PendingApprovalError.storeFull {
-            return
+            return nil
         } catch {
-            return
+            return nil
         }
     }
 
@@ -134,7 +149,8 @@ public actor NetworkReviewQueue {
     /// plant is refused.
     public func applyResolved(now: Date) async -> AppliedUpdate? {
         var newlyApplied: [String] = []
-        for (fingerprint, idValue) in knownIDs {
+        for (key, idValue) in knownIDs {
+            let fingerprint = key.fingerprint
             if appliedIDs.contains(idValue) { continue }
             guard let record = try? await store.load(id: ApprovalID(rawValue: idValue), now: now)
             else { continue }
