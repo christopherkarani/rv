@@ -338,6 +338,9 @@ let fuzzTargets: [Target] = Context.environment["RV_FUZZ"] == "1" ? [
     .executableTarget(
         name: "rv-fuzz-secret-rewrite", dependencies: ["RVIsolation"], path: "Fuzz/SecretRewrite",
         exclude: ["rewrite.dict", "seeds"], swiftSettings: fuzzHarness),
+    .executableTarget(
+        name: "rv-fuzz-procfs", dependencies: ["RVIsolation"], path: "Fuzz/ProcFS",
+        exclude: ["procfs.dict", "seeds"], swiftSettings: fuzzHarness),
 ] : []
 
 let package = Package(

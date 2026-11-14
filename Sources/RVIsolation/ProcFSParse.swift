@@ -18,9 +18,11 @@ enum ProcFSParse {
 
     /// `comm` (field 2) may hold spaces, digits and `)`, so the fields after
     /// it are read from the last `)`: nothing the kernel prints after it can
-    /// contain one.
+    /// contain one. The kernel ends the line with a newline; text without
+    /// one is a read cut short, whose last number may be missing digits.
     static func stat(_ bytes: [UInt8]) -> Stat? {
-        guard let open = bytes.firstIndex(of: UInt8(ascii: "(")), open > 1,
+        guard bytes.last == UInt8(ascii: "\n"),
+            let open = bytes.firstIndex(of: UInt8(ascii: "(")), open > 1,
             bytes[open - 1] == UInt8(ascii: " "),
             let close = bytes.lastIndex(of: UInt8(ascii: ")")), close > open,
             let pid: UInt32 = decimal(bytes[..<(open - 1)])

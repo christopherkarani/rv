@@ -202,6 +202,76 @@ jobs:
           python -m pip install -e "./sdk/python[test]"
           python -m pytest sdk/python/tests -m integration -q
 
+  # Linux checks that need root on a real VM (the hosted container images
+  # cannot remount /proc, load an AppArmor profile or change Yama). Each
+  # step runs code the `swift test` job also builds; RV_LINUX_PEER_STRICT=1
+  # turns "this host cannot do that" into a failure, so nothing here passes
+  # by skipping.
+  linux-root:
+    name: linux root e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache official Swift Linux tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/swift
+          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: swiftpm-root-e2e-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-root-e2e-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Tarball runtime deps (not apt swift)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            apparmor-utils binutils gcc git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 \
+            libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 libsqlite3-dev \
+            libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev
+
+      - name: Install official Swift 6.4 Linux tarball
+        run: |
+          bin="$(Scripts/install-official-swift-linux.sh --print-bin)"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Build tests
+        run: swift build --build-tests
+
+      - name: Host facts
+        run: |
+          {
+            echo "### linux root e2e host"
+            echo ""
+            echo "- kernel: \`$(uname -r)\` (\`$(uname -m)\`)"
+            echo "- LSMs: \`$(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)\`"
+            echo "- yama ptrace_scope: \`$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo none)\`"
+            echo "- /proc mount: \`$(grep ' /proc ' /proc/self/mountinfo | tail -n 1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Root runs the built bundle from the runner's checkout; HOME=/root
+      # keeps it away from the runner's configuration.
+      - name: Secrets gateway peer binding as root (strict)
+        run: |
+          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo env "PATH=$PATH" HOME=/root RV_LINUX_PEER_STRICT=1 \
+            timeout 900 swift test --skip-build \
+            --filter 'ProcFS|GatewayPeerBindingTests|SecretGatewayLinuxPeerTests|SecretGatewayLinuxAttackTests'
+
+      # Last: ptrace_scope=3 cannot be undone on a running kernel.
+      - name: Secrets gateway peer binding under hidepid, pid namespaces, no CAP_SYS_PTRACE, AppArmor, Docker, Yama
+        run: |
+          sudo env "PATH=$PATH" HOME=/root RV_LINUX_PEER_STRICT=1 RV_YAMA_IRREVERSIBLE=1 \
+            Scripts/linux-peer-binding-e2e.sh
+
   # Darwin isolation only, sharded by suite/test initial: A-E (142),
   # F-M (137), N-Z (319). 598 tests in one process collapse shared-runner
   # throughput (blocking waits saturate the small pool and queueing

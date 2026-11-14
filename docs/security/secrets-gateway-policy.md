@@ -155,8 +155,14 @@ therefore honored only on a connection from the runtime it was leased to.
 - On each request, rv takes the connection's port pair and looks (libproc
   on macOS, `/proc` on Linux; see below) for one of those processes holding
   the client socket: the leader
-  first, then the descendants (at most 4096), then the session. Each match
-  is re-checked after the scan so a reused pid does not count. Every
+  first, then the descendants (at most 4096), then the session. The
+  listings only name candidates. A candidate found holding the socket is
+  proved a member again from fresh reads: it is the recorded leader, or
+  every parent link from it up to the leader holds (each process read
+  again after its parent was, and no parent younger than its child), or
+  it is in the session the leader leads. So a pid that exited and was
+  reused mid-scan, by the holder or by a process between it and the
+  leader, does not count. Every
   placeholder in the request is checked, so one runtime cannot spend
   another's placeholder beside its own.
 - Not a member: `403`, refusal `runtimeMismatch`, and a `secret.misuse`
@@ -187,10 +193,20 @@ The check is the same scan; only the reads differ.
   be. A process holds it when one of its `/proc/<pid>/fd/*` links, or one
   of a thread's `/proc/<pid>/task/<tid>/fd/*` (a thread that unshared its
   table with `unshare(CLONE_FILES)`), reads `socket:[<inode>]`. A forked
-  child that inherited the socket is a holder too.
+  child that inherited the socket is a holder too. The kernel may print a
+  row twice when the table changes while it is read; the same row twice
+  is one socket.
+- A socket registered with an io_uring instance
+  (`IORING_REGISTER_FILES`, direct descriptors) whose descriptor was then
+  closed is named by no `fd` link: the ring holds it. A process holding
+  the ring (`anon_inode:[io_uring]`) holds every socket the ring's
+  `/proc/<pid>/fdinfo/<fd>` lists under `UserFiles:`. A ring whose files
+  cannot be read (the kernel omits the list while the ring is busy), or
+  that holds another ring, leaves the scan undecided.
 - A process is identified by its pid and its start time (`/proc/<pid>/stat`
   field 22, clock ticks after boot). The `comm` field is read from the last
-  `)`, as bytes, so a process cannot forge the fields after its name.
+  `)`, as bytes, so a process cannot forge the fields after its name. A
+  `stat` that does not end in a newline is a read cut short and is refused.
 - Descendants come from one pass over every process's `stat`, so every
   `stat` on the host must be readable.
 - Each candidate's `stat` is read before and after its descriptors. A
@@ -201,25 +217,72 @@ The check is the same scan; only the reads differ.
   the scan lists processes, or a zombie, is skipped, as on macOS. A
   process whose main thread exited while other threads run reads as a
   zombie in `stat` but is alive: it is kept while `/proc/<pid>/task` lists
-  more than one thread.
+  more than one thread. Its main thread has no descriptors any more (and
+  the kernel gives that thread's `fd` directory to root), so only the
+  threads that run are read.
+- One decision reads a bounded amount of `/proc`: at most 2^20 files,
+  links and directory entries (a listing is one read per process on the
+  host; a descriptor scan is up to threads times descriptors per
+  candidate). Past that every read fails and the answer is
+  `runtimeUnverified`.
 - In a terminal runtime's session, a listed process whose session cannot
   be read leaves the scan undecided too.
 - `runtimeUnverified` also covers: a `/proc` whose `self` is not rv's pid
-  (another pid namespace's), a `/proc` mounted with `hidepid` other than
+  (another pid namespace's: nothing at all is read from it, not one
+  process's `stat`), a `/proc` mounted with `hidepid` other than
   `0`/`off` (a descendant running as another user could not be seen), an
   unreadable descriptor table, the process's or any thread's (a setuid,
-  non-dumpable or other user's process when rv lacks `CAP_SYS_PTRACE`, an
-  LSM ptrace rule, or one that exited mid-read), a socket table that is missing, truncated,
+  non-dumpable or other user's process when rv lacks `CAP_SYS_PTRACE`, rv
+  itself confined by an LSM policy with no ptrace-read rule, or one that
+  exited mid-read), a socket table that is missing, truncated,
   malformed, ambiguous, or lacks the gateway's end, and a client end no
-  process holds (inode 0: time-wait or orphaned).
+  process holds (inode 0: time-wait or orphaned). Yama's `ptrace_scope`
+  restricts attaching, not these reads, at every setting.
 - A process in another network namespace cannot reach the gateway's
-  loopback, so it is never a holder. A listening socket shared with
+  loopback, so it is never a holder, even with the same port pair on its
+  own loopback. A listening socket shared with
   `SO_REUSEPORT` does not matter: a connected 4-tuple is unique within a
-  namespace.
-- Limits beyond macOS's: a recorded group's start time is ticks after
-  boot, so it names a process only until the host reboots. A process
-  whose main thread exited has no readable `/proc/<pid>/exe`, so binary
-  binding on it is `runtimeUnverified`.
+  namespace. A descendant in a pid namespace of its own (`unshare --pid`,
+  a rootless container) is still a process of rv's `/proc` and is read
+  like any other; `/proc` mounted with `subset=pid` hides nothing the
+  check reads.
+- Descriptors that change hands: holding the socket is the criterion,
+  however a process came to hold it. A runtime process that passes its
+  connection to a process outside the runtime (`SCM_RIGHTS`, `fork`) is
+  still a holder while it keeps its own descriptor, and the request is
+  served, as it would be if the runtime relayed it; once the runtime
+  closes its descriptor the connection is `runtimeMismatch`. The reverse
+  is a limit (the same on macOS): a runtime process that receives
+  descriptors from outside its runtime can be handed an outsider's
+  connection, and is then its holder.
+- Limits beyond macOS's:
+  - A recorded group's start time is ticks after boot, so it names a
+    process only until the host reboots, and only to the tick (10 ms): a
+    pid reused within one tick is the same identity.
+  - Socket inode numbers are 32 bits and the kernel reuses them after
+    2^32 allocations (the limit `ss -p` and `lsof` share). A local process
+    that can drive the counter around and land on the number of a socket
+    a runtime process holds would be attributed to the runtime. Driving
+    it takes on the order of hours of CPU.
+  - A socket in flight inside a Unix socket message (sent, not yet
+    received) is in no descriptor table: a request on it is
+    `runtimeMismatch` until a runtime process receives it. A child forked
+    after the scan listed processes, whose parent then exits, is missed
+    the same way.
+  - A process whose main thread exited has no readable `/proc/<pid>/exe`,
+    so binary binding on it is `runtimeUnverified`. A secret with
+    `binaries` is also `runtimeUnverified` while any runtime process has
+    an unreadable descriptor table (a setuid or non-dumpable child such
+    as `sudo` or `ssh-agent`): every holder must be read.
+  - A container started through a daemon (`docker run`) is the daemon's
+    child, not the runtime's: with host networking its requests are
+    `runtimeMismatch`.
+
+Verified on real kernels by `SecretGatewayLinuxPeerTests`,
+`SecretGatewayLinuxAttackTests` and `Scripts/linux-peer-binding-e2e.sh`,
+which runs the binding under `hidepid`, `subset=pid`, another pid
+namespace's `/proc`, root without `CAP_SYS_PTRACE`, an AppArmor-confined
+reader, Yama `ptrace_scope` 1 to 3, and a default Docker container.
 
 ## Uncontained launches (`rv run`)
 
