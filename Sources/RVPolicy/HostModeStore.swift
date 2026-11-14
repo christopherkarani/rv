@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 
 /// How rv guards one hook host. `block` enforces, `observe` allows and logs
 /// what enforcement would have blocked, `off` leaves the host unwired. A
@@ -65,9 +66,20 @@ public struct HostModeStore: Sendable {
     /// read, the checks and the write share one lock; a config that is not
     /// an object, or a non-object `guard` / `guard.hosts`, throws
     /// `unreadableConfig` and nothing is written.
-    public func save(_ mode: HostMode, for host: HookHost) throws {
+    /// Records `config.changed` (`guard.hosts.<host>`) write-ahead when the
+    /// stored entry changes. `beforeWrite` runs after that record and before
+    /// the file moves (`rv host mode <host> off` detaches the hooks there,
+    /// so an unrecorded `off` never unwires a host).
+    public func save(_ mode: HostMode, for host: HookHost, beforeWrite: () throws -> Void = {}) throws {
+        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
+            let prior = before["guard"]?["hosts"]?[host.rawValue]?.string ?? ConfigChangeAudit.unset
+            guard prior != mode.rawValue else { return nil }
+            return ConfigChangeAudit.setting(
+                "guard.hosts.\(host.rawValue)", from: prior, to: mode.rawValue,
+                direction: Self.direction(from: prior, to: mode))
+        }
         do {
-            try MachineConfigJSON.updateExistingObject(file: configFile) { root in
+            try MachineConfigJSON.updateExistingObject(file: configFile, audit: audit, beforeWrite: beforeWrite) { root in
                 var guardObject = try Self.object(root["guard"])
                 var hosts = try Self.object(guardObject["hosts"])
                 hosts[host.rawValue] = .string(mode.rawValue)
@@ -83,8 +95,13 @@ public struct HostModeStore: Sendable {
     /// Stored `guard.hosts` entries, and every other key, are kept; the
     /// same `unreadableConfig` rule as `save` applies.
     public func saveGlobalObserve() throws {
+        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
+            let prior = before["guard"]?["mode"]?.string ?? ConfigChangeAudit.unset
+            guard prior != "observe" else { return nil }
+            return ConfigChangeAudit.setting("guard.mode", from: prior, to: "observe", direction: .loosening)
+        }
         do {
-            try MachineConfigJSON.updateExistingObject(file: configFile) { root in
+            try MachineConfigJSON.updateExistingObject(file: configFile, audit: audit) { root in
                 var guardObject = try Self.object(root["guard"])
                 guardObject["mode"] = .string("observe")
                 root["guard"] = .object(guardObject)
@@ -92,6 +109,14 @@ public struct HostModeStore: Sendable {
         } catch MachineConfigJSONError.notAnObject {
             throw HostModeStoreError.unreadableConfig
         }
+    }
+
+    /// `block` is the tightest mode; otherwise only a move away from a
+    /// stored mode that `isLooser` than the new one tightens. A missing or
+    /// unknown entry follows `guard.mode`, which can be anything.
+    static func direction(from prior: String, to mode: HostMode) -> ConfigChangeAudit.Direction {
+        if mode == .block { return .tightening }
+        return HostMode(rawValue: prior)?.isLooser(than: mode) == true ? .tightening : .loosening
     }
 
     private static func object(_ value: JSONValue?) throws(HostModeStoreError) -> [String: JSONValue] {
