@@ -214,22 +214,26 @@ public enum MCPSandbox {
         let linkDenies = symlinkDenies(unreadable)
         let credentialDeny = "(deny file-read* file-write* file-link file-clone "
             + paths(unreadable, denyTargets: true) + linkDenies + ")"
-        // `file-write*` does not cover `file-link` or `file-clone`, which
-        // `(allow default)` would otherwise allow everywhere. A hard link
-        // needs both of its ends allowed (checked live on macOS 27), and a
-        // clone its source, so both are allowed only among the write roots:
-        // package managers link and clone inside their caches. Linking a
-        // file the cage cannot write was already refused by `file-write*`
-        // (the kernel checks write-data on the link source); this does not
-        // depend on that. A hard link an uncaged process planted under a
-        // write root before launch is not seen by any path rule.
+        // `file-write*` does not cover `file-link`, which `(allow default)`
+        // would otherwise allow everywhere. A hard link needs both of its
+        // ends allowed (checked live on macOS 27), so links are allowed only
+        // among the write roots: package managers link inside their caches.
+        // Linking a file the cage cannot write was already refused by
+        // `file-write*` (the kernel checks write-data on the link source);
+        // this does not depend on that. A clone is left to the read rules on
+        // its source and the write rules on its new name: it is its own
+        // copy-on-write file, so writing it never reaches the source, and
+        // Rust's `std::fs::copy` (uv, cargo) clones first and fails outright
+        // when the clone is refused. Credentials deny both. A hard link an
+        // uncaged process planted under a write root is not seen by any path
+        // rule.
         var lines = [
             "(version 1)",
             "(allow default)",
             "(deny file-write*)",
-            "(deny file-link file-clone)",
+            "(deny file-link)",
             "(allow file-write* " + writeAllow + ")",
-            "(allow file-link file-clone " + writeAllow + ")",
+            "(allow file-link " + writeAllow + ")",
             credentialDeny,
         ]
         // A credential symlink can be retargeted at a path the profile did not
