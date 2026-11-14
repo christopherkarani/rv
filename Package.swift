@@ -64,10 +64,14 @@ let terminalProbeTargets: [Target] = [
         path: "Sources/rv-terminal-probe"
     ),
     .executableTarget(name: "rv-pty-claim"),
+    // Changes real signal dispositions for RVMCPTests, out of the test process.
+    .executableTarget(name: "rv-mcp-signal-probe", dependencies: ["RVMCP"]),
 ]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-signal-probe"]
 #else
 let terminalProbeProducts: [Product] = []
 let terminalProbeTargets: [Target] = []
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation"]
 #endif
 
 let coreLibraryTargets: [Target] = [
@@ -191,7 +195,7 @@ let coreTestTargets: [Target] = [
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
-    .testTarget(name: "RVMCPTests", dependencies: ["RVMCP", "RVIsolation"]),
+    .testTarget(name: "RVMCPTests", dependencies: mcpTestDependencies),
     .testTarget(
         name: "RVCorpusTests",
         dependencies: ["RVDomain", "RVEngine", "RVPacks"],

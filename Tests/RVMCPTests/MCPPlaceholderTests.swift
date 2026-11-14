@@ -445,6 +445,22 @@ struct MCPPlaceholderPlannerTests {
         #expect(late.giveUp == start + 3 + MCPPlaceholderShutdown.grace + MCPPlaceholderShutdown.terminateGrace + 2)
     }
 
+    /// A second shutdown signal skips what is left of the grace: `SIGKILL`
+    /// now, whether or not `SIGTERM` went first, and only once.
+    @Test func aHurriedShutdownKillsAtOnceAndOnlyOnce() {
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var waiting = MCPPlaceholderShutdown(started: start)
+        #expect(waiting.hurry(exited: false) == SIGKILL)
+        #expect(waiting.hurry(exited: false) == nil)
+        #expect(waiting.signal(exited: false, now: start + 9) == nil)
+        var terminated = MCPPlaceholderShutdown(started: start)
+        #expect(terminated.signal(exited: false, now: start + 2) == SIGTERM)
+        #expect(terminated.hurry(exited: false) == SIGKILL)
+        #expect(terminated.signal(exited: false, now: start + 9) == nil)
+        var exited = MCPPlaceholderShutdown(started: start)
+        #expect(exited.hurry(exited: true) == nil)
+    }
+
     @Test func everyRefusalSaysWhy() {
         let refusals: [MCPPlaceholderRefusal] = [
             .unsupportedPlatform, .cageUnavailable, .noSandbox, .unconfinedNetwork, .realValueToo("A"),
