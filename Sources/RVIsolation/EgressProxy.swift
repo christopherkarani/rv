@@ -38,9 +38,10 @@ public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
 
 /// Review-queue intake for one `denied-policy` refusal. The hook calls
 /// `answer` once, from any thread, with the id of the proposal now awaiting a
-/// human for that denial (nil when none). The proxy runs it on its own
-/// dispatch queue and never touches Swift concurrency itself, so a busy
-/// cooperative pool can delay only the id, never the deny.
+/// human for that denial (nil when none). The proxy calls it from its own
+/// dispatch queue and waits on `answer` at most `proposalWait`, so a hook
+/// that hops into Swift concurrency (the supervisor's does, to reach the
+/// review-queue actor) can delay only the id, never the deny.
 public typealias EgressReviewHook = @Sendable (
     _ denial: EgressProxyDenial, _ answer: @escaping @Sendable (String?) -> Void
 ) -> Void
@@ -258,8 +259,10 @@ public final class EgressProxy: @unchecked Sendable {
     /// policy runs, so an unauthenticated sibling cannot ride any grant.
     /// Binary scope composes: when `binaryPolicy` is scoped, the instance
     /// attribution gate runs before credential authentication in both modes.
-    /// `review` is the review-queue intake whose proposal id the refusal
-    /// body names (see `review`).
+    /// `review` is the review-queue intake for `denied-policy` refusals. A
+    /// credentialed instance never names the proposal id in the refusal body
+    /// (`advertisesProposals` is false: live rules do not reach it), so here
+    /// the hook only files the proposal.
     public convenience init(
         grants: [EgressProxyCredential: EgressGrant],
         binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),

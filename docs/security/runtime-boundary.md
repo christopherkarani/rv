@@ -316,9 +316,15 @@ the seatbelt profile is untouched.
 
 - Intake: the workspace supervisor hands each per-runtime proxy a review
   hook (`EgressReviewHook`) beside the production denial log (which it
-  never replaces). The proxy calls it for `.deniedPolicy` denials only, on
-  its own dispatch queue (never the Swift cooperative pool); DNS, filter,
+  never replaces). The proxy calls it for `.deniedPolicy` denials only,
+  from its own dispatch queue rather than the serve thread; DNS, filter,
   dial, header, and malformed failures admit no rule and never reach it.
+  The production hook then starts a Swift `Task` to reach the review-queue
+  actor, so a starved cooperative pool can delay filing (and the id), but
+  the deny itself never waits on that pool beyond `proposalWait`.
+- What production refusals carry today: the JSON body, `Proxy-Status`,
+  and `next_step: "rv egress denials"`. Proposal ids appear in a refusal
+  only once per-runtime proxies apply live grant updates (see below).
 - Refusal response: every refusal the proxy writes (CONNECT and
   absolute-URI, 403 and 407) carries `Content-Type: application/json`,
   `Content-Length`, `Connection: close`, an RFC 9209 `Proxy-Status:
