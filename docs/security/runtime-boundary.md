@@ -320,8 +320,10 @@ the seatbelt profile is untouched.
   from its own dispatch queue rather than the serve thread; DNS, filter,
   dial, header, and malformed failures admit no rule and never reach it.
   The production hook then starts a Swift `Task` to reach the review-queue
-  actor, so a starved cooperative pool can delay filing (and the id), but
-  the deny itself never waits on that pool beyond `proposalWait`.
+  actor, so a starved cooperative pool can delay filing. Only advertising
+  instances wait for the id, at most `proposalWait`; production proxies
+  never wait, so their deny never depends on that pool. The hook must not
+  block: it runs on one process-wide serial queue.
 - What production refusals carry today: the JSON body, `Proxy-Status`,
   and `next_step: "rv egress denials"`. Proposal ids appear in a refusal
   only once per-runtime proxies apply live grant updates (see below).
@@ -341,7 +343,7 @@ the seatbelt profile is untouched.
   changes this instance's verdict (`EgressProxy.advertisesProposals`:
   open mode, not binary-scoped). There the proxy waits at most
   `proposalWait` (250 ms) for the id, with at most
-  `maximumProposalWaiters` (4) threads waiting; past either bound the
+  `maximumProposalWaiters` (4 by default) threads waiting; past either bound the
   deny goes out without one and intake still runs. Production per-runtime
   proxies are credentialed and ignore live rules (per-runtime grant
   updates are the T4 follow-up), so they file the proposal but never name

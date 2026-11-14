@@ -217,9 +217,10 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     #expect(calls.all.map(\.host) == ["sentinel.example"])
 }
 
-// A stuck review queue must not turn a deny into a hang: the proxy waits a
-// bounded moment, then denies without a proposal.
-@Test func slowReviewStillDeniesPromptly() throws {
+// A hook that never answers: the deny still arrives inside the exchange
+// deadline, with no proposal id and the denials pointer, and is recorded.
+// (The 250 ms bound itself is `ProposalAnswer.take`'s timeout.)
+@Test func neverAnsweringReviewDeniesWithoutAProposal() throws {
     let records = DenyWireCalls()
     let proxy = EgressProxy(
         policy: denyWirePolicy, grants: nil, record: { records.note($0) },
@@ -435,7 +436,8 @@ private final class DenyWireReplies: @unchecked Sendable {
 // The waiter cap: with `maximumProposalWaiters` denials parked on held
 // answers (and a wait longer than the exchange deadline), further policy
 // denials still go out at once without an id, and their intake still runs.
-// Without the cap the extras would park too and come back empty.
+// Without the cap the extras would park too and come back empty. The cap is
+// 1 here so the test needs only two live relay threads on a small runner.
 @Test func reviewWaitersAreCappedAndIntakeStillRuns() throws {
     let calls = DenyWireCalls()
     let held = DenyWireHeld()
@@ -444,10 +446,12 @@ private final class DenyWireReplies: @unchecked Sendable {
         held.hold(answer)
     }
     let proxy = EgressProxy(
-        policy: denyWirePolicy, grants: nil, record: { _ in }, review: hook, proposalWait: 120)
+        policy: denyWirePolicy, grants: nil, record: { _ in }, review: hook, proposalWait: 120,
+        maximumProposalWaiters: 1)
     let port = try proxy.start().get()
     defer { proxy.stop() }
-    let cap = EgressProxy.maximumProposalWaiters
+    let cap = proxy.maximumProposalWaiters
+    #expect(cap == 1)
     let parked = DenyWireReplies()
     let parkedDone = DispatchGroup()
     // Plain threads, not a width-limited pool: every parked client must be

@@ -39,9 +39,15 @@ public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
 /// Review-queue intake for one `denied-policy` refusal. The hook calls
 /// `answer` once, from any thread, with the id of the proposal now awaiting a
 /// human for that denial (nil when none). The proxy calls it from its own
-/// dispatch queue and waits on `answer` at most `proposalWait`, so a hook
-/// that hops into Swift concurrency (the supervisor's does, to reach the
-/// review-queue actor) can delay only the id, never the deny.
+/// dispatch queue. Only an advertising instance (`advertisesProposals`)
+/// waits on `answer`, at most `proposalWait`; every other instance,
+/// including every production proxy today, files and denies without
+/// waiting. A hook that hops into Swift concurrency (the supervisor's does,
+/// to reach the review-queue actor) can therefore delay only the id, never
+/// the deny.
+///
+/// The hook must not block: it runs on one process-wide serial queue, so a
+/// blocking hook delays every proxy's later hooks.
 public typealias EgressReviewHook = @Sendable (
     _ denial: EgressProxyDenial, _ answer: @escaping @Sendable (String?) -> Void
 ) -> Void
@@ -215,8 +221,10 @@ public final class EgressProxy: @unchecked Sendable {
     )
     /// At most this many serve threads wait on `review` at once; a flood of
     /// fresh denied hosts past it still files proposals but denies at once,
-    /// so it cannot park the relay queue's threads.
-    static let maximumProposalWaiters = 4
+    /// so it cannot park the relay queue's threads. Per instance and
+    /// injectable for tests (small CI hosts run the cap test at 1).
+    let maximumProposalWaiters: Int
+    static let defaultMaximumProposalWaiters = 4
     private let proposalWaiters = Mutex(0)
     /// Resolves one admitted target to the candidate set `dial` checks and
     /// connects. Production is `boundedResolver(budget: resolverBudget)`;
@@ -293,6 +301,7 @@ public final class EgressProxy: @unchecked Sendable {
         record: (@Sendable (EgressProxyDenial) -> Void)?,
         review: EgressReviewHook? = nil,
         proposalWait: TimeInterval = EgressProxy.defaultProposalWait,
+        maximumProposalWaiters: Int = EgressProxy.defaultMaximumProposalWaiters,
         resolverBudget: EgressResolverBudget = EgressResolverBudget(
             limit: EgressResolverBudget.perProxyLimit, parent: .processCeiling
         ),
@@ -306,6 +315,7 @@ public final class EgressProxy: @unchecked Sendable {
         self.record = record ?? EgressProxy.productionDenialLog()
         self.review = review
         self.proposalWait = proposalWait
+        self.maximumProposalWaiters = maximumProposalWaiters
         self.resolverBudget = resolverBudget
         self.resolve = resolve ?? EgressProxy.boundedResolver(budget: resolverBudget)
         admitAttributionPin()
@@ -763,7 +773,7 @@ public final class EgressProxy: @unchecked Sendable {
         guard let review else { return nil }
         let admitted = advertisesProposals
             && proposalWaiters.withLock { count in
-                guard count < Self.maximumProposalWaiters else { return false }
+                guard count < maximumProposalWaiters else { return false }
                 count += 1
                 return true
             }
