@@ -152,6 +152,9 @@ struct MCPHostConfigCorpusTests {
         "claude -p \"fix the failing test in $FILE\"", "claude --version", "codex exec 'run the tests'",
         "npm install -D typescript", "cp a.txt b.txt", "cp -r src dst", "mv old.txt new.txt",
         "ls mcp", "cat mcp/README.md", "less +F build.log", "git grep -n TODO",
+        "npm config set registry https://registry.example", "git config --get user.email",
+        "rsync -av src/ dst/ --delete", "pnpm exec vitest run", "deno run -A main.ts",
+        "npx github:owner/some-tool --help", "echo 'npm test' | sh", "cd tools/gemini-cli-docs",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()
