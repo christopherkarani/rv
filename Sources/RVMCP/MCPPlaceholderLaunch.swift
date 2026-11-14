@@ -9,16 +9,22 @@ import RVIsolation
 /// Why a server that lists `placeholders` is not started. It is refused on
 /// its own: the other servers still start.
 public enum MCPPlaceholderRefusal: Error, Sendable, Equatable {
-    case untrustedConfiguration
     case unsupportedPlatform
     /// The platform could cage it, but this launch does not enforce the cage.
     case cageUnavailable
     case noSandbox
     case unconfinedNetwork
-    /// The server would also hold this secret's real value (`secrets` or `${secret:NAME}` in `args`).
+    /// The server would also hold the real value of these placeholders: by
+    /// name (`secrets`, `${secret:NAME}` in `args`), or as the value of
+    /// another secret, an `env` literal or an argument.
     case realValueToo(String)
     case unknownSecret(String)
     case environmentDelivery(String)
+    /// Read from rv's own environment, which the MCP client that started
+    /// rv (and every server it starts directly) also has.
+    case hostEnvironmentSource(String)
+    /// Its upstream is neither https nor loopback.
+    case plaintextUpstream(String)
     case agentScoped(secret: String, agents: [String])
     case approvalRules(String)
     /// A placeholder variable the server's `env`, `secrets` or base environment already sets.
@@ -30,8 +36,6 @@ public enum MCPPlaceholderRefusal: Error, Sendable, Equatable {
 
     public var message: String {
         switch self {
-        case .untrustedConfiguration:
-            "mcp.json is not trusted, so no placeholders are staged"
         case .unsupportedPlatform:
             "placeholders need a server started suspended in its own process group, which only macOS supports today"
         case .cageUnavailable:
@@ -40,13 +44,19 @@ public enum MCPPlaceholderRefusal: Error, Sendable, Equatable {
             "placeholders need a sandbox; add \"sandbox\" to its mcp.json entry"
         case .unconfinedNetwork:
             "placeholders need sandbox.network false (list the hosts it needs in sandbox.hosts)"
-        case .realValueToo(let name):
-            "secret \(name) is also given as a real value (secrets or args); a server gets a secret one way"
+        case .realValueToo(let names):
+            "the server would also hold the real value of \(names) (through secrets, env or args); "
+                + "a server gets a secret one way"
         case .unknownSecret(let name):
             "secret \(name) is not defined in secrets.json"
         case .environmentDelivery(let name):
             "secret \(name) is delivered as an environment variable, so its real value would be in the server's "
                 + "environment; only gateway and awsSigV4 secrets can be placeholders"
+        case .hostEnvironmentSource(let name):
+            "secret \(name) is read from rv's own environment, which the MCP client that started rv also holds; "
+                + "store it in a secret store (keychain, 1Password, ...) to use it as a placeholder"
+        case .plaintextUpstream(let name):
+            "secret \(name) is sent to an upstream that is neither https nor loopback"
         case .agentScoped(let name, let agents):
             "secret \(name) stages only for \(agents.joined(separator: ", ")); an MCP server carries no agent tag"
         case .approvalRules(let name):
@@ -107,12 +117,11 @@ public struct MCPPlaceholderBinding: Sendable, Equatable {
 enum MCPPlaceholderPlanning {
     /// Why `definition` gets no placeholders, judged before anything is
     /// resolved, or nil. `secrets` is secrets.json as serve loaded it; the
-    /// lease checks the definitions it loads itself again.
+    /// lease checks the definitions it loads itself again. An untrusted
+    /// mcp.json never gets here: the plan refuses it whole.
     static func refusal(
-        _ definition: MCPServerDefinition, untrusted: Bool, platformSupported: Bool, cageEnforced: Bool,
-        secrets: SecretsConfiguration
+        _ definition: MCPServerDefinition, platformSupported: Bool, cageEnforced: Bool, secrets: SecretsConfiguration
     ) -> MCPPlaceholderRefusal? {
-        if untrusted { return .untrustedConfiguration }
         guard platformSupported else { return .unsupportedPlatform }
         guard cageEnforced else { return .cageUnavailable }
         guard let sandbox = definition.sandbox else { return .noSandbox }
@@ -122,7 +131,9 @@ enum MCPPlaceholderPlanning {
         for name in definition.placeholders {
             if realValues.contains(name) { return .realValueToo(name) }
             guard let secret = secrets.secret(named: name) else { return .unknownSecret(name) }
-            if secret.delivery == .environment { return .environmentDelivery(name) }
+            guard let upstream = upstream(secret) else { return .environmentDelivery(name) }
+            if SecretPlaceholderBroker.isHostEnvironmentSourced(secret) { return .hostEnvironmentSource(name) }
+            if protected(upstream) == false { return .plaintextUpstream(name) }
             if secret.stages(forAgent: nil) == false { return .agentScoped(secret: name, agents: secret.agents ?? []) }
             if SecretPlaceholderBroker.hasApprovalRules(secret) { return .approvalRules(name) }
             for variable in secret.stagedVariables
@@ -131,6 +142,31 @@ enum MCPPlaceholderPlanning {
             }
         }
         return nil
+    }
+
+    /// Where the gateway sends `secret`'s real value; nil for one delivered
+    /// in the environment.
+    package static func upstream(_ secret: SecretDefinition) -> URL? {
+        switch secret.delivery {
+        case .gateway(let binding): binding.upstream
+        case .awsSigV4(let binding): binding.upstream
+        case .environment: nil
+        }
+    }
+
+    /// `scheme://host[:port]`, as the trust review names an upstream.
+    package static func origin(_ url: URL) -> String {
+        let host = url.host.map { $0.contains(":") ? "[\($0)]" : $0 } ?? ""
+        return "\(url.scheme ?? "")://\(host)" + (url.port.map { ":\($0)" } ?? "")
+    }
+
+    /// https, or plain http to this host only.
+    static func protected(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "https": true
+        case "http": ["127.0.0.1", "localhost", "::1"].contains(url.host?.lowercased() ?? "")
+        default: false
+        }
     }
 
     /// `environment` with the lease's variables added. One that is already
@@ -149,29 +185,44 @@ enum MCPPlaceholderPlanning {
 }
 
 /// When serve's shutdown signals a placeholder server's group, counted from
-/// the moment its stdin was closed: nothing during `grace` (it may exit on
-/// its own), then `SIGTERM` once, then after `terminateGrace` more `SIGKILL`
-/// once. Nothing once the leader has exited.
+/// `started`, when this server's own shutdown began: nothing during `grace`
+/// (it may exit on its own), then `SIGTERM` once, then `terminateGrace`
+/// after that `SIGKILL` once. Nothing once the leader has exited.
 struct MCPPlaceholderShutdown: Equatable {
+    enum Step: Equatable {
+        case waiting
+        case terminated(at: Date)
+        case killed
+    }
+
     static let grace: TimeInterval = 2
     static let terminateGrace: TimeInterval = 1
 
-    private(set) var sent: Int32? = nil
+    let started: Date
+    private(set) var step = Step.waiting
 
-    init() {}
+    init(started: Date) {
+        self.started = started
+    }
 
-    mutating func signal(exited: Bool, elapsed: TimeInterval) -> Int32? {
-        guard exited == false, sent != SIGKILL else { return nil }
-        let due: Int32?
-        if elapsed >= Self.grace + Self.terminateGrace {
-            due = SIGKILL
-        } else if elapsed >= Self.grace {
-            due = SIGTERM
-        } else {
-            due = nil
+    /// When serve stops waiting for this group and leaves it to the broker's stop.
+    var giveUp: Date {
+        started.addingTimeInterval(Self.grace + Self.terminateGrace + 2)
+    }
+
+    mutating func signal(exited: Bool, now: Date) -> Int32? {
+        guard exited == false else { return nil }
+        switch step {
+        case .waiting:
+            guard now.timeIntervalSince(started) >= Self.grace else { return nil }
+            step = .terminated(at: now)
+            return SIGTERM
+        case .terminated(let sent):
+            guard now.timeIntervalSince(sent) >= Self.terminateGrace else { return nil }
+            step = .killed
+            return SIGKILL
+        case .killed:
+            return nil
         }
-        guard let due, due != sent else { return nil }
-        sent = due
-        return due
     }
 }

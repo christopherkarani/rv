@@ -8,6 +8,13 @@ import RVDomain
 import RVIsolation
 import Synchronization
 
+/// What a caged server may dial on loopback besides its `sandbox.hosts` proxy.
+public enum MCPCageReach: Sendable, Equatable {
+    case standard
+    /// The secrets gateway its placeholders are spent through.
+    case secretsGateway(port: Int)
+}
+
 /// Seatbelt cage for upstream MCP servers that set `sandbox` in mcp.json.
 /// Allow-default (so npx/uvx/node work) with writes confined to a scratch
 /// directory, temp and package caches, and reads of credential stores and
@@ -80,8 +87,8 @@ public enum MCPSandbox {
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
         denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
-    ) -> (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
-        { definition, launch in
+    ) -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
+        { definition, launch, reach in
             guard let policy = definition.sandbox else { return .success(launch) }
             guard enforced else { return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name))) }
             #if os(macOS)
@@ -99,8 +106,7 @@ public enum MCPSandbox {
             if let widened = unreviewedHome(home.path) {
                 return .failure(.sandbox(widened))
             }
-            var environment = launch.environment
-            var proxyPort: Int?
+            var proxied: (port: Int, credential: String)?
             if policy.hosts.isEmpty == false {
                 let server = definition.name
                 let credential = proxyCredential()
@@ -111,16 +117,15 @@ public enum MCPSandbox {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
                 proxies.withLock { $0.append(proxy) }
-                proxyPort = port
-                environment = proxyEnvironment(environment, port: port, credential: credential)
-                if launch.gatewayPort != nil { environment = bypassingProxyForGateway(environment) }
+                proxied = (port, credential)
             }
+            let network = cageNetwork(launch.environment, proxy: proxied, reach: reach)
             guard createPinned(scratch.path, pinned: pinned) else {
                 return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             switch profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
-                temporaryDirectory: temporary, loopbackPorts: loopbackPorts(proxy: proxyPort, gateway: launch.gatewayPort))
+                temporaryDirectory: temporary, loopbackPorts: network.loopbackPorts)
             {
             case .failure(let error): return .failure(error)
             case .success(let text):
@@ -130,7 +135,7 @@ public enum MCPSandbox {
                     return .failure(profileFailure(server: definition.name, reason: reason))
                 }
                 var caged = launch
-                caged.environment = environment
+                caged.environment = network.environment
                 caged.executable = sandboxExec
                 caged.arguments = ["-p", text, launch.executable] + launch.arguments
                 caged.workingDirectory = scratch.path
@@ -164,20 +169,30 @@ public enum MCPSandbox {
         return environment
     }
 
-    /// The loopback ports a caged server may dial: its `sandbox.hosts`
-    /// proxy and the secrets gateway its placeholders are spent through.
-    static func loopbackPorts(proxy: Int?, gateway: Int?) -> [Int] {
-        [proxy, gateway].compactMap { $0 }
-    }
-
-    /// The egress proxy does not relay loopback, so with one set a base-URL
-    /// request to the secrets gateway must skip it: `NO_PROXY` names the
-    /// gateway's address, and nothing else.
-    static func bypassingProxyForGateway(_ base: [String: String]) -> [String: String] {
+    /// A caged server's environment and the loopback ports it may dial: its
+    /// `sandbox.hosts` proxy, if it has one, and for placeholders the secrets
+    /// gateway. The egress proxy does not relay loopback, so with both a
+    /// base-URL request to the gateway must skip the proxy: `NO_PROXY` names
+    /// the gateway's address, and nothing else.
+    static func cageNetwork(
+        _ base: [String: String], proxy: (port: Int, credential: String)?, reach: MCPCageReach
+    ) -> (environment: [String: String], loopbackPorts: [Int]) {
         var environment = base
-        environment["NO_PROXY"] = "127.0.0.1"
-        environment["no_proxy"] = "127.0.0.1"
-        return environment
+        var ports: [Int] = []
+        if let proxy {
+            environment = proxyEnvironment(environment, port: proxy.port, credential: proxy.credential)
+            ports.append(proxy.port)
+        }
+        switch reach {
+        case .standard: break
+        case .secretsGateway(let port):
+            if proxy != nil {
+                environment["NO_PROXY"] = "127.0.0.1"
+                environment["no_proxy"] = "127.0.0.1"
+            }
+            ports.append(port)
+        }
+        return (environment, ports)
     }
 
     public static func profile(

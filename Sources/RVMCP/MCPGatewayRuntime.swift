@@ -15,21 +15,25 @@ public struct MCPUpstreamLaunch: Sendable, Equatable {
     public var arguments: [String]
     public var environment: [String: String]
     public var workingDirectory: String?
-    /// The secrets gateway's loopback port, for a server launched with
-    /// placeholders: its cage may dial that port.
-    public var gatewayPort: Int?
 
     public init(
         server: String, executable: String, arguments: [String], environment: [String: String],
-        workingDirectory: String? = nil, gatewayPort: Int? = nil
+        workingDirectory: String? = nil
     ) {
         self.server = server
         self.executable = executable
         self.arguments = arguments
         self.environment = environment
         self.workingDirectory = workingDirectory
-        self.gatewayPort = gatewayPort
     }
+}
+
+/// Whether the leases for this plan's placeholder servers can be bound
+/// here, asked once and only when a server lists placeholders.
+enum MCPPlaceholderCapability {
+    case unprobed
+    case available
+    case unavailable(String)
 }
 
 public enum MCPLaunchError: Error, Sendable, Equatable {
@@ -68,7 +72,7 @@ public enum MCPLaunchPlanner {
         baseEnvironment: [String: String],
         requireSandbox: Bool = MCPSandbox.enforced,
         oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
-        sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) },
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) },
         placeholders: MCPPlaceholderLeasing = .unavailable,
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
@@ -87,13 +91,13 @@ public enum MCPLaunchPlanner {
     private static func planServers(
         _ names: [String], configuration: MCPConfiguration, secrets: SecretsConfiguration, resolver: SecretResolver,
         baseEnvironment: [String: String], requireSandbox: Bool, oauthTokens: (String) -> MCPOAuthTokens?,
-        sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError>,
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>,
         placeholders: MCPPlaceholderLeasing, leases: inout [SecretPlaceholderLease],
         now: @escaping @Sendable () -> Date
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
         // nil until asked; then the reason leases cannot be bound here, or nil.
-        var capability: String?? = nil
+        var capability = MCPPlaceholderCapability.unprobed
         for name in names {
             if configuration.untrusted { return .failure(.untrustedRemote(name)) }
             if configuration.isBlocked(name) { return .failure(.blocked(name)) }
@@ -161,7 +165,7 @@ public enum MCPLaunchPlanner {
             let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
             let launch = MCPUpstreamLaunch(
                 server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
-            switch sandbox(definition, launch) {
+            switch sandbox(definition, launch, .standard) {
             case .failure(let error): return .failure(error)
             case .success(let caged):
                 var scrubbed = named(resolved)
@@ -178,11 +182,13 @@ public enum MCPLaunchPlanner {
     /// `args` as for any server, placeholders leased for the rest, and a cage
     /// that may reach the secrets gateway. A placeholder refusal refuses this
     /// server only (`.refused`); a failure any server would hit fails the plan.
+    /// Every refusal that needs no value comes before its own secrets are
+    /// resolved; only the real-value and cage checks come after.
     static func placeholderServer(
         _ definition: MCPServerDefinition, configuration: MCPConfiguration, secrets: SecretsConfiguration,
         resolver: SecretResolver, baseEnvironment: [String: String], requireSandbox: Bool,
-        placeholders: MCPPlaceholderLeasing, capability: inout String??,
-        sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError>,
+        placeholders: MCPPlaceholderLeasing, capability: inout MCPPlaceholderCapability,
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>,
         now: @escaping @Sendable () -> Date
     ) -> Result<(MCPGatewayCore.Upstream, MCPUpstreamConnection), MCPLaunchError> {
         let name = definition.name
@@ -190,42 +196,50 @@ public enum MCPLaunchPlanner {
             .success((MCPGatewayCore.Upstream(definition: definition, secretValues: []), .refused(server: name, refusal)))
         }
         if let refusal = MCPPlaceholderPlanning.refusal(
-            definition, untrusted: configuration.untrusted, platformSupported: placeholders.platformSupported,
-            cageEnforced: requireSandbox, secrets: secrets)
+            definition, platformSupported: placeholders.platformSupported, cageEnforced: requireSandbox, secrets: secrets)
         {
             return refuse(refusal)
         }
-        // Before anything is resolved: a server that cannot be bound must not prompt or unlock.
-        if capability == nil { capability = .some(placeholders.capability()) }
-        if let reason = capability ?? nil { return refuse(.capabilityUnavailable(reason)) }
-        var environment = sandboxEnvironment(baseEnvironment)
-        for (key, value) in definition.environment { environment[key] = value }
-        let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
-        let resolved: [String: String]
-        switch resolve(
-            referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
-            into: .stdioProcess, now: now)
-        {
-        case .failure(let error): return .failure(error)
-        case .success(let values): resolved = values
-        }
-        for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
-        let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
+        if let reason = capabilityRefusal(&capability, placeholders) { return refuse(.capabilityUnavailable(reason)) }
         let lease: SecretPlaceholderLease
         switch placeholders.lease(name, definition.placeholders) {
         case .failure(let error): return refuse(.leaseFailed(error.message))
         case .success(let leased): lease = leased
         }
+        var environment = sandboxEnvironment(baseEnvironment)
+        for (key, value) in definition.environment { environment[key] = value }
         switch MCPPlaceholderPlanning.merge(environment, lease: lease.environment) {
         case .failure(let refusal):
             lease.revoke()
             return refuse(refusal)
         case .success(let merged): environment = merged
         }
+        // The lease's own definitions may differ from the ones checked above.
+        if let clash = lease.environment.first(where: { definition.secrets[$0.name] != nil }) {
+            lease.revoke()
+            return refuse(.variableCollision(clash.name))
+        }
+        let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
+        let resolved: [String: String]
+        switch resolve(
+            referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver,
+            into: .stdioProcess, now: now)
+        {
+        case .failure(let error):
+            lease.revoke()
+            return .failure(error)
+        case .success(let values): resolved = values
+        }
+        for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
+        let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
         let launch = MCPUpstreamLaunch(
-            server: name, executable: envPath, arguments: [definition.command] + args, environment: environment,
-            gatewayPort: lease.gatewayPort)
-        switch sandbox(definition, launch) {
+            server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
+        // By value, under any name: an alias secret, an `env` literal, an argument.
+        if lease.holdsRealValue(environment: launch.environment, arguments: launch.arguments) {
+            lease.revoke()
+            return refuse(.realValueToo(definition.placeholders.joined(separator: ", ")))
+        }
+        switch sandbox(definition, launch, .secretsGateway(port: lease.gatewayPort)) {
         case .failure(let error):
             lease.revoke()
             return .failure(error)
@@ -241,6 +255,22 @@ public enum MCPLaunchPlanner {
             return .success((
                 MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed),
                 .placeholderBound(caged, MCPPlaceholderBinding(lease: lease))))
+        }
+    }
+
+    /// Why leases cannot be bound here, probed the first time a server asks:
+    /// before anything is resolved, so a server that cannot be bound never
+    /// prompts or unlocks.
+    static func capabilityRefusal(
+        _ capability: inout MCPPlaceholderCapability, _ placeholders: MCPPlaceholderLeasing
+    ) -> String? {
+        switch capability {
+        case .unprobed:
+            let reason = placeholders.capability()
+            capability = reason.map { .unavailable($0) } ?? .available
+            return reason
+        case .available: return nil
+        case .unavailable(let reason): return reason
         }
     }
 
@@ -549,7 +579,6 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         remotes = [:]
         for handle in upstreamInputs.values { try? handle.close() }
         upstreamInputs = [:]
-        let inputsClosed = Date()
         let deadline = Date().addingTimeInterval(2)
         for process in processes.values {
             while process.isRunning, Date() < deadline { usleep(20_000) }
@@ -561,21 +590,27 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
         processes = [:]
-        stopPlaceholderGroups(since: inputsClosed)
+        stopPlaceholderGroups()
     }
 
     /// Signals each placeholder server's whole group as
     /// `MCPPlaceholderShutdown` says until its leader exits, then waits for
     /// its supervisor to kill the rest of the group, reap it and revoke its
-    /// lease. Bounded: a group still there after that is left to the broker's
-    /// stop, which ends every lease.
-    private func stopPlaceholderGroups(since inputsClosed: Date) {
-        var shutdowns = placeholderGroups.mapValues { _ in MCPPlaceholderShutdown() }
-        let giveUp = inputsClosed.addingTimeInterval(MCPPlaceholderShutdown.grace + MCPPlaceholderShutdown.terminateGrace + 2)
-        while placeholderGroups.values.contains(where: { $0.hasExited == false }), Date() < giveUp {
-            let elapsed = Date().timeIntervalSince(inputsClosed)
+    /// lease. Timed from now, not from when plain servers began stopping.
+    /// Bounded: a group still there after that is left to the broker's stop,
+    /// which ends every lease.
+    private func stopPlaceholderGroups() {
+        let started = Date()
+        var shutdowns = placeholderGroups.mapValues { _ in MCPPlaceholderShutdown(started: started) }
+        func waiting(_ now: Date) -> Bool {
+            placeholderGroups.contains { server, group in
+                group.hasExited == false && now < (shutdowns[server]?.giveUp ?? now)
+            }
+        }
+        while waiting(Date()) {
+            let now = Date()
             for (server, group) in placeholderGroups {
-                if let number = shutdowns[server]?.signal(exited: group.hasExited, elapsed: elapsed) {
+                if let number = shutdowns[server]?.signal(exited: group.hasExited, now: now) {
                     group.signal(number)
                 }
             }
