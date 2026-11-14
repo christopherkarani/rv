@@ -263,7 +263,7 @@ jobs:
         run: |
           sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
           sudo env "PATH=$PATH" HOME=/root RV_LINUX_PEER_STRICT=1 \
-            timeout 900 swift test --skip-build \
+            Scripts/require-tests-ran.sh 100 timeout 900 swift test --skip-build \
             --filter 'ProcFS|GatewayPeerBindingTests|SecretGatewayLinuxPeerTests|SecretGatewayLinuxAttackTests'
 
       # Last: ptrace_scope=3 cannot be undone on a running kernel.

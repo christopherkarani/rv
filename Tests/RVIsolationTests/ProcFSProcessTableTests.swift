@@ -364,6 +364,48 @@ struct ProcFSProcessTableTests {
         #expect(proc.verdict(try proc.group(200)) == .member)
     }
 
+    /// With one tick a second a start time can exceed what a recorded
+    /// group holds. That is a process nothing was recorded for, not a trap.
+    @Test func aStartTimeTooLargeToRecordIsNotALeader() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, start: UInt64.max, sockets: [ProcFixture.clientInode])
+        try proc.process(201, parent: 200, group: 200, start: UInt64.max)
+        let table = ProcFSProcessTable(root: proc.root, uid: proc.uid, selfPID: proc.selfPID, hz: 1)
+        guard case .found(let leader) = table.lookup(200) else {
+            Issue.record("the process is not found")
+            return
+        }
+        #expect(leader.startSeconds == UInt64.max)
+        #expect(ProcessGroupRecovery.capture(pid: 200, in: table) == nil)
+        let group = ProcessGroupFact(
+            pgid: try #require(ValidatedPGID(200)), startSeconds: Int64.max, startMicroseconds: 0)
+        #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: table) == .unverifiable)
+        #expect(GatewayPeerScan.holders(proc.peer, group: group, in: table) == nil)
+        let pin = GatewayBinaryPin(path: "/bin/sh", device: 1, inode: 2, size: 3, changedSeconds: 4, changedNanoseconds: 5)
+        #expect(GatewayBinaryScan.verdict(
+            holder: GatewayHolder(pid: 201, startSeconds: UInt64.max, startMicroseconds: 0), leader: 200, pins: [pin],
+            in: table) == .unverifiable)
+    }
+
+    /// A process that moved to another group is the same process; one with
+    /// another start time, parent or pid is not.
+    @Test func theSameProcessIsItsPidStartAndParentNotItsGroup() {
+        let process = ProcessIdentity(pid: 7, parent: 3, group: 7, startSeconds: 10, startMicroseconds: 5)
+        var moved = process
+        moved.group = 9
+        #expect(process.isSameProcess(as: moved))
+        for change in [\ProcessIdentity.pid, \.parent] as [WritableKeyPath<ProcessIdentity, UInt32>] {
+            var other = process
+            other[keyPath: change] += 1
+            #expect(process.isSameProcess(as: other) == false)
+        }
+        for change in [\ProcessIdentity.startSeconds, \.startMicroseconds] as [WritableKeyPath<ProcessIdentity, UInt64>] {
+            var other = process
+            other[keyPath: change] += 1
+            #expect(process.isSameProcess(as: other) == false)
+        }
+    }
+
     // MARK: bounded work
 
     /// One decision reads a bounded amount of `/proc`. Past it every read

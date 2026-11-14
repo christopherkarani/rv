@@ -183,7 +183,7 @@ enum GatewayBinaryScan {
                 ended = true
                 break
             }
-            pid = pid_t(info.parent)
+            pid = pid_t(bitPattern: info.parent)
         }
         guard allowed || ended, ordered(walked) else { return .unverifiable }
         for process in walked {

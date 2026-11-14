@@ -235,7 +235,7 @@ final class ProcFSProcessTable: ProcessTable {
         }
         // The same process before and after: a pid reused in between, or one
         // that exited mid-scan (perhaps the holder), is not an answer.
-        guard case .found(let after) = self.lookup(pid), after == before else { return nil }
+        guard case .found(let after) = self.lookup(pid), after.isSameProcess(as: before) else { return nil }
         return holds
     }
 

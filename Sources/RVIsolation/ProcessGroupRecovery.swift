@@ -60,12 +60,12 @@ enum ProcessGroupRecovery {
         guard let pgid = ValidatedPGID(pid) else { return nil }
         switch table.lookup(pid) {
         case .found(let info):
-            guard info.pid == UInt32(pid), info.group == UInt32(pid) else { return nil }
-            return ProcessGroupFact(
-                pgid: pgid,
-                startSeconds: Int64(info.startSeconds),
-                startMicroseconds: Int64(info.startMicroseconds)
-            )
+            // A start time that does not fit is not one this records.
+            guard info.pid == UInt32(pid), info.group == UInt32(pid),
+                let seconds = Int64(exactly: info.startSeconds),
+                let microseconds = Int64(exactly: info.startMicroseconds)
+            else { return nil }
+            return ProcessGroupFact(pgid: pgid, startSeconds: seconds, startMicroseconds: microseconds)
         case .absent, .unavailable:
             return nil
         }
@@ -115,8 +115,8 @@ enum ProcessGroupRecovery {
             return .queryFailed
         case .found(let info):
             guard info.pid == UInt32(group.pgid.rawValue) else { return .queryFailed }
-            let sameStart = Int64(info.startSeconds) == group.startSeconds
-                && Int64(info.startMicroseconds) == group.startMicroseconds
+            let sameStart = Int64(exactly: info.startSeconds) == group.startSeconds
+                && Int64(exactly: info.startMicroseconds) == group.startMicroseconds
             if sameStart == false {
                 return .absent
             }

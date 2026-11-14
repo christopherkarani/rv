@@ -183,8 +183,8 @@ enum GatewayPeerScan {
     private static func isLeader(_ pid: pid_t, of group: ProcessGroupFact, in table: some ProcessTable) -> Bool {
         guard case .found(let info) = table.lookup(pid) else { return false }
         return info.group == UInt32(pid)
-            && Int64(info.startSeconds) == group.startSeconds
-            && Int64(info.startMicroseconds) == group.startMicroseconds
+            && Int64(exactly: info.startSeconds) == group.startSeconds
+            && Int64(exactly: info.startMicroseconds) == group.startMicroseconds
     }
 
     private struct Search {
@@ -237,8 +237,7 @@ enum GatewayPeerScan {
     /// the group is not membership.
     private static func unchanged(_ process: ProcessIdentity, in table: some ProcessTable) -> Bool {
         guard case .found(let now) = table.lookup(pid_t(bitPattern: process.pid)) else { return false }
-        return now.pid == process.pid && now.parent == process.parent
-            && now.startSeconds == process.startSeconds && now.startMicroseconds == process.startMicroseconds
+        return now.isSameProcess(as: process)
     }
 
     /// Whether the chain of parents from `process` reaches the runtime's

@@ -35,10 +35,11 @@ die() { log "$*"; exit 1; }
 [[ "$(id -u)" == "0" ]] || die "needs root (mount, pid namespaces, sysctl)"
 command -v swift >/dev/null || die "swift is not on PATH"
 
-# `swift test` with a wall-clock bound: a hung child must fail, not stall CI.
-run_tests() {
-  timeout 600 swift test --skip-build --only-use-versions-from-resolved-file --filter "$1"
-}
+# `swift test` with a wall-clock bound: a hung child must fail, not stall
+# CI. Every run goes through require-tests-ran.sh, which fails a filter
+# that matched nothing.
+SWIFT_TEST=(timeout 600 swift test --skip-build --only-use-versions-from-resolved-file --filter)
+RAN="$ROOT/Scripts/require-tests-ran.sh"
 
 unsupported() {
   if [[ "$STRICT" == "1" ]]; then
@@ -51,23 +52,21 @@ unsupported() {
 regime_mount() {
   local name="$1" options="$2" test="$3"
   log "regime $name: /proc mounted with $options"
-  RV_PROC_REGIME="$name" unshare --mount --propagation private -- sh -c "
+  RV_PROC_REGIME="$name" "$RAN" 1 unshare --mount --propagation private -- sh -c "
     mount -t proc -o '$options' proc /proc &&
     exec timeout 600 swift test --skip-build --only-use-versions-from-resolved-file --filter '$test'"
 }
 
 regime_foreign() {
   log "regime foreign: new pid namespace, old /proc"
-  RV_PROC_REGIME=foreign unshare --pid --fork -- \
-    timeout 600 swift test --skip-build --only-use-versions-from-resolved-file \
-    --filter aProcOfAnotherPidNamespaceAnswersNothing
+  RV_PROC_REGIME=foreign "$RAN" 1 unshare --pid --fork -- \
+    "${SWIFT_TEST[@]}" aProcOfAnotherPidNamespaceAnswersNothing
 }
 
 regime_noptrace() {
   log "regime noptrace: root without CAP_SYS_PTRACE"
-  RV_PROC_REGIME=noptrace setpriv --bounding-set -sys_ptrace --inh-caps -sys_ptrace -- \
-    timeout 600 swift test --skip-build --only-use-versions-from-resolved-file \
-    --filter aChildOfAnotherUserWhoseDescriptorsAreUnreadable
+  RV_PROC_REGIME=noptrace "$RAN" 1 setpriv --bounding-set -sys_ptrace --inh-caps -sys_ptrace -- \
+    "${SWIFT_TEST[@]}" aChildOfAnotherUserWhoseDescriptorsAreUnreadable
 }
 
 regime_confined() {
@@ -95,9 +94,8 @@ profile $PROFILE flags=(attach_disconnected) {
 EOF
   apparmor_parser --replace "$profile"
   local status=0
-  RV_PROC_REGIME=confined aa-exec -p "$PROFILE" -- \
-    timeout 600 swift test --skip-build --only-use-versions-from-resolved-file \
-    --filter aGatewayThatMayNotReadOtherProcessesCannotTell || status=$?
+  RV_PROC_REGIME=confined "$RAN" 1 aa-exec -p "$PROFILE" -- \
+    "${SWIFT_TEST[@]}" aGatewayThatMayNotReadOtherProcessesCannotTell || status=$?
   apparmor_parser --remove "$profile" || true
   rm -f "$profile"
   return "$status"
@@ -114,12 +112,12 @@ regime_yama() {
   for scope in 1 2; do
     log "regime yama: ptrace_scope=$scope"
     echo "$scope" >"$knob"
-    run_tests "$SUITES"
+    "$RAN" 20 "${SWIFT_TEST[@]}" "$SUITES"
   done
   if [[ "${RV_YAMA_IRREVERSIBLE:-0}" == "1" ]]; then
     log "regime yama: ptrace_scope=3 (stays until reboot)"
     echo 3 >"$knob"
-    run_tests "$SUITES"
+    "$RAN" 20 "${SWIFT_TEST[@]}" "$SUITES"
   else
     echo "$before" >"$knob"
     log "regime yama: ptrace_scope=3 not run (set RV_YAMA_IRREVERSIBLE=1; it cannot be undone)"
@@ -140,7 +138,7 @@ regime_container() {
   # checkout and toolchain are mounted at their host paths, so the bundle
   # built outside runs unchanged. Kernel features the profile refuses
   # (io_uring, unshare) print `skipped:` there: not strict.
-  docker run --rm \
+  "$RAN" 20 docker run --rm \
     -v "$ROOT:$ROOT" -v "$toolchain:$toolchain:ro" -w "$ROOT" \
     -e PATH="$toolchain/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     -e RV_PROC_REGIME=noptrace -e HOME=/tmp \
