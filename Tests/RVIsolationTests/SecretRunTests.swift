@@ -786,7 +786,9 @@ struct SecretRunLaunchTests {
         #expect(result == .success(128 + SIGTERM))
         let text = try String(contentsOf: directory.appendingPathComponent("bg"), encoding: .utf8)
         let leftover = try #require(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)))
-        let deadline = Date().addingTimeInterval(5)
+        // Killed with the group; it answers until launchd reaps it, which
+        // a loaded machine may take a while to do.
+        let deadline = Date().addingTimeInterval(20)
         while kill(leftover, 0) == 0, Date() < deadline { usleep(20_000) }
         #expect(kill(leftover, 0) == -1 && errno == ESRCH)
     }
