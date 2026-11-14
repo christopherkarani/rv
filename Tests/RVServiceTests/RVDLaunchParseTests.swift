@@ -77,9 +77,12 @@ struct RVDLaunchParseTests {
         #expect(text.components(separatedBy: entry + check).count == 3, "each run must check HOME first")
     }
 
-    /// SIGPIPE is ignored before rvd's first write (the log line
-    /// `captureDiscardedStderr` writes), on every platform.
-    @Test func rvdIgnoresSIGPIPEBeforeItsFirstWrite() throws {
+    /// Before rvd's first write (the log line `captureDiscardedStderr`
+    /// writes): on Darwin its stdout and stderr are set not to raise
+    /// SIGPIPE, per open file, so children keep the default disposition;
+    /// on Linux SIGPIPE is ignored, as systemd already starts it. Nothing
+    /// else in rvd's main changes the disposition.
+    @Test func rvdStdioCannotRaiseSIGPIPEBeforeItsFirstWrite() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -87,14 +90,20 @@ struct RVDLaunchParseTests {
             .appendingPathComponent("Sources/rvd/main.swift")
         let text = try String(contentsOf: url, encoding: .utf8)
         let entry = "    static func main() {\n"
-        let ignore = "        signal(SIGPIPE, SIG_IGN)\n"
         let body = try #require(text.components(separatedBy: entry).dropFirst().first, "rvd main")
-        let firstStatement = body.split(separator: "\n").first { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return trimmed.isEmpty == false && trimmed.hasPrefix("//") == false
+        let statements = body.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { line in
+            line.isEmpty == false && line.hasPrefix("//") == false
         }
-        #expect(firstStatement.map { String($0) + "\n" } == ignore)
-        #expect(text.components(separatedBy: ignore).count == 2, "ignored once, in main")
+        #expect(Array(statements.prefix(7)) == [
+            "#if canImport(Darwin)",
+            "_ = fcntl(STDOUT_FILENO, F_SETNOSIGPIPE, 1)",
+            "_ = fcntl(STDERR_FILENO, F_SETNOSIGPIPE, 1)",
+            "#else",
+            "signal(SIGPIPE, SIG_IGN)",
+            "#endif",
+            "RVDLogFile.captureDiscardedStderr()",
+        ])
+        #expect(text.components(separatedBy: "SIGPIPE, SIG_IGN").count == 2, "ignored once, on Linux only")
     }
 
 #if os(Linux)

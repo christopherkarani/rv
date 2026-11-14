@@ -346,6 +346,25 @@ struct MCPToolPinTests {
         #expect(Self.list(&harness, Self.hidingSchemaTools).logs.filter { $0.contains(Self.schemaNotice) }.isEmpty)
     }
 
+    /// L2: the hidden-schema notice quotes the tool's (conforming, so at
+    /// most 64 bytes) name, display-escaped, and never the property name
+    /// that hides text: no raw hiding scalar reaches stderr.
+    @Test func theHidingSchemaNoticeIsEscapedAndBounded() throws {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        let name = String(repeating: "n", count: 64)
+        let hiding = "\u{1B}[2J\u{202E}\u{2028}\u{E0041}"
+        let property = "secret" + hiding + "repo"
+        let tool = JSONValue.object([
+            "name": .string(name),
+            "inputSchema": .object(["type": .string("object"), "properties": .object([property: .object(["type": .string("string")])])]),
+        ]).compactText
+        let logs = Self.list(&harness, [tool]).logs
+        let notice = try #require(logs.first { $0.contains(Self.schemaNotice) })
+        #expect(notice.contains("such as \"\(name)\";"))
+        #expect(notice.contains("secret") == false)
+        for line in logs { #expect(MCPDisplayedText.hidesText(line) == false, "\(line)") }
+    }
+
     /// L2: hiding a definition still checks it against the pin, so a pinned
     /// tool listed once with a hiding schema stays changed when its pinned
     /// definition comes back; and a clean listing serves it again.

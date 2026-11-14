@@ -91,6 +91,29 @@ struct MCPToolTrustTests {
         #expect(try store.load().get() == ["github": ["push": MCPToolPinStore.hash(rich)]])
     }
 
+    /// L2 residual: `enum`, `const`, `default` and `examples` values are
+    /// forwarded byte-exact, so the review shows a hiding scalar in one
+    /// escaped at the moment of trust, and pins exactly those bytes.
+    @Test func theReviewShowsSchemaValuesEscaped() async throws {
+        let (fixture, store) = try Self.signedFixture()
+        let tool = try RVMCP.JSONValue.parse(
+            #"{"name":"push","inputSchema":{"type":"object","properties":{"sep":{"enum":[",","\t","a\u202eb"]},"mode":{"const":"x\u001b[2Jy"},"tag":{"default":"d\u2028e","examples":["f\udb40\udc41g"]}}}}"#)
+        #expect(store.recordChanged(server: "github", definitions: ["push": tool]) == .recorded)
+        let shown = Mutex("")
+        _ = try await MCPRun.trust(
+            environment: fixture.environment(presence: Self.confirming), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        let review = shown.withLock { $0 }
+        let hiding: Set<UInt32> = [0x09, 0x1B, 0x202E, 0x2028, 0xE0041]
+        #expect(review.unicodeScalars.contains { hiding.contains($0.value) } == false)
+        #expect(MCPRun.reviewConceals(review) == false)
+        let schema = try #require(review.split(separator: "\n").first { $0.hasPrefix("    inputSchema: ") })
+        for escape in ["\\t", "\\u202e", "\\u001b", "\\u2028", "\\udb40\\udc41"] {
+            #expect(schema.contains(escape), "\(escape) missing from \(schema)")
+        }
+        #expect(try store.load().get() == ["github": ["push": MCPToolPinStore.hash(tool)]])
+    }
+
     /// Trust race: the pins the review was built on changed before trust
     /// took the lock, so nothing is pinned and the user is told to rerun.
     @Test func pinsThatChangeDuringReviewPinNothing() async throws {

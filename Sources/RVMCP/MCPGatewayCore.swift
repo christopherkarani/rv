@@ -1014,9 +1014,13 @@ public struct MCPGatewayCore {
         }
         hidingSchemas[server] = Set(hiding)
         if let first = hiding.first, hidingSchemaNoticed.insert(server).inserted {
+            // `first` conforms to `servesToolName` (ASCII, at most 64 bytes);
+            // escaped and bounded anyway, as for the name notice. The
+            // property name that hides text is never quoted.
+            let shown = MCPDisplayedText.field(MCPCallRecord.bounded(first, 64))
             outputs.append(.log(
                 "MCP server \(shownServer) lists \(hiding.count) tool(s) with schema property names rv does not serve "
-                    + "(control, separator or format characters), such as \"\(first)\"; they are hidden"))
+                    + "(control, separator or format characters), such as \"\(shown)\"; they are hidden"))
         }
         if pinning.enforced {
             var seen: [String: String] = [:]
@@ -1258,7 +1262,9 @@ public struct MCPGatewayCore {
         return .object(walked)
     }
 
-    /// Keywords whose values are data, kept byte-exact.
+    /// Keywords whose values are data, kept byte-exact: a client sends them
+    /// back verbatim, so a hiding scalar in one is an accepted residual
+    /// (`rv mcp trust` showed it escaped).
     static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples", "dependentRequired"]
     /// Keywords whose members are named subschemas (or, for
     /// `dependencies`, property-name lists); a member may be called
