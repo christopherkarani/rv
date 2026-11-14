@@ -107,6 +107,35 @@ struct SecretsProvidersCommandTests {
             == .failure("GITHUB_TOKEN is already defined; edit secrets.json to change its delivery"))
     }
 
+    @Test func bareSetOfAProviderOnlyNameStillNeedsADelivery() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        for name in ["NPM_TOKEN", "TWINE_PASSWORD", "UV_PUBLISH_TOKEN", "OPENROUTER_API_KEY"] {
+            let resolved = SecretsRun.definitionForSet(
+                name: name, isNew: true, gateway: nil, baseURLEnv: nil, placeholderPrefix: "", environment: false)
+            #expect(resolved.definition == nil, "\(name)")
+            #expect(resolved.note == nil, "\(name)")
+            #expect(SecretsRun.set(
+                name: name, value: Data("token-1234".utf8), definition: resolved.definition, agents: [],
+                description: nil, environment: fixture.environment()).map { _ in "" }
+                == .failure("\(name) is new: pass --gateway URL --base-url-env VAR, or --environment"), "\(name)")
+            #expect(SecretsRun.brokenCatalogFailure(name: name, isNew: true, definition: nil) == nil, "\(name)")
+        }
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+    }
+
+    @Test func bareSetOfAWellKnownNameNamesABrokenCatalog() {
+        let broken = ProviderCatalog.decode(Data("{}".utf8))
+        let failure = SecretsRun.brokenCatalogFailure(name: "GITHUB_TOKEN", isNew: true, definition: nil, catalog: broken)
+        #expect(failure?.message.hasPrefix("the provider catalog is invalid:") == true)
+        #expect(failure?.message.hasSuffix(
+            ", so GITHUB_TOKEN has no default; pass --gateway URL --base-url-env VAR, or --environment") == true)
+        #expect(SecretsRun.brokenCatalogFailure(name: "GITHUB_TOKEN", isNew: false, definition: nil, catalog: broken) == nil)
+        #expect(SecretsRun.brokenCatalogFailure(
+            name: "GITHUB_TOKEN", isNew: true, definition: .environment, catalog: broken) == nil)
+        #expect(SecretsRun.brokenCatalogFailure(name: "GITHUB_TOKEN", isNew: true, definition: nil) == nil)
+    }
+
     @Test func providerFlagConflictsWithOtherDeliveries() {
         #expect(throws: (any Error).self) {
             _ = try SecretsSet.parse(["X", "--provider", "github", "--gateway", "https://x.example", "--base-url-env", "X_URL"])

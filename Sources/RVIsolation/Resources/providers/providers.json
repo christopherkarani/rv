@@ -79,7 +79,7 @@
     {
       "id": "npm",
       "displayName": "npm registry",
-      "description": "Publish to registry.npmjs.org: PUT of a package document only (publish, deprecate)",
+      "description": "Publish to registry.npmjs.org: PUT of an unscoped package document only",
       "endpoints": [
         {"name": "publish", "upstream": "https://registry.npmjs.org", "allow": [{"methods": ["PUT"], "path": "/*"}]}
       ],
@@ -88,7 +88,8 @@
       ],
       "notes": [
         "npm publish --registry \"$NPM_PUBLISH_REGISTRY/\" with //127.0.0.1:<port>/s/NPM_TOKEN/:_authToken=${NPM_TOKEN} in .npmrc",
-        "Installs, unpublish, dist-tags and owner changes are refused; scoped names (@scope%2fname) are refused as ambiguous paths"
+        "Refused by path only: installs, unpublish, dist-tags, owner changes, deprecate (it reads ?write=true first); a PUT body is not inspected",
+        "Scoped names (@scope%2fname) are refused as ambiguous paths; PUT / and PUT /- also match /* and are left to the registry"
       ]
     },
     {

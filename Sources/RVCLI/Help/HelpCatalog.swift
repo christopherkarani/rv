@@ -530,7 +530,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
-                HelpRow(name: "rv secrets set <name> --provider <id>[:<endpoint>] [--allow <rule>] [--base-url-env <var>]"),
+                HelpRow(name: "rv secrets set <name> --provider <id>[:<endpoint>] [--allow <rule>] [--surface <s>] [--base-url-env <var>] [--placeholder-prefix <p>]"),
                 HelpRow(name: "rv secrets providers [<id>] [--json]"),
                 HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
@@ -625,7 +625,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "defaults",
-                    description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
+                    description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN, VERCEL_TOKEN default to their gateway (any method and path); other names need a delivery or --provider"
                 ),
                 HelpRow(
                     name: "providers",

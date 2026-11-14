@@ -164,6 +164,25 @@ struct ProviderCatalogTests {
         #expect(KnownSecretDefaults.gateway(for: "openai_api_key") == nil)
     }
 
+    @Test func knownSecretDefaultsCoverOnlyTheLegacyNames() throws {
+        #expect(KnownSecretDefaults.names == [
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY", "GITHUB_TOKEN", "GH_TOKEN", "VERCEL_TOKEN",
+        ])
+        // Catalog variables scoped by their profile get no unscoped default.
+        for name in ["NPM_TOKEN", "TWINE_PASSWORD", "UV_PUBLISH_TOKEN", "OPENROUTER_API_KEY"] {
+            #expect(try Self.shipped().credential(for: name) != nil, "\(name)")
+            #expect(KnownSecretDefaults.gateway(for: name) == nil, "\(name)")
+        }
+    }
+
+    @Test func knownSecretDefaultsReportAnInvalidCatalogOnlyForTheirNames() {
+        let broken = ProviderCatalog.decode(Data("{}".utf8))
+        #expect(KnownSecretDefaults.catalogFailure(for: "GITHUB_TOKEN", catalog: broken)?
+            .hasPrefix("the provider catalog is invalid:") == true)
+        #expect(KnownSecretDefaults.catalogFailure(for: "NPM_TOKEN", catalog: broken) == nil)
+        #expect(KnownSecretDefaults.catalogFailure(for: "GITHUB_TOKEN") == nil)
+    }
+
     @Test func knownSecretDefaultsAnswerNothingFromAnInvalidCatalog() {
         let broken = ProviderCatalog.decode(Data("{}".utf8))
         #expect(KnownSecretDefaults.gateway(for: "OPENAI_API_KEY", catalog: broken) == nil)

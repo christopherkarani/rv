@@ -119,7 +119,7 @@ variables clients read, and optionally `binaries`. `rv secrets set NAME
 | `anthropic`, `openai`, `openrouter`, `vercel`, `stripe` | the service API | any method and path |
 | `github` (`api`) | `https://api.github.com` | `github-read` |
 | `github` (`git`) | `https://github.com` | `github-clone` (no push) |
-| `npm` | `https://registry.npmjs.org` | `PUT /*`: publish or deprecate one unscoped package |
+| `npm` | `https://registry.npmjs.org` | `PUT /*`: publish one unscoped package |
 | `pypi` | `https://upload.pypi.org/legacy` | `POST /legacy/`: an upload |
 
 The profile is the ceiling. `--surface` must list surfaces the endpoint
@@ -144,6 +144,20 @@ so `gh` commands that use it fail; npm escapes a scope's `/` as `%2f`,
 which the gateway refuses whenever rules are set, so scoped packages cannot
 be published through `npm`; PyPI tools must post to the base URL with a
 trailing slash.
+
+The `npm` refusals are by method and path only. Unpublish
+(`/<pkg>/-rev/<rev>`), dist-tags (`/-/package/...`), owner changes and
+`npm deprecate` (which first reads `GET /<pkg>?write=true`) are refused, but
+the body of an allowed `PUT /<pkg>` is opaque to rv: whatever the registry
+accepts in a package document goes through. `*` also matches an empty
+segment, so `PUT /` and `PUT /-` match `/*` too; they are accepted residuals
+left to the registry.
+
+Only `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`,
+`GITHUB_TOKEN`, `GH_TOKEN` and `VERCEL_TOKEN` get a default on a bare
+`rv secrets set`. The other catalog variables (`NPM_TOKEN`,
+`TWINE_PASSWORD`, `UV_PUBLISH_TOKEN`, `OPENROUTER_API_KEY`) are bound only
+through `--provider`, so their scope is never silently dropped.
 
 ## Runtime binding
 

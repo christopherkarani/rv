@@ -166,6 +166,18 @@ enum SecretsRun {
         return (definition, note)
     }
 
+    /// A new well-known name that got no default because the provider
+    /// catalog is invalid: say so, rather than the generic "is new" refusal.
+    static func brokenCatalogFailure(
+        name: String, isNew: Bool, definition: Definition?,
+        catalog: Result<ProviderCatalog, ProviderCatalogError> = ProviderCatalog.shipped
+    ) -> CommandFailure? {
+        guard isNew, definition == nil, let reason = KnownSecretDefaults.catalogFailure(for: name, catalog: catalog)
+        else { return nil }
+        return CommandFailure(
+            "\(reason), so \(DisplayedText.field(name)) has no default; pass --gateway URL --base-url-env VAR, or --environment")
+    }
+
     static func configuration(_ environment: SecretsEnvironment) -> Result<SecretsConfiguration, CommandFailure> {
         SecretsConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
     }
@@ -969,6 +981,9 @@ struct SecretsSet: AsyncParsableCommand {
                 allow: (try? SecretsRun.allowances(allow).get()) ?? [])
         }
         let definition = resolved.definition
+        if let failure = SecretsRun.brokenCatalogFailure(name: name, isNew: isNew, definition: definition) {
+            try ctx.fail("rv secrets set: \(failure.message)\n")
+        }
         if surfaces.isEmpty == false || allow.isEmpty == false, definition == nil, isNew == false {
             try ctx.fail(
                 "rv secrets set: \(DisplayedText.field(name)) is already defined; edit secrets.json to change its surfaces or allow rules\n")
