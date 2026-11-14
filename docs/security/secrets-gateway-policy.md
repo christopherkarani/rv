@@ -564,7 +564,7 @@ How it starts the server:
   planning stops serve before it starts any, but only once planning has
   finished: planning (resolving secret values, the capability check) is
   not cut short, and a second signal during it does not end rv either.
-  A signal serve does not catch (`SIGKILL`, `SIGQUIT`, `SIGUSR1` and the
+  A terminating signal serve does not catch (`SIGKILL`, `SIGQUIT`, `SIGUSR1` and the
   like) still ends rv at once, planning or not. Once servers run, a
   second signal skips the rest of the grace and kills every server still running at once. After a
   signal serve exits 128 plus its number, as a serve the signal had ended
@@ -589,15 +589,30 @@ What it does not:
 - The cage is `(allow default)` minus file writes outside the server's
   scratch, temporary and package-cache directories (`~/Library/Caches`,
   `~/.npm`, `~/.cache`, and any `sandbox.writable`), hard links
-  except among those, reads, writes, links and clones of credential
-  directories and rv's config directory, and the network but for the
-  gateway (and proxy) port. Seatbelt checks paths, not inodes: a hard
-  link that another process, running as you outside the cage, made
-  under one of those directories before or during the launch still lets
-  the server write the file it points at. rv does not scan for such
-  links (the workspace cage does, and mounts the workspace on its own
-  volume; caches cannot be moved to one), because whatever can plant one
-  can already write that file itself. It does not deny Mach or XPC lookups, so it
+  except among those, clones of directories outside those (the kernel
+  copies a cloned directory's whole tree while Seatbelt checks only its
+  top, so cloning `~/.config` would copy `~/.config/gh`), clones and
+  renames of a credential's ancestors that lie inside those, reads,
+  writes, links and clones of credential directories and rv's config
+  directory, and the network but for the gateway (and proxy) port. File
+  copies and file clones are not affected: `cp -c -R`, uv, Rust's
+  `std::fs::copy` and Node's `fs.cpSync` copy a tree file by file; only a
+  raw `clonefile(2)` of a directory from outside those is refused. A
+  credential that is a symlink is denied at the link and at the target it
+  resolves to when the server starts; if a process outside the cage
+  retargets the link while the server runs, the new target stays
+  readable until the server restarts. Seatbelt checks paths, not inodes:
+  a hard link that another process, running as you outside the cage,
+  made under one of those directories before or while the server runs
+  still lets the server write the file it points at. Ordinary tools make
+  such links: uv with `link-mode = "hardlink"` links a project's `.venv`
+  files to their copies in `~/.cache/uv`, and ccache with `hard_link`
+  links build outputs into its cache, so a caged server that writes its
+  cache copy changes a file in a project it cannot otherwise write. rv
+  does not scan for such links (the workspace cage does, and mounts the
+  workspace on its own volume; caches cannot be moved to one). Giving
+  each server its own cache directories instead of the shared cache roots
+  is the known way to close this; rv does not do that yet. It does not deny Mach or XPC lookups, so it
   does not stop a server asking the keychain (`securityd`, for example
   `security find-generic-password`), a password manager's local agent, or
   a provider CLI that reaches one, for the real value. rv's keychain items

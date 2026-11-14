@@ -94,5 +94,45 @@ struct MCPProbeProcargsTests {
         #expect(text.hasPrefix("ok argc=3 "), "\(text)")
         #expect(text.hasSuffix(" home=yes"), "\(text)")
     }
+
+    /// The same parse over a hand-built `KERN_PROCARGS2` buffer, so layouts
+    /// no real process produces are covered: no exec path terminator, padding
+    /// that is not NUL or runs past the buffer, and fewer than argc
+    /// arguments each fail the read, never pass for "no environment".
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        // argc 1, "/a" with no NUL.
+        ("01000000" + "2f61", "failed no exec path"),
+        // argc 1, "/a\0", padding to byte 12 holds an 'x'.
+        ("01000000" + "2f6100" + "0078000000", "failed padding"),
+        // argc 1, "/a\0", the buffer ends inside the padding.
+        ("01000000" + "2f6100" + "0000", "failed padding"),
+        // argc 2, "/a\0", padding, one argument only.
+        ("02000000" + "2f6100" + "0000000000" + "6100", "failed truncated argc=2"),
+        // argc 1, "/a\0", padding, an empty argv[0], then HOME=/x.
+        ("01000000" + "2f6100" + "0000000000" + "00" + "484f4d453d2f7800", "ok argc=1 strings=1 home=yes"),
+        // A negative argc word.
+        ("ffffffff" + "2f6100", "failed argc=-1"),
+    ])
+    func malformedBuffersFailTheRead(_ hex: String, _ expected: String) throws {
+        let probe = try mcpProbe()
+        let process = Process()
+        process.executableURL = probe
+        process.arguments = ["procargs-bytes", hex]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        // Hard bound: polls, never blocks in `waitid`; killed after 20 s.
+        let deadline = Date().addingTimeInterval(20)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            Issue.record("the procargs-bytes probe did not finish")
+            return
+        }
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(process.terminationStatus == 0, "\(text)")
+        #expect(text == expected)
+    }
 }
 #endif

@@ -233,22 +233,32 @@ public enum MCPSandbox {
         }
         let unreadable = deniedReads.map(expand) + [configDirectory]
         let writeAllow = paths(writable, denyTargets: false)
-        let linkDenies = symlinkDenies(unreadable)
+        guard let ancestors = credentialAncestors(unreadable, insideWriteRoots: writable) else {
+            return .failure(.sandbox(
+                "more than \(maximumCredentialAncestors) credential ancestors lie inside the write roots"))
+        }
         let credentialDeny = "(deny file-read* file-write* file-link file-clone "
-            + paths(unreadable, denyTargets: true) + linkDenies + ")"
-        // `file-write*` does not cover `file-link`, which `(allow default)`
-        // would otherwise allow everywhere. A hard link needs both of its
-        // ends allowed (checked live on macOS 27), so links are allowed only
-        // among the write roots: package managers link inside their caches.
-        // Linking a file the cage cannot write was already refused by
-        // `file-write*` (the kernel checks write-data on the link source);
-        // this does not depend on that. A clone is left to the read rules on
-        // its source and the write rules on its new name: it is its own
-        // copy-on-write file, so writing it never reaches the source, and
-        // Rust's `std::fs::copy` (uv, cargo) clones first and fails outright
-        // when the clone is refused. Credentials deny both. A hard link an
-        // uncaged process planted under a write root is not seen by any path
-        // rule.
+            + paths(unreadable, denyTargets: true) + symlinkDenies(unreadable) + ")"
+        // `file-write*` does not cover `file-link` or `file-clone`, which
+        // `(allow default)` would otherwise allow everywhere. A hard link
+        // needs both of its ends allowed (checked live on macOS 27), so links
+        // are allowed only among the write roots: package managers link
+        // inside their caches.
+        //
+        // A file clone needs read on its source, so a credential file is
+        // covered by the credential deny. A directory clone is checked only
+        // at its top directory, and the kernel copies every file under it,
+        // denied ones too: cloning `~/.config` would copy `~/.config/gh`. So
+        // a directory outside the write roots is never cloned. File-by-file
+        // copies and clones (`cp -c`, uv, Rust's `std::fs::copy`, Node's
+        // `fs.cpSync`) are unaffected; only a raw `clonefile(2)` of such a
+        // directory is refused. A credential ancestor inside a write root
+        // (a home under the temp directory, a target under a cache) is named
+        // one by one, refused a clone and a rename, so the credential is
+        // neither copied nor moved out from under its deny.
+        //
+        // A hard link an uncaged process planted under a write root is not
+        // seen by any path rule.
         var lines = [
             "(version 1)",
             "(allow default)",
@@ -256,17 +266,12 @@ public enum MCPSandbox {
             "(deny file-link)",
             "(allow file-write* " + writeAllow + ")",
             "(allow file-link " + writeAllow + ")",
-            credentialDeny,
+            "(deny file-clone (require-all (vnode-type DIRECTORY) (require-not (require-any " + writeAllow + "))))",
         ]
-        // A credential symlink can be retargeted at a path the profile did not
-        // name. File reads no longer fall through to (allow default). Reviewed
-        // write paths are allowed again, then the credential deny is repeated
-        // so a target under /private/tmp or a cache is not re-opened.
-        if linkDenies.isEmpty == false {
-            lines.append("(deny file-read*)")
-            lines.append("(allow file-read* file-write* " + writeAllow + ")")
-            lines.append(credentialDeny)
+        if ancestors.isEmpty == false {
+            lines.append("(deny file-clone file-write-unlink " + ancestorFilters(ancestors) + ")")
         }
+        lines.append(credentialDeny)
         // `hosts` is the stronger statement: with an allowlist the network is
         // caged to the proxy even if `network` was also set (the decoder
         // already refuses that combination; the profile must not depend on it).
@@ -1035,9 +1040,11 @@ public enum MCPSandbox {
     #endif
 
     /// Each symlink in a credential chain is denied by a regex built from the
-    /// path Seatbelt checks, and by its parent. A static regex cannot see a
-    /// retarget, so the parent is not left to `(allow default)`. Reviewed
-    /// write paths are allowed again after that deny.
+    /// path Seatbelt checks; `paths(_:denyTargets:)` denies the target the
+    /// chain resolves to at launch. Nothing else is denied: not the link's
+    /// parent (for `~/.ssh` that is the whole home, the scratch with it) and
+    /// not every read. A link an uncaged process retargets after launch
+    /// leaves its new target readable until the server restarts.
     static func symlinkDenies(_ raw: [String]) -> String {
         var seen = Set<String>()
         var filters: [String] = []
@@ -1052,15 +1059,63 @@ public enum MCPSandbox {
                         filters.append(filter)
                     }
                 }
-                let parent = URL(fileURLWithPath: link).deletingLastPathComponent().path
-                guard parent != "/" else { continue }
-                for spelling in seatbeltSpellings(parent) {
-                    let filter = "(subpath \(seatbeltString(escape(spelling), raw: false)))"
-                    if seen.insert(filter).inserted { filters.append(filter) }
-                }
             }
         }
         return filters.isEmpty ? "" : " " + filters.joined(separator: " ")
+    }
+
+    /// Credential ancestors `profile` names one by one; more refuse the profile.
+    static let maximumCredentialAncestors = 128
+
+    /// Every directory above a credential (its path, the target it resolves
+    /// to, and each link in its chain) that lies inside a write root, up to
+    /// the outermost one: renaming or cloning any of them would move or copy
+    /// the credential to a path its deny does not name. Real paths, without
+    /// repeats. Nil when there are more than `maximumCredentialAncestors`.
+    static func credentialAncestors(_ unreadable: [String], insideWriteRoots writable: [String]) -> [String]? {
+        // APFS is case-insensitive by default; folding can only add a path.
+        let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
+            .map { directorySpelling($0).lowercased() })
+        func insideWriteRoot(_ path: String) -> Bool {
+            let folded = path.lowercased()
+            return roots.contains { folded == $0 || folded.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+        }
+        var seen = Set<String>()
+        var ancestors: [String] = []
+        for path in unreadable {
+            for start in [path, deniedRealPath(path)] + symlinkChain(path) {
+                var parent = URL(fileURLWithPath: start).deletingLastPathComponent().path
+                while parent != "/", insideWriteRoot(parent) {
+                    let resolved = realPath(parent)
+                    if seen.insert(resolved).inserted {
+                        ancestors.append(resolved)
+                        if ancestors.count > maximumCredentialAncestors { return nil }
+                    }
+                    parent = URL(fileURLWithPath: parent).deletingLastPathComponent().path
+                }
+            }
+        }
+        return ancestors
+    }
+
+    /// Each ancestor exactly, as a literal in every spelling Seatbelt may
+    /// check, so files can still be made and removed inside it. Seatbelt
+    /// matches the canonical path, so a literal also holds against case
+    /// variants, `./`, `//`, a trailing slash and a symlinked spelling
+    /// (probed on macOS 27). No case-folded regex: thirty of them on
+    /// temp-directory paths kept libsandbox compiling for over 20 minutes.
+    static func ancestorFilters(_ ancestors: [String]) -> String {
+        var seen = Set<[UInt32]>()
+        var filters: [String] = []
+        for ancestor in ancestors {
+            for spelling in seatbeltSpellings(ancestor) {
+                for form in unicodeForms(spelling) {
+                    let filter = "(literal \(seatbeltString(escape(form), raw: false)))"
+                    if seen.insert(filter.unicodeScalars.map(\.value)).inserted { filters.append(filter) }
+                }
+            }
+        }
+        return filters.joined(separator: " ")
     }
 
     /// The path and every symlink it points through, without the final real
