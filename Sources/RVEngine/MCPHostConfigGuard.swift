@@ -98,20 +98,33 @@ private func foldedPath(_ path: String) -> String {
 /// python3 x.py`). The one copy that does not is a plain `cp` that provably
 /// only reads the name (`plainCopyOnlyReads`).
 func mcpHostConfigUnmodeledWrite(
+    _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext
+) -> Bool {
+    var reads = HostTextReads()
+    return mcpHostConfigUnmodeledWrite(raw, guard: guarded, context: context, reads: &reads)
+}
+
+/// `mcpHostConfigUnmodeledWrite` spending `reads`, whose counters say why
+/// carried text counted.
+func mcpHostConfigUnmodeledWrite(
     _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext,
-    reads: HostTextReads = HostTextReads()
+    reads: inout HostTextReads
 ) -> Bool {
     let launched = launchedCommandHeads(raw)
-    if launched.contains(where: { isHostMCPMutation($0, reads: reads) }) { return true }
+    for command in launched {
+        if isHostMCPMutation(command, reads: &reads) { return true }
+    }
     // Input the launcher parser stopped following may hide a host CLI.
     if launched.contains(where: \.truncated), mayNameHostMCP(raw) { return true }
+    // So may text the tokenizer splits or quotes unlike a shell
+    // (`watch "sh -c \"claude mcp add x\""`, zsh `=(…)`).
+    if hostMCPTextIsUnfollowable(raw, launched, reads: &reads) { return true }
     // Any program may run a command line another word carries (`echo
     // 'claude mcp add x' | sh`, `| at now`, `$(echo '…')`, `bash <<< '…'`,
     // `python3 -c 'os.system("…")'`). Only text on a line nothing runs is
     // read as data (`git commit -m 'add mcp install docs'`).
-    if carriesHostMCPText(launched, reads: reads, line: raw) || hostMCPTextNamesMutation(raw, reads: reads) {
-        return true
-    }
+    if carriesHostMCPText(launched, reads: &reads, line: raw) { return true }
+    if hostMCPTextNamesMutation(raw, reads: &reads) { return true }
     if launched.contains(where: hasOptionAfterOperand) { return true }
     let argvMentions = launched.reduce(0) { total, command in
         total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }
