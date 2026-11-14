@@ -213,6 +213,10 @@ public struct MCPGatewayCore {
     static let maximumChangeEvents = 64
     /// Longest progress `message` passed to the client, in UTF-8 bytes.
     static let maximumProgressMessageBytes = 512
+    /// Longest spelling of a forwarded progress `progress` or `total`.
+    static let maximumProgressNumberBytes = 32
+    /// Most bytes of an upstream's `initialize` error text that reach stderr.
+    static let maximumInitializeErrorBytes = 512
 
     /// Upstream tool names rv lists and routes. Any other name (prose,
     /// controls, separators, over 64 bytes) is neither listed nor called.
@@ -863,7 +867,8 @@ public struct MCPGatewayCore {
                     + releaseWaiting()
             }
             let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
-            let reason = MCPDisplayedText.field(scrubText(raw, for: server))
+            let reason = MCPCallRecord.bounded(
+                MCPDisplayedText.field(scrubText(raw, for: server)), Self.maximumInitializeErrorBytes)
             // The upstream's text goes to stderr only: a server's error is
             // not a channel to the client or the model.
             phases[server] = .failed("it failed to initialize")
@@ -1200,20 +1205,32 @@ public struct MCPGatewayCore {
     /// A progress notification for a call this upstream is running, rebuilt
     /// from the fields the protocol defines: the client's own token, the
     /// numbers, and a bounded, scrubbed, display-escaped `message`. Nil
-    /// (dropped) when no pending call from `server` carries the token.
+    /// (dropped) when no pending call from `server` carries the token, or
+    /// when `progress` (or a `total` that is present) is not a finite number
+    /// spelled in at most `maximumProgressNumberBytes`. The token sent on is
+    /// the one the client gave, never the upstream's copy of it.
     func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
         func runs(_ id: Int) -> Bool {
             guard case .call(_, let owner, _, _, _, _)? = pending[id] else { return false }
             return owner == server
         }
-        guard let token = params?["progressToken"],
-            progressTokens.contains(where: { $0.value == token && runs($0.key) }),
-            let done = params?["progress"], case .number = done
+        func finite(_ value: JSONValue?) -> Bool {
+            guard case .number(let spelling)? = value,
+                spelling.utf8.count <= Self.maximumProgressNumberBytes,
+                let number = Double(spelling)
+            else { return false }
+            return number.isFinite
+        }
+        guard let sent = params?["progressToken"],
+            let token = progressTokens.first(where: { $0.value == sent && runs($0.key) })?.value,
+            let done = params?["progress"], finite(done)
         else { return nil }
+        let total = params?["total"]
+        guard total == nil || finite(total) else { return nil }
         var rebuilt = JSONObject()
         rebuilt["progressToken"] = token
         rebuilt["progress"] = done
-        if let total = params?["total"], case .number = total { rebuilt["total"] = total }
+        if let total { rebuilt["total"] = total }
         if let text = params?["message"]?.stringValue {
             rebuilt["message"] = .string(MCPCallRecord.bounded(
                 MCPDisplayedText.field(scrubText(text, for: server)), Self.maximumProgressMessageBytes))

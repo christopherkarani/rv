@@ -402,6 +402,75 @@ struct MCPGatewayCoreTests {
         #expect(progress("github", ["progressToken": .int(1), "progress": .int(3)]).isEmpty)
     }
 
+    /// One `notifications/progress` from github, as the client sees it.
+    private static func progress(_ harness: inout GatewayHarness, _ params: JSONObject) -> [JSONValue] {
+        harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "method": .string("notifications/progress"), "params": .object(params),
+        ]))).toClient
+    }
+
+    /// P1: a `progress` or `total` that is not a finite number spelled in
+    /// at most 32 bytes drops the whole notification.
+    @Test func progressNumbersMustBeFiniteAndShort() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":1}}}"#)
+        #expect(call.toUpstream.count == 1)
+        let thirtyTwo = String(repeating: "1", count: MCPGatewayCore.maximumProgressNumberBytes)
+        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .number("1e999")]).isEmpty)
+        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .number(thirtyTwo + "1")]).isEmpty)
+        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .number("-1e400")]).isEmpty)
+        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .string("3")]).isEmpty)
+        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .null]).isEmpty)
+        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .number(thirtyTwo)]).count == 1)
+        let shown = Self.progress(&harness, ["progressToken": .int(1), "progress": .number("0.5"), "total": .int(1)])
+        #expect(shown.first?["params"]?["progress"] == .number("0.5"))
+        #expect(shown.first?["params"]?["total"] == .int(1))
+    }
+
+    /// P2: the token sent on is the client's own value, not the upstream's
+    /// copy that merely compares equal (object keys in another order).
+    @Test func progressEchoesTheClientsOwnToken() throws {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        _ = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":{"a":1,"b":2}}}}"#)
+        var reordered = JSONObject()
+        reordered["b"] = .int(2)
+        reordered["a"] = .int(1)
+        let shown = Self.progress(&harness, ["progressToken": .object(reordered), "progress": .int(1)])
+        let token = try #require(shown.first?["params"]?["progressToken"]?.objectValue)
+        #expect(token.keys == ["a", "b"])
+    }
+
+    /// A cancelled call, an upstream that exits, and an error reply each
+    /// clear the call's progress token: later progress for it is dropped.
+    @Test func cancelExitAndErrorReplyEachClearTheProgressToken() {
+        func started(_ token: Int) -> (GatewayHarness, Int) {
+            var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+            _ = harness.ready()
+            let call = harness.client(#"{"jsonrpc":"2.0","id":"c\#(token)","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":\#(token)}}}"#)
+            let id = call.toUpstream.first?.1["id"]?.intValue ?? -1
+            #expect(Self.progress(&harness, ["progressToken": .int(token), "progress": .int(1)]).count == 1)
+            return (harness, id)
+        }
+
+        var (cancelled, _) = started(1)
+        _ = cancelled.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"c1"}}"#)
+        #expect(cancelled.core.progressTokens.isEmpty)
+        #expect(Self.progress(&cancelled, ["progressToken": .int(1), "progress": .int(2)]).isEmpty)
+
+        var (exited, _) = started(2)
+        _ = exited.core.handle(.upstreamExited(server: "github"))
+        #expect(exited.core.progressTokens.isEmpty)
+        #expect(Self.progress(&exited, ["progressToken": .int(2), "progress": .int(2)]).isEmpty)
+
+        var (failed, id) = started(3)
+        #expect(id >= 0)
+        _ = failed.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"error":{"code":-1,"message":"no"}}"#)
+        #expect(failed.core.progressTokens.isEmpty)
+        #expect(Self.progress(&failed, ["progressToken": .int(3), "progress": .int(2)]).isEmpty)
+    }
+
     @Test func pingClientIdEscapesRightToLeftOverride() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let id = "\u{202E}" + sentence
@@ -720,6 +789,27 @@ struct MCPGatewayCoreTests {
         // N7: the upstream's text goes to stderr only; the client gets rv's.
         #expect(later.toClient.first?.compactText.contains("bad") == false)
         #expect(later.toClient.first?.compactText.contains("it failed to initialize") == true)
+    }
+
+    /// N7a: an upstream's `initialize` error text is cut to 512 bytes, after
+    /// display escaping, before it reaches stderr.
+    @Test func aLongInitializeErrorIsBoundedBeforeItIsLogged() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let started = harness.core.start().toUpstream
+        let id = started[0].1["id"] ?? .null
+        let failed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": id,
+            "error": .object(["code": .int(-1), "message": .string(String(repeating: "e", count: 100_000))]),
+        ])))
+        let logs = failed.compactMap { output -> String? in
+            if case .log(let text) = output { return text }
+            return nil
+        }
+        let prefix = "MCP server github failed to initialize: "
+        #expect(logs.count == 1)
+        let line = logs.first ?? ""
+        #expect(line.hasPrefix(prefix))
+        #expect(line.utf8.count == prefix.utf8.count + MCPGatewayCore.maximumInitializeErrorBytes)
     }
 
     @Test func initializeFailureLogEscapesTerminalControls() {
