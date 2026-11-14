@@ -65,6 +65,14 @@ public enum AuditOCSF {
             object["src_endpoint"] = ["hostname": hostName]
         case 1007:
             object["process"] = ["name": event.detail["tool"] ?? "command"]
+        case 5019:
+            // Device Config State Change: the gate itself changed. A change
+            // is neither "Enabled" nor "Disabled" as a whole, so `state` is
+            // Other with rv's own label; `status_detail` keeps a failed write
+            // apart from a bundle that failed verification.
+            object["state_id"] = 99
+            object["state"] = event.detail["change"] ?? event.detail["new"] ?? "changed"
+            if let reason = event.reason { object["status_detail"] = reason }
         case 2004:
             object["is_alert"] = true
             object["finding_info"] = [
@@ -111,6 +119,9 @@ public enum AuditOCSF {
         }
         if kind == .secretMisuse {
             return Class(uid: 2004, name: "Detection Finding", category: 2, categoryName: "Findings", activity: 1, activityName: "Create")
+        }
+        if kind == .policyChanged || kind == .policyManaged || kind == .configChanged {
+            return Class(uid: 5019, name: "Device Config State Change", category: 5, categoryName: "Discovery", activity: 1, activityName: "Log")
         }
         if kind == .egressDenied {
             return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 5, activityName: "Refuse")
