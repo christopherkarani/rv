@@ -1258,7 +1258,9 @@ public struct MCPGatewayCore {
         return .object(walked)
     }
 
-    /// Keywords whose values are data, kept byte-exact.
+    /// Keywords whose values are data, kept byte-exact: a client sends them
+    /// back verbatim, so a hiding scalar in one is an accepted residual
+    /// (`rv mcp trust` showed it escaped).
     static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples", "dependentRequired"]
     /// Keywords whose members are named subschemas (or, for
     /// `dependencies`, property-name lists); a member may be called
