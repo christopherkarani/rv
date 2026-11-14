@@ -113,10 +113,22 @@ func carriesHostMCPMutation(_ word: String, reads: HostTextReads) -> Bool {
 /// package or program; `fastmcp install`; `mcp install` given a `.py`
 /// server; an editor given `--add-mcp`. Over-reports on prose that names a
 /// host mutation, as a commit message or a grep pattern may. Linear in the
-/// pieces, which count against `reads` (past its cap: a mutation).
+/// pieces, which count against `reads` (past its cap: a mutation) unless
+/// no piece holds a stem.
 func textNamesHostMCPMutation(_ text: String, reads: HostTextReads) -> Bool {
     let pieces = textPieces(text)
     guard pieces.count > 1 else { return false }
+    // Sound early exit: every check below that can return true tests a
+    // table word (each holds a stem, `hostMCPTableWords`) by equality,
+    // prefix or containment against one of: a piece, its `commandName`, a
+    // `packageNames` name of it, or a later piece (a group word or
+    // `--add-mcp`); `install` and `.py` are only tested once a host
+    // matched. A `packageNames` name of a piece with no `%` is a substring
+    // of it, or two joined by `/`, which no stem holds; with a `%` the names
+    // are tested themselves. Decoding (`$'…'`, backslashes) happens before
+    // this text is formed, so the stems are tested on exactly the strings
+    // the checks see. So text no piece of which passes cannot match here.
+    guard pieces.contains(where: pieceMayNameHostMCP) else { return false }
     guard reads.examine(pieces: pieces.count) else { return true }
     let later = LaterPieces(pieces)
     for (index, piece) in pieces.enumerated() {
@@ -176,6 +188,14 @@ private func textPieces(_ text: String) -> [String] {
 }
 
 private let pieceCharacters: Set<Character> = ["_", "@", "/", ".", "-", "%", ":", "#", "~"]
+
+/// Whether a piece, its program name, or (with a `%`) a package name it
+/// decodes to holds a `hostMCPStems` stem.
+private func pieceMayNameHostMCP(_ piece: String) -> Bool {
+    let holdsStem = { (word: String) in hostMCPStems.contains { word.contains($0) } }
+    if holdsStem(piece) || holdsStem(commandName(piece)) { return true }
+    return piece.contains("%") && packageNames(piece).contains(where: holdsStem)
+}
 
 /// Every word the tables in this file match on, for the `hostMCPStems` check.
 func hostMCPTableWords() -> [String] {

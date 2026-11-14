@@ -6,8 +6,9 @@ import Foundation
 /// and a read past either counts as a mutation (fail closed). Text no
 /// decoding of which names a host CLI, a group or an installer
 /// (`mayNameHostMCP`) is never read, so ordinary commands spend nothing.
-/// Text scanned as program text (`textNamesHostMCPMutation`) spends pieces:
-/// at most `maxTokenPieces` in one text and `maxPieces` in all.
+/// Text scanned as program text (`textNamesHostMCPMutation`) that holds a
+/// stem spends pieces: at most `maxTokenPieces` in one text and `maxPieces`
+/// in all.
 final class HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
