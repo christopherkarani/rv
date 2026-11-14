@@ -5,8 +5,12 @@ import RVPolicy
 
 /// `rv policy check --ceiling`: read-only containment of the policy layers
 /// (or one shared file) in the owner's ceiling, with a concrete witness for
-/// each layer that exceeds it.
+/// each layer that exceeds it. Exit 0 within, 1 exceeds or indeterminate,
+/// 2 for usage or an invalid ceiling or policy file.
 struct PolicyCheck: AsyncParsableCommand {
+    static let exceedsExitCode: Int32 = 1
+    static let invalidExitCode: Int32 = 2
+
     static let configuration = CommandConfiguration(
         commandName: "check",
         abstract: "Check policy layers against the policy ceiling (read-only)."
@@ -33,9 +37,9 @@ struct PolicyCheck: AsyncParsableCommand {
             report = try PolicyCeilingRun.check(
                 home: home, workspace: workspace, file: path.map { URL(fileURLWithPath: $0) })
         } catch PolicyCeilingError.invalidFile {
-            try ctx.fail("rv policy check: the policy ceiling (ceiling.toml) is invalid\n", exitCode: 2)
+            try ctx.fail("rv policy check: the policy ceiling (ceiling.toml) is invalid\n", exitCode: Self.invalidExitCode)
         } catch {
-            try ctx.fail("rv policy check: invalid policy file\n", exitCode: 2)
+            try ctx.fail("rv policy check: invalid policy file\n", exitCode: Self.invalidExitCode)
         }
         if ctx.explicitRobot {
             do {
@@ -47,7 +51,7 @@ struct PolicyCheck: AsyncParsableCommand {
             ctx.writeStdout(report.pretty + "\n")
         }
         if report.withinCeiling == false {
-            throw ExitCode(2)
+            throw ExitCode(Self.exceedsExitCode)
         }
     }
 }
@@ -103,55 +107,89 @@ struct PolicyCeilingCommand: AsyncParsableCommand {
 /// One checked layer in `rv policy check --ceiling`.
 struct PolicyCeilingLayerResult: Equatable, Sendable, Codable {
     struct Witness: Equatable, Sendable, Codable {
+        /// The action, display-escaped. Something to check, not to run.
         var command: String
+        /// The read-only `rv explain` of `command`.
+        var check: String
         var candidateRule: String
         var candidateVerdict: String
         var ceilingRule: String
         var ceilingVerdict: String
+
+        init(_ found: PolicyContainmentWitness) {
+            command = found.command
+            check = found.checkCommand
+            candidateRule = DisplayedText.field(found.candidateRule.rawValue)
+            candidateVerdict = found.candidateVerdict.rawValue
+            ceilingRule = DisplayedText.field(found.ceilingRule.rawValue)
+            ceilingVerdict = found.ceilingVerdict.rawValue
+        }
     }
 
     /// `machine`, `repo`, or the checked file's path.
     var layer: String
-    /// `within`, `exceeds`, or `indeterminate`.
+    /// `within`, `exceeds`, `indeterminate`, or `unchecked`.
     var status: String
     var witness: Witness?
     var reason: String?
+    /// A layer `allow` the ceiling overrides. Evaluation ignores typed
+    /// allows, so this never makes the layer exceed.
+    var advisory: Witness?
 
-    init(layer: String, result: PolicyContainmentResult) {
+    init(layer: String, result: PolicyContainmentResult, advisory: PolicyContainmentResult = .contained) {
         self.layer = layer
         switch result {
         case .contained:
             status = "within"
         case .exceeds(let found):
             status = "exceeds"
-            witness = Witness(
-                command: found.command,
-                candidateRule: DisplayedText.field(found.candidateRule.rawValue),
-                candidateVerdict: found.candidateVerdict.rawValue,
-                ceilingRule: DisplayedText.field(found.ceilingRule.rawValue),
-                ceilingVerdict: found.ceilingVerdict.rawValue
-            )
+            witness = Witness(found)
         case .indeterminate(let text):
             status = "indeterminate"
             reason = DisplayedText.field(text)
         }
+        if case .exceeds(let found) = advisory {
+            self.advisory = Witness(found)
+        }
+    }
+
+    init(layer: String, ceiling: PolicyCeiling, document: PolicyDocument) {
+        self.init(layer: layer, result: ceiling.check(document), advisory: ceiling.advisory(document))
+    }
+
+    /// A layer whose policy file could not be read; nothing was checked.
+    static func unchecked(layer: String) -> PolicyCeilingLayerResult {
+        var result = PolicyCeilingLayerResult(layer: layer, result: .contained)
+        result.status = "unchecked"
+        result.reason = "invalid policy file"
+        return result
     }
 
     var pretty: [String] {
         let name = DisplayedText.field(layer)
+        var lines: [String]
         switch (status, witness) {
         case ("within", _):
-            return ["\(name): within the ceiling"]
+            lines = ["\(name): within the ceiling"]
         case ("exceeds", let witness?):
-            return [
+            lines = [
                 "\(name): exceeds the ceiling",
-                "  witness: \(witness.command)",
+                "  witness: \(witness.check)",
                 "  rule \(witness.candidateRule) says \(witness.candidateVerdict);"
                     + " ceiling rule \(witness.ceilingRule) says \(witness.ceilingVerdict)",
             ]
+        case ("unchecked", _):
+            lines = ["\(name): invalid policy file (not checked)"]
         default:
-            return ["\(name): indeterminate (\(reason ?? "unknown")); treated as exceeding"]
+            lines = ["\(name): indeterminate (\(reason ?? "unknown")); treated as exceeding"]
         }
+        if let advisory {
+            lines.append(
+                "  note: rule \(advisory.candidateRule) says allow on \(advisory.check);"
+                    + " it has no effect, ceiling rule \(advisory.ceilingRule) says \(advisory.ceilingVerdict)"
+            )
+        }
+        return lines
     }
 }
 
@@ -160,8 +198,10 @@ struct PolicyCeilingReport: Equatable, Sendable, Codable {
     var ceilingSet: Bool
     var layers: [PolicyCeilingLayerResult]
 
+    /// Advisory notes and unchecked layers do not fail the check; an
+    /// unreadable layer fails `check` itself with the invalid exit code.
     var withinCeiling: Bool {
-        layers.allSatisfy { $0.status == "within" }
+        layers.allSatisfy { $0.status == "within" || $0.status == "unchecked" }
     }
 
     var pretty: String {
@@ -183,14 +223,14 @@ enum PolicyCeilingRun {
             let document = try PolicyDocumentRun.load(file)
             return PolicyCeilingReport(
                 ceilingSet: true,
-                layers: [PolicyCeilingLayerResult(layer: file.path, result: ceiling.check(document))]
+                layers: [PolicyCeilingLayerResult(layer: file.path, ceiling: ceiling, document: document)]
             )
         }
         return PolicyCeilingReport(
             ceilingSet: true,
             layers: [
-                PolicyCeilingLayerResult(layer: "machine", result: ceiling.check(try session.loadMachineDocument())),
-                PolicyCeilingLayerResult(layer: "repo", result: ceiling.check(try session.loadRepoDocument())),
+                PolicyCeilingLayerResult(layer: "machine", ceiling: ceiling, document: try session.loadMachineDocument()),
+                PolicyCeilingLayerResult(layer: "repo", ceiling: ceiling, document: try session.loadRepoDocument()),
             ]
         )
     }
@@ -200,10 +240,11 @@ enum PolicyCeilingRun {
         var saved: Bool
     }
 
-    /// Parse, refuse a ceiling the machine layer already exceeds (every
-    /// evaluation would fail closed), confirm the owner, then replace.
-    /// The current repo layer is reported, not refused: other repos are not
-    /// visible here, and a repo above the ceiling fails closed on its own.
+    /// Parse, refuse a ceiling the machine layer already exceeds, confirm
+    /// the owner, then `replaceCeiling`, which re-checks the machine layer
+    /// under the machine policy locks before it writes. The current repo
+    /// layer is reported, never refused: an invalid repo file does not
+    /// block the owner, and evaluation overlays the ceiling on every repo.
     static func set(home: HomeDirectory, workspace: URL, file: URL) async throws -> SetOutcome {
         let ceiling: PolicyCeiling
         do {
@@ -213,25 +254,29 @@ enum PolicyCeilingRun {
         }
         let session = PolicyWorkspace(home: home, workspace: workspace)
         let machine: PolicyDocument
-        let repo: PolicyDocument
         do {
             machine = try session.loadMachineDocument()
-            repo = try session.loadRepoDocument()
         } catch {
-            return SetOutcome(lines: ["rv policy ceiling set: invalid policy file"], saved: false)
+            return SetOutcome(lines: ["rv policy ceiling set: invalid machine policy file"], saved: false)
         }
-        let machineResult = PolicyCeilingLayerResult(layer: "machine", result: ceiling.check(machine))
-        let repoResult = PolicyCeilingLayerResult(layer: "repo", result: ceiling.check(repo))
+        let machineResult = PolicyCeilingLayerResult(layer: "machine", ceiling: ceiling, document: machine)
+        let repoResult: PolicyCeilingLayerResult
+        if let repo = try? session.loadRepoDocument() {
+            repoResult = PolicyCeilingLayerResult(layer: "repo", ceiling: ceiling, document: repo)
+        } else {
+            repoResult = .unchecked(layer: "repo")
+        }
         let lines = machineResult.pretty + repoResult.pretty
+        let refused = "rv policy ceiling set: refused: the machine layer exceeds this ceiling"
         guard machineResult.status == "within" else {
-            return SetOutcome(
-                lines: lines + ["rv policy ceiling set: refused: the machine layer exceeds this ceiling"],
-                saved: false
-            )
+            return SetOutcome(lines: lines + [refused], saved: false)
         }
         try await OwnerConfirmation.require("replace the policy ceiling from \(file.path)")
         do {
-            try PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home)).save(ceiling)
+            try session.replaceCeiling(ceiling)
+        } catch let error as PolicyCeilingError {
+            // The machine layer changed between the check and the lock.
+            return SetOutcome(lines: lines + [refused, "  \(error.refusal)"], saved: false)
         } catch {
             return SetOutcome(lines: lines + ["rv policy ceiling set: write failed"], saved: false)
         }

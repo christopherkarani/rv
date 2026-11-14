@@ -70,22 +70,36 @@ public struct PolicyWorkspace: Sendable {
         )
     }
 
-    /// Merged typed rules. With a policy ceiling set, a layer that states a
-    /// weaker verdict than the ceiling on any action is refused here
-    /// (`PolicyCeilingError`), so the door fails closed as for an invalid
-    /// file; an unreadable ceiling is refused the same way.
+    /// Merged typed rules. The owner's policy ceiling goes last as a
+    /// restrict-only overlay, so its deny and ask rules hold whatever the
+    /// layers say, at O(rules) per action. An unreadable or invalid ceiling
+    /// throws `PolicyCeilingError.invalidFile`, so the door fails closed as
+    /// for an invalid `policy.toml`.
     public func loadEffectiveRules(builtin: [TypedRule] = []) throws -> [TypedRule] {
         let machine = try loadMachineDocument()
         let repo = try loadRepoDocument()
-        if let ceiling = try loadCeiling() {
-            try ceiling.requireContained(machine)
-            try ceiling.requireContained(repo)
-        }
+        let ceiling = try loadCeiling()
         return TypedRuleStore.merge(
             builtin: builtin,
             machine: machine.typedRules(origin: .machine),
-            repo: repo.typedRules(origin: .repo)
+            repo: repo.typedRules(origin: .repo),
+            ceiling: ceiling?.typedRules ?? []
         )
+    }
+
+    /// Replaces the owner's ceiling. Under the machine policy locks, the
+    /// live machine layer is re-checked against the new ceiling (a layer
+    /// that asks where it denies is refused with the witness), then
+    /// `ceiling.toml` is written and one revision line appended. Callers
+    /// confirm the device owner first, as for a machine `policy.toml` save.
+    public func replaceCeiling(_ ceiling: PolicyCeiling) throws {
+        guard let directory = machineDirectory else {
+            throw PolicyWorkspaceError.missingLayer(.machine)
+        }
+        try TypedRuleStore(baseDirectory: directory).withMachineLocked { machine in
+            try ceiling.requireContained(machine)
+            try PolicyCeilingStore(configDirectory: directory).commitLocked(ceiling, recordedAt: Date())
+        }
     }
 
     /// The owner's ceiling, or nil when none is set or there is no machine
@@ -178,11 +192,12 @@ public struct PolicyWorkspace: Sendable {
         guard save else {
             return merge(try loadWritableDocument(layer))
         }
-        // A save that would leave the layer above the ceiling writes nothing.
-        let ceiling = try loadCeiling()
+        // A save that would leave the layer asking where the ceiling denies
+        // writes nothing. The ceiling is read under the save lock, so a
+        // machine save serializes with `replaceCeiling`.
         return try updateDocument(layer: layer) { existing in
             let merged = merge(existing)
-            try ceiling?.requireContained(merged)
+            try loadCeiling()?.requireContained(merged)
             return merged
         }
     }

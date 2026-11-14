@@ -1,3 +1,4 @@
+import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
@@ -27,6 +28,17 @@ struct PolicyCeilingCommandTests {
         branch = "main"
         """
 
+    private let askForce = """
+        schema_version = 1
+
+        [[rule]]
+        id = "typed.git:ask-force-main"
+        verdict = "ask"
+        predicate = "gitPush"
+        force = "force"
+        branch = "main"
+        """
+
     @Test func subcommandsAreRegistered() {
         let children = Policy.configuration.subcommands.map { $0.configuration.commandName }
         #expect(children.contains("check"))
@@ -46,17 +58,44 @@ struct PolicyCeilingCommandTests {
     @Test func check_printsWitnessForTheLayerAboveTheCeiling() throws {
         try withCeilingContext { home, workspace in
             try writeCeiling(ceilingText, home: home)
-            let repoFile = TypedRuleStore.repoFileURL(workspace: workspace)
-            try FileManager.default.createDirectory(
-                at: repoFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try allowMain.write(to: repoFile, atomically: true, encoding: .utf8)
+            try writeRepo(askForce, workspace: workspace)
             let report = try PolicyCeilingRun.check(home: home, workspace: workspace, file: nil)
             #expect(report.withinCeiling == false)
             #expect(report.layers.map(\.status) == ["within", "exceeds"])
             #expect(report.layers[1].witness?.command == "git push --force origin main")
-            #expect(report.pretty.contains("repo: exceeds the ceiling\n  witness: git push --force origin main"))
+            #expect(report.pretty.contains(
+                "repo: exceeds the ceiling\n  witness: rv explain 'git push --force origin main'"), "\(report.pretty)")
             let robot = try RobotJSON.encode(report)
             #expect(robot.contains("git push --force origin main"))
+        }
+    }
+
+    @Test func check_layerAllowUnderCeiling_isAdvisoryNotExceeding() throws {
+        try withCeilingContext { home, workspace in
+            try writeCeiling(ceilingText, home: home)
+            try writeRepo(allowMain, workspace: workspace)
+            let report = try PolicyCeilingRun.check(home: home, workspace: workspace, file: nil)
+            #expect(report.withinCeiling)
+            #expect(report.layers.map(\.status) == ["within", "within"])
+            #expect(report.layers[1].advisory?.command == "git push --force origin main")
+            #expect(report.pretty.contains("  note: rule typed.git:allow-main says allow on"), "\(report.pretty)")
+        }
+    }
+
+    @Test func checkCommand_exitCodesSeparateExceedsFromInvalid() async throws {
+        let (home, workspace) = try makeDirs()
+        defer { cleanup(home, workspace) }
+        let out = CLIOutputCapture()
+        try await withCLIProcess(home: home, workspacePath: workspace.path, output: out) {
+            var within = try PolicyCheck.parse(["--ceiling"])
+            try await within.run()
+            try writeCeiling(ceilingText, home: home)
+            try writeRepo(askForce, workspace: workspace)
+            var exceeds = try PolicyCheck.parse(["--ceiling"])
+            await #expect(throws: ExitCode(1)) { try await exceeds.run() }
+            try writeCeiling("schema_version = 1\nbogus = 1\n", home: home)
+            var invalid = try PolicyCheck.parse(["--ceiling"])
+            await #expect(throws: ExitCode(2)) { try await invalid.run() }
         }
     }
 
@@ -64,7 +103,7 @@ struct PolicyCeilingCommandTests {
         try withCeilingContext { home, workspace in
             try writeCeiling(ceilingText, home: home)
             let share = workspace.appendingPathComponent("share.toml")
-            try allowMain.write(to: share, atomically: true, encoding: .utf8)
+            try askForce.write(to: share, atomically: true, encoding: .utf8)
             let report = try PolicyCeilingRun.check(home: home, workspace: workspace, file: share)
             #expect(report.layers.count == 1)
             #expect(report.layers[0].status == "exceeds")
@@ -88,18 +127,30 @@ struct PolicyCeilingCommandTests {
             #expect(outcome.saved)
             let store = PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
             #expect(try store.load()?.rules.count == 1)
+            #expect(FileManager.default.fileExists(atPath: store.revisionsURL.path))
+        }
+    }
+
+    @Test func set_invalidRepoFile_isReportedNotRefused() async throws {
+        try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
+            try writeRepo("schema_version = 1\nnot toml at all\n", workspace: workspace)
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try ceilingText.write(to: file, atomically: true, encoding: .utf8)
+            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            #expect(outcome.saved)
+            #expect(outcome.lines.contains("repo: invalid policy file (not checked)"), "\(outcome.lines)")
         }
     }
 
     @Test func set_refusesWhenMachineLayerAlreadyExceeds() async throws {
         try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
             try TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
-                .saveMachine(try PolicyDocumentTOML.parse(allowMain))
+                .saveMachine(try PolicyDocumentTOML.parse(askForce))
             let file = workspace.appendingPathComponent("ceiling.toml")
             try ceilingText.write(to: file, atomically: true, encoding: .utf8)
             let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
             #expect(outcome.saved == false)
-            #expect(outcome.lines.contains("  witness: git push --force origin main"))
+            #expect(outcome.lines.contains("  witness: rv explain 'git push --force origin main'"), "\(outcome.lines)")
             let store = PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
             #expect(try store.load() == nil)
         }
@@ -122,10 +173,11 @@ struct PolicyCeilingCommandTests {
             try writeCeiling(ceilingText, home: home)
             let session = PolicyWorkspace(home: home, workspace: workspace)
             do {
-                _ = try session.mergeIncoming(try PolicyDocumentTOML.parse(allowMain), layer: .repo, save: true)
+                _ = try session.mergeIncoming(try PolicyDocumentTOML.parse(askForce), layer: .repo, save: true)
                 Issue.record("expected a ceiling refusal")
             } catch let error as PolicyCeilingError {
                 #expect(error.refusal.hasPrefix("git push --force origin main exceeds the policy ceiling"))
+                #expect(error.refusal.contains("check: rv explain 'git push --force origin main'"), "\(error.refusal)")
             }
         }
     }
@@ -136,6 +188,13 @@ struct PolicyCeilingCommandTests {
         let config = RVPolicyPaths.configDirectory(home: home)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
         try text.write(to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+    }
+
+    private func writeRepo(_ text: String, workspace: URL) throws {
+        let repoFile = TypedRuleStore.repoFileURL(workspace: workspace)
+        try FileManager.default.createDirectory(
+            at: repoFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try text.write(to: repoFile, atomically: true, encoding: .utf8)
     }
 
     private func withCeilingContext(_ body: (HomeDirectory, URL) throws -> Void) throws {

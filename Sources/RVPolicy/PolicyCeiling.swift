@@ -1,3 +1,13 @@
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 
@@ -44,9 +54,12 @@ public struct PolicyCeilingEgressWitness: Sendable, Equatable {
 
 /// The owner's never-exceed bound, kept in `~/.config/rv/ceiling.toml`.
 ///
-/// Rules are `deny` or `ask` typed rules in the `policy.toml` dialect: no
-/// policy layer, shared document, or saved draft may state a weaker verdict
-/// on any action they match (`PolicyContainment`). `egress.hosts`, when
+/// Rules are `deny` or `ask` typed rules in the `policy.toml` dialect.
+/// Evaluation overlays them last, restrict-only (`TypedRuleStore.merge`),
+/// so they hold even where every layer is silent. Saves refuse a layer
+/// that asks where the ceiling denies (`check`); a layer `allow` is a no-op
+/// at evaluation, so one under the ceiling is only advisory (`advisory`).
+/// `egress.hosts`, when
 /// present, is the most egress approvals may ever add: an approval for a
 /// host outside it is refused. Absent, the ceiling does not bound egress;
 /// present and empty, it allows no egress approval at all.
@@ -69,10 +82,19 @@ public struct PolicyCeiling: Sendable, Equatable {
         rules.map { $0.typedRule(origin: .machine) }
     }
 
-    /// Containment of one layer's rules. Statements only: rules the
-    /// document leaves out never exceed.
+    /// Containment of the rules evaluation enforces (`deny`, `ask`) in one
+    /// layer. Rules the document leaves out, and its `allow` rules (a no-op
+    /// at evaluation), never exceed.
     public func check(_ document: PolicyDocument) -> PolicyContainmentResult {
-        PolicyContainment.check(candidate: document.typedRules(origin: .repo), ceiling: typedRules)
+        let enforced = document.typedRules(origin: .repo).filter { $0.verdict != .allow }
+        return PolicyContainment.check(candidate: enforced, ceiling: typedRules)
+    }
+
+    /// The layer's `allow` rules against the ceiling. An exceeding witness
+    /// here is advisory: evaluation ignores the allow and the ceiling holds.
+    public func advisory(_ document: PolicyDocument) -> PolicyContainmentResult {
+        let allows = document.typedRules(origin: .repo).filter { $0.verdict == .allow }
+        return PolicyContainment.check(candidate: allows, ceiling: typedRules)
     }
 
     /// Throws `exceeds` or `indeterminate` unless `document` is contained.
@@ -113,6 +135,7 @@ public struct PolicyCeiling: Sendable, Equatable {
         "\(witness.command) exceeds the policy ceiling: rule \(DisplayedText.field(witness.candidateRule.rawValue))"
             + " says \(witness.candidateVerdict.rawValue), ceiling rule"
             + " \(DisplayedText.field(witness.ceilingRule.rawValue)) says \(witness.ceilingVerdict.rawValue)"
+            + " (check: \(witness.checkCommand))"
     }
 }
 
@@ -202,26 +225,100 @@ public struct PolicyCeilingStore: Sendable {
         RVPolicyPaths.policyCeilingFile(inConfigDir: configDirectory)
     }
 
-    /// Nil when no ceiling is set. A file that exists but cannot be read or
-    /// parsed throws `invalidFile`: callers refuse, never skip the check.
+    public var revisionsURL: URL {
+        RVPolicyPaths.policyCeilingRevisionsFile(inConfigDir: configDirectory)
+    }
+
+    /// Nil only when `ceiling.toml` does not exist (ENOENT). Anything else
+    /// that is not a readable regular file within the size cap (a symlink,
+    /// dangling or not, a FIFO, a directory, EACCES, an oversized or
+    /// unparseable file) throws `invalidFile`: callers refuse, never skip.
     public func load() throws -> PolicyCeiling? {
-        let path = fileURL.path
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
-        guard let data = try? Data(contentsOf: fileURL), data.count <= PolicyCeiling.maximumBytes,
-            let text = String(data: data, encoding: .utf8)
+        let fd = open(fileURL.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else {
+            if errno == ENOENT { return nil }
+            throw PolicyCeilingError.invalidFile
+        }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+            info.st_size >= 0, Int(info.st_size) <= PolicyCeiling.maximumBytes
         else {
+            throw PolicyCeilingError.invalidFile
+        }
+        var bytes = [UInt8]()
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+        while true {
+            let count = read(fd, &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count >= 0 else { throw PolicyCeilingError.invalidFile }
+            if count == 0 { break }
+            bytes.append(contentsOf: buffer.prefix(count))
+            guard bytes.count <= PolicyCeiling.maximumBytes else { throw PolicyCeilingError.invalidFile }
+        }
+        guard let text = String(validating: bytes, as: UTF8.self) else {
             throw PolicyCeilingError.invalidFile
         }
         return try PolicyCeilingTOML.parse(text)
     }
 
-    /// Owner-only atomic replace. Callers confirm the device owner first,
-    /// the same gate as a machine `policy.toml` save.
-    public func save(_ ceiling: PolicyCeiling) throws {
+    /// Writes `ceiling.toml` (created 0600, then renamed over the old one)
+    /// and appends one line to `ceiling-revisions.jsonl`. Callers hold the
+    /// machine policy locks and have confirmed the owner:
+    /// `PolicyWorkspace.replaceCeiling` is the one caller.
+    func commitLocked(_ ceiling: PolicyCeiling, recordedAt: Date) throws {
         try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: configDirectory.path)
-        let data = Data(PolicyCeilingTOML.render(ceiling).utf8)
-        try data.write(to: fileURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        let text = PolicyCeilingTOML.render(ceiling)
+        let line = try Self.revisionLine(text: text, recordedAt: recordedAt)
+        let temp = fileURL.appendingPathExtension("tmp")
+        unlink(temp.path)
+        try Self.writeOwnerOnly(Array(text.utf8), to: temp, flags: O_CREAT | O_EXCL)
+        guard rename(temp.path, fileURL.path) == 0 else {
+            unlink(temp.path)
+            throw PolicyCeilingError.invalidFile
+        }
+        try Self.writeOwnerOnly(Array(line.utf8), to: revisionsURL, flags: O_CREAT | O_APPEND)
+    }
+
+    /// `{"recorded_at_ms":…,"sha256":"…","toml":"…"}` plus a newline.
+    static func revisionLine(text: String, recordedAt: Date) throws -> String {
+        struct Line: Encodable {
+            var recorded_at_ms: Int64
+            var sha256: String
+            var toml: String
+        }
+        let digest = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let record = Line(
+            recorded_at_ms: Int64((recordedAt.timeIntervalSince1970 * 1000).rounded(.down)),
+            sha256: digest,
+            toml: text
+        )
+        guard let json = String(data: try encoder.encode(record), encoding: .utf8) else {
+            throw PolicyCeilingError.invalidFile
+        }
+        return json + "\n"
+    }
+
+    /// Opens with `O_NOFOLLOW` and mode 0600, so the file is never readable
+    /// by others, not even between create and chmod.
+    private static func writeOwnerOnly(_ bytes: [UInt8], to url: URL, flags: Int32) throws {
+        let fd = open(url.path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC | flags, 0o600)
+        guard fd >= 0 else { throw PolicyCeilingError.invalidFile }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, fchmod(fd, 0o600) == 0 else {
+            throw PolicyCeilingError.invalidFile
+        }
+        var offset = 0
+        while offset < bytes.count {
+            let written = bytes[offset...].withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            if written < 0, errno == EINTR { continue }
+            guard written > 0 else { throw PolicyCeilingError.invalidFile }
+            offset += written
+        }
+        guard fsync(fd) == 0 else { throw PolicyCeilingError.invalidFile }
     }
 }

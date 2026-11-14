@@ -263,6 +263,17 @@ public struct TypedRuleStore: Sendable {
         try commitMachine { try transform(try loadMachineDocument()) }
     }
 
+    /// Runs `body` with the live machine document under both machine save
+    /// locks (log-lock then file-lock, the save order), so no machine save
+    /// interleaves. `body` must not call back into this store's saves.
+    func withMachineLocked<T>(_ body: (PolicyDocument) throws -> T) throws -> T {
+        try withFileLock(at: machineLogLockURL) {
+            try withFileLock(at: machineLockURL) {
+                try body(try loadMachineDocument())
+            }
+        }
+    }
+
     /// The one machine save path. `next` runs with both locks held, right
     /// before the write.
     ///
@@ -709,15 +720,19 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// Restrict-only: later layers may tighten, never drop an earlier deny or ask.
+    /// The owner's policy ceiling goes last, as a machine-origin layer: its
+    /// deny and ask rules hold whatever the other layers say.
     public static func merge(
         builtin: [TypedRule],
         machine: [TypedRule],
-        repo: [TypedRule]
+        repo: [TypedRule],
+        ceiling: [TypedRule] = []
     ) -> [TypedRule] {
         var merged: [TypedRule] = []
         overlay(&merged, builtin, origin: .builtin)
         overlay(&merged, machine, origin: .machine)
         overlay(&merged, repo, origin: .repo)
+        overlay(&merged, ceiling, origin: .machine)
         return merged
     }
 

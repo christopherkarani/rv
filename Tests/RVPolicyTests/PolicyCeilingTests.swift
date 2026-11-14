@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 import RVDomain
@@ -82,40 +87,70 @@ struct PolicyCeilingTests {
         #expect(closed.egressWitness(host: "github.com", port: 443) != nil)
     }
 
-    // MARK: Layers
+    // MARK: Evaluation overlay
 
-    @Test func repoLayerAboveCeiling_isRefusedAtLoadWithWitness() throws {
+    private let askForcePushLayer = """
+        schema_version = 1
+
+        [[rule]]
+        id = "typed.git:ask-force"
+        verdict = "ask"
+        predicate = "gitPush"
+        force = "force"
+        """
+
+    private static let forcePushMain = SemanticAction.git(.push(remote: "origin", refspec: "main", force: .force))
+
+    @Test func ceilingDeny_appliesWhereLayersAreSilent() throws {
         try withPolicyDirs { workspace in
             try writeCeiling(forcePushCeiling, workspace)
-            try writeRepo(allowMainLayer, workspace)
-            do {
-                _ = try workspace.loadEffectiveRules()
-                Issue.record("expected a ceiling refusal")
-            } catch PolicyCeilingError.exceeds(let witness) {
-                #expect(witness.command == "git push --force origin main")
-                #expect(witness.candidateRule.rawValue == "typed.git:allow-main")
-                #expect(witness.ceilingRule.rawValue == "typed.git:no-force-push")
-                let refusal = PolicyCeilingError.exceeds(witness).refusal
-                #expect(refusal.contains("git push --force origin main"))
+            let rules = try workspace.loadEffectiveRules()
+            #expect(rules.map(\.id.rawValue) == ["typed.git:no-force-push"])
+            let verdict = try #require(ActionPolicyEngine.typedRestriction(Self.forcePushMain, rules: rules))
+            guard case .hardDeny = verdict.decision else {
+                Issue.record("ceiling deny must deny with silent layers")
+                return
             }
         }
     }
 
-    @Test func machineLayerAboveCeiling_isRefusedAtLoad() throws {
+    @Test func repoAllowUnderCeiling_loads_andTheCeilingStillDenies() throws {
         try withPolicyDirs { workspace in
             try writeCeiling(forcePushCeiling, workspace)
-            try workspace.machineStore.saveMachine(try PolicyDocumentTOML.parse(allowMainLayer))
-            #expect(throws: PolicyCeilingError.self) { try workspace.loadEffectiveRules() }
+            try writeRepo(allowMainLayer, workspace)
+            let rules = try workspace.loadEffectiveRules()
+            let verdict = try #require(ActionPolicyEngine.typedRestriction(Self.forcePushMain, rules: rules))
+            guard case .hardDeny = verdict.decision else {
+                Issue.record("a layer allow must not lift the ceiling")
+                return
+            }
         }
     }
 
-    @Test func layersWithinCeiling_loadAsBefore() throws {
+    @Test func machineAskUnderCeilingDeny_loads_andTheDenyWins() throws {
+        try withPolicyDirs { workspace in
+            try writeCeiling(forcePushCeiling, workspace)
+            try workspace.machineStore.saveMachine(try PolicyDocumentTOML.parse(askForcePushLayer))
+            let rules = try workspace.loadEffectiveRules()
+            // Same predicate: the restrict-only overlay keeps the stronger verdict.
+            #expect(rules.count == 1)
+            #expect(rules.first?.verdict == .deny)
+            let verdict = try #require(ActionPolicyEngine.typedRestriction(Self.forcePushMain, rules: rules))
+            guard case .hardDeny = verdict.decision else {
+                Issue.record("ceiling deny must win over a layer ask")
+                return
+            }
+        }
+    }
+
+    @Test func layersKeepTheirRules_andGainTheCeiling() throws {
         try withPolicyDirs { workspace in
             try writeRepo(allowMainLayer, workspace)
             let before = try workspace.loadEffectiveRules()
             try writeCeiling("schema_version = 1\n[[rule]]\nid = \"typed.git:no-reset\"\nverdict = \"deny\"\npredicate = \"gitReset\"\n", workspace)
-            #expect(try workspace.loadEffectiveRules() == before)
-            #expect(before.count == 1)
+            let after = try workspace.loadEffectiveRules()
+            #expect(Array(after.prefix(before.count)) == before)
+            #expect(after.dropFirst(before.count).map(\.id.rawValue) == ["typed.git:no-reset"])
         }
     }
 
@@ -126,15 +161,86 @@ struct PolicyCeilingTests {
         }
     }
 
-    @Test func saveAboveCeiling_isRefusedAndWritesNothing() throws {
+    /// A cloned repo can ship a large `.rv/policy.toml`. Setting a ceiling
+    /// adds no containment enumeration per command: loading and evaluating
+    /// costs about what it costs without one. (Containment of 1024
+    /// distinct-branch push rules took ~7.9 s, the whole hook budget.)
+    @Test func largeRepoLayerUnderCeiling_costsAboutTheSameAsWithout() throws {
+        try withPolicyDirs { workspace in
+            let rules = (0..<1024).map { index in
+                """
+                [[rule]]
+                id = "typed.git:b\(index)"
+                verdict = "\(index.isMultiple(of: 2) ? "allow" : "ask")"
+                predicate = "gitPush"
+                branch = "branch-\(index)"
+                """
+            }
+            try writeRepo("schema_version = 1\n\n" + rules.joined(separator: "\n\n") + "\n", workspace)
+            let action = SemanticAction.git(.push(remote: "origin", refspec: "branch-1", force: .force))
+            let clock = ContinuousClock()
+            let without = try clock.measure {
+                let effective = try workspace.loadEffectiveRules()
+                #expect(effective.count == 1024)
+                #expect(ActionPolicyEngine.typedRestriction(action, rules: effective) != nil)
+            }
+            // The layer is contained in this ceiling, so a containment check
+            // would have to enumerate every branch class before saying so.
+            try writeCeiling(
+                "schema_version = 1\n[[rule]]\nid = \"typed.git:no-release\"\nverdict = \"deny\"\npredicate = \"gitPush\"\nbranch = \"release\"\n",
+                workspace)
+            let release = SemanticAction.git(.push(remote: "origin", refspec: "release", force: .none))
+            let with = try clock.measure {
+                let effective = try workspace.loadEffectiveRules()
+                #expect(effective.count == 1025)
+                #expect(ActionPolicyEngine.typedRestriction(action, rules: effective) != nil)
+                guard case .hardDeny? = ActionPolicyEngine.typedRestriction(release, rules: effective)?.decision else {
+                    Issue.record("the ceiling must deny a push to release")
+                    return
+                }
+            }
+            #expect(with < without * 2 + .seconds(1), "with a ceiling \(with), without \(without)")
+        }
+    }
+
+    // MARK: Saves
+
+    @Test func saveAskUnderCeilingDeny_isRefusedAndWritesNothing() throws {
+        try withPolicyDirs { workspace in
+            try writeCeiling(forcePushCeiling, workspace)
+            let incoming = try PolicyDocumentTOML.parse(askForcePushLayer)
+            do {
+                _ = try workspace.mergeIncoming(incoming, layer: .machine, save: true)
+                Issue.record("expected a ceiling refusal")
+            } catch let error as PolicyCeilingError {
+                #expect(error.refusal.hasPrefix("git push --force exceeds the policy ceiling"), "\(error.refusal)")
+                #expect(error.refusal.hasSuffix("(check: rv explain 'git push --force')"), "\(error.refusal)")
+            }
+            #expect(FileManager.default.fileExists(atPath: workspace.machineStore.machineFileURL.path) == false)
+            // A preview is never refused: it writes nothing.
+            _ = try workspace.mergeIncoming(incoming, layer: .machine, save: false)
+        }
+    }
+
+    @Test func saveAllowUnderCeiling_isAdvisoryAndSaves() throws {
         try withPolicyDirs { workspace in
             try writeCeiling(forcePushCeiling, workspace)
             let incoming = try PolicyDocumentTOML.parse(allowMainLayer)
-            #expect(throws: PolicyCeilingError.self) {
-                _ = try workspace.mergeIncoming(incoming, layer: .machine, save: true)
+            _ = try workspace.mergeIncoming(incoming, layer: .repo, save: true)
+            #expect(try workspace.session.loadRepoDocument().rules.count == 1)
+            let ceiling = try #require(try workspace.session.loadCeiling())
+            #expect(ceiling.check(incoming) == .contained)
+            guard case .exceeds(let note) = ceiling.advisory(incoming) else {
+                Issue.record("expected an advisory witness for the allow")
+                return
             }
-            #expect(FileManager.default.fileExists(atPath: workspace.machineStore.machineFileURL.path) == false)
-            // A tightening save is still accepted.
+            #expect(note.command == "git push --force origin main")
+        }
+    }
+
+    @Test func tighteningSave_isAccepted() throws {
+        try withPolicyDirs { workspace in
+            try writeCeiling(forcePushCeiling, workspace)
             let tighten = PolicyDocument(rules: [
                 PolicyDocumentRule(
                     id: RuleID(pack: .typedGit, pattern: "deny-main"),
@@ -144,21 +250,86 @@ struct PolicyCeilingTests {
             ])
             _ = try workspace.mergeIncoming(tighten, layer: .machine, save: true)
             #expect(try workspace.loadMachineDocument().rules.count == 1)
-            // A preview is never refused: it writes nothing.
-            _ = try workspace.mergeIncoming(incoming, layer: .machine, save: false)
         }
     }
 
-    @Test func storeSaveIsOwnerOnlyAndLoads() throws {
+    // MARK: Replace (owner `ceiling set`)
+
+    @Test func replaceCeiling_refusesWhenMachineAlreadyExceeds_andWritesNothing() throws {
+        try withPolicyDirs { workspace in
+            try workspace.machineStore.saveMachine(try PolicyDocumentTOML.parse(askForcePushLayer))
+            let ceiling = try PolicyCeilingTOML.parse(forcePushCeiling)
+            #expect(throws: PolicyCeilingError.self) { try workspace.session.replaceCeiling(ceiling) }
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            #expect(try store.load() == nil)
+            #expect(FileManager.default.fileExists(atPath: store.revisionsURL.path) == false)
+        }
+    }
+
+    @Test func replaceCeiling_writesOwnerOnly_andAppendsARevision() throws {
         try withPolicyDirs { workspace in
             let store = PolicyCeilingStore(configDirectory: workspace.config)
             #expect(try store.load() == nil)
             let ceiling = try PolicyCeilingTOML.parse(forcePushCeiling)
-            try store.save(ceiling)
-            #expect(try store.load() == ceiling)
+            try workspace.session.replaceCeiling(ceiling)
+            try workspace.session.replaceCeiling(PolicyCeiling())
+            #expect(try store.load() == PolicyCeiling())
             let mode = try #require(
                 FileManager.default.attributesOfItem(atPath: store.fileURL.path)[.posixPermissions] as? Int)
             #expect(mode & 0o777 == 0o600)
+            let lines = try String(contentsOf: store.revisionsURL, encoding: .utf8)
+                .split(separator: "\n")
+            #expect(lines.count == 2)
+            #expect(lines[0].contains("no-force-push"))
+            let logMode = try #require(
+                FileManager.default.attributesOfItem(atPath: store.revisionsURL.path)[.posixPermissions] as? Int)
+            #expect(logMode & 0o777 == 0o600)
+        }
+    }
+
+    // MARK: Store load
+
+    @Test func load_symlinkDirectoryFIFOAndOversize_areInvalid() throws {
+        try withPolicyDirs { workspace in
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            let target = workspace.config.appendingPathComponent("elsewhere.toml")
+            try forcePushCeiling.write(to: target, atomically: true, encoding: .utf8)
+
+            try FileManager.default.createSymbolicLink(at: store.fileURL, withDestinationURL: target)
+            #expect(throws: PolicyCeilingError.invalidFile) { try store.load() }
+            try FileManager.default.removeItem(at: store.fileURL)
+
+            // A dangling link is not "no ceiling".
+            try FileManager.default.createSymbolicLink(
+                at: store.fileURL, withDestinationURL: workspace.config.appendingPathComponent("missing"))
+            #expect(throws: PolicyCeilingError.invalidFile) { try store.load() }
+            try FileManager.default.removeItem(at: store.fileURL)
+
+            try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: false)
+            #expect(throws: PolicyCeilingError.invalidFile) { try store.load() }
+            try FileManager.default.removeItem(at: store.fileURL)
+
+            #expect(mkfifo(store.fileURL.path, 0o600) == 0)
+            #expect(throws: PolicyCeilingError.invalidFile) { try store.load() }
+            try FileManager.default.removeItem(at: store.fileURL)
+
+            let huge = "schema_version = 1\n" + String(repeating: "#", count: PolicyCeiling.maximumBytes)
+            try huge.write(to: store.fileURL, atomically: true, encoding: .utf8)
+            #expect(throws: PolicyCeilingError.invalidFile) { try store.load() }
+            try FileManager.default.removeItem(at: store.fileURL)
+
+            #expect(try store.load() == nil)
+        }
+    }
+
+    @Test func load_unreadableFile_isInvalidNotAbsent() throws {
+        guard getuid() != 0 else { return }
+        try withPolicyDirs { workspace in
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            try forcePushCeiling.write(to: store.fileURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.fileURL.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store.fileURL.path) }
+            #expect(throws: PolicyCeilingError.invalidFile) { try store.load() }
         }
     }
 

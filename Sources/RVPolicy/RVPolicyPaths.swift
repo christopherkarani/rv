@@ -63,6 +63,11 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("ceiling.toml", isDirectory: false)
     }
 
+    /// Append-only record of every `ceiling.toml` the owner set.
+    public static func policyCeilingRevisionsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("ceiling-revisions.jsonl", isDirectory: false)
+    }
+
     /// Append-only machine revision log. Every `policy.toml` save appends one
     /// JSON line; rollback appends a new head, never rewrites.
     public static func policyRevisionsFile(inConfigDir configDir: URL) -> URL {
