@@ -35,10 +35,11 @@ private func prior(_ c: Character) -> Character { Character(UnicodeScalar((c.asc
 private func shQuoted(_ line: String) -> String {
     "'" + line.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
-/// The group word (`mcp`) and, for the installer, the subcommand (`install`)
-/// a dynamic substitution cannot be resolved into — a documented residual.
+/// The installer's host word (`mcp`) given as a value rv cannot read — a
+/// documented residual: asking there would fire on every `$PM install`. A
+/// dynamic subcommand after a literal `mcp` asks.
 private func installerDynamicIsAResidual(payload: Int, position: Int, dynamic: Bool) -> Bool {
-    payload == 1 && dynamic && (position == 1 || position == 2)
+    payload == 1 && dynamic && position == 1
 }
 
 @Suite("MCP host spelling and dynamic resolution")
@@ -97,7 +98,7 @@ struct MCPHostSpellingTests {
                     // every wrapper re-runs the same unresolved words.
                     let known = installerDynamicIsAResidual(
                         payload: payloadIndex, position: position, dynamic: transform.dynamic)
-                        ? "mcp install installer: a value rv cannot read at the group or subcommand position"
+                        ? "mcp install installer: a value rv cannot read at the host position"
                         : nil
                     for wrap in wrappers {
                         cases.append(SpellCase(command: wrap(line), knownIssue: known))
@@ -105,14 +106,16 @@ struct MCPHostSpellingTests {
                 }
             }
             // Separators other than a plain space, applied across the line.
-            let joiners: [(String, String, String?)] = [
-                ("tab", "\t", nil),
-                ("spaces", "   ", nil),
-                ("$IFS", "$IFS", "a shell variable used as the word separator is not expanded"),
-                ("${IFS}", "${IFS}", "a shell variable used as the word separator is not expanded"),
-            ]
-            for (_, joiner, known) in joiners {
-                cases.append(SpellCase(command: payload.joined(separator: joiner), knownIssue: known))
+            for joiner in ["\t", "   "] {
+                cases.append(SpellCase(command: payload.joined(separator: joiner), knownIssue: nil))
+            }
+            // `$IFS` splits words where rv's tokenizer sees none (`$IFS''`
+            // ends the name without adding a word), bare and wrapped.
+            for joiner in ["$IFS ", "${IFS}", "$IFS''"] {
+                let line = payload.joined(separator: joiner)
+                for wrap in wrappers {
+                    cases.append(SpellCase(command: wrap(line), knownIssue: nil))
+                }
             }
         }
         return cases
