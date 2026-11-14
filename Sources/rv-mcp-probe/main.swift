@@ -67,12 +67,17 @@ private func catchSignals() -> Int32 {
     return 0
 }
 
-/// `KERN_PROCARGS2`: argc, the exec path, NUL padding, exactly argc
-/// NUL-terminated arguments (any of them may be empty), then whatever
-/// environment the kernel shows this caller. Fewer than argc terminated
-/// arguments is a failed read, never "no environment". Every non-empty
-/// string after the arguments counts, so nothing the kernel returned is
-/// skipped.
+/// `KERN_PROCARGS2`: argc, the exec path and its NUL, NUL padding up to the
+/// next 8-byte boundary after the argc word, exactly argc NUL-terminated
+/// arguments (any of them may be empty, `argv[0]` too), then whatever
+/// environment the kernel shows this caller. The arguments start at that
+/// boundary, never at the first non-NUL byte, which an empty `argv[0]`
+/// would push one string on. No exec path terminator, padding that is not
+/// NUL, or fewer than argc terminated arguments is a failed read, never
+/// "no environment". Every non-empty string after the arguments counts, so
+/// nothing the kernel returned is skipped. The 8-byte padding was measured
+/// on macOS 27 (exec paths of every length mod 8, `argv[0]` empty or not);
+/// were it smaller, a non-empty `argv[0]` would land in it and fail the read.
 private func procargs(_ pid: pid_t) -> String {
     var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
     var buffer = [UInt8](repeating: 0, count: 1 << 20)
@@ -84,7 +89,13 @@ private func procargs(_ pid: pid_t) -> String {
     guard argc >= 0 else { return "failed argc=\(argc)" }
     var index = 4
     while index < data.count, data[index] != 0 { index += 1 }
-    while index < data.count, data[index] == 0 { index += 1 }
+    guard index < data.count else { return "failed no exec path" }
+    let padded = index + 1
+    let arguments = 4 + (padded - 4 + 7) / 8 * 8
+    guard arguments <= data.count, data[padded..<arguments].allSatisfy({ $0 == 0 }) else {
+        return "failed padding"
+    }
+    index = arguments
     for _ in 0..<argc {
         while index < data.count, data[index] != 0 { index += 1 }
         guard index < data.count else { return "failed truncated argc=\(argc)" }
