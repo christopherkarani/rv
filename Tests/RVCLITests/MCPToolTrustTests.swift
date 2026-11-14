@@ -129,7 +129,8 @@ struct MCPToolTrustTests {
         let (fixture, store) = try Self.signedFixture()
         let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(result == "mcp.json already matches rv's signature; nothing to trust\n"
-            + "no tools of github are trusted or waiting for review; start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n")
+            + "no tools of github are trusted or waiting for review; start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again "
+            + "(a tool named with more than 64 bytes or anything but A-Z a-z 0-9 _ . - is hidden and never queued)\n")
         #expect(try store.load().get() == [:])
     }
 

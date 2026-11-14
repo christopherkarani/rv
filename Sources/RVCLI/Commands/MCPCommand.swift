@@ -752,7 +752,8 @@ enum MCPRun {
         var waitingHint: String {
             guard serversWithoutPins.isEmpty == false else { return "" }
             return "no tools of \(MCPRun.capped(serversWithoutPins.map(MCPRun.visible))) are trusted or waiting for review; "
-                + "start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n"
+                + "start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again "
+                + "(a tool named with more than 64 bytes or anything but A-Z a-z 0-9 _ . - is hidden and never queued)\n"
         }
     }
 
