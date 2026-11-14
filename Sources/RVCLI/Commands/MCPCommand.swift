@@ -1687,8 +1687,12 @@ struct MCPServe: AsyncParsableCommand {
         case .success(let result): planned = result
         }
         let configDirectory = environment.configDirectory
+        // As `MCPGatewayRuntime.run` does, but before the first stderr line
+        // below: a host that closed its stderr reader must not kill serve
+        // with SIGPIPE. Upstreams are spawned later, by `run`, as before.
+        signal(SIGPIPE, SIG_IGN)
         let log: @Sendable (String) -> Void = { message in
-            FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
+            MCPRun.writeServeStderr("rv mcp: \(message)\n")
         }
         let bindsPlaceholders = planned.contains { entry in
             guard case .placeholderBound = entry.1 else { return false }
@@ -1711,7 +1715,8 @@ struct MCPServe: AsyncParsableCommand {
                 configDirectory: configDirectory)
         }
         // Warns only, on stderr and in one event; waits at most
-        // `hostCheckTimeout` and never stops serving.
+        // `hostCheckTimeout` for the check and its audit append together,
+        // and never stops serving.
         MCPRun.checkHostsBeforeServing(
             environment, configuration: configuration, project: MCPRun.projectURL(nil), log: log)
         let core = MCPRun.serveCore(
