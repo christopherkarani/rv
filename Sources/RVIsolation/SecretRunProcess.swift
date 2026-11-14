@@ -19,10 +19,12 @@ package enum SecretRunCapability {
     }
 
     /// The one place `rv run` asks whether the gateway can bind a request to
-    /// the command's process group here. Answered by a probe of `peers`, so
-    /// a platform whose peer check gains a backend passes without an edit.
+    /// the command's process group here. The host must be able to attribute
+    /// a loopback connection at all (`GatewayPeerBinding.isVerifiable`), and
+    /// `peers` must then bind a spawned group in a probe, so a peer check
+    /// that answers for everything or for nothing is still refused.
     static func peerBindingVerifiable(_ peers: GatewayPeerCheck) -> Bool {
-        SecretRunProcess.bindsProcessGroups(peers)
+        GatewayPeerBinding.isVerifiable && SecretRunProcess.bindsProcessGroups(peers)
     }
 }
 
