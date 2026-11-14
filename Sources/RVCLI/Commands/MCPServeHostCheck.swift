@@ -75,10 +75,11 @@ extension MCPRun {
 
     /// Runs `count`, then `audit` with the event, on their own thread, and
     /// waits for both at most `timeout` in all; whatever is still running
-    /// then is left to finish on its own. A count past the deadline is one
-    /// line. Ungoverned entries are one line and one event, counts only, so
-    /// no text from a host config reaches either. A late or failed audit
-    /// write is said on `log` and changes nothing else. Never writes stdout.
+    /// then is left to finish on its own, and one line says which. A count
+    /// that finishes late may still append its event. Ungoverned entries
+    /// are one line and one event, counts only, so no text from a host
+    /// config reaches either. A late or failed audit write is said on `log`
+    /// and changes nothing else. Never writes stdout.
     static func checkHosts(
         timeout: TimeInterval = hostCheckTimeout,
         count: @escaping @Sendable () -> HostCheckCounts,
@@ -103,13 +104,15 @@ extension MCPRun {
             auditDone.signal()
         }
         guard countDone.wait(timeout: deadline) == .success, let found = counted.withLock({ $0 }) else {
-            log("could not check host MCP configs within \(shownTimeout) s; run `rv mcp check` to see them")
+            log(
+                "still checking host MCP configs after \(shownTimeout) s; serving without waiting; "
+                    + "run `rv mcp check` to see them")
             return
         }
         guard let notice = found else { return }
         log(notice.line)
         guard auditDone.wait(timeout: deadline) == .success else {
-            log("could not append the audit log within \(shownTimeout) s")
+            log("audit append still running after \(shownTimeout) s; serving without waiting")
             return
         }
         if audited.withLock({ $0 }) != true { log("could not append the audit log") }
