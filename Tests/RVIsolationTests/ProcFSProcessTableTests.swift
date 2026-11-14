@@ -79,6 +79,27 @@ final class ProcFixture {
         }
     }
 
+    /// An io_uring instance as descriptor `descriptor` of `pid` (or of its
+    /// thread `thread`), with `fdinfo` as the kernel would print it.
+    func ring(_ pid: pid_t, thread: pid_t? = nil, descriptor: Int = 9, fdinfo: String?) throws {
+        let task = thread.map { "\(pid)/task/\($0)" } ?? "\(pid)"
+        try FileManager.default.createSymbolicLink(
+            atPath: "\(root)/\(task)/fd/\(descriptor)", withDestinationPath: ProcFSParse.ringLink)
+        if let fdinfo { try write("\(task)/fdinfo/\(descriptor)", fdinfo) }
+    }
+
+    /// `fdinfo` of a ring with `files` registered, as Linux 6.18 prints it.
+    static func ringInfo(files: [String]) -> String {
+        "pos:\t0\nflags:\t02000002\nmnt_id:\t17\nino:\t1597616\nSqMask:\t0x3\nSqThread:\t-1\n"
+            + "UserFiles:\t\(files.count)\n"
+            + files.enumerated().map { "    \($0.offset): \($0.element)\n" }.joined()
+            + "UserBufs:\t0\nPollList:\nCqOverflowList:\nNAPI:\tdisabled\n"
+    }
+
+    func table(maximumReads: Int) -> ProcFSProcessTable {
+        ProcFSProcessTable(root: root, uid: uid, selfPID: selfPID, hz: 100, maximumReads: maximumReads)
+    }
+
     func write(_ relative: String, _ text: String) throws {
         let url = URL(fileURLWithPath: root + "/" + relative)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -208,12 +229,22 @@ struct ProcFSProcessTableTests {
         #expect(proc.verdict(try proc.group(200)) == .unverifiable)
     }
 
+    /// A `/proc` whose `self` is not this process belongs to another pid
+    /// namespace: its pids are other processes, so nothing is read from it,
+    /// not even one process's `stat` (a group could otherwise be captured
+    /// from, or reported gone by, a stranger's entry).
     @Test(arguments: ["101", "nothing"])
     func aProcThatIsNotThisProcesssCannotTell(link: String) throws {
         let proc = try ProcFixture(selfLink: link)
-        try proc.process(200, parent: 1, group: 200)
+        try proc.process(200, parent: 1, group: 200, exe: "/bin/sh")
         try proc.process(201, parent: 200, group: 200, sockets: [ProcFixture.clientInode])
-        #expect(proc.verdict(try proc.group(200)) == .unverifiable)
+        #expect(proc.table.lookup(200) == .unavailable)
+        #expect(proc.table.session(of: 200) == nil)
+        #expect(proc.table.executable(200) == nil)
+        #expect(ProcessGroupRecovery.capture(pid: 200, in: proc.table) == nil)
+        let group = ProcessGroupFact(pgid: try #require(ValidatedPGID(200)), startSeconds: 10, startMicroseconds: 0)
+        #expect(proc.verdict(group) == .unverifiable)
+        #expect(GatewayPeerScan.holders(proc.peer, group: group, in: proc.table) == nil)
     }
 
     @Test(arguments: ["rw,hidepid=2", "rw,hidepid=invisible", "rw,hidepid=1"])
@@ -289,6 +320,147 @@ struct ProcFSProcessTableTests {
         try proc.remove("201")
         try proc.process(201, parent: 1, group: 201, start: 5_000, sockets: [ProcFixture.clientInode])
         #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: table) == .outsider)
+    }
+
+    /// Two generations exited after the listing and both pids went to
+    /// unrelated processes, the lower one holding the socket and naming the
+    /// upper one as its parent. Its parent's pid is the one the listing
+    /// recorded, but its chain of parents no longer reaches the leader.
+    @Test func aHolderWhoseParentsNoLongerReachTheLeaderIsNotAMember() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.process(201, parent: 200, group: 200)
+        try proc.process(202, parent: 201, group: 200)
+        let group = try proc.group(200)
+        let table = proc.table
+        #expect(table.children(of: 201) == [202])
+        try proc.remove("201")
+        try proc.remove("202")
+        try proc.process(201, parent: 1, group: 201, start: 5_000)
+        try proc.process(202, parent: 201, group: 201, start: 5_001, sockets: [ProcFixture.clientInode])
+        #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: table) == .outsider)
+        #expect(GatewayPeerScan.holders(proc.peer, group: group, in: table) == nil)
+    }
+
+    /// A parent cannot have started after its child, nor a leader after its
+    /// descendant: one that did took the pid of the real parent, which exited.
+    @Test(arguments: [201, 200] as [pid_t])
+    func aParentThatStartedAfterItsChildIsAReusedPid(late: pid_t) throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, start: late == 200 ? 9_000 : 1_000)
+        try proc.process(201, parent: 200, group: 200, start: late == 201 ? 9_000 : 1_000)
+        try proc.process(202, parent: 201, group: 200, start: 2_000, sockets: [ProcFixture.clientInode])
+        let group = try proc.group(200)
+        #expect(proc.verdict(group) == .outsider)
+        #expect(GatewayPeerScan.holders(proc.peer, group: group, in: proc.table) == nil)
+    }
+
+    /// A process may move itself to another group; that is not a different
+    /// process, and the group is not membership.
+    @Test func aDescendantInAnotherGroupIsStillAMember() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.process(201, parent: 200, group: 201, session: 201, sockets: [ProcFixture.clientInode])
+        #expect(proc.verdict(try proc.group(200)) == .member)
+    }
+
+    // MARK: bounded work
+
+    /// One decision reads a bounded amount of `/proc`. Past it every read
+    /// fails, so the answer is the one an unbounded scan gives or "cannot
+    /// tell", never a different one.
+    @Test func aScanThatRunsOutOfReadsCannotTell() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.process(201, parent: 200, group: 200, sockets: Array(5_000..<5_040))
+        try proc.process(202, parent: 201, group: 200, sockets: [ProcFixture.clientInode])
+        try proc.process(300, parent: 1, group: 300, sockets: [ProcFixture.clientInode])
+        let group = try proc.group(200)
+        let outside = try proc.group(300)
+        try proc.remove("300/fd/3")
+        #expect(proc.verdict(group) == .member)
+        #expect(proc.verdict(outside) == .outsider)
+        var undecided = 0
+        for allowance in 0..<400 {
+            let member = GatewayPeerScan.verdict(proc.peer, group: group, in: proc.table(maximumReads: allowance))
+            let outsider = GatewayPeerScan.verdict(proc.peer, group: outside, in: proc.table(maximumReads: allowance))
+            #expect(member == .member || member == .unverifiable, "allowance \(allowance)")
+            #expect(outsider == .outsider || outsider == .unverifiable, "allowance \(allowance)")
+            #expect(GatewayPeerBinding.probe(pid: proc.selfPID, in: proc.table(maximumReads: allowance)) == false)
+            if member == .unverifiable { undecided += 1 }
+        }
+        #expect(undecided > 0)
+        #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: proc.table(maximumReads: 400)) == .member)
+    }
+
+    /// A descriptor table larger than what is left of the allowance is not
+    /// read at all.
+    @Test func aDescriptorTableLargerThanTheAllowanceCannotTell() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, sockets: Array(5_000..<5_600))
+        let group = try proc.group(200)
+        #expect(proc.verdict(group) == .outsider)
+        #expect(GatewayPeerScan.verdict(proc.peer, group: group, in: proc.table(maximumReads: 500)) == .unverifiable)
+        #expect(ProcFSReader.directory(proc.root + "/200/fd", limit: 100).isUnavailable)
+    }
+
+    // MARK: io_uring
+
+    /// A socket registered with an io_uring instance, its descriptor closed:
+    /// no `fd` link names it, the ring holds it, and whoever holds the ring
+    /// holds the socket.
+    @Test func aSocketHeldOnlyByARingIsHeldByTheRingsHolder() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.process(201, parent: 200, group: 200)
+        try proc.ring(201, fdinfo: ProcFixture.ringInfo(files: ["socket:[5]", "socket:[\(ProcFixture.clientInode)]"]))
+        let group = try proc.group(200)
+        #expect(proc.verdict(group) == .member)
+        #expect(GatewayPeerScan.holders(proc.peer, group: group, in: proc.table)?.map(\.pid) == [201])
+    }
+
+    @Test func aRingInAThreadsOwnTableCounts() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.thread(200, 250, sockets: [])
+        try proc.ring(200, thread: 250, fdinfo: ProcFixture.ringInfo(files: ["socket:[\(ProcFixture.clientInode)]"]))
+        #expect(proc.verdict(try proc.group(200)) == .member)
+    }
+
+    @Test func aRingWithoutTheSocketHoldsNothing() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.ring(200, fdinfo: ProcFixture.ringInfo(files: ["socket:[5]", "/tmp/socket:[\(ProcFixture.clientInode)]"]))
+        #expect(proc.verdict(try proc.group(200)) == .outsider)
+    }
+
+    /// The kernel leaves `UserFiles` out while the ring is busy; a ring can
+    /// hold another ring, whose files are not followed. Either way the ring
+    /// might hold the socket.
+    @Test(arguments: [
+        "pos:\t0\nflags:\t02000002\nmnt_id:\t17\nino:\t1597616\n",
+        "UserFiles:\tmany\n",
+        ProcFixture.ringInfo(files: ["socket:[5]", ProcFSParse.ringLink]),
+        "locked",
+    ])
+    func aRingWhoseFilesCannotBeReadLeavesTheScanUndecided(fdinfo: String) throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.ring(200, fdinfo: fdinfo)
+        if fdinfo == "locked" { proc.lock("200/fdinfo/9") }
+        let group = try proc.group(200)
+        #expect(proc.verdict(group) == .unverifiable)
+        // A holder elsewhere in the runtime still makes a member.
+        try proc.process(201, parent: 200, group: 200, sockets: [ProcFixture.clientInode])
+        #expect(proc.verdict(group) == .member)
+    }
+
+    /// The ring's descriptor closed between the listing and the read.
+    @Test func aRingClosedSinceTheListingHoldsNothing() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.ring(200, fdinfo: nil)
+        #expect(proc.verdict(try proc.group(200)) == .outsider)
     }
 
     /// The tree was read; then a user process's session could not be: it
@@ -479,4 +651,10 @@ struct ProcFSProcessTableTests {
         #expect(PidFD.signal(0, 0) == false)
     }
     #endif
+}
+
+extension ProcFSRead {
+    var isUnavailable: Bool {
+        if case .unavailable = self { true } else { false }
+    }
 }

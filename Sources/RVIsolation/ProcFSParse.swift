@@ -71,12 +71,44 @@ enum ProcFSParse {
 
     /// The inode a `/proc/<pid>/fd/<n>` link names when it is a socket.
     static func socketInode(link: String) -> UInt64? {
-        let bytes = Array(link.utf8)
+        socketInode(link: Array(link.utf8)[...])
+    }
+
+    static func socketInode(link bytes: ArraySlice<UInt8>) -> UInt64? {
         let prefix = Array("socket:[".utf8)
         guard bytes.count > prefix.count + 1, bytes.starts(with: prefix), bytes.last == UInt8(ascii: "]") else {
             return nil
         }
-        return decimal(bytes[prefix.count..<(bytes.count - 1)])
+        return decimal(bytes.dropFirst(prefix.count).dropLast())
+    }
+
+    /// What `/proc/<pid>/fd/<n>` reads as for an io_uring instance.
+    static let ringLink = "anon_inode:[io_uring]"
+
+    /// The files registered with an io_uring instance
+    /// (`IORING_REGISTER_FILES`, direct descriptors), from its
+    /// `/proc/<pid>/fdinfo/<n>`: the entries under `UserFiles:`, each
+    /// `<slot>: <name>` with the name as an `fd` link would read. A process
+    /// can register a socket and close its descriptor: the ring then holds
+    /// the socket and no `fd` link names it. Nil when there is no
+    /// `UserFiles:` line (the kernel omits it while the ring is busy) or
+    /// its count is not a number.
+    static func ringFiles(fdinfo bytes: [UInt8]) -> [ArraySlice<UInt8>]? {
+        let tag = Array("UserFiles:".utf8)
+        let lines = bytes.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+        guard let header = lines.firstIndex(where: { $0.starts(with: tag) }),
+            let count = fields(lines[header].dropFirst(tag.count)).first, (decimal(count) as UInt32?) != nil
+        else { return nil }
+        var names: [ArraySlice<UInt8>] = []
+        for line in lines[(header + 1)...] {
+            // `%5u: name`; anything else ends the list.
+            let entry = line.drop(while: { $0 == UInt8(ascii: " ") })
+            guard let colon = entry.firstIndex(of: UInt8(ascii: ":")), (decimal(entry[..<colon]) as UInt32?) != nil,
+                entry[colon...].starts(with: Array(": ".utf8))
+            else { break }
+            names.append(entry[(colon + 2)...])
+        }
+        return names
     }
 
     /// What `/proc/<pid>/exe` reads as once the file the process runs has

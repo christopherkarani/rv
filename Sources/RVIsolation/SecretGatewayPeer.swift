@@ -129,6 +129,9 @@ enum GatewayPeerScan {
             case .found(let info):
                 switch table.holdsSocket(pid, peer) {
                 case .some(true):
+                    // A candidate is a pid from a listing: the process that
+                    // holds the socket now must still be the runtime's.
+                    guard isMember(info, of: group, in: table) else { return nil }
                     found.append(GatewayHolder(
                         pid: pid, startSeconds: info.startSeconds, startMicroseconds: info.startMicroseconds))
                 case .some(false): continue
@@ -147,15 +150,15 @@ enum GatewayPeerScan {
         var search = Search(peer: peer)
         // Group membership alone proves nothing: a same-session process can
         // join any group with `POSIX_SPAWN_SETPGROUP`. A holder must be the
-        // leader, below it, or in the session it leads. Each match is
-        // re-checked after the scan, so a pid that exited and was reused
-        // mid-scan does not count.
-        if search.finds([leader], in: table, still: { _ in isLeader(leader, of: group, in: table) }) { return .member }
+        // leader, below it, or in the session it leads. The listings only
+        // name candidates: each match is proved again from fresh reads
+        // (`isMember`), so a pid that exited and was reused mid-scan, by the
+        // holder or by a process between it and the leader, does not count.
+        let member: (ProcessIdentity) -> Bool = { isMember($0, of: group, in: table) }
+        if search.finds([leader], in: table, still: member) { return .member }
         let (parents, complete) = descendants(of: leader, in: table)
         if complete == false { search.incomplete = true }
-        if search.finds(Array(parents.keys), in: table, still: { parent(of: $0, in: table) == parents[$0] }) {
-            return .member
-        }
+        if search.finds(Array(parents.keys), in: table, still: member) { return .member }
         let strict = table.failedListingIsEmptySession == false
         switch table.session(of: leader) {
         case .some(leader):
@@ -169,7 +172,7 @@ enum GatewayPeerScan {
                 case .none: if strict { search.incomplete = true }
                 }
             }
-            if search.finds(session, in: table, still: { table.session(of: $0) == leader }) { return .member }
+            if search.finds(session, in: table, still: member) { return .member }
         case .some: break
         case .none: if strict { search.incomplete = true }
         }
@@ -189,16 +192,80 @@ enum GatewayPeerScan {
         var scanned: Set<pid_t> = []
         var incomplete = false
 
-        mutating func finds(_ pids: [pid_t], in table: some ProcessTable, still member: (pid_t) -> Bool) -> Bool {
+        /// Whether one of `pids` holds the peer's socket and, read again
+        /// after its descriptors were, is still `member`. A holder that is
+        /// not is some other process now: it does not count either way.
+        mutating func finds(
+            _ pids: [pid_t], in table: some ProcessTable, still member: (ProcessIdentity) -> Bool
+        ) -> Bool {
             for pid in pids where scanned.insert(pid).inserted {
+                // Before the descriptors, so `member` can tell a pid that
+                // changed hands while they were read.
+                let seen = table.lookup(pid)
                 switch table.holdsSocket(pid, peer) {
-                case .some(true): if member(pid) { return true }
+                case .some(true):
+                    guard case .found(let process) = seen else {
+                        incomplete = true
+                        continue
+                    }
+                    if member(process) { return true }
                 case .some(false): continue
                 case .none: incomplete = true
                 }
             }
             return false
         }
+    }
+
+    /// Whether `process`, as it was read before its descriptors were, is
+    /// one of the runtime's processes now: its leader, below its leader, or
+    /// in the session its leader leads. Every fact is read afresh; nothing
+    /// from an earlier listing is trusted.
+    private static func isMember(
+        _ process: ProcessIdentity, of group: ProcessGroupFact, in table: some ProcessTable
+    ) -> Bool {
+        let leader = group.pgid.rawValue
+        let pid = pid_t(bitPattern: process.pid)
+        if pid == leader { return isLeader(leader, of: group, in: table) }
+        if descends(process, from: group, in: table) { return true }
+        return table.session(of: leader) == leader && table.session(of: pid) == leader
+            && unchanged(process, in: table) && isLeader(leader, of: group, in: table)
+    }
+
+    /// Whether `process` is still the same process with the same parent.
+    /// Its group is not compared: a process may move itself (`setpgid`), and
+    /// the group is not membership.
+    private static func unchanged(_ process: ProcessIdentity, in table: some ProcessTable) -> Bool {
+        guard case .found(let now) = table.lookup(pid_t(bitPattern: process.pid)) else { return false }
+        return now.pid == process.pid && now.parent == process.parent
+            && now.startSeconds == process.startSeconds && now.startMicroseconds == process.startMicroseconds
+    }
+
+    /// Whether the chain of parents from `process` reaches the runtime's
+    /// leader. Each link is read child first, then parent; once the leader
+    /// is reached (and is still the recorded leader) every process on the
+    /// way is read again and must be unchanged. A process's parent changes
+    /// only when that parent exits, and never back to the same pid, so an
+    /// unchanged child proves its parent was alive, and was itself, for
+    /// every read in between. A parent that started after its child is a
+    /// reused pid.
+    private static func descends(
+        _ process: ProcessIdentity, from group: ProcessGroupFact, in table: some ProcessTable
+    ) -> Bool {
+        let leader = group.pgid.rawValue
+        var walked = [process]
+        while let last = walked.last, pid_t(bitPattern: last.parent) != leader {
+            guard last.parent > 1, walked.count < maximumDescendants,
+                case .found(let parent) = table.lookup(pid_t(bitPattern: last.parent)),
+                (parent.startSeconds, parent.startMicroseconds) <= (last.startSeconds, last.startMicroseconds)
+            else { return false }
+            walked.append(parent)
+        }
+        guard isLeader(leader, of: group, in: table), let top = walked.last,
+            (group.startSeconds, group.startMicroseconds)
+                <= (Int64(clamping: top.startSeconds), Int64(clamping: top.startMicroseconds))
+        else { return false }
+        return walked.allSatisfy { unchanged($0, in: table) }
     }
 
     /// Child to parent for every live descendant of `root`; false when the
@@ -217,10 +284,6 @@ enum GatewayPeerScan {
         return (parents, true)
     }
 
-    private static func parent(of pid: pid_t, in table: some ProcessTable) -> pid_t? {
-        guard case .found(let info) = table.lookup(pid) else { return nil }
-        return pid_t(info.parent)
-    }
 }
 
 /// Whether the secrets gateway can bind a connection to a runtime on this

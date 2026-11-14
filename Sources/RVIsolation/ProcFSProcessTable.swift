@@ -49,7 +49,8 @@ enum ProcFSReader {
         return .value(target)
     }
 
-    static func directory(_ path: String) -> ProcFSRead<[String]> {
+    /// The entries of `path`; `unavailable` once there are more than `limit`.
+    static func directory(_ path: String, limit: Int = .max) -> ProcFSRead<[String]> {
         guard let stream = opendir(path) else { return failure(errno) }
         defer { closedir(stream) }
         var names: [String] = []
@@ -61,7 +62,10 @@ enum ProcFSReader {
                     String(cString: $0)
                 }
             }
-            if name != ".", name != ".." { names.append(name) }
+            if name != ".", name != ".." {
+                guard names.count < limit else { return .unavailable }
+                names.append(name)
+            }
         }
     }
 
@@ -92,24 +96,44 @@ enum ProcFSReader {
 /// looked at is skipped. A zombie is gone (`lookup` says `absent`), as on
 /// macOS, unless other threads of it still run.
 ///
+/// A socket registered with an io_uring instance is held by the ring, not
+/// by a descriptor: a process holding the ring holds the socket, read from
+/// the ring's `fdinfo` (`ProcFSParse.ringFiles`).
+///
 /// One table serves one decision: it caches the process listing and the
-/// socket inode, which are then as old as that decision.
+/// socket inode, which are then as old as that decision. Its work is
+/// bounded: it makes at most `maximumReads` reads (files, links and
+/// directory entries), and every read past that is `unavailable`, so a
+/// host with more processes, threads or descriptors than one decision can
+/// look at is a decision that cannot tell.
 final class ProcFSProcessTable: ProcessTable {
+    /// A descriptor scan is threads times descriptors per process; a listing
+    /// is one read per process on the host. A million reads is about a
+    /// second of `/proc`.
+    static let maximumReads = 1 << 20
+
     let root: String
     let uid: uid_t
     let selfPID: pid_t
     /// `sysconf(_SC_CLK_TCK)`; nil makes every lookup `unavailable`.
     let hz: UInt64?
 
-    private lazy var visible: Bool = seesEveryProcess()
+    /// Reads left for this decision.
+    private var reads: Int
+    private lazy var own: Bool = isOwnProc()
+    private lazy var visible: Bool = own && hidesNoProcess()
     private lazy var parents: [pid_t: [pid_t]]? = listChildren()
     private var resolved: (peer: GatewayPeer, inode: UInt64?)?
 
-    init(root: String = "/proc", uid: uid_t = getuid(), selfPID: pid_t = getpid(), hz: UInt64? = clockTicks()) {
+    init(
+        root: String = "/proc", uid: uid_t = getuid(), selfPID: pid_t = getpid(), hz: UInt64? = clockTicks(),
+        maximumReads: Int = ProcFSProcessTable.maximumReads
+    ) {
         self.root = root
         self.uid = uid
         self.selfPID = selfPID
         self.hz = hz
+        reads = maximumReads
     }
 
     var failedListingIsEmptySession: Bool { false }
@@ -120,7 +144,8 @@ final class ProcFSProcessTable: ProcessTable {
     }
 
     func lookup(_ pid: pid_t) -> ProcessLookup {
-        guard pid > 0, let hz else { return .unavailable }
+        // Pids under a `/proc` of another pid namespace name other processes.
+        guard pid > 0, let hz, own else { return .unavailable }
         switch readStat(pid) {
         case .absent: return .absent
         case .unavailable: return .unavailable
@@ -129,7 +154,7 @@ final class ProcFSProcessTable: ProcessTable {
                 // Linux shows a process whose main thread exited as a zombie
                 // while its other threads run: alive while `task` lists more
                 // than the main thread.
-                switch ProcFSReader.directory("\(root)/\(pid)/task") {
+                switch directory("\(root)/\(pid)/task") {
                 case .absent: return .absent
                 case .unavailable: return .unavailable
                 case .value(let threads): if threads.count <= 1 { return .absent }
@@ -145,7 +170,7 @@ final class ProcFSProcessTable: ProcessTable {
     }
 
     func session(of pid: pid_t) -> pid_t? {
-        guard pid > 0, case .value(let stat) = readStat(pid), stat.pid == UInt32(pid) else { return nil }
+        guard pid > 0, own, case .value(let stat) = readStat(pid), stat.pid == UInt32(pid) else { return nil }
         return pid_t(bitPattern: stat.session)
     }
 
@@ -165,7 +190,7 @@ final class ProcFSProcessTable: ProcessTable {
             case .unavailable: return nil
             case .found: break
             }
-            switch ProcFSReader.file("\(root)/\(pid)/status") {
+            switch file("\(root)/\(pid)/status") {
             case .absent: continue
             case .unavailable: return nil
             case .value(let bytes):
@@ -183,11 +208,11 @@ final class ProcFSProcessTable: ProcessTable {
         // The process's table, then each thread's: a thread that unshared its
         // table (`unshare(CLONE_FILES)`) holds what only it has, and a process
         // whose main thread exited keeps its descriptors in the others.
-        guard var holds = holds(inode, in: "\(root)/\(pid)/fd") else { return nil }
+        guard var holds = holds(inode, in: "\(root)/\(pid)") else { return nil }
         if holds == false {
-            guard case .value(let threads) = ProcFSReader.directory("\(root)/\(pid)/task") else { return nil }
+            guard case .value(let threads) = directory("\(root)/\(pid)/task") else { return nil }
             for thread in threads where thread != String(pid) {
-                guard let held = self.holds(inode, in: "\(root)/\(pid)/task/\(thread)/fd") else { return nil }
+                guard let held = self.holds(inode, in: "\(root)/\(pid)/task/\(thread)") else { return nil }
                 if held {
                     holds = true
                     break
@@ -200,32 +225,56 @@ final class ProcFSProcessTable: ProcessTable {
         return holds
     }
 
-    /// Whether a link in `descriptors` names socket `inode`; nil when the
-    /// table could not be read (a thread or process gone mid-scan included).
-    private func holds(_ inode: UInt64, in descriptors: String) -> Bool? {
-        guard case .value(let names) = ProcFSReader.directory(descriptors) else { return nil }
+    /// Whether the descriptor table under `task` (a process's or a thread's
+    /// directory) holds socket `inode`: an `fd` link names it, or an
+    /// io_uring instance in the table has it registered. Nil when the table
+    /// or a ring could not be read (a thread or process gone mid-scan
+    /// included).
+    private func holds(_ inode: UInt64, in task: String) -> Bool? {
+        guard case .value(let names) = directory(task + "/fd") else { return nil }
         for name in names {
-            switch ProcFSReader.link(descriptors + "/" + name) {
-            case .value(let target): if ProcFSParse.socketInode(link: target) == inode { return true }
+            switch link("\(task)/fd/\(name)") {
             case .absent: continue  // closed since the listing
             case .unavailable: return nil
+            case .value(let target):
+                if ProcFSParse.socketInode(link: target) == inode { return true }
+                guard target == ProcFSParse.ringLink else { continue }
+                switch ringHolds(inode, fdinfo: "\(task)/fdinfo/\(name)") {
+                case .some(true): return true
+                case .some(false): continue
+                case .none: return nil
+                }
             }
         }
         return false
+    }
+
+    /// Whether the io_uring instance described by `fdinfo` has socket
+    /// `inode` registered. Nil when its files cannot be read, or one of them
+    /// is another ring (whose own files this does not follow).
+    private func ringHolds(_ inode: UInt64, fdinfo: String) -> Bool? {
+        switch file(fdinfo) {
+        case .absent: return false  // closed since the listing
+        case .unavailable: return nil
+        case .value(let bytes):
+            guard let files = ProcFSParse.ringFiles(fdinfo: bytes) else { return nil }
+            if files.contains(where: { ProcFSParse.socketInode(link: $0) == inode }) { return true }
+            return files.contains { Array($0) == Array(ProcFSParse.ringLink.utf8) } ? nil : false
+        }
     }
 
     func executable(_ pid: pid_t) -> ProcessExecutable? {
         guard case .found(let before) = lookup(pid) else { return nil }
         let link = "\(root)/\(pid)/exe"
         // `stat` follows the link to the file the process runs, deleted or not.
-        guard case .value(let path) = ProcFSReader.link(link), let running = GatewayBinaryPin.identity(link),
+        guard case .value(let path) = self.link(link), let running = GatewayBinaryPin.identity(link),
             case .found(let after) = lookup(pid), after == before
         else { return nil }
         return .file(path: path, running: running)
     }
 
     private func readStat(_ pid: pid_t) -> ProcFSRead<ProcFSParse.Stat> {
-        switch ProcFSReader.file("\(root)/\(pid)/stat") {
+        switch file("\(root)/\(pid)/stat") {
         case .absent: return .absent
         case .unavailable: return .unavailable
         case .value(let bytes): return ProcFSParse.stat(bytes).map { .value($0) } ?? .unavailable
@@ -235,7 +284,7 @@ final class ProcFSProcessTable: ProcessTable {
     /// Every pid under `root`, or nil when `root` is not a `/proc` that shows
     /// this process and every other.
     private func processes() -> [pid_t]? {
-        guard visible, case .value(let names) = ProcFSReader.directory(root) else { return nil }
+        guard visible, case .value(let names) = directory(root) else { return nil }
         return names.compactMap { name in
             guard name.utf8.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }),
                 let pid = pid_t(name), pid > 0
@@ -257,13 +306,42 @@ final class ProcFSProcessTable: ProcessTable {
         return map
     }
 
-    /// `self` must be this process (a `/proc` of another pid namespace is
-    /// not), and the mount must not hide processes.
-    private func seesEveryProcess() -> Bool {
-        guard case .value(let me) = ProcFSReader.link("\(root)/self"), me == String(selfPID),
-            case .value(let mounts) = ProcFSReader.file("\(root)/self/mountinfo")
-        else { return false }
+    /// `self` must be this process: a `/proc` of another pid namespace
+    /// numbers processes differently, so nothing read from it is about the
+    /// pids this process knows.
+    private func isOwnProc() -> Bool {
+        guard case .value(let me) = link("\(root)/self") else { return false }
+        return me == String(selfPID)
+    }
+
+    /// The mount must not hide processes: then a listing is not every process.
+    private func hidesNoProcess() -> Bool {
+        guard case .value(let mounts) = file("\(root)/self/mountinfo") else { return false }
         return ProcFSParse.hidesProcesses(mountinfo: mounts, mountPoint: root) == false
+    }
+
+    // MARK: - Bounded reads
+
+    /// Takes `count` reads from this decision's allowance; false once it is spent.
+    private func spend(_ count: Int = 1) -> Bool {
+        reads -= count
+        return reads >= 0
+    }
+
+    private func file(_ path: String) -> ProcFSRead<[UInt8]> {
+        spend() ? ProcFSReader.file(path) : .unavailable
+    }
+
+    private func link(_ path: String) -> ProcFSRead<String> {
+        spend() ? ProcFSReader.link(path) : .unavailable
+    }
+
+    /// One read for the directory and one for each entry.
+    private func directory(_ path: String) -> ProcFSRead<[String]> {
+        guard spend() else { return .unavailable }
+        let listed = ProcFSReader.directory(path, limit: reads)
+        if case .value(let names) = listed { _ = spend(names.count) }
+        return listed
     }
 
     private func socketInode(_ peer: GatewayPeer) -> UInt64? {
@@ -274,11 +352,11 @@ final class ProcFSProcessTable: ProcessTable {
     }
 
     private func readSocketInode(_ peer: GatewayPeer) -> UInt64? {
-        guard visible, case .value(let tcp) = ProcFSReader.file("\(root)/self/net/tcp"),
+        guard visible, case .value(let tcp) = file("\(root)/self/net/tcp"),
             let rows = ProcFSParse.sockets(tcp)
         else { return nil }
         var rows6: [ProcFSParse.SocketRow] = []
-        switch ProcFSReader.file("\(root)/self/net/tcp6") {
+        switch file("\(root)/self/net/tcp6") {
         case .absent: break  // IPv6 disabled
         case .unavailable: return nil
         case .value(let bytes):
