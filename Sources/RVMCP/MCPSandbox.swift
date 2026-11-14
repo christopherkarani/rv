@@ -1006,6 +1006,9 @@ public enum MCPSandbox {
     ) -> UnsafeMutableRawPointer?
     private typealias FreeProfile = @convention(c) (UnsafeMutableRawPointer) -> Void
 
+    /// Two C function pointers, set once when libsandbox is loaded and never
+    /// changed; `@convention(c)` types are not Sendable only because the
+    /// compiler cannot see that. Each call gets its own buffers.
     private struct ProfileCompiler: @unchecked Sendable {
         let compile: CompileProfile
         let free: FreeProfile
@@ -1022,10 +1025,53 @@ public enum MCPSandbox {
             compile: unsafeBitCast(compile, to: CompileProfile.self), free: unsafeBitCast(free, to: FreeProfile.self))
     }()
 
+    /// The largest profile rv compiles. libsandbox recurses per filter: on a
+    /// 16 MiB stack a 256 KB profile of distinct filters compiles in about
+    /// 0.1 s, and 384 KB is refused as too large (measured, macOS 27). An
+    /// everyday profile is about 24 KB.
+    static let maximumProfileBytes = 256 * 1024
+
+    /// The compile's own stack. A 128 KB profile of distinct filters
+    /// overflowed a 512 KiB thread (SIGBUS in `expand_logical_conditions`),
+    /// the stack `rv mcp serve` and Swift Testing run synchronous code on.
+    static let profileCompileStackBytes = 16 << 20
+
+    /// How long a compile may take before the profile is refused. Round 12
+    /// measured a profile shape that compiled for over 20 minutes.
+    static let profileCompileSeconds = 60
+
+    /// Each compile's answer, by its key, until the caller takes it. A
+    /// compile that outlived its caller (and so refused its server) leaves
+    /// its one entry behind.
+    private static let compileOutcomes = Mutex<[UUID: String?]>([:])
+
     /// The compiler's first error line for `profile`, or nil when it
-    /// compiles. Nothing is applied or launched.
+    /// compiles. Nothing is applied or launched. It runs on a thread of its
+    /// own with `profileCompileStackBytes`, never on the caller's stack, and
+    /// a profile over `maximumProfileBytes` or a compile that does not
+    /// return in `profileCompileSeconds` is an error.
     static func profileCompileError(_ profile: String) -> String? {
+        let size = profile.utf8.count
+        if size > maximumProfileBytes {
+            return "the profile is \(size) bytes, more than the \(maximumProfileBytes) rv compiles"
+        }
         guard let compiler = profileCompiler else { return nil }
+        let key = UUID()
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            let error = compile(profile, with: compiler)
+            compileOutcomes.withLock { _ = $0.updateValue(error, forKey: key) }
+            done.signal()
+        }
+        thread.stackSize = profileCompileStackBytes
+        thread.start()
+        guard done.wait(timeout: .now() + .seconds(profileCompileSeconds)) == .success,
+            let error = compileOutcomes.withLock({ $0.removeValue(forKey: key) })
+        else { return "the profile did not compile within \(profileCompileSeconds) seconds" }
+        return error
+    }
+
+    private static func compile(_ profile: String, with compiler: ProfileCompiler) -> String? {
         var error: UnsafeMutablePointer<CChar>?
         if let compiled = profile.withCString({ compiler.compile($0, nil, &error) }) {
             compiler.free(compiled)
@@ -1067,11 +1113,20 @@ public enum MCPSandbox {
     /// Credential ancestors `profile` names one by one; more refuse the profile.
     static let maximumCredentialAncestors = 128
 
-    /// Every directory above a credential (its path, the target it resolves
-    /// to, and each link in its chain) that lies inside a write root, up to
-    /// the outermost one: renaming or cloning any of them would move or copy
-    /// the credential to a path its deny does not name. Real paths, without
-    /// repeats. Nil when there are more than `maximumCredentialAncestors`.
+    /// Paths `credentialAncestors` walks up from; more refuse the profile.
+    static let maximumCredentialAncestorWalks = 1024
+
+    /// Every directory above a credential that lies inside a write root, up
+    /// to the outermost one: renaming, unlinking or cloning any of them would
+    /// move or copy the credential to a path its deny does not name. The
+    /// walk starts at the credential's path, the target it resolves to, each
+    /// link in its chain and that link's target, and the target of every
+    /// symlinked directory it passes. Each directory is named twice: where it
+    /// resolves, and as the link itself (its parent resolved, its own name
+    /// not followed), which is the path an unlink or rename of a symlinked
+    /// directory is checked against. Without repeats. Nil, never a shorter
+    /// list, past `maximumCredentialAncestors` or
+    /// `maximumCredentialAncestorWalks`.
     static func credentialAncestors(_ unreadable: [String], insideWriteRoots writable: [String]) -> [String]? {
         // APFS is case-insensitive by default; folding can only add a path.
         let roots = Set(writable.flatMap { [$0, realPath($0)] }.flatMap(seatbeltSpellings)
@@ -1082,28 +1137,71 @@ public enum MCPSandbox {
         }
         var seen = Set<String>()
         var ancestors: [String] = []
+        func add(_ ancestor: String) -> Bool {
+            guard seen.insert(ancestor).inserted else { return true }
+            ancestors.append(ancestor)
+            return ancestors.count <= maximumCredentialAncestors
+        }
+        var pending: [String] = []
         for path in unreadable {
-            for start in [path, deniedRealPath(path)] + symlinkChain(path) {
-                var parent = URL(fileURLWithPath: start).deletingLastPathComponent().path
-                while parent != "/", insideWriteRoot(parent) {
-                    let resolved = realPath(parent)
-                    if seen.insert(resolved).inserted {
-                        ancestors.append(resolved)
-                        if ancestors.count > maximumCredentialAncestors { return nil }
-                    }
-                    parent = URL(fileURLWithPath: parent).deletingLastPathComponent().path
+            pending += [path, deniedRealPath(path)]
+            for link in symlinkChain(path) {
+                pending.append(link)
+                if let target = absoluteLinkTarget(link) { pending.append(target) }
+            }
+        }
+        var walked = Set<String>()
+        var next = 0
+        while next < pending.count {
+            let start = pending[next]
+            next += 1
+            guard walked.insert(start).inserted else { continue }
+            if walked.count > maximumCredentialAncestorWalks { return nil }
+            // No `.` or `..` is left, so each step drops one component and
+            // the walk ends at `/`. (`URL` would append `..` to a `..`.)
+            var parent = parentDirectory(withoutDotComponents(start))
+            while parent != "/", insideWriteRoot(parent) {
+                let above = parentDirectory(parent)
+                let resolvedAbove = realPath(above)
+                let name = parent.split(separator: "/").last.map(String.init) ?? ""
+                let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
+                guard add(realPath(parent)), add(itself) else { return nil }
+                var info = stat()
+                if lstat(parent, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK, let target = absoluteLinkTarget(parent) {
+                    pending.append(target)
                 }
+                parent = above
             }
         }
         return ancestors
     }
 
+    /// `path` with its `.` and `..` taken as `open` takes them: a `..` goes
+    /// to the parent of where the path so far resolves, not to the lexical
+    /// parent, which a symlink would make a different directory.
+    static func withoutDotComponents(_ path: String) -> String {
+        var current = "/"
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." {
+                current = parentDirectory(realPath(current))
+                continue
+            }
+            current = current == "/" ? "/" + part : current + "/" + part
+        }
+        return current
+    }
+
     /// Each ancestor exactly, as a literal in every spelling Seatbelt may
     /// check, so files can still be made and removed inside it. Seatbelt
     /// matches the canonical path, so a literal also holds against case
-    /// variants, `./`, `//`, a trailing slash and a symlinked spelling
-    /// (probed on macOS 27). No case-folded regex: thirty of them on
-    /// temp-directory paths kept libsandbox compiling for over 20 minutes.
+    /// variants, `./`, `//`, a trailing slash and a spelling through a
+    /// symlinked parent (probed on macOS 27). It does not hold when the
+    /// ancestor IS the link: an unlink or rename of a symlinked directory is
+    /// checked at the link's own path, not where it resolves, which is why
+    /// `credentialAncestors` names that path too. No case-folded regex:
+    /// thirty of them on temp-directory paths kept libsandbox compiling for
+    /// over 20 minutes.
     static func ancestorFilters(_ ancestors: [String]) -> String {
         var seen = Set<[UInt32]>()
         var filters: [String] = []

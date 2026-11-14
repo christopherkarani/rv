@@ -17,25 +17,54 @@ struct MCPCageCredentialLiveTests {
         sys.exit(0 if l.clonefile(sys.argv[1].encode(),sys.argv[2].encode(),0)==0 else 1)' "$1" "$2"; }
         """
 
+    /// `rename(2)` and `renamex_np(RENAME_SWAP)` from Python: `mv` onto a
+    /// symlink to a directory moves into that directory instead.
+    static let renameFunctions = """
+        replace() { /usr/bin/python3 -I -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null; }
+        swap() { /usr/bin/python3 -I -c 'import ctypes,sys; l=ctypes.CDLL(None,use_errno=True); \
+        sys.exit(0 if l.renamex_np(sys.argv[1].encode(),sys.argv[2].encode(),2)==0 else 1)' "$1" "$2"; }
+        """
+
     /// Runs `script` under `profile`, polled, never blocked in `waitid`;
-    /// killed after 20 s. Nil when it did not finish.
+    /// killed after 20 s. Its output is read while it runs, so a full pipe
+    /// cannot stall it, and without waiting for end of file: a child another
+    /// test spawns meanwhile can inherit the pipe's write end and hold it
+    /// open. Nil when it did not finish.
     private func caged(_ profile: String, _ script: String, _ arguments: [String], in directory: String) throws -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
-        process.arguments = ["-p", profile, "/bin/sh", "-c", Self.cloneFunction + "\n" + script, "sh"] + arguments
+        process.arguments = ["-p", profile, "/bin/sh", "-c",
+            Self.cloneFunction + "\n" + Self.renameFunctions + "\n" + script, "sh"] + arguments
         process.environment = ["PATH": "/usr/bin:/bin"]
         process.currentDirectoryURL = URL(fileURLWithPath: directory)
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        let reader = pipe.fileHandleForReading.fileDescriptor
+        try #require(fcntl(reader, F_SETFL, fcntl(reader, F_GETFL) | O_NONBLOCK) == 0)
         try process.run()
+        var output = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        func drain() {
+            while true {
+                let count = read(reader, &buffer, buffer.count)
+                guard count > 0 else { return }
+                output.append(contentsOf: buffer[0..<count])
+            }
+        }
         let deadline = Date().addingTimeInterval(20)
-        while process.isRunning, Date() < deadline { usleep(20_000) }
+        while process.isRunning, Date() < deadline {
+            drain()
+            usleep(20_000)
+        }
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
             return nil
         }
-        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        // The script ran its commands one after another, so everything it
+        // wrote is in the pipe once it has exited.
+        drain()
+        return String(decoding: output, as: UTF8.self)
     }
 
     /// A credential under an ancestor outside every write root: cloning the
@@ -136,6 +165,56 @@ struct MCPCageCredentialLiveTests {
         #expect(output.contains("RENAME_ANCESTOR_OK") == false, "\(output)")
         #expect(output.contains("CLONE_HOME_OK") == false, "\(output)")
         #expect(output.contains("SCRATCH_OK"), "\(output)")
+        #expect(FileManager.default.fileExists(atPath: keys.appendingPathComponent("credentials").path))
+    }
+
+    /// `~/.aws` → `x/aws`, and `x` itself a symlink to `y`, all under the
+    /// temp directory (a write root). The server starts and cannot read the
+    /// secret; it cannot remove, rename, replace or swap the link `x`, which
+    /// would point `~/.aws` at a directory it controls. The link is the
+    /// same afterwards.
+    @Test(.timeLimit(.minutes(1)))
+    func aSymlinkedDirectoryAboveACredentialCannotBeSwapped() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-ancestor-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let keys = root.appendingPathComponent("y/aws")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+        let marker = "RV-CAGE-SECRET-\(UUID().uuidString)"
+        try Data(marker.utf8).write(to: keys.appendingPathComponent("credentials"))
+        let link = root.appendingPathComponent("x")
+        try #require(symlink(root.appendingPathComponent("y").path, link.path) == 0)
+        try #require(symlink(link.appendingPathComponent("aws").path, home.appendingPathComponent(".aws").path) == 0)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/swapper", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let profile = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: home.appendingPathComponent(".config/rv").path, temporaryDirectory: tmp.path).get()
+        let script = """
+            home="$1"; s="$2"; x="$3"
+            /bin/echo STARTED
+            /bin/cat "$home/.aws/credentials" 2>/dev/null
+            /bin/mkdir -p "$s/mine/aws" && /bin/ln -s "$s/mine" "$s/evil"
+            /bin/rm "$x" 2>/dev/null && echo UNLINK_OK
+            /bin/mv "$x" "$s/moved" 2>/dev/null && echo RENAME_OK
+            replace "$s/evil" "$x" && echo REPLACE_OK
+            swap "$s/evil" "$x" && echo SWAP_OK
+            printf planted > "$home/.aws/planted" 2>/dev/null && echo PLANTED
+            echo DONE
+            """
+        let output = try #require(try caged(profile, script, [home.path, scratch.path, link.path], in: scratch.path))
+        #expect(output.contains("STARTED"), "\(output)")
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains(marker) == false, "\(output)")
+        for refused in ["UNLINK_OK", "RENAME_OK", "REPLACE_OK", "SWAP_OK", "PLANTED"] {
+            #expect(output.contains(refused) == false, "\(refused): \(output)")
+        }
+        #expect(MCPSandbox.readLink(link.path) == root.appendingPathComponent("y").path)
         #expect(FileManager.default.fileExists(atPath: keys.appendingPathComponent("credentials").path))
     }
 }

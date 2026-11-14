@@ -4258,7 +4258,7 @@ struct MCPCommandTests {
             id: one.id, server: "fs", tool: "write_file", argumentsHash: "h-one", argumentKeys: ["path", "contents"]) == nil)
     }
 
-    @Test func symlinkScratchIsNotAReviewedWrite() throws {
+    @Test(.timeLimit(.minutes(1))) func symlinkScratchIsNotAReviewedWrite() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-scratch-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4283,7 +4283,7 @@ struct MCPCommandTests {
         #expect(error.message.contains(canonicalPath(target.path)))
     }
 
-    @Test func writableSymlinkPlantedAfterConfirmIsRefused() throws {
+    @Test(.timeLimit(.minutes(1))) func writableSymlinkPlantedAfterConfirmIsRefused() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-writable-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4316,7 +4316,7 @@ struct MCPCommandTests {
         #expect(error.message.contains(canonicalPath(target.path)))
     }
 
-    @Test func missingScratchLeafThroughAParentSymlinkIsNotCreated() throws {
+    @Test(.timeLimit(.minutes(1))) func missingScratchLeafThroughAParentSymlinkIsNotCreated() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-leaf-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4342,11 +4342,12 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("rv-mcp").path) == false)
     }
 
-    @Test func sshSymlinkDenyCoversTheTarget() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-sandbox-ssh-\(UUID().uuidString)", isDirectory: true)
-        let target = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-ssh-target-\(UUID().uuidString)", isDirectory: true)
+    @Test(.timeLimit(.minutes(1))) func sshSymlinkDenyCoversTheTarget() throws {
+        // Canonical, as below: through the /var symlink a missing credential
+        // name is denied everywhere it could be linked to, the home included.
+        let temporary = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
+        let root = temporary.appendingPathComponent("rv-sandbox-ssh-\(UUID().uuidString)", isDirectory: true)
+        let target = temporary.appendingPathComponent("rv-ssh-target-\(UUID().uuidString)", isDirectory: true)
         defer {
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: target)
@@ -4382,7 +4383,7 @@ struct MCPCommandTests {
         #expect(allow.contains("regex") == false)
     }
 
-    @Test func sshSymlinkDenyMatchesSpellingsAndAnIntermediateLink() throws {
+    @Test(.timeLimit(.minutes(1))) func sshSymlinkDenyMatchesSpellingsAndAnIntermediateLink() throws {
         // Canonicalize the temp root: with a /var/folders spelling the
         // /var firmlink itself is a symlink ancestor, so every missing
         // credential name generates ancestor openings (patterns for
@@ -4438,8 +4439,9 @@ struct MCPCommandTests {
         #expect(deny.contains("\\.ssh"))
     }
 
-    @Test func credentialDeniesUseThePathSeatbeltChecks() throws {
-        let root = FileManager.default.temporaryDirectory
+    @Test(.timeLimit(.minutes(1))) func credentialDeniesUseThePathSeatbeltChecks() throws {
+        // Canonical: see sshSymlinkDenyCoversTheTarget.
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
             .appendingPathComponent("rv-sandbox-future-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
@@ -4469,7 +4471,7 @@ struct MCPCommandTests {
         #expect(allow.contains("(subpath \"\(parent)\")") == false)
     }
 
-    @Test func danglingCredentialTargetStaysDeniedAfterTheWriteAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func danglingCredentialTargetStaysDeniedAfterTheWriteAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-retarget-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4512,12 +4514,12 @@ struct MCPCommandTests {
         let optRule = lastFileReadRule(optProfile, matching: dataOpt)
         #expect(optRule?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
         let credential = lines.lastIndex { $0.hasPrefix("(deny file-read*") && $0.contains("future-keys") } ?? -1
         #expect(credential > writeAllow)
     }
 
-    @Test func danglingCredentialTargetDeniesTheCaseSeatbeltChecks() throws {
+    @Test(.timeLimit(.minutes(1))) func danglingCredentialTargetDeniesTheCaseSeatbeltChecks() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-case-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4544,7 +4546,7 @@ struct MCPCommandTests {
         let same = lastFileReadRule(profile, matching: "/private/tmp/future-keys/id_rsa")
         #expect(same?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
         let credential = lines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, folded) }
         } ?? -1
@@ -4567,14 +4569,14 @@ struct MCPCommandTests {
         #expect(patterns.contains { Self.wholeMatch($0, nfd + "/id_rsa") })
         #expect(patterns.contains { Self.wholeMatch($0, nfc + "/id_rsa") })
         let nfdLines = composedProfile.split(separator: "\n").map(String.init)
-        let nfdAllow = nfdLines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+        let nfdAllow = nfdLines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
         let nfdDeny = nfdLines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, nfd + "/id_rsa") }
         } ?? -1
         #expect(nfdDeny > nfdAllow)
     }
 
-    @Test func dotDotAfterAMissingComponentStillBuildsTheCredentialDeny() throws {
+    @Test(.timeLimit(.minutes(1))) func dotDotAfterAMissingComponentStillBuildsTheCredentialDeny() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-dotdot-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4601,12 +4603,12 @@ struct MCPCommandTests {
         let folded = lastFileReadRule(profile, matching: "/private/tmp/Future-Keys/id_rsa")
         #expect(folded?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
         let credential = lines.lastIndex { $0.hasPrefix("(deny file-read*") && $0.contains("future-keys") } ?? -1
         #expect(credential > writeAllow)
     }
 
-    @Test func dotDotThroughASymlinkDeniesThePrivateTmpTarget() throws {
+    @Test(.timeLimit(.minutes(1))) func dotDotThroughASymlinkDeniesThePrivateTmpTarget() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-kernel-allow-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4640,7 +4642,7 @@ struct MCPCommandTests {
             let rule = lastFileReadRule(profile, matching: secret)
             #expect(rule?.hasPrefix("(deny") == true)
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
             let credential = lines.lastIndex { line in
                 line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
             } ?? -1
@@ -4649,7 +4651,7 @@ struct MCPCommandTests {
         }
     }
 
-    @Test func longSMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func longSMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-long-s-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4673,7 +4675,7 @@ struct MCPCommandTests {
         let rule = lastFileReadRule(profile, matching: secret)
         #expect(rule?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
         let credential = lines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
         } ?? -1
@@ -4692,14 +4694,14 @@ struct MCPCommandTests {
         let finalSigma = "/private/tmp/\u{03C2}-keys/id_rsa"
         #expect(lastFileReadRule(sigmaProfile, matching: finalSigma)?.hasPrefix("(deny") == true)
         let sigmaLines = sigmaProfile.split(separator: "\n").map(String.init)
-        let sigmaAllow = sigmaLines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+        let sigmaAllow = sigmaLines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
         let sigmaDeny = sigmaLines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, finalSigma) }
         } ?? -1
         #expect(sigmaDeny > sigmaAllow)
     }
 
-    @Test func multiScalarCasefoldMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func multiScalarCasefoldMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-fold-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4722,7 +4724,7 @@ struct MCPCommandTests {
                 return
             }
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
             for secret in secrets {
                 #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
                 let credential = lines.lastIndex { line in
@@ -4754,7 +4756,7 @@ struct MCPCommandTests {
         ])
     }
 
-    @Test func nonBMPCasePairMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func nonBMPCasePairMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-nonbmp-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4777,7 +4779,7 @@ struct MCPCommandTests {
                 return
             }
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
             for secret in secrets {
                 #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
                 let credential = lines.lastIndex { line in
@@ -4797,7 +4799,7 @@ struct MCPCommandTests {
         ])
     }
 
-    @Test func ancestorSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
+    @Test(.timeLimit(.minutes(1))) func ancestorSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-ancestor-open-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4830,7 +4832,7 @@ struct MCPCommandTests {
                 }
                 #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
                 let lines = profile.split(separator: "\n").map(String.init)
-                let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+                let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
                 let credential = lines.lastIndex { line in
                     line.hasPrefix("(deny file-read*") && (
                         line.contains("(subpath \"/private/tmp/future-keys\")")
@@ -4854,7 +4856,7 @@ struct MCPCommandTests {
         #expect(lastFileReadRule(foldedProfile, matching: sharpSecret)?.hasPrefix("(deny") == true)
     }
 
-    @Test func dotDotSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
+    @Test(.timeLimit(.minutes(1))) func dotDotSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-open-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4887,7 +4889,7 @@ struct MCPCommandTests {
             }
             #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") } ?? -1
             let credential = lines.lastIndex { line in
                 line.hasPrefix("(deny file-read*") && (
                     line.contains("(subpath \"/private/tmp/future-keys\")")
@@ -4987,7 +4989,7 @@ struct MCPCommandTests {
         #expect(parsed?.first?["server"] as? String == "github")
     }
 
-    @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
+    @Test(.timeLimit(.minutes(1))) func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
         // Under the real home, not the system temp roots: the point is a
         // TMPDIR outside every reviewed temporary root.
         let root = FileManager.default.homeDirectoryForCurrentUser
@@ -5012,7 +5014,7 @@ struct MCPCommandTests {
         #expect(error.message.contains("(subpath") == false)
     }
 
-    @Test func temporaryDirectoryThroughAMissingComponentIsNotAnAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func temporaryDirectoryThroughAMissingComponentIsNotAnAllow() throws {
         let lexical = "/private/tmp/no-such/../../Users/me/src/app"
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-dots-\(UUID().uuidString)", isDirectory: true)
