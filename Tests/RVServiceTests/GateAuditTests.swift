@@ -1,9 +1,15 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 import RVDomain
 import RVHistory
 import RVPolicy
 @testable import RVService
+import Synchronization
 
 /// Enforced denies and Policy-gate overrides land in the hash-chained
 /// `audit.jsonl`, so `rv audit verify` covers the gate's core action.
@@ -129,6 +135,48 @@ struct GateAuditTests {
         // a separate file the broken audit log does not block.
         let blocks = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home)).records(asOf: Self.now)
         #expect(blocks.map(\.ruleID) == [deny.ruleID])
+    }
+
+    /// Pauses taken on a fake clock: each one is 10 ms of fake time.
+    private final class Ticks: Sendable {
+        let count = Mutex(0)
+        var value: Int { count.withLock { $0 } }
+        func increment() { count.withLock { $0 += 1 } }
+    }
+
+    /// L3: the override row and the deny row written when it fails share
+    /// one lock wait. Another holder keeps `audit.jsonl` locked; the
+    /// override row spends the whole 0.1 s (10 fake pauses) and the deny
+    /// row then tries once, without a fresh 0.1 s. The denial ledger, a
+    /// separate file, still gets the deny.
+    @Test func anUnrecordedOverrideAndItsDenyRowShareOneLockWait() throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(
+            at: config, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let holder = open(AuditLog.fileURL(configDirectory: config).path, O_CREAT | O_RDWR, 0o600)
+        #expect(holder >= 0)
+        defer { close(holder) }
+        #expect(flock(holder, LOCK_EX) == 0)
+        defer { _ = flock(holder, LOCK_UN) }
+
+        let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
+        let denial = GatedEffect.DenialRow(
+            at: Self.now, host: .hook(.claude), tool: .bash, ruleID: rule, category: .pack(rule.pack), path: "")
+        let row = GatedEffect.OverrideRow(
+            at: Self.now, host: .hook(.claude), ruleID: rule, override: "allowlist", workspace: nil, denial: denial)
+        let ticks = Ticks()
+        let base = ContinuousClock.now
+        let recorded = GatedEvaluate.perform([.overrideAudit(row)], home: home, lockWait: {
+            AuditLog.LockWait(
+                timeout: 0.1,
+                now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
+                pause: { ticks.increment() })
+        })
+        #expect(recorded == false)
+        #expect(ticks.value == 10, "the deny row must not get a fresh lock wait")
+        #expect(DenialLedger(configDirectory: config).records(asOf: Self.now).map(\.ruleID) == [rule])
     }
 
     @Test func ledgerCopiesOfChainedDeniesAreNotExportedTwice() throws {

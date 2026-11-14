@@ -92,7 +92,9 @@ enum GatedEffect: Sendable, Equatable {
         let override: String
         let workspace: URL?
         /// The rows for the deny this stays when the override row does not
-        /// land (`command.denied` and the denial ledger).
-        let denial: DenialRow
+        /// land (`command.denied` and the denial ledger). nil past the hook
+        /// deadline, as for any deny row: `HookDoor` then answers with the
+        /// timeout deny instead.
+        let denial: DenialRow?
     }
 }
