@@ -135,12 +135,14 @@ struct MCPServeHostCheckTests {
             },
             log: sink.log, audit: sink.audit(succeeds: true))
         let waited = Date().timeIntervalSince(started)
+        // Checked before the abandoned worker is released: it may still
+        // write its event afterwards, into this sink only.
+        #expect(sink.events.withLock { $0 }.isEmpty)
         release.signal()
         #expect(waited < 5)
         #expect(sink.lines.withLock { $0 } == [
             "could not check host MCP configs within 0.05 s; run `rv mcp check` to see them"
         ])
-        #expect(sink.events.withLock { $0 }.isEmpty)
     }
 
     /// What `rv mcp serve` runs, against a temporary home and a temporary
