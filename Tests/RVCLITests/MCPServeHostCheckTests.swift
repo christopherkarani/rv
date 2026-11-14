@@ -128,7 +128,7 @@ struct MCPServeHostCheckTests {
         let config = home.appendingPathComponent(".config/rv")
         let cursor = home.appendingPathComponent(".cursor/mcp.json")
         try FileManager.default.createDirectory(at: cursor.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let servers = JSONValue.object(["mcpServers": .object([
+        let servers = RVMCP.JSONValue.object(["mcpServers": .object([
             Self.hostile: .object(["command": .string("npx")]),
             "seq": .object(["command": .string("npx"), "args": .array([.string("-y"), .string("seq")])]),
         ])])
