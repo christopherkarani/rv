@@ -1,6 +1,7 @@
 #if os(Linux)
 import Glibc
 import Foundation
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -19,7 +20,8 @@ struct SecretGatewayLinuxPeerTests {
         let peer: GatewayPeer
 
         init() throws {
-            listener = try Self.socket()
+            // Locals: a closure may not capture `self` before every member is set.
+            let listener = try Self.socket()
             var address = sockaddr_in()
             address.sin_family = sa_family_t(AF_INET)
             address.sin_addr.s_addr = inet_addr("127.0.0.1")
@@ -35,18 +37,21 @@ struct SecretGatewayLinuxPeerTests {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
             }
             try #require(named == 0)
-            client = try Self.socket()
+            let client = try Self.socket()
             let connected = withUnsafePointer(to: &address) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
             try #require(connected == 0)
-            server = accept(listener, nil, nil)
+            let server = accept(listener, nil, nil)
             try #require(server >= 0)
             // Close-on-exec, so only a child given it explicitly holds it.
             _ = fcntl(server, F_SETFD, FD_CLOEXEC)
             peer = try #require(GatewayPeer.of(server))
+            self.listener = listener
+            self.client = client
+            self.server = server
         }
 
         deinit {
