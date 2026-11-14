@@ -85,6 +85,9 @@ the micro-VM placeholders (`MicroVMControlLayout`) read
 **Add a network rule or denial reason.** Policy is pure: `EgressHostPolicy`
 (RVDomain) and `EgressAdmission.decide`. Parsing is pure too: `EgressWire`.
 `EgressProxy` only gathers inputs and carries out the verdict.
+Owner-set private ranges (`allowed_ips`) are `EgressAllowedIPs` (RVDomain),
+keyed per allowlisted host in `EgressHostPolicy`; the verdict carries them and
+`EgressProxy.externalAnswerAdmitted` judges the one resolved answer set.
 
 **Add a secret source or delivery.** `SecretsConfiguration` (decoding),
 `SecretProviders` (reads), `SecretRelease` (the one release path),
