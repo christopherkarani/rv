@@ -128,14 +128,19 @@ enum SecretRunProcess {
                 break
             }
             guard info.si_code == CLD_STOPPED, let terminal else { break }
+            // Consume the stop. The spawn suspension also reads as a stop,
+            // with no signal; only a signal stop is passed on.
             var status: Int32 = 0
-            _ = waitpid(pid, &status, WUNTRACED | WNOHANG)
+            guard waitpid(pid, &status, WUNTRACED | WNOHANG) == pid, SecretRunExit.isStopped(waitStatus: status),
+                (status >> 8) & 0xff != 0
+            else { continue }
             // Ctrl-Z stopped the command's group, which the shell does not
-            // see; stop rv too so the shell regains the terminal, and on
-            // `fg` hand it back and continue the group.
+            // see; stop rv too so the shell regains the terminal. On `fg`,
+            // hand it back; on `bg`, leave it with the shell. Either way the
+            // group continues.
             terminal.reclaim()
             _ = kill(getpid(), SIGSTOP)
-            _ = terminal.hand(to: pid)
+            if tcgetpgrp(terminal.fd) == getpgrp() { _ = terminal.hand(to: pid) }
             _ = kill(-pid, SIGCONT)
         }
         terminal?.reclaim()
