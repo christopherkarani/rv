@@ -246,7 +246,7 @@ enum MCPRun {
         } else {
             if let problem = report.integrityProblem {
                 lines.append("untrusted  " + reviewField(problem))
-                lines.append("  Fix: review with `rv mcp list`, then `rv mcp trust`")
+                lines.append("  Fix: run `rv mcp trust`; it shows every server, host and range before you sign")
             }
             for row in report.failing {
                 let status = MCPEntryStatus(rawValue: row.status)

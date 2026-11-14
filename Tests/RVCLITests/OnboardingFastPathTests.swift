@@ -155,7 +155,7 @@ struct OnboardingFastPathTests {
             problems: [])
         let text = MCPRun.checkText(report, home: URL(fileURLWithPath: "/tmp/home"))
         #expect(text.contains("Fix: `rv mcp onboard --host cursor"))
-        #expect(text.contains("Fix: review with `rv mcp list`, then `rv mcp trust`"))
+        #expect(text.contains("Fix: run `rv mcp trust`; it shows every server, host and range before you sign"))
     }
 
     @Test func onboardImportsAndRoutesInOneStep() async throws {
