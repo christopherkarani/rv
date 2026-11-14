@@ -25,7 +25,9 @@ before audit completeness:
 
 - A change known to tighten the gate is made anyway. rv warns on stderr and
   tries once more to record it afterwards, with the reason `recorded after
-  the change; the audit log was unavailable`.
+  the change; the audit log was unavailable` and the change's own time in
+  `changed_at`. The warning names the event kind, subject and that time.
+  (Events have no id.)
 - Any other change is refused, and nothing is written. This covers a change
   that loosens the gate, a mixed change, and one that cannot be classified.
   The CLI exits 74 (`EX_IOERR`) with "the audit log could not record the …
@@ -35,7 +37,7 @@ How each change is classified:
 
 | Change | Tightening when |
 | --- | --- |
-| Policy revision | `PolicyDiffRisk` finds nothing in the replacement. Any removed or relaxed deny or ask, new allow, safety downgrade or new exemption loosens it. So does an unreadable live file. |
+| Policy revision | every new or changed rule is a deny and `PolicyDiffRisk` finds nothing in the replacement. Any removed or relaxed deny or ask, new allow or ask (an ask can relax an action a pack denies), safety downgrade or new exemption loosens it. So does an unreadable live file. |
 | Reinitialize | never |
 | Safety level | the new level is `strict` |
 | Host mode | the new mode is `block`, or the stored prior mode is looser than the new one |
@@ -54,10 +56,17 @@ way, so the copy does not claim that nothing changed.
 Ordering:
 
 - `rv host mode <host> off` records the change before it removes the hooks.
-- `rv secrets set` and `rv secrets remove` write `secrets.json` (and record
-  the change) before they touch the keychain.
+- `rv secrets set` for a new secret and `rv secrets remove` write
+  `secrets.json` (and record the change) before they touch the keychain.
+- `rv secrets set` on an existing secret stores the value first and writes
+  the definition (a new expiry or refresh) second. If the store fails, the
+  old value keeps its old expiry. If the definition is then refused, the new
+  value keeps the old expiry, which is never later.
 
 So a change that is refused leaves the hooks and keychain as they were.
+`rv safety`, `rv host mode`, `rv packs`, `rv policy apply`, `rv egress`,
+`rv secrets set|remove|import` and `rv setup --observe` all exit 74 for a
+refused change.
 
 ## Residuals
 
