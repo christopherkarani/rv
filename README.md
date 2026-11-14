@@ -259,7 +259,13 @@ rv is one binary, 25 commands. The rest of the surface:
   (`~/.claude.json`, `.mcp.json`, Cursor, Codex, Gemini, Claude Code
   plugins, ...) and host CLIs that add servers (`claude mcp add`, `npx
   @anthropic-ai/claude-code mcp add`, `mcp install`, `@smithery/cli`) ask
-  or deny as `core.mcp:mcp-host-config`. *Known limits:* a nested agent
+  or deny as `core.mcp:mcp-host-config`. A brace or glob spelling of a
+  host program, its group word or `mcp install` is resolved by what it can
+  produce, not its literal text (`claude m{c,}p add`, `clau?e mcp add`,
+  `chronic m[c]p install`), and a variable or substitution rv cannot read,
+  used as the program after a runner it does not strip (`stdbuf -o0 $c mcp
+  add`) or in a completing position of a `claude`-family mutation, counts
+  as that word. *Known limits:* a nested agent
   started with servers rv does not govern (`claude --mcp-config …`,
   `claude --plugin-dir …`, `codex -c mcp_servers…`), and a program that
   writes a config without its name on the command line (a script or a
@@ -272,6 +278,13 @@ rv is one binary, 25 commands. The rest of the surface:
   directory, a variable or a renamed copy (`cd …/claude/versions &&
   ./2.0.14 …`, `$D/versions/…`); or a git hook — which `git commit -m`
   still runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
+  Also not caught: a value rv cannot read standing for `mcp` or `install`
+  in the `mcp install` installer with no stripped runner (`chronic $M
+  install srv`, `chronic mcp $(…) srv`); a variable used as the word
+  separator (`claude${IFS}mcp add`); a brace, glob or dynamic spelling of
+  a stem inside opaque text never re-parsed as a shell command line
+  (`python3 -c "os.system('claude m{c,}p add')"`); and a config file name
+  written through a brace or glob spelling (`echo {} > .{mcp,x}.json`).
   Text that names a host mutation asks even as data (`git commit -m 'run
   claude mcp add x'`, `grep 'claude mcp add' docs/`, `grep claude "$f"`),
   as do dynamic programs given `config` (`"$GIT" config user.name`) and
