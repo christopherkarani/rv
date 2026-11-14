@@ -1157,11 +1157,13 @@ public enum MCPSandbox {
             next += 1
             guard walked.insert(start).inserted else { continue }
             if walked.count > maximumCredentialAncestorWalks { return nil }
-            var parent = URL(fileURLWithPath: start).deletingLastPathComponent().path
+            // No `.` or `..` is left, so each step drops one component and
+            // the walk ends at `/`. (`URL` would append `..` to a `..`.)
+            var parent = parentDirectory(withoutDotComponents(start))
             while parent != "/", insideWriteRoot(parent) {
-                let above = URL(fileURLWithPath: parent).deletingLastPathComponent().path
+                let above = parentDirectory(parent)
                 let resolvedAbove = realPath(above)
-                let name = URL(fileURLWithPath: parent).lastPathComponent
+                let name = parent.split(separator: "/").last.map(String.init) ?? ""
                 let itself = resolvedAbove == "/" ? "/" + name : resolvedAbove + "/" + name
                 guard add(realPath(parent)), add(itself) else { return nil }
                 var info = stat()
@@ -1172,6 +1174,22 @@ public enum MCPSandbox {
             }
         }
         return ancestors
+    }
+
+    /// `path` with its `.` and `..` taken as `open` takes them: a `..` goes
+    /// to the parent of where the path so far resolves, not to the lexical
+    /// parent, which a symlink would make a different directory.
+    static func withoutDotComponents(_ path: String) -> String {
+        var current = "/"
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." {
+                current = parentDirectory(realPath(current))
+                continue
+            }
+            current = current == "/" ? "/" + part : current + "/" + part
+        }
+        return current
     }
 
     /// Each ancestor exactly, as a literal in every spelling Seatbelt may
