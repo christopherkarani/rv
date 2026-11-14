@@ -38,6 +38,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <termios.h>
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
@@ -56,6 +57,9 @@
 #define OUTSIDE ROOT "/outside"
 #define SCRATCH ROOT "/scratch"
 #define UNIX_SOCKET OUTSIDE "/socket"
+#define TEMP ROOT "/temp"
+#define TEMP_SOCKET TEMP "/socket"
+#define SCRATCH_SOCKET SCRATCH "/socket"
 #define ABSTRACT_SOCKET "rv-kernel-e2e"
 #define ESTABLISH_FAILED 125
 #define EXEC_FAILED 126
@@ -141,6 +145,15 @@ static int probe(int argc, char **argv) {
     }
     if (strcmp(op, "signal") == 0) {
         return probe_exit(kill(atoi(argv[3]), 0) == 0);
+    }
+    if (strcmp(op, "ioctl") == 0) {
+        struct termios modes;
+        fd = open(argv[3], O_RDWR);
+        if (fd < 0) {
+            return errno;
+        }
+        /* Not a terminal: reaching the driver at all is the access. */
+        return probe_exit(ioctl(fd, TCGETS, &modes) == 0 || errno == ENOTTY);
     }
     return 124;
 }
@@ -363,9 +376,9 @@ static void enforcement_cases(void) {
 /* ---- MCP server confinement (rv-isolation-exec --confine) -------------- */
 
 /* rv-isolation-exec --confine FLOOR --read WORKSPACE --write SCRATCH
- *     [--tcp PORT] -- INNER INNER probe OP A */
+ *     --temp TEMP --temp /dev [--tcp PORT] -- INNER INNER probe OP A */
 static int confined(const char *floor, const char *port, const char *op, const char *a) {
-    char *argv[16];
+    char *argv[20];
     int count = 0;
     argv[count++] = HELPER;
     argv[count++] = "--confine";
@@ -374,6 +387,10 @@ static int confined(const char *floor, const char *port, const char *op, const c
     argv[count++] = WORKSPACE;
     argv[count++] = "--write";
     argv[count++] = SCRATCH;
+    argv[count++] = "--temp";
+    argv[count++] = TEMP;
+    argv[count++] = "--temp";
+    argv[count++] = "/dev";
     if (port != NULL) {
         argv[count++] = "--tcp";
         argv[count++] = (char *)port;
@@ -403,8 +420,19 @@ static int tcp_listener(void) {
     return ntohs(address.sin_port);
 }
 
-/* Loopback up, two TCP listeners, one pathname and one abstract Unix
- * listener, all held by this process, outside any cage. */
+/* A pathname Unix listener this process holds. */
+static int unix_listener(const char *path) {
+    struct sockaddr_un address;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    strcpy(address.sun_path, path);
+    return fd >= 0 && bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(fd, 8) == 0;
+}
+
+/* Loopback up, two TCP listeners, three pathname Unix listeners (outside
+ * every root, in the --temp root, in the --write root) and one abstract
+ * one, all held by this process, outside any cage. */
 static int confine_setup(char *port_a, char *port_b, size_t size) {
     struct ifreq interface;
     struct sockaddr_un address;
@@ -421,7 +449,10 @@ static int confine_setup(char *port_a, char *port_b, size_t size) {
     }
     a = tcp_listener();
     b = tcp_listener();
-    if (a == 0 || b == 0 || mkdir(SCRATCH, 0755) != 0) {
+    if (a == 0 || b == 0 || mkdir(SCRATCH, 0755) != 0 || mkdir(TEMP, 0755) != 0) {
+        return 0;
+    }
+    if (!unix_listener(TEMP_SOCKET) || !unix_listener(SCRATCH_SOCKET)) {
         return 0;
     }
     snprintf(port_a, size, "%d", a);
@@ -495,6 +526,17 @@ static void confine_cases(long abi) {
     check(status == (abi >= 6 ? EPERM : 0), "confine-signal-by-abi", "abi %ld exit %d", abi, status);
     status = confined("4", NULL, "unix", UNIX_SOCKET);
     check(status == (abi >= 9 ? EACCES : 0), "confine-pathname-unix-by-abi", "abi %ld exit %d", abi, status);
+    /* A shared directory is writable, but a socket in it is not the
+     * server's to reach; one in its own directory is. */
+    status = confined("4", NULL, "write", TEMP "/made.txt");
+    check(status == 0 && exists(TEMP "/made.txt"), "confine-temp-root-writable", "exit %d", status);
+    status = confined("4", NULL, "unix", TEMP_SOCKET);
+    check(status == (abi >= 9 ? EACCES : 0), "confine-unix-in-temp-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "unix", SCRATCH_SOCKET);
+    check(status == 0, "confine-unix-in-write-root-allowed", "abi %ld exit %d", abi, status);
+    /* ioctl on a device the server opens: granted nowhere, /dev included. */
+    status = confined("4", NULL, "ioctl", "/dev/null");
+    check(status == (abi >= 5 ? EACCES : 0), "confine-device-ioctl-by-abi", "abi %ld exit %d", abi, status);
     status = confined("4", NULL, "udp", "9");
     check(status == (abi >= 10 ? EACCES : 0), "confine-udp-by-abi", "abi %ld exit %d", abi, status);
 }

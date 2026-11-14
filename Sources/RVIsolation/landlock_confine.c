@@ -4,22 +4,26 @@
  * landlock_apply.c and shares its syscall wrappers.
  *
  *   rv-isolation-exec --confine FLOOR [--read PATH]... [--write PATH]...
- *                     [--tcp PORT]... -- EXECUTABLE ARGV0 [ARG...]
+ *                     [--temp PATH]... [--tcp PORT]...
+ *                     -- EXECUTABLE ARGV0 [ARG...]
  *
  * In this process, before exec: NO_NEW_PRIVS, then one ruleset that
- * handles every access right the running kernel's Landlock knows, so that
- * nothing it can restrict is left open:
+ * handles every file, network and scope right this file knows (through
+ * ABI 10) that the running kernel has:
  *
  *   files     nothing is readable but each --read path (read, list,
- *             execute) and nothing is writable but each --write path
- *             (everything, beneath it)
+ *             execute) and nothing is writable but each --write and
+ *             --temp path (everything, beneath it)
  *   TCP       no bind, and connect only to each --tcp port (ABI 4)
- *   devices   ioctl only beneath a --write path (ABI 5)
+ *   devices   no ioctl on a device the server opens (ABI 5)
  *   scopes    no abstract Unix socket and no signal outside this domain
  *             (ABI 6)
- *   sockets   no connect to a pathname Unix socket outside a --write path
- *             (ABI 9)
+ *   sockets   no connect to a pathname Unix socket outside a --write
+ *             path; a --temp path (/tmp, /dev) does not carry it (ABI 9)
  *   UDP       no bind and no send (ABI 10)
+ *
+ * What Landlock does not mediate stays open at every ABI: see the limits
+ * in the document above.
  *
  * The ABI is asked of the kernel (LANDLOCK_CREATE_RULESET_VERSION), never
  * inferred from its version. FLOOR is the lowest ABI the caller accepts:
@@ -76,6 +80,12 @@ struct rv_net_port_attr {
     (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE     \
         | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_TRUNCATE \
         | LANDLOCK_ACCESS_FS_IOCTL_DEV)
+
+/* Handled, so denied, and granted on no path: device nodes sit in /dev,
+ * which every server may write, and `ioctl` on one (a terminal's
+ * TIOCSTI) is not a file write. Descriptors the server inherits are not
+ * affected. */
+#define RV_FS_NEVER_GRANTED LANDLOCK_ACCESS_FS_IOCTL_DEV
 
 #define RV_FS_READ_RIGHTS \
     (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR)
@@ -228,7 +238,13 @@ int rv_landlock_confine(int argc, char **argv) {
                 return -1;
             }
         } else if (strcmp(argv[index], "--write") == 0) {
-            if (rv_confine_allow_path(ruleset_fd, argv[index + 1], handled_fs, 0) != 0) {
+            if (rv_confine_allow_path(ruleset_fd, argv[index + 1], handled_fs & ~RV_FS_NEVER_GRANTED, 0) != 0) {
+                close(ruleset_fd);
+                return -1;
+            }
+        } else if (strcmp(argv[index], "--temp") == 0) {
+            if (rv_confine_allow_path(ruleset_fd, argv[index + 1],
+                    handled_fs & ~(RV_FS_NEVER_GRANTED | LANDLOCK_ACCESS_FS_RESOLVE_UNIX), 0) != 0) {
                 close(ruleset_fd);
                 return -1;
             }

@@ -49,7 +49,7 @@ workspace. Each must exit 125 and never exec. The 5.10 and 6.1 lanes skip
 those cases: below ABI 3 the trampoline exits 125 for every argv, so they
 could not tell the argv lock from the ABI refusal. Those lanes prove only the
 refusal. The host script pins the exact number of checks each regime runs (7
-below ABI 3, 23 at ABI 3, 35 from ABI 4), so a dropped case fails the lane.
+below ABI 3, 23 at ABI 3, 39 from ABI 4), so a dropped case fails the lane.
 The guest compares the live Landlock ABI with the lane's expected ABI, so a
 kernel that boots with Landlock disabled fails its lane instead of quietly
 testing the wrong regime. The kernel command line passes `lsm=landlock` so
@@ -65,11 +65,16 @@ outside the cage: a read and a write inside the granted paths succeed and
 outside them fail with `EACCES`; `NO_NEW_PRIVS` is set; a TCP connection is
 refused without a port rule, accepted on the listed port and refused on
 another; a floor above the kernel's ABI, or below 4, exits 125 and runs
-nothing. Four channels are checked against the lane's ABI, open below the
-ABI that closes them and closed from it on: an abstract Unix socket and a
-signal to PID 1 (`EPERM` from ABI 6), a pathname Unix socket (`EACCES` from
-ABI 9), and a UDP datagram (`EACCES` from ABI 10). So 6.8 shows all four
-open, 6.12 two, and 7.3 none.
+nothing. A shared directory (`--temp`) is writable. Five channels are
+checked against the lane's ABI, open below the ABI that closes them and
+closed from it on: `ioctl` on a device the inner opens (`EACCES` from ABI
+5), an abstract Unix socket and a signal to PID 1 (`EPERM` from ABI 6), a
+pathname Unix socket outside the write roots or in a shared one (`EACCES`
+from ABI 9; one in the inner's own write root stays reachable), and a UDP
+datagram (`EACCES` from ABI 10). So 6.8 shows all five open, 6.12 two, and
+7.3 none. The routes no ABI closes (MPTCP, TCP fast open, `listen` without
+`bind`) are measured by `MCPLinuxSandboxTests` on the host kernel, not in
+these guests.
 
 ## Image route
 

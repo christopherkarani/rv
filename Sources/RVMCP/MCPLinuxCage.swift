@@ -37,9 +37,9 @@ public struct LandlockABI: Comparable, Hashable, Sendable, CustomStringConvertib
 
 /// What a Landlock cage does not keep a server from. The Seatbelt profile
 /// denies each of these with `(deny network*)` or has no equivalent;
-/// Landlock closes them one ABI at a time, and never closes the last.
+/// Landlock closes some one ABI at a time, and never closes the last two.
 public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
-    /// `ioctl` on device files it can open.
+    /// `ioctl` on device files it opens.
     case deviceIoctl
     /// Abstract Unix sockets, and signals to processes outside the cage.
     case abstractSocketsAndSignals
@@ -48,6 +48,10 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
     case pathnameUnixSockets
     /// Sending and receiving UDP, to any address.
     case udp
+    /// TCP that never passes the two calls Landlock's rules cover (`bind`
+    /// and `connect` on a TCP socket): an MPTCP socket, a connection opened
+    /// by `sendto` with TCP fast open, and `listen` on a socket never bound.
+    case tcpOutsideTheRules
     /// Sockets that are neither TCP, UDP nor Unix: ICMP echo, SCTP and other
     /// families the kernel lets an unprivileged process open.
     case otherSockets
@@ -59,7 +63,16 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
         case .abstractSocketsAndSignals: .scopes
         case .pathnameUnixSockets: .pathnameUnixSockets
         case .udp: .udp
-        case .otherSockets: nil
+        case .tcpOutsideTheRules, .otherSockets: nil
+        }
+    }
+
+    /// Whether this is a way onto the network (or to another process's
+    /// socket), which a policy that limits the network forbids.
+    public var reachesTheNetwork: Bool {
+        switch self {
+        case .deviceIoctl: false
+        case .abstractSocketsAndSignals, .pathnameUnixSockets, .udp, .tcpOutsideTheRules, .otherSockets: true
         }
     }
 
@@ -69,6 +82,7 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
         case .abstractSocketsAndSignals: "abstract Unix sockets and signals to other processes"
         case .pathnameUnixSockets: "connections to Unix sockets (session bus, SSH and GPG agents, container daemons)"
         case .udp: "UDP"
+        case .tcpOutsideTheRules: "TCP over MPTCP sockets, TCP fast open, and listening without a bind"
         case .otherSockets: "sockets that are not TCP, UDP or Unix (ICMP echo, SCTP)"
         }
     }
@@ -129,22 +143,31 @@ public enum MCPLinuxCageSupport: Equatable, Sendable {
 }
 
 public enum MCPLinuxCage {
-    /// The lowest Landlock ABI a server whose policy restricts the network
-    /// runs under. Every caged policy does: `network: false` or `hosts`.
-    ///
-    /// At `.tcp` (the project's decision: Landlock only, Linux 6.7) such a
-    /// server cannot make or accept TCP connections, but the kernels before
-    /// ABI 9 and 10 do not stop it from reaching Unix sockets or sending
-    /// UDP (`MCPLinuxCageGap`); rv says so when it starts the server. Set
-    /// this to `.udp` to refuse those servers instead wherever the kernel
-    /// cannot block UDP.
-    public static let networkFloor = LandlockABI.tcp
+    /// What rv does with a server whose policy limits the network, given
+    /// that Landlock cannot hold such a limit. Every sandboxed server's
+    /// policy does (`network: false`, or `hosts`), and on every kernel a
+    /// caged process still reaches the network by a route the rules do
+    /// not cover (`MCPLinuxCageGap.tcpOutsideTheRules`, `.otherSockets`).
+    public enum NetworkLimit: Equatable, Sendable {
+        /// Do not start it: rv does not run a server under a limit it
+        /// cannot hold. The host then has no MCP server sandbox.
+        case refuse
+        /// Start it with every rule the kernel has, and say what stays open.
+        case disclose
+    }
+
+    /// The release's answer. `.refuse` until the owner decides otherwise
+    /// (docs/security/mcp-linux-sandbox.md, "The network limit").
+    public static let networkLimit = NetworkLimit.refuse
 
     /// Why a server does not start in a cage.
     public enum Refusal: Error, Equatable, Sendable {
         case unavailable(MCPLinuxCageSupport.Unavailable)
-        /// The kernel cages, but not well enough for a policy that restricts the network.
-        case networkNotConfined(abi: LandlockABI, floor: LandlockABI)
+        /// The kernel cages files, but cannot hold the policy's network limit.
+        case networkNotConfined(LandlockABI)
+        /// A variable the dynamic loader acts on, set for the server: it
+        /// would take effect in rv's helper, before the cage.
+        case loaderVariable(String)
         /// A directory that holds a protected path could not be listed.
         case unlistable(String)
         /// More entries beside the protected paths than one request carries.
@@ -156,10 +179,13 @@ public enum MCPLinuxCage {
             switch self {
             case .unavailable(let unavailable):
                 unavailable.reason
-            case .networkNotConfined(let abi, let floor):
-                "this kernel's Landlock is ABI \(abi), which cannot keep a server off the network ("
-                    + MCPLinuxCageGap.open(at: abi).filter { $0 != .deviceIoctl }.map(\.summary).joined(separator: "; ")
-                    + " stay open); the sandbox needs ABI \(floor)"
+            case .networkNotConfined(let abi):
+                "Landlock (ABI \(abi) on this kernel) cannot keep a server off the network: "
+                    + MCPLinuxCageGap.open(at: abi).filter(\.reachesTheNetwork).map(\.summary).joined(separator: "; ")
+                    + " stay open, and every sandbox policy limits the network"
+            case .loaderVariable(let name):
+                "its environment sets \(name), which the dynamic loader would act on in rv's helper before the "
+                    + "sandbox applies; set it in the server's own command instead (env \(name)=... command)"
             case .unlistable(let directory):
                 "\(directory) holds a path the sandbox keeps unreadable and could not be listed"
             case .tooManyPaths:
@@ -170,18 +196,46 @@ public enum MCPLinuxCage {
         }
     }
 
-    /// Whether a server whose policy restricts the network may run on this
+    /// Whether a server whose policy limits the network may run on this
     /// host, and under which ABI.
     public static func admit(
-        _ support: MCPLinuxCageSupport, networkFloor: LandlockABI = MCPLinuxCage.networkFloor
+        _ support: MCPLinuxCageSupport, network: NetworkLimit = MCPLinuxCage.networkLimit
     ) -> Result<LandlockABI, Refusal> {
-        switch support {
-        case .unavailable(let unavailable):
-            return .failure(.unavailable(unavailable))
-        case .confines(let abi):
-            let floor = max(networkFloor, .tcp)
-            return abi < floor ? .failure(.networkNotConfined(abi: abi, floor: floor)) : .success(abi)
+        switch (support, network) {
+        case (.unavailable(let unavailable), _): .failure(.unavailable(unavailable))
+        case (.confines(let abi), .refuse): .failure(.networkNotConfined(abi))
+        case (.confines(let abi), .disclose): .success(abi)
         }
+    }
+
+    /// Whether serve requires a cage for every local server on this host.
+    /// A host that should have one and cannot say so (the helper is gone,
+    /// or its probe failed) requires it too: a local server is then
+    /// refused, never run bare as on a host that has no cage to offer.
+    public static func isRequired(
+        _ support: MCPLinuxCageSupport, network: NetworkLimit = MCPLinuxCage.networkLimit
+    ) -> Bool {
+        switch (support, network) {
+        case (_, .refuse): false
+        case (.confines, .disclose), (.unavailable(.helperMissing), .disclose), (.unavailable(.probeFailed), .disclose): true
+        case (.unavailable(.noLandlock), .disclose), (.unavailable(.tooOld), .disclose): false
+        }
+    }
+
+    /// Why this host has no cage, or nil when it has one.
+    public static func unavailability(
+        _ support: MCPLinuxCageSupport, network: NetworkLimit = MCPLinuxCage.networkLimit
+    ) -> String? {
+        switch admit(support, network: network) {
+        case .success: nil
+        case .failure(let refusal): refusal.reason
+        }
+    }
+
+    /// Variables the dynamic loader acts on before `main`: in the helper
+    /// they would run the server's code with no cage.
+    public static func isLoaderVariable(_ name: String) -> Bool {
+        name.hasPrefix("LD_") || name == "GLIBC_TUNABLES"
     }
 
     // MARK: - Paths
@@ -205,8 +259,10 @@ public enum MCPLinuxCage {
         }
     }
 
-    /// As many `--read` paths as one request carries.
+    /// As many `--read` paths as one request carries, and as many bytes
+    /// of them: the kernel bounds a process's arguments.
     public static let maximumReadablePaths = 16_384
+    public static let maximumReadableBytes = 1 << 20
 
     /// Every path the server may read: all of the file system but
     /// `protected`. Landlock only grants, so "everything but these" is the
@@ -220,6 +276,7 @@ public enum MCPLinuxCage {
         protecting protected: Set<String>, list: (String) -> [Entry]?
     ) -> Result<[String], Refusal> {
         var paths: [String] = []
+        var bytes = 0
         func holdsProtected(_ path: String) -> Bool {
             let prefix = path == "/" ? "/" : path + "/"
             return protected.contains { $0.hasPrefix(prefix) }
@@ -234,14 +291,16 @@ public enum MCPLinuxCage {
                     continue
                 case .file:
                     paths.append(path)
+                    bytes += path.utf8.count
                 case .directory:
                     if holdsProtected(path) {
                         if let refusal = walk(path) { return refusal }
                     } else {
                         paths.append(path)
+                        bytes += path.utf8.count
                     }
                 }
-                guard paths.count <= maximumReadablePaths else { return .tooManyPaths }
+                guard paths.count <= maximumReadablePaths, bytes <= maximumReadableBytes else { return .tooManyPaths }
             }
             return nil
         }
@@ -269,37 +328,40 @@ public enum MCPLinuxCage {
 
     /// One server's cage, as `rv-isolation-exec --confine` takes it.
     public struct Plan: Equatable, Sendable {
-        /// The helper refuses to run the server on a kernel below this.
-        public var floor: LandlockABI
         public var readable: [String]
+        /// The server's own directories: every file right beneath them.
         public var writable: [String]
+        /// Directories it shares with every other program (`/tmp`, `/dev`):
+        /// as `writable`, but a socket there is not the server's to reach.
+        public var shared: [String]
         /// TCP ports the server may connect to: the allowlist proxy's, or none.
         public var tcpPorts: [UInt16]
 
-        public init(floor: LandlockABI, readable: [String], writable: [String], tcpPorts: [UInt16]) {
-            self.floor = floor
+        public init(readable: [String], writable: [String], shared: [String], tcpPorts: [UInt16]) {
             self.readable = readable
             self.writable = writable
+            self.shared = shared
             self.tcpPorts = tcpPorts
         }
 
-        /// The helper's arguments: the cage, then the server's executable
-        /// and its whole argv (`argv[0]` included).
+        /// The helper's arguments: the lowest ABI it may run under, the
+        /// cage, then the server's executable and its whole argv
+        /// (`argv[0]` included).
         public func arguments(executable: String, argv: [String]) -> [String] {
-            ["--confine", String(floor.rawValue)]
+            ["--confine", String(LandlockABI.tcp.rawValue)]
                 + readable.flatMap { ["--read", $0] }
                 + writable.flatMap { ["--write", $0] }
+                + shared.flatMap { ["--temp", $0] }
                 + tcpPorts.flatMap { ["--tcp", String($0)] }
                 + ["--", executable] + argv
         }
     }
 
-    /// The line rv writes when it starts a caged server on a kernel that
-    /// leaves something open, or nil when nothing is.
-    public static func notice(server: String, abi: LandlockABI) -> String? {
-        let gaps = MCPLinuxCageGap.open(at: abi)
-        guard gaps.isEmpty == false else { return nil }
-        return "rv mcp: \(server) runs in a Landlock sandbox (ABI \(abi)): its files and TCP connections are "
-            + "confined; this kernel does not block " + gaps.map(\.summary).joined(separator: "; ")
+    /// The line rv writes when it starts a caged server: what the cage
+    /// holds, and what this kernel leaves open.
+    public static func notice(server: String, abi: LandlockABI) -> String {
+        "rv mcp: \(server) runs in a Landlock sandbox (ABI \(abi)): its files are confined, and TCP `connect` "
+            + "and `bind` are denied; this kernel does not block "
+            + MCPLinuxCageGap.open(at: abi).map(\.summary).joined(separator: "; ")
     }
 }

@@ -15,15 +15,15 @@ import Synchronization
 public enum MCPSandbox {
     public static let sandboxExec = "/usr/bin/sandbox-exec"
 
-    /// Whether serve cages local servers on this host: Seatbelt on macOS,
-    /// Landlock on a Linux kernel that has its network rules (6.7 or
-    /// later) with `rv-isolation-exec` installed. Elsewhere bare servers
+    /// Whether serve cages local servers on this host: Seatbelt on macOS;
+    /// on Linux, Landlock where `MCPLinuxCage.isRequired` says so (never,
+    /// while `MCPLinuxCage.networkLimit` refuses). Elsewhere bare servers
     /// run uncaged, and sandboxed ones, or every local one under an
     /// organization's `requireSandbox`, are refused.
     #if os(macOS)
     public static let enforced = true
     #elseif os(Linux)
-    public static let enforced = linuxSupport.abi != nil
+    public static let enforced = MCPLinuxCage.isRequired(linuxSupport)
     #else
     public static let enforced = false
     #endif
@@ -31,7 +31,7 @@ public enum MCPSandbox {
     /// Why this host has no cage, for the messages that refuse without one.
     public static var unavailability: String {
         #if os(Linux)
-        if case .unavailable(let unavailable) = linuxSupport { return unavailable.reason }
+        if let reason = MCPLinuxCage.unavailability(linuxSupport) { return reason }
         #endif
         return "it needs macOS, or Linux 6.7 or later"
     }
@@ -52,7 +52,7 @@ public enum MCPSandbox {
             return home + String(path.dropFirst(1))
         }
         #if os(Linux)
-        return [show("~/.cache/rv-mcp/\(name)")] + landlockWriteRoots + linuxDefaultWritable.map(show) + policy.writable
+        return [show("~/.cache/rv-mcp/\(name)")] + landlockSharedRoots + linuxDefaultWritable.map(show) + policy.writable
         #else
         let scratch = show("~/Library/Caches/rv-mcp/\(name)")
         return [scratch] + seatbeltWriteRoots + defaultWritable.map(show) + policy.writable

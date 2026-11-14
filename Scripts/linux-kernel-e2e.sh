@@ -136,7 +136,7 @@ build_initramfs() {
 # dropped or added case fails the lane until this is updated with it.
 CHECKS_REFUSAL=7
 CHECKS_ENFORCEMENT=23
-CHECKS_CONFINEMENT=35
+CHECKS_CONFINEMENT=39
 
 # One boot. Pass only on exactly one PASS result line, with the regime's
 # exact check count, from a kernel whose release matches the lane; a timeout,

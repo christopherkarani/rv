@@ -10,14 +10,19 @@ import RVIsolation
 /// server's process before `exec`; if it cannot, it exits without running
 /// the server, so a server that runs is a server that is caged.
 extension MCPSandbox {
-    /// Where Linux keeps the stores `deniedReads` names under `~/Library`:
-    /// the keyring, browser profiles, the Claude desktop app.
+    /// Where Linux keeps the stores `deniedReads` names under `~/Library`
+    /// (keyrings, browser profiles as packaged by the distribution, Snap
+    /// and Flatpak, the Claude apps), and the credential files macOS keeps
+    /// in the Keychain instead.
     static let linuxDeniedReads = [
-        "~/.local/share/keyrings", "~/.config/google-chrome", "~/.config/chromium", "~/.mozilla",
-        "~/.config/BraveSoftware", "~/.config/Claude",
+        "~/.local/share/keyrings", "~/.local/share/kwalletd", "~/.password-store", "~/.git-credentials",
+        "~/.config/google-chrome", "~/.config/chromium", "~/.mozilla", "~/.config/BraveSoftware",
+        "~/snap/firefox", "~/snap/chromium", "~/.var/app", "~/.config/Claude", "~/.claude/.credentials.json",
+        "~/.config/containers/auth.json", "~/.Xauthority",
     ]
     /// Write roots every cage has, as `/private/tmp` and `/dev` on macOS.
-    static let landlockWriteRoots = ["/tmp", "/dev"]
+    /// Shared with every other program: see `MCPLinuxCage.Plan.shared`.
+    static let landlockSharedRoots = ["/tmp", "/dev"]
     static let linuxDefaultWritable = ["~/.npm", "~/.cache"]
 
     static func linuxScratch(server: String, home: String) -> String {
@@ -91,17 +96,21 @@ extension MCPSandbox {
     static func applyLinux(
         definition: MCPServerDefinition, launch: MCPUpstreamLaunch, policy: MCPSandboxPolicy, configDirectory: URL,
         home: URL, accountHome: String? = passwdHome(), support: MCPLinuxCageSupport = MCPSandbox.linuxSupport,
-        helper: String? = MCPSandbox.linuxHelper, networkFloor: LandlockABI = MCPLinuxCage.networkFloor,
+        helper: String? = MCPSandbox.linuxHelper, network: MCPLinuxCage.NetworkLimit = MCPLinuxCage.networkLimit,
         notice: (String) -> Void, denied: @escaping @Sendable (String, EgressProxyDenial) -> Void
     ) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         let server = definition.name
         let abi: LandlockABI
-        switch MCPLinuxCage.admit(support, networkFloor: networkFloor) {
+        switch MCPLinuxCage.admit(support, network: network) {
         case .failure(let refusal): return .failure(linuxRefusal(server, refusal.reason))
         case .success(let admitted): abi = admitted
         }
         guard let helper else {
             return .failure(linuxRefusal(server, MCPLinuxCageSupport.Unavailable.helperMissing.reason))
+        }
+        // The helper is the first thing to run with this environment, uncaged.
+        if let name = launch.environment.keys.sorted().first(where: MCPLinuxCage.isLoaderVariable) {
+            return .failure(linuxRefusal(server, MCPLinuxCage.Refusal.loaderVariable(name).reason))
         }
         // `~` in the review is the account home; a serve-time HOME that is
         // another directory is a tree the review did not name.
@@ -134,7 +143,7 @@ extension MCPSandbox {
             return .failure(.sandbox(scratchCreationFailure(scratch)))
         }
         let requested = policy.writable.map { $0.hasPrefix("~/") ? homePath + $0.dropFirst(1) : $0 }
-        for path in landlockWriteRoots + defaults + requested {
+        for path in landlockSharedRoots + defaults + requested {
             guard let resolved = resolveExisting(path) else {
                 return .failure(.sandbox(
                     "sandbox.writable \(MCPDisplayedText.field(path)) does not exist; create it, then run `rv mcp serve`"))
@@ -145,10 +154,10 @@ extension MCPSandbox {
                         + "which was not the path reviewed"))
             }
         }
-        let writable = [scratch] + (landlockWriteRoots + defaults + requested).map(lexicalAbsolute)
+        let writable = [scratch] + (defaults + requested).map(lexicalAbsolute)
 
         let protected = linuxProtectedPaths(home: homePath, configDirectory: configDirectory.path)
-        if let conflict = MCPLinuxCage.writableConflict(writable, protected: protected) {
+        if let conflict = MCPLinuxCage.writableConflict(writable + landlockSharedRoots, protected: protected) {
             return .failure(linuxRefusal(server, conflict.reason))
         }
         let readable: [String]
@@ -175,8 +184,9 @@ extension MCPSandbox {
             return .failure(.sandbox(scratchCreationFailure(scratch)))
         }
 
-        let plan = MCPLinuxCage.Plan(floor: max(networkFloor, .tcp), readable: readable, writable: writable, tcpPorts: ports)
-        if let line = MCPLinuxCage.notice(server: server, abi: abi) { notice(line) }
+        let plan = MCPLinuxCage.Plan(
+            readable: readable, writable: writable, shared: landlockSharedRoots, tcpPorts: ports)
+        notice(MCPLinuxCage.notice(server: server, abi: abi))
         var caged = launch
         caged.environment = environment
         caged.executable = helper

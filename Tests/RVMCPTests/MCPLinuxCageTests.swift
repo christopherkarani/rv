@@ -23,29 +23,28 @@ struct MCPLinuxCageTests {
 
     /// Every ABI the cage can run under, and exactly what it leaves open.
     @Test(arguments: [
-        (4, [MCPLinuxCageGap.deviceIoctl, .abstractSocketsAndSignals, .pathnameUnixSockets, .udp, .otherSockets]),
-        (5, [.abstractSocketsAndSignals, .pathnameUnixSockets, .udp, .otherSockets]),
-        (6, [.pathnameUnixSockets, .udp, .otherSockets]),
-        (7, [.pathnameUnixSockets, .udp, .otherSockets]),
-        (8, [.pathnameUnixSockets, .udp, .otherSockets]),
-        (9, [.udp, .otherSockets]),
-        (10, [.otherSockets]),
-        (11, [.otherSockets]),
-        (12, [.otherSockets]),
-        (99, [.otherSockets]),
+        (4, [MCPLinuxCageGap.deviceIoctl, .abstractSocketsAndSignals, .pathnameUnixSockets, .udp]),
+        (5, [.abstractSocketsAndSignals, .pathnameUnixSockets, .udp]),
+        (6, [.pathnameUnixSockets, .udp]),
+        (8, [.pathnameUnixSockets, .udp]),
+        (9, [.udp]),
+        (10, []),
+        (12, []),
+        (99, []),
     ])
-    func eachABIClosesItsGapsAndNoneClosesTheLast(version: Int, open: [MCPLinuxCageGap]) {
-        #expect(MCPLinuxCageGap.open(at: abi(version)) == open)
+    func eachABIClosesItsGapsAndNoneClosesTheLastTwo(version: Int, closable: [MCPLinuxCageGap]) {
+        #expect(MCPLinuxCageGap.open(at: abi(version)) == closable + [.tcpOutsideTheRules, .otherSockets])
     }
 
-    @Test func everyGapButOneHasTheABIThatClosesIt() {
+    @Test func everyGapSaysWhichABIClosesItAndWhetherItReachesTheNetwork() {
         for gap in MCPLinuxCageGap.allCases {
             switch gap {
-            case .deviceIoctl: #expect(gap.closedAt == .deviceIoctl)
-            case .abstractSocketsAndSignals: #expect(gap.closedAt == .scopes)
-            case .pathnameUnixSockets: #expect(gap.closedAt == .pathnameUnixSockets)
-            case .udp: #expect(gap.closedAt == .udp)
-            case .otherSockets: #expect(gap.closedAt == nil)
+            case .deviceIoctl:
+                #expect(gap.closedAt == .deviceIoctl && gap.reachesTheNetwork == false)
+            case .abstractSocketsAndSignals: #expect(gap.closedAt == .scopes && gap.reachesTheNetwork)
+            case .pathnameUnixSockets: #expect(gap.closedAt == .pathnameUnixSockets && gap.reachesTheNetwork)
+            case .udp: #expect(gap.closedAt == .udp && gap.reachesTheNetwork)
+            case .tcpOutsideTheRules, .otherSockets: #expect(gap.closedAt == nil && gap.reachesTheNetwork)
             }
             #expect(gap.summary.isEmpty == false)
         }
@@ -79,28 +78,48 @@ struct MCPLinuxCageTests {
         #expect(old.contains("ABI 3") && old.contains("ABI 4") && old.contains("Linux 6.7"))
     }
 
-    /// A server is admitted from the floor up and refused below it; a floor
-    /// under the TCP rules is the TCP rules.
-    @Test func admissionIsTheHostsABIAgainstTheNetworkFloor() {
+    /// No ABI holds a network limit, so the release refuses on every one;
+    /// with the limits disclosed instead, every caging host admits.
+    @Test func admissionIsTheHostAndTheAnswerToTheNetworkLimit() {
+        #expect(MCPLinuxCage.networkLimit == .refuse)
         for version in 4...12 {
             let support = MCPLinuxCageSupport.confines(abi(version))
-            #expect(MCPLinuxCage.admit(support, networkFloor: .tcp) == .success(abi(version)))
-            #expect(MCPLinuxCage.admit(support, networkFloor: abi(1)) == .success(abi(version)))
-            let strict = MCPLinuxCage.admit(support, networkFloor: .udp)
-            if version >= 10 {
-                #expect(strict == .success(abi(version)))
-            } else {
-                #expect(strict == .failure(.networkNotConfined(abi: abi(version), floor: .udp)))
-            }
+            #expect(MCPLinuxCage.admit(support) == .failure(.networkNotConfined(abi(version))))
+            #expect(MCPLinuxCage.admit(support, network: .disclose) == .success(abi(version)))
+            #expect(MCPLinuxCage.isRequired(support) == false)
+            #expect(MCPLinuxCage.isRequired(support, network: .disclose))
+            #expect(MCPLinuxCage.unavailability(support)?.contains("cannot keep a server off the network") == true)
+            #expect(MCPLinuxCage.unavailability(support, network: .disclose) == nil)
         }
         for unavailable in [
             MCPLinuxCageSupport.Unavailable.helperMissing, .probeFailed, .noLandlock, .tooOld(abi(3)),
         ] {
-            #expect(MCPLinuxCage.admit(.unavailable(unavailable), networkFloor: .tcp) == .failure(.unavailable(unavailable)))
+            for network in [MCPLinuxCage.NetworkLimit.refuse, .disclose] {
+                #expect(MCPLinuxCage.admit(.unavailable(unavailable), network: network) == .failure(.unavailable(unavailable)))
+                #expect(MCPLinuxCage.unavailability(.unavailable(unavailable), network: network) == unavailable.reason)
+            }
+            #expect(MCPLinuxCage.isRequired(.unavailable(unavailable)) == false)
         }
-        #expect(MCPLinuxCage.networkFloor == .tcp)
-        let reason = MCPLinuxCage.Refusal.networkNotConfined(abi: abi(7), floor: .udp).reason
-        #expect(reason.contains("ABI 7") && reason.contains("UDP") && reason.contains("ABI 10"))
+        // A host that should cage and cannot say so refuses local servers;
+        // one whose kernel has no cage runs them bare, as before.
+        #expect(MCPLinuxCage.isRequired(.unavailable(.helperMissing), network: .disclose))
+        #expect(MCPLinuxCage.isRequired(.unavailable(.probeFailed), network: .disclose))
+        #expect(MCPLinuxCage.isRequired(.unavailable(.noLandlock), network: .disclose) == false)
+        #expect(MCPLinuxCage.isRequired(.unavailable(.tooOld(abi(3))), network: .disclose) == false)
+        let reason = MCPLinuxCage.Refusal.networkNotConfined(abi(7)).reason
+        #expect(reason.contains("ABI 7") && reason.contains("UDP") && reason.contains("MPTCP")
+            && reason.contains("ioctl") == false)
+        #expect(MCPLinuxCage.Refusal.networkNotConfined(abi(10)).reason.contains("UDP;") == false)
+    }
+
+    @Test func loaderVariablesAreTheOnesTheDynamicLoaderActsOn() {
+        for name in ["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "GLIBC_TUNABLES"] {
+            #expect(MCPLinuxCage.isLoaderVariable(name))
+        }
+        for name in ["PATH", "HOME", "LDFLAGS", "ld_preload", "NODE_OPTIONS", "GLIBC", ""] {
+            #expect(MCPLinuxCage.isLoaderVariable(name) == false)
+        }
+        #expect(MCPLinuxCage.Refusal.loaderVariable("LD_PRELOAD").reason.contains("env LD_PRELOAD=... command"))
     }
 
     // MARK: Readable paths
@@ -149,6 +168,14 @@ struct MCPLinuxCageTests {
 
     @Test func tooManyEntriesBesideAProtectedPathIsARefusal() {
         let many = (0...MCPLinuxCage.maximumReadablePaths).map { ("f\($0)", MCPLinuxCage.EntryKind.file) }
+        let list = tree(["/": [("home", .directory)], "/home": many + [(".ssh", .directory)]])
+        #expect(MCPLinuxCage.readable(protecting: ["/home/.ssh"], list: list) == .failure(.tooManyPaths))
+    }
+
+    @Test func moreBytesOfPathsThanARequestCarriesIsARefusal() {
+        let long = String(repeating: "n", count: 200)
+        let many = (0..<(MCPLinuxCage.maximumReadableBytes / 200)).map { ("\(long)\($0)", MCPLinuxCage.EntryKind.file) }
+        #expect(many.count < MCPLinuxCage.maximumReadablePaths)
         let list = tree(["/": [("home", .directory)], "/home": many + [(".ssh", .directory)]])
         #expect(MCPLinuxCage.readable(protecting: ["/home/.ssh"], list: list) == .failure(.tooManyPaths))
     }
@@ -214,20 +241,23 @@ struct MCPLinuxCageTests {
 
     @Test func thePlanIsTheHelpersArguments() {
         let plan = MCPLinuxCage.Plan(
-            floor: .tcp, readable: ["/usr", "/home/me/code"], writable: ["/tmp", "/home/me/.cache/rv-mcp/fs"],
+            readable: ["/usr", "/home/me/code"], writable: ["/home/me/.cache/rv-mcp/fs"], shared: ["/tmp", "/dev"],
             tcpPorts: [40123])
         #expect(plan.arguments(executable: "/usr/bin/env", argv: ["/usr/bin/env", "npx", "--confine", "--"]) == [
-            "--confine", "4", "--read", "/usr", "--read", "/home/me/code", "--write", "/tmp", "--write",
-            "/home/me/.cache/rv-mcp/fs", "--tcp", "40123", "--", "/usr/bin/env", "/usr/bin/env", "npx", "--confine", "--",
+            "--confine", "4", "--read", "/usr", "--read", "/home/me/code", "--write", "/home/me/.cache/rv-mcp/fs",
+            "--temp", "/tmp", "--temp", "/dev", "--tcp", "40123", "--", "/usr/bin/env", "/usr/bin/env", "npx",
+            "--confine", "--",
         ])
-        let closed = MCPLinuxCage.Plan(floor: .udp, readable: [], writable: [], tcpPorts: [])
-        #expect(closed.arguments(executable: "/bin/true", argv: ["true"]) == ["--confine", "10", "--", "/bin/true", "true"])
+        let closed = MCPLinuxCage.Plan(readable: [], writable: [], shared: [], tcpPorts: [])
+        #expect(closed.arguments(executable: "/bin/true", argv: ["true"]) == ["--confine", "4", "--", "/bin/true", "true"])
     }
 
-    @Test func theNoticeNamesWhatTheKernelLeavesOpen() throws {
-        let old = try #require(MCPLinuxCage.notice(server: "fs", abi: .tcp))
+    @Test func theNoticeNamesWhatTheKernelLeavesOpen() {
+        let old = MCPLinuxCage.notice(server: "fs", abi: .tcp)
         #expect(old.contains("fs") && old.contains("ABI 4") && old.contains("UDP") && old.contains("Unix sockets"))
-        let new = try #require(MCPLinuxCage.notice(server: "fs", abi: abi(10)))
-        #expect(new.hasSuffix("this kernel does not block " + MCPLinuxCageGap.otherSockets.summary))
+        let new = MCPLinuxCage.notice(server: "fs", abi: abi(10))
+        #expect(new.hasSuffix("this kernel does not block " + MCPLinuxCageGap.tcpOutsideTheRules.summary + "; "
+            + MCPLinuxCageGap.otherSockets.summary))
+        #expect(new.contains("UDP;") == false)
     }
 }

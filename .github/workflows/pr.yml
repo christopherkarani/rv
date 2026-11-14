@@ -281,12 +281,15 @@ jobs:
             Scripts/require-tests-ran.sh --suites 6 100 timeout 900 swift test --skip-build \
             --filter 'ProcFS|GatewayPeerBindingTests|SecretGatewayLinuxPeerTests|SecretGatewayLinuxAttackTests'
 
-      # The setuid test needs root; the rest repeats what `swift test` ran
-      # as the runner, now with every capability.
+      # The two tests that need root, by name and with no skip allowed;
+      # then what `swift test` ran as the runner, now with every capability.
       - name: MCP sandbox and rv run as root
         run: |
           sudo env "PATH=$PATH" HOME=/root \
-            Scripts/require-tests-ran.sh --suites 3 60 timeout 900 swift test --skip-build \
+            Scripts/require-tests-ran.sh --no-skips 2 timeout 900 swift test --skip-build \
+            --filter 'aSetuidBinaryGivesTheServerNoPrivileges|aLauncherStartedByPidOneStopsAndRuns'
+          sudo env "PATH=$PATH" HOME=/root \
+            Scripts/require-tests-ran.sh --suites 3 70 timeout 900 swift test --skip-build \
             --filter 'MCPLinuxSandboxTests|MCPLinuxCageTests|SecretRunLaunchTests'
 
       # Last: ptrace_scope=3 cannot be undone on a running kernel.
