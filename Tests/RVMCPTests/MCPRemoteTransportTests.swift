@@ -116,34 +116,81 @@ struct MCPRemoteTransportTests {
     }
 }
 
+/// The fixture never said which port it listens on. Thrown from `init`, so
+/// the test stops there and records what the fixture did instead.
+struct RemoteFixtureUnstarted: Error, CustomStringConvertible {
+    var description: String
+}
+
 /// `Scripts/mcp-remote-fixture.py` on a loopback port.
 final class RemoteFixture: @unchecked Sendable {
     static let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().appendingPathComponent("Scripts/mcp-remote-fixture.py")
+    static let startTimeout: TimeInterval = 15
 
     let process = Process()
     let errors = Pipe()
-    private(set) var port = 0
+    let port: Int
 
+    /// Throws `RemoteFixtureUnstarted` when no `PORT n` line arrives within
+    /// `startTimeout`: the fixture is killed and its exit state, its stderr
+    /// and what it printed instead are in the error.
     init(_ arguments: [String] = []) throws {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", "-u", Self.script.path] + arguments
         process.standardOutput = output
         process.standardError = errors
+        let started = Date()
         try process.run()
         var line = Data()
+        var readError: Int32 = 0
         let fd = output.fileHandleForReading.fileDescriptor
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = started.addingTimeInterval(Self.startTimeout)
         while Date() < deadline, line.last != 0x0A {
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 200) > 0 else { continue }
             var byte: UInt8 = 0
-            guard read(fd, &byte, 1) == 1 else { break }
+            let n = read(fd, &byte, 1)
+            if n < 0, errno == EINTR { continue }
+            guard n == 1 else {
+                readError = n < 0 ? errno : 0
+                break
+            }
             line.append(byte)
         }
         let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        port = text.hasPrefix("PORT ") ? Int(text.dropFirst(5)) ?? 0 : 0
+        if text.hasPrefix("PORT "), let port = Int(text.dropFirst(5)), port > 0 {
+            self.port = port
+            return
+        }
+        let elapsed = String(format: "%.1f", Date().timeIntervalSince(started))
+        let running = process.isRunning
+        kill(process.processIdentifier, SIGKILL)
+        process.waitUntilExit()
+        let state = running
+            ? "still running (killed now)"
+            : "exited (\(process.terminationReason == .exit ? "status" : "signal") \(process.terminationStatus))"
+        let stderr = Self.available(errors.fileHandleForReading.fileDescriptor)
+        throw RemoteFixtureUnstarted(description: """
+            remote fixture printed no PORT line in \(elapsed) s: \(state); \
+            stdout \(String(reflecting: text))\(readError == 0 ? "" : ", read errno \(readError)"); \
+            stderr \(String(reflecting: stderr))
+            """)
+    }
+
+    /// What `fd` holds now, without waiting for its end: a child the fixture
+    /// left could still hold the write end open.
+    private static func available(_ fd: Int32) -> String {
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while data.count < 64 * 1024 {
+            let n = read(fd, &chunk, chunk.count)
+            guard n > 0 else { break }
+            data.append(contentsOf: chunk[0..<n])
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     func url(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(port)\(path)")! }
