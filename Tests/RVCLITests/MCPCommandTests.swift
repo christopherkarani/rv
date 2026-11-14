@@ -4258,7 +4258,7 @@ struct MCPCommandTests {
             id: one.id, server: "fs", tool: "write_file", argumentsHash: "h-one", argumentKeys: ["path", "contents"]) == nil)
     }
 
-    @Test func symlinkScratchIsNotAReviewedWrite() throws {
+    @Test(.timeLimit(.minutes(1))) func symlinkScratchIsNotAReviewedWrite() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-scratch-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4283,7 +4283,7 @@ struct MCPCommandTests {
         #expect(error.message.contains(canonicalPath(target.path)))
     }
 
-    @Test func writableSymlinkPlantedAfterConfirmIsRefused() throws {
+    @Test(.timeLimit(.minutes(1))) func writableSymlinkPlantedAfterConfirmIsRefused() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-writable-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4316,7 +4316,7 @@ struct MCPCommandTests {
         #expect(error.message.contains(canonicalPath(target.path)))
     }
 
-    @Test func missingScratchLeafThroughAParentSymlinkIsNotCreated() throws {
+    @Test(.timeLimit(.minutes(1))) func missingScratchLeafThroughAParentSymlinkIsNotCreated() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-leaf-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4342,7 +4342,7 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("rv-mcp").path) == false)
     }
 
-    @Test func sshSymlinkDenyCoversTheTarget() throws {
+    @Test(.timeLimit(.minutes(1))) func sshSymlinkDenyCoversTheTarget() throws {
         // Canonical, as below: through the /var symlink a missing credential
         // name is denied everywhere it could be linked to, the home included.
         let temporary = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
@@ -4383,7 +4383,7 @@ struct MCPCommandTests {
         #expect(allow.contains("regex") == false)
     }
 
-    @Test func sshSymlinkDenyMatchesSpellingsAndAnIntermediateLink() throws {
+    @Test(.timeLimit(.minutes(1))) func sshSymlinkDenyMatchesSpellingsAndAnIntermediateLink() throws {
         // Canonicalize the temp root: with a /var/folders spelling the
         // /var firmlink itself is a symlink ancestor, so every missing
         // credential name generates ancestor openings (patterns for
@@ -4439,7 +4439,7 @@ struct MCPCommandTests {
         #expect(deny.contains("\\.ssh"))
     }
 
-    @Test func credentialDeniesUseThePathSeatbeltChecks() throws {
+    @Test(.timeLimit(.minutes(1))) func credentialDeniesUseThePathSeatbeltChecks() throws {
         // Canonical: see sshSymlinkDenyCoversTheTarget.
         let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
             .appendingPathComponent("rv-sandbox-future-\(UUID().uuidString)", isDirectory: true)
@@ -4471,7 +4471,7 @@ struct MCPCommandTests {
         #expect(allow.contains("(subpath \"\(parent)\")") == false)
     }
 
-    @Test func danglingCredentialTargetStaysDeniedAfterTheWriteAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func danglingCredentialTargetStaysDeniedAfterTheWriteAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-retarget-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4519,7 +4519,7 @@ struct MCPCommandTests {
         #expect(credential > writeAllow)
     }
 
-    @Test func danglingCredentialTargetDeniesTheCaseSeatbeltChecks() throws {
+    @Test(.timeLimit(.minutes(1))) func danglingCredentialTargetDeniesTheCaseSeatbeltChecks() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-case-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4576,7 +4576,7 @@ struct MCPCommandTests {
         #expect(nfdDeny > nfdAllow)
     }
 
-    @Test func dotDotAfterAMissingComponentStillBuildsTheCredentialDeny() throws {
+    @Test(.timeLimit(.minutes(1))) func dotDotAfterAMissingComponentStillBuildsTheCredentialDeny() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-dotdot-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4608,7 +4608,7 @@ struct MCPCommandTests {
         #expect(credential > writeAllow)
     }
 
-    @Test func dotDotThroughASymlinkDeniesThePrivateTmpTarget() throws {
+    @Test(.timeLimit(.minutes(1))) func dotDotThroughASymlinkDeniesThePrivateTmpTarget() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-kernel-allow-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4651,7 +4651,7 @@ struct MCPCommandTests {
         }
     }
 
-    @Test func longSMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func longSMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-long-s-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4701,7 +4701,7 @@ struct MCPCommandTests {
         #expect(sigmaDeny > sigmaAllow)
     }
 
-    @Test func multiScalarCasefoldMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func multiScalarCasefoldMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-fold-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4756,7 +4756,7 @@ struct MCPCommandTests {
         ])
     }
 
-    @Test func nonBMPCasePairMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func nonBMPCasePairMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-nonbmp-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4799,7 +4799,7 @@ struct MCPCommandTests {
         ])
     }
 
-    @Test func ancestorSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
+    @Test(.timeLimit(.minutes(1))) func ancestorSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-ancestor-open-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4856,7 +4856,7 @@ struct MCPCommandTests {
         #expect(lastFileReadRule(foldedProfile, matching: sharpSecret)?.hasPrefix("(deny") == true)
     }
 
-    @Test func dotDotSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
+    @Test(.timeLimit(.minutes(1))) func dotDotSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-open-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4989,7 +4989,7 @@ struct MCPCommandTests {
         #expect(parsed?.first?["server"] as? String == "github")
     }
 
-    @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
+    @Test(.timeLimit(.minutes(1))) func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
         // Under the real home, not the system temp roots: the point is a
         // TMPDIR outside every reviewed temporary root.
         let root = FileManager.default.homeDirectoryForCurrentUser
@@ -5014,7 +5014,7 @@ struct MCPCommandTests {
         #expect(error.message.contains("(subpath") == false)
     }
 
-    @Test func temporaryDirectoryThroughAMissingComponentIsNotAnAllow() throws {
+    @Test(.timeLimit(.minutes(1))) func temporaryDirectoryThroughAMissingComponentIsNotAnAllow() throws {
         let lexical = "/private/tmp/no-such/../../Users/me/src/app"
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-dots-\(UUID().uuidString)", isDirectory: true)

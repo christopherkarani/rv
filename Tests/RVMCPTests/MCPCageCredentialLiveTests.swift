@@ -1,7 +1,6 @@
 #if os(macOS)
 import Darwin
 import Foundation
-import Synchronization
 import Testing
 @testable import RVMCP
 
@@ -26,13 +25,11 @@ struct MCPCageCredentialLiveTests {
         sys.exit(0 if l.renamex_np(sys.argv[1].encode(),sys.argv[2].encode(),2)==0 else 1)' "$1" "$2"; }
         """
 
-    private final class Output: Sendable {
-        let data = Mutex(Data())
-    }
-
     /// Runs `script` under `profile`, polled, never blocked in `waitid`;
     /// killed after 20 s. Its output is read while it runs, so a full pipe
-    /// cannot stall it. Nil when it did not finish.
+    /// cannot stall it, and without waiting for end of file: a child another
+    /// test spawns meanwhile can inherit the pipe's write end and hold it
+    /// open. Nil when it did not finish.
     private func caged(_ profile: String, _ script: String, _ arguments: [String], in directory: String) throws -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
@@ -43,23 +40,31 @@ struct MCPCageCredentialLiveTests {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        let reader = pipe.fileHandleForReading.fileDescriptor
+        try #require(fcntl(reader, F_SETFL, fcntl(reader, F_GETFL) | O_NONBLOCK) == 0)
         try process.run()
-        let output = Output()
-        let drained = DispatchSemaphore(value: 0)
-        let reader = pipe.fileHandleForReading
-        DispatchQueue.global().async {
-            let data = reader.readDataToEndOfFile()
-            output.data.withLock { $0 = data }
-            drained.signal()
+        var output = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        func drain() {
+            while true {
+                let count = read(reader, &buffer, buffer.count)
+                guard count > 0 else { return }
+                output.append(contentsOf: buffer[0..<count])
+            }
         }
         let deadline = Date().addingTimeInterval(20)
-        while process.isRunning, Date() < deadline { usleep(20_000) }
+        while process.isRunning, Date() < deadline {
+            drain()
+            usleep(20_000)
+        }
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
             return nil
         }
-        guard drained.wait(timeout: .now() + 5) == .success else { return nil }
-        return String(decoding: output.data.withLock { $0 }, as: UTF8.self)
+        // The script ran its commands one after another, so everything it
+        // wrote is in the pipe once it has exited.
+        drain()
+        return String(decoding: output, as: UTF8.self)
     }
 
     /// A credential under an ancestor outside every write root: cloning the

@@ -128,7 +128,7 @@ struct MCPStrictProfileTests {
         }
     }
 
-    @Test func profileTextLetsTheCageReachOnlyItsProxy() {
+    @Test(.timeLimit(.minutes(1))) func profileTextLetsTheCageReachOnlyItsProxy() {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-strict-profile-\(UUID().uuidString)", isDirectory: true)
         try! FileManager.default.createDirectory(
@@ -173,7 +173,7 @@ struct MCPStrictProfileTests {
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
     }
 
-    @Test func gatewayPortIsTheOnlyLoopbackReachOfAClosedCage() throws {
+    @Test(.timeLimit(.minutes(1))) func gatewayPortIsTheOnlyLoopbackReachOfAClosedCage() throws {
         let root = try Self.resolvedTemporaryRoot("rv-gateway-profile")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
         // profile() runs after apply() created the scratch; a missing one is refused.
@@ -200,7 +200,7 @@ struct MCPStrictProfileTests {
     /// allows a clone. A symlinked credential adds no read deny of its own:
     /// the credential deny names the link and its target, nothing else, so
     /// system libraries and the write roots stay readable.
-    @Test(arguments: [false, true])
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func linksAndClonesAreRefusedWhereTheyCouldReachACredential(_ symlinkedCredential: Bool) throws {
         let root = try Self.resolvedTemporaryRoot("rv-link-profile")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
@@ -254,7 +254,7 @@ struct MCPStrictProfileTests {
 
     /// More credential ancestors inside the write roots than the profile
     /// names one by one: the profile is refused, never written without them.
-    @Test func tooManyCredentialAncestorsInsideAWriteRootRefuseTheProfile() throws {
+    @Test(.timeLimit(.minutes(1))) func tooManyCredentialAncestorsInsideAWriteRootRefuseTheProfile() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-deep-profile-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -283,7 +283,7 @@ struct MCPStrictProfileTests {
     /// credential link whose target runs through a linked directory
     /// (`~/.aws` → `x/aws`, `x` → `y`), and a linked parent (`~/.config` →
     /// `dotfiles/config`, for `~/.config/gh`).
-    @Test func aSymlinkedDirectoryAboveACredentialIsNamedByItsLinkPath() throws {
+    @Test(.timeLimit(.minutes(1))) func aSymlinkedDirectoryAboveACredentialIsNamedByItsLinkPath() throws {
         let root = try Self.resolvedTemporaryRoot("rv-ancestor-link")
         defer { try? FileManager.default.removeItem(at: root) }
         for name in ["tmp", "scratch", "home", "y/aws", "dotfiles/config/gh"] {
@@ -308,7 +308,7 @@ struct MCPStrictProfileTests {
         #endif
     }
 
-    @Test func hostsAndGatewayEachGetOneLoopbackRule() throws {
+    @Test(.timeLimit(.minutes(1))) func hostsAndGatewayEachGetOneLoopbackRule() throws {
         let root = try Self.resolvedTemporaryRoot("rv-gateway-profile")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
@@ -386,7 +386,7 @@ struct MCPSandboxHostsLiveTests {
         deinit { close(fd) }
     }
 
-    @Test func cagedServerReachesItsProxyButNothingElse() throws {
+    @Test(.timeLimit(.minutes(1))) func cagedServerReachesItsProxyButNothingElse() throws {
         // Under the real home directory, never the checkout: a checkout
         // under /tmp sits inside the cage's writable temp roots by design.
         let root = FileManager.default.homeDirectoryForCurrentUser
