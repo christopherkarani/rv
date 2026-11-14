@@ -1042,12 +1042,13 @@ public final class EgressProxy: @unchecked Sendable {
         external: Bool,
         allowedIPs: EgressAllowedIPs? = nil,
         resolve: (String, Int) -> [EgressDialCandidate],
-        connect: (EgressDialCandidate) -> Int32? = connectCandidate
+        connect: (EgressDialCandidate) -> Int32? = connectCandidate,
+        localAddresses: () -> Set<EgressIPAddress>? = localInterfaceAddresses
     ) -> DialOutcome {
         let candidates = resolve(host, port)
         guard candidates.isEmpty == false else { return .dnsFailed }
         if external {
-            guard externalAnswerAdmitted(candidates, allowedIPs: allowedIPs) else {
+            guard externalAnswerAdmitted(candidates, allowedIPs: allowedIPs, localAddresses: localAddresses) else {
                 return .addressFiltered
             }
         } else {
@@ -1079,7 +1080,17 @@ public final class EgressProxy: @unchecked Sendable {
     /// when every address, public ones included, is covered by the list
     /// and outside the forbidden ranges (`EgressAllowedIPs.covers`), so a
     /// mixed answer with one uncovered address is refused whole.
-    static func externalAnswerAdmitted(_ candidates: [EgressDialCandidate], allowedIPs: EgressAllowedIPs?) -> Bool {
+    ///
+    /// A listed range can include this machine's own interface address
+    /// (192.168.1.0/24 with the Mac at 192.168.1.10), which would hand the
+    /// cage every host service on that port. So a non-public answer is
+    /// also refused when any address equals a local interface address,
+    /// and when the interfaces cannot be listed (`localAddresses` nil).
+    static func externalAnswerAdmitted(
+        _ candidates: [EgressDialCandidate],
+        allowedIPs: EgressAllowedIPs?,
+        localAddresses: () -> Set<EgressIPAddress>? = localInterfaceAddresses
+    ) -> Bool {
         let allPublic = candidates.allSatisfy { candidate in
             var storage = candidate.address
             return withUnsafePointer(to: &storage) { pointer in
@@ -1087,11 +1098,42 @@ public final class EgressProxy: @unchecked Sendable {
             }
         }
         if allPublic { return true }
-        guard let allowedIPs else { return false }
+        guard let allowedIPs, let local = localAddresses() else { return false }
         return candidates.allSatisfy { candidate in
             guard let address = coverageAddress(of: candidate) else { return false }
-            return allowedIPs.covers(address)
+            return allowedIPs.covers(address) && local.contains(address) == false
         }
+    }
+
+    /// Every address on this machine's interfaces (`getifaddrs`), folded
+    /// like a coverage address; IPv6 scope ids are ignored so a scoped
+    /// local address still matches its bytes. Nil when the interfaces
+    /// cannot be listed.
+    static func localInterfaceAddresses() -> Set<EgressIPAddress>? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return nil }
+        defer { freeifaddrs(head) }
+        var addresses = Set<EgressIPAddress>()
+        var cursor = head
+        while let entry = cursor {
+            cursor = entry.pointee.ifa_next
+            guard let raw = entry.pointee.ifa_addr else { continue }
+            let address: EgressIPAddress?
+            switch Int32(raw.pointee.sa_family) {
+            case AF_INET:
+                address = raw.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                    withUnsafeBytes(of: socket.pointee.sin_addr) { EgressIPAddress(ipv4: Array($0)) }
+                }
+            case AF_INET6:
+                address = raw.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                    withUnsafeBytes(of: socket.pointee.sin6_addr) { EgressIPAddress(ipv6: Array($0)) }
+                }
+            default:
+                address = nil
+            }
+            if let address { addresses.insert(address) }
+        }
+        return addresses
     }
 
     /// The address one candidate dials, for `allowed_ips` coverage. Nil

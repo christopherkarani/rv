@@ -89,7 +89,50 @@ import Testing
     func answerSetVerdict(_ row: AnswerCase) throws {
         let candidates = try row.answer.map { try Self.v4($0) }
         let allowed = try row.allowed.map(Self.list)
-        #expect(EgressProxy.externalAnswerAdmitted(candidates, allowedIPs: allowed) == row.admitted)
+        #expect(EgressProxy.externalAnswerAdmitted(candidates, allowedIPs: allowed, localAddresses: { [] }) == row.admitted)
+    }
+
+    /// A range that includes this machine's own interface address (the Mac
+    /// at 192.168.1.10 inside 192.168.1.0/24) must not let the cage reach
+    /// host services: an answer equal to a local address is refused, in
+    /// IPv4 or mapped form; its neighbours still pass.
+    @Test func answerEqualToALocalInterfaceAddressIsRefused() throws {
+        let allowed = try Self.list(["192.168.1.0/24", "fd12:3456:789a::/48"])
+        let local: Set<EgressIPAddress> = [
+            try #require(EgressIPAddress(parsing: "192.168.1.10")),
+            try #require(EgressIPAddress(parsing: "fd12:3456:789a::10")),
+        ]
+        func admitted(_ answer: [EgressDialCandidate]) -> Bool {
+            EgressProxy.externalAnswerAdmitted(answer, allowedIPs: allowed, localAddresses: { local })
+        }
+        #expect(admitted([try Self.v4("192.168.1.11")]))
+        #expect(admitted([try Self.v4("192.168.1.10")]) == false)
+        #expect(admitted([try Self.v6("::ffff:192.168.1.10")]) == false)
+        #expect(admitted([try Self.v4("192.168.1.11"), try Self.v4("192.168.1.10")]) == false)
+        #expect(admitted([try Self.v6("fd12:3456:789a::10")]) == false)
+        #expect(admitted([try Self.v6("fd12:3456:789a::11")]))
+    }
+
+    /// Interfaces that cannot be listed deny every private-range answer;
+    /// public answers do not depend on the listing.
+    @Test func unlistableInterfacesDenyPrivateRangeAnswers() throws {
+        let allowed = try Self.list(["10.0.5.0/24"])
+        let covered = try Self.v4("10.0.5.20")
+        #expect(EgressProxy.externalAnswerAdmitted([covered], allowedIPs: allowed, localAddresses: { nil }) == false)
+        #expect(EgressProxy.externalAnswerAdmitted([try Self.v4("8.8.8.8")], allowedIPs: allowed, localAddresses: { nil }))
+        let dialed = DialedAddresses()
+        let outcome = EgressProxy.dial(
+            host: Self.host, port: 443, external: true, allowedIPs: allowed,
+            resolve: { _, _ in [covered] }, connect: { dialed.record($0) }, localAddresses: { nil }
+        )
+        #expect(outcome == .addressFiltered)
+        #expect(dialed.all.isEmpty)
+    }
+
+    /// The production listing sees this machine's loopback interface.
+    @Test func localInterfaceAddressesListsLoopback() throws {
+        let local = try #require(EgressProxy.localInterfaceAddresses())
+        #expect(local.contains(try #require(EgressIPAddress(parsing: "127.0.0.1"))))
     }
 
     /// `::ffff:10.0.5.20` is the IPv4 host 10.0.5.20: an IPv4 list covers
