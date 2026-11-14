@@ -185,6 +185,14 @@ public final class EgressProxy: @unchecked Sendable {
     private let pins: EgressBinaryPinCache
     private let grants: [EgressProxyCredential: EgressGrant]?
     private let record: @Sendable (EgressProxyDenial) -> Void
+    /// Review-queue intake for `denied-policy` refusals: returns the id of
+    /// the proposal the denial minted (or already pends under), which the
+    /// refusal body names so the user can approve it. Awaited at most
+    /// `proposalWait`; past that the deny goes out without an id.
+    private let review: (@Sendable (EgressProxyDenial) async -> String?)?
+    /// Bound on waiting for `review`. A stuck queue costs each policy deny
+    /// this much latency, never a hang and never an allow.
+    static let proposalWait: TimeInterval = 0.25
     /// Resolves one admitted target to the candidate set `dial` checks and
     /// connects. Production is `boundedResolver(budget: resolverBudget)`;
     /// tests inject answers.
@@ -229,16 +237,19 @@ public final class EgressProxy: @unchecked Sendable {
     /// policy runs, so an unauthenticated sibling cannot ride any grant.
     /// Binary scope composes: when `binaryPolicy` is scoped, the instance
     /// attribution gate runs before credential authentication in both modes.
+    /// `review` is the review-queue intake whose proposal id the refusal
+    /// body names (see `review`).
     public convenience init(
         grants: [EgressProxyCredential: EgressGrant],
         binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
-        record: (@Sendable (EgressProxyDenial) -> Void)? = nil
+        record: (@Sendable (EgressProxyDenial) -> Void)? = nil,
+        review: (@Sendable (EgressProxyDenial) async -> String?)? = nil
     ) {
         self.init(
             policy: .publicHTTPS, grants: grants, binaryPolicy: binaryPolicy, attribution: attribution,
-            pins: pins, record: record
+            pins: pins, record: record, review: review
         )
     }
 
@@ -253,6 +264,7 @@ public final class EgressProxy: @unchecked Sendable {
         attribution: EgressRuntimeAttribution? = nil,
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
         record: (@Sendable (EgressProxyDenial) -> Void)?,
+        review: (@Sendable (EgressProxyDenial) async -> String?)? = nil,
         resolverBudget: EgressResolverBudget = EgressResolverBudget(
             limit: EgressResolverBudget.perProxyLimit, parent: .processCeiling
         ),
@@ -264,6 +276,7 @@ public final class EgressProxy: @unchecked Sendable {
         self.pins = pins
         self.grants = grants
         self.record = record ?? EgressProxy.productionDenialLog()
+        self.review = review
         self.resolverBudget = resolverBudget
         self.resolve = resolve ?? EgressProxy.boundedResolver(budget: resolverBudget)
         admitAttributionPin()
@@ -672,6 +685,9 @@ public final class EgressProxy: @unchecked Sendable {
         return supplementRules.contains(rule)
     }
 
+    /// Writes the 403 refusal (`EgressDenialResponse`: status, Proxy-Status,
+    /// JSON body), closes, and records. Only a `denied-policy` denial asks
+    /// the review queue for a proposal id, bounded by `proposalWait`.
     private func deny(
         client: Int32,
         host: String,
@@ -679,17 +695,43 @@ public final class EgressProxy: @unchecked Sendable {
         reason: EgressDenialReason,
         binaryPath: String? = nil
     ) {
-        _ = EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 403 Forbidden\r\n\r\n".utf8))
-        close(client)
-        record(
-            EgressProxyDenial(
-                host: host,
-                port: port,
-                reason: reason,
-                recordedAt: Date(),
-                binaryPath: binaryPath
-            )
+        let denial = EgressProxyDenial(
+            host: host,
+            port: port,
+            reason: reason,
+            recordedAt: Date(),
+            binaryPath: binaryPath
         )
+        let proposalID = reason == .deniedPolicy ? awaitProposal(for: denial) : nil
+        let response = EgressDenialResponse(reason: reason, host: host, port: port, proposalID: proposalID)
+        _ = EgressProxy.writeAll(client, bytes: response.bytes)
+        close(client)
+        record(denial)
+    }
+
+    /// The review hook's proposal id, or nil when there is no hook or it
+    /// does not answer within `proposalWait`. The intake keeps running past
+    /// the deadline (it is the review queue's own fire-and-forget work);
+    /// only the id is abandoned.
+    private func awaitProposal(for denial: EgressProxyDenial) -> String? {
+        guard let review else { return nil }
+        return Self.boundedProposal(for: denial, review: review, wait: Self.proposalWait)
+    }
+
+    static func boundedProposal(
+        for denial: EgressProxyDenial,
+        review: @escaping @Sendable (EgressProxyDenial) async -> String?,
+        wait: TimeInterval
+    ) -> String? {
+        let answer = Mutex<String?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        Task {
+            let id = await review(denial)
+            answer.withLock { $0 = id }
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + wait) == .success else { return nil }
+        return answer.withLock { $0 }
     }
 
     /// Policy judging this request: the shared policy in open mode, or the
@@ -706,14 +748,11 @@ public final class EgressProxy: @unchecked Sendable {
         return .granted(grant.policy)
     }
 
+    /// One constant 407 shape for missing, malformed, and unknown tokens
+    /// (only the client's own target is echoed): no credential-validity hint.
     private func denyProxyAuthRequired(client: Int32, host: String, port: Int) {
-        _ = EgressProxy.writeAll(
-            client,
-            bytes: Array(
-                "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Bearer\r\nConnection: close\r\n\r\n"
-                    .utf8
-            )
-        )
+        let response = EgressDenialResponse(reason: .deniedCredential, host: host, port: port)
+        _ = EgressProxy.writeAll(client, bytes: response.bytes)
         close(client)
         record(EgressProxyDenial(host: host, port: port, reason: .deniedCredential, recordedAt: Date()))
     }
