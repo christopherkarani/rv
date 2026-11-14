@@ -318,6 +318,70 @@ never starts. Linux has no no-window spawn in `rv run` yet, so it is
 refused there (`rv run: this platform cannot start the command suspended
 ...`) even once its peer check binds process groups.
 
+## Stdio MCP servers (`rv mcp serve`)
+
+A local server in mcp.json gets the real value of every secret in its
+`secrets` map and in `${secret:NAME}` arguments, as before. It can list
+secrets under `placeholders` instead:
+
+```json
+{ "name": "llm", "command": "llm-mcp",
+  "placeholders": ["OPENAI_API_KEY"],
+  "sandbox": { "network": false } }
+```
+
+Each one is staged for that server's launch only, as `rv run` stages it:
+the server gets the placeholder and the base URL (the AWS endpoint and
+stand-in credentials for an `awsSigV4` secret) and never the real value,
+and `rv mcp serve`'s own gateway honors the placeholder only for that
+server's process group.
+
+The field is for local (`command`) servers; a remote server with it is
+rejected. Names are listed once, and a secret a server also gets as a real
+value (`secrets` or `args`) is rejected: a server gets a secret one way.
+`rv mcp trust` shows each placeholder, the variables it sets and the host
+its real value goes to, and signs nothing whose review leaves one out.
+
+Each of these refuses that server, with the reason on serve's stderr; the
+other servers still start:
+
+- mcp.json is not trusted, the platform is not macOS, or the server has no
+  enforced `sandbox` with `network` false (list the hosts it needs in
+  `sandbox.hosts`).
+- A listed secret is not in secrets.json, has `environment` delivery, has
+  an `agents` filter (an MCP server carries no agent tag), or has `approve`
+  rules. No approver can answer for an MCP server, so these are refused
+  before any value is resolved rather than per request as in `rv run`.
+- A variable the secret stages is already set by the server's `env` or
+  `secrets`, or the sandbox hook would not run it under `sandbox-exec`.
+- The host fails `SecretRunCapability.check` (asked once per serve, before
+  any secret is resolved), or the lease cannot be staged.
+
+How it starts the server:
+
+- The cage may dial only the gateway's loopback port (and, with
+  `sandbox.hosts`, the egress proxy's). With `sandbox.hosts`, `NO_PROXY`
+  is `127.0.0.1`: the proxy does not relay loopback.
+- `posix_spawn` starts `sandbox-exec` stopped as the leader of its own
+  process group, with only stdio inherited. `sandbox-exec` and `env` exec
+  in place, so the server keeps that pid and group. rv binds the lease to
+  the group and then sends `SIGCONT`. If the group cannot be read or the
+  resume fails, the stopped child is killed and reaped before it ran, and
+  the lease is revoked.
+- One thread per server waits for the leader to exit, kills what is left
+  of its group, reaps it and revokes the lease, in that order. When the
+  client goes away serve closes the server's stdin, sends `SIGTERM` to the
+  group after 2 seconds and `SIGKILL` a second later. A server that exits
+  is not restarted, and its stdout closing ends its group.
+- The staged records and every gateway record for these placeholders
+  carry `runtime` `mcp:<server>`.
+
+What it does not: a process the server starts that is reparented to
+launchd is not in its group, cannot spend the placeholders and is not
+killed with it. A client that ignores the base-URL variable and calls the
+upstream directly fails: the cage has no other network. Placeholders are
+not offered on Linux yet.
+
 ## Binary binding
 
 `binaries` on a `gateway` or `awsSigV4` secret narrows the runtime check
