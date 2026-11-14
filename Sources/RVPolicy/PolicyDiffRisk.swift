@@ -21,14 +21,10 @@ public struct PolicyNetworkScope: Sendable, Equatable {
     /// Binary identity paths, e.g. `/usr/bin/git`. Entries containing `*`
     /// are wildcards.
     public var binaries: [String]
-    /// Owner-set `allowed_ips` per destination host: the private networks
-    /// that host may reach beyond public unicast.
-    public var allowedIPs: [String: [String]]
 
-    public init(destinations: [String] = [], binaries: [String] = [], allowedIPs: [String: [String]] = [:]) {
+    public init(destinations: [String] = [], binaries: [String] = []) {
         self.destinations = destinations
         self.binaries = binaries
-        self.allowedIPs = allowedIPs
     }
 
     public static let empty = PolicyNetworkScope()
@@ -58,9 +54,6 @@ public struct PolicyDiffRiskFinding: Sendable, Equatable, Hashable, Comparable {
         case newAllowRule = "new-allow-rule"
         case verdictRelaxed = "verdict-relaxed"
         case newSecretExemption = "new-secret-exemption"
-        /// A host gained an `allowed_ips` network: it may now reach that
-        /// private range, a loosening of public-only egress.
-        case privateRangeAllowed = "private-range-allowed"
     }
 
     public enum Severity: String, Sendable, Equatable, Hashable {
@@ -178,7 +171,6 @@ public enum PolicyDiffRisk {
             new: newScope.destinations
         )
         findings += binaryFindings(old: oldScope.binaries, new: newScope.binaries)
-        findings += allowedIPFindings(old: oldScope.allowedIPs, new: newScope.allowedIPs)
         findings += evaluateReplacement(
             existing: oldDocument,
             incoming: newDocument,
@@ -544,43 +536,6 @@ public enum PolicyDiffRisk {
                         detail: "\(range.rawValue) \(parsed.host)"
                     )
                 )
-            }
-        }
-        return findings
-    }
-
-    /// Each `allowed_ips` network a host gains is a loosening (advisory,
-    /// like any new grant). Entries compare canonically, so a respelled
-    /// range already reviewed is not re-flagged. An entry rv would refuse
-    /// at load blocks: forbidden ranges as `sensitive-range`, anything
-    /// unparseable as `unparseable-destination`.
-    private static func allowedIPFindings(
-        old: [String: [String]], new: [String: [String]]
-    ) -> [PolicyDiffRiskFinding] {
-        func canonical(_ entry: String) -> String {
-            (try? EgressCIDR(parsing: entry))?.description ?? entry
-        }
-        var reviewed: [String: Set<String>] = [:]
-        for (host, entries) in old {
-            reviewed[host.lowercased(), default: []].formUnion(entries.map(canonical))
-        }
-        var findings: [PolicyDiffRiskFinding] = []
-        for (rawHost, entries) in new {
-            let host = rawHost.lowercased()
-            for entry in entries where reviewed[host]?.contains(canonical(entry)) != true {
-                do throws(EgressAllowedIPError) {
-                    let parsed = try EgressAllowedIPs(parsing: [entry])
-                    for network in parsed.entries {
-                        findings.append(
-                            PolicyDiffRiskFinding(kind: .privateRangeAllowed, severity: .advisory, detail: "\(host) \(network)"))
-                    }
-                } catch .forbidden(_, let range, _) {
-                    findings.append(
-                        PolicyDiffRiskFinding(kind: .sensitiveRange, severity: .blocking, detail: "\(host) \(entry) \(range)"))
-                } catch {
-                    findings.append(
-                        PolicyDiffRiskFinding(kind: .unparseableDestination, severity: .blocking, detail: "\(host) \(entry)"))
-                }
             }
         }
         return findings
