@@ -15,9 +15,12 @@ struct ELFDynamic: Equatable {
     /// `DT_RUNPATH` and `DT_RPATH` entries, split at `:`. An empty entry
     /// (the current directory, to a loader) is kept.
     var searchPath: [String]
+    /// The loader the kernel starts the file with (`PT_INTERP`), if any.
+    var interpreter: String?
 
     private static let loadSegment: UInt32 = 1
     private static let dynamicSegment: UInt32 = 2
+    private static let interpreterSegment: UInt32 = 3
     private static let neededTag: UInt64 = 1
     private static let stringTableTag: UInt64 = 5
     private static let sonameTag: UInt64 = 14
@@ -33,6 +36,8 @@ struct ELFDynamic: Equatable {
         var paths: [Int] = []
         /// The file's own name (`DT_SONAME`), if it has one.
         var names: [Int] = []
+        /// File offset of the `PT_INTERP` string.
+        var interpreter: Int?
     }
 
     private static func integer<T: FixedWidthInteger>(_ type: T.Type, _ bytes: [UInt8], at offset: Int) -> T? {
@@ -59,6 +64,7 @@ struct ELFDynamic: Equatable {
         guard size >= 56 else { return nil }
         var loads: [(address: UInt64, offset: UInt64, length: UInt64)] = []
         var dynamic: (offset: Int, length: Int)?
+        var interpreter: Int?
         for index in 0..<Int(count) {
             let (start, overflow) = table.addingReportingOverflow(index * Int(size))
             guard overflow == false, start <= bytes.count, let type = integer(UInt32.self, bytes, at: start),
@@ -67,13 +73,17 @@ struct ELFDynamic: Equatable {
                 let length = integer(UInt64.self, bytes, at: start + 32)
             else { return nil }
             if type == loadSegment { loads.append((address, offset, length)) }
+            if type == interpreterSegment {
+                guard let at = Int(exactly: offset), at < bytes.count else { return nil }
+                interpreter = at
+            }
             if type == dynamicSegment {
                 guard let at = Int(exactly: offset), let extent = Int(exactly: length) else { return nil }
                 dynamic = (at, extent)
             }
         }
         // No dynamic section: a static file asks for nothing.
-        guard let dynamic else { return Layout() }
+        guard let dynamic else { return Layout(interpreter: interpreter) }
         guard dynamic.offset >= 0, dynamic.length >= 0, dynamic.offset <= bytes.count - dynamic.length else { return nil }
         var entries: [(tag: UInt64, value: UInt64)] = []
         for start in stride(from: dynamic.offset, to: dynamic.offset + dynamic.length - 15, by: 16) {
@@ -88,8 +98,8 @@ struct ELFDynamic: Equatable {
             let segment = loads.first(where: { address >= $0.address && address - $0.address < $0.length }),
             case let (sum, overflow) = segment.offset.addingReportingOverflow(address - segment.address),
             overflow == false, let strings = Int(exactly: sum), strings <= bytes.count
-        else { return entries.contains { stringTags.contains($0.tag) } ? nil : Layout() }
-        var layout = Layout()
+        else { return entries.contains { stringTags.contains($0.tag) } ? nil : Layout(interpreter: interpreter) }
+        var layout = Layout(interpreter: interpreter)
         for entry in entries where stringTags.contains(entry.tag) {
             guard let value = Int(exactly: entry.value), value <= bytes.count - strings else { return nil }
             switch entry.tag {
@@ -115,6 +125,10 @@ struct ELFDynamic: Equatable {
             if path.isEmpty == false {
                 search += path.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
             }
+        }
+        if let offset = layout.interpreter {
+            guard let path = Self.string(bytes, at: offset) else { return nil }
+            interpreter = path
         }
         self.needed = needed
         searchPath = search

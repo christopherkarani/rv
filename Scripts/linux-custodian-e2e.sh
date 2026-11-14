@@ -71,8 +71,12 @@ trap cleanup EXIT
 # unit cannot see (ProtectHome=yes).
 install -m 0755 "$BUILD/rv" "$BUILD/rv-mcp-custodian" "$STAGE/"
 [[ -x "$BUILD/rv-isolation-exec" ]] && install -m 0755 "$BUILD/rv-isolation-exec" "$STAGE/"
-ldd "$BUILD/rv-mcp-custodian" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | while read -r library; do
+{ ldd "$BUILD/rv"; ldd "$BUILD/rv-mcp-custodian"; } | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | sort -u \
+  | while read -r library; do
   case "$library" in
+    # A toolchain installed system-wide keeps its runtime in its own
+    # directory, which only the build's search path names.
+    */swift/*) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
     /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*) ;;
     *) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
   esac
@@ -93,7 +97,10 @@ chmod 0755 "$STAGE"
 # account can: refused, naming the place, and nothing is installed.
 install -d -m 0755 "$STAGE/unconfined"
 install -d -m 0755 -o nobody "$STAGE/elsewhere"
-cp -p "$STAGE"/rv "$STAGE"/rv-mcp-custodian "$STAGE"/lib*.so* "$STAGE/unconfined/"
+cp -p "$STAGE"/rv "$STAGE"/rv-mcp-custodian "$STAGE/unconfined/"
+for library in "$STAGE"/lib*.so*; do
+  [[ -e "$library" ]] && cp -p "$library" "$STAGE/unconfined/"
+done
 patchelf --set-rpath "$STAGE/elsewhere:\$ORIGIN" "$STAGE/unconfined/rv"
 if refusal="$("$STAGE/unconfined/rv" mcp custodian install 2>&1)"; then
   die "install ran from a copy of rv that loads libraries from $STAGE/elsewhere"

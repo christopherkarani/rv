@@ -91,11 +91,25 @@ for line in sys.stdin:
 ''')
 
 
+# Where the host has a sandbox (Landlock ABI 4 and seccomp filters) every
+# local server needs an entry and runs in it; elsewhere one with an entry
+# is refused.
+def host_cages():
+    helper = os.path.join(os.path.dirname(RV), "rv-isolation-exec")
+    try:
+        report = subprocess.run([helper, "--landlock-abi"], capture_output=True, text=True, timeout=30).stdout.split()
+    except OSError:
+        return False
+    return len(report) == 1 and report[0].isdigit() and int(report[0]) >= 4
+
+
+SANDBOX = {"sandbox": {"network": False}} if host_cages() else {}
+
+
 def write_config(extra_allow=()):
     cfg = {"version": 1, "servers": [{
         "name": "fx", "command": "/usr/bin/python3", "args": [FIXTURE],
-        # Where the host has a sandbox every local server runs in one.
-        "sandbox": {"network": False},
+        **SANDBOX,
         "tools": {"allow": ["echo", *extra_allow], "ask": ["write_note"]}}]}
     with open(f"{CONFIG}/mcp.json", "w") as f:
         json.dump(cfg, f, indent=2)

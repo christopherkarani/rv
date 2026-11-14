@@ -22,6 +22,10 @@ enum ReportRun {
         var userName: String
         var userID: UInt32
         var fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        #if os(Linux)
+        /// Whether this kernel cages local MCP servers (Landlock and seccomp).
+        var linuxCage: @Sendable () -> Bool = { MCPSandbox.enforced }
+        #endif
         var approvalSigning: MCPApprovalSigning = .unavailable
         /// Project whose MCP configs count too (`rv report` passes its
         /// working directory, as `rv mcp check` does); nil for user scope only.
@@ -137,8 +141,16 @@ enum ReportRun {
             audit: auditSummary(inputs),
             sandbox: Report.Sandbox(
                 platform: platform,
-                mcpSandbox: inputs.fileExists(MCPSandbox.sandboxExec),
+                mcpSandbox: mcpSandbox(inputs),
                 peerTrustInstalled: inputs.fileExists("/Library/Application Support/RV/peer-trust.json")))
+    }
+
+    static func mcpSandbox(_ inputs: Inputs) -> Bool {
+        #if os(Linux)
+        inputs.linuxCage()
+        #else
+        inputs.fileExists(MCPSandbox.sandboxExec)
+        #endif
     }
 
     static func mcpSummary(_ inputs: Inputs) -> Report.MCPSummary {

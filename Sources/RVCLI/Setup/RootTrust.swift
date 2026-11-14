@@ -103,7 +103,11 @@ enum RootTrust {
 
     static func live(_ path: String) -> Entry? {
         var info = stat()
-        guard lstat(path, &info) == 0 else { return nil }
+        guard lstat(path, &info) == 0 else {
+            // Not there is an answer. Anything else (a mount root may not
+            // enter) is something this cannot see, and so cannot trust.
+            return errno == ENOENT || errno == ENOTDIR ? nil : Entry(owner: .max, mode: 0)
+        }
         var link: String?
         if info.st_mode & S_IFMT == S_IFLNK {
             var buffer = [UInt8](repeating: 0, count: Int(PATH_MAX))
@@ -123,18 +127,21 @@ enum RootTrust {
 struct LoadedCode: Equatable {
     /// Found before the system's directories, in the order a loader meets them.
     var libraries: [String] = []
+    /// The program's own loader (`PT_INTERP`), which runs before any of them.
+    var interpreter: String?
     /// Every directory the program and those libraries have their loader search.
     var searched: [String] = []
 
     /// Nil when the program or a library found for it is not an ELF file
     /// this reads, or asks its loader for something this cannot follow:
     /// a library by path, or a search entry that is relative, empty, or
-    /// uses a token other than `$ORIGIN`.
+    /// uses a token other than a leading `$ORIGIN`.
     init?(program: String, read: (String) -> Data?, isFile: (String) -> Bool) {
         guard let main = read(program).flatMap(ELFDynamic.init),
             let mainSearch = Self.directories(main, at: program)
         else { return nil }
         searched = mainSearch
+        interpreter = main.interpreter
         var seen: Set<String> = []
         var queue = [(file: main, search: mainSearch)]
         while queue.isEmpty == false {
@@ -162,8 +169,15 @@ struct LoadedCode: Equatable {
         let origin = (path as NSString).deletingLastPathComponent
         var directories: [String] = []
         for entry in file.searchPath {
-            let expanded = entry.replacingOccurrences(of: "${ORIGIN}", with: origin)
-                .replacingOccurrences(of: "$ORIGIN", with: origin)
+            var expanded = entry
+            // `$ORIGIN` is one only as a whole path component: a loader
+            // reads `$ORIGINX` as a directory of that name.
+            for token in ["${ORIGIN}", "$ORIGIN"] where entry.hasPrefix(token) {
+                let rest = entry.dropFirst(token.count)
+                guard rest.isEmpty || rest.hasPrefix("/") else { return nil }
+                expanded = origin + rest
+                break
+            }
             guard expanded.hasPrefix("/"), expanded.contains("$") == false else { return nil }
             directories.append(expanded)
         }

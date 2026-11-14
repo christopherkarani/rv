@@ -720,7 +720,7 @@ enum HelpCatalog {
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(
                     name: "sandbox",
-                    description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
+                    description: "\"sandbox\" cages the server (macOS, Linux 6.7+); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
                     name: "defaults",

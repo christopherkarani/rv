@@ -210,8 +210,9 @@ enum MCPCustodianSetup {
             return .failure(Refusal(message: "\(path) can be changed by an account other than root, and rv run as "
                 + "root, or the services this installs, would load code from there. Copy the directory that holds rv "
                 + "(rv, rv-cli, rv-mcp-custodian and the lib*.so files) into one only root can write, for example "
-                + "with `sudo cp -R`, and run `rv mcp custodian install` from the copy. A build from source also "
-                + "searches its toolchain's directory: see docs/security/mcp-linux-custodian.md. Nothing was installed"))
+                + "with `sudo cp -R`, and run `rv mcp custodian install` from the copy. A build from source needs "
+                + "more (its toolchain's libraries beside it): see docs/security/mcp-linux-custodian.md. "
+                + "Nothing was installed"))
         }
         guard host.hasSystemd else {
             return .failure(Refusal(message: "this host does not run systemd, which starts and confines the custodian; "
@@ -324,7 +325,7 @@ enum MCPCustodianSetup {
                 return ([], [], program)
             }
             if program == copied { libraries = loaded.libraries }
-            for file in [program] + loaded.libraries {
+            for file in [program] + loaded.libraries + (loaded.interpreter.map { [$0] } ?? []) {
                 untrusted += RootTrust.changeable(file, as: .file, inspect: inspect)
             }
             for directory in loaded.searched {

@@ -228,6 +228,14 @@ struct ManagedCommandTests {
 
         let plain = ReportRun.build(inputs(.none))
         #expect(plain.schema == "rv.report.v1")
+        #if os(Linux)
+        // On Linux the MCP sandbox is the kernel's to give, not a file's.
+        var caged = inputs(.none)
+        caged.linuxCage = { true }
+        var bare = inputs(.none)
+        bare.linuxCage = { false }
+        #expect(ReportRun.build(caged).sandbox.mcpSandbox && ReportRun.build(bare).sandbox.mcpSandbox == false)
+        #endif
         #expect(plain.mcp.counts == ["unreviewed": 1])
         #expect(plain.mcp.plaintextCredentials == 1)
         #expect(plain.secrets.items == [.init(name: "GH", source: "hostEnvironment", delivery: "environment")])

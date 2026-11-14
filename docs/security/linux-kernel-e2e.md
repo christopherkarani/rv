@@ -61,25 +61,34 @@ the regime comes from the kernel version, not from the distro's LSM list.
 server in; [mcp-linux-sandbox.md](mcp-linux-sandbox.md)) needs Landlock ABI
 4. Below it (the 5.10, 6.1 and 6.6 lanes) a valid request exits 125 and the
 inner never runs. From ABI 4 the guest checks, with listeners it holds
-outside the cage: a read and a write inside the granted paths succeed and
-outside them fail with `EACCES`; `NO_NEW_PRIVS` is set; a TCP connection is
-refused without a port rule, accepted on the listed port and refused on
-another; a floor above the kernel's ABI, or below 4, exits 125 and runs
-nothing. A shared directory (`--temp`) is writable. Five channels are
-checked against the lane's ABI, open below the ABI that closes them and
-closed from it on: `ioctl` on a device the inner opens (`EACCES` from ABI
-5), an abstract Unix socket and a signal to PID 1 (`EPERM` from ABI 6), a
-pathname Unix socket outside the write roots or in a shared one (`EACCES`
-from ABI 9; one in the inner's own write root stays reachable), and a UDP
-datagram (`EACCES` from ABI 10). So 6.8 shows all five open, 6.12 two, and
-7.3 none. A socket the inner makes itself in a shared directory, and one
-another program made in a write root nested inside a shared directory
-(where the scratch directory is), stay reachable on every lane from ABI
-4. Two more checks hold on those lanes, and are why a network limit is
-refused ([mcp-linux-sandbox.md](mcp-linux-sandbox.md)): `listen` on a
-socket never bound succeeds, and at least one of an MPTCP `connect`, TCP
-fast open and MPTCP fast open reaches a listener with no port rule. The
-guest prints which (`INFO tcp-routes`).
+outside the cage:
+
+- **Files and privileges.** A read and a write inside the granted paths
+  succeed and outside them fail with `EACCES`; `NO_NEW_PRIVS` is set; a
+  shared directory (`--temp`) is writable; a floor above the kernel's
+  ABI, or below 4, exits 125 and runs nothing.
+- **TCP.** A connection is refused without a port, made to the listed
+  port on loopback, and refused on another port. The listed port also
+  answers on a second address of the guest (`10.99.0.1`): reached outside
+  the cage, refused inside it with the port listed and without. The
+  inner's exit status comes back through the connector.
+- **The routes Landlock's TCP rules miss.** An MPTCP `connect`, TCP fast
+  open, MPTCP fast open, `listen` on a socket never bound, a UDP
+  datagram and `io_uring_setup`: each succeeds outside the cage and is
+  refused inside it (`EACCES`; `ENOSYS` for io_uring), with a port listed
+  and without. The guest prints the three results per route
+  (`INFO route`).
+- **Unix sockets.** Another program's pathname socket, outside the write
+  roots or in a shared one, is never reached. An abstract one is refused
+  (`EACCES` at `socket` below ABI 9, `EPERM` from Landlock from it on). A
+  datagram `socketpair` sent to another program's socket works outside
+  the cage and is refused inside it. A socket in the inner's own write
+  root, one in a write root nested in a shared directory, and one the
+  inner makes itself are reached from ABI 9 and refused below it; a
+  stream `socketpair` works on every lane.
+- **What only Landlock mediates** follows the lane's ABI: `ioctl` on a
+  device the inner opens (`EACCES` from ABI 5) and a signal to PID 1
+  (`EPERM` from ABI 6). So 6.8 shows both open, 6.12 and 7.3 neither.
 
 ## Image route
 

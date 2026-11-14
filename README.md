@@ -254,12 +254,14 @@ rv is one binary, 25 commands. The rest of the surface:
   custodian rv's signing key is a file any process running as you can
   read: mcp.json is never trusted, `rv mcp serve` launches no servers,
   and `rv mcp trust` and `rv mcp approve` refuse. The MCP server sandbox
-  is macOS only in this release: Landlock, the Linux mechanism, cannot
-  keep a server off the network, so rv does not claim it
-  ([details](docs/security/mcp-linux-sandbox.md)). Where a host has no
-  sandbox, servers that ask for one, or that an organization policy with
-  `requireSandbox` covers, are refused rather than run uncaged; a server
-  with no `sandbox` entry runs uncaged with a warning.
+  is Seatbelt on macOS and, on Linux 6.7 or later, Landlock with a
+  seccomp socket filter
+  ([what it closes and what it leaves](docs/security/mcp-linux-sandbox.md)).
+  Where a host has a sandbox every local server needs a `sandbox` entry
+  and runs in it. Where it has none (an older Linux kernel), servers that
+  ask for one, or that an organization policy with `requireSandbox`
+  covers, are refused rather than run uncaged; a server with no `sandbox`
+  entry runs uncaged with a warning.
   While the gateway is in use, the hook guard also keeps an agent from
   adding servers around it: writes to a host's own MCP config
   (`~/.claude.json`, `.mcp.json`, Cursor, Codex, Gemini, Claude Code
@@ -308,7 +310,7 @@ rv is one binary, 25 commands. The rest of the surface:
 | `rv run` (placeholders for one command) | yes | yes; needs `rv-isolation-exec` beside rv (the installer puts it there) and Linux 5.9+ |
 | MCP gateway: per-tool policy, tool pinning, audit | yes | yes, with the custodian installed |
 | MCP approvals signed by a key the agent cannot use | RVApprovals.app (Touch ID or password) | `sudo rv mcp custodian install` (login password through PAM; systemd) |
-| MCP server sandbox | Seatbelt | not in this release: refused, see [why](docs/security/mcp-linux-sandbox.md) |
+| MCP server sandbox | Seatbelt | Landlock, a seccomp socket filter and, for `sandbox.hosts`, a connector; Linux 6.7+ (x86-64 tested), see [limits](docs/security/mcp-linux-sandbox.md) |
 | Contained workspaces, micro-VMs | yes | no |
 | On-device judge | yes | no (packs only) |
 

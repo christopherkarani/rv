@@ -394,6 +394,10 @@ struct CustodianSocketClientTests {
         #expect(try storage.loadKey(1003).get() == nil)
         #expect(try storage.createKey(1003).get().mac("p", []).isEmpty == false)
         #expect(try storage.loadLedger(1003).get() == MCPCustodianLedger())
+        // A ledger that is there is kept, not started again.
+        #expect(storage.saveLedger(1004, ledger))
+        #expect(try storage.createKey(1004).get().mac("p", []).isEmpty == false)
+        #expect(try storage.loadLedger(1004).get() == ledger)
     }
 }
 

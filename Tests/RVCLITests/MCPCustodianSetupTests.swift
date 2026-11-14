@@ -171,10 +171,20 @@ struct MCPCustodianSetupTests {
             || loaded.searched.contains(URL(fileURLWithPath: builtCustodian).resolvingSymlinksInPath()
                 .deletingLastPathComponent().path))
         #expect(LoadedCode(program: "/etc/hostname", read: { files.contents(atPath: $0) }, isFile: isFile) == nil)
-        // The live reader agrees with the system about the system's own.
-        #expect(RootTrust.changeable("/usr/bin/env", as: .file, inspect: RootTrust.live).isEmpty)
-        #expect(RootTrust.changeable("/usr/lib", as: .searched, inspect: RootTrust.live).isEmpty)
-        #expect(RootTrust.changeable("/tmp", as: .searched, inspect: RootTrust.live) == ["/tmp"])
+        // The real binary names the system's loader.
+        let built = try #require(files.contents(atPath: builtCustodian).flatMap(ELFDynamic.init))
+        #expect(built.interpreter?.hasPrefix("/lib") == true && loaded.interpreter == built.interpreter)
+        // The live reader agrees with the system about the system's own,
+        // where the system looks the usual way (in some build sandboxes
+        // `/` is nobody's and `/tmp` is private).
+        var slash = stat()
+        var temporary = stat()
+        if stat("/", &slash) == 0, slash.st_uid == 0, stat("/tmp", &temporary) == 0, temporary.st_mode & 0o1002 == 0o1002 {
+            #expect(RootTrust.changeable("/usr/bin/env", as: .file, inspect: RootTrust.live).isEmpty)
+            #expect(RootTrust.changeable("/usr/lib", as: .searched, inspect: RootTrust.live).isEmpty)
+            #expect(RootTrust.changeable("/tmp", as: .searched, inspect: RootTrust.live) == ["/tmp"])
+        }
+        #expect(RootTrust.live("/no/such/path") == nil)
     }
     #endif
 
@@ -260,7 +270,7 @@ struct MCPCustodianSetupTests {
     /// section with these entries, then the strings they name.
     private func elf(
         needed: [String] = [], runpath: String? = nil, soname: String? = nil, other: [(tag: UInt64, name: String)] = [],
-        mergedTail: Bool = false
+        mergedTail: Bool = false, interpreter: String? = nil
     ) -> Data {
         var strings: [UInt8] = [0]
         var entries: [(UInt64, UInt64)] = []
@@ -278,18 +288,26 @@ struct MCPCustodianSetupTests {
         }
         if let soname { add(14, soname) }
         for (tag, name) in other { add(tag, name) }
-        let dynamicOffset = 64 + 2 * 56
+        let dynamicOffset = 64 + 3 * 56
         let stringsOffset = dynamicOffset + (entries.count + 2) * 16
         entries.append((5, UInt64(stringsOffset)))
         entries.append((0, 0))
         var bytes = [UInt8](repeating: 0, count: stringsOffset) + strings
+        let interpreterOffset = bytes.count
+        if let interpreter { bytes += Array(interpreter.utf8) + [0] }
         func put<T: FixedWidthInteger>(_ value: T, at offset: Int) {
             for index in 0..<MemoryLayout<T>.size { bytes[offset + index] = UInt8(truncatingIfNeeded: value >> (8 * index)) }
         }
         bytes.replaceSubrange(0..<6, with: [0x7F, 0x45, 0x4C, 0x46, 2, 1])
         put(UInt64(64), at: 0x20)
         put(UInt16(56), at: 0x36)
-        put(UInt16(2), at: 0x38)
+        put(UInt16(interpreter == nil ? 2 : 3), at: 0x38)
+        if let interpreter {
+            // PT_INTERP.
+            put(UInt32(3), at: 176)
+            put(UInt64(interpreterOffset), at: 176 + 8)
+            put(UInt64(interpreter.utf8.count + 1), at: 176 + 32)
+        }
         // PT_LOAD: the whole file at address 0.
         put(UInt32(1), at: 64)
         put(UInt64(bytes.count), at: 64 + 32)
@@ -357,7 +375,7 @@ struct MCPCustodianSetupTests {
         #expect(loaded.libraries == ["/home/dev/swift/lib/libA.so", "/home/dev/swift/lib/deps/libB.so"])
         #expect(loaded.searched == ["/home/dev/swift/lib", "/opt/rv", "/home/dev/swift/lib/deps"])
         // What a loader would do with these cannot be told from the file.
-        for path in ["lib", "$LIB/rv", "/opt/$PLATFORM", "/opt/lib::/usr/lib"] {
+        for path in ["lib", "$LIB/rv", "/opt/$PLATFORM", "/opt/lib::/usr/lib", "$ORIGINX", "${ORIGIN}lib", "/opt/$ORIGIN"] {
             let odd = ["/opt/rv/rv": elf(needed: ["libc.so.6"], runpath: path)]
             #expect(LoadedCode(program: "/opt/rv/rv", read: { odd[$0] }, isFile: { odd[$0] != nil }) == nil, "\(path)")
         }
@@ -394,6 +412,40 @@ struct MCPCustodianSetupTests {
         entries["/home/dev"] = nil
         #expect(trust(["/opt/rv/rv", "/opt/rv/rv-mcp-custodian"]).untrusted == [])
         #expect(trust(["/opt/rv/missing"]).unreadable == "/opt/rv/missing")
+    }
+
+    /// The loader a program names for itself runs before any library.
+    @Test func aProgramsOwnLoaderIsCheckedToo() throws {
+        let files: [String: Data] = [
+            "/opt/rv/rv": elf(needed: ["libc.so.6"], runpath: "$ORIGIN", interpreter: "/home/dev/nix/ld.so"),
+            "/opt/rv/rv-cli": elf(needed: ["libc.so.6"], runpath: "$ORIGIN", interpreter: "/lib64/ld-linux-x86-64.so.2"),
+        ]
+        #expect(ELFDynamic(try #require(files["/opt/rv/rv"]))?.interpreter == "/home/dev/nix/ld.so")
+        let entries: [String: RootTrust.Entry] = [
+            "/": Self.root, "/opt": Self.root, "/opt/rv": Self.root, "/opt/rv/rv": Self.program,
+            "/opt/rv/rv-cli": Self.program, "/lib64": Self.root, "/lib64/ld-linux-x86-64.so.2": Self.program,
+            "/home": Self.root, "/home/dev": .init(owner: 1000, mode: 0o040755),
+        ]
+        func untrusted(_ program: String) -> [String] {
+            MCPCustodianSetup.sourceTrust(
+                programs: [program], copied: nil, read: { files[$0] }, isFile: { files[$0] != nil },
+                inspect: { entries[$0] }
+            ).untrusted
+        }
+        #expect(untrusted("/opt/rv/rv-cli") == [])
+        // The directory that is someone else's, and the loader missing from it.
+        #expect(untrusted("/opt/rv/rv").sorted() == ["/home/dev", "/home/dev/nix"])
+    }
+
+    /// What cannot be looked at (a mount root may not enter) is not
+    /// "missing": only root could make a missing directory, anyone may be
+    /// behind one that cannot be seen.
+    @Test func aPathThatCannotBeLookedAtIsNotTrusted() {
+        let unseen = RootTrust.Entry(owner: .max, mode: 0)
+        let entries: [String: RootTrust.Entry] = ["/": Self.root, "/home": Self.root, "/home/dev": unseen]
+        #expect(changeable("/home/dev", as: .searched, in: entries) == ["/home/dev"])
+        #expect(changeable("/home/dev/lib", as: .searched, in: entries) == ["/home/dev"])
+        #expect(changeable("/home/other/lib", as: .searched, in: entries) == [])
     }
 
     @Test func anELFFileThatIsNotOneIsNotRead() {

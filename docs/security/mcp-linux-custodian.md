@@ -226,16 +226,21 @@ It refuses, changing nothing, when:
   root can write, for example `sudo cp -R ~/.local/bin /opt/rv`, and run
   `sudo /opt/rv/rv mcp custodian install`. **A build from source** is
   refused there too: its binaries search the toolchain's directory before
-  their own. Rewrite the search path of the copies first
-  (`sudo patchelf --set-rpath '$ORIGIN' /opt/rv/rv /opt/rv/rv-mcp-custodian
-  /opt/rv/lib*.so`), which is what `Scripts/linux-custodian-e2e.sh` does.
+  their own, and the Swift runtime is only there. Copy the runtime
+  libraries the binaries load (the paths `ldd` prints that are not the
+  system's) beside the copies, then rewrite the search path of every
+  copy (`sudo patchelf --set-rpath '$ORIGIN' /opt/rv/rv
+  /opt/rv/rv-mcp-custodian /opt/rv/lib*.so`).
+  `Scripts/linux-custodian-e2e.sh` stages a build this way.
   The check is rv's own, so it only helps while the `rv` you run with
   sudo is one the agent could not have replaced: it tells an honest
   install that it is unsafe, it cannot stop a replaced one;
 - a program among those is not one whose loader rv can follow: not a
   64-bit ELF file, one that names a library by path or through an audit,
   filter or auxiliary entry, or one whose search path has an entry that
-  is relative, empty, or uses a token other than `$ORIGIN`;
+  is relative, empty, or uses a token other than a leading `$ORIGIN`.
+  The loader a program names for itself (`PT_INTERP`) is checked like a
+  library;
 - the host has neither PAM stack;
 - one of the files it writes exists and was not written by rv.
 
@@ -322,6 +327,24 @@ helper's lines from an imitation.
   connection. A grant being used is then already spent: the call is not
   run and the audit log records the grant as forged. A signature being
   made is made twice, and the owner is asked again.
+- **What the source check does not see.** It reads each file the way a
+  loader would, from what the file says. It does not look in the
+  hardware-specific subdirectories glibc tries inside a search directory
+  first (`glibc-hwcaps/`), so a library there that another account owns,
+  inside a directory only root can write, is missed. A file crafted so
+  that this reader and the loader disagree about it (a dynamic section
+  the header says is empty, two string tables) is read wrongly; such a
+  file is one somebody already put where only root can write. A
+  directory on a search path that does not exist is trusted while only
+  root could create it: a release's binaries name the build host's
+  toolchain directory first (`/home/runner/...`), so an account named
+  `runner` created later decides what `sudo rv` loads from that copy.
+  Root's installed copies are not affected by any of these: they are
+  single files copied into root's directory with the search path
+  rewritten. A copy whose search path shares bytes with a symbol name
+  (GNU ld can store one string as the tail of another) is rewritten
+  wrongly and fails to start; rv's own files, linked with lld, are not
+  such.
 - **Accounts from a directory rv's key daemon cannot ask.** The key
   daemon has no network (`PrivateNetwork=yes`, `AF_UNIX` only). An
   account that exists only through a name-service module that goes to
