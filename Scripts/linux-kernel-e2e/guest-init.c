@@ -60,6 +60,8 @@
 #define TEMP ROOT "/temp"
 #define TEMP_SOCKET TEMP "/socket"
 #define SCRATCH_SOCKET SCRATCH "/socket"
+#define NESTED TEMP "/own"
+#define NESTED_SOCKET NESTED "/socket"
 #define ABSTRACT_SOCKET "rv-kernel-e2e"
 #define ESTABLISH_FAILED 125
 #define EXEC_FAILED 126
@@ -142,6 +144,20 @@ static int probe(int argc, char **argv) {
         }
         fd = socket(AF_UNIX, SOCK_STREAM, 0);
         return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, length) == 0);
+    }
+    /* A socket the caged process makes itself, then connects to. */
+    if (strcmp(op, "own-unix") == 0) {
+        struct sockaddr_un address;
+        int client;
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        strncpy(address.sun_path, argv[3], sizeof(address.sun_path) - 1);
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 1) != 0) {
+            return errno;
+        }
+        client = socket(AF_UNIX, SOCK_STREAM, 0);
+        return probe_exit(client >= 0 && connect(client, (struct sockaddr *)&address, sizeof(address)) == 0);
     }
     if (strcmp(op, "signal") == 0) {
         return probe_exit(kill(atoi(argv[3]), 0) == 0);
@@ -399,9 +415,10 @@ static void enforcement_cases(void) {
 /* ---- MCP server confinement (rv-isolation-exec --confine) -------------- */
 
 /* rv-isolation-exec --confine FLOOR --read WORKSPACE --write SCRATCH
- *     --temp TEMP --temp /dev [--tcp PORT] -- INNER INNER probe OP A */
+ *     --write NESTED --temp TEMP --temp /dev [--tcp PORT]
+ *     -- INNER INNER probe OP A */
 static int confined(const char *floor, const char *port, const char *op, const char *a) {
-    char *argv[20];
+    char *argv[24];
     int count = 0;
     argv[count++] = HELPER;
     argv[count++] = "--confine";
@@ -410,6 +427,13 @@ static int confined(const char *floor, const char *port, const char *op, const c
     argv[count++] = WORKSPACE;
     argv[count++] = "--write";
     argv[count++] = SCRATCH;
+    /* A write root inside a shared one, as the scratch directory is
+     * inside the user's cache. Missing below ABI 4, where nothing is
+     * applied and the request is refused before it is looked at. */
+    if (access(NESTED, F_OK) == 0) {
+        argv[count++] = "--write";
+        argv[count++] = NESTED;
+    }
     argv[count++] = "--temp";
     argv[count++] = TEMP;
     argv[count++] = "--temp";
@@ -475,7 +499,10 @@ static int confine_setup(char *port_a, char *port_b, size_t size) {
     if (a == 0 || b == 0 || mkdir(SCRATCH, 0755) != 0 || mkdir(TEMP, 0755) != 0) {
         return 0;
     }
-    if (!unix_listener(TEMP_SOCKET) || !unix_listener(SCRATCH_SOCKET)) {
+    if (mkdir(NESTED, 0755) != 0) {
+        return 0;
+    }
+    if (!unix_listener(TEMP_SOCKET) || !unix_listener(SCRATCH_SOCKET) || !unix_listener(NESTED_SOCKET)) {
         return 0;
     }
     snprintf(port_a, size, "%d", a);
@@ -557,6 +584,10 @@ static void confine_cases(long abi) {
     check(status == (abi >= 9 ? EACCES : 0), "confine-unix-in-temp-by-abi", "abi %ld exit %d", abi, status);
     status = confined("4", NULL, "unix", SCRATCH_SOCKET);
     check(status == 0, "confine-unix-in-write-root-allowed", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "unix", NESTED_SOCKET);
+    check(status == 0, "confine-unix-in-write-root-inside-temp-allowed", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "own-unix", TEMP "/made-here.sock");
+    check(status == 0, "confine-own-unix-in-temp-allowed", "abi %ld exit %d", abi, status);
     /* ioctl on a device the server opens: granted nowhere, /dev included. */
     status = confined("4", NULL, "ioctl", "/dev/null");
     check(status == (abi >= 5 ? EACCES : 0), "confine-device-ioctl-by-abi", "abi %ld exit %d", abi, status);

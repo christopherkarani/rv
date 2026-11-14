@@ -13,7 +13,9 @@ import RVMCP
 /// step at a time, and stops at the first that fails.
 enum MCPCustodianSetup {
     static let account = MCPCustodianSocket.account
-    static let binary = "/usr/local/libexec/rv/rv-mcp-custodian"
+    /// Root's own copy of the custodian and the libraries shipped beside it.
+    static let directory = "/usr/local/libexec/rv"
+    static let binary = directory + "/rv-mcp-custodian"
     static let keyUnit = "/etc/systemd/system/rv-mcp-custodian.service"
     static let presenceUnit = "/etc/systemd/system/rv-mcp-presence.service"
     static let pamFile = "/etc/pam.d/\(MCPCustodianSocket.pamService)"
@@ -165,6 +167,9 @@ enum MCPCustodianSetup {
         var hasSystemd: Bool
         /// The custodian binary beside this rv, or nil.
         var source: String?
+        /// Shared libraries shipped beside it (a release's Swift runtime),
+        /// which it loads from its own directory.
+        var libraries: [String] = []
         var pam: (auth: String, account: String)?
         var accountExists: Bool
         var nologin: String
@@ -201,6 +206,9 @@ enum MCPCustodianSetup {
                 host.nologin, account,
             ]))
         }
+        steps += host.libraries.sorted().map {
+            .installFile(from: $0, to: directory + "/" + ($0 as NSString).lastPathComponent, mode: 0o755)
+        }
         steps += [
             .installFile(from: source, to: binary, mode: 0o755),
             .writeFile(pamFile, contents: pamText(include: pam), mode: 0o644),
@@ -227,7 +235,7 @@ enum MCPCustodianSetup {
         if host.hasSystemd { steps.append(.attempt(["systemctl", "disable", "--now"] + units)) }
         steps += [.removeFile(keyUnit), .removeFile(presenceUnit)]
         if host.hasSystemd { steps.append(.run(["systemctl", "daemon-reload"])) }
-        steps += [.removeFile(pamFile), .removeFile(binary)]
+        steps += [.removeFile(pamFile), .removeTree(directory)]
         if purge {
             steps.append(.removeTree(state))
             if host.accountExists { steps.append(.run(["userdel", account])) }
@@ -239,12 +247,17 @@ enum MCPCustodianSetup {
 
     static func liveHost() -> Host {
         let files = FileManager.default
-        let beside = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
-            .appendingPathComponent("rv-mcp-custodian").path
+        let home = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
+        let beside = home?.appendingPathComponent("rv-mcp-custodian").path
+        let siblings = home.flatMap { try? files.contentsOfDirectory(atPath: $0.path) } ?? []
         return Host(
             isRoot: geteuid() == 0,
             hasSystemd: files.fileExists(atPath: "/run/systemd/system"),
             source: beside.flatMap { files.isExecutableFile(atPath: $0) ? $0 : nil },
+            // `lib*.so`: the runtime a release stages, not a build's test bundles.
+            libraries: siblings.filter { $0.hasPrefix("lib") && ($0.hasSuffix(".so") || $0.contains(".so.")) }.compactMap { name in
+                home?.appendingPathComponent(name).path
+            },
             pam: pamInclude { files.fileExists(atPath: $0) },
             accountExists: getpwnam(account) != nil,
             nologin: files.isExecutableFile(atPath: "/usr/sbin/nologin") ? "/usr/sbin/nologin" : "/sbin/nologin",

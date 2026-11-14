@@ -169,9 +169,9 @@ issue `v1` signatures and keep the same ledger. A bare 64-hex signature
 to the system log (`authpriv`):
 
 1. creates the system account `rv-mcp-custodian` (no home, no shell);
-2. copies `rv-mcp-custodian` from beside rv to
-   `/usr/local/libexec/rv/rv-mcp-custodian`, owned by root, so the
-   services never run a file the owner's account can change;
+2. copies `rv-mcp-custodian` from beside rv (and the shared libraries a
+   release ships beside it) to `/usr/local/libexec/rv/`, owned by root, so
+   the services never run a file the owner's account can change;
 3. writes `/etc/pam.d/rv-mcp-custodian`, which includes `common-auth` and
    `common-account`, or `system-auth`;
 4. writes `rv-mcp-custodian.service` and `rv-mcp-presence.service`, then
@@ -183,7 +183,7 @@ stack, or when one of those files exists and was not written by rv.
 Running it again replaces the binary and files and restarts the services.
 
 `sudo rv mcp custodian uninstall` stops and disables the units and removes
-the unit files, the PAM file and the binary. The keys stay in
+the unit files, the PAM file and `/usr/local/libexec/rv`. The keys stay in
 `/var/lib/rv-mcp-custodian`; `--purge` deletes them and the account, which
 voids every grant and signature. Removing what is already gone succeeds.
 

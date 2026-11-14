@@ -11,10 +11,11 @@ struct MCPCustodianSetupTests {
     private func host(
         isRoot: Bool = true, hasSystemd: Bool = true, source: String? = "/opt/rv/rv-mcp-custodian",
         pam: (auth: String, account: String)? = ("common-auth", "common-account"), accountExists: Bool = false,
-        foreign: Set<String> = []
+        foreign: Set<String> = [], libraries: [String] = []
     ) -> MCPCustodianSetup.Host {
         MCPCustodianSetup.Host(
-            isRoot: isRoot, hasSystemd: hasSystemd, source: source, pam: pam, accountExists: accountExists,
+            isRoot: isRoot, hasSystemd: hasSystemd, source: source, libraries: libraries, pam: pam,
+            accountExists: accountExists,
             nologin: "/usr/sbin/nologin", isForeign: { foreign.contains($0) })
     }
 
@@ -33,6 +34,15 @@ struct MCPCustodianSetupTests {
         // A second install: the account is there, the rest is written again.
         let again = try MCPCustodianSetup.installPlan(host(accountExists: true)).get()
         #expect(again == Array(steps.dropFirst()))
+        // A release ships the Swift runtime beside its binaries; the
+        // custodian's copy loads it from its own directory.
+        let shipped = try MCPCustodianSetup.installPlan(
+            host(accountExists: true, libraries: ["/opt/rv/libswiftCore.so", "/opt/rv/libFoundation.so"])
+        ).get()
+        #expect(shipped.prefix(2) == [
+            .installFile(from: "/opt/rv/libFoundation.so", to: "/usr/local/libexec/rv/libFoundation.so", mode: 0o755),
+            .installFile(from: "/opt/rv/libswiftCore.so", to: "/usr/local/libexec/rv/libswiftCore.so", mode: 0o755),
+        ])
     }
 
     @Test func installRefusesAHostItCannotInstallOnAndChangesNothing() {
@@ -57,14 +67,14 @@ struct MCPCustodianSetupTests {
             .attempt(["systemctl", "disable", "--now", "rv-mcp-custodian.service", "rv-mcp-presence.service"]),
             .removeFile(MCPCustodianSetup.keyUnit), .removeFile(MCPCustodianSetup.presenceUnit),
             .run(["systemctl", "daemon-reload"]),
-            .removeFile(MCPCustodianSetup.pamFile), .removeFile(MCPCustodianSetup.binary),
+            .removeFile(MCPCustodianSetup.pamFile), .removeTree("/usr/local/libexec/rv"),
         ])
         let purged = try MCPCustodianSetup.uninstallPlan(host(accountExists: true), purge: true).get()
         #expect(purged == steps + [.removeTree("/var/lib/rv-mcp-custodian"), .run(["userdel", "rv-mcp-custodian"])])
         // Everything install writes, uninstall removes.
         let installed = try MCPCustodianSetup.installPlan(host()).get()
         for case .writeFile(let path, _, _) in installed { #expect(steps.contains(.removeFile(path))) }
-        for case .installFile(_, let path, _) in installed { #expect(steps.contains(.removeFile(path))) }
+        for case .installFile(_, let path, _) in installed { #expect(path.hasPrefix("/usr/local/libexec/rv/")) }
         guard case .failure(let refusal) = MCPCustodianSetup.uninstallPlan(host(isRoot: false), purge: true) else {
             Issue.record("uninstall planned without root")
             return

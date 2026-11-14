@@ -51,8 +51,8 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
     /// TCP that never passes the two calls Landlock's rules cover (`bind`
     /// and `connect` on a TCP socket): an MPTCP socket, a connection opened
     /// by `sendto` with TCP fast open, and `listen` on a socket never
-    /// bound. Which of these a kernel leaves open varies; every kernel
-    /// measured leaves at least two.
+    /// bound. Which of these a kernel build leaves open varies, by patch
+    /// level as well as version; every one measured leaves the last open.
     case tcpOutsideTheRules
     /// Sockets that are neither TCP, UDP nor Unix: ICMP echo, SCTP and other
     /// families the kernel lets an unprivileged process open.
@@ -85,8 +85,8 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
         case .pathnameUnixSockets: "connections to Unix sockets (session bus, SSH and GPG agents, container daemons)"
         case .udp: "UDP"
         case .tcpOutsideTheRules:
-            "TCP by a route the rules miss (which ones depends on the kernel: MPTCP sockets, TCP fast open, "
-                + "listening without a bind)"
+            "TCP by a route the rules miss (which ones depends on the kernel build: MPTCP sockets, TCP fast "
+                + "open, listening without a bind)"
         case .otherSockets: "sockets that are not TCP, UDP or Unix (ICMP echo, SCTP)"
         }
     }
@@ -290,9 +290,9 @@ public enum MCPLinuxCage {
             let prefix = path == "/" ? "/" : path + "/"
             return protected.contains { $0.hasPrefix(prefix) }
         }
-        // A file written beside a protected one under its name (`name.lock`,
-        // `.name.tmp`) is what a save renames over it: a grant follows the
-        // file, so that one is not granted either.
+        // An entry beside a protected one and named after it (`name.lock`,
+        // `.name.tmp`, `nameXXXXXX`) is what a save renames over it: a grant
+        // follows the file, so that one is not granted either.
         func shadowsProtected(_ name: String, in directory: String) -> Bool {
             let prefix = directory == "/" ? "/" : directory + "/"
             return protected.contains { path in
@@ -330,20 +330,23 @@ public enum MCPLinuxCage {
         return .success(paths)
     }
 
-    /// Whether `name` carries `guarded` as a whole word: not run together
-    /// with a letter or digit on either side. `.git-credentials.lock` and
-    /// `my.netrc` name `.git-credentials` and `.netrc`; `ghostty` does not
-    /// name `gh`.
+    /// Whether `name` is named after `guarded`. A distinctive name (five
+    /// characters or more, or one with a character that is not a letter or
+    /// digit) is carried anywhere in it: `.git-credentials.lock`,
+    /// `.netrcAbCdEf` (a `mkstemp` name), `my.netrc`. A short plain one
+    /// must stand as a whole word, so `ghostty` is not named after `gh`.
     static func names(_ name: String, _ guarded: String) -> Bool {
         guard guarded.isEmpty == false, name != guarded else { return false }
         let text = Array(name.unicodeScalars)
         let word = Array(guarded.unicodeScalars)
         guard text.count > word.count else { return false }
         func isWord(_ scalar: Unicode.Scalar) -> Bool { scalar.properties.isAlphabetic || scalar.properties.numericType != nil }
+        let distinctive = word.count >= 5 || word.contains { isWord($0) == false }
         for start in 0...(text.count - word.count) where Array(text[start..<(start + word.count)]) == word {
-            let before = start == 0 || isWord(text[start - 1]) == false || isWord(word[0]) == false
+            if distinctive { return true }
+            let before = start == 0 || isWord(text[start - 1]) == false
             let end = start + word.count
-            let after = end == text.count || isWord(text[end]) == false || isWord(word[word.count - 1]) == false
+            let after = end == text.count || isWord(text[end]) == false
             if before, after { return true }
         }
         return false

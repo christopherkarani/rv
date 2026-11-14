@@ -19,7 +19,8 @@
  *   scopes    no abstract Unix socket and no signal outside this domain
  *             (ABI 6)
  *   sockets   no connect to a pathname Unix socket outside a --write
- *             path; a --temp path (/tmp, /dev) does not carry it (ABI 9)
+ *             path; a --temp path (/tmp, /dev, the caches) does not
+ *             carry it (ABI 9)
  *   UDP       no bind and no send (ABI 10)
  *
  * What Landlock does not mediate stays open at every ABI: see the limits

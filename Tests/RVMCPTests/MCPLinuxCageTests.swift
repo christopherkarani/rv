@@ -180,17 +180,22 @@ struct MCPLinuxCageTests {
             "/home": [
                 (".git-credentials", .file), (".git-credentials.lock", .file), (".git-credentials~", .file),
                 ("#.git-credentials#", .file), (".netrc.tmp.123", .file), (".config", .directory), ("notes", .file),
-                (".netrcx", .file), ("my.netrc", .file),
+                (".netrcAbCdEf", .file), ("my.netrc", .file), ("netrc", .file),
             ],
             "/home/.config": [("gh", .directory), ("gh.bak", .directory), ("ghostty", .directory), ("light", .directory)],
         ])
         let paths = try MCPLinuxCage.readable(
             protecting: ["/home/.git-credentials", "/home/.netrc", "/home/.config/gh"], list: list
         ).get()
-        #expect(paths == ["/home/.config/ghostty", "/home/.config/light", "/home/.netrcx", "/home/notes"])
+        #expect(paths == ["/home/.config/ghostty", "/home/.config/light", "/home/netrc", "/home/notes"])
         #expect(MCPLinuxCage.names(".git-credentials.lock", ".git-credentials"))
+        // A temporary name run together with the file's (`mkstemp`).
+        #expect(MCPLinuxCage.names(".git-credentialsXXXXXX", ".git-credentials"))
+        #expect(MCPLinuxCage.names("auth.json1234567", "auth.json") && MCPLinuxCage.names("credentials123", "credentials"))
+        // A short plain name only as a whole word.
         #expect(MCPLinuxCage.names("ghostty", "gh") == false && MCPLinuxCage.names("gh", "gh") == false)
         #expect(MCPLinuxCage.names("x", "") == false && MCPLinuxCage.names("a.gh", "gh") && MCPLinuxCage.names("high", "gh") == false)
+        #expect(MCPLinuxCage.names("gh-dash", "gh") && MCPLinuxCage.names("apple", "app") == false)
     }
 
     @Test func tooManyEntriesBesideAProtectedPathIsARefusal() {

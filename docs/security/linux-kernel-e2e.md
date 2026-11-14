@@ -49,7 +49,7 @@ workspace. Each must exit 125 and never exec. The 5.10 and 6.1 lanes skip
 those cases: below ABI 3 the trampoline exits 125 for every argv, so they
 could not tell the argv lock from the ABI refusal. Those lanes prove only the
 refusal. The host script pins the exact number of checks each regime runs (7
-below ABI 3, 23 at ABI 3, 41 from ABI 4), so a dropped case fails the lane.
+below ABI 3, 23 at ABI 3, 43 from ABI 4), so a dropped case fails the lane.
 The guest compares the live Landlock ABI with the lane's expected ABI, so a
 kernel that boots with Landlock disabled fails its lane instead of quietly
 testing the wrong regime. The kernel command line passes `lsm=landlock` so
@@ -72,7 +72,10 @@ closed from it on: `ioctl` on a device the inner opens (`EACCES` from ABI
 pathname Unix socket outside the write roots or in a shared one (`EACCES`
 from ABI 9; one in the inner's own write root stays reachable), and a UDP
 datagram (`EACCES` from ABI 10). So 6.8 shows all five open, 6.12 two, and
-7.3 none. Two checks hold on every lane, and are why a network limit is
+7.3 none. A socket the inner makes itself in a shared directory, and one
+another program made in a write root nested inside a shared directory
+(where the scratch directory is), stay reachable on every lane. Two more
+checks hold on every lane from ABI 4, and are why a network limit is
 refused ([mcp-linux-sandbox.md](mcp-linux-sandbox.md)): `listen` on a
 socket never bound succeeds, and at least one of an MPTCP `connect`, TCP
 fast open and MPTCP fast open reaches a listener with no port rule. The

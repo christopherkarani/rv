@@ -223,11 +223,12 @@ struct MCPLinuxSandboxTests {
     }
 
     /// Why `MCPLinuxCage.networkLimit` refuses: TCP that passes neither of
-    /// those two calls. Which route a kernel leaves open varies (MPTCP is
-    /// denied on some, fast open on others), so each is tried outside the
-    /// cage first: the cage may deny a route, never open one, and it
-    /// leaves `listen` without `bind` and at least one way out open. If a
-    /// kernel closes them all, this fails and the limits in
+    /// those two calls. Which route a kernel build leaves open varies
+    /// (MPTCP `connect` and TCP fast open are each denied on some), so
+    /// each is tried outside the cage first: the cage may deny a route,
+    /// never open one. `listen` without `bind` is open in every cage, and
+    /// where the host has MPTCP at least one way out is too. If a kernel
+    /// closes these, this fails and the limits in
     /// docs/security/mcp-linux-sandbox.md change.
     @Test(.timeLimit(.minutes(2)))
     func tcpThatPassesNeitherConnectNorBindIsNotAllDenied() throws {
@@ -262,14 +263,18 @@ struct MCPLinuxSandboxTests {
             server: "control", executable: "/usr/bin/env",
             arguments: ["python3", home.path + "/project/routes.py", String(open.port)],
             environment: ["PATH": "/usr/bin:/bin"])))
-        #expect(control["listen-unbound"] == "ok" && control["fast-open"] == "ok", "\(control)")
+        #expect(control["listen-unbound"] == "ok", "\(control)")
         let inside = results(try caged(home, "python3 ~/project/routes.py \(open.port)"))
         #expect(Set(inside.keys) == Set(control.keys))
         for (route, outcome) in inside where outcome == "ok" {
             #expect(control[route] == "ok", "\(route) is open in the cage and not outside it")
         }
         #expect(inside["listen-unbound"] == "ok", "\(inside)")
-        #expect(["mptcp", "fast-open", "mptcp-fast-open"].contains { inside[$0] == "ok" }, "\(inside)")
+        // With MPTCP switched off, a kernel that denies fast open leaves no
+        // way out by TCP; with it, every build measured leaves one.
+        if control["mptcp"] == "ok" {
+            #expect(["mptcp", "fast-open", "mptcp-fast-open"].contains { inside[$0] == "ok" }, "\(inside)")
+        }
     }
 
     /// `hosts`: the one port the cage may connect to is the allowlist
