@@ -25,8 +25,25 @@ public struct PolicyRollbackPreview: Sendable, Equatable {
     }
 }
 
-/// The head a rollback preview showed: revision number plus content hash.
-/// Passing it to a rollback binds the write to that exact head.
+/// What an owner approved after a preview: the revision to restore and
+/// the head it replaces, each as revision number plus content hash. A
+/// rollback given this binding refuses `headChanged` when either differs
+/// under the lock.
+public struct PolicyRollbackBinding: Sendable, Equatable {
+    public var target: PolicyRevisionHead
+    public var head: PolicyRevisionHead
+
+    public init(target: PolicyRevisionHead, head: PolicyRevisionHead) {
+        self.target = target
+        self.head = head
+    }
+
+    public init(target: PolicyRevision, head: PolicyRevision) {
+        self.init(target: PolicyRevisionHead(target), head: PolicyRevisionHead(head))
+    }
+}
+
+/// One revision a rollback preview showed: revision number plus content hash.
 public struct PolicyRevisionHead: Sendable, Equatable {
     public var revision: Int
     public var hash: String

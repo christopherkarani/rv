@@ -247,12 +247,41 @@ struct RollbackPreviewTests {
             let before = try directorySnapshot(config).merging(try directorySnapshot(workspace)) { a, _ in a }
 
             #expect(throws: TypedRuleStoreError.headChanged) {
-                _ = try session.rollback(layer: layer, to: 1, expectedHead: PolicyRevisionHead(preview.head))
+                _ = try session.rollback(layer: layer, to: 1, expected: binding(preview))
             }
 
             let after = try directorySnapshot(config).merging(try directorySnapshot(workspace)) { a, _ in a }
             #expect(after == before)
             #expect(try session.listRevisions(layer: layer).count == 3)
+        }
+    }
+
+    @Test func rollbackBoundToAnotherTargetRefusesWithoutWriting() throws {
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let session = PolicyWorkspace(configDirectory: config, workspace: workspace)
+        for layer in [PolicyDocumentLayer.machine, .repo] {
+            try session.upsert(previewDeny, layer: layer)
+            try session.upsert(previewAllow, layer: layer)
+            let preview = try session.previewRollback(layer: layer, to: 1)
+            var wrongHash = binding(preview)
+            wrongHash.target.hash = String(repeating: "0", count: 64)
+            var wrongRevision = binding(preview)
+            wrongRevision.target.revision = 2
+            let before = try directorySnapshot(config).merging(try directorySnapshot(workspace)) { a, _ in a }
+
+            for stale in [wrongHash, wrongRevision] {
+                #expect(throws: TypedRuleStoreError.headChanged) {
+                    _ = try session.rollback(layer: layer, to: 1, expected: stale)
+                }
+            }
+
+            let after = try directorySnapshot(config).merging(try directorySnapshot(workspace)) { a, _ in a }
+            #expect(after == before)
         }
     }
 
@@ -264,7 +293,7 @@ struct RollbackPreviewTests {
         try session.upsert(previewAllow, layer: .machine)
         let preview = try session.previewRollback(layer: .machine, to: 1)
 
-        let head = try session.rollback(layer: .machine, to: 1, expectedHead: PolicyRevisionHead(preview.head))
+        let head = try session.rollback(layer: .machine, to: 1, expected: binding(preview))
 
         #expect(head.revision == 3)
         #expect(try session.loadMachineDocument().rules == [previewDeny])
@@ -335,4 +364,8 @@ private func isolatedPreviewDirectory() throws -> URL {
         .appendingPathComponent("rv-rollback-preview-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
+}
+
+private func binding(_ preview: PolicyWorkspace.RollbackPreview) -> PolicyRollbackBinding {
+    PolicyRollbackBinding(target: preview.target, head: preview.head)
 }

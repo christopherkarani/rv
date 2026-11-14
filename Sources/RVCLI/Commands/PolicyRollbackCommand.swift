@@ -117,7 +117,8 @@ enum PolicyRollbackRun {
         let restored: PolicyRevision
         do {
             restored = try session.rollback(
-                layer: layer, to: revision, expectedHead: PolicyRevisionHead(preview.head))
+                layer: layer, to: revision,
+                expected: PolicyRollbackBinding(target: preview.target, head: preview.head))
         } catch PolicyDiffRiskError.blockedByFindings(let report) {
             var refused = preview
             refused.risk = report
@@ -254,7 +255,7 @@ enum PolicyRollbackRun {
         case TypedRuleStoreError.unknownRevision, TypedRuleStoreError.revisionNotFound:
             return prefix + "unknown revision r\(revision) (see rv policy list\(repo ? " --repo" : ""))\n"
         case TypedRuleStoreError.headChanged:
-            return prefix + "policy changed since preview; nothing was changed. Re-run to review the new head.\n"
+            return prefix + "policy changed since preview; nothing was rolled back. Re-run to review the new head.\n"
         case TypedRuleStoreError.logCorrupted:
             // Machine only (the repo log has no seal). A crash between the
             // policy.toml write and the seal also lands here; the next

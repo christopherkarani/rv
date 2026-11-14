@@ -352,7 +352,7 @@ struct PolicyRollbackCommandTests {
                 }
             }
 
-            #expect(output.stderr == "rv policy rollback: policy changed since preview; nothing was changed. Re-run to review the new head.\n")
+            #expect(output.stderr == "rv policy rollback: policy changed since preview; nothing was rolled back. Re-run to review the new head.\n")
             #expect(try fixture.session.loadMachineDocument().rules == [denyPush, allowDiscard, askReset])
             #expect(try fixture.session.listRevisions(layer: .machine).count == 3)
         }
@@ -382,6 +382,33 @@ struct PolicyRollbackCommandTests {
             #expect(output.stderr.isEmpty)
             #expect(try jsonObject(robot.stdout)["outcome"] as? String == "unchanged")
             #expect(try fixture.snapshot() == before)
+        }
+    }
+
+    @Test func theCurrentHeadWithAnEditedLiveFileIsNotANoOp() async throws {
+        try await withRollbackFixture { fixture in
+            try fixture.saveMachine([denyPush])
+            try fixture.saveMachine([denyPush, allowDiscard])
+            // Hand-edited outside the log: the head is r2, the live file is not.
+            let edited = PolicyDocumentTOML.render(PolicyDocument(rules: [denyPush]))
+            try edited.write(to: fixture.store.machineFileURL, atomically: true, encoding: .utf8)
+            let output = CLIOutputCapture()
+            let confirmed = SummaryRecorder()
+
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: output
+            ) {
+                try await PolicyRollbackRun.execute(
+                    session: fixture.session, layer: .machine, revision: 2, save: true, robot: false
+                ) { summary in
+                    confirmed.summaries.append(summary)
+                }
+            }
+
+            #expect(confirmed.summaries == ["roll the machine policy back to r2"])
+            #expect(output.stdout.contains("already the current policy") == false)
+            #expect(output.stdout.contains("restored r2 as r"))
+            #expect(try fixture.session.loadMachineDocument().rules == [denyPush, allowDiscard])
         }
     }
 

@@ -20,8 +20,11 @@ public enum TypedRuleStoreError: Error, Sendable, Equatable {
     case logMissing
     /// F1: no verified log record carries the requested revision.
     case revisionNotFound
-    /// A rollback bound to a previewed head found a different head under
-    /// the lock: the policy changed since the preview. Nothing was written.
+    /// A rollback bound to a preview (`PolicyRollbackBinding`) found a
+    /// different head or target under the lock: the policy changed since
+    /// the preview. Nothing was rolled back. On the machine layer the
+    /// binding is checked before an interrupted save is reconciled, and
+    /// again under the file lock (see `rollbackMachine(toRevision:...)`).
     case headChanged
 }
 
@@ -361,9 +364,16 @@ public struct TypedRuleStore: Sendable {
     func rollbackMachine(
         toRevision target: Int,
         interlock: RollbackInterlock?,
-        expectedHead: PolicyRevisionHead? = nil
+        expected: PolicyRollbackBinding? = nil
     ) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
+            // The log lock serializes machine saves, so a binding that
+            // already fails here refuses before reconciliation can seal an
+            // interrupted save. An unreadable display log is left to the
+            // cross-check below; the binding is re-checked there.
+            if let expected, let early = try? readRevisions(from: machineRevisionsURL) {
+                try Self.requireBinding(expected, target: target, in: early)
+            }
             let chain = try reconcileInterruptedSave(verified: try loadVerifiedChain())
             // Public revisions are generations, so `target` names the same
             // generation `machineHistory()` and `rv policy list` print.
@@ -383,7 +393,9 @@ public struct TypedRuleStore: Sendable {
                 // computed against history that failed verification.
                 let display = try readRevisions(from: machineRevisionsURL)
                 try MachineRevisionLog.checkDisplay(chain, matches: display)
-                try Self.requireHead(expectedHead, is: display.last)
+                if let expected {
+                    try Self.requireBinding(expected, target: target, in: display)
+                }
                 // Enforcement reads policy.toml and ignores the sealed log.
                 // A deny edited into the live file is part of the posture
                 // this restore would replace, even when the sealed
@@ -587,19 +599,25 @@ public struct TypedRuleStore: Sendable {
     /// anything is written (see `refuseRelaxingRollback`). Dropping an
     /// allow still succeeds. Returns the new head.
     ///
-    /// `expectedHead` binds the rollback to the head a preview showed: when
-    /// the display head under the lock is any other revision, it throws
-    /// `headChanged` before the gate and before anything is written.
+    /// `expected` binds the rollback to the target and head a preview
+    /// showed: when either differs in the display log under the lock, it
+    /// throws `headChanged` before the gate and before the rollback writes.
     public func rollbackMachine(
         to revision: Int,
-        expectedHead: PolicyRevisionHead? = nil
+        expected: PolicyRollbackBinding
     ) throws -> PolicyRevision {
+        try rollbackMachine(to: revision, binding: expected)
+    }
+
+    /// `rollbackMachine(to:expected:)` with an optional binding, for tests
+    /// of the gate itself.
+    func rollbackMachine(to revision: Int, binding: PolicyRollbackBinding?) throws -> PolicyRevision {
         // One implementation: the sealed, byte-exact, single-lock path.
         // Public revisions are generations in both spellings (see
         // `machineHistory()`), so this is a forwarder, not a second
         // rollback with its own numbering and lock discipline.
         do {
-            return try rollbackMachine(toRevision: revision, interlock: nil, expectedHead: expectedHead)
+            return try rollbackMachine(toRevision: revision, interlock: nil, expected: binding)
         } catch TypedRuleStoreError.revisionNotFound {
             throw TypedRuleStoreError.unknownRevision
         }
@@ -614,20 +632,20 @@ public struct TypedRuleStore: Sendable {
     ///
     /// `.policy.lock` is held across the live re-read, both gates, and
     /// the write. `loadRepoDocument` does not take that lock.
-    /// `expectedHead` is the same preview binding as on the machine layer.
+    /// `expected` is the same preview binding as on the machine layer.
     public func rollbackRepo(
         to revision: Int,
         workspace: URL,
-        expectedHead: PolicyRevisionHead? = nil
+        expected: PolicyRollbackBinding
     ) throws -> PolicyRevision {
-        try rollbackRepo(to: revision, workspace: workspace, interlock: nil, expectedHead: expectedHead)
+        try rollbackRepo(to: revision, workspace: workspace, interlock: nil, expected: expected)
     }
 
     func rollbackRepo(
         to revision: Int,
         workspace: URL,
         interlock: RollbackInterlock?,
-        expectedHead: PolicyRevisionHead? = nil
+        expected: PolicyRollbackBinding? = nil
     ) throws -> PolicyRevision {
         let file = Self.repoFileURL(workspace: workspace)
         let lock = file.deletingLastPathComponent()
@@ -635,7 +653,9 @@ public struct TypedRuleStore: Sendable {
         let revisionsURL = repoRevisionsURL(workspace: workspace)
         try withFileLock(at: lock) {
             let entries = try readRevisions(from: revisionsURL)
-            try Self.requireHead(expectedHead, is: entries.last)
+            if let expected {
+                try Self.requireBinding(expected, target: revision, in: entries)
+            }
             guard
                 let target = entries.first(where: { $0.revision == revision }),
                 let head = entries.last
@@ -718,12 +738,19 @@ public struct TypedRuleStore: Sendable {
         }
     }
 
-    /// Preview binding: with an expected head, the log head read under the
-    /// lock must be that exact revision and content, or the rollback
-    /// refuses `headChanged` before the gate runs.
-    private static func requireHead(_ expected: PolicyRevisionHead?, is head: PolicyRevision?) throws {
-        guard let expected else { return }
-        guard let head, head.revision == expected.revision, head.hash == expected.hash else {
+    /// Preview binding: the log read under the lock must still hold the
+    /// previewed target and head, each the exact revision and content, or
+    /// the rollback refuses `headChanged` before the gate runs.
+    private static func requireBinding(
+        _ expected: PolicyRollbackBinding, target revision: Int, in entries: [PolicyRevision]
+    ) throws {
+        func matches(_ entry: PolicyRevision?, _ want: PolicyRevisionHead) -> Bool {
+            entry.map { $0.revision == want.revision && $0.hash == want.hash } == true
+        }
+        guard expected.target.revision == revision,
+              matches(entries.first { $0.revision == revision }, expected.target),
+              matches(entries.last, expected.head)
+        else {
             throw TypedRuleStoreError.headChanged
         }
     }

@@ -127,12 +127,13 @@ public struct PolicyWorkspace: Sendable {
     /// downgrade the safety level, or widen secret exemptions refuse with
     /// `blockedByFindings` before anything is written. Dropping an allow
     /// still succeeds. The gate compares the live policy file.
-    /// `expectedHead` (from a preview) makes the rollback refuse
-    /// `headChanged` when the layer's head moved since that preview.
+    /// `expected` (from a preview) makes the rollback refuse `headChanged`
+    /// when the layer's head or the target moved since that preview. It is
+    /// required, so no caller can skip the binding by omission.
     public func rollback(
         layer: PolicyDocumentLayer,
         to revision: Int,
-        expectedHead: PolicyRevisionHead? = nil
+        expected: PolicyRollbackBinding
     ) throws -> PolicyRevision {
         switch layer {
         case .machine:
@@ -140,13 +141,13 @@ public struct PolicyWorkspace: Sendable {
                 throw PolicyWorkspaceError.missingLayer(.machine)
             }
             return try TypedRuleStore(baseDirectory: directory)
-                .rollbackMachine(to: revision, expectedHead: expectedHead)
+                .rollbackMachine(to: revision, expected: expected)
         case .repo:
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
             return try revisionRepoStore(workspace: workspace)
-                .rollbackRepo(to: revision, workspace: workspace, expectedHead: expectedHead)
+                .rollbackRepo(to: revision, workspace: workspace, expected: expected)
         }
     }
 
