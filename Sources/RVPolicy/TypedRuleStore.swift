@@ -1210,9 +1210,13 @@ private struct PolicyChange {
     /// Tightening only when `PolicyDiffRisk` finds nothing at all in the
     /// replacement (no removed or relaxed deny or ask, no new allow, no
     /// safety downgrade, no new exemption); an unreadable live file is
-    /// unclassified.
+    /// unclassified. A new or changed rule that is not a deny also loosens:
+    /// an `ask` over an action a pack denies can relax it, and
+    /// `PolicyDiffRisk` does not see packs.
     func direction(to document: PolicyDocument) -> ConfigChangeAudit.Direction {
         guard let replacing else { return .loosening }
+        let added = document.rules.filter { replacing.rules.contains($0) == false }
+        guard added.allSatisfy({ $0.verdict == .deny }) else { return .loosening }
         let report = PolicyDiffRisk.evaluateReplacement(
             existing: replacing, incoming: document, secretExemptionSeverity: .blocking)
         return report.findings.isEmpty ? .tightening : .loosening

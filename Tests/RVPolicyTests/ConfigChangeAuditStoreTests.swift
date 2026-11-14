@@ -236,6 +236,11 @@ struct ConfigChangeAuditStoreTests {
         #expect(throws: ConfigChangeUnrecorded.self) {
             try store.saveMachine(PolicyDocument(rules: [rule("allow-push", verdict: .allow)]))
         }
+        // An ask can relax an action a pack denies, which PolicyDiffRisk
+        // does not see: a new ask is not known to tighten.
+        #expect(throws: ConfigChangeUnrecorded.self) {
+            try store.saveMachine(PolicyDocument(rules: [rule("ask-push", verdict: .ask)]))
+        }
         #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
     }
 
