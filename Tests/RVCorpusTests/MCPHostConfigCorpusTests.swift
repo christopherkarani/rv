@@ -239,6 +239,10 @@ struct MCPHostConfigCorpusTests {
         "npm install {lodash,react}", "git add src/*.swift",
         // A dynamic word or `$IFS` with no host word and no stem.
         "npm install $PKG", "echo $IFS", "make $TARGET install",
+        // Spellings where nothing runs them, or that cannot be a host word.
+        "grep -rn claude *", "rg codex *", "grep -rn claude * | head", "tr '[:upper:]' '[:lower:]'",
+        "claude -p \"explain function f() { ... }\"", "codex exec \"fix {x} in ../src\"",
+        "touch f{1..100}", "mkdir -p src/{a,b,c}", "ls *", "npm install np{l..m}",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()

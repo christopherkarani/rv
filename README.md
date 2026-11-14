@@ -276,14 +276,27 @@ rv is one binary, 25 commands. The rest of the surface:
   (`~/.claude.json`, `.mcp.json`, Cursor, Codex, Gemini, Claude Code
   plugins, ...) and host CLIs that add servers (`claude mcp add`, `npx
   @anthropic-ai/claude-code mcp add`, `mcp install`, `@smithery/cli`) ask
-  or deny as `core.mcp:mcp-host-config`. A brace or glob spelling of a
-  host program, its group word or `mcp install` is resolved by what it can
-  produce, not its literal text (`claude m{c,}p add`, `clau?e mcp add`,
-  `chronic m[c]p install`), and a variable or substitution rv cannot read,
-  used as the program after a runner it does not strip (`stdbuf -o0 $c mcp
-  add`) or in a completing position of a `claude`-family mutation, counts
-  as that word; so does one in the subcommand position after a literal
-  `mcp` or `fastmcp` (`chronic mcp $(…) srv`, `ls mcp $X`). `$IFS` or
+  or deny as `core.mcp:mcp-host-config`. Where a word may run (the
+  program, any word after a runner, or an operand of a program not known
+  to leave its operands alone), a brace or glob spelling of a host
+  program, its group word or `mcp install` is resolved by every word it
+  can produce, as bash expands comma groups and `{x..y}` ranges, into
+  several words where bash splits them (`claude m{c,}p add`, `clau?e mcp
+  add`, `chronic m[c]p install`, `chronic mc{o..p} install`, `{claude,mcp}
+  add`, `mcp {,} install`); a POSIX class matches any one character, a
+  quoted word holding a blank is only itself, and a word past the
+  spelling budget (over 256 characters, over 64 brace words, or 1,000,000
+  matching steps per command) may be any words. Carried text is read when
+  it holds a host stem or such a word (`watch 'chronic m?p install
+  srv'`). Where nothing runs the word (a `grep` or `rg` operand, a commit
+  message) and in text such a command carries, only literal words count
+  (`grep -rn claude * | head` allows). A variable or substitution rv
+  cannot read, used as the program at any position after a runner it does
+  not strip and followed anywhere by a group word (`stdbuf -o0 $c mcp
+  add`), or in a completing position of a `claude`, `codex`, `gemini`,
+  `opencode` or `cursor-agent` mutation, counts as that word; so does one
+  in the subcommand position after a literal `mcp` or `fastmcp` where it
+  may run (`chronic mcp $(…) srv`, `ls mcp $X`). `$IFS` or
   `${IFS}`, in any quoting, on a line that runs something and may name a
   host CLI asks as text rv's tokenizer cannot follow (`claude${IFS}mcp
   add`, `sh -c 'claude${IFS}mcp add'`). *Known limits:* a nested agent
@@ -300,10 +313,12 @@ rv is one binary, 25 commands. The rest of the surface:
   ./2.0.14 …`, `$D/versions/…`); or a git hook — which `git commit -m`
   still runs — diff/pager tool or `.ackrc`/lesskey file set up earlier).
   Also not caught: a value rv cannot read standing for the `mcp` host
-  word of the `mcp install` installer with no stripped runner (`chronic
-  $M install srv`; asking there would fire on every `$PM install`); a
-  brace, glob or dynamic spelling of
-  a stem inside opaque text never re-parsed as a shell command line
+  word of the `mcp install` installer, in any position and after any
+  runner (`chronic $M install srv`, `stdbuf $M install srv`; asking there
+  would fire on every `$PM install`); a glob the filesystem expands into
+  several words that supply both a host and its group (`* add x` in a
+  directory holding only `claude` and `mcp`); a brace, glob or dynamic
+  spelling of a stem inside opaque text never re-parsed as a shell command line
   (`python3 -c "os.system('claude m{c,}p add')"`); and a config file name
   written through a brace or glob spelling (`echo {} > .{mcp,x}.json`).
   Text that names a host mutation asks even as data (`git commit -m 'run
@@ -318,16 +333,19 @@ rv is one binary, 25 commands. The rest of the surface:
   (`make -C|--directory`, `npm -C|--prefix|-w|--workspace`, `pnpm
   -C|--dir|--filter`, `bun --cwd|-F|--filter`: `make -C mcp install`;
   `pnpm -w mcp install` and `yarn --cwd mcp install` ask) and as text on a
-  line that runs nothing: one `grep`, `rg`, `echo`, `printf`, `git
-  commit|tag` or `gh pr|issue create|comment|edit`, written with no
+  line that runs nothing: one `grep`, `rg` (no `--pre` or
+  `--hostname-bin`), `echo`, `printf`, `git commit|tag` or `gh pr|issue
+  create|comment|edit`, written with no
   backslash in its program or subcommand, and no pipe, list, redirect,
   substitution or parenthesis anywhere (`git commit -m 'add mcp install
   docs'`; after `cd x &&` it asks). Text that may name a host CLI and
   that rv's shell tokenizer cannot follow asks on any other line: a
   backslash before a quote or blank (`watch "sh -c \"claude mcp add
-  x\""`, `'\''`, `claude\ mcp`), `\'` inside `$'…'`, and zsh `=(…)`. This
-  also asks for some harmless commands, such as `cat ~/Library/Application\
-  Support/Claude/…`, `jq ".a[\"x\"]" config.json` or a commit message with
+  x\""`, `'\''`, `claude\ mcp`), `\'` inside `$'…'`, and zsh `=(…)`; so
+  does such text with a glob that may be a host word. This also asks for
+  some harmless commands, such as `cat ~/Library/Application\
+  Support/Claude/…`, `ls ~/Library/Application\ Support/*`, `jq
+  ".a[\"x\"]" config.json` or a commit message with
   `\"` after `cd x &&`. zsh `=claude` counts as `claude`.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound

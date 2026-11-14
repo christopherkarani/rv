@@ -10,6 +10,7 @@ import Foundation
 /// (`hasUnfollowableShellText`) that may name one counts too. Text scanned
 /// as program text (`textNamesHostMCPMutation`) that holds a stem spends
 /// pieces: at most `maxTokenPieces` in one text and `maxPieces` in all.
+/// Brace and glob spellings spend `spelling` (`SpellingBudget`).
 struct HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
@@ -34,6 +35,16 @@ struct HostTextReads {
     /// The read in progress re-splits operands already judged in their own
     /// command (`joinedReadsRun`).
     private(set) var resplit = false
+    /// The read in progress is text a command that never runs its operands
+    /// carries (`isNonExecutor`, not a printer: a `grep` pattern, a commit
+    /// message): only literal words count there, as they did before brace
+    /// and glob spellings were resolved.
+    private(set) var literal = false
+    /// The work budget for brace and glob spellings, across every read.
+    var spelling = SpellingBudget()
+    /// Words `isHostMCPMutation` visited, across every read: a structural
+    /// bound on its work (each pass over a command's words counts them).
+    private(set) var wordVisits = 0
 
     init() {}
 
@@ -52,19 +63,30 @@ struct HostTextReads {
         unfollowable = true
     }
 
+    /// Counts `count` words visited by one pass of `isHostMCPMutation`.
+    mutating func visit(words count: Int) {
+        wordVisits += count
+    }
+
     /// Whether `text`, read as a command line, runs a host MCP mutation. A
     /// `nested` read is a word's own quoting level: its words and joined
     /// tails are read in turn (`carriesHostMCPText`). A flat read is a
     /// re-split of words already read one by one (a joined tail): only its
     /// commands are judged. A `dataOnly` read is text nothing runs
-    /// (`isInertLine`, `isNonExecutor`); reads inside it are data too. Text
-    /// that runs and that the tokenizer cannot follow counts.
+    /// (`isInertLine`, `isNonExecutor`); reads inside it are data too. A
+    /// `literalOnly` read, and every read inside it, judges literal words
+    /// only (`literal`). Text that runs and that the tokenizer cannot follow
+    /// counts.
     mutating func runsHostMCPMutation(
-        _ text: String, nested: Bool = true, dataOnly: Bool = false, resplit splitting: Bool = false
+        _ text: String, nested: Bool = true, dataOnly: Bool = false, resplit splitting: Bool = false,
+        literalOnly: Bool = false
     ) -> Bool {
         let reading = inert || dataOnly
-        let key = (nested ? "n" : "f") + (reading ? "d" : "r") + (splitting ? "s" : "w") + text
-        guard mayNameHostMCP(text), seen.insert(key).inserted else { return false }
+        let literalReading = literal || literalOnly
+        let key = (nested ? "n" : "f") + (reading ? "d" : "r") + (splitting ? "s" : "w")
+            + (literalReading ? "l" : "e") + text
+        let mayName = literalReading ? holdsHostMCPStem(text) : mayNameHostMCP(text, budget: &spelling)
+        guard mayName, seen.insert(key).inserted else { return false }
         guard remaining > 0, depth < Self.maxDepth else {
             exceeded = true
             if depth >= Self.maxDepth { depthExceeded = true }
@@ -78,13 +100,16 @@ struct HostTextReads {
         readsDone += 1
         let outerInert = inert
         let outerResplit = resplit
+        let outerLiteral = literal
         inert = reading
         resplit = splitting
+        literal = literalReading
         if nested { depth += 1 }
         defer {
             if nested { depth -= 1 }
             inert = outerInert
             resplit = outerResplit
+            literal = outerLiteral
         }
         let launched = launchedCommandHeads(text)
         if launched.contains(where: \.truncated) { return true }
@@ -125,10 +150,13 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         let isPrinter = printers.contains(name)
         // Text nothing runs: a plain operand of a non-executor on an inert line.
         let dataOnly = lineInert && isNonExecutor(command)
+        // A non-executor that prints none of its operands (`grep`, `git
+        // commit`): only their literal words count.
+        let literalOnly = isPrinter == false && isNonExecutor(command)
         for word in args + values {
             for variant in Set([word, word.ansiCDecodedIfMarked, decodedWord(word)])
             where variant.contains(where: \.isWhitespace) {
-                if reads.runsHostMCPMutation(variant, dataOnly: dataOnly) { return true }
+                if reads.runsHostMCPMutation(variant, dataOnly: dataOnly, literalOnly: literalOnly) { return true }
             }
         }
         var tails = [args]
@@ -139,11 +167,15 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
             printed.append(contentsOf: operands)
         }
         for tail in tails where tail.isEmpty == false {
-            if joinedReadsRun(tail, &reads, dataOnly: dataOnly) { return true }
+            if joinedReadsRun(tail, &reads, dataOnly: dataOnly, literalOnly: literalOnly) { return true }
         }
         let argv = [command.head] + args
         let decoded = argv.map(\.ansiCDecodedIfMarked)
-        if decoded != argv, reads.runsHostMCPMutation(decoded.joined(separator: " "), nested: false) { return true }
+        if decoded != argv,
+           reads.runsHostMCPMutation(decoded.joined(separator: " "), nested: false, literalOnly: literalOnly)
+        {
+            return true
+        }
     }
     guard printed.isEmpty == false else { return false }
     return joinedReadsRun(printed, &reads, dataOnly: lineInert && launched.allSatisfy(isNonExecutor))
@@ -154,7 +186,7 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
 /// does not: nothing on it runs, and its program and the words
 /// `isNonExecutor` reads are read exactly (`isInertLine`).
 func hostMCPTextIsUnfollowable(_ raw: String, _ launched: [LaunchedCommand], reads: inout HostTextReads) -> Bool {
-    guard hasUnfollowableShellText(raw), mayNameHostMCP(raw) else { return false }
+    guard hasUnfollowableShellText(raw), mayNameHostMCP(raw, budget: &reads.spelling) else { return false }
     if isInertLine(raw, launched), launched.allSatisfy(isNonExecutor) { return false }
     reads.noteUnfollowable()
     return true
@@ -219,9 +251,13 @@ func hasUnfollowableShellText(_ text: String) -> Bool {
 
 /// `words` joined into one command line, as written and decoded, read flat
 /// as a re-split of operands already judged in their own command.
-private func joinedReadsRun(_ words: [String], _ reads: inout HostTextReads, dataOnly: Bool = false) -> Bool {
+private func joinedReadsRun(
+    _ words: [String], _ reads: inout HostTextReads, dataOnly: Bool = false, literalOnly: Bool = false
+) -> Bool {
     for line in Set([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]) {
-        if reads.runsHostMCPMutation(line, nested: false, dataOnly: dataOnly, resplit: true) { return true }
+        if reads.runsHostMCPMutation(line, nested: false, dataOnly: dataOnly, resplit: true, literalOnly: literalOnly) {
+            return true
+        }
     }
     return false
 }
@@ -251,18 +287,40 @@ func hostMCPTextNamesMutation(_ raw: String, reads: inout HostTextReads) -> Bool
 }
 
 /// Whether `text` may hold a word the host CLI checks match: some
-/// substring in `hostMCPStems`, once quote marks, backslashes and newlines
-/// are dropped (the tokenizer joins quoted runs, a line continuation joins
+/// substring in `hostMCPStems`, or a brace or glob word that may expand to
+/// such a word (`spellsHostMCPTableWord`: `m?p`, `mc{o..p}`), spending
+/// `budget`. Each test runs once quote marks, backslashes and newlines are
+/// dropped (the tokenizer joins quoted runs, a line continuation joins
 /// lines), `%XX` decoded (`packageNames`), and case-folded as `foldedWord`
 /// folds, after any number of ANSI-C decodings (`\x63laude`). Every word
 /// those checks match holds a stem (`hostMCPTableWords`).
+func mayNameHostMCP(_ text: String, budget: inout SpellingBudget) -> Bool {
+    decodedLayersMayName(text) { folded in
+        hostMCPStems.contains(where: { folded.contains($0) }) || spellsHostMCPTableWord(folded, budget: &budget)
+    }
+}
+
+/// `mayNameHostMCP` with a budget of its own.
 func mayNameHostMCP(_ text: String) -> Bool {
+    var budget = SpellingBudget()
+    return mayNameHostMCP(text, budget: &budget)
+}
+
+/// Whether some decoding of `text` holds a `hostMCPStems` stem as written,
+/// brace and glob words judged as their own text: the prefilter for a read
+/// that judges literal words only (`HostTextReads.literal`).
+func holdsHostMCPStem(_ text: String) -> Bool {
+    decodedLayersMayName(text) { folded in hostMCPStems.contains(where: { folded.contains($0) }) }
+}
+
+/// `test` on each quote-free, `%XX`-decoded and case-folded ANSI-C decoding
+/// layer of `text`; true past the decoding depth.
+private func decodedLayersMayName(_ text: String, _ test: (String) -> Bool) -> Bool {
     var layer = text
     for _ in 0..<HostTextReads.maxDepth + 2 {
         let plain = String(layer.filter { "'\"\\\n".contains($0) == false })
         for candidate in [plain, percentDecoded(plain)] {
-            let folded = candidate.folding(options: .caseInsensitive, locale: nil)
-            if hostMCPStems.contains(where: { folded.contains($0) }) { return true }
+            if test(candidate.folding(options: .caseInsensitive, locale: nil)) { return true }
         }
         let next = decodingAnsiCEscapes(layer)
         if next == layer { return false }

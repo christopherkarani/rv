@@ -160,11 +160,164 @@ struct MCPHostSpellingTests {
     func lookAlikeNeverAsks(_ item: SpellCase) {
         #expect(judgeSpelling(item.command) == false, "\(item.command)")
     }
+
+    /// Carried text with no stem whose glob or brace word may expand to a
+    /// table word is read, not skipped by the prefilter.
+    @Test("carried text spelling a host word with no stem asks", arguments: [
+        "watch 'chronic m?p install srv'", "watch 'chronic m[c]p install srv'",
+        "watch 'chronic m*p install srv'", "watch 'chronic mc{o..p} install srv'",
+        "echo 'chronic m?p install srv' | sh", "echo 'chronic m[c]p install srv' | sh",
+        "echo 'chronic m*p install srv' | sh", "echo 'chronic mc{o..p} install srv' | sh",
+    ])
+    func carriedSpellingAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    @Test("the prefilter passes a glob or brace word that may be a table word")
+    func prefilterReadsSpellings() {
+        for text in ["chronic m?p install srv", "chronic m[c]p install srv", "chronic m*p install srv",
+                     "chronic mc{o..p} install srv", "stdbuf src/clau?e x", "chronic m?p${IFS}install"]
+        {
+            #expect(mayNameHostMCP(text), "\(text)")
+        }
+        for text in ["ls src/*.swift", "tr '[:upper:]' '[:lower:]'", "cp {a,b}.txt dst/", "touch f{1..100}"] {
+            #expect(mayNameHostMCP(text) == false, "\(text)")
+        }
+    }
+
+    /// A brace word the shell splits into several words, a POSIX class, and
+    /// a word the shell expands to nothing before the subcommand.
+    @Test("a spelling the shell splits or classes still asks", arguments: [
+        "{claude,mcp} add evil -- x", "stdbuf -o0 {claude,mcp} add evil -- x", "chronic {mcp,install} srv",
+        "chronic mcp {,} install srv",
+        "stdbuf -o0 clau[[:alpha:]]e mcp add evil -- x", "claude m[[:alpha:]]p add evil -- x",
+        "stdbuf -o0 {code,--add-mcp} x", "chronic {mcp,$SUB} srv",
+    ])
+    func splitSpellingAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// Spellings count only where the word may run: a glob operand of a
+    /// command that never runs its operands, text such a command carries,
+    /// and a quoted word holding a blank are what they were before
+    /// spellings were resolved.
+    @Test("a spelling that cannot run is only its own text", arguments: [
+        "grep -rn claude *", "rg codex *", "grep -rn claude * | head", "rg -l codex * | wc -l",
+        "grep fastmcp $X", "git commit -m 'claude m?p add'", "grep -rn 'chronic m?p install' src | head",
+        "claude -p \"explain function f() { ... }\"", "codex exec \"fix {x} in ../src\"",
+        "claude -p 'rename {a,b}.ts to ../c'", "tr '[:upper:]' '[:lower:]'",
+        "echo x | tr '[:upper:]' '[:lower:]'", "touch f{1..100}", "mkdir -p src/{a,b,c}", "ls *",
+        "np{l..m} install lodash", "ma{j..k}e install",
+    ])
+    func unrunnableSpellingAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// A program not known to leave its operands alone may run them: these
+    /// ask as their literal forms (`ls mcp install`) always have.
+    @Test("a spelled operand of a program that may run still asks", arguments: [
+        "ls mcp *", "git add mcp *", "ls mcp $DIR",
+    ])
+    func runnableSpelledOperandAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    @Test("brace expansion yields the shell's words")
+    func braceExpansionWords() {
+        func expand(_ word: String) -> [String]? {
+            var budget = SpellingBudget()
+            return boundedBraceExpansions(word, budget: &budget)
+        }
+        #expect(expand("m{c,}p") == ["mcp", "mp"])
+        #expect(expand("{,}") == [])
+        #expect(expand("{mcp,}") == ["mcp"])
+        #expect(expand("mc{o..p}") == ["mco", "mcp"])
+        #expect(expand("x{1..3}") == ["x1", "x2", "x3"])
+        #expect(expand("x{5..1..2}") == ["x5", "x3", "x1"])
+        #expect(expand("{a,{b,c}}") == ["a", "b", "c"])
+        #expect(expand("{{a,b}") == ["{a", "{b"])
+        #expect(expand("f() { ... }") == ["f() { ... }"])
+        #expect(expand("m{b..c..0}p") == ["mbp", "mcp"])
+        #expect(expand("a{1..100}") == ["a1"])
+        // A `..` group bash cannot enumerate stays text.
+        #expect(expand("{a..zz}") == ["{a..zz}"])
+        #expect(expand("{...}") == ["{...}"])
+        #expect(expand("*{1..100}") == nil)
+        #expect(expand("{" + Array(repeating: "a", count: 65).joined(separator: ",") + "}") == nil)
+        #expect(expand("{9223372036854775800..9223372036854775807..5}") == ["9223372036854775800", "9223372036854775805"])
+        #expect(expand("{-9223372036854775807..9223372036854775807}") == ["-9223372036854775807"])
+    }
+
+    /// An over-long integer range stands for one word (`braceRange`): sound
+    /// only while no word the guard matches holds a digit.
+    @Test("no word the guard matches holds a digit")
+    func tableWordsHoldNoDigit() {
+        for word in hostMCPTableWords() + ["install"] {
+            #expect(word.contains(where: \.isNumber) == false, "\(word)")
+        }
+    }
+
+    @Test("a POSIX class matches one character of any kind")
+    func posixClassGlob() {
+        var budget = SpellingBudget()
+        #expect(globCanMatch("clau[[:alpha:]]e", "claude", budget: &budget))
+        #expect(globCanMatch("m[[=c=]]p", "mcp", budget: &budget))
+        #expect(globCanMatch("[:upper:]", "claude", budget: &budget) == false)
+        #expect(globCanMatch("clau[[:alpha:]]", "claude", budget: &budget) == false)
+    }
+
+    /// Many dynamic words after a runner, none followed by a group word: one
+    /// pass over the words, no work per pair.
+    @Test("dynamic words are judged in linear word visits")
+    func dynamicWordsAreLinear() {
+        let args = ["-o0"] + Array(repeating: "$a", count: 16_000) + ["x"]
+        let command = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: args, headIsDynamic: false)
+        var reads = HostTextReads()
+        #expect(isHostMCPMutation(command, reads: &reads) == false)
+        #expect(reads.wordVisits <= 3 * (args.count + 1) + 2)
+        #expect(reads.spelling.steps == 0)
+        #expect(judgeSpelling("stdbuf " + args.joined(separator: " ")) == false)
+    }
+
+    /// A ~64 KiB line of dynamic words, star-heavy globs, a long run of `{`
+    /// and a long `*` word: the spelling work stops at the budget and the
+    /// line asks (fail closed); word visits stay linear.
+    @Test("an adversarial line is judged within the spelling budget")
+    func adversarialLineIsBounded() {
+        let stars = (0..<200).map { index in
+            String(repeating: "*a", count: 120) + "*" + String(Character(UnicodeScalar(UInt8(98 + index % 20))))
+        }
+        let args = ["-o0"] + Array(repeating: "$a", count: 2_000) + stars
+            + [String(repeating: "{", count: 4_000) + ",", String(repeating: "*a", count: 2_000)]
+        let line = "stdbuf " + args.joined(separator: " ")
+        #expect(line.utf8.count > 60_000)
+        let command = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: args, headIsDynamic: false)
+        var reads = HostTextReads()
+        #expect(isHostMCPMutation(command, reads: &reads))
+        #expect(reads.spelling.steps <= SpellingBudget.maxSteps)
+        #expect(reads.wordVisits <= 3 * (args.count + 1) + 2)
+        // The stars alone, with nothing rv cannot expand after them.
+        let starArgs = ["-o0"] + stars + ["x"]
+        let starCommand = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: starArgs, headIsDynamic: false)
+        var starReads = HostTextReads()
+        _ = isHostMCPMutation(starCommand, reads: &starReads)
+        #expect(starReads.spelling.steps <= SpellingBudget.maxSteps)
+        #expect(starReads.wordVisits <= 3 * (starArgs.count + 1) + 2)
+        var lineReads = HostTextReads()
+        #expect(judgeSpelling(line, &lineReads))
+        #expect(lineReads.spelling.steps <= SpellingBudget.maxSteps)
+        #expect(lineReads.readsDone <= HostTextReads.maxReads)
+    }
 }
 
 /// The MCP guard's verdict on `command` in isolation: true asks.
 private func judgeSpelling(_ command: String) -> Bool {
     var reads = HostTextReads()
+    return judgeSpelling(command, &reads)
+}
+
+/// `judgeSpelling` spending `reads`.
+private func judgeSpelling(_ command: String, _ reads: inout HostTextReads) -> Bool {
     let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
     return mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context, reads: &reads)
 }
