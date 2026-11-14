@@ -11,26 +11,36 @@ import Testing
 
 let placeholderSecretsJSON = """
     {"version":1,"secrets":[
-      {"name":"OPENAI_API_KEY","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+      {"name":"OPENAI_API_KEY","source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
        "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"OPENAI_BASE_URL",
                               "placeholderPrefix":"sk-"}}},
-      {"name":"APPROVED","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+      {"name":"APPROVED","source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
        "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"APPROVED_BASE_URL",
                               "approve":[{"methods":["DELETE"],"path":"/v1/**"}]}}},
-      {"name":"CODEX_ONLY","agents":["codex"],"source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+      {"name":"CODEX_ONLY","agents":["codex"],
+       "source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
        "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"CODEX_BASE_URL"}}},
-      {"name":"GH_TOKEN","source":{"hostEnvironment":{"variable":"FAKE_GH"}},"delivery":{"environment":{}}}
+      {"name":"HOST_SOURCED","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+       "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"HOST_BASE_URL"}}},
+      {"name":"ALIAS","source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
+       "delivery":{"environment":{}}},
+      {"name":"GH_TOKEN","source":{"keychain":{"service":"rv.secrets","account":"GH_TOKEN"}},
+       "delivery":{"environment":{}}}
     ]}
     """
 
+/// The value behind OPENAI_API_KEY, and so behind ALIAS and APPROVED too.
 let placeholderRealValue = "sk-live-REAL-0123456789"
+/// The value behind GH_TOKEN.
+let otherRealValue = "ghp_realtoken0123456789"
 
-/// Counts every resolution; answers with the one real value.
+/// Counts every resolution; answers by keychain account.
 final class CountingResolver: Sendable {
     let count = Mutex(0)
     var resolver: SecretResolver {
-        SecretResolver { _ in
+        SecretResolver { source in
             self.count.withLock { $0 += 1 }
+            if case .keychain(_, "GH_TOKEN") = source { return .success(SecretValue(otherRealValue)!) }
             return .success(SecretValue(placeholderRealValue)!)
         }
     }
@@ -64,7 +74,9 @@ struct PlaceholderSecretsFixture {
 
 /// Stands in for `MCPSandbox.apply`: runs the launch under sandbox-exec
 /// with a placeholder profile. The profile text itself is tested elsewhere.
-func cagingHook(_ definition: MCPServerDefinition, _ launch: MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
+func cagingHook(
+    _ definition: MCPServerDefinition, _ launch: MCPUpstreamLaunch, _ reach: MCPCageReach
+) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
     var caged = launch
     caged.executable = MCPSandbox.sandboxExec
     caged.arguments = ["-p", "(version 1)", launch.executable] + launch.arguments
@@ -80,12 +92,17 @@ private func leasing(
     MCPPlaceholderLeasing(platformSupported: platformSupported, capability: capability, lease: lease)
 }
 
+private func leasing(_ broker: SecretPlaceholderBroker) -> MCPPlaceholderLeasing {
+    leasing(lease: { server, names in broker.lease(names, server: server) })
+}
+
 private func bound(
-    _ name: String = "bound", placeholders: [String] = ["OPENAI_API_KEY"], environment: [String: String] = [:],
-    secrets: [String: String] = [:], sandbox: MCPSandboxPolicy? = MCPSandboxPolicy(network: false)
+    _ name: String = "bound", placeholders: [String] = ["OPENAI_API_KEY"], args: [String] = ["-c", "true"],
+    environment: [String: String] = [:], secrets: [String: String] = [:],
+    sandbox: MCPSandboxPolicy? = MCPSandboxPolicy(network: false)
 ) -> MCPServerDefinition {
     MCPServerDefinition(
-        name: name, command: "/bin/sh", args: ["-c", "true"], environment: environment, secrets: secrets,
+        name: name, command: "/bin/sh", args: args, environment: environment, secrets: secrets,
         sandbox: sandbox, placeholders: placeholders)
 }
 
@@ -153,7 +170,8 @@ struct MCPPlaceholderPlannerTests {
     private func plan(
         _ servers: [MCPServerDefinition], secrets: SecretsConfiguration, resolver: SecretResolver,
         requireSandbox: Bool = true, placeholders: MCPPlaceholderLeasing,
-        sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = cagingHook
+        sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError>
+            = cagingHook
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         MCPLaunchPlanner.plan(
             servers: servers.map(\.name), configuration: MCPConfiguration(servers: servers), secrets: secrets,
@@ -174,6 +192,20 @@ struct MCPPlaceholderPlannerTests {
         return refusal
     }
 
+    /// `secrets` as decoded, with OPENAI_API_KEY's upstream replaced. The
+    /// decoder takes only https; a definition built in code is checked again.
+    private func secrets(upstream: String) throws -> SecretsConfiguration {
+        var definitions = try PlaceholderSecretsFixture.definitions().secrets
+        let index = try #require(definitions.firstIndex { $0.name == "OPENAI_API_KEY" })
+        guard case .gateway(var binding) = definitions[index].delivery else {
+            Issue.record("OPENAI_API_KEY is not a gateway secret")
+            return SecretsConfiguration()
+        }
+        binding.upstream = try #require(URL(string: upstream))
+        definitions[index].delivery = .gateway(binding)
+        return SecretsConfiguration(secrets: definitions)
+    }
+
     @Test func eachReasonRefusesOnlyThatServer() throws {
         #expect(try refusal(bound(), placeholders: leasing(platformSupported: false)) == .unsupportedPlatform)
         #expect(try refusal(bound(), requireSandbox: false) == .cageUnavailable)
@@ -182,6 +214,7 @@ struct MCPPlaceholderPlannerTests {
         #expect(try refusal(bound(secrets: ["KEY": "OPENAI_API_KEY"])) == .realValueToo("OPENAI_API_KEY"))
         #expect(try refusal(bound(placeholders: ["MISSING"])) == .unknownSecret("MISSING"))
         #expect(try refusal(bound(placeholders: ["GH_TOKEN"])) == .environmentDelivery("GH_TOKEN"))
+        #expect(try refusal(bound(placeholders: ["HOST_SOURCED"])) == .hostEnvironmentSource("HOST_SOURCED"))
         #expect(try refusal(bound(placeholders: ["CODEX_ONLY"])) == .agentScoped(secret: "CODEX_ONLY", agents: ["codex"]))
         #expect(try refusal(bound(placeholders: ["APPROVED"])) == .approvalRules("APPROVED"))
         #expect(try refusal(bound(environment: ["OPENAI_BASE_URL": "https://elsewhere.example"]))
@@ -193,10 +226,19 @@ struct MCPPlaceholderPlannerTests {
             == .leaseFailed("vault locked"))
     }
 
-    @Test func anUntrustedConfigurationGetsNoPlaceholders() throws {
-        #expect(MCPPlaceholderPlanning.refusal(
-            bound(), untrusted: true, platformSupported: true, cageEnforced: true,
-            secrets: try PlaceholderSecretsFixture.definitions()) == .untrustedConfiguration)
+    @Test func aPlaintextUpstreamIsRefusedUnlessItIsLoopback() throws {
+        func refusal(_ upstream: String) throws -> MCPPlaceholderRefusal? {
+            MCPPlaceholderPlanning.refusal(
+                bound(), platformSupported: true, cageEnforced: true, secrets: try secrets(upstream: upstream))
+        }
+        #expect(try refusal("http://api.example.com/v1") == .plaintextUpstream("OPENAI_API_KEY"))
+        #expect(try refusal("ftp://api.example.com/v1") == .plaintextUpstream("OPENAI_API_KEY"))
+        #expect(try refusal("http://127.0.0.1:8080/v1") == nil)
+        #expect(try refusal("http://localhost:8080/v1") == nil)
+        #expect(try refusal("http://[::1]:8080/v1") == nil)
+        #expect(try refusal("https://api.example.com/v1") == nil)
+        #expect(MCPPlaceholderPlanning.origin(try #require(URL(string: "https://api.example.com/v1"))) == "https://api.example.com")
+        #expect(MCPPlaceholderPlanning.origin(try #require(URL(string: "http://127.0.0.1:8080/v1"))) == "http://127.0.0.1:8080")
     }
 
     /// The probe runs once per plan, and a server that cannot be bound
@@ -221,30 +263,95 @@ struct MCPPlaceholderPlannerTests {
         }
     }
 
+    /// Every refusal that needs no value is decided before the server's own
+    /// `secrets` are resolved: a server that will not start prompts nothing.
+    @Test func aServerRefusedBeforeLaunchResolvesNoneOfItsSecrets() throws {
+        let fixture = try PlaceholderSecretsFixture()
+        defer { fixture.tearDown() }
+        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: CountingResolver().resolver)
+        defer { broker.stop() }
+        let colliding = SecretPlaceholderLease(
+            broker: broker.broker, lease: SecretLease(placeholders: [], environment: [(name: "PATH", value: "ph")]),
+            gatewayPort: 1)
+        let cases: [(MCPServerDefinition, MCPPlaceholderLeasing, MCPPlaceholderRefusal)] = [
+            (bound(placeholders: ["HOST_SOURCED"], secrets: ["REAL": "GH_TOKEN"]), leasing(broker),
+             .hostEnvironmentSource("HOST_SOURCED")),
+            (bound(secrets: ["REAL": "GH_TOKEN"]), leasing(lease: { _, _ in .failure(.refused("vault locked")) }),
+             .leaseFailed("vault locked")),
+            (bound(secrets: ["REAL": "GH_TOKEN"]), leasing(lease: { _, _ in .success(colliding) }),
+             .variableCollision("PATH")),
+        ]
+        for (server, placeholders, expected) in cases {
+            let resolver = CountingResolver()
+            let planned = try plan(
+                [server], secrets: PlaceholderSecretsFixture.definitions(), resolver: resolver.resolver,
+                placeholders: placeholders).get()
+            guard case .refused(_, let refusal) = planned.first?.1 else {
+                Issue.record("not refused: \(String(describing: planned.first?.1))")
+                continue
+            }
+            #expect(refusal == expected)
+            #expect(resolver.count.withLock { $0 } == 0, "\(expected) resolved a secret")
+        }
+        #expect(broker.broker.liveCount == 0)
+    }
+
     @Test func aBoundServerHoldsPlaceholdersAndItsOtherSecretsRealValues() throws {
         let fixture = try PlaceholderSecretsFixture()
         defer { fixture.tearDown() }
-        let resolver = CountingResolver()
-        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: resolver.resolver)
+        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: CountingResolver().resolver)
         defer { broker.stop() }
+        let reaches = Mutex<[String: MCPCageReach]>([:])
         let planned = try plan(
-            [bound(secrets: ["REAL": "GH_TOKEN"])], secrets: PlaceholderSecretsFixture.definitions(), resolver: resolver.resolver,
-            placeholders: leasing(lease: { server, names in broker.lease(names, server: server) })).get()
+            [bound(secrets: ["REAL": "GH_TOKEN"]), plain], secrets: PlaceholderSecretsFixture.definitions(),
+            resolver: CountingResolver().resolver, placeholders: leasing(broker),
+            sandbox: { definition, launch, reach in
+                reaches.withLock { $0[definition.name] = reach }
+                return cagingHook(definition, launch, reach)
+            }).get()
         guard case .placeholderBound(let launch, let binding) = planned.first?.1 else {
             Issue.record("not bound: \(String(describing: planned.first?.1))")
             return
         }
         #expect(launch.executable == MCPSandbox.sandboxExec)
-        #expect(launch.gatewayPort == binding.lease.gatewayPort)
+        // Only the placeholder server's cage may dial the gateway.
+        #expect(reaches.withLock { $0 } == ["bound": .secretsGateway(port: binding.lease.gatewayPort), "plain": .standard])
         #expect(launch.environment["OPENAI_API_KEY"]?.hasPrefix("sk-rvph_") == true)
         #expect(launch.environment["OPENAI_BASE_URL"] == "http://127.0.0.1:\(binding.lease.gatewayPort)/s/OPENAI_API_KEY")
         // `secrets` keeps its meaning: that one real value, scrubbed from replies.
-        #expect(launch.environment["REAL"] == placeholderRealValue)
+        #expect(launch.environment["REAL"] == otherRealValue)
         #expect(planned.first?.0.secretValues.map { $0.name } == ["GH_TOKEN"])
-        #expect(launch.environment.filter { $0.key != "REAL" }.values.contains { $0.contains(placeholderRealValue) } == false)
+        #expect(launch.environment.values.contains { $0.contains(placeholderRealValue) } == false)
+        #expect(launch.arguments.contains { $0.contains(placeholderRealValue) } == false)
         #expect(fixture.auditText.contains("\"runtime\":\"mcp:bound\""))
         binding.lease.revoke()
         #expect(broker.broker.liveCount == 0)
+    }
+
+    /// A placeholder's real value under another secret's name, as a literal
+    /// in `env`, or in an argument: the server would hold it after all.
+    @Test func aServerThatWouldHoldAPlaceholdersRealValueByAnyNameIsRefused() throws {
+        let fixture = try PlaceholderSecretsFixture()
+        defer { fixture.tearDown() }
+        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: CountingResolver().resolver)
+        defer { broker.stop() }
+        let servers = [
+            bound(secrets: ["OTHER": "ALIAS"]),
+            bound(environment: ["LITERAL": placeholderRealValue]),
+            bound(environment: ["AUTH": "Bearer " + placeholderRealValue]),
+            bound(args: ["-c", "true", "--key=" + placeholderRealValue]),
+        ]
+        for server in servers {
+            let planned = try plan(
+                [server], secrets: PlaceholderSecretsFixture.definitions(), resolver: CountingResolver().resolver,
+                placeholders: leasing(broker)).get()
+            guard case .refused(_, let refusal) = planned.first?.1 else {
+                Issue.record("bound although it holds the real value: \(server)")
+                continue
+            }
+            #expect(refusal == .realValueToo("OPENAI_API_KEY"))
+            #expect(broker.broker.liveCount == 0)
+        }
     }
 
     @Test func aLaunchTheHookLeavesUncagedIsRefusedAndItsLeaseRevoked() throws {
@@ -254,8 +361,7 @@ struct MCPPlaceholderPlannerTests {
         defer { broker.stop() }
         let planned = try plan(
             [bound()], secrets: PlaceholderSecretsFixture.definitions(), resolver: CountingResolver().resolver,
-            placeholders: leasing(lease: { server, names in broker.lease(names, server: server) }),
-            sandbox: { _, launch in .success(launch) }).get()
+            placeholders: leasing(broker), sandbox: { _, launch, _ in .success(launch) }).get()
         guard case .refused(_, .uncaged) = planned.first?.1 else {
             Issue.record("an uncaged launch was bound")
             return
@@ -273,7 +379,7 @@ struct MCPPlaceholderPlannerTests {
             name: "broken", command: "/bin/sh", secrets: ["T": "MISSING"], sandbox: MCPSandboxPolicy(network: false))
         guard case .failure = plan(
             [bound(), unresolvable], secrets: try PlaceholderSecretsFixture.definitions(), resolver: CountingResolver().resolver,
-            placeholders: leasing(lease: { server, names in broker.lease(names, server: server) }))
+            placeholders: leasing(broker))
         else {
             Issue.record("a plan with an undefined secret succeeded")
             return
@@ -296,22 +402,37 @@ struct MCPPlaceholderPlannerTests {
     }
 
     @Test func shutdownWaitsThenTerminatesOnceThenKillsOnce() {
-        var shutdown = MCPPlaceholderShutdown()
-        #expect(shutdown.signal(exited: false, elapsed: 0) == nil)
-        #expect(shutdown.signal(exited: false, elapsed: 1.9) == nil)
-        #expect(shutdown.signal(exited: false, elapsed: 2) == SIGTERM)
-        #expect(shutdown.signal(exited: false, elapsed: 2.5) == nil)
-        #expect(shutdown.signal(exited: false, elapsed: 3) == SIGKILL)
-        #expect(shutdown.signal(exited: false, elapsed: 9) == nil)
-        var exited = MCPPlaceholderShutdown()
-        #expect(exited.signal(exited: true, elapsed: 9) == nil)
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var shutdown = MCPPlaceholderShutdown(started: start)
+        #expect(shutdown.signal(exited: false, now: start) == nil)
+        #expect(shutdown.signal(exited: false, now: start + 1.9) == nil)
+        #expect(shutdown.signal(exited: false, now: start + 2) == SIGTERM)
+        #expect(shutdown.signal(exited: false, now: start + 2.5) == nil)
+        #expect(shutdown.signal(exited: false, now: start + 3) == SIGKILL)
+        #expect(shutdown.signal(exited: false, now: start + 9) == nil)
+        var exited = MCPPlaceholderShutdown(started: start)
+        #expect(exited.signal(exited: true, now: start + 9) == nil)
+    }
+
+    /// Each schedule counts from its own start, and `SIGKILL` from when
+    /// `SIGTERM` was sent: one that starts late, or is polled late, still
+    /// gets `SIGTERM` first and its full grace after it.
+    @Test func eachShutdownIsTimedFromItsOwnStart() {
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var late = MCPPlaceholderShutdown(started: start + 3)
+        #expect(late.signal(exited: false, now: start + 4.9) == nil)
+        #expect(late.signal(exited: false, now: start + 9) == SIGTERM)
+        #expect(late.signal(exited: false, now: start + 9.9) == nil)
+        #expect(late.signal(exited: false, now: start + 10) == SIGKILL)
+        #expect(late.giveUp == start + 3 + MCPPlaceholderShutdown.grace + MCPPlaceholderShutdown.terminateGrace + 2)
     }
 
     @Test func everyRefusalSaysWhy() {
         let refusals: [MCPPlaceholderRefusal] = [
-            .untrustedConfiguration, .unsupportedPlatform, .cageUnavailable, .noSandbox, .unconfinedNetwork,
-            .realValueToo("A"), .unknownSecret("A"), .environmentDelivery("A"), .agentScoped(secret: "A", agents: ["codex"]),
-            .approvalRules("A"), .variableCollision("A"), .capabilityUnavailable("x"), .leaseFailed("x"), .uncaged,
+            .unsupportedPlatform, .cageUnavailable, .noSandbox, .unconfinedNetwork, .realValueToo("A"),
+            .unknownSecret("A"), .environmentDelivery("A"), .hostEnvironmentSource("A"), .plaintextUpstream("A"),
+            .agentScoped(secret: "A", agents: ["codex"]), .approvalRules("A"), .variableCollision("A"),
+            .capabilityUnavailable("x"), .leaseFailed("x"), .uncaged,
         ]
         #expect(Set(refusals.map(\.message)).count == refusals.count)
         #expect(MCPPlaceholderRefusal.unsupportedPlatform.message.contains("only macOS"))
