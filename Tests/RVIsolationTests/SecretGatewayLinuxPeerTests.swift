@@ -442,7 +442,9 @@ struct SecretGatewayLinuxPeerTests {
         #expect(leader.group == UInt32(child.pid))
         #expect(table.children(of: getpid())?.contains(child.pid) == true)
         // Its descriptors are only in the running thread's table.
-        #expect(links(try inode(connection.client), in: "/proc/\(child.pid)/fd") == false)
+        let socket = try inode(connection.client)
+        #expect(links(socket, in: "/proc/\(child.pid)/fd") == false)
+        #expect((entries("/proc/\(child.pid)/task") ?? []).contains { links(socket, in: "/proc/\(child.pid)/task/\($0)/fd") })
         let group = try #require(ProcessGroupRecovery.capture(pid: child.pid))
         #expect(GatewayPeerScan.verdict(connection.peer, group: group, in: ProcFSProcessTable()) == .member)
         // No main thread, no `exe` link: a binary binding cannot tell.
