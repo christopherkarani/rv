@@ -34,6 +34,7 @@ die() { log "$*"; exit 1; }
 [[ "$(uname -s)" == "Linux" ]] || die "Linux only"
 [[ "$(id -u)" == "0" ]] || die "needs root (mount, pid namespaces, sysctl)"
 command -v swift >/dev/null || die "swift is not on PATH"
+"$ROOT/Scripts/require-tests-ran.sh" --self-test
 
 # `swift test` with a wall-clock bound: a hung child must fail, not stall
 # CI. Every run goes through require-tests-ran.sh, which fails a filter
@@ -52,20 +53,20 @@ unsupported() {
 regime_mount() {
   local name="$1" options="$2" test="$3"
   log "regime $name: /proc mounted with $options"
-  RV_PROC_REGIME="$name" "$RAN" 1 unshare --mount --propagation private -- sh -c "
+  RV_PROC_REGIME="$name" "$RAN" --no-skips 1 unshare --mount --propagation private -- sh -c "
     mount -t proc -o '$options' proc /proc &&
     exec timeout 600 swift test --skip-build --only-use-versions-from-resolved-file --filter '$test'"
 }
 
 regime_foreign() {
   log "regime foreign: new pid namespace, old /proc"
-  RV_PROC_REGIME=foreign "$RAN" 1 unshare --pid --fork -- \
+  RV_PROC_REGIME=foreign "$RAN" --no-skips 1 unshare --pid --fork -- \
     "${SWIFT_TEST[@]}" aProcOfAnotherPidNamespaceAnswersNothing
 }
 
 regime_noptrace() {
   log "regime noptrace: root without CAP_SYS_PTRACE"
-  RV_PROC_REGIME=noptrace "$RAN" 1 setpriv --bounding-set -sys_ptrace --inh-caps -sys_ptrace -- \
+  RV_PROC_REGIME=noptrace "$RAN" --no-skips 1 setpriv --bounding-set -sys_ptrace --inh-caps -sys_ptrace -- \
     "${SWIFT_TEST[@]}" aChildOfAnotherUserWhoseDescriptorsAreUnreadable
 }
 
@@ -94,7 +95,7 @@ profile $PROFILE flags=(attach_disconnected) {
 EOF
   apparmor_parser --replace "$profile"
   local status=0
-  RV_PROC_REGIME=confined "$RAN" 1 aa-exec -p "$PROFILE" -- \
+  RV_PROC_REGIME=confined "$RAN" --no-skips 1 aa-exec -p "$PROFILE" -- \
     "${SWIFT_TEST[@]}" aGatewayThatMayNotReadOtherProcessesCannotTell || status=$?
   apparmor_parser --remove "$profile" || true
   rm -f "$profile"
@@ -112,12 +113,12 @@ regime_yama() {
   for scope in 1 2; do
     log "regime yama: ptrace_scope=$scope"
     echo "$scope" >"$knob"
-    "$RAN" 20 "${SWIFT_TEST[@]}" "$SUITES"
+    "$RAN" --suites 2 20 "${SWIFT_TEST[@]}" "$SUITES"
   done
   if [[ "${RV_YAMA_IRREVERSIBLE:-0}" == "1" ]]; then
     log "regime yama: ptrace_scope=3 (stays until reboot)"
     echo 3 >"$knob"
-    "$RAN" 20 "${SWIFT_TEST[@]}" "$SUITES"
+    "$RAN" --suites 2 20 "${SWIFT_TEST[@]}" "$SUITES"
   else
     echo "$before" >"$knob"
     log "regime yama: ptrace_scope=3 not run (set RV_YAMA_IRREVERSIBLE=1; it cannot be undone)"
@@ -138,7 +139,7 @@ regime_container() {
   # checkout and toolchain are mounted at their host paths, so the bundle
   # built outside runs unchanged. Kernel features the profile refuses
   # (io_uring, unshare) print `skipped:` there: not strict.
-  "$RAN" 20 docker run --rm \
+  "$RAN" --suites 3 25 docker run --rm \
     -v "$ROOT:$ROOT" -v "$toolchain:$toolchain:ro" -w "$ROOT" \
     -e PATH="$toolchain/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     -e RV_PROC_REGIME=noptrace -e HOME=/tmp \

@@ -387,6 +387,25 @@ struct ProcFSProcessTableTests {
             in: table) == .unverifiable)
     }
 
+    /// A parent pid past what a pid can be is no process: the walk up from
+    /// a holder that names one ends undecided, without narrowing it.
+    @Test func aParentPidThatIsNotAPidEndsTheBinaryWalkUndecided() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200, exe: "/bin/sh")
+        try proc.process(201, parent: 200, group: 200, exe: "/bin/sh")
+        try proc.write("201/stat", "201 (x) S 4294967295 200 50 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 1000 0 0\n")
+        guard case .found(let holder) = proc.table.lookup(201) else {
+            Issue.record("the process is not found")
+            return
+        }
+        #expect(holder.parent == UInt32.max)
+        #expect(proc.table.executable(201) != nil)
+        let pin = GatewayBinaryPin(path: "/nowhere", device: 1, inode: 2, size: 3, changedSeconds: 4, changedNanoseconds: 5)
+        #expect(GatewayBinaryScan.verdict(
+            holder: GatewayHolder(pid: 201, startSeconds: 10, startMicroseconds: 0), leader: 200, pins: [pin],
+            in: proc.table) == .unverifiable)
+    }
+
     /// A process that moved to another group is the same process; one with
     /// another start time, parent or pid is not.
     @Test func theSameProcessIsItsPidStartAndParentNotItsGroup() {

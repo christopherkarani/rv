@@ -299,7 +299,7 @@ final class ProcFSProcessTable: ProcessTable {
         let link = "\(root)/\(pid)/exe"
         // `stat` follows the link to the file the process runs, deleted or not.
         guard case .value(let path) = self.link(link), let running = GatewayBinaryPin.identity(link),
-            case .found(let after) = lookup(pid), after == before
+            case .found(let after) = lookup(pid), after.isSameProcess(as: before)
         else { return nil }
         return .file(path: path, running: running)
     }
