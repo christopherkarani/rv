@@ -139,7 +139,7 @@ private func hostCLIs(_ word: String) -> [String] {
     var hosts: [String] = []
     let name = commandName(word)
     if hostGroups[name] != nil || editorHosts.contains(name) || pythonInstallers.contains(name) { hosts.append(name) }
-    if name == "claude-code" || word.contains("/claude/versions/") { hosts.append("claude") }
+    if name == "claude-code" || ("/" + word).contains("/claude/versions/") { hosts.append("claude") }
     for (package, host) in hostPackages where word.contains(package) { hosts.append(host) }
     for package in packageNames(word) {
         if let host = hostPackageNames[package] { hosts.append(host) }
