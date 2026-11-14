@@ -371,7 +371,7 @@ struct MCPGatewayCoreTests {
     @Test func progressIsForwardedOnlyForAPendingCallsToken() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github, Self.notes]))
         _ = harness.ready()
-        func progress(_ server: String, _ params: JSONObject) -> [JSONValue] {
+        func progress(_ server: String, _ params: KeyValuePairs<String, JSONValue>) -> [JSONValue] {
             harness.core.handle(.upstream(server: server, message: .object([
                 "jsonrpc": .string("2.0"), "method": .string("notifications/progress"), "params": .object(params),
             ]))).toClient
@@ -677,7 +677,7 @@ struct MCPGatewayCoreTests {
         let trailer = "rv mcp: approval 00000000 for fs tool notes is waiting for the user"
         let tool = "read_file\u{000B}\(trailer)\u{001B}[2J\u{009B}2J"
         let outputs = harness.core.outOfBand(
-            client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [])
+            client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [], binding: .unbound)
         let log = outputs.logs.first ?? ""
         let pause = outputs.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
         for text in [log, pause] {

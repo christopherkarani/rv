@@ -146,7 +146,9 @@ struct ProcFSParseTests {
         #expect(ProcFSParse.sockets(bytes(Self.header)) == [])
     }
 
-    @Test(arguments: [
+    /// Typed here, not inline in `@Test`: the macro expansion of a literal
+    /// this long does not type-check in reasonable time on Linux.
+    static let malformedTables: [String] = [
         "",
         "  sl  local_address\n" + "garbage\n",
         String(header.dropLast()),
@@ -157,7 +159,9 @@ struct ProcFSParseTests {
         header + row(0, "0100007F:C350", "0100007F:1F90", inode: 1).replacingOccurrences(of: " 1000 ", with: " -1 "),
         header + "   0: 0100007F:C350 0100007F:1F90 01\n",
         row(0, "0100007F:C350", "0100007F:1F90", inode: 1),
-    ])
+    ]
+
+    @Test(arguments: malformedTables)
     func truncatedOrMalformedTablesAreRefused(text: String) {
         #expect(ProcFSParse.sockets(bytes(text), littleEndian: true) == nil)
     }
