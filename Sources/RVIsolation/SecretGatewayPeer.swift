@@ -222,3 +222,102 @@ enum GatewayPeerScan {
         return pid_t(info.parent)
     }
 }
+
+/// Whether the secrets gateway can bind a connection to a runtime on this
+/// host, for a launcher (`rv run`) that must refuse to start a runtime whose
+/// every spend would be refused as `unverifiable`.
+public enum GatewayPeerBinding {
+    /// True when this process can attribute a loopback connection to the
+    /// process holding its client end: libproc on macOS, `/proc` on Linux.
+    ///
+    /// A self-probe, run once per process on first use and then cached. It
+    /// opens a loopback connection, keeps the client end, and requires the
+    /// host's `ProcessTable` to find this process, list every process (the
+    /// descendant walk), list this user's processes (the session search),
+    /// and see this process hold the client socket, with the same identity
+    /// before and after. These are the reads `GatewayPeerCheck.runtime`
+    /// makes for a runtime leader. Any read that cannot tell makes it false:
+    /// a `/proc` that hides processes (`hidepid`) or belongs to another pid
+    /// namespace, missing or unreadable `net/tcp` tables, refused descriptor
+    /// reads, a platform with neither backend, or a connection that could not
+    /// be made. True does not promise every later verdict: a runtime whose
+    /// processes cannot be read is still refused, closed, per connection.
+    ///
+    /// It does not depend on how this process was started: it reads this
+    /// process, not its group, so a pipeline position or an orphaned group
+    /// does not change the answer.
+    public static var isVerifiable: Bool { probed }
+
+    private static let probed = probe(in: HostProcessTable.make())
+
+    static func probe(pid: pid_t = getpid(), in table: some ProcessTable) -> Bool {
+        guard let connection = LoopbackConnection() else { return false }
+        defer { connection.close() }
+        guard case .found(let before) = table.lookup(pid), before.pid == UInt32(pid),
+            table.children(of: pid) != nil,
+            table.failedListingIsEmptySession || table.userProcesses() != nil,
+            table.holdsSocket(pid, connection.peer) == true,
+            case .found(let after) = table.lookup(pid), after == before
+        else { return false }
+        return true
+    }
+
+    /// Both ends of one loopback connection, close-on-exec and above the
+    /// spawn floors, as the gateway's own sockets are.
+    private struct LoopbackConnection {
+        let listener: Int32
+        let client: Int32
+        let server: Int32
+        let peer: GatewayPeer
+
+        init?() {
+            var listener = SecretGateway.openStreamSocket()
+            guard relocateOwnedSocket(&listener, above: SecretGateway.socketFloor) else { return nil }
+            var address = sockaddr_in()
+            #if canImport(Darwin)
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            #endif
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_addr.s_addr = GatewayPeer.loopback
+            var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let listening = withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    bind(listener, $0, length) == 0 && listen(listener, 1) == 0
+                        && getsockname(listener, $0, &length) == 0
+                }
+            }
+            var client = listening ? SecretGateway.openStreamSocket() : -1
+            guard listening, relocateOwnedSocket(&client, above: SecretGateway.socketFloor) else {
+                closeOwnedSocket(listener)
+                return nil
+            }
+            // Loopback completes the handshake into the backlog, so neither
+            // call blocks.
+            let connected = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+                }
+            }
+            var server = connected ? accept(listener, nil, nil) : -1
+            // A failed move has already closed the accepted original.
+            let moved = relocateOwnedSocket(&server, above: SecretGateway.socketFloor)
+            guard moved, let peer = GatewayPeer.of(server) else {
+                if moved { closeOwnedSocket(server) }
+                closeOwnedSocket(client)
+                closeOwnedSocket(listener)
+                return nil
+            }
+            _ = fcntl(server, F_SETFD, FD_CLOEXEC)
+            self.listener = listener
+            self.client = client
+            self.server = server
+            self.peer = peer
+        }
+
+        func close() {
+            closeOwnedSocket(server)
+            closeOwnedSocket(client)
+            closeOwnedSocket(listener)
+        }
+    }
+}

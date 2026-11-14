@@ -132,6 +132,117 @@ struct SecretGatewayLinuxPeerTests {
         func path(_ name: String) -> String { directory.appendingPathComponent(name).path }
     }
 
+    /// A forked copy of this process, leading a new process group, that
+    /// closes every descriptor above 2 but `keep` and runs `body`. Between
+    /// fork and `body` the child makes only libc calls on values set up
+    /// before the fork; `body` must do the same.
+    final class Forked {
+        let pid: pid_t
+        private var reaped = false
+
+        init(keeping keep: [Int32], _ body: () -> Never) throws {
+            var limit = rlimit()
+            try #require(getrlimit(Int32(RLIMIT_NOFILE.rawValue), &limit) == 0)
+            let top = Int32(clamping: min(limit.rlim_cur, 1 << 16))
+            let child = linuxPeerFork()
+            try #require(child >= 0)
+            if child == 0 {
+                _ = setpgid(0, 0)
+                var fd: Int32 = 3
+                while fd < top {
+                    var kept = false
+                    var index = 0
+                    while index < keep.count {
+                        if keep[index] == fd { kept = true }
+                        index += 1
+                    }
+                    if kept == false { _ = close(fd) }
+                    fd += 1
+                }
+                body()
+            }
+            // Also from here, so the group exists before the caller looks.
+            _ = setpgid(child, child)
+            pid = child
+        }
+
+        /// The wait status once the child has exited; nil if it is still
+        /// running after the deadline.
+        func reap() -> Int32? {
+            var status: Int32 = 0
+            let deadline = Date().addingTimeInterval(20)
+            while Date() < deadline {
+                if waitpid(pid, &status, WNOHANG) == pid {
+                    reaped = true
+                    return status
+                }
+                usleep(20_000)
+            }
+            return nil
+        }
+
+        deinit {
+            guard reaped == false else { return }
+            kill(-pid, SIGKILL)
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
+        }
+    }
+
+    /// One pipe, both ends close-on-exec.
+    struct Channel {
+        let read: Int32
+        let write: Int32
+
+        init() throws {
+            var ends: [Int32] = [-1, -1]
+            try #require(pipe(&ends) == 0)
+            read = ends[0]
+            write = ends[1]
+            _ = fcntl(read, F_SETFD, FD_CLOEXEC)
+            _ = fcntl(write, F_SETFD, FD_CLOEXEC)
+        }
+
+        func close() {
+            _ = Glibc.close(read)
+            _ = Glibc.close(write)
+        }
+
+        /// One byte, waiting at most 20 s.
+        func receive() throws -> UInt8 {
+            var state = pollfd(fd: read, events: Int16(POLLIN), revents: 0)
+            try #require(poll(&state, 1, 20_000) == 1)
+            var byte: UInt8 = 0
+            try #require(Glibc.read(read, &byte, 1) == 1)
+            return byte
+        }
+    }
+
+    /// The `/proc/<pid>/stat` the kernel shows now.
+    private func procStat(_ pid: pid_t) -> ProcFSParse.Stat? {
+        guard case .value(let bytes) = ProcFSReader.file("/proc/\(pid)/stat") else { return nil }
+        return ProcFSParse.stat(bytes)
+    }
+
+    private func entries(_ path: String) -> [String]? {
+        guard case .value(let names) = ProcFSReader.directory(path) else { return nil }
+        return names
+    }
+
+    /// Whether a descriptor table under `/proc` links socket `inode`.
+    private func links(_ inode: UInt64, in table: String) -> Bool {
+        (entries(table) ?? []).contains { name in
+            guard case .value(let target) = ProcFSReader.link(table + "/" + name) else { return false }
+            return ProcFSParse.socketInode(link: target) == inode
+        }
+    }
+
+    private func inode(_ fd: Int32) throws -> UInt64 {
+        var info = Glibc.stat()
+        try #require(fstat(fd, &info) == 0)
+        return UInt64(info.st_ino)
+    }
+
     private func waitUntil(_ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline {
@@ -308,6 +419,142 @@ struct SecretGatewayLinuxPeerTests {
         #expect(status & 0x7F == SIGKILL)
     }
 
+    /// Linux shows a process whose main thread exited as a zombie while its
+    /// other threads run. It is still the group: found, kept in the tree,
+    /// a member through the thread's descriptors, and stopped by recovery
+    /// (which once read it as gone and reported success without a signal).
+    @Test func aProcessWhoseMainThreadExitedIsAliveAMemberAndStopped() throws {
+        let connection = try Connection()
+        let child = try Forked(keeping: [connection.client]) {
+            var thread = pthread_t()
+            _ = pthread_create(&thread, nil, { _ in while true { pause() } }, nil)
+            pthread_exit(nil)
+        }
+        try #require(waitUntil {
+            guard let state = procStat(child.pid), ProcFSParse.exited(state) else { return false }
+            return entries("/proc/\(child.pid)/task")?.count == 2
+        })
+        let table = ProcFSProcessTable()
+        guard case .found(let leader) = table.lookup(child.pid) else {
+            Issue.record("a process with a running thread read as gone")
+            return
+        }
+        #expect(leader.group == UInt32(child.pid))
+        #expect(table.children(of: getpid())?.contains(child.pid) == true)
+        // Its descriptors are only in the running thread's table.
+        #expect(links(try inode(connection.client), in: "/proc/\(child.pid)/fd") == false)
+        let group = try #require(ProcessGroupRecovery.capture(pid: child.pid))
+        #expect(GatewayPeerScan.verdict(connection.peer, group: group, in: ProcFSProcessTable()) == .member)
+        // No main thread, no `exe` link: a binary binding cannot tell.
+        #expect(table.executable(child.pid) == nil)
+        let bash = try GatewayBinaryPin.pin("/bin/bash").get()
+        #expect(GatewayPeerScan.binaries(connection.peer, group: group, pins: [bash], in: ProcFSProcessTable())
+            == .unverifiable)
+
+        let recorded = RecordedProcessGroup(
+            runtime: UUID(), pgid: group.pgid, startSeconds: group.startSeconds,
+            startMicroseconds: group.startMicroseconds)
+        guard case .success = ProcessGroupRecovery.terminate(recorded) else {
+            Issue.record("the group was not stopped")
+            return
+        }
+        // Dead, unreaped, no thread left: now it is gone.
+        #expect(ProcFSProcessTable().lookup(child.pid) == .absent)
+        let status = try #require(child.reap(), "terminate reported success but the process still runs")
+        #expect(status & 0x7F == SIGKILL)
+    }
+
+    /// A thread that took its own descriptor table (`unshare(CLONE_FILES)`)
+    /// keeps the socket after the process's table closed it: it is the holder.
+    @Test func aThreadWithItsOwnDescriptorTableHoldsTheSocket() throws {
+        let connection = try Connection()
+        let report = try Channel()
+        let inner = try Channel()
+        defer {
+            report.close()
+            inner.close()
+        }
+        let signal = UnsafeMutableRawPointer(bitPattern: Int(inner.write))
+        let client = connection.client
+        let child = try Forked(keeping: [client, report.write, inner.read, inner.write]) {
+            var thread = pthread_t()
+            _ = pthread_create(&thread, nil, { argument in
+                let channel = Int32(truncatingIfNeeded: Int(bitPattern: argument))
+                var result: UInt8 = 0
+                // CLONE_FILES (<sched.h> declares it only under _GNU_SOURCE).
+                if linuxPeerUnshare(0x0000_0400) != 0 { result = UInt8(truncatingIfNeeded: errno == 0 ? 0x7F : errno) }
+                _ = write(channel, &result, 1)
+                while true { pause() }
+            }, signal)
+            var result: UInt8 = 0xFF
+            _ = read(inner.read, &result, 1)
+            if result == 0 { _ = close(client) }
+            _ = write(report.write, &result, 1)
+            while true { pause() }
+        }
+        let result = try report.receive()
+        if result == UInt8(EPERM) {
+            // Docker's default seccomp profile refuses `unshare` without CAP_SYS_ADMIN.
+            print("skipped: unshare(CLONE_FILES) is refused here (EPERM)")
+            return
+        }
+        try #require(result == 0, "unshare failed with errno \(result)")
+        let socket = try inode(client)
+        #expect(links(socket, in: "/proc/\(child.pid)/fd") == false)
+        #expect((entries("/proc/\(child.pid)/task") ?? []).contains { links(socket, in: "/proc/\(child.pid)/task/\($0)/fd") })
+        #expect(ProcFSProcessTable().holdsSocket(child.pid, connection.peer) == true)
+        let group = try #require(ProcessGroupRecovery.capture(pid: child.pid))
+        #expect(GatewayPeerScan.verdict(connection.peer, group: group, in: ProcFSProcessTable()) == .member)
+    }
+
+    /// A child running as another user (uid 65534) whose descriptors this
+    /// root process may not read: Docker drops `CAP_SYS_PTRACE`, so the read
+    /// is `EACCES`. It might hold the socket, so an empty scan cannot say
+    /// outsider; a holder found earlier (the leader) still makes a member,
+    /// but the full holder set needed for a binary binding cannot be read.
+    @Test(.enabled(if: getuid() == 0 && FileManager.default.isExecutableFile(atPath: "/usr/bin/setpriv"),
+        "needs root to drop to another uid with setpriv"),
+        arguments: [false, true])
+    func aChildOfAnotherUserWhoseDescriptorsAreUnreadable(leaderHolds: Bool) throws {
+        let scratch = try Scratch()
+        let connection = try Connection()
+        let leader = try Leader(
+            #"/usr/bin/setpriv --reuid=65534 --regid=65534 --clear-groups /bin/sleep 300 & read -r _ < "$1""#,
+            arguments: [try scratch.fifo("hold")], inherit: leaderHolds ? connection.client : nil)
+        let group = try #require(ProcessGroupRecovery.capture(pid: leader.pid))
+        let child = try #require(try children(of: leader.pid).first)
+        try #require(waitUntil {
+            guard case .value(let status) = ProcFSReader.file("/proc/\(child)/status") else { return false }
+            return ProcFSParse.uids(status: status)?.first == 65534
+        })
+        let refused: Bool
+        switch ProcFSReader.directory("/proc/\(child)/fd") {
+        case .value: refused = false
+        case .unavailable: refused = true
+        case .absent:
+            Issue.record("the child exited")
+            return
+        }
+        let bash = try GatewayBinaryPin.pin("/bin/bash").get()
+        let verdict = GatewayPeerScan.verdict(connection.peer, group: group, in: ProcFSProcessTable())
+        let binaries = GatewayPeerScan.binaries(connection.peer, group: group, pins: [bash], in: ProcFSProcessTable())
+        switch (leaderHolds, refused) {
+        case (true, true):
+            #expect(verdict == .member)
+            #expect(binaries == .unverifiable)
+        case (true, false):
+            #expect(verdict == .member)
+            // The child holds it too and runs sleep (bash is its parent).
+            #expect(binaries == .allowed)
+        case (false, true):
+            #expect(verdict == .unverifiable)
+            #expect(binaries == .unverifiable)
+        case (false, false):
+            #expect(verdict == .outsider)
+            #expect(binaries == .unverifiable)
+        }
+    }
+
     @Test func pidfdsOpenOnThisKernel() throws {
         guard case .descriptor(let descriptor) = PidFD.open(getpid()) else {
             Issue.record("pidfd_open is unavailable; group recovery falls back to identity-checked kill")
@@ -320,4 +567,11 @@ struct SecretGatewayLinuxPeerTests {
         #expect(PidFD.open(leader.pid) == .gone)
     }
 }
+
+/// The libc symbols; the children above call nothing Swift-level.
+@_silgen_name("fork")
+private func linuxPeerFork() -> pid_t
+
+@_silgen_name("unshare")
+private func linuxPeerUnshare(_ flags: Int32) -> Int32
 #endif
