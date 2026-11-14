@@ -424,20 +424,26 @@ struct SecretGatewayBinaryTests {
             secret: "OPENAI_API_KEY", prefix: "sk-", value: try #require(SecretValue("sk-live-REAL-0123456789")),
             upstream: try #require(URL(string: "https://api.example.com/v1")), fingerprint: "abcd", runtime: "R1",
             surfaces: [.header], processGroup: group, binaries: try pins(leader)))
-        try Data("\(port) \(placeholder.text)".utf8).write(to: URL(fileURLWithPath: go))
         let deadline = Date().addingTimeInterval(20)
+        var quietChildIsEmpty: Bool?
+        if mode == "quiet" {
+            // The request is sent only once the child's table reads empty, so
+            // the scan sees the quiet descendant, not one still mid-exec.
+            // Still running: the group is killed only on return.
+            quietChildIsEmpty = false
+            while Date() < deadline, quietChildIsEmpty == false {
+                let child = pid_t(((try? String(contentsOfFile: out + ".quiet", encoding: .utf8)) ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines))
+                quietChildIsEmpty = child.map(Self.hasEmptyDescriptorTable) ?? false
+                if quietChildIsEmpty == false { Thread.sleep(forTimeInterval: 0.05) }
+            }
+        }
+        try Data("\(port) \(placeholder.text)".utf8).write(to: URL(fileURLWithPath: go))
         var status = ""
         while Date() < deadline {
             status = ((try? String(contentsOfFile: out, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if status.isEmpty == false { break }
             Thread.sleep(forTimeInterval: 0.05)
-        }
-        var quietChildIsEmpty: Bool?
-        if mode == "quiet" {
-            // Still running: the group is killed only on return.
-            let child = pid_t(((try? String(contentsOfFile: out + ".quiet", encoding: .utf8)) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines))
-            quietChildIsEmpty = child.map(Self.hasEmptyDescriptorTable) ?? false
         }
         return (status, audit.items.withLock { $0.last?.refusal?.code }, quietChildIsEmpty)
     }
