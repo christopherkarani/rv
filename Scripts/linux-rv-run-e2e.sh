@@ -42,8 +42,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# rv and its launcher where any account can run them, as an install has them.
+# rv and its launcher where any account can run them, as an install has
+# them, and the driver with them: a checkout is often under a home the
+# throwaway account cannot enter.
 install -m 0755 "$BUILD/rv" "$BUILD/rv-isolation-exec" "$STAGE/"
+install -m 0644 "$ROOT/Scripts/linux-rv-run-e2e.py" "$STAGE/"
 chmod 0755 "$STAGE"
 
 mkdir "$STAGE/certificates"
@@ -69,7 +72,7 @@ unshare --mount --propagation private -- sh -c "
   mount --bind '$STAGE/certificates/bundle.crt' '$BUNDLE' &&
   exec setpriv --reuid '$OWNER' --regid '$OWNER' --init-groups \
     env -i HOME='/home/$OWNER' USER='$OWNER' PATH=/usr/bin:/bin LANG=C.UTF-8 \
-    python3 '$ROOT/Scripts/linux-rv-run-e2e.py' '$STAGE/rv' '$STAGE/certificates'" || status=$?
+    python3 '$STAGE/linux-rv-run-e2e.py' '$STAGE/rv' '$STAGE/certificates'" || status=$?
 
 [[ "$status" == "0" ]] && log "PASS" || log "FAILED"
 exit "$status"

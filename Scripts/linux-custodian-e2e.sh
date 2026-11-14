@@ -68,6 +68,9 @@ ldd "$BUILD/rv-mcp-custodian" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | wh
     *) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
   esac
 done
+# The driver too: a checkout is often under a home the throwaway account
+# cannot enter.
+install -m 0644 "$ROOT/Scripts/linux-custodian-e2e.py" "$STAGE/"
 chmod 0755 "$STAGE"
 
 if [[ "$SYSTEMD" == "1" ]]; then
@@ -133,7 +136,7 @@ log "driving rv as $OWNER"
 status=0
 setpriv --reuid "$OWNER" --regid "$OWNER" --init-groups \
   env -i HOME="/home/$OWNER" USER="$OWNER" PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
-  RV_E2E_PASSWORD="$PASSWORD" python3 "$ROOT/Scripts/linux-custodian-e2e.py" "$STAGE/rv" || status=$?
+  RV_E2E_PASSWORD="$PASSWORD" python3 "$STAGE/linux-custodian-e2e.py" "$STAGE/rv" || status=$?
 
 # What the custodian holds is unreadable to the account it holds it for.
 if setpriv --reuid "$OWNER" --regid "$OWNER" --init-groups \
