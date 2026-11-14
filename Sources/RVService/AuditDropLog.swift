@@ -18,7 +18,10 @@ final class AuditDropLog: Sendable {
     private let lastLogged = Mutex<[Kind: Date]>([:])
     private let write: @Sendable (String) -> Void
 
-    init(write: @escaping @Sendable (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }) {
+    /// The default writer ignores write errors: stderr is `rvd.log`, on the
+    /// disk whose being full is a reason rows drop, and `write(_:)` traps on
+    /// ENOSPC or EPIPE.
+    init(write: @escaping @Sendable (String) -> Void = { try? FileHandle.standardError.write(contentsOf: Data($0.utf8)) }) {
         self.write = write
     }
 

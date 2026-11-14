@@ -23,7 +23,7 @@ enum RVD {
             )
             Foundation.exit(2)
         } catch RVDLaunchError.homeRequired {
-            FileHandle.standardError.write(Data(
+            try? FileHandle.standardError.write(contentsOf: Data(
                 "rvd: HOME is required, as an absolute path (rvd keeps its policy and audit log in ~/.config/rv)\n".utf8))
             Foundation.exit(1)
         } catch UnixSocketPathError.runtimeDirectoryMissing {
