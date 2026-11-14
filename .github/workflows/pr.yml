@@ -292,6 +292,11 @@ jobs:
             Scripts/require-tests-ran.sh --suites 3 70 timeout 900 swift test --skip-build \
             --filter 'MCPLinuxSandboxTests|MCPLinuxCageTests|SecretRunLaunchTests'
 
+      # rv run with a real HTTPS request: a throwaway account, a TLS
+      # upstream on localhost, a private mount namespace for its CA.
+      - name: rv run, end to end with a real HTTPS request
+        run: sudo env "PATH=$PATH" Scripts/linux-rv-run-e2e.sh
+
       # The approvals custodian for real: installed with systemd through
       # `rv mcp custodian install`, a throwaway account with a password,
       # PAM, the gateway, an approval, a replayed grant, a rolled-back
