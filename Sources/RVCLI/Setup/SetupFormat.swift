@@ -14,6 +14,9 @@ struct SetupReport: Equatable, Sendable {
     /// Linux with no systemd user manager: rvd was started unsupervised,
     /// so it will not survive logout or reboot.
     var serviceStartedDirectly = false
+    /// Agent skill files setup left alone because rv did not write them
+    /// (no seal, or edited since). The hook is still wired.
+    var agentSkillsKept: [String] = []
 
     init(
         grok: SetupSlotKind,

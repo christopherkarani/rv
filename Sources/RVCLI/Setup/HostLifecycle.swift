@@ -5,7 +5,9 @@ import RVService
 
 enum HostAttachOutcome: Equatable, Sendable {
     case occupied
-    case wired(wrote: Bool)
+    /// `keptAgentSkill` names a skill file rv left alone because it did not
+    /// write it (`AgentSkillInstall.keptForeign`).
+    case wired(wrote: Bool, keptAgentSkill: String? = nil)
 }
 
 struct UninstallHostResult: Equatable, Sendable {
@@ -39,6 +41,7 @@ enum HostLifecycle {
         var serviceSkippedMissingRvd: String?
         var serviceStartedDirectly = false
         var runtimeMissing: [String: [HookHost]] = [:]
+        var keptAgentSkills: [String] = []
 
         for step in plan.steps {
             switch step {
@@ -73,7 +76,10 @@ enum HostLifecycle {
                 switch try perform(write, env: env, layout: layout, files: files) {
                 case .occupied:
                     slots.assign(.occupied, to: write.host)
-                case .wired(let wrote):
+                case .wired(let wrote, let keptAgentSkill):
+                    if let keptAgentSkill {
+                        keptAgentSkills.append(keptAgentSkill)
+                    }
                     if wrote {
                         slots.wrote.insert(write.host)
                     }
@@ -98,6 +104,7 @@ enum HostLifecycle {
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
         report.serviceStartedDirectly = serviceStartedDirectly
         report.unwiredForMissingInterpreter = runtimeMissing
+        report.agentSkillsKept = keptAgentSkills
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
     }
@@ -177,7 +184,22 @@ enum HostLifecycle {
             layout: layout,
             files: files
         )
-        return .wired(wrote: wrote)
+        guard let skill = write.agentSkill else { return .wired(wrote: wrote) }
+        // After the hook: the skill only describes a gate that is in place.
+        let installed: AgentSkillInstall
+        do {
+            installed = try AgentSkill.install(at: skill, files: files)
+        } catch {
+            throw SetupError.hostHookWriteFailed(write.host)
+        }
+        switch installed {
+        case .wrote:
+            return .wired(wrote: true)
+        case .unchanged:
+            return .wired(wrote: wrote)
+        case .keptForeign:
+            return .wired(wrote: wrote, keptAgentSkill: skill)
+        }
     }
 
     /// Removes rv-owned hook artifacts. `only` scopes it to some hosts
@@ -222,7 +244,11 @@ enum HostLifecycle {
                     occupiedHosts.insert(owned.host)
                 }
             case .skip:
-                break
+                // No hook left to remove, but a skill from an earlier
+                // wiring may still be there.
+                let enacted = try enact(write.remove.filter(\.isAgentSkillRemoval), files: files)
+                removedPaths.append(contentsOf: enacted.removedPaths)
+                emptyDirectories.append(contentsOf: enacted.emptyDirectories)
             }
         }
 
@@ -289,9 +315,23 @@ enum HostLifecycle {
                 enacted.stripOpenCodeAsk = true
             case .removeEmptyDirectory(let path):
                 enacted.emptyDirectories.append(path)
+            case .removeAgentSkill(let path):
+                // Not `changed`: the skill never decides whether a host's
+                // hook was removed or left occupied.
+                if AgentSkill.isOwned(at: path, files: files) {
+                    enacted.removedPaths.append(path)
+                    enacted.emptyDirectories.append(contentsOf: AgentSkill.emptyDirectories(after: path))
+                }
             }
         }
         return enacted
+    }
+}
+
+private extension HostDetachOperation {
+    var isAgentSkillRemoval: Bool {
+        if case .removeAgentSkill = self { return true }
+        return false
     }
 }
 

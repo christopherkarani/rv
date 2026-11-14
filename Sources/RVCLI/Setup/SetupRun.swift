@@ -61,6 +61,7 @@ enum SetupRun {
                 stderr: observeNotice(guardRequest, env: env)
                     + serviceWarning(report, observing: observing)
                     + direct
+                    + agentSkillWarning(report)
                     + refusals.joined(),
                 exitCode: refusals.isEmpty ? 0 : EX_UNAVAILABLE,
                 emitted: json ? false : formatted.emitted
@@ -119,6 +120,18 @@ enum SetupRun {
             stderr: stderr,
             exitCode: exitCode
         )
+    }
+
+    /// Names each agent skill file setup did not replace. The hook works
+    /// without it; the agent just does not get rv's instructions.
+    static func agentSkillWarning(_ report: SetupReport) -> String {
+        report.agentSkillsKept.map { path in
+            """
+            rv setup: kept \(path): it was changed outside rv, so rv did not replace it
+            fix: move it aside, then run rv setup again to install rv's agent skill
+
+            """
+        }.joined()
     }
 
     /// Hooks wired with no service behind them deny every tool call (under
