@@ -46,8 +46,7 @@ cleanup() {
   else
     for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null; done
     rm -rf /run/rv-mcp-custodian /run/rv-mcp-presence /var/lib/rv-mcp-custodian \
-      /usr/local/libexec/rv/rv-mcp-custodian /etc/pam.d/rv-mcp-custodian
-    rmdir /usr/local/libexec/rv 2>/dev/null
+      /usr/local/libexec/rv /etc/pam.d/rv-mcp-custodian
     userdel "$ACCOUNT" 2>/dev/null
   fi
   pkill -KILL -u "$OWNER" 2>/dev/null
@@ -57,9 +56,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The binaries where any account can run them, as an install would have them.
+# The binaries where any account can run them, as an install would have
+# them, with the Swift runtime beside them, as a release stages it: a
+# build's toolchain sits under a home directory, which the key daemon's
+# unit cannot see (ProtectHome=yes).
 install -m 0755 "$BUILD/rv" "$BUILD/rv-mcp-custodian" "$STAGE/"
 [[ -x "$BUILD/rv-isolation-exec" ]] && install -m 0755 "$BUILD/rv-isolation-exec" "$STAGE/"
+ldd "$BUILD/rv-mcp-custodian" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | while read -r library; do
+  case "$library" in
+    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*) ;;
+    *) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
+  esac
+done
 chmod 0755 "$STAGE"
 
 if [[ "$SYSTEMD" == "1" ]]; then
@@ -77,7 +85,10 @@ else
   getent passwd "$ACCOUNT" >/dev/null \
     || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$ACCOUNT"
   install -d -m 0755 /usr/local/libexec/rv
-  install -m 0755 "$BUILD/rv-mcp-custodian" /usr/local/libexec/rv/rv-mcp-custodian
+  install -m 0755 "$STAGE/rv-mcp-custodian" /usr/local/libexec/rv/rv-mcp-custodian
+  for library in "$STAGE"/lib*.so*; do
+    [[ -e "$library" ]] && install -m 0755 "$library" /usr/local/libexec/rv/
+  done
   if [[ "$include" == "common" ]]; then
     printf 'auth     include  common-auth\naccount  include  common-account\n' > /etc/pam.d/rv-mcp-custodian
   else
@@ -86,8 +97,11 @@ else
   install -d -o "$ACCOUNT" -g "$ACCOUNT" -m 0700 /var/lib/rv-mcp-custodian
   install -d -o "$ACCOUNT" -g "$ACCOUNT" -m 0755 /run/rv-mcp-custodian
   install -d -m 0755 /run/rv-mcp-presence
-  setpriv --reuid "$ACCOUNT" --regid "$ACCOUNT" --clear-groups \
-    /usr/local/libexec/rv/rv-mcp-custodian serve 2>"$STAGE/custodian.log" &
+  # With every home hidden, as the unit's ProtectHome=yes hides them.
+  unshare --mount --propagation private -- sh -c "
+    mount -t tmpfs tmpfs /home && mount -t tmpfs tmpfs /root &&
+    exec setpriv --reuid '$ACCOUNT' --regid '$ACCOUNT' --clear-groups \
+      /usr/local/libexec/rv/rv-mcp-custodian serve" 2>"$STAGE/custodian.log" &
   PIDS+=("$!")
   /usr/local/libexec/rv/rv-mcp-custodian presence 2>"$STAGE/presence.log" &
   PIDS+=("$!")
@@ -97,8 +111,15 @@ for _ in $(seq 1 100); do
   [[ -S /run/rv-mcp-custodian/custodian.sock && -S /run/rv-mcp-presence/presence.sock ]] && break
   sleep 0.1
 done
-[[ -S /run/rv-mcp-custodian/custodian.sock && -S /run/rv-mcp-presence/presence.sock ]] \
-  || die "the custodian's sockets did not appear"
+if [[ ! -S /run/rv-mcp-custodian/custodian.sock || ! -S /run/rv-mcp-presence/presence.sock ]]; then
+  if [[ "$SYSTEMD" == "1" ]]; then
+    systemctl status --no-pager rv-mcp-custodian.service rv-mcp-presence.service >&2 || true
+    journalctl -u rv-mcp-custodian.service -u rv-mcp-presence.service --no-pager -n 60 >&2 || true
+  else
+    cat "$STAGE/custodian.log" "$STAGE/presence.log" >&2 || true
+  fi
+  die "the custodian's sockets did not appear"
+fi
 
 # The state is the custodian's alone.
 [[ "$(stat -c '%U %a' /var/lib/rv-mcp-custodian)" == "$ACCOUNT 700" ]] \
