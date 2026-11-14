@@ -145,6 +145,32 @@ struct AuditCommandTests {
         #expect(ocsf.contains("\\u202e"))
         #expect(try JSONSerialization.jsonObject(with: Data(ocsf.utf8)) is [String: Any])
     }
+
+    @Test func gateChangesRenderWhatChangedAndWhoAuthorizedIt() {
+        let policy = ConfigChangeAudit.$authorization.withValue("owner (test)") {
+            var event = ConfigChangeAudit.policy(
+                layer: "machine", change: "rollback", revision: 4, hash: "0123456789abcdef", ruleCount: 2,
+                prior: (revision: 3, hash: "fff", ruleCount: 1))
+            event.detail["rollback_to"] = "2"
+            return event
+        }
+        #expect(AuditRun.changeSummary(policy) == [
+            "rollback r3 -> r4", "hash=0123456789ab", "restored=r2", "by=owner (test)",
+        ])
+        let setting = ConfigChangeAudit.setting(
+            "allowlist", from: "0 entries", to: "1 entries", detail: ["added": "core.git:reset-hard"])
+        #expect(AuditRun.changeSummary(setting) == [
+            "0 entries -> 1 entries", "added=core.git:reset-hard", "by=none",
+        ])
+        let managed = ConfigChangeAudit.event(
+            .policyManaged, subject: "Acme",
+            detail: ["change": "serial-accepted", "serial": "5", "authorized_by": "organization signature"])
+        #expect(AuditRun.changeSummary(managed) == ["serial-accepted", "serial=5", "by=organization signature"])
+        let line = AuditRun.pretty([setting])
+        #expect(line.contains("config.changed  allowlist  0 entries -> 1 entries"))
+        let other = AuditEvent(time: Date(), kind: .secretUse, decision: .info, subject: "s", source: "audit.jsonl")
+        #expect(AuditRun.changeSummary(other).isEmpty)
+    }
 }
 
 @Suite("rv audit verify")

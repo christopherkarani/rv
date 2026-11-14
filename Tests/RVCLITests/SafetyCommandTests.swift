@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVTheme
 @testable import RVCLI
@@ -34,6 +35,18 @@ struct SafetyCommandTests {
             try await SafetyRun.set(.normal, home: home)
         }
         #expect(SafetyRun.show(home: home, workspace: nil) == "normal")
+    }
+
+    @Test func set_recordsTheOwnerCheckThatAuthorizedIt() async throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        try await withCLIProcess(home: home, ownerAuthOutcome: .authenticated) {
+            try await SafetyRun.set(.strict, home: home)
+        }
+        let events = AuditLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            .events(AuditFilter(kinds: ["config.changed"]))
+        #expect(events.map(\.subject) == ["safety.level"])
+        #expect(events.first?.detail["authorized_by"] == OwnerConfirmation.testAuthorization)
     }
 
     private func tempHome() throws -> HomeDirectory {

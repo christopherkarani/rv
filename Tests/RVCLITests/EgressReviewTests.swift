@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 import RVPolicy
 @testable import RVCLI
 
@@ -363,5 +364,30 @@ struct EgressReviewTests {
         #expect(text.contains("\"ruleLoaded\":true"))
         let plain = try EgressReviewRun.robotShow(view, rejectionReason: nil, loaded: nil)
         #expect(plain.contains("\"loaded\"") == false)
+    }
+
+    @Test func reviewsAreRecordedWithoutTheDenyReason() async throws {
+        let config = try egressCLITempConfig()
+        defer { try? FileManager.default.removeItem(at: config) }
+        let store = PendingApprovalStore(baseDirectory: config)
+        let approved = try await egressCLIProposal(store: store, host: "a.example.com")
+        let denied = try await egressCLIProposal(store: store, host: "b.example.com", port: 8443)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let now = Date()
+        try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            _ = try await EgressReviewRun.approve(
+                id: approved.id, tty: tty, robot: false, store: store, now: now, refreshedNow: { now })
+            _ = try await EgressReviewRun.deny(
+                id: denied.id, reason: "secret-ish tracker note", tty: tty, robot: false, store: store,
+                now: now, refreshedNow: { now })
+        }
+        let events = AuditLedger(configDirectory: config).events(AuditFilter(kinds: ["config.changed"]))
+        #expect(events.map { $0.detail["new"] ?? "" } == ["allow-once", "deny"])
+        #expect(events.map { $0.detail["host"] ?? "" } == ["a.example.com", "b.example.com"])
+        #expect(events.last?.detail["port"] == "8443")
+        #expect(events.last?.detail["approval"] == denied.id.rawValue)
+        #expect(events.allSatisfy { $0.subject == "egress.rule" && $0.detail["authorized_by"] == "owner (test seam)" })
+        let raw = try String(contentsOf: AuditLog.fileURL(configDirectory: config), encoding: .utf8)
+        #expect(raw.contains("tracker note") == false)
     }
 }
