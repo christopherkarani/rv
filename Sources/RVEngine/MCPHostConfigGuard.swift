@@ -10,15 +10,13 @@ import RVDomain
 ///   `cp`, `mv`, `ln`, `install`, `dd`, `curl -o`, ...) whose target, as
 ///   written or resolved, is a guarded file, a resolved alias of one, or —
 ///   for a move or overwrite — a directory that holds one.
-/// - Unmodeled commands: a program rv does not model (`python3`, `node`,
-///   `perl -i`, `jq … | sponge`, an editor, a script runner) that names a
-///   guarded file; any name of one fed to `xargs`, a script run by a shell,
-///   or hidden from argv (an assignment, a here-document) beside such a
-///   program; a dynamic or truncated command beside any name of one; a
-///   copy-style verb naming one; and host CLIs that edit MCP servers
-///   (`claude mcp add`, `codex mcp add`, `claude plugin install`, `code
-///   --add-mcp`, ...). Known readers (`cat`, `jq`, `grep`, `ls`, ...) and
-///   read-only `git` subcommands stay allowed.
+/// - Unmodeled commands (`mcpHostConfigUnmodeledWrite`): host CLIs that edit
+///   MCP servers, behind any launcher; copy verbs with an option word after
+///   an operand (BSD `cp` writes to the last word); and, once any guarded
+///   name appears, any program rv does not model, any consumer (`xargs`, a
+///   shell), any command run with an environment assignment, git with a
+///   config override, and any copy verb naming one. Known readers (`cat`,
+///   `jq`, `grep`, `ls`, ...) and read-only `git` subcommands stay allowed.
 ///
 /// The deny is `core.mcp`, not pinned: the owner may approve one through
 /// allow-once.
@@ -74,21 +72,22 @@ private func foldedPath(_ path: String) -> String {
 // MARK: - Unmodeled commands
 
 /// Whether `raw` may write a host MCP config through something the
-/// filesystem parser does not model. Fails closed: an unknown program that
-/// names a guarded file counts, even when it only reads it. The one copy
-/// that does not is a plain `cp` that provably only reads the name
-/// (`plainCopyOnlyReads`).
+/// filesystem parser does not model. Fails closed: an unknown program
+/// anywhere in a command that names a guarded file counts, even when it
+/// only reads it or the name reaches it on stdin (`echo .mcp.json |
+/// python3 x.py`). The one copy that does not is a plain `cp` that provably
+/// only reads the name (`plainCopyOnlyReads`).
 func mcpHostConfigUnmodeledWrite(
     _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext
 ) -> Bool {
     let launched = launchedCommandHeads(raw)
     if launched.contains(where: isHostMCPMutation) { return true }
-    let changesDirectory = launched.contains { ["cd", "pushd", "popd"].contains(commandName($0.head)) }
+    if launched.contains(where: hasOptionAfterOperand) { return true }
     let argvMentions = launched.reduce(0) { total, command in
-        total + command.argv.dropFirst().reduce(0) { $0 + mentionCount($1) }
+        total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }
     }
-    let rawMentions = mentionCount(raw)
-    guard rawMentions > 0 || argvMentions > 0 else { return false }
+    guard mentionCount(raw) > 0 || argvMentions > 0 else { return false }
+    let copyIsPlain = launched.contains(where: mayShadowOrMoveCopy) == false && mayDefineCommands(raw) == false
     var unknown = false
     for command in launched {
         if command.truncated || command.headIsDynamic { return true }
@@ -99,17 +98,14 @@ func mcpHostConfigUnmodeledWrite(
         case .consumer:
             return true
         case .copy:
-            if named, changesDirectory || plainCopyOnlyReads(command, guard: guarded, context: context) == false {
+            if named, copyIsPlain == false || plainCopyOnlyReads(command, guard: guarded, context: context) == false {
                 return true
             }
         case .unknown:
-            if named { return true }
             unknown = true
         }
     }
-    // A name the launched argv does not carry (an assignment, a
-    // here-document) may reach an unknown program.
-    return unknown && rawMentions > argvMentions
+    return unknown
 }
 
 private func mentionCount(_ text: String) -> Int {
@@ -125,6 +121,40 @@ private func mentionCount(_ text: String) -> Int {
     return count
 }
 
+/// BSD getopt (macOS `cp`, `mv`, `ln`, `install`) stops at the first
+/// operand: a later `-x` word is an operand, and the last word the real
+/// destination, which the GNU-style writer parse does not see.
+private func hasOptionAfterOperand(_ command: LaunchedCommand) -> Bool {
+    let name = commandName(command.head)
+    guard ["cp", "mv", "ln", "install"].contains(name) else { return false }
+    var sawOperand = false
+    var skipValue = false
+    for word in command.guardArgv.dropFirst().map(unescapeBackslashPairs) {
+        if skipValue {
+            skipValue = false
+            continue
+        }
+        if word == "--" { return false }
+        if word.hasPrefix("-"), word != "-" {
+            if sawOperand { return true }
+            skipValue = name == "install" && ["-m", "-o", "-g"].contains(word)
+            continue
+        }
+        sawOperand = true
+    }
+    return false
+}
+
+/// A directory change, or a definition that may stand in for `cp`.
+private func mayShadowOrMoveCopy(_ command: LaunchedCommand) -> Bool {
+    ["cd", "pushd", "popd", "alias", "function", "hash", "enable"].contains(commandName(command.head))
+}
+
+/// A shell function definition or a `PATH` change anywhere in `raw`.
+private func mayDefineCommands(_ raw: String) -> Bool {
+    raw.contains("()") || raw.contains("PATH=") || raw.contains("PATH+=")
+}
+
 private enum MCPCommandClass {
     case reader
     case modeled
@@ -134,9 +164,12 @@ private enum MCPCommandClass {
 }
 
 private func classify(_ command: LaunchedCommand) -> MCPCommandClass {
+    // `LESSOPEN=… less`, `GIT_PAGER=… git log`, `PATH=… cp`: the
+    // environment may make any program run code.
+    if command.assignments.isEmpty == false { return .unknown }
     let name = commandName(command.head)
     let operands = command.guardArgv.dropFirst().map(foldedWord)
-    if name == "git" { return gitClass(operands) }
+    if name == "git" { return gitClass(command) }
     if name == "find" {
         let acting = ["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]
         return operands.contains(where: acting.contains) ? .unknown : .reader
@@ -149,21 +182,42 @@ private func classify(_ command: LaunchedCommand) -> MCPCommandClass {
     return .unknown
 }
 
-private func gitClass(_ operands: [String]) -> MCPCommandClass {
-    let readOnly: Set<String> = [
-        "status", "diff", "log", "show", "blame", "grep", "ls-files", "rev-parse", "add", "commit",
-        "check-ignore", "cat-file", "shortlog",
-    ]
-    guard let sub = operands.first(where: { $0.hasPrefix("-") == false }) else { return .reader }
-    return readOnly.contains(sub) ? .reader : .unknown
+/// Read-only subcommands, with no global option that can run a program
+/// (`-c core.pager=…`, `--config-env=…`, `--exec-path`). `commit` runs
+/// an editor and hooks: read-only only with a message given on the command
+/// line, no `--edit`, and no guarded name of its own.
+private func gitClass(_ command: LaunchedCommand) -> MCPCommandClass {
+    let words = command.guardArgv.dropFirst().map(unescapeBackslashPairs)
+    guard let index = words.firstIndex(where: { $0.hasPrefix("-") == false }) else { return .reader }
+    let overrides = words[..<index].contains {
+        $0.hasPrefix("-c") || $0.hasPrefix("--config-env") || $0.hasPrefix("--exec-path")
+    }
+    if overrides { return .unknown }
+    let sub = foldedWord(words[index])
+    let rest = words[(index + 1)...]
+    if sub == "commit" {
+        let message = rest.contains {
+            ["-m", "-am", "-F", "--message", "--file"].contains($0)
+                || $0.hasPrefix("--message=") || $0.hasPrefix("--file=")
+        }
+        let edits = rest.contains { $0 == "-e" || $0 == "--edit" }
+        let named = rest.contains(where: MCPHostConfigPaths.mentions)
+        return message && edits == false && named == false ? .reader : .unknown
+    }
+    return gitReadOnly.contains(sub) ? .reader : .unknown
 }
+
+private let gitReadOnly: Set<String> = [
+    "status", "diff", "log", "show", "blame", "grep", "ls-files", "rev-parse", "add", "check-ignore", "cat-file",
+    "shortlog",
+]
 
 /// Programs that only read their operands (redirects are layer A's).
 private let readerPrograms: Set<String> = [
     "cat", "less", "more", "head", "tail", "bat", "jq", "gojq", "grep", "egrep", "fgrep", "rg", "ag", "ack",
     "wc", "stat", "ls", "file", "diff", "cmp", "sha1sum", "sha256sum", "sha512sum", "shasum", "md5sum", "md5",
     "hexdump", "od", "strings", "test", "[", "realpath", "readlink", "dirname", "basename", "echo", "printf",
-    "true", "false", ":", "eval", "rv", "rv-cli",
+    "true", "false", ":", "eval", "rv", "rv-cli", "cd", "pushd", "popd",
 ]
 
 /// Writers the filesystem parser models, so layer A sees their targets.
@@ -180,12 +234,13 @@ private let copyPrograms: Set<String> = [
     "patch",
 ]
 
-/// `cp SRC DEST` with only `-f -i -n -p -v`, static operands, a working
-/// directory and a probed, certain `DEST`: the source is then only read,
-/// and the copy lands at `DEST` or, when `DEST` exists (it may be a
-/// directory), at `DEST/basename(SRC)`. Neither may be a guarded file and
-/// `DEST` may not hold one. Anything else (recursion, `-t`, `--parents`,
-/// links, several sources, globs, an unprobed `DEST`) keeps the copy unmodeled.
+/// `cp SRC DEST` with only `-f -i -n -p -v` before the operands, static
+/// operands, a working directory and a probed, certain `DEST`: the source
+/// is then only read, and the copy lands at `DEST` or, when `DEST` exists
+/// (it may be a directory), at `DEST/basename(SRC)`. Neither may be a
+/// guarded file and `DEST` may not hold one. Anything else (recursion,
+/// `-t`, `--parents`, `--`, links, several sources, globs, an option after
+/// an operand, an unprobed `DEST`) keeps the copy unmodeled.
 private func plainCopyOnlyReads(
     _ command: LaunchedCommand, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext
 ) -> Bool {
@@ -194,7 +249,7 @@ private func plainCopyOnlyReads(
     for word in command.guardArgv.dropFirst() {
         let plain = unescapeBackslashPairs(word)
         if plain.hasPrefix("-") {
-            guard plain.count > 1, plain.hasPrefix("--") == false,
+            guard operands.isEmpty, plain.count > 1, plain.hasPrefix("--") == false,
                   plain.dropFirst().allSatisfy(plainCopyFlags.contains)
             else { return false }
             continue
@@ -229,34 +284,3 @@ private let opaqueOperandCharacters: Set<Character> = ["$", "`", "*", "?", "[", 
 private let consumerPrograms: Set<String> = [
     "xargs", "parallel", "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh", "source", ".",
 ]
-
-/// Host CLIs that add, remove or install MCP servers or plugins.
-private func isHostMCPMutation(_ command: LaunchedCommand) -> Bool {
-    let name = commandName(command.head)
-    let operands = command.guardArgv.dropFirst().map(foldedWord)
-    if ["code", "code-insiders", "cursor", "windsurf"].contains(name) {
-        return operands.contains { $0 == "--add-mcp" || $0.hasPrefix("--add-mcp=") }
-    }
-    let readOnly: [String: Set<String>] = [
-        "claude": ["list", "get", "serve", "help", "--help", "-h"],
-        "codex": ["list", "get", "help", "--help", "-h"],
-        "gemini": ["list", "help", "--help", "-h"],
-        "opencode": ["list", "ls", "help", "--help", "-h"],
-    ]
-    guard let allowed = readOnly[name] else { return false }
-    let words = operands.filter { $0.hasPrefix("-") == false || $0 == "--help" || $0 == "-h" }
-    let groups: Set<String> = name == "claude" ? ["mcp", "plugin", "plugins"] : ["mcp"]
-    guard let index = words.firstIndex(where: groups.contains) else { return false }
-    let group = words[index]
-    guard let sub = words.dropFirst(index + 1).first else { return false }
-    if group == "mcp" { return allowed.contains(sub) == false }
-    if sub == "marketplace" {
-        // `claude plugin marketplace list`; a bare group prints its help.
-        guard let action = words.dropFirst(index + 2).first else { return false }
-        return claudeReadOnlyPluginWords.subtracting(["validate"]).contains(action) == false
-    }
-    return claudeReadOnlyPluginWords.contains(sub) == false
-}
-
-/// `claude plugin` subcommands that only print.
-private let claudeReadOnlyPluginWords: Set<String> = ["list", "help", "validate", "--help", "-h"]

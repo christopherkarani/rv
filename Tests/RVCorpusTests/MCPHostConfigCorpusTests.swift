@@ -56,6 +56,8 @@ struct MCPHostConfigCorpusTests {
         "cp .mcp.json backup",
         "cp -r evil .cursor",
         "claude plugin marketplace add evil/market",
+        "cp evil.json mcp.json -v",
+        "echo .mcp.json | python3 edit.py",
     ])
     func guardOwnsInRepositoryWrites(command: String) throws {
         let harness = try StressHarness.dayOne()
@@ -84,7 +86,7 @@ struct MCPHostConfigCorpusTests {
 /// `guarded`. `notes-link` is a symlink to `~/.claude.json`, `team-link`
 /// one to the repository's `.mcp.json`, `backup` an existing directory,
 /// `backup.json` and `mcp.json.bak` missing files (`elsewhere` is unprobed),
-/// and
+/// `-v` a directory symlink to `~/.cursor`, and
 /// `dotfiles/claude.json` is the resolved target of a guarded file.
 private func door(_ harness: StressHarness, _ command: String, guarded: Bool) -> EvaluationResult {
     let repo = MCPHostConfigCorpusTests.repo
@@ -102,6 +104,9 @@ private func door(_ harness: StressHarness, _ command: String, guarded: Bool) ->
             FilesystemPathFact(apparent: "backup", canonical: repo + "/backup", resolution: .resolved),
             FilesystemPathFact(apparent: "backup.json", canonical: repo + "/backup.json", resolution: .lexical),
             FilesystemPathFact(apparent: "mcp.json.bak", canonical: repo + "/mcp.json.bak", resolution: .lexical),
+            // A directory named `-v` that links to `~/.cursor`: BSD `cp a b -v` copies into it.
+            FilesystemPathFact(
+                apparent: "-v", canonical: "/isolated-home/.cursor", followedSymlink: true, resolution: .resolved),
         ],
         mcpHostConfigGuard: guarded
             ? MCPHostConfigGuard(resolvedAliases: [repo + "/dotfiles/claude.json"])

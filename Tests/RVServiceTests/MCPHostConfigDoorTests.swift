@@ -126,6 +126,30 @@ struct MCPHostConfigDoorTests {
         }
     }
 
+    /// The live filesystem probe always answers `.probed`, also with no
+    /// working directory or one that does not exist, so the guard rides
+    /// every shell evaluation.
+    @Test func shellDoorKeepsTheGuardWithoutAUsableWorkingDirectory() async throws {
+        try await Self.withHome(gateway: true) { root, home in
+            let cwds: [WorkingDirectory?] = [nil, wd(root.path + "/missing/dir")]
+            for cwd in cwds {
+                for command in ["claude mcp add evil -- evil-mcp", "echo .mcp.json | python3 edit.py"] {
+                    let result = await GatedEvaluate().decide(
+                        .peek, EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
+                        cwd: cwd, home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
+                        allowlist: { .empty }, host: .hook(.claude), tool: .bash,
+                        inputs: EvaluationInputs(
+                            guardMode: .enforce,
+                            judge: JudgeSelection(engine: .ft, bundle: nil),
+                            store: .gather(home: home, cwd: cwd)
+                        )
+                    ).result
+                    #expect(result.decision != .allow, "\(command) from \(cwd?.rawValue ?? "no cwd")")
+                }
+            }
+        }
+    }
+
     /// The guard is not an observe floor: observe measures it first. The
     /// agent is let through and the would-be verdict lands in the denial
     /// ledger `rv blocks` lists (ask on the shell door, deny on the file door).
