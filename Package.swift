@@ -64,10 +64,11 @@ let terminalProbeTargets: [Target] = [
         path: "Sources/rv-terminal-probe"
     ),
     .executableTarget(name: "rv-pty-claim"),
-    // Changes real signal dispositions for RVMCPTests, out of the test process.
-    .executableTarget(name: "rv-mcp-signal-probe", dependencies: ["RVMCP"]),
+    // RVMCPTests' child: signal dispositions out of the test process, and
+    // what a caged server can read of its parent.
+    .executableTarget(name: "rv-mcp-probe", dependencies: ["RVMCP"]),
 ]
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-signal-probe"]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-probe"]
 #else
 let terminalProbeProducts: [Product] = []
 let terminalProbeTargets: [Target] = []

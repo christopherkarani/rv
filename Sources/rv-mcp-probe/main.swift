@@ -1,12 +1,14 @@
-// Test probe for `MCPShutdownSignals` (RVMCPTests). It changes real signal
-// dispositions, which must not happen in the shared test process, so the
-// tests run it as a child. Not shipped.
+// Test probe for RVMCPTests, run as a child. Not shipped.
 //
-// `rv-mcp-signal-probe report` prints this process's dispositions.
-// `rv-mcp-signal-probe` installs the shutdown signals, prints the
+// `rv-mcp-probe signals` installs `MCPShutdownSignals`, which changes real
+// signal dispositions (never done in the shared test process). It prints the
 // dispositions it inherited and installed, spawns `report` through
 // Foundation `Process` as serve spawns a plain server, sends itself SIGTERM,
 // then cancels and prints the restored dispositions.
+// `rv-mcp-probe report` prints this process's dispositions.
+// `rv-mcp-probe procargs <pid>` reads `pid`'s arguments and environment
+// through `sysctl` `KERN_PROCARGS2`, as a caged server could, and prints what
+// it got back: never the values, only counts and whether `HOME=` was there.
 import Darwin
 import Foundation
 import RVMCP
@@ -32,7 +34,7 @@ private func say(_ line: String) {
     FileHandle.standardOutput.write(Data((line + "\n").utf8))
 }
 
-private func probe() -> Int32 {
+private func catchSignals() -> Int32 {
     say("inherited " + dispositions())
     let signals = MCPShutdownSignals(MCPShutdownSignals.handled, catching: true)
     let heard = Count()
@@ -64,8 +66,37 @@ private func probe() -> Int32 {
     return 0
 }
 
-if CommandLine.arguments.dropFirst().first == "report" {
+/// `KERN_PROCARGS2`: argc, the exec path, padding, argv, then whatever
+/// environment the kernel shows this caller.
+private func procargs(_ pid: pid_t) -> String {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var buffer = [UInt8](repeating: 0, count: 1 << 20)
+    var size = buffer.count
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return "failed errno=\(errno)" }
+    let data = Array(buffer.prefix(size))
+    guard data.count >= 4 else { return "failed short" }
+    let argc = Int(data.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
+    let strings = data.dropFirst(4).split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+    let rest = strings.dropFirst(1 + argc)
+    let home = rest.contains { $0.hasPrefix("HOME=") }
+    return "ok argc=\(argc) strings=\(rest.count) home=\(home ? "yes" : "no")"
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+switch arguments.first ?? "" {
+case "report":
     say(dispositions())
     exit(0)
+case "signals":
+    exit(catchSignals())
+case "procargs":
+    guard arguments.count == 2, let pid = pid_t(arguments[1]) else {
+        say("usage: rv-mcp-probe procargs <pid>")
+        exit(2)
+    }
+    say(procargs(pid))
+    exit(0)
+default:
+    say("usage: rv-mcp-probe signals | report | procargs <pid>")
+    exit(2)
 }
-exit(probe())

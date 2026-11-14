@@ -16,29 +16,6 @@ private func eventually(_ seconds: TimeInterval = 10, _ condition: () -> Bool) -
     return true
 }
 
-private struct MissingProbe: Error {}
-
-/// The built `rv-mcp-signal-probe`, next to the test bundle or in `.build`.
-private func signalProbe() throws -> URL {
-    let root = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    var candidates = [
-        root.appendingPathComponent(".build/out/Products/Debug/rv-mcp-signal-probe"),
-        root.appendingPathComponent(".build/debug/rv-mcp-signal-probe"),
-        root.appendingPathComponent(".build/arm64-apple-macosx/debug/rv-mcp-signal-probe"),
-    ]
-    var directory = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-    for _ in 0..<8 {
-        candidates.append(directory.appendingPathComponent("rv-mcp-signal-probe"))
-        let parent = directory.deletingLastPathComponent()
-        if parent.path == directory.path { break }
-        directory = parent
-    }
-    if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) { return found }
-    Issue.record("missing built product rv-mcp-signal-probe")
-    throw MissingProbe()
-}
-
 /// Runs `executable` to its end and returns its output lines by their first
 /// word. Hard bound: killed, and the test fails, after 20 seconds; the wait
 /// polls instead of blocking in `waitid`.
@@ -113,7 +90,7 @@ struct MCPShutdownSignalTests {
     /// not die of it; cancel puts the defaults back.
     @Test(.enabled(if: ignoresNone), .timeLimit(.minutes(1)))
     func caughtSignalsLeaveAPlainChildTheDefaultsAndAreRestored() throws {
-        let lines = try probeLines(try signalProbe().path, [])
+        let lines = try probeLines(try mcpProbe().path, ["signals"])
         #expect(lines["inherited"] == "INT=default TERM=default HUP=default")
         #expect(lines["installed"] == "INT=handler TERM=handler HUP=handler")
         #expect(lines["child"] == "INT=default TERM=default HUP=default")
@@ -125,7 +102,7 @@ struct MCPShutdownSignalTests {
     /// is left so, for serve and for its children.
     @Test(.enabled(if: ignoresNone), .timeLimit(.minutes(1)))
     func aSignalInheritedIgnoredStaysIgnored() throws {
-        let lines = try probeLines("/usr/bin/nohup", [try signalProbe().path])
+        let lines = try probeLines("/usr/bin/nohup", [try mcpProbe().path, "signals"])
         #expect(lines["inherited"] == "INT=default TERM=default HUP=ignore")
         #expect(lines["installed"] == "INT=handler TERM=handler HUP=ignore")
         // Serve adds nothing: the child keeps HUP ignored, unless Foundation's
