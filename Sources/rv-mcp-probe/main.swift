@@ -57,7 +57,7 @@ private func catchSignals() -> Int32 {
     say("child " + reported.trimmingCharacters(in: .whitespacesAndNewlines))
 
     kill(getpid(), SIGTERM)
-    let deadline = Date().addingTimeInterval(5)
+    let deadline = Date().addingTimeInterval(15)
     while heard.value.withLock({ $0 }) == 0, Date() < deadline { usleep(10_000) }
     say("heard \(heard.value.withLock { $0 }) first \(signals.first.map { String($0) } ?? "none")")
 

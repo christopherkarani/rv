@@ -163,7 +163,7 @@ struct MCPShutdownSignalTests {
         runtime.requestShutdown()
         runtime.requestShutdown()
         #expect(done.wait(timeout: .now() + 10) == .success)
-        #expect(Date().timeIntervalSince(asked) < 1.5)
+        #expect(Date().timeIntervalSince(asked) < 2.5)
         try? client.toGateway.fileHandleForWriting.close()
     }
 

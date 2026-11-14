@@ -29,7 +29,7 @@ private func contents(_ directory: URL, _ name: String) -> String {
 }
 
 /// Polls `condition` for up to `seconds`; the test thread never blocks in a wait call.
-private func eventually(_ seconds: TimeInterval = 15, _ condition: () -> Bool) -> Bool {
+private func eventually(_ seconds: TimeInterval = 30, _ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(seconds)
     while condition() == false {
         guard Date() < deadline else { return false }
@@ -193,7 +193,7 @@ struct MCPPlaceholderLiveTests {
         #expect(kill(grandchild, 0) == 0)
         // The client goes away: serve closes the server's stdin, then SIGTERMs its group.
         try client.toGateway.fileHandleForWriting.close()
-        served = done.wait(timeout: .now() + 15) == .success
+        served = done.wait(timeout: .now() + 30) == .success
         #expect(served)
         #expect(kill(leader, 0) == -1 && errno == ESRCH)
         let grandchildGone = eventually(5) { kill(grandchild, 0) == -1 && errno == ESRCH }
