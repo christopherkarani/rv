@@ -25,7 +25,9 @@
  *
  * Residual: a process that forks, moves itself out of the group, and
  * whose parent exits before the next poll is reparented to launchd
- * unseen; nothing then links it to this runtime. The owner is named by
+ * unseen; nothing then links it to this runtime, so a daemonizing
+ * process usually escapes. A tracked process that execs a setuid binary
+ * is dropped: proc_pidinfo fails with EPERM. The owner is named by
  * pid only, so an owner that exited before arming is refused but one
  * whose pid was already reused would be watched in its place.
  */
@@ -298,7 +300,7 @@ int rv_start_watchdog(uint64_t deadline_seconds, uint64_t cpu_seconds, pid_t own
     int status = 0;
     char byte = 0;
     ssize_t got;
-    /* 31 days in seconds is the largest cap rv sends; refuse what would
+    /* 365 days in seconds is the largest cap rv sends; refuse what would
      * overflow the nanosecond arithmetic. */
     if ((deadline_seconds == 0 && cpu_seconds == 0 && owner == 0) || deadline_seconds > 31536000u
         || cpu_seconds > 31536000u || owner < 0 || owner == 1 || owner == leader) {
