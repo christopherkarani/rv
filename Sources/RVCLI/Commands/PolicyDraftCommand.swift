@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 struct PolicyDraftCommand: AsyncParsableCommand {
@@ -80,7 +81,8 @@ enum PolicyDraftRun {
         workspace: URL,
         compiler: some EnglishCompiler
     ) async throws -> PolicyDraftResult {
-        if save { try await OwnerConfirmation.require("save a policy rule drafted from English") }
+        var authorization: String?
+        if save { authorization = try await OwnerConfirmation.require("save a policy rule drafted from English") }
         let compiled = try await compiler.compile(english)
         switch compiled {
         case .refuse(let reason):
@@ -91,10 +93,12 @@ enum PolicyDraftRun {
         case .preview(let preview):
             var saved = false
             if save, preview.allowedToSave {
-                try PolicyWorkspace(home: home, workspace: workspace).upsert(
-                    preview.rule,
-                    layer: repo ? .repo : .machine
-                )
+                try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                    try PolicyWorkspace(home: home, workspace: workspace).upsert(
+                        preview.rule,
+                        layer: repo ? .repo : .machine
+                    )
+                }
                 saved = true
             }
             return PolicyDraftResult(

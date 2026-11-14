@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 struct Policy: AsyncParsableCommand {
@@ -268,9 +269,14 @@ struct Policy: AsyncParsableCommand {
                 if risk.hasBlockingFindings {
                     try CommandContext.fail("rv policy apply: blocked by policy risk findings\n")
                 }
-                try await OwnerConfirmation.require("apply policy from \(path) to the \(repo ? "repo" : "machine") layer")
+                let authorization = try await OwnerConfirmation.require(
+                    "apply policy from \(path) to the \(repo ? "repo" : "machine") layer")
                 do {
-                    _ = try session.mergeIncoming(incoming, layer: layer, save: true)
+                    _ = try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                        try session.mergeIncoming(incoming, layer: layer, save: true)
+                    }
+                } catch let unrecorded as ConfigChangeUnrecorded {
+                    try ConfigChangeRefusal.fail(command: "policy apply", unrecorded)
                 } catch let error as PolicyCeilingError {
                     try CommandContext.fail("rv policy apply: refused: \(error.refusal)\n")
                 } catch {

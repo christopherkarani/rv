@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 /// Phase 4 review queue surface: blocked network egress becomes scoped
@@ -290,6 +291,8 @@ enum EgressReviewRun {
     /// Map a resolve-CAS failure: binding/state losses mean the proposal
     /// changed under review (retry), never a store outage.
     static func mapResolveError(_ error: Error) -> Error {
+        // An unrecorded review keeps its own line and exit code.
+        if error is ConfigChangeUnrecorded { return error }
         guard let pending = error as? PendingApprovalError else {
             return EgressReviewError.storeUnavailable
         }
@@ -326,7 +329,7 @@ enum EgressReviewRun {
         try PolicyCeilingStore(configDirectory: store.baseDirectory).load()?
             .requireEgress(host: rule.host, port: rule.port)
         try await reserveLAPrompt(store: store, now: now)
-        try await CLIOwnerAuth.requireAuthenticated(
+        let authorization = try await CLIOwnerAuth.requireAuthenticated(
             reason: approveReason(host: rule.host, port: rule.port)
         )
         // Fresh stamp after the prompt: expiry/sweep on re-read and
@@ -343,13 +346,16 @@ enum EgressReviewRun {
         }
         let resolved: PendingApproval
         do {
-            resolved = try await store.resolve(
-                id: id,
-                decision: .allowOnce,
-                fingerprint: after.fingerprint,
-                identity: after.identity,
-                now: afterNow
-            )
+            let event = reviewEvent(id: id, rule: rule, decision: "allow-once", authorization: authorization)
+            resolved = try await ConfigChangeAudit.commitAwaiting(event, configDirectory: store.baseDirectory) {
+                try await store.resolve(
+                    id: id,
+                    decision: .allowOnce,
+                    fingerprint: after.fingerprint,
+                    identity: after.identity,
+                    now: afterNow
+                )
+            }
         } catch {
             throw mapResolveError(error)
         }
@@ -357,6 +363,20 @@ enum EgressReviewRun {
             throw EgressReviewError.notNetworkProposal
         }
         return view
+    }
+
+    /// `config.changed` (`egress.rule`) for one reviewed network proposal,
+    /// recorded write-ahead of the resolve: a review the audit log cannot
+    /// hold is not resolved (the proposal stays pending, which denies).
+    /// Host, port and approval id; never the deny reason's free text.
+    static func reviewEvent(id: ApprovalID, rule: LiveNetworkRule, decision: String, authorization: String) -> AuditEvent {
+        // A deny only tightens; an allow-once grants.
+        ConfigChangeAudit.setting(
+            "egress.rule", from: "proposed", to: decision, direction: decision == "deny" ? .tightening : .loosening,
+            detail: [
+                "host": rule.host, "port": String(rule.port), "approval": id.rawValue,
+                "authorized_by": authorization,
+            ])
     }
 
     /// Deny ceremony: same gates as approve, plus a required human reason
@@ -380,7 +400,7 @@ enum EgressReviewRun {
             throw EgressReviewError.notNetworkProposal
         }
         try await reserveLAPrompt(store: store, now: now)
-        try await CLIOwnerAuth.requireAuthenticated(
+        let authorization = try await CLIOwnerAuth.requireAuthenticated(
             reason: denyReason(host: rule.host, port: rule.port)
         )
         let afterNow = refreshedNow()
@@ -395,14 +415,17 @@ enum EgressReviewRun {
         }
         let resolved: PendingApproval
         do {
-            resolved = try await store.resolveWithReason(
-                id: id,
-                decision: .deny,
-                fingerprint: after.fingerprint,
-                identity: after.identity,
-                reason: reason,
-                now: afterNow
-            )
+            let event = reviewEvent(id: id, rule: rule, decision: "deny", authorization: authorization)
+            resolved = try await ConfigChangeAudit.commitAwaiting(event, configDirectory: store.baseDirectory) {
+                try await store.resolveWithReason(
+                    id: id,
+                    decision: .deny,
+                    fingerprint: after.fingerprint,
+                    identity: after.identity,
+                    reason: reason,
+                    now: afterNow
+                )
+            }
         } catch PendingApprovalError.invalidRequest {
             throw EgressReviewError.reasonRequired
         } catch {
