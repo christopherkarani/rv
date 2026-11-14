@@ -237,6 +237,24 @@ struct MCPPlaceholderPlannerTests {
         #expect(try refusal("http://localhost:8080/v1") == nil)
         #expect(try refusal("http://[::1]:8080/v1") == nil)
         #expect(try refusal("https://api.example.com/v1") == nil)
+        // Only the exact loopback names pass; anything that merely looks
+        // like one, or reaches loopback by another spelling, is refused.
+        for lookalike in [
+            "http://localhost.evil.com/v1", "http://127.0.0.1.evil.com/v1", "http://evil.com/127.0.0.1",
+            "http://127.0.0.1@evil.com/v1", "http://localhost:x@evil.com/v1", "http://0.0.0.0:8080/v1",
+            "http://127.0.0.2/v1", "http://127.1/v1", "http://2130706433/v1", "http://0x7f000001/v1",
+            "http://017700000001/v1", "http://localhost./v1", "http://[::ffff:127.0.0.1]/v1",
+            "http://[::2]/v1", "http:/127.0.0.1/v1", "http:127.0.0.1/v1",
+        ] {
+            #expect(try refusal(lookalike) == .plaintextUpstream("OPENAI_API_KEY"), "\(lookalike)")
+        }
+        // Case does not matter; the host is what is dialled, not the userinfo.
+        #expect(try refusal("HTTP://LOCALHOST:8080/v1") == nil)
+        #expect(try refusal("Http://127.0.0.1/v1") == nil)
+        #expect(try refusal("http://evil.com@127.0.0.1/v1") == nil)
+        #expect(try refusal("http://[::1]/v1") == nil)
+        // https is protected whatever the host; this one is TLS to evil.com.
+        #expect(try refusal("https://127.0.0.1@evil.com/v1") == nil)
         #expect(MCPPlaceholderPlanning.origin(try #require(URL(string: "https://api.example.com/v1"))) == "https://api.example.com")
         #expect(MCPPlaceholderPlanning.origin(try #require(URL(string: "http://127.0.0.1:8080/v1"))) == "http://127.0.0.1:8080")
     }
