@@ -249,7 +249,7 @@ private let hostMutatingWords: [String: [String]] = Dictionary(
         let host = pair.1
         let installs: [String] = pythonInstallers.contains(host) ? ["install"] : []
         let addMCP: [String] = editorHosts.contains(host) ? ["--add-mcp"] : []
-        return (host, Array(hostGroups[host] ?? []) + installs + addMCP)
+        return (host, (hostGroups[host] ?? []).sorted() + installs + addMCP)
     },
     uniquingKeysWith: { first, _ in first })
 
@@ -435,7 +435,7 @@ private func hostCLIs(_ word: String) -> [String] {
     if hostGroups[name] != nil || editorHosts.contains(name) || pythonInstallers.contains(name) { hosts.append(name) }
     if name == "claude-code" || ("/" + word).contains("/claude/versions/") { hosts.append("claude") }
     for (package, host) in hostPackages where word.contains(package) { hosts.append(host) }
-    for package in packageNames(word) {
+    for package in packageNames(word).sorted() {
         if let host = hostPackageNames[package] { hosts.append(host) }
         if pythonInstallers.contains(package) { hosts.append(package) }
     }
@@ -688,12 +688,13 @@ private func isReadOnlyHostForm(host: String, _ rest: [String]) -> Bool {
 // MARK: - Brace and glob spellings
 
 /// Plain host program names (not package specs) a brace or glob spelling may
-/// stand for, each mapped to the host it runs.
+/// stand for, each mapped to the host it runs. Sorted, so the budget is
+/// spent in the same order in every process.
 private let spelledHostNames: [(String, String)] = {
     var pairs: [(String, String)] = []
-    for name in hostGroups.keys { pairs.append((name, name)) }
-    for name in editorHosts { pairs.append((name, name)) }
-    for name in pythonInstallers { pairs.append((name, name)) }
+    for name in hostGroups.keys.sorted() { pairs.append((name, name)) }
+    for name in editorHosts.sorted() { pairs.append((name, name)) }
+    for name in pythonInstallers.sorted() { pairs.append((name, name)) }
     pairs.append(("claude-code", "claude"))
     return pairs
 }()

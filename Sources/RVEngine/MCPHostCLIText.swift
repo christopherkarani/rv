@@ -53,7 +53,32 @@ struct HostTextReads {
     /// bound on its work (each pass over a command's words counts them).
     private(set) var wordVisits = 0
 
+    /// Test hook: set, each list of text variants (`ordered`) is read in an
+    /// order drawn from it, as a per-process hash seed once ordered a `Set`
+    /// of them. Nil reads them in the order written.
+    var variantOrderSeed: UInt64?
+
     init() {}
+
+    /// `variants` without repeats, each kept where first written: the order
+    /// they are read in is fixed, so the verdict and these counters are the
+    /// same in every process (`variantOrderSeed` aside).
+    mutating func ordered(_ variants: [String]) -> [String] {
+        var kept: Set<String> = []
+        var out = variants.filter { kept.insert($0).inserted }
+        guard var state = variantOrderSeed, out.count > 1 else { return out }
+        for index in stride(from: out.count - 1, to: 0, by: -1) {
+            // SplitMix64.
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var mixed = state
+            mixed = (mixed ^ (mixed >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            mixed = (mixed ^ (mixed >> 27)) &* 0x94D0_49BB_1331_11EB
+            mixed ^= mixed >> 31
+            out.swapAt(index, Int(mixed % UInt64(index + 1)))
+        }
+        variantOrderSeed = state
+        return out
+    }
 
     /// Spends `count` pieces of one text; false (and `exceeded`) past a cap.
     mutating func examine(pieces count: Int) -> Bool {
@@ -90,8 +115,11 @@ struct HostTextReads {
     ) -> Bool {
         let reading = inert || dataOnly
         let literalReading = literal || literalOnly
+        // A text is read once per depth: read again deeper, its nested reads
+        // may reach `maxDepth` where the shallower read did not, so a
+        // shallower copy read first never hides that ask.
         let key = (nested ? "n" : "f") + (reading ? "d" : "r") + (splitting ? "s" : "w")
-            + (literalReading ? "l" : "e") + text
+            + (literalReading ? "l" : "e") + String(depth) + ":" + text
         let mayName = literalReading ? holdsHostMCPStem(text) : mayNameHostMCP(text, budget: &spelling)
         guard mayName, seen.insert(key).inserted else { return false }
         guard remaining > 0, depth < Self.maxDepth else {
@@ -184,7 +212,7 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         let operandsStayWords = reads.commandsArePlain && leavesOperandsAlone(command)
         let literalOnly = isPrinter == false && (isNonExecutor(command) || operandsStayWords)
         for word in args + values {
-            for variant in Set([word, word.ansiCDecodedIfMarked, decodedWord(word)])
+            for variant in reads.ordered([word, word.ansiCDecodedIfMarked, decodedWord(word)])
             where variant.contains(where: \.isWhitespace) {
                 if reads.runsHostMCPMutation(variant, dataOnly: dataOnly, literalOnly: literalOnly) { return true }
             }
@@ -284,7 +312,7 @@ func hasUnfollowableShellText(_ text: String) -> Bool {
 private func joinedReadsRun(
     _ words: [String], _ reads: inout HostTextReads, dataOnly: Bool = false, literalOnly: Bool = false
 ) -> Bool {
-    for line in Set([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]) {
+    for line in reads.ordered([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]) {
         if reads.runsHostMCPMutation(line, nested: false, dataOnly: dataOnly, resplit: true, literalOnly: literalOnly) {
             return true
         }
@@ -305,9 +333,9 @@ private let printers: Set<String> = ["echo", "printf", "print"]
 /// text is scanned once, under the pieces budget of `reads`.
 func hostMCPTextNamesMutation(_ raw: String, reads: inout HostTextReads) -> Bool {
     var scanned: Set<String> = []
-    for view in Set([raw, raw.replacingOccurrences(of: "\\\n", with: "")]) {
+    for view in reads.ordered([raw, raw.replacingOccurrences(of: "\\\n", with: "")]) {
         for token in ShellPipeline.tokenize(view) {
-            for variant in Set([unescapeBackslashPairs(token.lexeme), decodingAnsiCEscapes(token.lexeme)])
+            for variant in reads.ordered([unescapeBackslashPairs(token.lexeme), decodingAnsiCEscapes(token.lexeme)])
             where scanned.insert(variant).inserted {
                 if textNamesHostMCPMutation(variant, reads: &reads) { return true }
             }
