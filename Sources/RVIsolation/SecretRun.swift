@@ -55,8 +55,15 @@ package enum SecretRun {
         _ request: SecretRunRequest, context: SecretRunContext
     ) -> Result<Int32, SecretRunRefusal> {
         guard let name = request.command.first else { return .failure(.emptyCommand) }
-        // Before anything is resolved: a launch that cannot be bound must not prompt or unlock.
-        if let refusal = context.capability(context.peers) { return .failure(refusal) }
+        // Before anything is resolved: a launch that cannot be bound must not
+        // prompt or unlock. Guarded, so a Ctrl-C cannot end rv while its
+        // suspended probe child is alive (it would be left stopped forever).
+        let probing = SecretRunSignals()
+        let refusal = context.capability(context.peers)
+        let interrupted = probing.interrupted
+        probing.restore()
+        if let refusal { return .failure(refusal) }
+        if let interrupted { return .success(SecretRunExit.code(waitStatus: interrupted)) }
         guard let executable = SecretRunCommand.resolve(
             name, path: context.environment["PATH"], directory: context.directory,
             isExecutable: SecretRunCommand.isExecutableFile)
@@ -72,7 +79,9 @@ package enum SecretRun {
         case .success(let resolved): selection = resolved
         }
         for skip in selection.skipped {
-            context.notice("rv run: not staging \(skip.name): \(skip.reason.text)")
+            context.notice(
+                "rv run: not staging \(skip.name) (\(skip.reason.text)); "
+                    + "its variables are removed from the command's environment")
         }
 
         let broker = SecretLaunchBroker(
@@ -86,10 +95,14 @@ package enum SecretRun {
         }
         defer { broker.revoke(lease) }
         guard lease.placeholders.isEmpty == false else { return .failure(.lease("no placeholder was staged")) }
+        // What is stripped below comes from the lease's definitions: every selected one must be there.
+        guard Set(lease.definitions.map(\.name)) == Set(selection.names) else {
+            return .failure(.lease("the lease did not stage every selected secret"))
+        }
 
-        let selected = selection.names.compactMap { configuration.secret(named: $0) }
         let environment = SecretRunEnvironment.build(
-            parent: context.environment, selected: selected, lease: lease.environment, realValues: lease.realValues)
+            parent: context.environment, selected: lease.definitions, skipped: selection.skipped.map(\.definition),
+            lease: lease.environment, realValues: lease.realValues)
         // Names the lease replaces with a placeholder go without saying.
         let copies = SecretRunEnvironment.copies(parent: context.environment, realValues: lease.realValues)
             .filter { name in lease.environment.contains { $0.name == name } == false }

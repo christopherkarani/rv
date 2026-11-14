@@ -33,7 +33,7 @@ package enum SecretRunRefusal: Error, Sendable, Equatable {
             "secret \(name) stages only for \(agents.joined(separator: ", ")); rv run carries no agent tag"
         case .configuration(let reason): reason
         case .peerBindingUnavailable:
-            "the secrets gateway cannot tell which process sent a request on this platform, "
+            "the secrets gateway's peer check could not tell which process held a test connection here, "
                 + "so placeholders cannot be bound to the command; refusing to launch"
         case .spawnUnavailable:
             "this platform cannot start the command suspended until its placeholders are bound; refusing to launch"
@@ -65,14 +65,16 @@ package struct SecretRunSkip: Sendable, Equatable {
 
         package var text: String {
             switch self {
-            case .realValueDelivery: "environment delivery puts the real value in the environment"
-            case .agentScoped(let agents): "stages only for \(agents.joined(separator: ", "))"
+            case .realValueDelivery: "environment delivery would put the real value in the environment"
+            case .agentScoped(let agents): "it stages only for \(agents.joined(separator: ", "))"
             }
         }
     }
 
     package var name: String
     package var reason: Reason
+    /// What `rv run` keeps out of the command's environment for it.
+    package var definition: SecretDefinition
 }
 
 /// Which secrets one `rv run` stages.
@@ -90,7 +92,7 @@ package struct SecretRunSelection: Sendable, Equatable {
             var skipped: [SecretRunSkip] = []
             for definition in configuration.secrets {
                 if let reason = skipReason(definition) {
-                    skipped.append(SecretRunSkip(name: definition.name, reason: reason))
+                    skipped.append(SecretRunSkip(name: definition.name, reason: reason, definition: definition))
                 } else {
                     names.append(definition.name)
                 }
@@ -125,20 +127,22 @@ package enum SecretRunEnvironment {
     /// rv replaces; a session token would pair with nothing rv staged.
     static let awsCredentialVariables = ["AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"]
 
-    /// The parent's environment without any variable a selected secret
-    /// stages (its real value may be exported there) or is read from (a
-    /// `hostEnvironment` source's variable holds the real value), without
-    /// the login of the store a selected secret comes from, and without any
-    /// variable holding one of `realValues`, then the lease's
-    /// placeholders and base URLs on top.
+    /// The parent's environment without any variable a selected or
+    /// `skipped` secret stages (its real value may be exported there) or is
+    /// read from (a `hostEnvironment` source's variable holds the real
+    /// value), without the login of the store a selected secret comes from,
+    /// and without any variable holding one of `realValues`, then the
+    /// lease's placeholders and base URLs on top.
     static func build(
-        parent: [String: String], selected: [SecretDefinition], lease: [(name: String, value: String)],
-        realValues: [SecretValue]
+        parent: [String: String], selected: [SecretDefinition], skipped: [SecretDefinition],
+        lease: [(name: String, value: String)], realValues: [SecretValue]
     ) -> [String: String] {
         var environment = parent
-        for definition in selected {
+        for definition in selected + skipped {
             for variable in definition.stagedVariables { environment[variable] = nil }
             if case .hostEnvironment(let variable) = definition.source { environment[variable] = nil }
+        }
+        for definition in selected {
             for variable in storeLoginVariables(definition.source) { environment[variable] = nil }
             if case .awsSigV4 = definition.delivery {
                 for variable in awsCredentialVariables { environment[variable] = nil }
@@ -163,15 +167,25 @@ package enum SecretRunEnvironment {
         }
     }
 
-    /// The parent's variables, by name, whose value is one of `realValues`.
-    /// Compared in memory; the values are never printed.
+    /// A real value this long also gives away a variable it appears inside
+    /// (`Bearer <token>`); a shorter one only an exact copy, so a short PIN
+    /// or id does not take unrelated variables with it.
+    static let containedValueLength = 12
+
+    /// The parent's variables, by name, whose value is one of `realValues`
+    /// (as is or trimmed of whitespace) or contains one at least
+    /// `containedValueLength` bytes long. Compared in memory as bytes; the
+    /// values are never printed.
     static func copies(parent: [String: String], realValues: [SecretValue]) -> [String] {
         let real = Set(realValues.map { $0.revealed() })
         guard real.isEmpty == false else { return [] }
+        let contained = real.filter { $0.count >= containedValueLength }
         return parent.compactMap { name, value in
             let padded = Array(value.utf8)
             let trimmed = Array(value.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
-            return real.contains(padded) || real.contains(trimmed) ? name : nil
+            if real.contains(padded) || real.contains(trimmed) { return name }
+            let inside = contained.contains { SecretLeakScanner.occurrences(of: $0, in: padded).isEmpty == false }
+            return inside ? name : nil
         }.sorted()
     }
 
@@ -188,11 +202,6 @@ package enum SecretRunExit {
         let signal = status & 0x7f
         if signal == 0 { return (status >> 8) & 0xff }
         return 128 + signal
-    }
-
-    /// `WIFSTOPPED`.
-    static func isStopped(waitStatus status: Int32) -> Bool {
-        status & 0xff == 0x7f
     }
 }
 
