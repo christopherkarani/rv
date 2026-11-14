@@ -653,8 +653,11 @@ enum MCPRun {
         var review = ""
         var prompt = ""
         if configTrusted == false {
-            review = trustReview(configuration, secrets: SecretsConfiguration.load(configDirectory: environment.configDirectory))
-                + "\nsha256 \(digest)"
+            let secrets = SecretsConfiguration.load(configDirectory: environment.configDirectory)
+            if let refusal = placeholderSigningRefusal(configuration, secrets: secrets) {
+                return .failure(CommandFailure(refusal))
+            }
+            review = trustReview(configuration, secrets: secrets) + "\nsha256 \(digest)"
             guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
                 return .failure("trust review omitted a literal value; nothing signed")
             }
@@ -893,14 +896,43 @@ enum MCPRun {
     ) -> String {
         guard case .success(let loaded) = secrets else { return "secrets.json unreadable: variables and upstream unknown" }
         guard let secret = loaded.secret(named: name) else { return "not defined in secrets.json: serve refuses this server" }
-        let upstream: URL
-        switch secret.delivery {
-        case .environment: return "environment delivery: serve refuses this server"
-        case .gateway(let binding): upstream = binding.upstream
-        case .awsSigV4(let binding): upstream = binding.upstream
+        guard let upstream = MCPPlaceholderPlanning.upstream(secret) else {
+            return "environment delivery: serve refuses this server"
+        }
+        if SecretPlaceholderBroker.isHostEnvironmentSourced(secret) {
+            return "read from rv's own environment: serve refuses this server"
         }
         let variables = secret.stagedVariables.map(visible).joined(separator: ", ")
-        return "sets \(variables) · real value only to \(visible(upstream.host ?? upstream.absoluteString))"
+        return "sets \(variables) · real value only to \(visible(MCPPlaceholderPlanning.origin(upstream)))"
+    }
+
+    /// Why `rv mcp trust` signs nothing: the signature covers mcp.json, not
+    /// secrets.json, so a review that cannot say where a placeholder's real
+    /// value goes is not one to sign.
+    static func placeholderSigningRefusal(
+        _ configuration: MCPConfiguration, secrets: Result<SecretsConfiguration, SecretsConfigurationError>
+    ) -> String? {
+        for server in configuration.servers where server.placeholders.isEmpty == false {
+            guard case .success(let loaded) = secrets else {
+                return "secrets.json cannot be read, so the review cannot say where \(visible(server.name))'s "
+                    + "placeholders go; nothing signed"
+            }
+            for name in server.placeholders where loaded.secret(named: name) == nil {
+                return "secrets.json does not define placeholder \(visible(name)) of \(visible(server.name)); nothing signed"
+            }
+        }
+        return nil
+    }
+
+    /// One stderr line per placeholder of each server serve bound: the
+    /// secret, the variables it set and the upstream that gets the value.
+    static func placeholderBindingLog(_ servers: [MCPServerDefinition], secrets: SecretsConfiguration) -> [String] {
+        servers.flatMap { server in
+            server.placeholders.map { name in
+                "MCP server \(visible(server.name)): placeholder \(visible(name)) "
+                    + placeholderDetail(name, secrets: .success(secrets))
+            }
+        }
     }
 
     static func connect(
@@ -1636,6 +1668,11 @@ struct MCPServe: AsyncParsableCommand {
         let log: @Sendable (String) -> Void = { message in
             FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
         }
+        let bound = planned.compactMap { entry -> MCPServerDefinition? in
+            guard case .placeholderBound(let launch, _) = entry.1 else { return nil }
+            return configuration.server(named: launch.server)
+        }
+        for line in MCPRun.placeholderBindingLog(bound, secrets: secrets) { log(line) }
         // Read and verified once, beside the mcp.json check above. An
         // unreadable or unverifiable store pins nothing: every tool asks.
         let (pinning, pinFailure) = MCPToolPinStore(

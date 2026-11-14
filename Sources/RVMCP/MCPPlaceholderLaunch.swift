@@ -114,7 +114,7 @@ public struct MCPPlaceholderBinding: Sendable, Equatable {
 }
 
 /// The decisions for a server with placeholders, over values only.
-enum MCPPlaceholderPlanning {
+package enum MCPPlaceholderPlanning {
     /// Why `definition` gets no placeholders, judged before anything is
     /// resolved, or nil. `secrets` is secrets.json as serve loaded it; the
     /// lease checks the definitions it loads itself again. An untrusted
