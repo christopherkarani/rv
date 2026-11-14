@@ -250,6 +250,27 @@ struct UnixSocketListenerTests {
         #expect(err.contains("HOME is required"))
     }
 
+    /// stdout is a pipe nobody reads: the version write must fail with
+    /// EPIPE (SIGPIPE ignored) and rvd must say so with its exit status,
+    /// not die of the signal and not exit 0 having printed nothing.
+    @Test func rvdVersionToAClosedPipeExitsOne() throws {
+        let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let home = try makeIsolatedHome("ver")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let process = Process()
+        process.executableURL = rvd
+        process.arguments = ["--version"]
+        process.environment = ["HOME": home.path]
+        let stdout = Pipe()
+        try stdout.fileHandleForReading.close()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationReason == .exit, "rvd must not die of SIGPIPE")
+        #expect(process.terminationStatus == 1)
+    }
+
     /// On macOS XPC is the production transport: a socket base the daemon
     /// refuses (group-writable `~/.config`) must not take XPC down with it.
     @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() throws {
