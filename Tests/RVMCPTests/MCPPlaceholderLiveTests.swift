@@ -122,11 +122,15 @@ struct MCPPlaceholderLiveTests {
             configuration: configuration, upstreams: planned.map { $0.0 },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
             pinning: .unenforced, recordForward: { _ in true })
+        let bindings = Mutex<[String]>([])
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
-            audit: { _ in }, log: { _ in })
+            audit: { _ in }, log: { _ in },
+            placeholdersBound: { server, definitions in
+                bindings.withLock { $0.append("\(server): " + definitions.map(\.name).joined(separator: ",")) }
+            })
         let done = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
             runtime.run()
@@ -144,6 +148,8 @@ struct MCPPlaceholderLiveTests {
             }
         }
         try #require(eventually { contents(scratch, "ready") == "ready" }, "the server never got going")
+        // Reported once it runs bound, with what its lease staged.
+        #expect(bindings.withLock { $0 } == ["\(name): OPENAI_API_KEY"])
 
         // sandbox-exec and env exec in place: the shell is the group leader
         // rv spawned, and its parent is this process, not a wrapper.
