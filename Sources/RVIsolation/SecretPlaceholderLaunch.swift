@@ -179,10 +179,12 @@ package final class SecretPlaceholderLease: Sendable {
         Self.holdsRealValue(environment: environment, arguments: arguments, realValues: lease.realValues)
     }
 
-    /// `SecretValueCopy` over each variable's value and each argument.
+    /// `SecretValueCopy` over each variable's name, each variable's value and
+    /// each argument: the process sees all three.
     static func holdsRealValue(environment: [String: String], arguments: [String], realValues: [SecretValue]) -> Bool {
         guard realValues.isEmpty == false else { return false }
-        return (Array(environment.values) + arguments).contains { SecretValueCopy.found(in: $0, realValues: realValues) }
+        return (Array(environment.keys) + Array(environment.values) + arguments)
+            .contains { SecretValueCopy.found(in: $0, realValues: realValues) }
     }
 
     /// Spawns `executable` stopped as the leader of a new process group,
