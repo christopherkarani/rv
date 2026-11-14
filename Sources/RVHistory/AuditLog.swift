@@ -17,18 +17,47 @@ public enum AuditLog {
         configDirectory.appendingPathComponent(AuditLedger.Source.audit.rawValue, isDirectory: false)
     }
 
-    /// How long an append waits for another process holding the file lock.
+    /// How long one append waits, in all, for the in-process lock and the
+    /// file lock together.
     public static let defaultLockTimeout: TimeInterval = 2
 
     /// Each line's `prev` is the SHA-256 of the line before it (see `AuditChain`).
     /// A torn last line is closed with a newline first, so it stays one bad line.
-    /// False, with nothing written, when another process holds the file
-    /// lock for longer than `lockTimeout`: a writer stuck on the lock never
-    /// stalls the caller (or every other thread waiting behind it).
+    /// False, with nothing written, when the locks are not both taken within
+    /// `lockTimeout` of the call, on the monotonic clock: a writer stuck on
+    /// the lock never stalls the caller, and every thread queued behind it
+    /// gives up on its own deadline instead of waiting its turn first.
     @discardableResult
     public static func append(
         _ event: AuditEvent, configDirectory: URL, lockTimeout: TimeInterval = defaultLockTimeout
     ) -> Bool {
+        append(event, configDirectory: configDirectory, wait: LockWait(timeout: lockTimeout))
+    }
+
+    /// One append's lock budget: a deadline fixed when the append starts,
+    /// shared by the in-process lock and `flock`. `now` and `pause` are seams
+    /// for tests.
+    struct LockWait: Sendable {
+        let now: @Sendable () -> ContinuousClock.Instant
+        let pause: @Sendable () -> Void
+        let deadline: ContinuousClock.Instant
+
+        init(
+            timeout: TimeInterval,
+            now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
+            pause: @escaping @Sendable () -> Void = { usleep(2_000) }
+        ) {
+            self.now = now
+            self.pause = pause
+            // A negative or non-finite timeout gets one attempt, no wait.
+            let seconds = timeout.isFinite ? max(0, timeout) : 0
+            self.deadline = now().advanced(by: .seconds(seconds))
+        }
+
+        var expired: Bool { now() >= deadline }
+    }
+
+    static func append(_ event: AuditEvent, configDirectory: URL, wait: LockWait) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -42,11 +71,11 @@ public enum AuditLog {
             return false
         }
         let url = fileURL(configDirectory: configDirectory)
-        return AppendLock.withLock {
+        return AppendLock.withLock(wait) {
             let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { return false }
             defer { close(fd) }
-            guard lock(fd, timeout: lockTimeout) else { return false }
+            guard lock(fd, wait) else { return false }
             defer { _ = flock(fd, LOCK_UN) }
             guard let tail = lastLine(fd) else { return false }
             var chained = event
@@ -64,7 +93,7 @@ public enum AuditLog {
             data.append(UInt8(ascii: "\n"))
             guard writeAll(fd, data) else { return false }
             return sync(fd)
-        }
+        } ?? false
     }
 
     /// The encoded line with every display hazard (ESC, bidi controls, tag
@@ -142,21 +171,26 @@ public enum AuditLog {
 
     /// Threads in this process. macOS `flock` does not exclude them.
     /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
-    private enum AppendLock {
-        private static let mutex = Mutex<Void>(())
+    enum AppendLock {
+        static let mutex = Mutex<Void>(())
 
-        static func withLock<T: Sendable>(_ body: () -> T) -> T {
-            mutex.withLock { _ in body() }
+        /// `body` under the lock, or nil when the lock is not free before
+        /// `wait`'s deadline.
+        static func withLock<T: Sendable>(_ wait: LockWait, _ body: () -> T) -> T? {
+            while true {
+                if let result = mutex.withLockIfAvailable({ _ in body() }) { return result }
+                guard wait.expired == false else { return nil }
+                wait.pause()
+            }
         }
     }
 
-    /// Excludes other processes, waiting at most `timeout`. Callers already
-    /// hold `AppendLock`.
-    private static func lock(_ fd: Int32, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+    /// Excludes other processes until `wait`'s deadline, the one the
+    /// in-process lock already spent from. Callers hold `AppendLock`.
+    private static func lock(_ fd: Int32, _ wait: LockWait) -> Bool {
         while flock(fd, LOCK_EX | LOCK_NB) != 0 {
-            guard errno == EWOULDBLOCK || errno == EINTR, Date() < deadline else { return false }
-            usleep(10_000)
+            guard errno == EWOULDBLOCK || errno == EINTR, wait.expired == false else { return false }
+            wait.pause()
         }
         return true
     }
