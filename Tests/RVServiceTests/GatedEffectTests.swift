@@ -467,4 +467,44 @@ struct GatedEffectTests {
         #expect(overrides.first.map { $0.denial == nil } == true)
         #expect(deadline.hasTripped)
     }
+
+    private final class Calls: Sendable {
+        let count = Mutex(0)
+        func next() -> Int { count.withLock { $0 += 1; return $0 } }
+    }
+
+    /// An allow-once grant spent in time keeps its reply when the deadline
+    /// passes after: `HookDoor` sends it, not the timeout deny, so the deny
+    /// it becomes if the override row fails keeps its deny rows. The fake
+    /// clock is in time for the gate's check and the grant claim (the first
+    /// two reads) and late from the third, the check after the gate.
+    @Test("an allow-once spent in time keeps its deny rows when the deadline passes after")
+    func spentGrantKeepsDenyRowsPastTheDeadline() async throws {
+        let grants = EphemeralAllowOnceTable()
+        let cwd = wd("/tmp/ws")
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: cwd, codeHash: "late-grant", now: Self.now
+            ) == .planted
+        )
+        let command = ShellCommand(rawValue: "git reset --hard")
+        let calls = Calls()
+        let base = ContinuousClock.now
+        let deadline = HookDeadline(
+            expiresAt: base.advanced(by: .seconds(60)),
+            now: { calls.next() <= 2 ? base : base.advanced(by: .seconds(120)) })
+        let decided = await HookDeadline.$current.withValue(deadline) {
+            await Self.decide(.apply, command, mode: .enforce, cwd: cwd, grants: grants)
+        }
+        #expect(decided.result.decision == .allow, "the grant must be spent in time")
+        #expect(deadline.hasTripped)
+        #expect(deadline.requiresTimeoutReply == false)
+        let overrides = decided.effects.compactMap { effect -> GatedEffect.OverrideRow? in
+            if case .overrideAudit(let row) = effect { return row }
+            return nil
+        }
+        #expect(overrides.count == 1)
+        #expect(overrides.first?.override == "allowOnce")
+        #expect(overrides.first?.denial?.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+    }
 }

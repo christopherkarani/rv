@@ -361,9 +361,13 @@ struct MCPGatewayCoreTests {
         #expect(description.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(description.contains("\\u001b[2J"))
         #expect(description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
-        // N2: a tool named with controls or prose is not listed at all.
+        // N2: a tool named with controls or prose is not listed at all. The
+        // sentence reaches the wire once, behind the escaped controls in
+        // list_issues' description, never as the dropped tool's name.
         #expect(tools.map { $0["name"] } == [.string("list_issues")])
-        #expect(listed.toClient.first?.compactText.contains(sentence) == false)
+        let wire = listed.toClient.first?.compactText ?? ""
+        #expect(wire.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(wire.components(separatedBy: sentence).count == 2, "\(wire)")
     }
 
     /// N6: progress reaches the client only for a call this upstream is
@@ -504,10 +508,11 @@ struct MCPGatewayCoreTests {
         #expect(echoed.contains(sentence))
     }
 
-    /// Display text (descriptions, titles, progress, rv's own messages) is
-    /// escaped once; payloads (results, errors, schemas) keep their exact
-    /// value and are escaped only by JSON on the wire, which never carries
-    /// a raw control, separator, or bidi scalar.
+    /// Display text (descriptions and titles, including those inside a
+    /// pinned tool's schemas, progress, rv's own messages) is escaped once;
+    /// payloads (results, errors, schema values) keep their exact value and
+    /// are escaped only by JSON on the wire, which never carries a raw
+    /// control, separator, or bidi scalar.
     @Test func everyClientStringIsEscapedOnce() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence
@@ -619,8 +624,9 @@ struct MCPGatewayCoreTests {
         #expect(shown(tool?["description"]) == "plain")
         escaped(shown(tool?["title"]))
         escaped(shown(tool?["annotations"]?["title"]))
-        faithful(tool?["inputSchema"]?["description"], raw, in: listed.toClient.first)
-        faithful(tool?["outputSchema"]?["description"], bidi, in: listed.toClient.first)
+        // Schema descriptions are prose a host shows too (`schemaProse`).
+        escaped(shown(tool?["inputSchema"]?["description"]))
+        escaped(shown(tool?["outputSchema"]?["description"]))
 
         // Progress is display text: only for a pending call's own token,
         // which is echoed as the client sent it; the message is escaped.

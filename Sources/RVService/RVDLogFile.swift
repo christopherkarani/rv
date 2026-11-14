@@ -50,7 +50,7 @@ public enum RVDLogFile {
         close(fd)
         guard moved else { return nil }
         let pid = getpid()
-        FileHandle.standardError.write(Data(line("rvd \(RVDLaunch.versionLine) pid \(pid) started").utf8))
+        try? FileHandle.standardError.write(contentsOf: Data(line("rvd \(RVDLaunch.versionLine) pid \(pid) started").utf8))
         return path
     }
 

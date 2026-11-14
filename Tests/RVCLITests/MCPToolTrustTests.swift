@@ -189,7 +189,8 @@ struct MCPToolTrustTests {
     /// though there is nothing to trust; nothing is pinned.
     @Test func aStaleOnlyQueueIsPrunedWhenThereIsNothingToTrust() async throws {
         let (fixture, store) = try Self.signedFixture()
-        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        // Queued under its own name: an entry whose key is not its name is dropped on read.
+        #expect(store.recordChanged(server: "removed", definitions: ["push": Self.added]) == .recorded)
         #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
         let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(result.hasPrefix("mcp.json already matches rv's signature; nothing to trust\n"), "\(result)")
@@ -200,7 +201,8 @@ struct MCPToolTrustTests {
     /// An mcp.json changed since it was signed, under review.
     private static func unsignedFixtureWithStaleQueue() throws -> (Fixture, MCPToolPinStore) {
         let (fixture, store) = try Self.signedFixture()
-        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        #expect(store.recordChanged(server: "removed", definitions: ["push": Self.added]) == .recorded)
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
         let config = MCPConfiguration.fileURL(configDirectory: fixture.config)
         var bytes = try Data(contentsOf: config)
         bytes.append(UInt8(ascii: "\n"))
