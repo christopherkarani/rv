@@ -32,46 +32,14 @@ struct PolicyRollbackCommand: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "policy rollback", format: format)
         let home = try ctx.requireHome()
         let workspace = URL(fileURLWithPath: CLIProcess.workspacePath(), isDirectory: true)
-        let session = PolicyWorkspace(home: home, workspace: workspace)
-        let layer: PolicyDocumentLayer = repo ? .repo : .machine
-        let number = revision.value
-        let preview: PolicyWorkspace.RollbackPreview
-        do {
-            preview = try session.previewRollback(layer: layer, to: number)
-        } catch {
-            try ctx.fail(PolicyRollbackRun.failure(error, revision: number, repo: repo))
-        }
-        guard save else {
-            ctx.writeStdout(try PolicyRollbackRun.render(preview, outcome: .preview, robot: ctx.explicitRobot))
-            return
-        }
-        if preview.risk.hasBlockingFindings {
-            ctx.writeStdout(try PolicyRollbackRun.render(preview, outcome: .blocked, robot: ctx.explicitRobot))
-            try ctx.fail("rv policy rollback: blocked by policy risk findings\n", exitCode: 2)
-        }
-        if ctx.explicitRobot == false {
-            // The owner sees what they approve before the prompt.
-            ctx.writeStdout(PolicyRollbackRun.pretty(preview, outcome: .preview, footer: false))
-        }
-        try await OwnerConfirmation.require(
-            "roll the \(PolicyRollbackRun.layerName(layer)) policy back to r\(number)")
-        let restored: PolicyRevision
-        do {
-            restored = try session.rollback(layer: layer, to: number)
-        } catch PolicyDiffRiskError.blockedByFindings(let report) {
-            // The store gate re-judged under the lock: the layer changed
-            // since the preview. Nothing was written.
-            var refused = preview
-            refused.risk = report
-            ctx.writeStdout(try PolicyRollbackRun.render(refused, outcome: .blocked, robot: ctx.explicitRobot))
-            try ctx.fail("rv policy rollback: blocked by policy risk findings\n", exitCode: 2)
-        } catch {
-            try ctx.fail(PolicyRollbackRun.failure(error, revision: number, repo: repo))
-        }
-        if ctx.explicitRobot {
-            ctx.writeStdout(try PolicyRollbackRun.render(preview, outcome: .restored(restored), robot: true))
-        } else {
-            ctx.writeStdout("restored r\(number) as r\(restored.revision)\n")
+        try await PolicyRollbackRun.execute(
+            session: PolicyWorkspace(home: home, workspace: workspace),
+            layer: repo ? .repo : .machine,
+            revision: revision.value,
+            save: save,
+            robot: ctx.explicitRobot
+        ) { summary in
+            try await OwnerConfirmation.require(summary)
         }
     }
 }
@@ -95,15 +63,78 @@ enum PolicyRollbackRun {
     enum Outcome: Equatable {
         case preview
         case blocked
+        case unchanged
         case restored(PolicyRevision)
 
         var name: String {
             switch self {
             case .preview: "preview"
             case .blocked: "blocked"
+            case .unchanged: "unchanged"
             case .restored: "restored"
             }
         }
+    }
+
+    /// The whole command after argument parsing. `confirm` is the owner
+    /// check (`OwnerConfirmation.require` in the CLI); tests inject it to
+    /// model what happens between approval and write. The write is bound
+    /// to the previewed head, so a layer that moved after the preview
+    /// refuses `headChanged`, and the store re-runs the relax gate under
+    /// the lock, so a live-file edit with the head unchanged refuses too.
+    static func execute(
+        session: PolicyWorkspace,
+        layer: PolicyDocumentLayer,
+        revision: Int,
+        save: Bool,
+        robot: Bool,
+        confirm: (String) async throws -> Void
+    ) async throws {
+        let repo = layer == .repo
+        let preview: PolicyWorkspace.RollbackPreview
+        do {
+            preview = try session.previewRollback(layer: layer, to: revision)
+        } catch {
+            try CommandContext.fail(failure(error, revision: revision, repo: repo))
+        }
+        guard save else {
+            CommandContext.writeStdout(try render(preview, outcome: .preview, robot: robot))
+            return
+        }
+        if preview.risk.hasBlockingFindings {
+            try refuseBlocked(preview, robot: robot)
+        }
+        if preview.isNoOp {
+            // Nothing to restore: no owner prompt, nothing written.
+            CommandContext.writeStdout(try render(preview, outcome: .unchanged, robot: robot))
+            return
+        }
+        if robot == false {
+            // The owner sees what they approve before the prompt.
+            CommandContext.writeStdout(pretty(preview, outcome: .preview, footer: false))
+        }
+        try await confirm("roll the \(layerName(layer)) policy back to r\(revision)")
+        let restored: PolicyRevision
+        do {
+            restored = try session.rollback(
+                layer: layer, to: revision, expectedHead: PolicyRevisionHead(preview.head))
+        } catch PolicyDiffRiskError.blockedByFindings(let report) {
+            var refused = preview
+            refused.risk = report
+            try refuseBlocked(refused, robot: robot)
+        } catch {
+            try CommandContext.fail(failure(error, revision: revision, repo: repo))
+        }
+        if robot {
+            CommandContext.writeStdout(try render(preview, outcome: .restored(restored), robot: true))
+        } else {
+            CommandContext.writeStdout("restored r\(revision) as r\(restored.revision)\n")
+        }
+    }
+
+    private static func refuseBlocked(_ preview: PolicyWorkspace.RollbackPreview, robot: Bool) throws -> Never {
+        CommandContext.writeStdout(try render(preview, outcome: .blocked, robot: robot))
+        try CommandContext.fail("rv policy rollback: blocked by policy risk findings\n", exitCode: 2)
     }
 
     struct EffectiveDiff: Equatable, Sendable, Codable {
@@ -193,12 +224,17 @@ enum PolicyRollbackRun {
         if footer {
             switch outcome {
             case .preview:
-                lines.append(
-                    preview.risk.hasBlockingFindings
-                        ? "preview only: --save would be refused"
-                        : "preview only: nothing was written; add --save to restore")
+                if preview.risk.hasBlockingFindings {
+                    lines.append("preview only: --save would be refused")
+                } else if preview.isNoOp {
+                    lines.append("preview only: r\(preview.target.revision) is already the current policy")
+                } else {
+                    lines.append("preview only: nothing was written; add --save to restore")
+                }
             case .blocked:
                 lines.append("refused: nothing was written")
+            case .unchanged:
+                lines.append("r\(preview.target.revision) is already the current policy; nothing was written")
             case .restored(let head):
                 lines.append("restored r\(preview.target.revision) as r\(head.revision)")
             }
@@ -206,23 +242,34 @@ enum PolicyRollbackRun {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Refusal line for a store error. `policy show` is a read, so its
+    /// lines do not claim "nothing was changed".
     static func failure(
         _ error: Error, revision: Int, repo: Bool, command: String = "policy rollback"
     ) -> String {
         let prefix = "rv \(command): "
+        let writes = command == "policy rollback"
+        let unchanged = writes ? "; nothing was changed" : ""
         switch error {
         case TypedRuleStoreError.unknownRevision, TypedRuleStoreError.revisionNotFound:
             return prefix + "unknown revision r\(revision) (see rv policy list\(repo ? " --repo" : ""))\n"
+        case TypedRuleStoreError.headChanged:
+            return prefix + "policy changed since preview; nothing was changed. Re-run to review the new head.\n"
         case TypedRuleStoreError.logCorrupted:
-            return prefix + "the policy revision log failed verification; nothing was changed\n"
+            // Machine only (the repo log has no seal). A crash between the
+            // policy.toml write and the seal also lands here; the next
+            // ordinary save reconciles that interrupted write.
+            return prefix + "the policy revision log failed verification\(unchanged). "
+                + "If a policy save was interrupted, the next policy save (for example rv policy apply --save) "
+                + "completes it; otherwise the log was altered.\n"
         case TypedRuleStoreError.logMissing:
-            return prefix + "the policy revision log is missing; nothing was changed\n"
+            return prefix + "the policy revision log is missing\(unchanged)\n"
         case TypedRuleStoreError.lockFailed:
-            return prefix + "could not lock the policy files; nothing was changed\n"
+            return prefix + "could not lock the policy files\(unchanged)\n"
         case TypedRuleStoreError.invalidFile:
             return prefix + "invalid policy file\n"
         default:
-            return prefix + "failed; nothing was changed\n"
+            return prefix + "failed\(unchanged)\n"
         }
     }
 

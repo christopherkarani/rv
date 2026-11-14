@@ -931,7 +931,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
                 HelpRow(name: "rv policy apply"),
-                HelpRow(name: "rv policy rollback <revision> [--repo] [--save]"),
+                HelpRow(name: "rv policy rollback <revision> [--repo] [--save] [--json]"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(

@@ -179,7 +179,8 @@ struct PolicyRollbackCommandTests {
                     try await PolicyRollbackCommand.parse(["1", "--save"]).run()
                 }
             }
-            #expect(corrupted.stderr == "rv policy rollback: the policy revision log failed verification; nothing was changed\n")
+            #expect(corrupted.stderr.hasPrefix("rv policy rollback: the policy revision log failed verification; nothing was changed. "))
+            #expect(corrupted.stderr.contains("the next policy save (for example rv policy apply --save) completes it"))
 
             try FileManager.default.removeItem(at: display)
             let missing = CLIOutputCapture()
@@ -301,6 +302,95 @@ struct PolicyRollbackCommandTests {
         }
     }
 
+    @Test func liveDenyEditedAfterACleanPreviewIsRefusedByTheStoreGate() async throws {
+        try await withRollbackFixture { fixture in
+            try fixture.saveMachine([denyPush])
+            try fixture.saveMachine([denyPush, allowDiscard])
+            let edited = PolicyDocumentTOML.render(PolicyDocument(rules: [denyPush, allowDiscard, askReset]))
+            let output = CLIOutputCapture()
+            let confirmed = SummaryRecorder()
+
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: output
+            ) {
+                await #expect(throws: ExitCode(2)) {
+                    try await PolicyRollbackRun.execute(
+                        session: fixture.session, layer: .machine, revision: 1, save: true, robot: false
+                    ) { summary in
+                        confirmed.summaries.append(summary)
+                        // The head stays r2; only the live file gains an ask.
+                        try edited.write(to: fixture.store.machineFileURL, atomically: true, encoding: .utf8)
+                    }
+                }
+            }
+
+            #expect(confirmed.summaries == ["roll the machine policy back to r1"])
+            #expect(output.stdout.contains("risk: none"))
+            #expect(output.stdout.contains("[blocking]"))
+            #expect(output.stdout.hasSuffix("refused: nothing was written\n"))
+            #expect(output.stderr == "rv policy rollback: blocked by policy risk findings\n")
+            #expect(try String(contentsOf: fixture.store.machineFileURL, encoding: .utf8) == edited)
+            #expect(try fixture.session.listRevisions(layer: .machine).count == 2)
+        }
+    }
+
+    @Test func aSaveBetweenPreviewAndApprovalRefusesHeadChanged() async throws {
+        try await withRollbackFixture { fixture in
+            try fixture.saveMachine([denyPush])
+            try fixture.saveMachine([denyPush, allowDiscard])
+            let output = CLIOutputCapture()
+
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: output
+            ) {
+                await #expect(throws: ExitCode(1)) {
+                    try await PolicyRollbackRun.execute(
+                        session: fixture.session, layer: .machine, revision: 1, save: true, robot: false
+                    ) { _ in
+                        try fixture.saveMachine([denyPush, allowDiscard, askReset])
+                    }
+                }
+            }
+
+            #expect(output.stderr == "rv policy rollback: policy changed since preview; nothing was changed. Re-run to review the new head.\n")
+            #expect(try fixture.session.loadMachineDocument().rules == [denyPush, allowDiscard, askReset])
+            #expect(try fixture.session.listRevisions(layer: .machine).count == 3)
+        }
+    }
+
+    @Test func rollingBackToTheCurrentHeadSkipsTheOwnerPrompt() async throws {
+        try await withRollbackFixture { fixture in
+            try fixture.saveMachine([denyPush])
+            try fixture.saveMachine([denyPush, allowDiscard])
+            let before = try fixture.snapshot()
+            let output = CLIOutputCapture()
+            let robot = CLIOutputCapture()
+
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: output
+            ) {
+                // No owner auth in this context: a prompt would refuse.
+                try await PolicyRollbackCommand.parse(["2", "--save"]).run()
+            }
+            try await withCLIProcess(
+                home: fixture.home, workspacePath: fixture.workspace.path, output: robot
+            ) {
+                try await PolicyRollbackCommand.parse(["2", "--save", "--json"]).run()
+            }
+
+            #expect(output.stdout.hasSuffix("r2 is already the current policy; nothing was written\n"))
+            #expect(output.stderr.isEmpty)
+            #expect(try jsonObject(robot.stdout)["outcome"] as? String == "unchanged")
+            #expect(try fixture.snapshot() == before)
+        }
+    }
+
+    @Test func showRevisionFailuresDoNotClaimAWrite() {
+        let line = PolicyRollbackRun.failure(
+            TypedRuleStoreError.logMissing, revision: 1, repo: false, command: "policy show")
+        #expect(line == "rv policy show: the policy revision log is missing\n")
+    }
+
     @Test func showRevisionPrintsThatRevisionsTOML() async throws {
         try await withRollbackFixture { fixture in
             try fixture.saveMachine([denyPush])
@@ -350,6 +440,11 @@ private let askReset = PolicyDocumentRule(
 )
 
 
+
+/// Owner-check summaries the injected confirm step saw.
+private final class SummaryRecorder {
+    var summaries: [String] = []
+}
 
 private struct RollbackFixture {
     let home: HomeDirectory
