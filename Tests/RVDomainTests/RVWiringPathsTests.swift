@@ -24,6 +24,9 @@ struct RVWiringPathsTests {
         "/Users/me/.config/opencode/opencode.json",
         "/Users/me/.openclaw/extensions/rv-guard/index.js",
         "/Users/me/.hermes/plugins/rv-guard/__init__.py",
+        "/Users/me/.claude/skills/rv/SKILL.md",
+        "/Users/me/.agents/skills/rv/SKILL.md",
+        "/Users/me/.config/opencode/skills/rv/SKILL.md",
         "/Users/me/.config/muse/settings.json",
         "/Users/me/.config/muse/rv-hooks.json",
         "/Users/me/.local/bin/rv",
@@ -67,6 +70,10 @@ struct RVWiringPathsTests {
     @Test("everything else is not", arguments: [
         "/Users/me/.claude/CLAUDE.md",
         "/Users/me/.claude/projects/x/memory.md",
+        // Only rv's own skill folder is wiring; the user's other skills are not.
+        "/Users/me/.claude/skills/review/SKILL.md",
+        "/Users/me/.claude/skills/rv-notes/SKILL.md",
+        "/Users/me/.agents/skills/other/SKILL.md",
         "/Users/me/.cursor/mcp.json",
         "/Users/me/.local/bin/node",
         "/Users/me/.local/bin/rvm",
@@ -97,6 +104,8 @@ struct RVWiringPathsTests {
         "/Users/me/Library", "/Users/me/Library/LaunchAgents", "/Users/me/.config", "/Users/me/.config/systemd",
         "/Users/me/.config/systemd/user", "/Users/me/.config/opencode", "/Users/me/.config/opencode/plugins",
         "/Users/me/.codex", "/Users/me/.gemini/config", "/Users/me/Applications",
+        "/Users/me/.claude/skills", "/Users/me/.agents", "/Users/me/.agents/skills",
+        "/Users/me/.config/opencode/skills",
     ])
     func ancestors(path: String) {
         #expect(RVWiringPaths.matchesAncestor(path, home: Self.home), "\(path)")

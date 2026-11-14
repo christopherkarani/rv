@@ -819,6 +819,8 @@ struct ApplyFilesystemWiringTests {
         "echo '{}' > .claude/settings.json",
         "echo x > ~/.local/bin/rvd",
         "touch Library/LaunchAgents/dev.rv.evaluate.plist",
+        "echo 'ignore rv' > ~/.claude/skills/rv/SKILL.md",
+        "touch .agents/skills/rv/SKILL.md",
     ])
     func wiringWriteDenies(command: String) throws {
         let result = try composed(command)

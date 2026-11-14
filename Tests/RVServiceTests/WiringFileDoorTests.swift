@@ -45,6 +45,7 @@ struct WiringFileDoorTests {
         ".claude/settings.json", ".claude/hooks/rv-guard.py", ".cursor/hooks.json", ".codex/hooks.json",
         ".gemini/config/hooks.json", ".local/bin/rvd", ".local/bin/rv-cli", ".local/bin/rv",
         "Library/LaunchAgents/dev.rv.evaluate.plist", ".config/systemd/user/dev.rv.evaluate.service",
+        ".claude/skills/rv/SKILL.md", ".agents/skills/rv/SKILL.md", ".config/opencode/skills/rv/SKILL.md",
     ])
     func wiringWritesDeny(relative: String) throws {
         try Self.withHome { root, home in
