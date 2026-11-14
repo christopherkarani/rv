@@ -228,8 +228,9 @@ rv is one binary, 25 commands. The rest of the surface:
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
-  `rv mcp serve` also warns once at start, on stderr and in the audit
-  log, when host configs bypass the gateway or hold unreviewed servers.
+  Each `rv mcp serve` process also warns once at start, on stderr and in
+  the audit log, when host configs bypass the gateway or hold unreviewed
+  servers (a host set up by `rv mcp setup` runs one serve per server).
   Tool definitions are pinned only by `rv mcp trust`, which shows every
   field it pins: a tool that is new or changed since you trusted it
   always asks and reaches the agent as its name, rv's marker saying it
