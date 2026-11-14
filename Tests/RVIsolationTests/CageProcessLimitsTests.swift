@@ -3,6 +3,7 @@ import Darwin
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -159,7 +160,7 @@ struct CageProcessLimitsSeatbeltTests {
         // Process makes the helper lead its own group, as the spawn does.
         leader.executableURL = URL(fileURLWithPath: claim)
         leader.arguments = [
-            "--deadline-seconds=2", "-", "/bin/sh", "-c",
+            "--deadline-seconds=8", "-", "/bin/sh", "-c",
             "/bin/sleep 300 & echo $! > '\(files[0].path)'; "
                 + "/usr/bin/perl -e 'setpgrp(0, 0); sleep 300' & echo $! > '\(files[1].path)'; "
                 + "/usr/bin/perl -e 'use POSIX; POSIX::setsid(); sleep 300' & echo $! > '\(files[2].path)'; "
@@ -175,6 +176,9 @@ struct CageProcessLimitsSeatbeltTests {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             ))
         }
+        let ended = limitsWait(seconds: 90) { leader.isRunning == false }
+        if ended == false { leader.terminate() }
+        #expect(ended, "the watchdog did not end the leader")
         leader.waitUntilExit()
         #expect(leader.terminationReason == .uncaughtSignal)
         #expect(leader.terminationStatus == SIGKILL)
@@ -264,8 +268,9 @@ struct CageProcessLimitsSeatbeltTests {
         let claim = try #require(resolvedPtyClaimPath(workspace: tree.workspaceURL.path))
         let owner = Process()
         owner.executableURL = URL(fileURLWithPath: "/bin/sleep")
-        owner.arguments = ["2"]
+        owner.arguments = ["300"]
         try owner.run()
+        defer { if owner.isRunning { owner.terminate() } }
         let file = tree.workspaceURL.appendingPathComponent("bg.pid")
         let oneShot = Process()
         oneShot.executableURL = URL(fileURLWithPath: claim)
@@ -279,6 +284,9 @@ struct CageProcessLimitsSeatbeltTests {
             String(decoding: try Data(contentsOf: file), as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         ))
+        // The payload ran, so the helper's watchdog is armed on the owner.
+        #expect(oneShot.isRunning)
+        owner.terminate()
         owner.waitUntilExit()
         let ended = limitsWait(seconds: 30) { oneShot.isRunning == false }
         if ended == false { oneShot.terminate() }
@@ -306,6 +314,67 @@ struct CageProcessLimitsSeatbeltTests {
         oneShot.waitUntilExit()
         #expect(oneShot.terminationStatus == 125)
         #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+    }
+
+    @Test(arguments: [
+        ["--owner-pid=0"],
+        ["--owner-pid=1"],
+        ["--owner-pid=2147483648"],
+        ["--owner-pid="],
+        ["--owner-pid=12x"],
+        ["--owner-pid=4242", "--owner-pid=4242"],
+    ])
+    func aBadOwnerPidIsRefusedBeforeExec(owner: [String]) throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let claim = try #require(resolvedPtyClaimPath(workspace: tree.workspaceURL.path))
+        let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: claim)
+        helper.arguments = owner + ["-", "/usr/bin/touch", marker.path]
+        helper.standardError = FileHandle.nullDevice
+        try helper.run()
+        helper.waitUntilExit()
+        #expect(helper.terminationStatus == 127)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+    }
+
+    /// The host's deadline reaches the terminal's exit notice, which is
+    /// what makes `rv workspace run` exit 124.
+    @Test func aTimedOutTerminalRuntimeReportsItsDeadline() throws {
+        let opened = try LimitsWorkspace()
+        defer { opened.close() }
+        let notices = try opened.terminalNotices("/bin/sleep 300", timeoutSeconds: 1)
+        let exit = try #require(limitsExit(notices, seconds: 60))
+        #expect(exit.timedOutAfter == 1)
+    }
+
+    /// An older client refuses a frame with an unknown key, so the reason
+    /// goes only to a subscriber that named `runtimeExitReasonV1`.
+    @Test func theExitReasonGoesOnlyToSubscribersThatAskForIt() {
+        let runtime = UUID()
+        let notice = TerminalNotice.exited(9, timedOutAfter: 30)
+        guard case .runtimeExited(let opted) = workspaceTerminalMessage(notice, runtime: runtime, exitReasons: true).payload,
+            case .runtimeExited(let legacy) = workspaceTerminalMessage(notice, runtime: runtime, exitReasons: false).payload
+        else {
+            Issue.record("an exit notice must become runtimeExited")
+            return
+        }
+        #expect(opted.timedOutAfter == 30)
+        #expect(opted.exitStatus == 9)
+        #expect(legacy.timedOutAfter == nil)
+        #expect(legacy.exitStatus == 9)
+    }
+
+    /// A SIGKILL that is not the deadline's is reported as the status
+    /// alone, never as a timeout.
+    @Test func aKilledTerminalRuntimeIsNotReportedAsATimeout() throws {
+        let opened = try LimitsWorkspace()
+        defer { opened.close() }
+        let notices = try opened.terminalNotices("kill -9 $$", timeoutSeconds: 60)
+        let exit = try #require(limitsExit(notices, seconds: 60))
+        #expect(exit.status == SIGKILL)
+        #expect(exit.timedOutAfter == nil)
     }
 
     @Test func theWatchdogRefusesALeaderOutsideItsOwnGroup() throws {
@@ -361,10 +430,52 @@ private struct LimitsWorkspace {
             .split(separator: "\n").map(String.init)
     }
 
+    /// Launches `script` on a host-owned terminal and records its notices.
+    func terminalNotices(_ script: String, timeoutSeconds: UInt64) throws -> LimitsNotices {
+        let running = try supervisor.launch(
+            host: nil,
+            command: try limitsShell(script),
+            plan: compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace),
+            io: .pseudoTerminal(rows: 24, columns: 80),
+            admission: .failClosed,
+            sessionStore: .file(runtimeLog),
+            timeoutSeconds: timeoutSeconds
+        ).get()
+        let notices = LimitsNotices()
+        let client = UUID()
+        try supervisor.subscribeTerminal(runtime: running.id.rawValue, client: client) { notice in
+            notices.box.withLock { $0.append(notice) }
+            return true
+        }.get()
+        supervisor.activateTerminal(runtime: running.id.rawValue, client: client)
+        return notices
+    }
+
     func close() {
         _ = supervisor.close()
         tree.tearDown()
     }
+}
+
+private final class LimitsNotices: Sendable {
+    let box = Mutex<[TerminalNotice]>([])
+}
+
+private func limitsExit(
+    _ notices: LimitsNotices, seconds: TimeInterval
+) -> (status: Int32, timedOutAfter: UInt64?)? {
+    let deadline = Date().addingTimeInterval(seconds)
+    repeat {
+        let found = notices.box.withLock { list -> (Int32, UInt64?)? in
+            for notice in list {
+                if case .exited(let status, let timedOutAfter) = notice { return (status, timedOutAfter) }
+            }
+            return nil
+        }
+        if let found { return (found.0, found.1) }
+        Thread.sleep(forTimeInterval: 0.05)
+    } while Date() < deadline
+    return nil
 }
 
 private func limitsShell(_ script: String) throws -> IsolatedCommand {

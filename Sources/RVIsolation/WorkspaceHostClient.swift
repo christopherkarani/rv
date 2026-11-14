@@ -98,7 +98,9 @@ public struct WorkspaceTerminalEvent: Sendable, Equatable {
         case output(sequence: Int64, bytes: Data)
         case inputOwner(Bool)
         case window(rows: Int, columns: Int)
-        case exited(Int32)
+        /// `timedOutAfter`: the host's deadline in seconds, when that
+        /// deadline stopped the runtime.
+        case exited(Int32, timedOutAfter: UInt64? = nil)
         case overflow
     }
 }
@@ -566,6 +568,7 @@ public final class WorkspaceClient: Sendable {
                 features: [
                     WorkspaceControlFeature.terminalWindowNoticesV1,
                     WorkspaceControlFeature.terminalReplayBatchesV1,
+                    WorkspaceControlFeature.runtimeExitReasonV1,
                 ]
             ))
         )
@@ -1581,7 +1584,9 @@ private func workspaceTerminalEvent(_ message: WorkspaceControlResponseFrame) ->
         return WorkspaceTerminalEvent(runtime: runtime, body: .window(rows: rows, columns: columns))
     case .runtimeExited(let exited):
         guard let runtime = exited.runtime, let status = exited.exitStatus else { return nil }
-        return WorkspaceTerminalEvent(runtime: runtime, body: .exited(status))
+        return WorkspaceTerminalEvent(
+            runtime: runtime, body: .exited(status, timedOutAfter: exited.timedOutAfter)
+        )
     case .terminalOverflow(let overflow):
         guard let runtime = overflow.runtime else { return nil }
         return WorkspaceTerminalEvent(runtime: runtime, body: .overflow)

@@ -136,9 +136,12 @@ final class LiveSeatbeltChild: Sendable {
     let resources: RuntimeResourceManifest?
     /// Workspace whose micro-VM control placeholders this run holds.
     let placeholderWorkspace: String?
-    /// Deadline on the continuous clock, so time asleep counts. The watch kills the group here, the way a
-    /// cancel does; `rv-pty-claim`'s watchdog backs it up if this host dies.
+    /// Deadline on the continuous clock, so time asleep counts. The
+    /// watch kills the group here, the way a cancel does;
+    /// `rv-pty-claim`'s watchdog backs it up if this host dies.
     let deadline: ContinuousClock.Instant?
+    /// The deadline's length in seconds, as this host resolved it.
+    let timeoutSeconds: UInt64?
     private let timedOut = Mutex(false)
     private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
 
@@ -184,9 +187,10 @@ final class LiveSeatbeltChild: Sendable {
         terminal: RuntimeTerminal?,
         resources: RuntimeResourceManifest?,
         placeholderWorkspace: String? = nil,
-        deadline: ContinuousClock.Instant? = nil
+        timeoutSeconds: UInt64? = nil
     ) {
-        self.deadline = deadline
+        self.timeoutSeconds = timeoutSeconds
+        self.deadline = timeoutSeconds.map { ContinuousClock.now + .seconds(Int64($0)) }
         self.session = session
         self.capability = capability
         self.pid = pid
@@ -217,6 +221,9 @@ final class LiveSeatbeltChild: Sendable {
     func markTimedOut() {
         timedOut.withLock { $0 = true }
     }
+
+    /// The deadline that stopped this runtime, nil for any other end.
+    var timedOutAfter: UInt64? { didTimeOut ? timeoutSeconds : nil }
 
     /// The lifecycle `endReason` for this runtime, nil for an ordinary end.
     var endReason: String? { didTimeOut ? "timeout" : nil }
@@ -828,7 +835,7 @@ func spawnSeatbeltProcessBody(
         terminal: terminal,
         resources: request.resources,
         placeholderWorkspace: placeholdersHeld ? workspace : nil,
-        deadline: limits.timeoutSeconds.map { ContinuousClock.now + .seconds(Int64($0)) }
+        timeoutSeconds: limits.timeoutSeconds
     )
     handedOff = true
     resourceStageHandedOff = true
@@ -1369,7 +1376,7 @@ func watchSeatbeltProcess(
     } else {
         live.recordTerminal(nil)
     }
-    live.pty?.finish(status: outcome.status)
+    live.pty?.finish(status: outcome.status, timedOutAfter: live.timedOutAfter)
     let handshakeFD = live.takeHandshakeRead()
     if handshakeFD >= 0 {
         close(handshakeFD)

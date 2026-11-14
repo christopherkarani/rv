@@ -487,11 +487,18 @@ public enum WorkspaceControlResponsePayload: Sendable, Equatable {
         public var runtime: UUID?
         public var running: Bool?
         public var exitStatus: Int32?
+        /// The host's deadline in seconds, set only when that deadline
+        /// stopped the runtime.
+        public var timedOutAfter: UInt64?
 
-        public init(runtime: UUID? = nil, running: Bool? = nil, exitStatus: Int32? = nil) {
+        public init(
+            runtime: UUID? = nil, running: Bool? = nil, exitStatus: Int32? = nil,
+            timedOutAfter: UInt64? = nil
+        ) {
             self.runtime = runtime
             self.running = running
             self.exitStatus = exitStatus
+            self.timedOutAfter = timedOutAfter
         }
     }
 

@@ -862,10 +862,11 @@ final class WorkspaceHostServer: Sendable {
         let client = connection.id
         let windowNotices = fields.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
         let replayBatches = fields.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
+        let exitReasons = fields.features?.contains(WorkspaceControlFeature.runtimeExitReasonV1) == true
         switch supervisor.subscribeTerminal(
             runtime: runtime, client: client,
             emit: { notice in
-                connection.send(workspaceTerminalMessage(notice, runtime: runtime))
+                connection.send(workspaceTerminalMessage(notice, runtime: runtime, exitReasons: exitReasons))
             },
             windowNotices: windowNotices,
             replayBatches: replayBatches
@@ -1169,9 +1170,10 @@ final class WorkspaceHostServer: Sendable {
     }
 }
 
-private func workspaceTerminalMessage(
+func workspaceTerminalMessage(
     _ notice: TerminalNotice,
-    runtime: UUID
+    runtime: UUID,
+    exitReasons: Bool
 ) -> WorkspaceControlResponseFrame {
     switch notice {
     case .replayBegin(let batch, let truncated, let byteCount):
@@ -1217,11 +1219,12 @@ private func workspaceTerminalMessage(
             ok: true,
             payload: .terminalWindow(.init(runtime: runtime, rows: rows, columns: columns))
         )
-    case .exited(let status):
+    case .exited(let status, let timedOutAfter):
         WorkspaceControlResponseFrame(
             ok: true,
             payload: .runtimeExited(.init(
-                runtime: runtime, running: false, exitStatus: status
+                runtime: runtime, running: false, exitStatus: status,
+                timedOutAfter: exitReasons ? timedOutAfter : nil
             ))
         )
     case .overflow:

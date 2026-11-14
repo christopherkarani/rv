@@ -56,20 +56,13 @@ enum WorkspaceRunTimeout {
     /// Exit status `timeout(1)` uses for a command it stopped.
     static let timedOutExitCode: Int32 = 124
 
-    /// How a finished `rv workspace run` reports. A runtime killed by
-    /// SIGKILL once its deadline has passed was stopped by that deadline:
-    /// it exits 124 with a stderr line naming it. Anything else keeps the
-    /// runtime's own status. The audit record (`runtime.ended`, reason
-    /// `timeout`) is the authoritative account; this is the CLI's.
-    static func outcome(
-        status: Int32, elapsed: Duration, deadlineSeconds: UInt64?
-    ) -> (code: Int32, message: String?) {
-        guard let deadlineSeconds, status == SIGKILL,
-            elapsed >= .seconds(Int64(deadlineSeconds))
-        else {
-            return (status, nil)
-        }
-        return (timedOutExitCode, "rv: runtime stopped after its \(deadlineSeconds)-second timeout\n")
+    /// How a finished interactive run reports. Only the host says a
+    /// deadline stopped the runtime (`timedOutAfter`, the deadline it
+    /// applied): that exits 124 with a stderr line naming it. Every other
+    /// end, a SIGKILL included, keeps the runtime's own status.
+    static func outcome(status: Int32, timedOutAfter: UInt64?) -> (code: Int32, message: String?) {
+        guard let timedOutAfter else { return (status, nil) }
+        return (timedOutExitCode, "rv: runtime stopped after its \(timedOutAfter)-second timeout\n")
     }
 
     #if os(macOS)

@@ -123,24 +123,11 @@ struct WorkspaceRun: AsyncParsableCommand {
             timeout, microVM: microVM != nil,
             policy: { policyLimits }
         )
-        let started = ContinuousClock.now
-        do {
-            try WorkspaceCommandRun.run(
-                path.workspace, rows: rows, columns: columns, command: argv,
-                resourceProfileID: resourceProfile, hook: hook,
-                microVM: microVM, timeoutSeconds: timeoutSeconds
-            )
-        } catch let exit as ExitCode {
-            let reported = WorkspaceRunTimeout.outcome(
-                status: exit.rawValue,
-                elapsed: ContinuousClock.now - started,
-                deadlineSeconds: timeoutSeconds ?? policyLimits?.timeoutSeconds
-            )
-            if let message = reported.message {
-                FileHandle.standardError.write(Data(message.utf8))
-            }
-            throw ExitCode(reported.code)
-        }
+        try WorkspaceCommandRun.run(
+            path.workspace, rows: rows, columns: columns, command: argv,
+            resourceProfileID: resourceProfile, hook: hook,
+            microVM: microVM, timeoutSeconds: timeoutSeconds
+        )
     }
 }
 
@@ -677,8 +664,12 @@ enum WorkspaceCommandRun {
         } catch {
             throw ValidationError(text(error, resourceProfileID: resourceProfileID))
         }
-        if case .exited(let status) = outcome {
-            throw ExitCode(status)
+        if case .exited(let status, let timedOutAfter) = outcome {
+            let reported = WorkspaceRunTimeout.outcome(status: status, timedOutAfter: timedOutAfter)
+            if let message = reported.message {
+                FileHandle.standardError.write(Data(message.utf8))
+            }
+            throw ExitCode(reported.code)
         }
         #endif
     }

@@ -104,6 +104,26 @@ struct LaunchParityWireTests {
         }
     }
 
+    @Test func runtimeExitedCarriesTheHostsTimeoutAndNothingElseDoes() throws {
+        let runtime = LaunchParityFixtures.runtime
+        let frame = WorkspaceControlResponseFrame(
+            ok: true,
+            payload: .runtimeExited(.init(runtime: runtime, running: false, exitStatus: 9, timedOutAfter: 30))
+        )
+        let body = try #require(WorkspaceControlCodec.encodeResponse(frame))
+        #expect(String(decoding: body, as: UTF8.self).contains("\"timedOutAfter\":30"))
+        #expect(WorkspaceControlCodec.decodeResponse(body) == .frame(frame))
+        let id = runtime.uuidString
+        for raw in [
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":0}",
+            "{\"v\":1,\"ok\":true,\"op\":\"runtimeExited\",\"runtime\":\"\(id)\",\"exit\":9,\"timedOutAfter\":604801}",
+            "{\"v\":1,\"ok\":true,\"op\":\"terminalOutput\",\"runtime\":\"\(id)\",\"timedOutAfter\":30}",
+            "{\"v\":1,\"op\":\"launchRuntime\",\"executable\":\"/bin/sh\",\"timedOutAfter\":30}",
+        ] {
+            #expect(WorkspaceControlCodec.decodeResponse(Data(raw.utf8)) == .invalid, "\(raw)")
+        }
+    }
+
     @Test func aTimeoutOnAnyOtherOpIsRefused() {
         // Only launchRuntime honours a timeout; elsewhere it would be
         // silently dropped, so the codec refuses the frame instead.
