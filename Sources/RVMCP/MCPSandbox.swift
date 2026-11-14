@@ -16,8 +16,9 @@ public enum MCPSandbox {
     public static let sandboxExec = "/usr/bin/sandbox-exec"
 
     /// Whether serve cages local servers on this platform. The seatbelt
-    /// cage is macOS-only: elsewhere bare servers run uncaged and
-    /// sandboxed ones are refused until the Linux cage lands.
+    /// cage is macOS-only: elsewhere bare servers run uncaged, and
+    /// sandboxed ones, or every local one under an organization's
+    /// `requireSandbox`, are refused until the Linux cage lands.
     #if os(macOS)
     public static let enforced = true
     #else
@@ -74,11 +75,15 @@ public enum MCPSandbox {
 
     /// The planner hook `rv mcp serve` passes to `MCPLaunchPlanner.plan`.
     /// `denied` hears each CONNECT a `sandbox.hosts` proxy refuses.
+    /// `enforced` is whether this platform can build the cage; without it
+    /// a server that asks for one is refused, never run bare.
     public static func apply(
-        configDirectory: URL, home: URL, denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
+        configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
+        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
     ) -> (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch in
             guard let policy = definition.sandbox else { return .success(launch) }
+            guard enforced else { return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name))) }
             #if os(macOS)
             let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(definition.name)", isDirectory: true)
             let temporary = launch.environment["TMPDIR"] ?? NSTemporaryDirectory()
@@ -131,7 +136,7 @@ public enum MCPSandbox {
                 return .success(caged)
             }
             #else
-            return .failure(.sandbox("\(definition.name) asks for a sandbox, which rv supports only on macOS"))
+            return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name)))
             #endif
         }
     }

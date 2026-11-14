@@ -228,6 +228,13 @@ rv is one binary, 25 commands. The rest of the surface:
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
+  *Platform support:* gateway trust and approvals need a key custodian
+  the agent cannot read (macOS today). Without one, as on Linux in this
+  release, rv's signing key is a file any process running as you can
+  read: mcp.json is never trusted, `rv mcp serve` launches no servers,
+  and `rv mcp trust` and `rv mcp approve` refuse. Where this host has no
+  MCP server sandbox, servers that ask for one, or that an organization
+  policy with `requireSandbox` covers, are refused rather than run uncaged.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review

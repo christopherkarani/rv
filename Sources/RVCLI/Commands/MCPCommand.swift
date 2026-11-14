@@ -355,8 +355,9 @@ enum MCPRun {
     /// Governed local servers `rv mcp serve` will refuse. Where the cage
     /// is enforced every local server needs an explicit sandbox, and a
     /// sandbox reaches the network only through `sandbox.hosts`.
-    /// Elsewhere there is no cage yet: bare servers serve, sandboxed
-    /// ones are refused. Blocked servers are refused either way.
+    /// Elsewhere there is no cage yet: bare servers are named as uncaged,
+    /// sandboxed ones (every one under the organization's
+    /// `requireSandbox`) are refused. Blocked servers are refused either way.
     static func sandboxProblems(
         _ configuration: MCPConfiguration, configDirectory: URL, requireSandbox: Bool = MCPSandbox.enforced
     ) -> [Problem] {
@@ -376,10 +377,12 @@ enum MCPRun {
                 }
                 return nil
             }
-            guard server.sandbox != nil else { return nil }
-            return Problem(
-                path: path,
-                message: "\(server.name) asks for a sandbox, which rv supports only on macOS")
+            let message = configuration.managed?.mcp.requireSandbox == true
+                ? MCPPlatformSupport.organizationSandboxUnenforced(server: server.name)
+                : server.sandbox == nil
+                    ? MCPPlatformSupport.runsUncaged(server: server.name)
+                    : MCPPlatformSupport.sandboxUnenforced(server: server.name)
+            return Problem(path: path, message: message)
         }
     }
 
@@ -439,6 +442,7 @@ enum MCPRun {
     /// Grants one pending call; `always` also adds the tool to the server's allow list.
     /// The person approving must prove presence first, so an agent's shell cannot approve.
     static func approve(id: String, always: Bool, environment: MCPEnvironment) async -> Result<String, CommandFailure> {
+        if environment.approvalSigning.custodyIsSameUser { return .failure(CommandFailure(MCPPlatformSupport.approvalsUnavailable)) }
         let store = environment.approvals
         guard let request = store.pending().first(where: { $0.id == id }) else {
             return .failure("no pending MCP approval has id \(reviewField(id)) (see `rv mcp pending`)")
@@ -570,6 +574,7 @@ enum MCPRun {
     static func trust(
         environment: MCPEnvironment, show: @Sendable (String) -> Void
     ) async -> Result<String, CommandFailure> {
+        if environment.approvalSigning.custodyIsSameUser { return .failure(CommandFailure(MCPPlatformSupport.trustUnavailable)) }
         let url = MCPConfiguration.fileURL(configDirectory: environment.configDirectory)
         let data: Data
         switch OwnerOnlyFile.read(url, maximumBytes: MCPConfiguration.maximumBytes) {
