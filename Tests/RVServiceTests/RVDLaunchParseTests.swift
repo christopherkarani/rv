@@ -80,7 +80,8 @@ struct RVDLaunchParseTests {
     /// Before rvd's first write (the log line `captureDiscardedStderr`
     /// writes): on Darwin its stdout and stderr are set not to raise
     /// SIGPIPE, per open file, so children keep the default disposition;
-    /// on Linux SIGPIPE is ignored, as systemd already starts it. Nothing
+    /// on Linux SIGPIPE is ignored (systemd's unit already did; `rv service
+    /// start` does not). The process tests prove the Darwin path. Nothing
     /// else in rvd's main changes the disposition.
     @Test func rvdStdioCannotRaiseSIGPIPEBeforeItsFirstWrite() throws {
         let url = URL(fileURLWithPath: #filePath)
