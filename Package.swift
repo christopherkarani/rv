@@ -80,6 +80,7 @@ let coreLibraryTargets: [Target] = [
         // only into Linux `rv-isolation-exec`.
         exclude: [
             "landlock_apply.c",
+            "landlock_confine.c",
             "include",
             "README.md",
         ]

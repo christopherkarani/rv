@@ -24,6 +24,16 @@ extern "C" {
  */
 int rv_landlock_restrict_self_to_workspace(const char *workspace);
 
+/*
+ * MCP server confinement (landlock_confine.c). Applies the ruleset argv
+ * describes to this process and returns the index of the executable to
+ * exec, or -1 after printing why nothing was applied.
+ */
+int rv_landlock_confine(int argc, char **argv);
+
+/* The running kernel's Landlock ABI; 0 when it has none. */
+int rv_landlock_abi(void);
+
 #ifdef __cplusplus
 }
 #endif

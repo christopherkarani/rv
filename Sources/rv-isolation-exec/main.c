@@ -15,8 +15,19 @@
  * no spawn that starts a process stopped; this is that. rv binds its
  * placeholders to this process while it is stopped, and pid, process
  * group and start time survive exec, so what it bound is the command.
- * Bad argv or descriptors that cannot be closed exit 125 before the stop;
- * a failed execve says why on stderr and exits 126.
+ * Bad argv or descriptors that cannot be closed exit 125 before the stop,
+ * as does a parent that changed while it was stopped (rv is gone); a
+ * failed execve says why on stderr and exits 126.
+ *
+ * Third form, for an MCP server (Sources/RVIsolation/landlock_confine.c):
+ *   rv-isolation-exec --confine FLOOR [--read PATH]... [--write PATH]...
+ *                     [--tcp PORT]... -- EXECUTABLE ARGV0 [ARG...]
+ * closes inherited descriptors, sets NO_NEW_PRIVS, applies the Landlock
+ * ruleset the request describes and execs. Anything that fails exits 125
+ * with a line on stderr and does not exec.
+ *
+ *   rv-isolation-exec --landlock-abi
+ * prints the kernel's Landlock ABI (0 when it has none) and exits 0.
  *
  * SwiftPM cannot compile C into the RVIsolation Swift target, so this
  * translation unit includes the shim from Sources/RVIsolation.
@@ -24,6 +35,7 @@
 #include "rv_landlock_apply.h"
 
 #include "../RVIsolation/landlock_apply.c"
+#include "../RVIsolation/landlock_confine.c"
 
 #include <errno.h>
 #include <limits.h>
