@@ -30,7 +30,13 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool
     let firstRunner = words.firstIndex { hostRunners.contains(commandName($0)) }
     let firstPythonRunner = words.firstIndex { pythonRunners.contains(commandName($0)) }
     let runs = { (index: Int) in index == 0 || firstRunner.map { $0 < index } == true }
-    for (index, word) in words.enumerated() {
+    // argv holds the head's basename; the head as written is judged too, as
+    // a path to a host binary its basename does not name
+    // (`~/.local/share/claude/versions/2.0.14`, `…/@openai/codex/bin/codex.js`).
+    var judged = Array(words.enumerated())
+    let written = foldedWord(command.head)
+    if let first = words.first, written != first { judged.append((offset: 0, element: written)) }
+    for (index, word) in judged {
         if isConfigInstallerPackage(word) || configInstallerPrograms.contains(commandName(word)) { return true }
         if runs(index), packageNames(word).contains(where: configInstallerNames.contains) { return true }
         // A runner given a command line as one word (`watch 'claude mcp

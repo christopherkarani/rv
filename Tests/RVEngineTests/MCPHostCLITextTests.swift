@@ -46,6 +46,24 @@ struct MCPHostCLITextTests {
         #expect(packageNames("add-mcp-support").contains("add-mcp") == false)
     }
 
+    /// A head that is a path to a host binary its basename does not name.
+    @Test("a path to a host binary is that host", arguments: [
+        "~/.local/share/claude/versions/2.0.14 mcp add evil -- x",
+        "./node_modules/@anthropic-ai/claude-code/cli.js mcp add evil -- x",
+        "node_modules/@openai/codex/bin/codex.js mcp add evil -- x",
+        "/opt/homebrew/bin/claude mcp add evil -- x",
+    ])
+    func hostBinaryPathsCount(command: String) {
+        let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
+        #expect(mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context), "\(command)")
+    }
+
+    @Test func hostBinaryPathReadsStayReads() {
+        let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
+        let command = "~/.local/share/claude/versions/2.0.14 mcp list"
+        #expect(mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context) == false)
+    }
+
     /// Past the read budget or the nesting depth, a read counts (fail closed).
     @Test func exhaustedBudgetCounts() {
         let reads = HostTextReads()
