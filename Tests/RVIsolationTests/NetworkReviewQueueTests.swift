@@ -168,6 +168,30 @@ struct NetworkReviewQueueTests {
         #expect(try await store.list(now: now).count == 1)
     }
 
+    /// The id the proxy's refusal body names: the awaiting row's id, the
+    /// same one across a retry storm, and nil when nothing awaits.
+    @Test func intakeReturnsTheAwaitingProposalID() async throws {
+        let config = try reviewTempConfig(named: "returns-id")
+        let queue = NetworkReviewQueue(configDirectory: config)
+        let (workspace, directory) = try reviewWorkspace()
+        let now = Date()
+        let policy = EgressProxyDenial(host: "blocked.invalid", port: 443, reason: .deniedPolicy, recordedAt: now)
+        let first = try #require(
+            await queue.noteDenial(policy, workspace: workspace, workspaceDirectory: directory, now: now))
+        let again = await queue.noteDenial(policy, workspace: workspace, workspaceDirectory: directory, now: now)
+        #expect(again == first)
+        let store = PendingApprovalStore(baseDirectory: config)
+        #expect(try await store.list(now: now).map(\.id) == [first])
+        let dial = await queue.noteDenial(
+            EgressProxyDenial(host: "blocked.invalid", port: 443, reason: .dialFailed, recordedAt: now),
+            workspace: workspace, workspaceDirectory: directory, now: now)
+        #expect(dial == nil)
+        let unparsable = await queue.noteDenial(
+            EgressProxyDenial(host: "not a host!!", port: 443, reason: .deniedPolicy, recordedAt: now),
+            workspace: workspace, workspaceDirectory: directory, now: now)
+        #expect(unparsable == nil)
+    }
+
     @Test func intakeSkipsLiveRules() async throws {
         let config = try reviewTempConfig(named: "live-skip")
         let queue = NetworkReviewQueue(configDirectory: config)

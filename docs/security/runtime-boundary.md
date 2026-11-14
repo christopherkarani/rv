@@ -314,10 +314,33 @@ the seatbelt profile is untouched.
 
 #### Mechanism
 
-- Intake: the workspace supervisor's proxy denial closure chains review
-  intake ahead of the production denial log (chained, never replaced).
-  Only `.deniedPolicy` denials mint proposals; DNS, filter, dial,
-  header, and malformed failures admit no rule and are ignored.
+- Intake: the workspace supervisor hands each per-runtime proxy a review
+  hook beside the production denial log (which it never replaces). The
+  proxy calls it for `.deniedPolicy` denials only and waits at most
+  `EgressProxy.proposalWait` (250 ms) for the proposal id; DNS, filter,
+  dial, header, and malformed failures admit no rule and never reach it.
+- Refusal response: every refusal the proxy writes (CONNECT and
+  absolute-URI, 403 and 407) carries `Content-Type: application/json`,
+  `Content-Length`, `Connection: close`, an RFC 9209 `Proxy-Status:
+  rv-egress; error=…; details="…"` header, and an `rv.egress.denied.v1`
+  body: `schema`, `reason`, `host` (the parsed authority, lowercased,
+  only when it is hostname-safe ASCII), `port`, a constant one-sentence
+  `message`, and `next_step` (`rv egress approve <id>` with
+  `proposal_id` when the denial minted or deduped onto an awaiting
+  proposal, else `rv egress denials`). `EgressDenialResponse` builds it;
+  the body stays under 1 KiB. Oracle rules (pinned by
+  `EgressDenialResponseTests` and `EgressDenialWireTests`):
+  `binary-mismatch` and `unattributed-peer` go out byte-identical to a
+  proposal-less `denied-policy`; `dns-failed` and `address-filtered` go
+  out as `dial-failed`, so the cage cannot probe the host resolver; the
+  407 is one constant shape for missing, malformed, and unknown tokens,
+  decided before the binary gate. No binary path, pin, credential, or
+  filesystem path is written. `egress-denials.jsonl` keeps the precise
+  reason. Residual: an authenticated cage can still tell a binary-gate
+  denial from a policy one by trying an allowed host (inherent to
+  enforcement) or by the absence of a `proposal_id`; tunnels that already
+  sent `200` (SNI mismatch, dial failure after SNI check) still just
+  close.
 - Proposal: one `PendingApprovalStore` row per blocked `host:port`, reused
   from the existing approval system (no parallel queue). Fingerprint
   `egress:<canonical-host>:<port>`; reason `.mandatoryHuman`;

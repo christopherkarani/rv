@@ -78,26 +78,31 @@ public actor NetworkReviewQueue {
     /// `knownIDs` after a restart by returning the awaiting row. A full
     /// store drops the proposal (spam protection, mirroring HookDoor):
     /// the denial still stands and the human path is unaffected.
+    ///
+    /// Returns the id of the proposal now awaiting a human for this rule
+    /// (freshly minted or deduped onto), which the proxy's refusal body
+    /// names; nil when no awaiting proposal exists for it.
+    @discardableResult
     public func noteDenial(
         _ denial: EgressProxyDenial,
         workspace: WorkspaceSessionID,
         workspaceDirectory: WorkingDirectory,
         now: Date
-    ) async {
-        guard denial.reason == .deniedPolicy else { return }
-        guard let rule = LiveNetworkRule(host: denial.host, port: denial.port) else { return }
-        if channel.contains(rule) { return }
+    ) async -> ApprovalID? {
+        guard denial.reason == .deniedPolicy else { return nil }
+        guard let rule = LiveNetworkRule(host: denial.host, port: denial.port) else { return nil }
+        if channel.contains(rule) { return nil }
         let fingerprint = EgressProposal.fingerprint(for: rule).rawValue
         if let known = knownIDs[fingerprint],
             let record = try? await store.load(id: ApprovalID(rawValue: known), now: now)
         {
             switch record.state {
             case .awaitingHuman:
-                return
+                return record.id
             case .resolved(let resolution) where resolution.decision.authorizesExactAction:
-                return
+                return nil
             case .consumed(let resolution, _) where resolution.decision.authorizesExactAction:
-                return
+                return nil
             case .resolved, .consumed, .expired, .canceled, .timedOut:
                 break
             }
@@ -110,15 +115,16 @@ public actor NetworkReviewQueue {
                 workspaceDirectory: workspaceDirectory
             )
         else {
-            return
+            return nil
         }
         do {
             let created = try await store.create(request, now: now)
             knownIDs[fingerprint] = created.id.rawValue
+            return created.id
         } catch PendingApprovalError.storeFull {
-            return
+            return nil
         } catch {
-            return
+            return nil
         }
     }
 

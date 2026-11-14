@@ -23,8 +23,9 @@ import Testing
 /// (https://raw.githubusercontent.com/NVIDIA/OpenShell/main/crates/openshell-driver-docker/README.md).
 ///
 /// Hermetic: denials land in an injected in-memory collector (never the real
-/// `~/.config`) and every workspace opens with a nil review queue, so no
-/// test writes proposals. Serialized: the tests spawn real runtimes.
+/// `~/.config`) and every workspace opens with a nil review queue, except
+/// `policyRefusalNamesTheQueuedProposal`, whose queue writes into its own
+/// test tree. Serialized: the tests spawn real runtimes.
 @Suite("Per-runtime egress wiring", .serialized)
 struct RuntimeEgressWiringTests {
     @Test func twoRuntimesGetDistinctProxies() throws {
@@ -114,6 +115,52 @@ struct RuntimeEgressWiringTests {
         #expect(reasons.count == 3)
         #expect(reasons.filter({ $0 == .deniedCredential }).count == 2)
         #expect(reasons.filter({ $0 == .deniedPolicy }).count == 1)
+    }
+
+    /// The supervisor's review hook reaches the refusal body: a policy deny
+    /// names the proposal the queue holds, as the exact approve command.
+    /// The queue writes into the test tree, never the real config.
+    @Test func policyRefusalNamesTheQueuedProposal() async throws {
+        let collector = WiringDenialCollector()
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let reviewDirectory = tree.rootURL.appendingPathComponent("review-\(UUID().uuidString)")
+        let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let supervisor = try WorkspaceSessionSupervisor.open(
+            directory,
+            lifecycleLog: .file(tree.rootURL.appendingPathComponent("workspace-\(UUID().uuidString).jsonl")),
+            reviewConfigDirectory: reviewDirectory,
+            denialRecorder: { collector.record($0) }
+        ).get()
+        defer { _ = supervisor.close() }
+        let runtime = try launchWiringRuntime(
+            supervisor,
+            log: tree.rootURL.appendingPathComponent("runtime-\(UUID().uuidString).jsonl"),
+            script: "/bin/sleep 30"
+        )
+        let proxy = try #require(supervisor.egressProxy(for: runtime.session.id))
+        let credential = try #require(supervisor.egressCredential(for: runtime.session.id))
+        // The first intake may outlive the bounded wait on a loaded host;
+        // the retry storm dedupes onto the same row, so retry until named.
+        var proposalID: String?
+        for _ in 0..<10 where proposalID == nil {
+            let reply = wiringStatus(port: proxy.port, credential: credential, host: "denied.example", port: 22)
+            #expect(reply.hasPrefix("HTTP/1.1 403 Forbidden"))
+            guard let start = reply.range(of: "\r\n\r\n")?.upperBound,
+                let body = try? JSONSerialization.jsonObject(with: Data(reply[start...].utf8)) as? [String: Any]
+            else {
+                Issue.record("refusal carried no JSON body: \(reply)")
+                return
+            }
+            #expect(body["reason"] as? String == "denied-policy")
+            proposalID = body["proposal_id"] as? String
+            if let proposalID {
+                #expect(body["next_step"] as? String == "rv egress approve \(proposalID)")
+            }
+        }
+        let id = try #require(proposalID)
+        let rows = try await PendingApprovalStore(baseDirectory: reviewDirectory).list(now: Date())
+        #expect(rows.map(\.id.rawValue) == [id])
     }
 
     @Test func unauthenticatedLoopbackGetsNothing() throws {
