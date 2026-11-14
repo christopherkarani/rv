@@ -925,22 +925,29 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv policy show [--base] [--effective]"),
+                HelpRow(name: "rv policy show --revision <n> [--repo]"),
                 HelpRow(name: "rv policy list [--repo]"),
                 HelpRow(name: "rv policy draft --english <text> [--save]"),
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
                 HelpRow(name: "rv policy apply"),
+                HelpRow(name: "rv policy rollback <revision> [--repo] [--save]"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "draft",
                     description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
                 ),
+                HelpRow(
+                    name: "rollback",
+                    description: "Previews the restore (effective-rule diff and risk); --save re-submits it as a new head after owner approval. A restore that drops or relaxes a deny or ask is refused (exit 2)."
+                ),
             ]),
         ],
         examples: [
             "rv policy show",
             "rv policy draft --english 'never allow force-push to main'",
+            "rv policy rollback r2",
         ]
     )
 

@@ -53,6 +53,7 @@ complete -c rv -n "__fish_seen_subcommand_from policy" -a "draft" -d "Compile En
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "validate" -d "Validate"
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "export" -d "Export"
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "apply" -d "Apply"
+complete -c rv -n "__fish_seen_subcommand_from policy" -a "rollback" -d "Restore an earlier revision"
 complete -c rv -n "__fish_seen_subcommand_from scan" -a "sessions" -d "Scan host session stores"
 complete -c rv -n "__fish_seen_subcommand_from safety" -a "normal" -d "File-tool secrets plus shell evaluate"
 complete -c rv -n "__fish_seen_subcommand_from safety" -a "strict" -d "Also deny ls / test / stat of a catalog path"
