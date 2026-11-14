@@ -332,6 +332,12 @@ let fuzzTargets: [Target] = Context.environment["RV_FUZZ"] == "1" ? [
     .executableTarget(
         name: "rv-fuzz-normalize", dependencies: ["RVDomain", "RVEngine", "RVPacks"], path: "Fuzz/Normalize",
         exclude: ["shell.dict"], swiftSettings: fuzzHarness),
+    .executableTarget(
+        name: "rv-fuzz-mcp-json", dependencies: ["RVMCP"], path: "Fuzz/MCPJSON",
+        exclude: ["json.dict", "seeds"], swiftSettings: fuzzHarness),
+    .executableTarget(
+        name: "rv-fuzz-secret-rewrite", dependencies: ["RVIsolation"], path: "Fuzz/SecretRewrite",
+        exclude: ["rewrite.dict", "seeds"], swiftSettings: fuzzHarness),
 ] : []
 
 let package = Package(

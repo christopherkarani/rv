@@ -344,6 +344,65 @@ jobs:
       - name: Run RVIsolationTests (N-Z)
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[N-Zn-z]'
 
+  # RVMCPTests and RVMCPCustodianCoreTests on Darwin. Linux `swift test`
+  # runs both, but the macOS code paths (sandbox-exec profiles, /private
+  # firmlinks, Security-framework keychain queries, NSXPC fail-closed) were
+  # only exercised at release. Neither suite needs a signed build or Touch
+  # ID: custodian tests use the file key store in place of the keychain,
+  # the XPC test targets an unregistered Mach service, and the remote /
+  # OAuth suites start Scripts/mcp-remote-fixture.py on loopback with the
+  # runner's python3. The sandbox suites also run in hook-grade; repeating
+  # them here keeps this job the one place MCP runs whole on macOS. Each
+  # product runs under the watchdog, scoped to its own test product, never
+  # an unfiltered `swift test`.
+  macos-mcp:
+    name: macos mcp
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      # Packages only, not compiled artifacts (see the isolation jobs).
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-mcp-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-mcp-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
+      # Neither suite execs a workspace product, so only the two test
+      # targets are compiled.
+      - name: Compile MCP test targets
+        run: |
+          Scripts/swift-6.4 build --target RVMCPTests
+          Scripts/swift-6.4 build --target RVMCPCustodianCoreTests
+
+      - name: Run RVMCPTests and RVMCPCustodianCoreTests
+        run: |
+          status=0
+          for product in RVMCPTests RVMCPCustodianCoreTests; do
+            printf '== %s\n' "$product"
+            Scripts/ci-watchdog.sh 600 Scripts/swift-6.4 test --skip-build \
+              --test-product "$product" --filter "$product\\." || status=1
+          done
+          exit "$status"
+
   # Compiler host is macos-26. Advertised Darwin floor is macOS 15.
   # sequoia-smoke executes the staged binaries; it does not compile Swift.
   hook-grade:
@@ -403,8 +462,8 @@ jobs:
       # the parallel macos isolation job. Only the MCPSandboxCreateTests and
       # MCPSandboxLongPathTests suites are added from RVMCPTests: they are
       # Darwin-shaped (/private firmlinks, Seatbelt compile) and were
-      # silently never run on macOS. The rest of RVMCPTests (remote
-      # transport / OAuth) needs the loopback fixture and is not run here. Skip the
+      # silently never run on macOS. All of RVMCPTests and
+      # RVMCPCustodianCoreTests run in the macos-mcp job. Skip the
       # in-process CHookPipeTests proof — this job already ran
       # Scripts/c-hook-proof.sh. Build once, then one --skip-build run per
       # test product under a watchdog: `swift test` block-buffers each
