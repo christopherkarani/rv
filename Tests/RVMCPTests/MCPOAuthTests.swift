@@ -237,14 +237,16 @@ struct MCPOAuthTests {
 
 @Suite("MCP OAuth against the fixture", .enabled(if: python3Available))
 struct MCPOAuthFixtureTests {
-    @Test func connectThenServeRefreshesAfterA401AndScrubsEveryToken() throws {
+    @Test func connectThenServeRefreshesAfterA401AndScrubsEveryToken() async throws {
         let fixture = try RemoteFixture(["--oauth"])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-oauth-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MCPOAuthTokenStore.file(configDirectory: directory)
         let url = fixture.url("/mcp")
         let flow = MCPOAuthFlow(present: followInBrowser, timeout: 15)
-        let tokens = try flow.connect(server: "remote", launch: MCPRemoteLaunch(server: "remote", url: url), clientID: nil, scope: nil).get()
+        let tokens = try await offThePool {
+            flow.connect(server: "remote", launch: MCPRemoteLaunch(server: "remote", url: url), clientID: nil, scope: nil)
+        }.get()
         #expect(tokens.resource == url.absoluteString)
         #expect(tokens.scope == "mcp:tools")
         #expect(tokens.refreshToken != nil)
@@ -275,20 +277,21 @@ struct MCPOAuthFixtureTests {
             done.signal()
         }
         client.send(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#)
-        _ = client.receive()
-        func whoami(_ id: Int) -> String? {
+        _ = await client.next()
+        func whoami(_ id: Int) async -> String? {
             client.send(#"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#)
-            return client.receive()?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue
+            return await client.next()?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue
         }
-        #expect(whoami(2) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none", "\(logs.text)")
+        #expect(await whoami(2) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none", "\(logs.text)")
         var expire = URLRequest(url: fixture.url("/auth/expire"))
         expire.httpMethod = "POST"
-        #expect(MCPOAuthHTTP.live(expire)?.status == 200)
-        #expect(whoami(3) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none", "\(logs.text)")
+        let expiring = expire
+        #expect(await offThePool { MCPOAuthHTTP.live(expiring)?.status } == 200)
+        #expect(await whoami(3) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none", "\(logs.text)")
         try client.toGateway.fileHandleForWriting.close()
-        #expect(done.wait(timeout: .now() + 10) == .success)
+        #expect(await offThePool { done.wait(timeout: .now() + 10) } == .success)
 
-        let requests = fixture.stop()
+        let requests = await offThePool { fixture.stop() }
         let refreshed = try #require(store.load("remote"))
         #expect(refreshed.accessToken != tokens.accessToken)
         #expect(refreshed.refreshToken != tokens.refreshToken)
