@@ -226,4 +226,16 @@ struct MCPPlaceholderShutdown: Equatable {
             return nil
         }
     }
+
+    /// After a second shutdown signal: `SIGKILL` now, unless already sent.
+    mutating func hurry(exited: Bool) -> Int32? {
+        guard exited == false else { return nil }
+        switch step {
+        case .waiting, .terminated:
+            step = .killed
+            return SIGKILL
+        case .killed:
+            return nil
+        }
+    }
 }

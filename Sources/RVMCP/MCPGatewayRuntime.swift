@@ -7,6 +7,7 @@ import Dispatch
 import Foundation
 import RVHistory
 import RVIsolation
+import Synchronization
 
 /// How to start one upstream server process.
 public struct MCPUpstreamLaunch: Sendable, Equatable {
@@ -358,6 +359,9 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private var remotes: [String: MCPRemoteUpstream] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
+    /// How many times `requestShutdown` was called; from the second on,
+    /// stopping skips the grace periods.
+    private let shutdownRequests = Atomic<Int>(0)
 
     public init(
         core: MCPGatewayCore,
@@ -413,9 +417,16 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
     }
 
-    /// `run` stops every upstream and returns, as when the client closes its input.
+    /// `run` stops every upstream and returns, as when the client closes its
+    /// input. A second call (a second signal) also cuts the grace short:
+    /// every upstream still running is killed now, even mid-shutdown.
     public func requestShutdown() {
+        _ = shutdownRequests.add(1, ordering: .sequentiallyConsistent)
         queue.async { self.finished.signal() }
+    }
+
+    private var hurried: Bool {
+        shutdownRequests.load(ordering: .sequentiallyConsistent) >= 2
     }
 
     private func spawn(_ launch: MCPUpstreamLaunch) -> Bool {
@@ -585,12 +596,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         upstreamInputs = [:]
         let deadline = Date().addingTimeInterval(2)
         for process in processes.values {
-            while process.isRunning, Date() < deadline { usleep(20_000) }
-            if process.isRunning { process.terminate() }
+            while process.isRunning, Date() < deadline, hurried == false { usleep(20_000) }
+            if process.isRunning, hurried == false { process.terminate() }
         }
         let killDeadline = Date().addingTimeInterval(1)
         for process in processes.values {
-            while process.isRunning, Date() < killDeadline { usleep(20_000) }
+            while process.isRunning, Date() < killDeadline, hurried == false { usleep(20_000) }
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
         processes = [:]
@@ -613,10 +624,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         }
         while waiting(Date()) {
             let now = Date()
+            let hurry = hurried
             for (server, group) in placeholderGroups {
-                if let number = shutdowns[server]?.signal(exited: group.hasExited, now: now) {
-                    group.signal(number)
-                }
+                let number = hurry
+                    ? shutdowns[server]?.hurry(exited: group.hasExited)
+                    : shutdowns[server]?.signal(exited: group.hasExited, now: now)
+                if let number { group.signal(number) }
             }
             usleep(20_000)
         }

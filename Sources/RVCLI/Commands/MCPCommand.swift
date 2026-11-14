@@ -1647,6 +1647,13 @@ struct MCPServe: AsyncParsableCommand {
         case .failure(let error): try fail(error.message)
         case .success(let loaded): secrets = loaded
         }
+        // A signal ends serve through its normal shutdown once a server lists
+        // placeholders: from before planning, whose capability probe holds a
+        // stopped child, until the last group is reaped. A second signal
+        // kills what is left at once. Any other serve keeps the defaults.
+        let signals = MCPShutdownSignals.wanted(by: names.compactMap { configuration.server(named: $0) })
+            ? MCPShutdownSignals(MCPShutdownSignals.handled, catching: true) : nil
+        defer { signals?.cancel() }
         // Its gateway serves only the servers that list `placeholders`, each
         // lease bound to that server's process group; it stops with serve.
         let placeholderBroker = SecretPlaceholderBroker(
@@ -1697,13 +1704,20 @@ struct MCPServe: AsyncParsableCommand {
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
             log: log)
-        // Without this a signal ends rv before its placeholder servers'
-        // groups are stopped and reaped; a plain serve keeps the defaults.
-        let signals = bound.isEmpty
-            ? nil : MCPShutdownSignals(MCPShutdownSignals.handled, ignoring: true) { _ in runtime.requestShutdown() }
+        // No server bound: from here a signal acts by default. Cancelled
+        // before `first` is read, so no signal falls between the two.
+        if bound.isEmpty { signals?.cancel() }
+        // Heard while planning: nothing was spawned, and the leases end with
+        // the broker. Exits as a signal-killed serve would report it.
+        if let number = signals?.first {
+            MCPSandbox.stopProxies()
+            throw ExitCode(128 + number)
+        }
+        signals?.forward { runtime.requestShutdown() }
         runtime.run()
         signals?.cancel()
         MCPSandbox.stopProxies()
+        if let number = signals?.first { throw ExitCode(128 + number) }
     }
 }
 
