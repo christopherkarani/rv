@@ -145,6 +145,22 @@ struct SecretRunPlanTests {
         #expect(built == ["PATH": "/usr/bin:/bin", "FAKE_GH": "gh-unselected", "OPENAI_API_KEY": "sk-rvph_0123"])
     }
 
+    /// A store login lets the command fetch the real value itself: the token
+    /// rv's Vault provider reads goes when a selected secret comes from
+    /// Vault, and stays when none does. The server address is no secret.
+    @Test func environmentDropsTheLoginOfAProviderBackingASelectedSecret() throws {
+        let vault = SecretDefinition(
+            name: "VAULTED", source: .vault(path: "secret/data/app", field: "key", address: nil),
+            delivery: .gateway(SecretGatewayBinding(
+                upstream: URL(string: "https://api.example.com")!, baseURLEnv: "VAULTED_BASE_URL")))
+        let openAI = try #require(try configuration().secret(named: "OPENAI_API_KEY"))
+        let parent = ["PATH": "/usr/bin:/bin", "VAULT_TOKEN": "hvs.real", "VAULT_ADDR": "https://vault.example.com"]
+        let fromVault = SecretRunEnvironment.build(parent: parent, selected: [vault], lease: [], realValues: [])
+        #expect(fromVault == ["PATH": "/usr/bin:/bin", "VAULT_ADDR": "https://vault.example.com"])
+        let elsewhere = SecretRunEnvironment.build(parent: parent, selected: [openAI], lease: [], realValues: [])
+        #expect(elsewhere == parent)
+    }
+
     /// The real value may sit under any name (a `.env` loader, a copy the
     /// shell made): every variable holding a selected secret's value is
     /// dropped, padded with whitespace or not, and nothing else is.
@@ -306,6 +322,24 @@ struct SecretRunLaunchTests {
         // The kernel check (libproc) binds here; elsewhere it is whatever that platform offers.
         #expect(SecretRunCapability.check(.runtime) == nil)
         #endif
+    }
+
+    /// Linux today: the real capability check refuses in one line, exit
+    /// 125, and nothing runs or resolves.
+    @Test(.enabled(if: SecretRunProcess.isAvailable == false))
+    func aHostWithoutASuspendedSpawnRefusesInOneLine() throws {
+        let fixture = try SecretsFixture(runSecrets)
+        defer { fixture.tearDown() }
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let request = SecretRunRequest(secrets: ["OPENAI_API_KEY"], all: false, command: ["/bin/sh", "-c", "touch ran"])
+        let result = SecretRun.execute(request, context: context(
+            fixture, directory: directory, peers: .runtime, capability: SecretRunCapability.check))
+        #expect(result == .failure(.spawnUnavailable))
+        #expect(SecretRunRefusal.spawnUnavailable.message.contains("\n") == false)
+        #expect(SecretRunRefusal.spawnUnavailable.exitCode == 125)
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ran").path) == false)
+        #expect(fixture.auditText.isEmpty)
     }
 
     @Test(arguments: [SecretRunRefusal.peerBindingUnavailable, .spawnUnavailable])
