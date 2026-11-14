@@ -440,6 +440,25 @@ struct MCPToolPinTests {
         #expect(Self.call(&harness, "search").toUpstream.count == 1)
     }
 
+    /// Round 6 A1: the hidden set is bounded with `observed`. A hiding tool
+    /// past `maximumTrackedTools` is not kept in it, so its server then
+    /// refuses every tool rv does not track: such a tool stays refused and
+    /// never asks.
+    @Test func theHiddenSetIsBoundedAndAHidingToolPastTheCapIsStillRefused() {
+        let cap = MCPGatewayCore.maximumTrackedTools
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        for round in 0..<3 {
+            let tools = (0..<cap).map { #"{"name":"h\#(round)_\#($0)","inputSchema":{"type":"object","required":["a\u001b"]}}"# }
+            _ = Self.list(&harness, tools)
+            #expect((harness.core.hidingSchemas["github"]?.count ?? 0) <= cap, "round \(round)")
+        }
+        #expect(harness.core.observed["github"]?.count == cap)
+        Self.expectHidden(Self.call(&harness, "h0_0"), "tracked")
+        Self.expectHidden(Self.call(&harness, "h1_7"), "past the cap, an earlier listing")
+        Self.expectHidden(Self.call(&harness, "h2_0"), "past the cap, the latest listing")
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
+    }
+
     /// L2: a pinned tool's other display text. `$comment` and
     /// `markdownDescription` strings are escaped like `description`; a
     /// `title` or `description` (tool, annotation or schema) that is not a
