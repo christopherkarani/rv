@@ -64,7 +64,8 @@ enum SecretsRun {
     enum Definition: Equatable {
         case gateway(
             upstream: String, baseURLEnv: String, placeholderPrefix: String,
-            surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [])
+            surfaces: Set<GatewaySurface> = GatewaySurface.defaults, allow: [GatewayAllowance] = [],
+            binaries: [String]? = nil)
         case environment
     }
 
@@ -163,6 +164,18 @@ enum SecretsRun {
         let note =
             "Using known defaults for \(DisplayedText.field(name)): gateway \(known.upstream) via $\(known.baseURLEnv).\n"
         return (definition, note)
+    }
+
+    /// A new well-known name that got no default because the provider
+    /// catalog is invalid: say so, rather than the generic "is new" refusal.
+    static func brokenCatalogFailure(
+        name: String, isNew: Bool, definition: Definition?,
+        catalog: Result<ProviderCatalog, ProviderCatalogError> = ProviderCatalog.shipped
+    ) -> CommandFailure? {
+        guard isNew, definition == nil, let reason = KnownSecretDefaults.catalogFailure(for: name, catalog: catalog)
+        else { return nil }
+        return CommandFailure(
+            "\(reason), so \(DisplayedText.field(name)) has no default; pass --gateway URL --base-url-env VAR, or --environment")
     }
 
     static func configuration(_ environment: SecretsEnvironment) -> Result<SecretsConfiguration, CommandFailure> {
@@ -360,11 +373,11 @@ enum SecretsRun {
             switch definition {
             case .environment:
                 delivery = .environment
-            case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces, let allow):
+            case .gateway(let upstream, let baseURLEnv, let prefix, let surfaces, let allow, let binaries):
                 guard let url = URL(string: upstream) else { return .failure("--gateway must be an https URL") }
                 delivery = .gateway(SecretGatewayBinding(
                     upstream: url, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, surfaces: surfaces,
-                    allow: allow))
+                    allow: allow, limits: SecretGatewayLimits(binaries: binaries)))
             }
             updated.secrets.append(SecretDefinition(
                 name: name, description: description, agents: agents.isEmpty ? nil : agents,
@@ -828,7 +841,7 @@ struct Secrets: AsyncParsableCommand {
         subcommands: [
             SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsOAuthReset.self,
             SecretsScan.self,
-            SecretsDescribe.self, SecretsImport.self, SecretsHook.self,
+            SecretsDescribe.self, SecretsImport.self, SecretsHook.self, SecretsProviders.self,
         ],
         defaultSubcommand: SecretsList.self
     )
@@ -894,6 +907,10 @@ struct SecretsSet: AsyncParsableCommand {
             to their gateway; anything else needs a delivery:
               rv secrets set OPENAI_API_KEY --resource-profile main
               rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
+            --provider expands a profile from `rv secrets providers` into upstream and allow
+            rules; --allow and --surface may only narrow it:
+              rv secrets set GITHUB_TOKEN --provider github
+              rv secrets set GITHUB_TOKEN --provider github --allow "GET /repos/**"
               printf %s "$TOKEN" | rv secrets set GH_TOKEN --environment
             Setting a new value reaches running sessions that use the gateway on their next
             request. Environment-delivered values only change for new sessions.
@@ -903,6 +920,8 @@ struct SecretsSet: AsyncParsableCommand {
 
     @Argument(help: "Environment variable name the agent sees.") var name: String
     @Option(help: "https upstream the gateway may send this secret to.") var gateway: String?
+    @Option(help: "Provider profile to expand: an id, or id:endpoint (see `rv secrets providers`).")
+    var provider: String?
     @Option(name: .customLong("base-url-env"), help: "Variable that receives the gateway base URL.")
     var baseURLEnv: String?
     @Option(name: .customLong("placeholder-prefix"), help: "Prefix kept on the placeholder (for SDK format checks).")
@@ -926,9 +945,13 @@ struct SecretsSet: AsyncParsableCommand {
     var refresh: String?
 
     func validate() throws {
-        if environment, gateway != nil { throw ValidationError("pass either --gateway or --environment, not both") }
+        if [environment, gateway != nil, provider != nil].filter({ $0 }).count > 1 {
+            throw ValidationError("pass one of --gateway, --provider, or --environment")
+        }
         if gateway != nil, baseURLEnv == nil { throw ValidationError("--gateway needs --base-url-env") }
-        if gateway == nil, baseURLEnv != nil { throw ValidationError("--base-url-env needs --gateway") }
+        if gateway == nil, provider == nil, baseURLEnv != nil {
+            throw ValidationError("--base-url-env needs --gateway or --provider")
+        }
         if environment, surfaces.isEmpty == false { throw ValidationError("--surface applies to gateway delivery") }
         if case .failure(let failure) = SecretsRun.surfaces(surfaces) { throw ValidationError(failure.message) }
         if environment, allow.isEmpty == false { throw ValidationError("--allow applies to gateway delivery") }
@@ -949,12 +972,26 @@ struct SecretsSet: AsyncParsableCommand {
         case .success(let loaded): configuration = loaded
         }
         let isNew = configuration.secret(named: name) == nil
-        let resolved = SecretsRun.definitionForSet(
-            name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
-            placeholderPrefix: placeholderPrefix, environment: self.environment,
-            surfaces: try? SecretsRun.surfaces(surfaces).get(),
-            allow: (try? SecretsRun.allowances(allow).get()) ?? [])
+        let resolved: (definition: SecretsRun.Definition?, note: String?)
+        if let provider {
+            switch SecretsRun.definitionForProvider(
+                provider, name: name, isNew: isNew, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix,
+                surfaces: try SecretsRun.surfaces(surfaces).get(), allow: try SecretsRun.allowances(allow).get())
+            {
+            case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
+            case .success(let expanded): resolved = (expanded.definition, expanded.note)
+            }
+        } else {
+            resolved = SecretsRun.definitionForSet(
+                name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
+                placeholderPrefix: placeholderPrefix, environment: self.environment,
+                surfaces: try? SecretsRun.surfaces(surfaces).get(),
+                allow: (try? SecretsRun.allowances(allow).get()) ?? [])
+        }
         let definition = resolved.definition
+        if let failure = SecretsRun.brokenCatalogFailure(name: name, isNew: isNew, definition: definition) {
+            try ctx.fail("rv secrets set: \(failure.message)\n")
+        }
         if surfaces.isEmpty == false || allow.isEmpty == false, definition == nil, isNew == false {
             try ctx.fail(
                 "rv secrets set: \(DisplayedText.field(name)) is already defined; edit secrets.json to change its surfaces or allow rules\n")

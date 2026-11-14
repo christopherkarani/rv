@@ -530,6 +530,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
+                HelpRow(name: "rv secrets set <name> --provider <id>[:<endpoint>] [--allow <rule>] [--surface <s>] [--base-url-env <var>] [--placeholder-prefix <p>]"),
+                HelpRow(name: "rv secrets providers [<id>] [--json]"),
                 HelpRow(name: "rv secrets set <name> [--expires <date>|none] [--refresh <interval>|none]"),
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets oauth-reset <name>"),
@@ -540,6 +542,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
+                HelpRow(name: "--provider", description: "Expand a provider profile into upstream, surfaces and allow rules; --allow and --surface only narrow it"),
                 HelpRow(name: "--base-url-env", description: "Variable that receives the gateway base URL"),
                 HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
                 HelpRow(name: "--surface", description: "Where the placeholder is swapped: header (default), query, path; repeatable"),
@@ -622,7 +625,11 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "defaults",
-                    description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
+                    description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN, VERCEL_TOKEN default to their gateway (any method and path); other names need a delivery or --provider"
+                ),
+                HelpRow(
+                    name: "providers",
+                    description: "anthropic, openai, openrouter, github (read + clone, no push), vercel, stripe, npm and pypi (publish only)"
                 ),
                 HelpRow(name: "describe", description: "Names, descriptions, types, delivery, surfaces, and allow rules for agents; never a value"),
                 HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, @proxy, and provider refs; @proxy(domain=) imports as gateway, literals are skipped"),
@@ -646,6 +653,7 @@ enum HelpCatalog {
         ],
         examples: [
             "rv secrets set OPENAI_API_KEY --resource-profile main",
+            "rv secrets set GITHUB_TOKEN --provider github",
             "rv secrets check",
             "rv secrets scan .",
         ]
