@@ -458,8 +458,8 @@ What it does not:
 
 - The cage is `(allow default)` minus file writes outside the server's
   scratch, temporary and package-cache directories (`~/Library/Caches`,
-  `~/.npm`, `~/.cache`, and any `sandbox.writable`), hard links and
-  clones except among those, reads and writes of credential
+  `~/.npm`, `~/.cache`, and any `sandbox.writable`), hard links
+  except among those, reads, writes, links and clones of credential
   directories and rv's config directory, and the network but for the
   gateway (and proxy) port. Seatbelt checks paths, not inodes: a hard
   link that another process, running as you outside the cage, made
