@@ -355,8 +355,25 @@ public struct GatedEvaluate: Sendable {
         // Exemption audit and judge log are file appends: keep them off the
         // cooperative pool, as they were when they ran inside the offload.
         let effects = decided.effects
-        await JudgeOffload.run { Self.perform(effects, home: home) }
-        return decided.result
+        let overridesRecorded = await JudgeOffload.run { Self.perform(effects, home: home) }
+        return overridesRecorded ? decided.result : Self.unrecordedOverride(decided.result, effects: effects)
+    }
+
+    /// Why an override whose `command.override` row was not written stays a deny.
+    static let unrecordedOverrideReason =
+        "rv could not write the audit log, so the override of this deny was not applied"
+
+    /// The deny an override turns back into when its audit row did not land:
+    /// no unrecorded allow ever leaves the gate.
+    private static func unrecordedOverride(_ result: EvaluationResult, effects: [GatedEffect]) -> EvaluationResult {
+        for effect in effects {
+            guard case .overrideAudit(let row) = effect else { continue }
+            return EvaluationResult(
+                outcome: .deny(Deny(ruleID: row.ruleID, reason: unrecordedOverrideReason), matched: nil),
+                matchingView: result.matchingView, analysis: result.analysis
+            )
+        }
+        return result
     }
 
     /// Shell-door decision: the verdict plus the writes it asks for, in
@@ -985,8 +1002,12 @@ public struct GatedEvaluate: Sendable {
     /// has no config directory, so nothing is written. The hook deadline
     /// is applied by the decision (no `.denialRow` is emitted past it);
     /// the exemption audit and judge log are not deadline-gated.
-    static func perform(_ effects: [GatedEffect], home: HomeDirectory?) {
-        guard let home else { return }
+    /// Returns false when a `command.override` row did not land; the shell
+    /// door then keeps the deny (only that door emits override rows).
+    @discardableResult
+    static func perform(_ effects: [GatedEffect], home: HomeDirectory?) -> Bool {
+        guard let home else { return true }
+        var overridesRecorded = true
         for effect in effects {
             switch effect {
             case .exemptionAudit(let audit):
@@ -999,9 +1020,10 @@ public struct GatedEvaluate: Sendable {
                 auditDenial(row, home: home)
                 recordDenial(row, home: home)
             case .overrideAudit(let row):
-                auditOverride(row, home: home)
+                if auditOverride(row, home: home) == false { overridesRecorded = false }
             }
         }
+        return overridesRecorded
     }
 
     /// Appends a `command.denied` event to the hash-chained `audit.jsonl`
@@ -1015,7 +1037,7 @@ public struct GatedEvaluate: Sendable {
         let path = DenialPathRedaction.redact(row.path, home: home)
         if path.isEmpty == false { detail["path"] = path }
         if row.observed { detail["would_be"] = row.wouldBe.rawValue }
-        AuditLog.append(
+        let recorded = AuditLog.append(
             AuditEvent(
                 time: row.at,
                 kind: row.observed ? .commandObserved : .commandDenied,
@@ -1025,11 +1047,18 @@ public struct GatedEvaluate: Sendable {
             ),
             configDirectory: RVPolicyPaths.configDirectory(home: home)
         )
+        // The deny stands either way; say that its chained record is missing.
+        if recorded == false {
+            FileHandle.standardError.write(Data(RVDLogFile.line(
+                "rvd: audit.jsonl append failed; dropped the record of a deny by \(row.ruleID.rawValue)"
+            ).utf8))
+        }
     }
 
     /// Appends a `command.override` event: a deny a human-granted or policy
     /// override turned into an allow. The rule and override kind only.
-    private static func auditOverride(_ row: GatedEffect.OverrideRow, home: HomeDirectory) {
+    /// Returns whether the row landed.
+    private static func auditOverride(_ row: GatedEffect.OverrideRow, home: HomeDirectory) -> Bool {
         AuditLog.append(
             AuditEvent(
                 time: row.at, kind: .commandOverride, decision: .allowed,
