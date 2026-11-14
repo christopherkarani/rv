@@ -60,10 +60,12 @@ public enum ExclusiveFileLock {
     /// an existing lock file read-only (no create, no chmod) and holds
     /// LOCK_EX across `body`. A missing lock file runs `body` unlocked, since
     /// creating one would be a write. A directory, a non-regular file, or
-    /// any other open or `flock` failure throws `LockError`.
+    /// any other open or `flock` failure throws `LockError`. `O_NONBLOCK`
+    /// keeps a FIFO planted at the lock path from blocking the open before
+    /// the regular-file check; it does not make `flock` non-blocking.
     public static func withExistingLock<T>(at lockURL: URL, _ body: () throws -> T) throws -> T {
         let fd = lockURL.path.withCString { path in
-            open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+            open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
         }
         if fd < 0 {
             guard errno == ENOENT else { throw LockError.lockFailed }
