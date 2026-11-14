@@ -258,13 +258,13 @@ struct SecretRunPlanTests {
     /// back only if it gave it: a backgrounded rv leaves it with the shell.
     @Test func terminalIsHandedFromTheForegroundAndReclaimedOnlyIfHanded() {
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
-        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true))  // Ctrl-Z
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == true)
+        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == true)  // Ctrl-Z
         #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == false)  // nothing left to take back
         #expect(job.handsTerminal(rvInForeground: false, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == false)  // `bg`
         #expect(job.reclaimsTerminal(foreground: 7, foregroundAlive: true) == false)  // stops in the background
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))  // `fg`
-        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: false))  // the command's group is gone
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == true)  // `fg`
+        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: false) == true)  // the command's group is gone
 
         var background = SecretRunJobControl()
         #expect(background.handsTerminal(rvInForeground: false, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == false)  // `rv run … &`
@@ -276,14 +276,14 @@ struct SecretRunPlanTests {
     /// group nobody is in any more, and never when the foreground is unknown.
     @Test func terminalAnotherJobHoldsIsNotTakenBack() {
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == true)
         #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: true) == false)
         #expect(job.handedTo == nil)
 
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
-        #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: false))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == true)
+        #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: false) == true)
 
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == true)
         #expect(job.reclaimsTerminal(foreground: nil, foregroundAlive: false) == false)
     }
 
@@ -316,7 +316,7 @@ struct SecretRunPlanTests {
         var job = SecretRunJobControl()
         #expect(job.tellsHeldBack(rvInForeground: false, sharesGroup: true) == false)
         #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: false) == false)
-        #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: true))
+        #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: true) == true)
         #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: true) == false)
     }
 
