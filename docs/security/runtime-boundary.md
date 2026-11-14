@@ -315,9 +315,9 @@ the seatbelt profile is untouched.
 #### Mechanism
 
 - Intake: the workspace supervisor hands each per-runtime proxy a review
-  hook beside the production denial log (which it never replaces). The
-  proxy calls it for `.deniedPolicy` denials only and waits at most
-  `EgressProxy.proposalWait` (250 ms) for the proposal id; DNS, filter,
+  hook (`EgressReviewHook`) beside the production denial log (which it
+  never replaces). The proxy calls it for `.deniedPolicy` denials only, on
+  its own dispatch queue (never the Swift cooperative pool); DNS, filter,
   dial, header, and malformed failures admit no rule and never reach it.
 - Refusal response: every refusal the proxy writes (CONNECT and
   absolute-URI, 403 and 407) carries `Content-Type: application/json`,
@@ -326,22 +326,41 @@ the seatbelt profile is untouched.
   body: `schema`, `reason`, `host` (the parsed authority, lowercased,
   only when it is hostname-safe ASCII), `port`, a constant one-sentence
   `message`, and `next_step` (`rv egress approve <id>` with
-  `proposal_id` when the denial minted or deduped onto an awaiting
-  proposal, else `rv egress denials`). `EgressDenialResponse` builds it;
-  the body stays under 1 KiB. Oracle rules (pinned by
-  `EgressDenialResponseTests` and `EgressDenialWireTests`):
-  `binary-mismatch` and `unattributed-peer` go out byte-identical to a
-  proposal-less `denied-policy`; `dns-failed` and `address-filtered` go
-  out as `dial-failed`, so the cage cannot probe the host resolver; the
-  407 is one constant shape for missing, malformed, and unknown tokens,
-  decided before the binary gate. No binary path, pin, credential, or
-  filesystem path is written. `egress-denials.jsonl` keeps the precise
-  reason. A binary-scoped instance never attaches a `proposal_id` (and
-  never waits for one), since its binary-gate denials cannot mint one; at
-  most `EgressProxy.maximumProposalWaiters` (4) serve threads wait at
-  once, and denials past that cap still reach intake but deny at once.
-  Residual: an authenticated cage can still tell a binary-gate denial from
-  a policy one by trying an allowed host (inherent to enforcement); tunnels
+  `proposal_id`, or `rv egress denials`). `EgressDenialResponse` builds
+  it; the body stays under 1 KiB. Refusals end with FIN, then a bounded
+  non-blocking discard of request bytes already received, then close,
+  so a client still uploading a body is less likely to see the refusal
+  cut off by RST.
+- When the body names a proposal: only on instances where approving it
+  changes this instance's verdict (`EgressProxy.advertisesProposals`:
+  open mode, not binary-scoped). There the proxy waits at most
+  `proposalWait` (250 ms) for the id, with at most
+  `maximumProposalWaiters` (4) threads waiting; past either bound the
+  deny goes out without one and intake still runs. Production per-runtime
+  proxies are credentialed and ignore live rules (per-runtime grant
+  updates are the T4 follow-up), so they file the proposal but never name
+  it: an approval there does not reach the running runtime, and new
+  runtimes start from the static grant too. The choice depends only on
+  instance configuration, never on per-request state. Pinned by
+  `advertisedApprovalTakesEffectOnRetry` and
+  `credentialedInstanceNeverAdvertisesAnApprovalThatCannotApply`
+  (approve, then retry).
+- Oracle rules (pinned by `EgressDenialResponseTests` and
+  `EgressDenialWireTests`): `binary-mismatch` and `unattributed-peer` go
+  out byte-identical to a proposal-less `denied-policy`; `dns-failed` and
+  `address-filtered` go out as `dial-failed`, so the cage cannot probe
+  the host resolver; the 407 is one constant shape for missing,
+  malformed, and unknown tokens, decided before the binary gate. No
+  binary path, pin, credential, or filesystem path is written.
+  `egress-denials.jsonl` keeps the precise reason.
+- Accepted residuals, on advertising (open-mode) instances only: the id
+  disappears when the shared store is full (`storeFull`, 256 awaiting
+  rows), so a cage that mints proposals can estimate how many approvals
+  are awaiting; an id also disappears once a sibling's approval for the
+  same `host:port` resolved it; and a fresh row (store write) answers
+  more slowly than a deduped one (store read). Everywhere: an
+  authenticated cage can still tell a binary-gate denial from a policy
+  one by trying an allowed host (inherent to enforcement), and tunnels
   that already sent `200` (SNI mismatch, dial failure after SNI check)
   still just close.
 - Proposal: one `PendingApprovalStore` row per blocked `host:port`, reused
