@@ -6,7 +6,21 @@ import Glibc
 import Dispatch
 import Foundation
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
+/// libc under names the types below do not shadow with their own methods.
+private func closeFile(_ fd: Int32) { _ = close(fd) }
+private func listenOn(_ fd: Int32, _ backlog: Int32) -> Int32 { listen(fd, backlog) }
+private func connectTo(_ fd: Int32, _ address: UnsafePointer<sockaddr>, _ length: socklen_t) -> Int32 {
+    connect(fd, address, length)
+}
+private func streamSocket() -> Int32 {
+    #if canImport(Darwin)
+    socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+}
+
 /// rv's controlling terminal. The command gets the foreground for its run
 /// while rv holds it alone, so Ctrl-C and Ctrl-Z reach its group, and rv
 /// takes it back when the command stops or exits.
@@ -29,7 +43,7 @@ final class SecretRunTerminal: SecretRunTerminalControl {
         guard fd >= 0 else { return nil }
         var modes = termios()
         guard tcgetpgrp(fd) > 0, tcgetattr(fd, &modes) == 0 else {
-            _ = Darwin.close(fd)
+            closeFile(fd)
             return nil
         }
         return SecretRunTerminal(fd: fd, saved: modes)
@@ -41,7 +55,7 @@ final class SecretRunTerminal: SecretRunTerminalControl {
     }
 
     func close() {
-        _ = Darwin.close(fd)
+        closeFile(fd)
     }
 
     var rvInForeground: Bool { tcgetpgrp(fd) == getpgrp() }
@@ -55,6 +69,7 @@ final class SecretRunTerminal: SecretRunTerminalControl {
     /// by membership, not by whether stdout is a pipe: a pipe to a file
     /// reader in another group would read the same.
     var sharesGroup: Bool {
+        #if os(macOS)
         var ancestors: Set<pid_t> = []
         var current = getppid()
         while current > 1, ancestors.count < 256, ancestors.insert(current).inserted {
@@ -63,6 +78,12 @@ final class SecretRunTerminal: SecretRunTerminalControl {
         }
         return SecretRunJobControl.sharesGroup(
             members: listedPIDs(proc_listpgrppids, getpgrp()), rv: getpid(), ancestors: ancestors)
+        #else
+        // The same two facts from `/proc`: one table, one reading of it.
+        let table = ProcFSProcessTable()
+        return SecretRunJobControl.sharesGroup(
+            members: table.groupMembers(getpgrp()) ?? [], rv: getpid(), ancestors: table.ancestors(of: getpid()))
+        #endif
     }
 
     /// `SIGTTOU` must be ignored (as `SecretRunSignals` does): once the
@@ -163,6 +184,9 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         guard members.removeValue(forKey: ObjectIdentifier(target)) != nil, members.isEmpty else { return }
         for source in sources { source.cancel() }
         sources.removeAll()
+        #if os(Linux)
+        SecretRunSignalRelay.remove()
+        #endif
         for entry in previous.reversed() { _ = signal(entry.number, entry.handler) }
         previous.removeAll()
         ignoredBefore.removeAll()
@@ -183,12 +207,17 @@ private final class SecretRunSignalTable: @unchecked Sendable {
             if Self.ignores(handler) { ignoredBefore.insert(number) }
         }
         previous.append((SIGCHLD, signal(SIGCHLD, SIG_DFL)))
+        #if os(macOS)
         for number in SecretRunSignals.forwarded {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
             source.setEventHandler { [unowned self] in self.deliver(number) }
             source.resume()
             sources.append(source)
         }
+        #else
+        // Linux drops an ignored signal before a signal source could read it.
+        SecretRunSignalRelay.install(SecretRunSignals.forwarded) { [unowned self] in self.deliver($0) }
+        #endif
     }
 
     private static func ignores(_ handler: sig_t?) -> Bool {
@@ -204,23 +233,23 @@ struct SecretRunLoopback {
     let peer: GatewayPeer
 
     func close() {
-        _ = Darwin.close(client)
-        _ = Darwin.close(server)
+        closeFile(client)
+        closeFile(server)
     }
 
     /// A listener on 127.0.0.1 and an ephemeral port.
     static func listen() -> (fd: Int32, port: UInt16)? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = streamSocket()
         guard fd >= 0 else { return nil }
         var address = loopback(port: 0)
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let ready = withUnsafeMutablePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, length) == 0 && Darwin.listen(fd, 2) == 0 && getsockname(fd, $0, &length) == 0
+                bind(fd, $0, length) == 0 && listenOn(fd, 2) == 0 && getsockname(fd, $0, &length) == 0
             }
         }
         guard ready else {
-            _ = Darwin.close(fd)
+            closeFile(fd)
             return nil
         }
         return (fd, UInt16(bigEndian: address.sin_port))
@@ -229,21 +258,21 @@ struct SecretRunLoopback {
     /// The client end sits at fd 10 or above, so it can never be the fd 3
     /// it is duplicated onto in the probe child.
     static func connect(_ listener: (fd: Int32, port: UInt16)) -> SecretRunLoopback? {
-        let opened = socket(AF_INET, SOCK_STREAM, 0)
+        let opened = streamSocket()
         guard opened >= 0 else { return nil }
         let client = fcntl(opened, F_DUPFD_CLOEXEC, 10)
-        _ = Darwin.close(opened)
+        closeFile(opened)
         guard client >= 0 else { return nil }
         var address = loopback(port: listener.port)
         let connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+                connectTo(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
             }
         }
         let server = connected ? accept(listener.fd, nil, nil) : -1
         guard server >= 0, let peer = GatewayPeer.of(server) else {
-            _ = Darwin.close(client)
-            if server >= 0 { _ = Darwin.close(server) }
+            closeFile(client)
+            if server >= 0 { closeFile(server) }
             return nil
         }
         return SecretRunLoopback(client: client, server: server, peer: peer)
@@ -251,7 +280,9 @@ struct SecretRunLoopback {
 
     private static func loopback(port: UInt16) -> sockaddr_in {
         var address = sockaddr_in()
+        #if canImport(Darwin)
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         address.sin_addr.s_addr = GatewayPeer.loopback

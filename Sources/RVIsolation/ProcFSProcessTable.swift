@@ -122,7 +122,7 @@ final class ProcFSProcessTable: ProcessTable {
     private var reads: Int
     private lazy var own: Bool = isOwnProc()
     private lazy var visible: Bool = own && hidesNoProcess()
-    private lazy var parents: [pid_t: [pid_t]]? = listChildren()
+    private lazy var listing: Listing? = listProcesses()
     private var resolved: (peer: GatewayPeer, inode: UInt64?)?
 
     init(
@@ -184,7 +184,24 @@ final class ProcFSProcessTable: ProcessTable {
     /// From one pass over every process's `stat`. Any `stat` that cannot be
     /// read makes the listing incomplete: that process could be a child.
     func children(of pid: pid_t) -> [pid_t]? {
-        parents.map { $0[pid] ?? [] }
+        listing.map { $0.children[pid] ?? [] }
+    }
+
+    /// The live processes whose process group is `group`. Nil when the
+    /// processes could not be listed.
+    func groupMembers(_ group: pid_t) -> [pid_t]? {
+        listing.map { $0.groups[group] ?? [] }
+    }
+
+    /// The chain of parents above `pid`, as far as it can be read.
+    func ancestors(of pid: pid_t) -> Set<pid_t> {
+        var ancestors: Set<pid_t> = []
+        var current = pid
+        while ancestors.count < 256, case .found(let process) = lookup(current) {
+            current = pid_t(bitPattern: process.parent)
+            guard current > 1, ancestors.insert(current).inserted else { break }
+        }
+        return ancestors
     }
 
     func userProcesses() -> [pid_t]? {
@@ -307,17 +324,25 @@ final class ProcFSProcessTable: ProcessTable {
         }
     }
 
-    private func listChildren() -> [pid_t: [pid_t]]? {
+    /// One pass over every process above pid 1, indexed by parent and by group.
+    private struct Listing {
+        var children: [pid_t: [pid_t]] = [:]
+        var groups: [pid_t: [pid_t]] = [:]
+    }
+
+    private func listProcesses() -> Listing? {
         guard let pids = processes() else { return nil }
-        var map: [pid_t: [pid_t]] = [:]
+        var listing = Listing()
         for pid in pids where pid > 1 {
             switch lookup(pid) {
             case .absent: continue
             case .unavailable: return nil
-            case .found(let process): map[pid_t(bitPattern: process.parent), default: []].append(pid)
+            case .found(let process):
+                listing.children[pid_t(bitPattern: process.parent), default: []].append(pid)
+                listing.groups[pid_t(bitPattern: process.group), default: []].append(pid)
             }
         }
-        return map
+        return listing
     }
 
     /// `self` must be this process: a `/proc` of another pid namespace

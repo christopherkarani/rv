@@ -347,7 +347,7 @@ struct SecretRunLaunchTests {
         #expect(lease.definitions.map(\.name) == ["OPENAI_API_KEY"])
     }
 
-    #if os(macOS)
+    #if os(macOS) || os(Linux)
     /// The stop a supervisor observed may be followed at once by the
     /// leader's exit. Consuming the stop must not reap that exit: the zombie
     /// is what keeps the group id from being reused before the group kill.
@@ -466,12 +466,13 @@ struct SecretRunLaunchTests {
         for lastOut in [0, 1] {
             let guards = [SecretRunSignals(), SecretRunSignals()]
             #expect(SecretRunSignals.installed)
-            #expect(disposition(SIGINT) == ignoredDisposition)
+            #expect(isGuarded(SIGINT))
+            #expect(disposition(SIGTTOU) == ignoredDisposition)
             #expect(disposition(SIGCHLD) == 0)
             guards[1 - lastOut].restore()
             guards[1 - lastOut].restore()  // idempotent: it does not leave on the other's behalf
             #expect(SecretRunSignals.installed)
-            #expect(disposition(SIGTERM) == ignoredDisposition)
+            #expect(isGuarded(SIGTERM))
             guards[lastOut].restore()
             #expect(SecretRunSignals.installed == false)
             #expect(watched.map(disposition) == before)
@@ -508,8 +509,8 @@ struct SecretRunLaunchTests {
         let unavailable: SecretRunRefusal? = SecretRunProcess.isAvailable ? .peerBindingUnavailable : .spawnUnavailable
         #expect(SecretRunCapability.check(.alwaysMember) == unavailable)
         #expect(SecretRunCapability.check(.neverAnswers) == unavailable)
-        #if os(macOS)
-        // The kernel check (libproc) binds here; elsewhere it is whatever that platform offers.
+        #if os(macOS) || os(Linux)
+        // The kernel check (libproc, /proc) binds here; elsewhere it is whatever that platform offers.
         #expect(SecretRunCapability.check(.runtime) == nil)
         #endif
     }
@@ -693,7 +694,7 @@ struct SecretRunLaunchTests {
     }
 }
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
 /// Stands in for rv's terminal: models which group holds the foreground and
 /// records what `supervise` asks of it. rv never stops itself here.
 private final class RecordingTerminal: SecretRunTerminalControl {
@@ -722,15 +723,36 @@ private final class RecordingTerminal: SecretRunTerminalControl {
 private func disposition(_ number: Int32) -> Int {
     var action = sigaction()
     _ = sigaction(number, nil, &action)
+    #if canImport(Darwin)
     return unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self)
+    #else
+    return unsafeBitCast(action.__sigaction_handler.sa_handler, to: Int.self)
+    #endif
 }
 
 private let ignoredDisposition = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
 
-/// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`).
+/// Whether rv's guard holds `number`: ignored and read from a signal source
+/// on macOS; a handler on Linux, which drops ignored signals unread.
+private func isGuarded(_ number: Int32) -> Bool {
+    #if os(macOS)
+    disposition(number) == ignoredDisposition
+    #else
+    disposition(number) != 0 && disposition(number) != ignoredDisposition
+    #endif
+}
+
+/// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`; `T` in `stat`).
 private func isStopped(_ pid: pid_t) -> Bool {
+    #if os(macOS)
     guard pid > 1, case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return false }
     return info.pbi_status == 4
+    #else
+    guard pid > 1, case .value(let bytes) = ProcFSReader.file("/proc/\(pid)/stat"),
+        let stat = ProcFSParse.stat(bytes)
+    else { return false }
+    return stat.state == UInt8(ascii: "T")
+    #endif
 }
 #endif
 

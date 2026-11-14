@@ -321,19 +321,41 @@ How it starts the command:
   and start time, binds the lease to it, hands it the terminal, and only
   then sends `SIGCONT`. If any step fails, or a signal reaches rv before
   the resume, the stopped child is killed. Only stdio is inherited.
+- On Linux, where `posix_spawn` cannot start a process stopped, the child
+  is a launcher: `rv-isolation-exec --stopped`, the helper installed
+  beside rv and found from `/proc/self/exe` (never `PATH`). It is spawned
+  as its own group leader (`POSIX_SPAWN_SETPGROUP`), closes every
+  descriptor above stdio with `close_range` (it exits 125 instead if the
+  kernel refuses, so a kernel before 5.9 cannot run `rv run`), stops
+  itself with `SIGSTOP`, and execs the command only once continued. rv
+  waits for that stop, and takes only a stop by `SIGSTOP` for it: a
+  launcher that exited, was killed, or stopped for another reason is
+  killed and the launch refused. The rest is the same code as on macOS:
+  rv records the stopped process's pid and start time, which survive
+  `exec`, binds the lease, hands over the terminal and sends `SIGCONT`.
+  So the command's image runs no instruction before its placeholders are
+  bound, and holds none of rv's descriptors. If `exec` then fails the
+  launcher says why on stderr and exits 126. A `SIGSTOP` sent to the new
+  child by another process before its own is indistinguishable from it;
+  the command then stops once more as it starts, bound either way.
 - `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
   command's group, each followed by `SIGCONT` so a stopped group gets it,
   until the leader exits; nothing is signalled once it is reaped. One rv
   inherited ignored (`nohup`) stays ignored for the command. The
   dispositions are process-wide and installed once however many guards
   are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
-  behind rv. rv takes its terminal from `/dev/tty`, so a command reading
+  behind rv. macOS ignores the four signals and reads them from a signal
+  source. Linux discards an ignored signal unread, so there each has a
+  handler that writes its number to a pipe one thread reads; a handler
+  does not survive `exec`, so the signals rv inherited ignored are
+  ignored again for the instant of the spawn. rv takes its terminal from `/dev/tty`, so a command reading
   the terminal while stdin is a pipe still stops and resumes with job
   control. Ctrl-Z stops rv with the command, and `fg` resumes both; `bg`
   resumes both and leaves the terminal with the shell. rv hands the
   terminal on only while it holds the foreground and its process group
   holds nothing but rv and its own parents (read with
-  `proc_listpgrppids`). In a pipeline (`rv run -- x | less`) the other
+  `proc_listpgrppids`; on Linux from one pass over `/proc`, and a `/proc`
+  that cannot be listed counts as shared). In a pipeline (`rv run -- x | less`) the other
   commands share rv's group, so the terminal stays with them: Ctrl-C
   reaches the command only because rv forwards it, and Ctrl-Z stops rv but
   not the command. rv takes the terminal back only from the command's
@@ -376,10 +398,9 @@ doing them (`SecretRunCapability.check`): it spawns a suspended probe
 child holding one end of a loopback connection, and the gateway's peer
 check must call that connection the probe's and a second one not. A
 platform without a no-window spawn, or whose peer check cannot tell
-(`/proc` hidden, no libproc), is refused with exit 125 and the command
-never starts. Linux has no no-window spawn in `rv run` yet, so it is
-refused there (`rv run: this platform cannot start the command suspended
-...`) even once its peer check binds process groups.
+(`/proc` hidden or another pid namespace's, no libproc, rv confined so
+it may not read other processes, the Linux launcher missing), is refused
+with exit 125 and the command never starts.
 
 ## Binary binding
 

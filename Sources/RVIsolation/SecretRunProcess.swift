@@ -34,7 +34,7 @@ package enum SecretRunCapability {
 /// false `rv run` refuses; giving a platform a no-window `launch` here is
 /// all `rv run` needs from this file.
 enum SecretRunProcess {
-    #if os(macOS)
+    #if os(macOS) || os(Linux)
     static let isAvailable = true
 
     /// `launch` with rv's controlling terminal (when `manageTerminal`) and
@@ -106,6 +106,7 @@ enum SecretRunProcess {
         if job.reclaimsTerminal(foreground: foreground, foregroundAlive: alive) { terminal.reclaim() }
     }
 
+    #if os(macOS)
     /// `POSIX_SPAWN_SETPGROUP` makes the child its own group leader inside
     /// the spawn call and `POSIX_SPAWN_START_SUSPENDED` stops it before its
     /// image runs, so there is no moment where it executes unbound. Only
@@ -161,6 +162,7 @@ enum SecretRunProcess {
         guard status == 0, pid > 1 else { return .failure(.spawnFailed(String(cString: strerror(status)))) }
         return .success(pid)
     }
+    #endif
 
     /// For a child that must never run: kills its group and reaps it. The
     /// child is unreaped until then, so its pgid cannot have been reused.
