@@ -130,6 +130,14 @@ struct SecretPlaceholderLaunchTests {
                 #expect(holds([:], ["--auth=\(safe)"]), "URL-safe base64 of \(prefix.count) + value")
             }
         }
+        // The values above encode with no `+` or `/`, so their URL-safe form
+        // is the standard one. `>>>???ab` encodes to `Pj4+Pz8/…`: only the
+        // URL-safe matcher finds `Pj4-Pz8_`.
+        let symbols = [try #require(SecretValue(">>>???ab"))]
+        #expect(Data(">>>???ab".utf8).base64EncodedString().hasPrefix("Pj4+Pz8/"))
+        #expect(SecretPlaceholderLease.holdsRealValue(environment: [:], arguments: ["--k=Pj4-Pz8_"], realValues: symbols))
+        #expect(SecretPlaceholderLease.holdsRealValue(environment: [:], arguments: ["--k=Pj4+Pz8/"], realValues: symbols))
+        #expect(SecretPlaceholderLease.holdsRealValue(environment: [:], arguments: ["--k=Pj4-Pz8"], realValues: symbols) == false)
         let hex = Data(long.utf8).map { String(format: "%02x", $0) }.joined()
         #expect(holds(["HEX": "0x\(hex)"]))
         #expect(holds(["HEX": hex.uppercased()]))
