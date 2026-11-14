@@ -418,8 +418,9 @@ the seatbelt profile is untouched.
   approve <id>` binds the state read right before the owner prompt; the
   `rv tui` pane binds the token of the row it showed. The resolve
   re-checks the token inside the pending store's file lock, so a grant
-  landing between display and apply refuses the approval ("policy
-  changed since you reviewed this"). A missing token is refused. The
+  landing between display and apply refuses the approval ("egress
+  grants changed since you reviewed this"). A missing token is refused,
+  and so is an unreadable pending store (never read as empty). The
   token is not a credential: owner authentication still decides who
   approves. Denials are not bound (denying stale state is safe).
 - Supplement admissions always dial the filtered external path, and

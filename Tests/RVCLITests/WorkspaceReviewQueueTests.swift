@@ -155,7 +155,7 @@ struct WorkspaceReviewQueueTests {
         ) {
             await WorkspaceReviewQueue().approve(egress: proposal.id.rawValue, reviewToken: token)
         }
-        #expect(outcome == .refused("approve refused: policy changed since you reviewed this; review it again"))
+        #expect(outcome == .refused("approve refused: egress grants changed since you reviewed this; review it again"))
         #expect(try await stillAwaiting(proposal, home: home))
     }
 

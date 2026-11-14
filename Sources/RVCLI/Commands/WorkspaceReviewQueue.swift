@@ -87,7 +87,7 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
         case EgressReviewError.notNetworkProposal: return "not a network proposal"
         case EgressReviewError.notAwaiting(let state): return "proposal is \(state)"
         case EgressReviewError.reasonRequired: return "a reason is required (one line, 500 chars)"
-        case EgressReviewError.reviewChanged: return "policy changed since you reviewed this; review it again"
+        case EgressReviewError.reviewChanged: return "egress grants changed since you reviewed this; review it again"
         case EgressReviewError.reviewTokenMissing: return "nothing binds this approval to what you reviewed; review it again"
         default: return "unexpected error"
         }

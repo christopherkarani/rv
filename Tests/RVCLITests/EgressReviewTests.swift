@@ -391,10 +391,31 @@ struct EgressReviewTests {
         }
     }
 
+    /// Each in-lock refusal keeps its own CLI error: a gone or ended row
+    /// is the redemption-changed refusal, an unreadable store is
+    /// store-unavailable, and a review mismatch stays reviewChanged.
+    @Test func boundResolveRefusalsMapToTheirOwnErrors() {
+        for ended in [PendingApprovalError.alreadyResolved, .notFound, .expired, .timedOut] {
+            #expect(EgressReviewRun.mapResolveError(ended) as? AllowOnceError == .redemptionChanged)
+        }
+        for unavailable in [PendingApprovalError.encodeFailed, .lockFailed] {
+            #expect(EgressReviewRun.mapResolveError(unavailable) as? EgressReviewError == .storeUnavailable)
+        }
+        #expect(
+            EgressReviewRun.mapResolveError(EgressReviewError.reviewChanged) as? EgressReviewError
+                == .reviewChanged)
+    }
+
     @Test func reviewChangedMessageNamesTheRetry() {
         #expect(
             EgressReviewRun.reviewChangedText(id: "p1")
-                == "policy changed since you reviewed this; run rv egress show p1 / rv egress approve p1 again")
+                == "egress grants changed since you reviewed this; run rv egress approve p1 again")
+    }
+
+    @Test func reviewTokenMissingMessageIsItsOwn() {
+        #expect(
+            EgressReviewRun.reviewTokenMissingText(id: "p1")
+                == "nothing binds this approval to what you reviewed; run rv egress approve p1 again")
     }
 
     // No owner authentication (seamed context, no `.authenticated`

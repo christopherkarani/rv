@@ -109,7 +109,12 @@ enum EgressReviewRun {
 
     static func reviewChangedText(id: String) -> String {
         let id = DisplayedText.field(id)
-        return "policy changed since you reviewed this; run rv egress show \(id) / rv egress approve \(id) again"
+        return "egress grants changed since you reviewed this; run rv egress approve \(id) again"
+    }
+
+    static func reviewTokenMissingText(id: String) -> String {
+        let id = DisplayedText.field(id)
+        return "nothing binds this approval to what you reviewed; run rv egress approve \(id) again"
     }
 
     static func view(for record: PendingApproval) -> EgressProposalView? {
@@ -685,8 +690,10 @@ struct EgressApprove: AsyncParsableCommand {
             try ctx.fail("rv egress approve: not a network proposal\n", exitCode: 2)
         } catch EgressReviewError.notAwaiting(let state) {
             try ctx.fail("rv egress approve: proposal is \(state)\n", exitCode: 2)
-        } catch EgressReviewError.reviewChanged, EgressReviewError.reviewTokenMissing {
+        } catch EgressReviewError.reviewChanged {
             try ctx.fail("rv egress approve: \(EgressReviewRun.reviewChangedText(id: id))\n", exitCode: 2)
+        } catch EgressReviewError.reviewTokenMissing {
+            try ctx.fail("rv egress approve: \(EgressReviewRun.reviewTokenMissingText(id: id))\n", exitCode: 2)
         } catch {
             try ctx.failOwnerGate(error, command: "egress approve", subject: .proposal)
         }
