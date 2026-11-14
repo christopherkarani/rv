@@ -535,7 +535,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
                 HelpRow(name: "--since", description: "Only events newer than 30m, 24h, 7d"),
-                HelpRow(name: "--kind", description: "Kind or prefix: egress, admission, runtime, workspace, agent"),
+                HelpRow(name: "--kind", description: "Kind or prefix: egress, admission, runtime, workspace, agent, policy, config"),
                 HelpRow(name: "--json", description: "JSON array on stdout"),
             ]),
             HelpSection(heading: "Notes", rows: [

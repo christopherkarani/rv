@@ -101,11 +101,11 @@ struct AuditLogLineTests {
         defer { close(holder) }
         #expect(flock(holder, LOCK_EX) == 0)
         let started = Date()
-        #expect(AuditLog.append(event("blocked"), configDirectory: dir, lockTimeout: 0.2) == false)
+        #expect(AuditLog.append(event("blocked"), configDirectory: dir, lockTimeout: .milliseconds(200)) == false)
         #expect(Date().timeIntervalSince(started) < 2)
         #expect(try Data(contentsOf: file).isEmpty)
         _ = flock(holder, LOCK_UN)
-        #expect(AuditLog.append(event("after"), configDirectory: dir, lockTimeout: 0.2))
+        #expect(AuditLog.append(event("after"), configDirectory: dir, lockTimeout: .milliseconds(200)))
         #expect(try AuditChain.verify(fileURL: file).get().lines == 1)
     }
 }
