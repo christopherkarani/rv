@@ -156,7 +156,7 @@ private func feedsInstall(_ raw: String, launched: [LaunchedCommand]) -> Bool {
     // `… | xargs <destructive>`: the destructive program is xargs's operand,
     // so it is not a launched command of its own. The producer text names it.
     let xargsDestructive = launched.contains { command in
-        guard command.headIsDynamic == false, command.guardArgv.first == "xargs" else { return false }
+        guard command.headIsDynamic == false, command.guardArgv.first.map({ ["xargs", "gxargs"].contains($0) }) == true else { return false }
         return command.guardArgv.dropFirst().contains { isDestructiveName($0) }
     }
     return xargsDestructive && mentionsInstall(raw)

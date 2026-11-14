@@ -28,8 +28,9 @@ private func launchWeakens(_ launched: LaunchedCommand, xargsDepth: Int) -> Bool
 
 /// Stands in for the words `xargs` appends from stdin, and for each
 /// replace-string occurrence (`-I %`): unmodelled, so it counts as a
-/// flag-gated write (`draft`/`rollback --save`), as a dynamic verb, and as
-/// a dynamic head, and an operand-less `xargs rv` fails closed.
+/// flag-gated write (`draft`/`rollback --save`) and as a dynamic verb. A
+/// re-fed command whose head is or contains it runs a program stdin
+/// chose (`xargs sudo`, `xargs -I{} sh -c '{}'`): refused.
 private let xargsStdinWord = "$xargs-stdin"
 
 private let xargsProgramNames: Set<String> = ["xargs", "gxargs"]
@@ -37,34 +38,78 @@ private let xargsProgramNames: Set<String> = ["xargs", "gxargs"]
 /// xargs feeding xargs feeding…: past this, fail closed.
 private let maxXargsDepth = 4
 
-/// Real xargs lines have one program candidate; more come only from
-/// unknown options. Past this bound, fail closed instead of re-resolving.
-private let maxXargsCandidates = 32
-
-/// `xargs` runs its program with stdin words appended, and the launcher
-/// parser does not follow it. Each word that may be xargs's program
-/// (`scanXargsOptions`) starts a command that is re-fed through the shared
-/// launcher resolver, so `sudo`/`env`/`nohup`/`timeout` prefixes, shell
-/// `-c` payloads and dynamic heads resolve as they do at top level. It is
-/// judged as written and with every replace-string occurrence swapped for
-/// the stdin stand-in, the stand-in appended to both. Only adds refusals.
+/// `xargs` runs its program with stdin words, and the launcher parser does
+/// not follow it. The program is re-fed through the shared launcher
+/// resolver (`sudo`/`env`/`nohup`/`timeout` prefixes, shell `-c`, `eval`,
+/// dynamic heads, nested xargs), judged as written and with every replace
+/// string swapped for the stdin stand-in; the stand-in is appended unless
+/// replace mode alone is in effect. A dynamic head may be xargs too.
+///
+/// Fail closed rather than model xargs precisely: a literal xargs whose
+/// options do not parse exactly (`parseXargsOptions` nil) is refused
+/// whenever any of its words could reach rv (`uncertainXargsMayReachRV`).
+/// A line with no such word is left to the other stages, so the
+/// self-protection floor does not mask their deny (`xargs --frobnicate
+/// rm -r` stays denied). Relative to main this only adds refusals. A
+/// dynamic head is judged as xargs only when its options parse, since
+/// `$PYTHON -m x` is far likelier than a variable naming xargs; it is
+/// still judged as rv and as a launcher elsewhere.
 private func xargsFeedsWeakeningInvocation(_ launched: LaunchedCommand, depth: Int) -> Bool {
-    guard launched.headIsDynamic == false, let name = launched.guardArgv.first,
-          xargsProgramNames.contains(name) else { return false }
+    guard let name = launched.guardArgv.first,
+          launched.headIsDynamic || xargsProgramNames.contains(name) else { return false }
     guard depth < maxXargsDepth else { return true }
     let words = Array(launched.guardArgv.dropFirst())
-    let scan = scanXargsOptions(words)
-    if scan.starts.count > maxXargsCandidates { return true }
-    return scan.starts.contains { start in
-        let program = Array(words[start...])
-        var variants = [program]
-        let substituted = substitutingReplaceStrings(scan.replaceStrings, in: program)
-        if substituted != program { variants.append(substituted) }
-        return variants.contains { argv in
-            launchedCommandHeads(argv: argv + [xargsStdinWord], depth: depth + 1)
-                .contains { launchWeakens($0, xargsDepth: depth + 1) }
+    guard let parsed = parseXargsOptions(words) else {
+        return launched.headIsDynamic == false && uncertainXargsMayReachRV(words)
+    }
+    // No program: xargs runs echo.
+    guard let start = parsed.programStart else { return false }
+    let program = Array(words[start...])
+    let stdin = parsed.appendsStdin ? [xargsStdinWord] : []
+    var variants = [program + stdin]
+    let substituted = substitutingReplaceStrings(parsed.replaceStrings, in: program)
+    if substituted != program { variants.append(substituted + stdin) }
+    return variants.contains { argv in
+        launchedCommandHeads(argv: argv, depth: depth + 1).contains { fed in
+            fed.head.contains(xargsStdinWord) || launchWeakens(fed, xargsDepth: depth + 1)
         }
     }
+}
+
+/// Programs that may run a command their stdin or operands name.
+private let xargsExecNames: Set<String> = plainLaunchers.union(shellNames).union([
+    "sudo", "env", "timeout", "busybox", "eval", "stdbuf", "ionice", "xargs", "gxargs",
+])
+
+/// With options that do not parse, any word may be the program, a value,
+/// or a replace string. A word could reach rv when it names rv (any
+/// spelling containing `rv`), is unmodelled, names a program that runs
+/// other commands, has no letter or digit (a possible replace string in
+/// head position, `-` included), or when a possible option value occurs
+/// again in a later word (a possible replace string, `--repl=X X`).
+private func uncertainXargsMayReachRV(_ words: [String]) -> Bool {
+    let unescaped = words.map(unescapeBackslashPairs)
+    for (index, word) in unescaped.enumerated() {
+        if word == "--" { continue }
+        if word.lowercased().contains("rv") || isUnmodelledWord(word) { return true }
+        if xargsExecNames.contains(commandName(word)) { return true }
+        if word.contains(where: { $0.isLetter || $0.isNumber }) == false { return true }
+        guard word.hasPrefix("-") else { continue }
+        // (value, first word after it): attached, then the next word.
+        var values: [(String, Int)] = []
+        if let equals = word.firstIndex(of: "=") {
+            values.append((String(word[word.index(after: equals)...]), index + 1))
+        } else if word.hasPrefix("--") == false, word.count > 2 {
+            values.append((String(word.dropFirst(2)), index + 1))
+        }
+        if index + 1 < unescaped.count { values.append((unescaped[index + 1], index + 2)) }
+        if values.contains(where: { value, after in
+            value.isEmpty == false && unescaped.dropFirst(after).contains { $0.contains(value) }
+        }) {
+            return true
+        }
+    }
+    return false
 }
 
 /// xargs replaces each occurrence of its replace string (`-I`/`-J`/`-i`/
@@ -89,9 +134,14 @@ private func substitutingReplaceStrings(_ replaceStrings: Set<String>, in words:
 /// Short option letters that take no value (BSD and GNU).
 private let xargsFlagLetters: Set<Character> = ["0", "o", "p", "r", "t", "x"]
 
-/// A short cluster `xargsShortCluster` can walk exactly: every letter
-/// before the first value-taking one is a known flag. An unknown letter
-/// may take the next word on some platform, so it stays ambiguous.
+/// Letters and long names that set a per-command argument count; with a
+/// replace string, which one wins is platform-specific, so stdin is
+/// assumed appended.
+private let xargsCountLetters: Set<Character> = ["n", "L", "l"]
+private let xargsCountLongNames: Set<String> = ["max-args", "max-lines"]
+
+/// A short cluster `xargsShortCluster` walks exactly: every letter before
+/// the first value-taking one is a known flag.
 private func isKnownXargsCluster(_ word: String) -> Bool {
     for letter in word.dropFirst() {
         if xargsFlagLetters.contains(letter) { continue }
@@ -101,41 +151,59 @@ private func isKnownXargsCluster(_ word: String) -> Bool {
     return word.count > 1
 }
 
-/// Indexes into xargs's operands that may be its program, plus every
-/// replace string its options name. Known options (clusters included) are
-/// walked with the same parsers as `peelXargs`. An unknown option may or
-/// may not take the next word, so that word stays a candidate and the
-/// scan continues after it. The first word that can only be the program
-/// ends the scan.
-private func scanXargsOptions(_ words: [String]) -> (starts: [Int], replaceStrings: Set<String>) {
-    var starts: [Int] = []
+/// Whether the cluster's letters up to its value-taking one set a count.
+private func clusterSetsCount(_ word: String) -> Bool {
+    for letter in word.dropFirst() {
+        if xargsCountLetters.contains(letter) { return true }
+        if xargsFlagLetters.contains(letter) == false { return false }
+    }
+    return false
+}
+
+private struct ParsedXargs {
+    /// Index of the program word; nil when xargs runs its default (echo).
+    var programStart: Int?
     var replaceStrings: Set<String> = []
+    /// False only in replace mode with no count option: xargs then
+    /// substitutes stdin instead of appending it.
+    var appendsStdin = true
+}
+
+/// xargs's options, walked with the parsers `peelXargs` uses. Nil when any
+/// step is not exact: an unknown or abbreviated option, an unknown cluster
+/// letter, a missing value, a value that looks like an option, or `-` in
+/// program position. Callers fail closed on nil.
+private func parseXargsOptions(_ words: [String]) -> ParsedXargs? {
+    var parsed = ParsedXargs()
+    var setsCount = false
     var index = 0
     while index < words.count {
         let word = unescapeBackslashPairs(words[index])
         if word == "--" {
-            if index + 1 < words.count { starts.append(index + 1) }
+            if index + 1 < words.count { parsed.programStart = index + 1 }
             break
         }
-        guard word.hasPrefix("-"), word != "-" else {
-            starts.append(index)
+        if word == "-" { return nil }
+        guard word.hasPrefix("-") else {
+            parsed.programStart = index
             break
         }
         let next = index + 1 < words.count ? unescapeBackslashPairs(words[index + 1]) : nil
-        let step: XargsOptionStep? = word.hasPrefix("--")
-            ? xargsLongOption(word, next: next)
-            : (isKnownXargsCluster(word) ? xargsShortCluster(word, next: next) : nil)
-        if let step {
-            if let replace = step.replace { replaceStrings.insert(replace) }
-            index += step.width
-        } else if let next, next.hasPrefix("-") == false {
-            starts.append(index + 1)
-            index += 2
+        let step: XargsOptionStep?
+        if word.hasPrefix("--") {
+            step = xargsLongOption(word, next: next)
+            setsCount = setsCount || xargsCountLongNames.contains(String(word.dropFirst(2).prefix { $0 != "=" }))
         } else {
-            index += 1
+            step = isKnownXargsCluster(word) ? xargsShortCluster(word, next: next) : nil
+            setsCount = setsCount || clusterSetsCount(word)
         }
+        guard let step else { return nil }
+        if step.width == 2, next?.hasPrefix("-") == true { return nil }
+        if let replace = step.replace { parsed.replaceStrings.insert(replace) }
+        index += step.width
     }
-    return (starts, replaceStrings)
+    parsed.appendsStdin = parsed.replaceStrings.isEmpty || setsCount
+    return parsed
 }
 
 /// `rv` is the C front door; it execs the installed `rv-cli` sibling with the

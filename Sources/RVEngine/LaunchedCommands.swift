@@ -550,7 +550,7 @@ func commandName(_ word: String) -> String {
     unescapeBackslashPairs(basename(word)).folding(options: .caseInsensitive, locale: nil)
 }
 
-private let shellNames: Set<String> = [
+let shellNames: Set<String> = [
     "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh",
     "ksh93", "rbash", "yash", "pwsh", "nu", "xonsh",
 ]
