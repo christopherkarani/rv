@@ -196,4 +196,35 @@ struct MCPToolTrustTests {
         #expect(try store.contents().get().changed.isEmpty)
         #expect(try store.load().get() == [:])
     }
+
+    /// An mcp.json changed since it was signed, under review.
+    private static func unsignedFixtureWithStaleQueue() throws -> (Fixture, MCPToolPinStore) {
+        let (fixture, store) = try Self.signedFixture()
+        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        let config = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        var bytes = try Data(contentsOf: config)
+        bytes.append(UInt8(ascii: "\n"))
+        try bytes.write(to: config)
+        chmod(config.path, 0o600)
+        #expect(fixture.environment().integrity != .trusted)
+        return (fixture, store)
+    }
+
+    /// M2: an mcp.json the owner has not confirmed decides nothing about
+    /// the queue: declined, every queued tool stays.
+    @Test func anUnconfirmedMcpJSONPrunesNothing() async throws {
+        let (fixture, store) = try Self.unsignedFixtureWithStaleQueue()
+        let refused = await MCPRun.trust(environment: fixture.environment(presence: MCPCommandTests.absent), show: { _ in })
+        #expect(refused.failureMessage == "not trusted: this process has no terminal")
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
+    }
+
+    /// M2: once the owner confirms and mcp.json is signed, its server list
+    /// prunes the queue.
+    @Test func aConfirmedMcpJSONPrunesAfterSigning() async throws {
+        let (fixture, store) = try Self.unsignedFixtureWithStaleQueue()
+        let result = try await MCPRun.trust(environment: fixture.environment(presence: MCPCommandTests.present), show: { _ in }).get()
+        #expect(result.hasPrefix("trusted mcp.json; rv signs it again on every change it makes\n"), "\(result)")
+        #expect(try store.contents().get().changed.isEmpty)
+    }
 }
