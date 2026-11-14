@@ -158,7 +158,10 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     private let queue = DispatchQueue(label: "rv.run.signals")
     private var members: [ObjectIdentifier: SecretRunSignalTarget] = [:]
     private var sources: [any DispatchSourceSignal] = []
-    private var previous: [(number: Int32, handler: sig_t?)] = []
+    /// Whole `sigaction`s, never `sig_t?`: `SIG_IGN` is 1, which Swift
+    /// reads as nil one optional further out (a `for` over such pairs ends
+    /// at the first ignored one, and the rest stayed ignored).
+    private var previous: [(number: Int32, action: sigaction)] = []
     private var ignoredBefore: Set<Int32> = []
     private var delivered = 0
 
@@ -193,7 +196,7 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         guard members.removeValue(forKey: ObjectIdentifier(target)) != nil, members.isEmpty else { return }
         for source in sources { source.cancel() }
         sources.removeAll()
-        for entry in previous.reversed() { _ = signal(entry.number, entry.handler) }
+        for entry in previous.reversed() { _ = Self.set(entry.number, entry.action) }
         previous.removeAll()
         ignoredBefore.removeAll()
     }
@@ -211,17 +214,31 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     /// Under `lock`, by the first member.
     private func install() {
         for number in SecretRunSignals.forwarded + [SIGTTOU] {
-            let handler = signal(number, SIG_IGN)
-            previous.append((number, handler))
-            if Self.ignores(handler) { ignoredBefore.insert(number) }
+            let before = Self.set(number, Self.action(SIG_IGN))
+            previous.append((number, before))
+            if Self.ignores(before.__sigaction_u.__sa_handler) { ignoredBefore.insert(number) }
         }
-        previous.append((SIGCHLD, signal(SIGCHLD, SIG_DFL)))
+        previous.append((SIGCHLD, Self.set(SIGCHLD, Self.action(SIG_DFL))))
         for number in SecretRunSignals.forwarded {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
             source.setEventHandler { [unowned self] in self.deliver(number) }
             source.resume()
             sources.append(source)
         }
+    }
+
+    /// Sets `number`'s action and returns the one it replaces.
+    private static func set(_ number: Int32, _ action: sigaction) -> sigaction {
+        var action = action
+        var replaced = sigaction()
+        _ = sigaction(number, &action, &replaced)
+        return replaced
+    }
+
+    private static func action(_ handler: sig_t?) -> sigaction {
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = handler
+        return action
     }
 
     private static func ignores(_ handler: sig_t?) -> Bool {
