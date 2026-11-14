@@ -260,8 +260,12 @@ How it starts the command:
   the resume, the stopped child is killed. Only stdio is inherited.
 - `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
   command's group, each followed by `SIGCONT` so a stopped group gets it,
-  until the leader exits; nothing is signalled once it is reaped. One rv
-  inherited ignored (`nohup`) stays ignored for the command. The
+  until the leader exits; nothing is signalled once it is reaped. A
+  signal before the resume abandons the launch, and nothing is forwarded
+  to the suspended child after it. Any signal rv resets for the command
+  (`SIGINT`, `SIGQUIT`, `SIGHUP`, `SIGTERM`, `SIGTSTP`, `SIGTTIN`,
+  `SIGTTOU`, `SIGPIPE`, `SIGWINCH`, `SIGINFO`) that rv inherited ignored
+  (`nohup`, a parent that ignores `SIGPIPE`) stays ignored for it. The
   dispositions are process-wide and installed once however many guards
   are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
   behind rv. rv takes its terminal from `/dev/tty`, so a command reading
@@ -270,13 +274,23 @@ How it starts the command:
   resumes both and leaves the terminal with the shell. rv hands the
   terminal on only while it holds the foreground and its process group
   holds nothing but rv and its own parents (read with
-  `proc_listpgrppids`). In a pipeline (`rv run -- x | less`) the other
-  commands share rv's group, so the terminal stays with them: Ctrl-C
-  reaches the command only because rv forwards it, and Ctrl-Z stops rv but
-  not the command. rv takes the terminal back only from the command's
+  `proc_listpgrppids`), and it did not inherit `SIGINT` ignored (an
+  asynchronous list, `rv run … &`, in a script without job control: the
+  terminal stays with the script). In a pipeline (`rv run -- x | less`)
+  the other commands share rv's group, so the terminal stays with them:
+  Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops
+  rv but not the command. rv says so once on stderr, also when the group
+  could not be read. rv takes the terminal back only from the command's
   group, or from a group nobody is in any more: if the shell gave it to
   another job while rv was stopped, that job keeps it. Terminal modes are
-  saved when rv takes it back and re-applied when it hands it on. rv exits with
+  saved when rv takes it back and re-applied when it hands it on. rv
+  re-decides the hand-off only when it continues after stopping itself
+  for its command's stop. If rv alone is stopped (a `SIGSTOP` or
+  `SIGTSTP` sent to rv's pid), then `bg` and `fg`, the terminal stays with
+  rv's group and the command in the background, so Ctrl-Z then stops rv
+  but not the command. A command that reads the terminal stops on
+  `SIGTTIN`, rv stops with it, and the next `fg` hands the terminal over.
+  rv exits with
   the command's code, or 128 plus the signal that ended it; 125 means
   `rv run` refused and the command never ran (126: could not be started,
   127: not found).
