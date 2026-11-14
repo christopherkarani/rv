@@ -500,7 +500,11 @@ struct SecretGatewayLinuxPeerTests {
         let result = try report.receive()
         if result == UInt8(EPERM) {
             // Docker's default seccomp profile refuses `unshare` without CAP_SYS_ADMIN.
-            print("skipped: unshare(CLONE_FILES) is refused here (EPERM)")
+            if SecretGatewayLinuxAttackTests.strict {
+                Issue.record("unshare(CLONE_FILES) is refused here, and RV_LINUX_PEER_STRICT=1 requires it")
+            } else {
+                print("skipped: unshare(CLONE_FILES) is refused here (EPERM)")
+            }
             return
         }
         try #require(result == 0, "unshare failed with errno \(result)")
@@ -532,13 +536,23 @@ struct SecretGatewayLinuxPeerTests {
             guard case .value(let status) = ProcFSReader.file("/proc/\(child)/status") else { return false }
             return ProcFSParse.uids(status: status)?.first == 65534
         })
+        // Root without CAP_SYS_PTRACE may still list the directory
+        // (CAP_DAC_READ_SEARCH) and is refused at each link.
         let refused: Bool
         switch ProcFSReader.directory("/proc/\(child)/fd") {
-        case .value: refused = false
+        case .value(let names):
+            refused = names.contains { name in
+                if case .unavailable = ProcFSReader.link("/proc/\(child)/fd/\(name)") { true } else { false }
+            }
         case .unavailable: refused = true
         case .absent:
             Issue.record("the child exited")
             return
+        }
+        // Scripts/linux-peer-binding-e2e.sh runs this without CAP_SYS_PTRACE,
+        // where the read must be refused.
+        if ProcessInfo.processInfo.environment["RV_PROC_REGIME"] == "noptrace" {
+            #expect(refused, "another user's descriptors are readable without CAP_SYS_PTRACE")
         }
         let bash = try GatewayBinaryPin.pin("/bin/bash").get()
         let verdict = GatewayPeerScan.verdict(connection.peer, group: group, in: ProcFSProcessTable())
