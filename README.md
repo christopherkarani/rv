@@ -214,8 +214,8 @@ rv is one binary, 25 commands. The rest of the surface:
   Hook-guarded agents get secret-path blocking instead. Stdio MCP servers
   receive the real value of each secret in their `secrets` map; one that
   lists a secret under `"placeholders"` in mcp.json gets a placeholder and
-  base URL instead (macOS, sandboxed servers only), spendable only from
-  that server's process group. `rv secrets scan` + a git pre-commit hook
+  base URL instead (macOS, sandboxed servers only), spendable only by
+  that server and its live descendants. `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
 - **App logins, once** — `rv login connect vercel` imports the Vercel or
   GitHub login you already have (CLI auth file, token variable, or
