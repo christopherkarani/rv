@@ -20,6 +20,9 @@ public enum TypedRuleStoreError: Error, Sendable, Equatable {
     case logMissing
     /// F1: no verified log record carries the requested revision.
     case revisionNotFound
+    /// A rollback bound to a previewed head found a different head under
+    /// the lock: the policy changed since the preview. Nothing was written.
+    case headChanged
 }
 
 /// One append-only policy revision. The embedded TOML is the full document at
@@ -357,7 +360,8 @@ public struct TypedRuleStore: Sendable {
     @discardableResult
     func rollbackMachine(
         toRevision target: Int,
-        interlock: RollbackInterlock?
+        interlock: RollbackInterlock?,
+        expectedHead: PolicyRevisionHead? = nil
     ) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
             let chain = try reconcileInterruptedSave(verified: try loadVerifiedChain())
@@ -379,6 +383,7 @@ public struct TypedRuleStore: Sendable {
                 // computed against history that failed verification.
                 let display = try readRevisions(from: machineRevisionsURL)
                 try MachineRevisionLog.checkDisplay(chain, matches: display)
+                try Self.requireHead(expectedHead, is: display.last)
                 // Enforcement reads policy.toml and ignores the sealed log.
                 // A deny edited into the live file is part of the posture
                 // this restore would replace, even when the sealed
@@ -581,13 +586,20 @@ public struct TypedRuleStore: Sendable {
     /// than the sealed head is refused (`blockedByFindings`) before
     /// anything is written (see `refuseRelaxingRollback`). Dropping an
     /// allow still succeeds. Returns the new head.
-    public func rollbackMachine(to revision: Int) throws -> PolicyRevision {
+    ///
+    /// `expectedHead` binds the rollback to the head a preview showed: when
+    /// the display head under the lock is any other revision, it throws
+    /// `headChanged` before the gate and before anything is written.
+    public func rollbackMachine(
+        to revision: Int,
+        expectedHead: PolicyRevisionHead? = nil
+    ) throws -> PolicyRevision {
         // One implementation: the sealed, byte-exact, single-lock path.
         // Public revisions are generations in both spellings (see
         // `machineHistory()`), so this is a forwarder, not a second
         // rollback with its own numbering and lock discipline.
         do {
-            return try rollbackMachine(toRevision: revision)
+            return try rollbackMachine(toRevision: revision, interlock: nil, expectedHead: expectedHead)
         } catch TypedRuleStoreError.revisionNotFound {
             throw TypedRuleStoreError.unknownRevision
         }
@@ -602,14 +614,20 @@ public struct TypedRuleStore: Sendable {
     ///
     /// `.policy.lock` is held across the live re-read, both gates, and
     /// the write. `loadRepoDocument` does not take that lock.
-    public func rollbackRepo(to revision: Int, workspace: URL) throws -> PolicyRevision {
-        try rollbackRepo(to: revision, workspace: workspace, interlock: nil)
+    /// `expectedHead` is the same preview binding as on the machine layer.
+    public func rollbackRepo(
+        to revision: Int,
+        workspace: URL,
+        expectedHead: PolicyRevisionHead? = nil
+    ) throws -> PolicyRevision {
+        try rollbackRepo(to: revision, workspace: workspace, interlock: nil, expectedHead: expectedHead)
     }
 
     func rollbackRepo(
         to revision: Int,
         workspace: URL,
-        interlock: RollbackInterlock?
+        interlock: RollbackInterlock?,
+        expectedHead: PolicyRevisionHead? = nil
     ) throws -> PolicyRevision {
         let file = Self.repoFileURL(workspace: workspace)
         let lock = file.deletingLastPathComponent()
@@ -617,6 +635,7 @@ public struct TypedRuleStore: Sendable {
         let revisionsURL = repoRevisionsURL(workspace: workspace)
         try withFileLock(at: lock) {
             let entries = try readRevisions(from: revisionsURL)
+            try Self.requireHead(expectedHead, is: entries.last)
             guard
                 let target = entries.first(where: { $0.revision == revision }),
                 let head = entries.last
@@ -699,6 +718,16 @@ public struct TypedRuleStore: Sendable {
         }
     }
 
+    /// Preview binding: with an expected head, the log head read under the
+    /// lock must be that exact revision and content, or the rollback
+    /// refuses `headChanged` before the gate runs.
+    private static func requireHead(_ expected: PolicyRevisionHead?, is head: PolicyRevision?) throws {
+        guard let expected else { return }
+        guard let head, head.revision == expected.revision, head.hash == expected.hash else {
+            throw TypedRuleStoreError.headChanged
+        }
+    }
+
     private static func rollbackPreviewRisk(
         live: PolicyDocument?,
         historyHead: PolicyDocument,
@@ -712,16 +741,18 @@ public struct TypedRuleStore: Sendable {
 
     /// Read-only twin of `rollbackMachine(to:)`: the same verified chain,
     /// display cross-check, target lookup, live-file load, and risk
-    /// reports, under the same locks, with nothing written (an interrupted
-    /// save is not reconciled; the cross-check refuses it instead, as
-    /// `listMachineRevisions` does). Fresh state throws `unknownRevision`
-    /// without taking a lock. `logCorrupted` and `logMissing` fail closed.
+    /// reports, under the same locks, with nothing written: locks are taken
+    /// only when their files already exist and are never created or
+    /// chmodded (`withExistingFileLock`), and an interrupted save is not
+    /// reconciled (the cross-check refuses it instead, as
+    /// `listMachineRevisions` does). Fresh state throws `unknownRevision`.
+    /// `logCorrupted` and `logMissing` fail closed.
     public func previewMachineRollback(to revision: Int) throws -> PolicyRollbackPreview {
         guard machineHistoryMayExist else {
             throw TypedRuleStoreError.unknownRevision
         }
-        return try withFileLock(at: machineLogLockURL) {
-            try withFileLock(at: machineLockURL) {
+        return try withExistingFileLock(at: machineLogLockURL) {
+            try withExistingFileLock(at: machineLockURL) {
                 let chain = try loadVerifiedChain()
                 let display = try readRevisions(from: machineRevisionsURL)
                 try MachineRevisionLog.checkDisplay(chain, matches: display)
@@ -752,8 +783,8 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// Read-only twin of `rollbackRepo(to:workspace:)` under the same
-    /// `.policy.lock`. No revision log throws `unknownRevision` without
-    /// creating `.rv/` in the workspace.
+    /// `.policy.lock`, taken only when it already exists: `.rv/` is never
+    /// created or chmodded. No revision log throws `unknownRevision`.
     public func previewRepoRollback(to revision: Int, workspace: URL) throws -> PolicyRollbackPreview {
         let revisionsURL = repoRevisionsURL(workspace: workspace)
         guard FileManager.default.fileExists(atPath: revisionsURL.path) else {
@@ -761,7 +792,7 @@ public struct TypedRuleStore: Sendable {
         }
         let lock = Self.repoFileURL(workspace: workspace).deletingLastPathComponent()
             .appendingPathComponent(".policy.lock", isDirectory: false)
-        return try withFileLock(at: lock) {
+        return try withExistingFileLock(at: lock) {
             let entries = try readRevisions(from: revisionsURL)
             guard
                 let target = entries.first(where: { $0.revision == revision }),
@@ -1112,6 +1143,19 @@ public struct TypedRuleStore: Sendable {
             throw TypedRuleStoreError.invalidFile
         }
         try setOwnerOnlyFile(url)
+    }
+
+    /// Read-only lock for previews: no directory prepare, no lock-file
+    /// create or chmod (`ExclusiveFileLock.withExistingLock`).
+    private func withExistingFileLock<T>(at lockURL: URL, _ body: () throws -> T) throws -> T {
+        do {
+            return try ExclusiveFileLock.withExistingLock(at: lockURL, body)
+        } catch let error as ExclusiveFileLock.LockError {
+            switch error {
+            case .lockFailed:
+                throw TypedRuleStoreError.lockFailed
+            }
+        }
     }
 
     private func withFileLock<T>(at lockURL: URL, _ body: () throws -> T) throws -> T {

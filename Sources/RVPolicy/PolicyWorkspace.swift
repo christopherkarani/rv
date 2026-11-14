@@ -127,33 +127,48 @@ public struct PolicyWorkspace: Sendable {
     /// downgrade the safety level, or widen secret exemptions refuse with
     /// `blockedByFindings` before anything is written. Dropping an allow
     /// still succeeds. The gate compares the live policy file.
-    public func rollback(layer: PolicyDocumentLayer, to revision: Int) throws -> PolicyRevision {
+    /// `expectedHead` (from a preview) makes the rollback refuse
+    /// `headChanged` when the layer's head moved since that preview.
+    public func rollback(
+        layer: PolicyDocumentLayer,
+        to revision: Int,
+        expectedHead: PolicyRevisionHead? = nil
+    ) throws -> PolicyRevision {
         switch layer {
         case .machine:
             guard let directory = machineDirectory else {
                 throw PolicyWorkspaceError.missingLayer(.machine)
             }
-            return try TypedRuleStore(baseDirectory: directory).rollbackMachine(to: revision)
+            return try TypedRuleStore(baseDirectory: directory)
+                .rollbackMachine(to: revision, expectedHead: expectedHead)
         case .repo:
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
             return try revisionRepoStore(workspace: workspace)
-                .rollbackRepo(to: revision, workspace: workspace)
+                .rollbackRepo(to: revision, workspace: workspace, expectedHead: expectedHead)
         }
     }
 
     /// A layer rollback preview plus the effective rules before and after.
     /// `currentEffective` is nil when a live layer file does not parse;
     /// `restoredEffective` is nil when the other layer's file does not.
+    /// `liveHash` is the live layer document's identity (nil: unparseable).
     public struct RollbackPreview: Sendable, Equatable {
         public var layer: PolicyDocumentLayer
         public var target: PolicyRevision
         public var head: PolicyRevision
         public var liveParses: Bool
+        public var liveHash: String?
         public var risk: PolicyDiffRiskReport
         public var currentEffective: [TypedRule]?
         public var restoredEffective: [TypedRule]?
+
+        /// Restoring would change nothing: the target is the head and the
+        /// live file already holds that content.
+        public var isNoOp: Bool {
+            target.hash == head.hash && liveHash == target.hash
+        }
     }
 
     /// Read-only: what `rollback(layer:to:)` would restore and whether its
@@ -181,9 +196,9 @@ public struct PolicyWorkspace: Sendable {
         let otherRules: [TypedRule]?
         switch layer {
         case .machine:
-            otherRules = try? loadRepoDocument().typedRules(origin: .repo)
+            otherRules = try Self.nilWhenUnparseable { try loadRepoDocument().typedRules(origin: .repo) }
         case .repo:
-            otherRules = try? loadMachineDocument().typedRules(origin: .machine)
+            otherRules = try Self.nilWhenUnparseable { try loadMachineDocument().typedRules(origin: .machine) }
         }
         let restoredEffective = otherRules.map { other in
             layer == .machine
@@ -195,10 +210,22 @@ public struct PolicyWorkspace: Sendable {
             target: preview.target,
             head: preview.head,
             liveParses: preview.live != nil,
+            liveHash: preview.live.map(PolicyRevisionIdentity.hash),
             risk: preview.risk,
-            currentEffective: try? loadEffectiveRules(builtin: builtin),
+            currentEffective: try Self.nilWhenUnparseable { try loadEffectiveRules(builtin: builtin) },
             restoredEffective: restoredEffective
         )
+    }
+
+    /// An unparseable policy file (`invalidFile`) is a state the preview
+    /// reports, since rollback is its repair path; any other failure
+    /// (lock, I/O) propagates instead of reading as "unavailable".
+    private static func nilWhenUnparseable<T>(_ load: () throws -> T) throws -> T? {
+        do {
+            return try load()
+        } catch TypedRuleStoreError.invalidFile {
+            return nil
+        }
     }
 
     public func upsert(_ rule: PolicyDocumentRule, layer: PolicyDocumentLayer) throws {

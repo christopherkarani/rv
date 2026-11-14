@@ -24,3 +24,19 @@ public struct PolicyRollbackPreview: Sendable, Equatable {
         self.risk = risk
     }
 }
+
+/// The head a rollback preview showed: revision number plus content hash.
+/// Passing it to a rollback binds the write to that exact head.
+public struct PolicyRevisionHead: Sendable, Equatable {
+    public var revision: Int
+    public var hash: String
+
+    public init(revision: Int, hash: String) {
+        self.revision = revision
+        self.hash = hash
+    }
+
+    public init(_ entry: PolicyRevision) {
+        self.init(revision: entry.revision, hash: entry.hash)
+    }
+}

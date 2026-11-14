@@ -173,6 +173,103 @@ struct RollbackPreviewTests {
         }
     }
 
+    @Test func repoPreviewWithDeletedRvDirectoryCreatesNothing() throws {
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        try store.saveRepo(PolicyDocument(rules: [previewAllow]), workspace: workspace)
+        try store.saveRepo(PolicyDocument(rules: []), workspace: workspace)
+        try FileManager.default.removeItem(at: workspace.appendingPathComponent(".rv", isDirectory: true))
+        let configBefore = try directorySnapshot(config)
+        let workspaceBefore = try directorySnapshot(workspace)
+
+        let preview = try store.previewRepoRollback(to: 1, workspace: workspace)
+
+        #expect(preview.target.revision == 1)
+        #expect(try directorySnapshot(config) == configBefore)
+        #expect(try directorySnapshot(workspace) == workspaceBefore)
+        #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".rv").path) == false)
+    }
+
+    @Test func machinePreviewWithoutLogsCreatesNoLockFiles() throws {
+        let root = try isolatedPreviewDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        try PolicyDocumentTOML.render(PolicyDocument(rules: [previewDeny]))
+            .write(to: store.machineFileURL, atomically: true, encoding: .utf8)
+        let before = try directorySnapshot(root)
+
+        #expect(throws: TypedRuleStoreError.logMissing) { _ = try store.previewMachineRollback(to: 1) }
+
+        #expect(try directorySnapshot(root) == before)
+    }
+
+    @Test func repoPreviewKeepsAnExistingRvDirectoryMode() throws {
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        try store.saveRepo(PolicyDocument(rules: [previewDeny]), workspace: workspace)
+        let rv = workspace.appendingPathComponent(".rv", isDirectory: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rv.path)
+        let before = try directorySnapshot(workspace)
+
+        _ = try store.previewRepoRollback(to: 1, workspace: workspace)
+
+        #expect(try directorySnapshot(workspace) == before)
+        let mode = try FileManager.default.attributesOfItem(atPath: rv.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o755)
+    }
+
+    @Test func rollbackBoundToAStaleHeadRefusesWithoutWriting() throws {
+        let config = try isolatedPreviewDirectory()
+        let workspace = try isolatedPreviewDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let session = PolicyWorkspace(configDirectory: config, workspace: workspace)
+        try session.upsert(previewDeny, layer: .machine)
+        try session.upsert(previewAllow, layer: .machine)
+        try session.upsert(previewDeny, layer: .repo)
+        try session.upsert(previewAllow, layer: .repo)
+        for layer in [PolicyDocumentLayer.machine, .repo] {
+            let preview = try session.previewRollback(layer: layer, to: 1)
+            // Another save lands between the preview and the approved write.
+            try session.upsert(previewAsk, layer: layer)
+            let before = try directorySnapshot(config).merging(try directorySnapshot(workspace)) { a, _ in a }
+
+            #expect(throws: TypedRuleStoreError.headChanged) {
+                _ = try session.rollback(layer: layer, to: 1, expectedHead: PolicyRevisionHead(preview.head))
+            }
+
+            let after = try directorySnapshot(config).merging(try directorySnapshot(workspace)) { a, _ in a }
+            #expect(after == before)
+            #expect(try session.listRevisions(layer: layer).count == 3)
+        }
+    }
+
+    @Test func rollbackBoundToTheCurrentHeadProceeds() throws {
+        let config = try isolatedPreviewDirectory()
+        defer { try? FileManager.default.removeItem(at: config) }
+        let session = PolicyWorkspace(configDirectory: config, workspace: nil)
+        try session.upsert(previewDeny, layer: .machine)
+        try session.upsert(previewAllow, layer: .machine)
+        let preview = try session.previewRollback(layer: .machine, to: 1)
+
+        let head = try session.rollback(layer: .machine, to: 1, expectedHead: PolicyRevisionHead(preview.head))
+
+        #expect(head.revision == 3)
+        #expect(try session.loadMachineDocument().rules == [previewDeny])
+    }
+
     @Test func workspaceRepoPreviewRefusesWithoutMachineDirectory() throws {
         let workspace = try isolatedPreviewDirectory()
         defer { try? FileManager.default.removeItem(at: workspace) }
@@ -206,15 +303,29 @@ private func previewAllowOn(_ predicate: PolicyPredicate) -> PolicyDocumentRule 
     PolicyDocumentRule(id: RuleID(pack: .coreGit, pattern: "force-push-main"), verdict: .allow, predicate: predicate)
 }
 
-/// Every file under `root` with its bytes: a preview must change none.
-private func directorySnapshot(_ root: URL) throws -> [String: Data] {
-    var snapshot: [String: Data] = [:]
-    let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])
-    while let url = enumerator?.nextObject() as? URL {
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey])
-        if values.isRegularFile == true {
-            snapshot[url.path] = try Data(contentsOf: url)
-        }
+/// Every entry under `root` (and `root` itself): type, POSIX mode, and
+/// bytes for files. A preview must change none of it, including creating
+/// a lock file or chmodding a directory.
+private struct EntrySnapshot: Equatable {
+    var type: FileAttributeType
+    var mode: Int
+    var bytes: Data?
+}
+
+private func directorySnapshot(_ root: URL) throws -> [String: EntrySnapshot] {
+    var snapshot: [String: EntrySnapshot] = [:]
+    func record(_ path: String) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let type = attributes[.type] as? FileAttributeType ?? .typeUnknown
+        snapshot[path] = EntrySnapshot(
+            type: type,
+            mode: (attributes[.posixPermissions] as? NSNumber)?.intValue ?? -1,
+            bytes: type == .typeRegular ? try Data(contentsOf: URL(fileURLWithPath: path)) : nil
+        )
+    }
+    try record(root.path)
+    for relative in try FileManager.default.subpathsOfDirectory(atPath: root.path) {
+        try record(root.appendingPathComponent(relative).path)
     }
     return snapshot
 }
