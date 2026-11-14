@@ -924,14 +924,14 @@ enum MCPRun {
         return nil
     }
 
-    /// One stderr line per placeholder of each server serve bound: the
-    /// secret, the variables it set and the upstream that gets the value.
-    static func placeholderBindingLog(_ servers: [MCPServerDefinition], secrets: SecretsConfiguration) -> [String] {
-        servers.flatMap { server in
-            server.placeholders.map { name in
-                "MCP server \(visible(server.name)): placeholder \(visible(name)) "
-                    + placeholderDetail(name, secrets: .success(secrets))
-            }
+    /// One stderr line per placeholder of a server once it runs bound: the
+    /// secret, the variables it set and the upstream that gets the value,
+    /// from the definitions its lease staged.
+    static func placeholderBindingLog(server: String, definitions: [SecretDefinition]) -> [String] {
+        let staged = SecretsConfiguration(secrets: definitions)
+        return definitions.map { definition in
+            "MCP server \(visible(server)): placeholder \(visible(definition.name)) "
+                + placeholderDetail(definition.name, secrets: .success(staged))
         }
     }
 
@@ -1675,11 +1675,10 @@ struct MCPServe: AsyncParsableCommand {
         let log: @Sendable (String) -> Void = { message in
             FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
         }
-        let bound = planned.compactMap { entry -> MCPServerDefinition? in
-            guard case .placeholderBound(let launch, _) = entry.1 else { return nil }
-            return configuration.server(named: launch.server)
+        let bindsPlaceholders = planned.contains { entry in
+            guard case .placeholderBound = entry.1 else { return false }
+            return true
         }
-        for line in MCPRun.placeholderBindingLog(bound, secrets: secrets) { log(line) }
         // Read and verified once, beside the mcp.json check above. An
         // unreadable or unverifiable store pins nothing: every tool asks.
         let (pinning, pinFailure) = MCPToolPinStore(
@@ -1703,10 +1702,13 @@ struct MCPServe: AsyncParsableCommand {
             oauthStore: environment.oauthTokens,
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
-            log: log)
+            log: log,
+            placeholdersBound: { server, definitions in
+                for line in MCPRun.placeholderBindingLog(server: server, definitions: definitions) { log(line) }
+            })
         // No server bound: from here a signal acts by default. Cancelled
         // before `first` is read, so no signal falls between the two.
-        if bound.isEmpty { signals?.cancel() }
+        if bindsPlaceholders == false { signals?.cancel() }
         // Heard while planning: nothing was spawned, and the leases end with
         // the broker. Exits as a signal-killed serve would report it.
         if let number = signals?.first {

@@ -162,6 +162,11 @@ package final class SecretPlaceholderLease: Sendable {
         self.gatewayPort = gatewayPort
     }
 
+    /// The definitions this lease staged, as it loaded them.
+    package var definitions: [SecretDefinition] {
+        lease.definitions
+    }
+
     /// The gateway refuses these placeholders from now on. Revoking twice is harmless.
     package func revoke() {
         broker.revoke(lease)

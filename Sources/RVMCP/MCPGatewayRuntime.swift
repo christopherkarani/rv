@@ -352,6 +352,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let audit: @Sendable (MCPCallRecord) -> Void
     private let event: @Sendable (AuditEvent) -> Void
     private let log: @Sendable (String) -> Void
+    /// A placeholder server is running bound: its name and what its lease staged.
+    private let placeholdersBound: @Sendable (String, [SecretDefinition]) -> Void
     private let queue = DispatchQueue(label: "rv.mcp.gateway")
     private var processes: [String: Process] = [:]
     private var placeholderGroups: [String: SecretPlaceholderGroup] = [:]
@@ -371,7 +373,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         output: Int32 = STDOUT_FILENO,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
         event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
-        log: @escaping @Sendable (String) -> Void
+        log: @escaping @Sendable (String) -> Void,
+        placeholdersBound: @escaping @Sendable (String, [SecretDefinition]) -> Void = { _, _ in }
     ) {
         self.core = core
         self.connections = connections
@@ -381,6 +384,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.audit = audit
         self.event = event
         self.log = log
+        self.placeholdersBound = placeholdersBound
     }
 
     /// Blocks until the client closes its input, then stops every upstream.
@@ -514,6 +518,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         try? stderr.fileHandleForWriting.close()
         placeholderGroups[server] = group
         upstreamInputs[server] = stdin.fileHandleForWriting
+        placeholdersBound(server, binding.lease.definitions)
         let stderrReader = stderr.fileHandleForReading
         Thread.detachNewThread {
             Self.relayStderr(stderrReader.fileDescriptor) { data in
