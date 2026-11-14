@@ -37,7 +37,12 @@ extension MCPSandbox {
 
     static func probeLinuxSupport(helper: String?) -> MCPLinuxCageSupport {
         guard let helper else { return .resolve(helperInstalled: false, report: nil) }
-        guard let outcome = BoundedProcess.run(helper, ["--landlock-abi"], environment: [:], timeout: 10),
+        // From `/`: what the kernel can do does not depend on where rv was
+        // started, and a directory this user may not enter (a service's,
+        // another account's checkout) would keep the helper from starting.
+        guard
+            let outcome = BoundedProcess.run(
+                helper, ["--landlock-abi"], environment: [:], timeout: 10, workingDirectory: "/"),
             outcome.status == 0
         else { return .resolve(helperInstalled: true, report: nil) }
         let text = String(decoding: outcome.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)

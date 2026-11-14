@@ -177,10 +177,17 @@ useradd --create-home --shell /bin/bash "$OWNER"
 printf '%s:%s\n' "$OWNER" "$PASSWORD" | chpasswd
 log "driving rv as $OWNER"
 
+# From a directory the owner may not enter, as when rv is started by a
+# service or from another account's checkout: nothing rv does for the
+# gateway may depend on where it was started.
+install -d -m 0700 "$STAGE/elsewhere-only-root"
 status=0
-setpriv --reuid "$OWNER" --regid "$OWNER" --init-groups \
-  env -i HOME="/home/$OWNER" USER="$OWNER" PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
-  RV_E2E_PASSWORD="$PASSWORD" python3 "$STAGE/linux-custodian-e2e.py" "$STAGE/rv" || status=$?
+(
+  cd "$STAGE/elsewhere-only-root"
+  setpriv --reuid "$OWNER" --regid "$OWNER" --init-groups \
+    env -i HOME="/home/$OWNER" USER="$OWNER" PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
+    RV_E2E_PASSWORD="$PASSWORD" python3 "$STAGE/linux-custodian-e2e.py" "$STAGE/rv"
+) || status=$?
 
 # What the custodian holds is unreadable to the account it holds it for.
 if setpriv --reuid "$OWNER" --regid "$OWNER" --init-groups \

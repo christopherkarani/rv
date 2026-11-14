@@ -46,6 +46,16 @@ trap cleanup EXIT
 # them, and the driver with them: a checkout is often under a home the
 # throwaway account cannot enter.
 install -m 0755 "$BUILD/rv" "$BUILD/rv-isolation-exec" "$STAGE/"
+# The Swift runtime beside rv, as a release has it: a build finds it in
+# its toolchain's directory, which is often under a home too. rv looks
+# beside itself when that directory cannot be read.
+ldd "$BUILD/rv" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | while read -r library; do
+  case "$library" in
+    */swift/*) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
+    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*) ;;
+    *) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
+  esac
+done
 install -m 0644 "$ROOT/Scripts/linux-rv-run-e2e.py" "$STAGE/"
 chmod 0755 "$STAGE"
 
