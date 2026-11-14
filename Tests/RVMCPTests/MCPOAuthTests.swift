@@ -280,7 +280,7 @@ struct MCPOAuthFixtureTests {
             client.send(#"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#)
             return client.receive()?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue
         }
-        #expect(whoami(2) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none")
+        #expect(whoami(2) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none", "\(logs.text)")
         var expire = URLRequest(url: fixture.url("/auth/expire"))
         expire.httpMethod = "POST"
         #expect(MCPOAuthHTTP.live(expire)?.status == 200)

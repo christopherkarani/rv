@@ -134,7 +134,11 @@ final class RemoteFixture: @unchecked Sendable {
         try process.run()
         var line = Data()
         let fd = output.fileHandleForReading.fileDescriptor
-        let deadline = Date().addingTimeInterval(15)
+        // A minute, not seconds: the first `python3` on a cold macOS runner
+        // goes through the developer-tools shim, and a suite's fixtures
+        // start together.
+        let started = Date()
+        let deadline = started.addingTimeInterval(60)
         while Date() < deadline, line.last != 0x0A {
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 200) > 0 else { continue }
@@ -144,6 +148,14 @@ final class RemoteFixture: @unchecked Sendable {
         }
         let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         port = text.hasPrefix("PORT ") ? Int(text.dropFirst(5)) ?? 0 : 0
+        let waited = Int(Date().timeIntervalSince(started))
+        // Without a port every request would go to port 0 and each test
+        // would fail on its own expectations, saying nothing of why.
+        if port == 0 {
+            Issue.record("the remote fixture reported no port in \(waited) s (it said \"\(text)\")")
+        } else if waited >= 5 {
+            print("mcp-remote-fixture took \(waited) s to report its port")
+        }
     }
 
     func url(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(port)\(path)")! }
@@ -198,6 +210,8 @@ struct MCPRemoteRuntimeTests {
         try body(client)
         try client.toGateway.fileHandleForWriting.close()
         #expect(done.wait(timeout: .now() + 10) == .success)
+        // What the gateway said of its upstreams, where a test then fails.
+        if logs.text.isEmpty == false { print("gateway log for \(servers.map(\.name)): \(logs.text)") }
         return logs
     }
 
