@@ -465,7 +465,18 @@ struct SecretGatewayLinuxAttackTests {
     func aGatewayThatMayNotReadOtherProcessesCannotTell() throws {
         let connection = try Connection()
         let leader = try sleeper(inherit: connection.client)
-        guard case .unavailable = ProcFSReader.directory("/proc/\(leader.pid)/fd") else {
+        // A confined reader may still list the directory and is refused at
+        // each link, as root without CAP_SYS_PTRACE is.
+        let refused: Bool
+        switch ProcFSReader.directory("/proc/\(leader.pid)/fd") {
+        case .value(let names):
+            refused = names.contains { name in
+                if case .unavailable = ProcFSReader.link("/proc/\(leader.pid)/fd/\(name)") { true } else { false }
+            }
+        case .unavailable: refused = true
+        case .absent: refused = false
+        }
+        guard refused else {
             Issue.record("another process's descriptors are readable: this run is not confined")
             return
         }
