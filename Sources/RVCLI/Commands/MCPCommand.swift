@@ -584,18 +584,38 @@ enum MCPRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let decoded): configuration = decoded
         }
-        if MCPIntegrity.status(of: data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) == .trusted {
+        let configTrusted = MCPIntegrity.status(
+            of: data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) == .trusted
+        let pinStore = MCPToolPinStore(configDirectory: environment.configDirectory, signing: environment.approvalSigning)
+        // Where `rv mcp serve` cannot rely on pins (see `MCPToolPinStore.pinning`), there is nothing to pin.
+        var tools = ToolTrustReview()
+        if environment.approvalSigning.honorsGrants {
+            switch toolTrustReview(pinStore, servers: configuration.servers.map(\.name)) {
+            case .failure(let failure): return .failure(CommandFailure("\(failure.reason); nothing trusted"))
+            case .success(let review): tools = review
+            }
+        }
+        if configTrusted, tools.isEmpty {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
-        let review = trustReview(configuration) + "\nsha256 \(digest)"
-        guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
-            return .failure("trust review omitted a literal value; nothing signed")
+        var review = ""
+        var prompt = ""
+        if configTrusted == false {
+            review = trustReview(configuration) + "\nsha256 \(digest)"
+            guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
+                return .failure("trust review omitted a literal value; nothing signed")
+            }
+            prompt = "rv: trust mcp.json sha256 \(digest)\n\(review)"
+        }
+        if tools.isEmpty == false {
+            review += (review.isEmpty ? "" : "\n") + tools.text
+            prompt += (prompt.isEmpty ? "" : "\n") + "rv: trust MCP tool definitions sha256 \(tools.digest)\n\(tools.summary)"
         }
         show(review + "\n")
         // The reason-bearing confirmation is the authentication: the
         // custodian's key prompt carries no context about what is trusted.
-        let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)\n\(review)", .deviceOwner)
+        let outcome = await environment.presence.confirm(prompt, .deviceOwner)
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not trusted: \(refusal)"))
@@ -604,19 +624,91 @@ enum MCPRun {
         // custodian's key context; end that window so signing prompts for
         // itself, after this review rather than before it.
         environment.approvalSigning.beginFreshAuth()
-        guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
-            return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
+        var done: [String] = []
+        if configTrusted == false {
+            guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signing: environment.approvalSigning) else {
+                return .failure(CommandFailure(Self.signingFailureText(status: environment.approvalSigning.status())))
+            }
+            guard environment.integrity == .trusted else {
+                return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
+            }
+            auditOrLog(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPConfiguration.fileName,
+                    reason: "mcp.json trusted", source: "rv mcp trust",
+                    detail: ["method": method, "sha256": RVDigest.sha256Hex([UInt8](data))]),
+                configDirectory: environment.configDirectory)
+            done.append("trusted mcp.json; rv signs it again on every change it makes")
         }
-        guard environment.integrity == .trusted else {
-            return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
+        if tools.isEmpty == false {
+            guard pinStore.trust(reviewed: tools.reviewed, servers: configuration.servers.map(\.name)) else {
+                return .failure(CommandFailure("could not pin the reviewed MCP tool definitions in \(MCPToolPinStore.fileName)"))
+            }
+            auditOrLog(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPToolPinStore.fileName,
+                    reason: "MCP tool definitions trusted", source: "rv mcp trust",
+                    detail: ["method": method, "sha256": tools.digest, "tools": tools.names.joined(separator: ",")]),
+                configDirectory: environment.configDirectory)
+            done.append("pinned \(tools.names.count) MCP tool definitions; rv serves them unchanged as trusted")
         }
-        auditOrLog(
-            AuditEvent(
-                time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPConfiguration.fileName,
-                reason: "mcp.json trusted", source: "rv mcp trust",
-                detail: ["method": method, "sha256": RVDigest.sha256Hex([UInt8](data))]),
-            configDirectory: environment.configDirectory)
-        return .success("trusted mcp.json; rv signs it again on every change it makes\n")
+        return .success(done.joined(separator: "\n") + "\n")
+    }
+
+    /// Tool definitions `rv mcp serve` saw that are not pinned, for the owner
+    /// to review and pin exactly as shown.
+    struct ToolTrustReview {
+        var reviewed: [String: [String: RVMCP.JSONValue]] = [:]
+        /// The pins on disk do not verify; trusting starts them over.
+        var resetsPins = false
+        var names: [String] = []
+        var text = ""
+        var summary = ""
+        var digest = ""
+
+        var isEmpty: Bool { reviewed.isEmpty && resetsPins == false }
+    }
+
+    static func toolTrustReview(
+        _ store: MCPToolPinStore, servers: [String]
+    ) -> Result<ToolTrustReview, MCPToolPinStore.LoadFailure> {
+        let contents: MCPToolPinStore.Contents
+        switch store.contents() {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): contents = loaded
+        }
+        var review = ToolTrustReview()
+        review.resetsPins = contents.pins == nil
+        var lines: [String] = []
+        var summary: [String] = []
+        if review.resetsPins {
+            let reset = "\(MCPToolPinStore.fileName) does not verify; trusting starts every server's tool pins over, "
+                + "and tools not shown here ask until you review them"
+            lines.append(reset)
+            summary.append(reset)
+        }
+        for server in servers.sorted() {
+            for (tool, definition) in (contents.changed[server] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                let hash = MCPToolPinStore.hash(definition)
+                let state = contents.pins?[server]?[tool] == nil ? "new" : "changed"
+                let name = "\(visible(server))/\(visible(tool))"
+                lines.append("MCP tool \(name) (\(state)) sha256 \(hash)")
+                if let description = definition["description"] {
+                    lines.append("    description: \(visible(description.stringValue ?? description.canonicalText))")
+                }
+                if let schema = definition["inputSchema"] {
+                    lines.append("    inputSchema: \(visible(schema.canonicalText))")
+                }
+                summary.append("\(name) sha256 \(hash)")
+                review.reviewed[server, default: [:]][tool] = definition
+                review.names.append("\(server)/\(tool)")
+            }
+        }
+        guard review.isEmpty == false else { return .success(review) }
+        review.text = lines.joined(separator: "\n")
+        review.summary = summary.joined(separator: "\n")
+        review.digest = RVDigest.sha256Hex(Array(review.summary.utf8))
+        return .success(review)
     }
 
     static func trustReview(_ configuration: MCPConfiguration) -> String {
@@ -1390,10 +1482,24 @@ struct MCPServe: AsyncParsableCommand {
         let log: @Sendable (String) -> Void = { message in
             FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
         }
+        // Read and verified once, beside the mcp.json check above. An
+        // unreadable or unverifiable store pins nothing: every tool asks.
+        let (pinning, pinFailure) = MCPToolPinStore(
+            configDirectory: configDirectory, signing: environment.approvalSigning
+        ).pinning()
+        if let pinFailure {
+            log("\(pinFailure.reason); every MCP tool asks until `rv mcp trust`")
+            MCPRun.auditOrLog(
+                AuditEvent(
+                    time: Date(), kind: .mcpToolChanged, decision: .failed, subject: MCPToolPinStore.fileName,
+                    reason: pinFailure.reason, source: "mcp-gateway", detail: ["status": "unverified"]),
+                configDirectory: configDirectory)
+        }
         let core = MCPGatewayCore(
             configuration: configuration,
             upstreams: planned.map { $0.0 },
-            approvals: .store(environment.approvals))
+            approvals: .store(environment.approvals),
+            pinning: pinning)
         let runtime = MCPGatewayRuntime(
             core: core,
             connections: planned.map { $0.1 },

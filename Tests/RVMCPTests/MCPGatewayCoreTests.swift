@@ -27,12 +27,17 @@ struct GatewayHarness {
     var core: MCPGatewayCore
     let approvals = FakeApprovals()
 
-    init(_ configuration: MCPConfiguration, secrets: [String: [(name: String, value: String)]] = [:]) {
+    init(
+        _ configuration: MCPConfiguration, secrets: [String: [(name: String, value: String)]] = [:],
+        pinning: MCPToolPinning = .unenforced
+    ) {
         let upstreams = configuration.servers.map {
             MCPGatewayCore.Upstream(definition: $0, secretValues: secrets[$0.name] ?? [])
         }
         let approvals = self.approvals
-        core = MCPGatewayCore(configuration: configuration, upstreams: upstreams, approvals: approvals.gate, clock: { Date() })
+        core = MCPGatewayCore(
+            configuration: configuration, upstreams: upstreams, approvals: approvals.gate, pinning: pinning,
+            clock: { Date() })
     }
 
     /// Starts and answers every upstream initialize.
