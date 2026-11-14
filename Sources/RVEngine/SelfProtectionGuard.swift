@@ -19,8 +19,88 @@ public enum SelfProtectionGuard {
             // Truncated input cannot be followed: unknown, so flagged. A dynamic
             // or glob head may resolve to rv: judged as rv (fail closed).
             launched.truncated || isWeakeningInvocation(launched.guardArgv, headMayBeRV: launched.headIsDynamic)
+                || xargsFeedsWeakeningInvocation(launched)
         }
     }
+}
+
+/// Stands in for the words `xargs` appends from stdin: unmodelled, so a
+/// flag-gated write (`draft`/`rollback --save`) counts as one and an
+/// operand-less `xargs rv` fails closed.
+private let xargsStdinWord = "$xargs-stdin"
+
+/// `xargs` runs its program with stdin words appended, and the launcher
+/// parser does not follow it. Each word that may be xargs's program
+/// (`xargsProgramCandidates`) and is `rv`/`rv-cli`, or dynamic (it may
+/// resolve to rv), starts a candidate command judged with the stdin
+/// stand-in appended. Only adds refusals.
+private func xargsFeedsWeakeningInvocation(_ launched: LaunchedCommand) -> Bool {
+    guard launched.headIsDynamic == false, launched.guardArgv.first == "xargs" else { return false }
+    let words = Array(launched.guardArgv.dropFirst())
+    let starts = xargsProgramCandidates(words)
+    if starts.count > maxVerbCandidates { return true }
+    return starts.contains { start in
+        let program = words[start]
+        let dynamic = isUnmodelledWord(program)
+        guard dynamic || rvProgramNames.contains(commandName(program)) else { return false }
+        let argv = [dynamic ? program : "rv"] + words[(start + 1)...] + [xargsStdinWord]
+        return isWeakeningInvocation(argv, headMayBeRV: dynamic)
+    }
+}
+
+/// xargs options (BSD and GNU) whose value is the next word.
+private let xargsValuedOptions: Set<String> = [
+    "-E", "-I", "-J", "-L", "-n", "-P", "-R", "-S", "-s", "-a", "-d",
+    "--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars", "--process-slot-var",
+]
+
+/// xargs options that take no separate value (GNU `-e`/`-i`/`-l` and
+/// `--eof`/`--replace`/`--max-lines` take theirs attached only).
+private let xargsFlagOptions: Set<String> = [
+    "-0", "-o", "-p", "-r", "-t", "-x", "-e", "-i", "-l",
+    "--null", "--open-tty", "--interactive", "--no-run-if-empty", "--verbose", "--exit",
+    "--show-limits", "--eof", "--replace", "--max-lines",
+]
+
+/// Indexes into xargs's operands that may be its program. Known options
+/// are skipped with their values; an unknown option may or may not take
+/// the next word, so both that word and the one after stay candidates.
+/// The first word that can only be the program ends the scan.
+private func xargsProgramCandidates(_ words: [String]) -> [Int] {
+    var candidates: [Int] = []
+    var index = 0
+    while index < words.count {
+        let word = unescapeBackslashPairs(words[index])
+        if word == "--" {
+            if index + 1 < words.count { candidates.append(index + 1) }
+            break
+        }
+        guard word.hasPrefix("-"), word != "-" else {
+            candidates.append(index)
+            break
+        }
+        if xargsFlagOptions.contains(word) || isAttachedXargsValue(word) {
+            index += 1
+        } else if xargsValuedOptions.contains(word) {
+            index += 2
+        } else {
+            if index + 1 < words.count, words[index + 1].hasPrefix("-") == false {
+                candidates.append(index + 1)
+                index += 2
+            } else {
+                index += 1
+            }
+        }
+    }
+    return candidates
+}
+
+/// `-n1`, `-I{}`, `--max-args=1`, `-eEOF`: the value is part of the word.
+private func isAttachedXargsValue(_ word: String) -> Bool {
+    if word.hasPrefix("--") { return word.contains("=") }
+    guard word.count > 2 else { return false }
+    let option = String(word.prefix(2))
+    return xargsValuedOptions.contains(option) || ["-e", "-i", "-l"].contains(option)
 }
 
 /// `rv` is the C front door; it execs the installed `rv-cli` sibling with the
