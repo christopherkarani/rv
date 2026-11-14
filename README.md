@@ -213,9 +213,11 @@ rv is one binary, 25 commands. The rest of the surface:
   Bitwarden, then scrubbed from everything that comes back.
   Hook-guarded agents get secret-path blocking instead. Stdio MCP servers
   receive the real value of each secret in their `secrets` map; one that
-  lists a secret under `"placeholders"` in mcp.json gets a placeholder and
-  base URL instead (macOS, sandboxed servers only), spendable only by
-  that server and its live descendants. `rv secrets scan` + a git pre-commit hook
+  lists a secret under `"placeholders"` in mcp.json is handed a
+  placeholder and base URL instead (macOS, sandboxed servers only),
+  spendable only by that server and its live descendants; its cage does
+  not stop it asking your keychain or a provider for the value itself.
+  `rv secrets scan` + a git pre-commit hook
   catch leaks before they land.
 - **App logins, once** — `rv login connect vercel` imports the Vercel or
   GitHub login you already have (CLI auth file, token variable, or

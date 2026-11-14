@@ -88,12 +88,14 @@ struct MCPPlaceholderLiveTests {
 
         // The server answers nothing and ignores its stdin closing and
         // SIGTERM's grandchild: only the group kill after the leader exits
-        // ends `sleep`. `ps eww` asks for its parent's environment, which is
-        // where a secret read from rv's own environment would be.
+        // ends `sleep`. The probe asks the kernel for its parent's arguments
+        // and environment (`KERN_PROCARGS2`), which is where a secret read
+        // from rv's own environment would be.
+        let probe = try mcpProbe()
         let script = """
             out="$1"
             env > "$out/env"; printf '%s %s' "$*" > "$out/argv"; echo $$ > "$out/pid"; echo $PPID > "$out/ppid"
-            /bin/ps eww -p $PPID > "$out/ps" 2>&1
+            "$2" procargs $PPID > "$out/procargs" 2>&1
             /usr/bin/curl -s --max-time 10 --noproxy '*' -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models" > "$out/status"
             /bin/sh -c 'trap "" TERM; /bin/sleep 60' & echo $! > "$out/grandchild"
@@ -101,7 +103,7 @@ struct MCPPlaceholderLiveTests {
             while :; do /bin/sleep 0.05; done
             """
         let definition = MCPServerDefinition(
-            name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path],
+            name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path, probe.path],
             sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
         let configuration = MCPConfiguration(servers: [definition])
         let planned = try MCPLaunchPlanner.plan(
@@ -122,37 +124,50 @@ struct MCPPlaceholderLiveTests {
             configuration: configuration, upstreams: planned.map { $0.0 },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
             pinning: .unenforced, recordForward: { _ in true })
+        let bindings = Mutex<[String]>([])
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
-            audit: { _ in }, log: { _ in })
+            audit: { _ in }, log: { _ in },
+            placeholdersBound: { server, definitions in
+                bindings.withLock { $0.append("\(server): " + definitions.map(\.name).joined(separator: ",")) }
+            })
         let done = DispatchSemaphore(value: 0)
         Thread.detachNewThread {
             runtime.run()
             done.signal()
         }
-        // Whatever fails below, nothing outlives the test (once serve has
-        // reaped them their ids are not this test's to signal).
+        // Whatever fails below, nothing outlives the test. The leader is this
+        // process's child, so only this process (the runtime's supervisor)
+        // reaps it: its group is killed only while `waitid` (WNOHANG,
+        // WNOWAIT, reaping nothing) still finds it, so a reused id is not
+        // signalled, bar a reap in the instant between the check and the
+        // kill. The grandchild is in that group.
         var served = false
         defer {
             if served == false {
-                if let leader = pid_t(contents(scratch, "pid")), leader > 1 { _ = kill(-leader, SIGKILL) }
-                if let grandchild = pid_t(contents(scratch, "grandchild")), grandchild > 1 { _ = kill(grandchild, SIGKILL) }
+                if let leader = pid_t(contents(scratch, "pid")), leader > 1, Self.unreaped(leader) {
+                    _ = kill(-leader, SIGKILL)
+                }
                 try? client.toGateway.fileHandleForWriting.close()
                 _ = done.wait(timeout: .now() + 10)
             }
         }
         try #require(eventually { contents(scratch, "ready") == "ready" }, "the server never got going")
+        // Reported once it runs bound, with what its lease staged.
+        #expect(bindings.withLock { $0 } == ["\(name): OPENAI_API_KEY"])
 
         // sandbox-exec and env exec in place: the shell is the group leader
         // rv spawned, and its parent is this process, not a wrapper.
         let leader = try #require(pid_t(contents(scratch, "pid")))
         #expect(getpgid(leader) == leader)
         #expect(pid_t(contents(scratch, "ppid")) == getpid())
-        // The cage cannot run setuid ps, and the kernel shows no other
-        // process's environment to a same-user process: rv's stays unread.
-        #expect(contents(scratch, "ps").contains("HOME=") == false, "\(contents(scratch, "ps"))")
+        // The kernel answers the caged server's read of its parent (here this
+        // test process, in serve rv): the arguments, but no environment.
+        let procargs = contents(scratch, "procargs")
+        #expect(procargs.hasPrefix("ok argc=\(CommandLine.arguments.count) "), "\(procargs)")
+        #expect(procargs.hasSuffix(" home=no"), "\(procargs)")
         let environment = contents(scratch, "env")
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("OPENAI_BASE_URL=http://127.0.0.1:\(port)/s/OPENAI_API_KEY"))
@@ -181,6 +196,13 @@ struct MCPPlaceholderLiveTests {
         #expect(broker.broker.liveCount == 0)
         #expect(fixture.auditText.contains("\"runtime\":\"mcp:\(name)\""))
         #expect(fixture.auditText.contains(placeholderRealValue) == false)
+    }
+
+    /// Whether `pid` is a child of this process not yet reaped, running or
+    /// a zombie; its id cannot have been reused. Never blocks, reaps nothing.
+    private static func unreaped(_ pid: pid_t) -> Bool {
+        var info = siginfo_t()
+        return waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0
     }
 }
 #endif

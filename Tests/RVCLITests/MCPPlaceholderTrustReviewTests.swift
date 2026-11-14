@@ -74,14 +74,15 @@ struct MCPPlaceholderTrustReviewTests {
         #expect(MCPRun.placeholderSigningRefusal(plain, secrets: .failure(.unreadable)) == nil)
     }
 
-    /// What serve tells stderr for each server it bound.
+    /// What serve tells stderr once a server is running bound: from the
+    /// definitions its lease staged, not from serve's own read.
     @Test func serveNamesEachBindingItMade() throws {
-        let server = MCPServerDefinition(
-            name: "llm", command: "/usr/bin/llm-mcp", sandbox: MCPSandboxPolicy(network: false),
-            placeholders: ["OPENAI_API_KEY"])
-        #expect(MCPRun.placeholderBindingLog([server], secrets: try Self.loaded()) == [
+        let definitions = try Self.loaded().secrets.filter { $0.name == "OPENAI_API_KEY" }
+        #expect(MCPRun.placeholderBindingLog(server: "llm", definitions: definitions) == [
             "MCP server llm: placeholder OPENAI_API_KEY sets OPENAI_API_KEY, OPENAI_BASE_URL · "
                 + "real value only to https://api.example.com"
         ])
+        #expect(MCPRun.placeholderBindingLog(server: "llm\u{1B}[2J", definitions: definitions).first?
+            .hasPrefix("MCP server llm\\u{001B}[2J: ") == true)
     }
 }

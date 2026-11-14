@@ -352,10 +352,12 @@ secrets under `placeholders` instead:
 ```
 
 Each one is staged for that server's launch only, as `rv run` stages it:
-the server gets the placeholder and the base URL (the AWS endpoint and
-stand-in credentials for an `awsSigV4` secret) and never the real value,
-and `rv mcp serve`'s own gateway honors the placeholder only for that
-server's process group.
+rv hands the server the placeholder and the base URL (the AWS endpoint and
+stand-in credentials for an `awsSigV4` secret), not the real value, and
+`rv mcp serve`'s own gateway honors the placeholder only for that server's
+process group. That is the guarantee: rv does not give the server the
+value. Whether the server can get it some other way is down to the cage,
+which is not a deny-everything one (see "What it does not" below).
 
 The field is for local (`command`) servers; a remote server with it is
 rejected. Names are listed once, and a secret a server also gets as a real
@@ -366,8 +368,10 @@ upstream (`scheme://host[:port]`) its real value goes to, and signs nothing
 whose review leaves one out. Those details come from secrets.json, which
 the mcp.json signature does not cover: trust signs nothing while
 secrets.json cannot be read or does not define a listed placeholder, and
-at start `rv mcp serve` writes to stderr, for each server it bound, each
-placeholder with the variables it set and the upstream it goes to. A later
+once a server is running bound, `rv mcp serve` writes to stderr each of its
+placeholders with the variables it set and the upstream it goes to, taken
+from the definitions the server's lease loaded (not from serve's own read
+of secrets.json, and not for a server that failed to start). A later
 change to secrets.json changes what serve binds without a new review; read
 that line.
 
@@ -383,28 +387,42 @@ reason on serve's stderr, and the other servers still start:
   MCP server carries no agent tag), or has `approve` rules. No approver can
   answer for an MCP server, so these are refused before any value is
   resolved rather than per request as in `rv run`.
-- A variable the lease stages is already set by the server's `env`,
-  `secrets` or the base environment.
+- A variable the lease stages is already set by the server's `env` or
+  `secrets` (checked against serve's read of secrets.json before the
+  lease, and against the lease's own read after it), or by the base
+  environment (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`; after the lease).
 - The host fails `SecretRunCapability.check` (asked once per serve), or
   the lease cannot be staged.
 - The launch would hold a real value of one of its placeholders under any
   name: another secret in its `secrets` map or arguments with the same
-  value, an `env` literal, or an argument. The rule is `rv run`'s: equal
-  as is or trimmed, or contained when the value is at least 12 bytes. Or
-  the sandbox hook would not run it under `sandbox-exec`.
+  value, an `env` literal, or an argument. Stricter than `rv run`, since
+  here a match refuses a launch rather than dropping a variable: an
+  argument or variable equal to a real value as is or trimmed, or, for a
+  value of 8 bytes or more, containing it anywhere, as is, base64
+  (standard or URL-safe, padded or not, at any offset), hex (either case)
+  or percent-encoded. A shorter value is matched only exactly. A value
+  split across variables or arguments, base64 broken across lines, or any
+  other encoding is not recognised. Or the sandbox hook would not run it
+  under `sandbox-exec`.
 
-Every refusal before the last one is decided before any of the server's
-own `secrets` are resolved, so a refused server prompts for nothing; the
-last two need the resolved values and the caged launch.
+The refusals in the first two items, the collision check against serve's
+read, and the capability check come before anything is resolved, so such
+a server prompts for nothing and unlocks nothing. Staging the lease resolves the placeholder secrets themselves (a
+keychain prompt, a provider unlock), one after another, so a refusal from
+the lease (a later name that cannot be resolved), the collision checks
+after it, and the last two items can come after a prompt. The server's own
+`secrets` and `${secret:}` arguments are resolved only once all of those
+but the last two have passed.
 
 A `hostEnvironment` source is refused because its value sits in the
 environment rv was started with, which the MCP client that started rv
 also holds and may pass to every other server it starts. What the cage
 itself allows, as tested on macOS 27: `/bin/ps eww -p $PPID` fails with
 "Operation not permitted" (`ps` is setuid), and `sysctl` `KERN_PROCARGS2`
-shows a same-user, non-root process no environment of another process,
-caged or not. Other ways to read rv's memory (`task_for_pid` and the like)
-were not tested; the refusal does not depend on them.
+of its parent answers with the arguments but no environment (a same-user,
+non-root caller sees none, caged or not); the live test asserts the
+second. Other ways to read rv's memory (`task_for_pid` and the like) were
+not tested; the refusal does not depend on them.
 
 How it starts the server:
 
@@ -424,11 +442,19 @@ How it starts the server:
   group 2 seconds after that group's own shutdown began and `SIGKILL` a
   second after the `SIGTERM`. A server that exits is not restarted, and
   its stdout closing ends its group.
-- When it bound a placeholder server, `SIGINT`, `SIGTERM` and `SIGHUP` make
-  serve run that same shutdown instead of exiting at once (one rv
-  inherited ignored stays ignored). `SIGKILL` to rv still ends it at once:
-  its gateway goes with it, so the placeholders are dead, but the server's
-  group is left running.
+- When a server it serves lists `placeholders`, serve catches `SIGINT`,
+  `SIGTERM` and `SIGHUP` from before it plans (the capability check holds
+  a stopped child) with a handler that does nothing, so the signal runs
+  that same shutdown instead of ending rv. A handler, unlike `SIG_IGN`, is
+  reset across `exec`, so plain servers start with the defaults; one rv
+  inherited ignored (`nohup`) stays ignored. If no server ends up bound,
+  the defaults are back before any server starts; a signal heard while
+  planning stops serve before it starts any. A second signal skips the
+  rest of the grace and kills every server still running at once. After a
+  signal serve exits 128 plus its number, as a serve the signal had ended
+  would report. `SIGKILL` to rv still ends it at once: its gateway goes
+  with it, so the placeholders are dead, but the server's group is left
+  running.
 - The staged records and every gateway record for these placeholders
   carry `runtime` `mcp:<server>`.
 
@@ -441,6 +467,29 @@ the leader exits. A process that left the group (`setsid`, `setpgid`, or
 not killed then. While the leader lives, such a process can still spend
 the placeholders as long as its parent chain leads back to the leader;
 once the leader exits the lease is revoked and nobody can.
+
+What it does not:
+
+- The cage is `(allow default)` minus file writes outside the server's
+  scratch and temporary directories, reads and writes of credential
+  directories and rv's config directory, and the network but for the
+  gateway (and proxy) port. It does not deny Mach or XPC lookups, so it
+  does not stop a server asking the keychain (`securityd`, for example
+  `security find-generic-password`), a password manager's local agent, or
+  a provider CLI that reaches one, for the real value. rv's keychain items
+  have the default access list, so a first read by another program should
+  prompt you; that prompt was not tested, and you can approve it.
+- It keeps nothing else from the server: other variables, the server's
+  own `secrets`, and files outside the denied directories are as for any
+  caged server.
+- Tested (macOS, live test through the real planner, sandbox hook and
+  `sandbox-exec`): the server's environment and arguments hold the
+  placeholder and not the real value; the placeholder is spent from the
+  server and refused from outside its group; its parent's
+  `KERN_PROCARGS2` shows no environment; the whole group ends with
+  serve. Not tested: keychain or provider access from inside the cage,
+  `task_for_pid`, and `nsurlsessiond` or other XPC services reached from
+  it.
 
 Also: `rv mcp check` and `rv mcp list` do not show placeholders, only
 `rv mcp trust` and serve's stderr do. Placeholders are macOS only; on
