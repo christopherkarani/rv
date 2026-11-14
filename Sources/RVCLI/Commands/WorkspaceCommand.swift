@@ -114,21 +114,33 @@ struct WorkspaceRun: AsyncParsableCommand {
     func run() throws {
         let argv = command.first == "--" ? Array(command.dropFirst()) : command
         let microVM = try WorkspaceMicroVM.options(image: microvm, macOSImage: macvm, cpus: cpus, memoryMiB: memoryMib)
+        #if os(macOS)
+        let policyLimits = microVM == nil ? WorkspaceRunTimeout.ownerPolicyLimits() : nil
+        #else
+        let policyLimits: RuntimeProcessLimits? = nil
+        #endif
         let timeoutSeconds = try WorkspaceRunTimeout.resolve(
             timeout, microVM: microVM != nil,
-            policy: {
-                #if os(macOS)
-                WorkspaceTUICommand.loadResourceProfiles().limits
-                #else
-                nil
-                #endif
+            policy: { policyLimits }
+        )
+        let started = ContinuousClock.now
+        do {
+            try WorkspaceCommandRun.run(
+                path.workspace, rows: rows, columns: columns, command: argv,
+                resourceProfileID: resourceProfile, hook: hook,
+                microVM: microVM, timeoutSeconds: timeoutSeconds
+            )
+        } catch let exit as ExitCode {
+            let reported = WorkspaceRunTimeout.outcome(
+                status: exit.rawValue,
+                elapsed: ContinuousClock.now - started,
+                deadlineSeconds: timeoutSeconds ?? policyLimits?.timeoutSeconds
+            )
+            if let message = reported.message {
+                FileHandle.standardError.write(Data(message.utf8))
             }
-        )
-        try WorkspaceCommandRun.run(
-            path.workspace, rows: rows, columns: columns, command: argv,
-            resourceProfileID: resourceProfile, hook: hook,
-            microVM: microVM, timeoutSeconds: timeoutSeconds
-        )
+            throw ExitCode(reported.code)
+        }
     }
 }
 

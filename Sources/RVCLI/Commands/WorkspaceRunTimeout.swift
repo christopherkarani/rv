@@ -1,5 +1,11 @@
 import ArgumentParser
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import RVDomain
+import RVPolicy
 
 /// `rv workspace run --timeout`: a wall-clock deadline for one runtime.
 ///
@@ -46,4 +52,34 @@ enum WorkspaceRunTimeout {
         }
         return seconds
     }
+
+    /// Exit status `timeout(1)` uses for a command it stopped.
+    static let timedOutExitCode: Int32 = 124
+
+    /// How a finished `rv workspace run` reports. A runtime killed by
+    /// SIGKILL once its deadline has passed was stopped by that deadline:
+    /// it exits 124 with a stderr line naming it. Anything else keeps the
+    /// runtime's own status. The audit record (`runtime.ended`, reason
+    /// `timeout`) is the authoritative account; this is the CLI's.
+    static func outcome(
+        status: Int32, elapsed: Duration, deadlineSeconds: UInt64?
+    ) -> (code: Int32, message: String?) {
+        guard let deadlineSeconds, status == SIGKILL,
+            elapsed >= .seconds(Int64(deadlineSeconds))
+        else {
+            return (status, nil)
+        }
+        return (timedOutExitCode, "rv: runtime stopped after its \(deadlineSeconds)-second timeout\n")
+    }
+
+    #if os(macOS)
+    /// The policy limits the workspace host enforces: read from the
+    /// passwd home, as the host does, never from HOME.
+    static func ownerPolicyLimits() -> RuntimeProcessLimits? {
+        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: directory)
+        guard home.hasPrefix("/"), let validated = HomeDirectory(validating: home) else { return nil }
+        return WorkspaceTUICommand.loadResourceProfiles(home: validated).limits
+    }
+    #endif
 }

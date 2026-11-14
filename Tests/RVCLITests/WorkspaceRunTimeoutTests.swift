@@ -37,3 +37,22 @@ func workspaceRunTimeoutRefusesMalformedOrOutOfRange(raw: String) {
     #expect(parsed.timeout == "10m")
     #expect(parsed.command.drop(while: { $0 == "--" }) == ["/bin/sh", "-c", "true"])
 }
+
+@Test func aRuntimeKilledAtItsDeadlineExits124WithAMessage() {
+    let stopped = WorkspaceRunTimeout.outcome(status: 9, elapsed: .seconds(31), deadlineSeconds: 30)
+    #expect(stopped.code == WorkspaceRunTimeout.timedOutExitCode)
+    #expect(stopped.message == "rv: runtime stopped after its 30-second timeout\n")
+    let exact = WorkspaceRunTimeout.outcome(status: 9, elapsed: .seconds(30), deadlineSeconds: 30)
+    #expect(exact.code == 124)
+}
+
+@Test func otherEndingsKeepTheRuntimeStatus() {
+    // (status, elapsed seconds, deadline): killed before the deadline is
+    // someone else's SIGKILL; a clean or failing exit is the runtime's.
+    let cases: [(Int32, Int64, UInt64?)] = [(9, 5, 30), (0, 40, 30), (1, 40, 30), (9, 40, nil)]
+    for (status, elapsed, deadline) in cases {
+        let reported = WorkspaceRunTimeout.outcome(status: status, elapsed: .seconds(elapsed), deadlineSeconds: deadline)
+        #expect(reported.code == status)
+        #expect(reported.message == nil)
+    }
+}
