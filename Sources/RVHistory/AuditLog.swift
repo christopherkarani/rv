@@ -49,8 +49,9 @@ public enum AuditLog {
         ) {
             self.now = now
             self.pause = pause
-            // A negative or non-finite timeout gets one attempt, no wait.
-            let seconds = timeout.isFinite ? max(0, timeout) : 0
+            // A negative or non-finite timeout gets one attempt, no wait; an
+            // absurd one is held to an hour.
+            let seconds = timeout.isFinite ? min(max(0, timeout), 3600) : 0
             self.deadline = now().advanced(by: .seconds(seconds))
         }
 
@@ -71,7 +72,7 @@ public enum AuditLog {
             return false
         }
         let url = fileURL(configDirectory: configDirectory)
-        return AppendLock.withLock(wait) {
+        return AppendLock.withLock(wait) { () -> Bool in
             let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { return false }
             defer { close(fd) }
