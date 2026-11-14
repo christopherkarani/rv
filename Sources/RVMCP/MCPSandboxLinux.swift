@@ -172,7 +172,7 @@ extension MCPSandbox {
         }
 
         var environment = launch.environment
-        var ports: [UInt16] = []
+        var proxyPort: UInt16?
         if policy.hosts.isEmpty == false {
             let credential = proxyCredential()
             let proxy = EgressProxy(
@@ -182,7 +182,7 @@ extension MCPSandbox {
                 return .failure(.sandbox("could not start the egress proxy for \(server)"))
             }
             proxies.withLock { $0.append(proxy) }
-            ports = [tcp]
+            proxyPort = tcp
             environment = proxyEnvironment(environment, port: port, credential: credential)
         }
         guard createPinned(scratch, pinned: pinned), resolveExisting(scratch) == scratch else {
@@ -190,7 +190,7 @@ extension MCPSandbox {
         }
 
         let plan = MCPLinuxCage.Plan(
-            readable: readable, writable: writable, shared: shared, tcpPorts: ports)
+            readable: readable, writable: writable, shared: shared, proxyPort: proxyPort)
         if let line = MCPLinuxCage.notice(server: server, abi: abi) { notice(line) }
         var caged = launch
         caged.environment = environment

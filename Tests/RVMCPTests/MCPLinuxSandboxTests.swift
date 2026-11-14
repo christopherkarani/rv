@@ -11,6 +11,15 @@ import Testing
 ///
 /// What the kernel's Landlock does not block is asserted too, per ABI, so
 /// the documented limits are the measured ones.
+/// Whether this host forbids what the cage's connector does (copying a
+/// descriptor from the server): `kernel.yama.ptrace_scope` 3 forbids it
+/// to everyone, 2 to everyone but root.
+private func hostForbidsTheConnector() -> Bool {
+    let text = (try? String(contentsOfFile: "/proc/sys/kernel/yama/ptrace_scope", encoding: .utf8)) ?? "0"
+    let scope = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    return scope >= 3 || (scope == 2 && getuid() != 0)
+}
+
 @Suite("MCP Linux sandbox", .serialized)
 struct MCPLinuxSandboxTests {
     /// A home with credential stores, rv's configuration, and ordinary
@@ -327,7 +336,7 @@ struct MCPLinuxSandboxTests {
     /// `hosts`: plain TCP sockets exist, for the proxy's port alone. Every
     /// way round the port rule is refused: another kind of socket, fast
     /// open (a connection with no `connect`), and listening.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
     func aServerWithAnAllowlistHasNoWayRoundTheProxysPort() throws {
         let home = try Home()
         defer { MCPSandbox.stopProxies() }
@@ -344,6 +353,159 @@ struct MCPLinuxSandboxTests {
         // A TCP socket can be made, flags and all; where it may connect is the port rule's.
         #expect(found["tcp-with-flags"] == "ok" && found["socketpair"] == "ok")
         #expect(found["proxy"] == "ok", "\(found)")
+    }
+
+    /// An address of this host that is not loopback, or one that is
+    /// nobody's (TEST-NET-1) where the host has none.
+    private var addressBeyondLoopback: String {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0 else { return "192.0.2.1" }
+        defer { freeifaddrs(list) }
+        var next = list
+        while let entry = next {
+            next = entry.pointee.ifa_next
+            guard let address = entry.pointee.ifa_addr, address.pointee.sa_family == sa_family_t(AF_INET),
+                entry.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0
+            else { continue }
+            var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            let found = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { pointer in
+                inet_ntop(AF_INET, &pointer.pointee.sin_addr, &text, socklen_t(text.count)) != nil
+            }
+            if found { return String(decoding: text.prefix { $0 != 0 }.map(UInt8.init(bitPattern:)), as: UTF8.self) }
+        }
+        return "192.0.2.1"
+    }
+
+    /// The allowlist is the proxy on this host and nowhere else: the
+    /// proxy's port on another address is refused, not merely unanswered.
+    /// Landlock can name only the port, so rv's connector makes each
+    /// connection itself, to loopback.
+    @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
+    func theProxysPortOnAnotherAddressIsRefused() throws {
+        let home = try Home()
+        defer { MCPSandbox.stopProxies() }
+        try home.write("project/beyond.py", """
+            import errno, os, socket, sys
+            port = int(os.environ["HTTPS_PROXY"].rsplit(":", 1)[1])
+            def attempt(label, family, address):
+                try:
+                    s = socket.socket(family, socket.SOCK_STREAM)
+                    s.settimeout(3)
+                    s.connect(address); print(label + "=ok")
+                except socket.timeout:
+                    print(label + "=sent")
+                except OSError as error:
+                    print(label + "=" + errno.errorcode.get(error.errno, str(error.errno)))
+            attempt("proxy", socket.AF_INET, ("127.0.0.1", port))
+            attempt("proxy-by-ipv6-socket", socket.AF_INET6, ("::ffff:127.0.0.1", port))
+            attempt("beyond", socket.AF_INET, (sys.argv[1], port))
+            attempt("beyond-by-ipv6-socket", socket.AF_INET6, ("::ffff:" + sys.argv[1], port))
+            attempt("beyond-ipv6", socket.AF_INET6, ("2001:db8::1", port))
+            attempt("other-port", socket.AF_INET, ("127.0.0.1", port + 1 if port < 65535 else port - 1))
+            # Not blocking: the answer is "in progress", and the connection completes.
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.setblocking(False)
+            code = s.connect_ex(("127.0.0.1", port))
+            import select
+            select.select([], [s], [], 5)
+            print("proxy-nonblocking=" + ("ok" if code in (0, errno.EINPROGRESS)
+                and s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0 and s.getpeername()[1] == port else "failed"))
+            # Many threads at once: each gets its own answer.
+            import threading
+            done = []
+            def one():
+                t = socket.socket(socket.AF_INET, socket.SOCK_STREAM); t.settimeout(5)
+                try:
+                    t.connect(("127.0.0.1", port)); done.append(t.getpeername()[1] == port)
+                except OSError:
+                    done.append(False)
+            threads = [threading.Thread(target=one) for _ in range(24)]
+            [t.start() for t in threads]; [t.join() for t in threads]
+            print("proxy-from-threads=" + ("ok" if len(done) == 24 and all(done) else "failed"))
+            """)
+        let policy = MCPSandboxPolicy(network: false, hosts: ["allowed.example"])
+        let outcome = try caged(home, "python3 ~/project/beyond.py \(addressBeyondLoopback)", policy: policy)
+        // A host with IPv6 switched off has no such socket, caged or not.
+        let probe = socket(AF_INET6, Int32(SOCK_STREAM.rawValue), 0)
+        if probe >= 0 { close(probe) }
+        func ipv6(_ answer: String) -> String { probe >= 0 ? answer : "EAFNOSUPPORT" }
+        #expect(results(outcome) == [
+            "proxy": "ok", "proxy-by-ipv6-socket": ipv6("ok"), "proxy-nonblocking": "ok", "proxy-from-threads": "ok",
+            "beyond": "EACCES", "beyond-by-ipv6-socket": ipv6("EACCES"), "beyond-ipv6": ipv6("EACCES"),
+            "other-port": "EACCES",
+        ], "\(outcome.output) \(outcome.errors)")
+        #expect(outcome.status == 0, "\(outcome.errors)")
+    }
+
+    /// Where the host lets no process copy another's descriptors, the
+    /// connector cannot connect anything: the server is not started.
+    @Test(.enabled(if: hostForbidsTheConnector(), "needs kernel.yama.ptrace_scope 3, or 2 without root"),
+        .timeLimit(.minutes(2)))
+    func whereTheHostForbidsTheConnectorAServerWithAnAllowlistIsNotStarted() throws {
+        let home = try Home()
+        defer { MCPSandbox.stopProxies() }
+        let policy = MCPSandboxPolicy(network: false, hosts: ["allowed.example"])
+        let outcome = try caged(home, "echo ran > ran", policy: policy)
+        #expect(outcome.status == 125 && outcome.errors.contains("kernel.yama.ptrace_scope"), "\(outcome)")
+        #expect(home.read(".cache/rv-mcp/probe/ran") == nil)
+        // A server with no network needs no connector and runs.
+        #expect(try caged(home, "echo ran > ran").status == 0)
+        #expect(home.read(".cache/rv-mcp/probe/ran") == "ran\n")
+    }
+
+    /// With an allowlist the server is a child of rv's connector: its exit
+    /// status, a signal that kills it, and a signal sent to it all pass
+    /// through, and a kill of the connector takes the server with it.
+    @Test(.enabled(if: hostForbidsTheConnector() == false, "this host forbids the connector"), .timeLimit(.minutes(2)))
+    func aServerWithAnAllowlistStillExitsAndIsSignalledAsItself() throws {
+        let home = try Home()
+        defer { MCPSandbox.stopProxies() }
+        let policy = MCPSandboxPolicy(network: false, hosts: ["allowed.example"])
+        #expect(try caged(home, "exit 7", policy: policy).status == 7)
+        let killed = try run(try cage(home, "kill -SEGV $$", policy: policy).get())
+        #expect(killed.status == SIGSEGV, "\(killed)")
+        // SIGTERM to the process the gateway holds reaches the server.
+        let launch = try cage(
+            home, "trap 'echo heard > terminated; exit 9' TERM; echo ready; while :; do sleep 0.05; done", policy: policy
+        ).get()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launch.executable)
+        process.arguments = launch.arguments
+        process.environment = launch.environment
+        if let directory = launch.workingDirectory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardInput = FileHandle.nullDevice
+        try process.run()
+        try #require(output.fileHandleForReading.availableData.isEmpty == false)
+        process.terminate()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 9 && home.read(".cache/rv-mcp/probe/terminated") == "heard\n")
+        // A server that ignores SIGTERM is killed soon after; one whose
+        // connector is killed outright dies with it.
+        for signal in [SIGTERM, SIGKILL] {
+            let stubborn = Process()
+            let launch = try cage(
+                home, "trap '' TERM; echo $$; while :; do sleep 0.05; done", policy: policy).get()
+            stubborn.executableURL = URL(fileURLWithPath: launch.executable)
+            stubborn.arguments = launch.arguments
+            stubborn.environment = launch.environment
+            let pipe = Pipe()
+            stubborn.standardOutput = pipe
+            stubborn.standardInput = FileHandle.nullDevice
+            try stubborn.run()
+            let text = String(decoding: pipe.fileHandleForReading.availableData, as: UTF8.self)
+            let server = try #require(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), "\(text)")
+            #expect(server != stubborn.processIdentifier)
+            kill(stubborn.processIdentifier, signal)
+            let ended = Date().addingTimeInterval(10)
+            while stubborn.isRunning, Date() < ended { usleep(20_000) }
+            #expect(stubborn.isRunning == false, "signal \(signal) did not end the process the gateway holds")
+            kill(stubborn.processIdentifier, SIGKILL)
+            stubborn.waitUntilExit()
+            let deadline = Date().addingTimeInterval(5)
+            while kill(server, 0) == 0, Date() < deadline { usleep(20_000) }
+            #expect(kill(server, 0) != 0 && errno == ESRCH, "the server outlived signal \(signal)")
+        }
     }
 
     // MARK: - Privileges and other processes
@@ -384,7 +546,7 @@ struct MCPLinuxSandboxTests {
         try FileManager.default.copyItem(atPath: "/usr/bin/id", toPath: directory + "/id")
         try #require(chmod(directory, 0o755) == 0 && chown(directory + "/id", 0, 0) == 0 && chmod(directory + "/id", 0o4755) == 0)
         let plan = MCPLinuxCage.Plan(
-            readable: ["/usr", "/lib", "/lib64", "/bin", "/etc", directory], writable: [], shared: ["/dev"], tcpPorts: [])
+            readable: ["/usr", "/lib", "/lib64", "/bin", "/etc", directory], writable: [], shared: ["/dev"], proxyPort: nil)
         func effectiveUser(_ arguments: [String]) throws -> String {
             let outcome = try run(MCPUpstreamLaunch(
                 server: "setuid", executable: "/usr/bin/setpriv",
@@ -659,7 +821,7 @@ struct MCPLinuxSandboxTests {
         let helper = try #require(MCPSandbox.linuxHelper)
         let marker = home.path + "/project/ran"
         let plan = MCPLinuxCage.Plan(
-            readable: ["/usr", "/bin", "/lib", "/lib64"], writable: [home.path + "/project"], shared: [], tcpPorts: [])
+            readable: ["/usr", "/bin", "/lib", "/lib64"], writable: [home.path + "/project"], shared: [], proxyPort: nil)
         var arguments = plan.arguments(executable: "/usr/bin/touch", argv: ["touch", marker])
         try #require(arguments[0...1] == ["--confine", "4"])
         arguments[1] = "999"
@@ -681,6 +843,11 @@ struct MCPLinuxSandboxTests {
         ["--confine", "4", "--tcp", "0", "--", "/usr/bin/true", "true"],
         ["--confine", "4", "--tcp", "65536", "--", "/usr/bin/true", "true"],
         ["--confine", "4", "--tcp", "80x", "--", "/usr/bin/true", "true"],
+        // One proxy, one port.
+        ["--confine", "4", "--tcp", "8080", "--tcp", "8081", "--", "/usr/bin/true", "true"],
+        // A port, then something that is not a request: nothing is started to connect.
+        ["--confine", "4", "--tcp", "8080", "--read", "relative", "--", "/usr/bin/true", "true"],
+        ["--confine", "4", "--tcp", "8080", "--", "relative", "true"],
         ["--confine", "4", "--bogus", "x", "--", "/usr/bin/true", "true"],
     ])
     func theHelperRefusesARequestItDoesNotUnderstand(arguments: [String]) throws {

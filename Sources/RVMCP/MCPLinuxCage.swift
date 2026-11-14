@@ -306,14 +306,17 @@ public enum MCPLinuxCage {
         /// user's caches): as `writable`, but a socket another program
         /// made there is not the server's to reach.
         public var shared: [String]
-        /// TCP ports the server may connect to: the allowlist proxy's, or none.
-        public var tcpPorts: [UInt16]
+        /// The allowlist proxy's port on loopback, the one place the
+        /// server may open a TCP connection to; nil for no network. The
+        /// helper then stays as the server's parent and makes each of
+        /// those connections for it.
+        public var proxyPort: UInt16?
 
-        public init(readable: [String], writable: [String], shared: [String], tcpPorts: [UInt16]) {
+        public init(readable: [String], writable: [String], shared: [String], proxyPort: UInt16?) {
             self.readable = readable
             self.writable = writable
             self.shared = shared
-            self.tcpPorts = tcpPorts
+            self.proxyPort = proxyPort
         }
 
         /// The helper's arguments: the lowest ABI it may run under, the
@@ -324,7 +327,7 @@ public enum MCPLinuxCage {
                 + readable.flatMap { ["--read", $0] }
                 + writable.flatMap { ["--write", $0] }
                 + shared.flatMap { ["--temp", $0] }
-                + tcpPorts.flatMap { ["--tcp", String($0)] }
+                + (proxyPort.map { ["--tcp", String($0)] } ?? [])
                 + ["--", executable] + argv
         }
     }

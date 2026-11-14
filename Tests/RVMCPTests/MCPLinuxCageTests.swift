@@ -246,13 +246,13 @@ struct MCPLinuxCageTests {
     @Test func thePlanIsTheHelpersArguments() {
         let plan = MCPLinuxCage.Plan(
             readable: ["/usr", "/home/me/code"], writable: ["/home/me/.cache/rv-mcp/fs"], shared: ["/tmp", "/dev"],
-            tcpPorts: [40123])
+            proxyPort: 40123)
         #expect(plan.arguments(executable: "/usr/bin/env", argv: ["/usr/bin/env", "npx", "--confine", "--"]) == [
             "--confine", "4", "--read", "/usr", "--read", "/home/me/code", "--write", "/home/me/.cache/rv-mcp/fs",
             "--temp", "/tmp", "--temp", "/dev", "--tcp", "40123", "--", "/usr/bin/env", "/usr/bin/env", "npx",
             "--confine", "--",
         ])
-        let closed = MCPLinuxCage.Plan(readable: [], writable: [], shared: [], tcpPorts: [])
+        let closed = MCPLinuxCage.Plan(readable: [], writable: [], shared: [], proxyPort: nil)
         #expect(closed.arguments(executable: "/bin/true", argv: ["true"]) == ["--confine", "4", "--", "/bin/true", "true"])
     }
 

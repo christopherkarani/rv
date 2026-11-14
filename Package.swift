@@ -82,6 +82,7 @@ let coreLibraryTargets: [Target] = [
             "landlock_apply.c",
             "landlock_confine.c",
             "socket_filter.c",
+            "proxy_connector.c",
             "include",
             "README.md",
         ]

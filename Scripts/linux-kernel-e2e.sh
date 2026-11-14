@@ -132,11 +132,11 @@ build_initramfs() {
 
 # Exact check count guest-init.c runs per regime (ABI check + refusal cases
 # below ABI 3; ABI check + argv lock + enforcement at 3+; the MCP server
-# confinement adds 2 refusal checks below ABI 4 and 40 from it on). A
+# confinement adds 2 refusal checks below ABI 4 and 44 from it on). A
 # dropped or added case fails the lane until this is updated with it.
 CHECKS_REFUSAL=7
 CHECKS_ENFORCEMENT=23
-CHECKS_CONFINEMENT=61
+CHECKS_CONFINEMENT=65
 
 # One boot. Pass only on exactly one PASS result line, with the regime's
 # exact check count, from a kernel whose release matches the lane; a timeout,

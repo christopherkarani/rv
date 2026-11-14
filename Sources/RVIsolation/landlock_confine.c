@@ -4,7 +4,7 @@
  * landlock_apply.c and shares its syscall wrappers.
  *
  *   rv-isolation-exec --confine FLOOR [--read PATH]... [--write PATH]...
- *                     [--temp PATH]... [--tcp PORT]...
+ *                     [--temp PATH]... [--tcp PORT]
  *                     -- EXECUTABLE ARGV0 [ARG...]
  *
  * In this process, before exec: NO_NEW_PRIVS, then one ruleset that
@@ -14,7 +14,9 @@
  *   files     nothing is readable but each --read path (read, list,
  *             execute) and nothing is writable but each --write and
  *             --temp path (everything, beneath it)
- *   TCP       no bind, and connect only to each --tcp port (ABI 4)
+ *   TCP       no bind and no connect (ABI 4). With --tcp PORT the
+ *             cage's connections to that port on loopback are made for
+ *             it, from outside, by the connector (proxy_connector.c)
  *   devices   no ioctl on a device the server opens (ABI 5)
  *   scopes    no abstract Unix socket and no signal outside this domain
  *             (ABI 6)
@@ -69,11 +71,6 @@ struct rv_ruleset_attr {
     uint64_t handled_access_fs;
     uint64_t handled_access_net;
     uint64_t scoped;
-};
-
-struct rv_net_port_attr {
-    uint64_t allowed_access;
-    uint64_t port;
 };
 
 /* Rights a rule on a file (not a directory) may carry. */
@@ -177,10 +174,9 @@ static int rv_confine_allow_path(int ruleset_fd, const char *path, uint64_t acce
 
 /* Returns the index of EXECUTABLE in argv, or -1 after printing why not.
  * argv[1] is "--confine". On success `*kernel_abi` is the Landlock ABI
- * applied and `*tcp_ports` the number of --tcp rules. */
-int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) {
+ * applied and `*tcp_port` the --tcp port, or 0 when there is none. */
+int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_port) {
     struct rv_ruleset_attr attr;
-    struct rv_net_port_attr port_attr;
     unsigned long floor;
     unsigned long port;
     uint64_t handled_fs;
@@ -188,7 +184,7 @@ int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) 
     int restricted;
     int abi;
     int index;
-    int ports = 0;
+    int chosen = 0;
 
     if (argc < 3 || rv_confine_number(argv[2], 1000, &floor) != 0 || floor < RV_CONFINE_MINIMUM_ABI) {
         rv_confine_fail("the confinement request is malformed", NULL);
@@ -252,20 +248,14 @@ int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) 
                 return -1;
             }
         } else if (strcmp(argv[index], "--tcp") == 0) {
-            if (rv_confine_number(argv[index + 1], 65535, &port) != 0 || port == 0) {
+            /* No Landlock rule: a port rule would allow the port on every
+             * host. The connector makes these connections (proxy_connector.c). */
+            if (rv_confine_number(argv[index + 1], 65535, &port) != 0 || port == 0 || chosen != 0) {
                 close(ruleset_fd);
-                rv_confine_fail("a confined port is not a TCP port", argv[index + 1]);
+                rv_confine_fail("the confined port is not one TCP port", argv[index + 1]);
                 return -1;
             }
-            memset(&port_attr, 0, sizeof(port_attr));
-            port_attr.allowed_access = LANDLOCK_ACCESS_NET_CONNECT_TCP;
-            port_attr.port = port;
-            if (rv_sys_landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT, &port_attr, 0) != 0) {
-                close(ruleset_fd);
-                rv_confine_fail("a port rule could not be added", strerror(errno));
-                return -1;
-            }
-            ports++;
+            chosen = (int)port;
         } else {
             close(ruleset_fd);
             rv_confine_fail("the confinement request is malformed", argv[index]);
@@ -286,8 +276,23 @@ int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) 
         return -1;
     }
     *kernel_abi = abi;
-    *tcp_ports = ports;
+    *tcp_port = chosen;
     return index + 1;
+}
+
+/* Whether the request has a --tcp port, read before anything is applied:
+ * 1, 0, or -1 when the request is not one rv_landlock_confine would take
+ * (which then says why). */
+int rv_landlock_confine_has_port(int argc, char **argv) {
+    int index;
+    int found = 0;
+
+    for (index = 3; index + 1 < argc && strcmp(argv[index], "--") != 0; index += 2) {
+        if (strcmp(argv[index], "--tcp") == 0) {
+            found = 1;
+        }
+    }
+    return index < argc && strcmp(argv[index], "--") == 0 ? found : -1;
 }
 
 /* The running kernel's Landlock ABI; 0 when it has none. */
@@ -298,11 +303,17 @@ int rv_landlock_abi(void) {
 
 #else
 
-int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) {
+int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_port) {
     (void)argc;
     (void)argv;
     (void)kernel_abi;
-    (void)tcp_ports;
+    (void)tcp_port;
+    return -1;
+}
+
+int rv_landlock_confine_has_port(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
     return -1;
 }
 

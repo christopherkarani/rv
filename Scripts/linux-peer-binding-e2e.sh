@@ -119,6 +119,9 @@ regime_yama() {
     log "regime yama: ptrace_scope=3 (stays until reboot)"
     echo 3 >"$knob"
     "$RAN" --suites 2 20 "${SWIFT_TEST[@]}" "$SUITES"
+    # The MCP sandbox's connector copies a descriptor from the server,
+    # which this setting forbids: a server with an allowlist is refused.
+    "$RAN" --no-skips 1 "${SWIFT_TEST[@]}" whereTheHostForbidsTheConnectorAServerWithAnAllowlistIsNotStarted
   else
     echo "$before" >"$knob"
     log "regime yama: ptrace_scope=3 not run (set RV_YAMA_IRREVERSIBLE=1; it cannot be undone)"

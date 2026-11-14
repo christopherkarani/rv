@@ -64,6 +64,8 @@
 #define NESTED TEMP "/own"
 #define NESTED_SOCKET NESTED "/socket"
 #define ABSTRACT_SOCKET "rv-kernel-e2e"
+/* A second address of this guest, on the loopback device but not in 127/8. */
+#define BEYOND_ADDRESS "10.99.0.1"
 #define ESTABLISH_FAILED 125
 #define EXEC_FAILED 126
 #define INHERITED_FD 7
@@ -185,6 +187,19 @@ static int probe(int argc, char **argv) {
         fd = socket(AF_INET, SOCK_STREAM, 0);
         return probe_exit(fd >= 0 && listen(fd, 1) == 0
             && getsockname(fd, (struct sockaddr *)&address, &length) == 0 && address.sin_port != 0);
+    }
+    /* The port of a listener this host has on an address that is not loopback. */
+    if (strcmp(op, "tcp-beyond") == 0) {
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = inet_addr(BEYOND_ADDRESS);
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+    }
+    if (strcmp(op, "exit") == 0) {
+        return atoi(argv[3]);
     }
     if (strcmp(op, "socketpair") == 0) {
         int pair[2];
@@ -481,19 +496,24 @@ static int uncaged(const char *op, const char *a) {
     return run(argv);
 }
 
-/* A TCP listener on loopback; returns its port, or 0. */
-static int tcp_listener(void) {
+/* A TCP listener on `host` (and `port`, or any when 0); returns its port, or 0. */
+static int tcp_listener_at(const char *host, int port) {
     struct sockaddr_in address;
     socklen_t length = sizeof(address);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_addr.s_addr = inet_addr(host);
+    address.sin_port = htons((unsigned short)port);
     if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 8) != 0
         || getsockname(fd, (struct sockaddr *)&address, &length) != 0) {
         return 0;
     }
     return ntohs(address.sin_port);
+}
+
+static int tcp_listener(void) {
+    return tcp_listener_at("127.0.0.1", 0);
 }
 
 /* A pathname Unix socket this process holds: a listener, or a datagram one. */
@@ -529,8 +549,20 @@ static int confine_setup(char *port_a, char *port_b, size_t size) {
     if (control < 0 || ioctl(control, SIOCSIFFLAGS, &interface) != 0) {
         return 0;
     }
+    /* The second address, as an alias of the loopback device. */
+    memset(&interface, 0, sizeof(interface));
+    strcpy(interface.ifr_name, "lo:1");
+    ((struct sockaddr_in *)&interface.ifr_addr)->sin_family = AF_INET;
+    ((struct sockaddr_in *)&interface.ifr_addr)->sin_addr.s_addr = inet_addr(BEYOND_ADDRESS);
+    if (ioctl(control, SIOCSIFADDR, &interface) != 0) {
+        return 0;
+    }
     a = tcp_listener();
     b = tcp_listener();
+    /* The first listener's port again, on the address that is not loopback. */
+    if (a == 0 || tcp_listener_at(BEYOND_ADDRESS, a) != a) {
+        return 0;
+    }
     if (a == 0 || b == 0 || mkdir(SCRATCH, 0755) != 0 || mkdir(TEMP, 0755) != 0) {
         return 0;
     }
@@ -593,6 +625,18 @@ static void confine_cases(long abi) {
     check(status == 0, "confine-tcp-listed-port-allowed", "exit %d", status);
     status = confined("4", port_a, "tcp", port_b);
     check(status == EACCES, "confine-tcp-other-port-denied", "exit %d", status);
+    /* The listed port is the proxy's on loopback, not that port anywhere:
+     * the same port answers on another address of this guest, outside
+     * the cage only. */
+    status = uncaged("tcp-beyond", port_a);
+    check(status == 0, "confine-listed-port-elsewhere-works-outside-the-cage", "exit %d", status);
+    status = confined("4", port_a, "tcp-beyond", port_a);
+    check(status == EACCES, "confine-listed-port-elsewhere-denied", "exit %d", status);
+    status = confined("4", NULL, "tcp-beyond", port_a);
+    check(status == EACCES, "confine-tcp-elsewhere-denied", "exit %d", status);
+    /* The inner is then a child of the helper, and its exit is the helper's. */
+    status = confined("4", port_a, "exit", "7");
+    check(status == 7, "confine-exit-status-passes-through-the-connector", "exit %d", status);
 
     status = confined("999", NULL, "write", SCRATCH "/floor-ran");
     check(status == ESTABLISH_FAILED && !exists(SCRATCH "/floor-ran"), "confine-floor-above-abi-refuses",
