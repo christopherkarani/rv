@@ -20,17 +20,24 @@
  * cannot silently test a different regime than it claims.
  */
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/ioctl.h>
 #include <sys/reboot.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
@@ -47,6 +54,9 @@
 #define ROOT "/e2e"
 #define WORKSPACE ROOT "/workspace"
 #define OUTSIDE ROOT "/outside"
+#define SCRATCH ROOT "/scratch"
+#define UNIX_SOCKET OUTSIDE "/socket"
+#define ABSTRACT_SOCKET "rv-kernel-e2e"
 #define ESTABLISH_FAILED 125
 #define EXEC_FAILED 126
 #define INHERITED_FD 7
@@ -99,6 +109,38 @@ static int probe(int argc, char **argv) {
     if (strcmp(op, "nnp") == 0) {
         errno = EPERM;
         return probe_exit(prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1);
+    }
+    if (strcmp(op, "tcp") == 0 || strcmp(op, "udp") == 0) {
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        if (strcmp(op, "tcp") == 0) {
+            fd = socket(AF_INET, SOCK_STREAM, 0);
+            return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+        }
+        fd = socket(AF_INET, SOCK_DGRAM, 0);
+        return probe_exit(fd >= 0
+            && sendto(fd, "x", 1, 0, (struct sockaddr *)&address, sizeof(address)) == 1);
+    }
+    if (strcmp(op, "unix") == 0 || strcmp(op, "abstract") == 0) {
+        struct sockaddr_un address;
+        socklen_t length;
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        if (strcmp(op, "unix") == 0) {
+            strncpy(address.sun_path, argv[3], sizeof(address.sun_path) - 1);
+            length = sizeof(address);
+        } else {
+            strncpy(address.sun_path + 1, argv[3], sizeof(address.sun_path) - 2);
+            length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(argv[3]));
+        }
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        return probe_exit(fd >= 0 && connect(fd, (struct sockaddr *)&address, length) == 0);
+    }
+    if (strcmp(op, "signal") == 0) {
+        return probe_exit(kill(atoi(argv[3]), 0) == 0);
     }
     return 124;
 }
@@ -318,6 +360,145 @@ static void enforcement_cases(void) {
 /* Setup failed before /dev/console was usable: point stdout at the console
  * anyway (creating the node if devtmpfs never mounted) so the FAIL line
  * still reaches the serial log. */
+/* ---- MCP server confinement (rv-isolation-exec --confine) -------------- */
+
+/* rv-isolation-exec --confine FLOOR --read WORKSPACE --write SCRATCH
+ *     [--tcp PORT] -- INNER INNER probe OP A */
+static int confined(const char *floor, const char *port, const char *op, const char *a) {
+    char *argv[16];
+    int count = 0;
+    argv[count++] = HELPER;
+    argv[count++] = "--confine";
+    argv[count++] = (char *)floor;
+    argv[count++] = "--read";
+    argv[count++] = WORKSPACE;
+    argv[count++] = "--write";
+    argv[count++] = SCRATCH;
+    if (port != NULL) {
+        argv[count++] = "--tcp";
+        argv[count++] = (char *)port;
+    }
+    argv[count++] = "--";
+    argv[count++] = INNER;
+    argv[count++] = INNER; /* the inner's own argv[0] */
+    argv[count++] = "probe";
+    argv[count++] = (char *)op;
+    argv[count++] = (char *)a;
+    argv[count] = NULL;
+    return run(argv);
+}
+
+/* A TCP listener on loopback; returns its port, or 0. */
+static int tcp_listener(void) {
+    struct sockaddr_in address;
+    socklen_t length = sizeof(address);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 8) != 0
+        || getsockname(fd, (struct sockaddr *)&address, &length) != 0) {
+        return 0;
+    }
+    return ntohs(address.sin_port);
+}
+
+/* Loopback up, two TCP listeners, one pathname and one abstract Unix
+ * listener, all held by this process, outside any cage. */
+static int confine_setup(char *port_a, char *port_b, size_t size) {
+    struct ifreq interface;
+    struct sockaddr_un address;
+    int control = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd;
+    int a;
+    int b;
+
+    memset(&interface, 0, sizeof(interface));
+    strcpy(interface.ifr_name, "lo");
+    interface.ifr_flags = IFF_UP;
+    if (control < 0 || ioctl(control, SIOCSIFFLAGS, &interface) != 0) {
+        return 0;
+    }
+    a = tcp_listener();
+    b = tcp_listener();
+    if (a == 0 || b == 0 || mkdir(SCRATCH, 0755) != 0) {
+        return 0;
+    }
+    snprintf(port_a, size, "%d", a);
+    snprintf(port_b, size, "%d", b);
+
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    strcpy(address.sun_path, UNIX_SOCKET);
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 8) != 0) {
+        return 0;
+    }
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    strcpy(address.sun_path + 1, ABSTRACT_SOCKET);
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    return fd >= 0
+        && bind(fd, (struct sockaddr *)&address,
+            (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(ABSTRACT_SOCKET))) == 0
+        && listen(fd, 8) == 0;
+}
+
+/* Below ABI 4 nothing is confined and nothing runs. */
+static void confine_refusal_cases(void) {
+    const char *marker = WORKSPACE "/confine-refusal-ran";
+    int status = confined("4", NULL, "write", marker);
+    check(status == ESTABLISH_FAILED, "confine-refuses-125", "exit %d", status);
+    check(!exists(marker), "confine-refusal-never-execs", "inner wrote %s", marker);
+}
+
+/* ABI 4 and up: files and TCP always; each other channel is open below
+ * the ABI that closes it and closed from it on. */
+static void confine_cases(long abi) {
+    char port_a[16];
+    char port_b[16];
+    int status;
+
+    if (!confine_setup(port_a, port_b, sizeof(port_a))) {
+        check(0, "confine-setup", "errno %d", errno);
+        return;
+    }
+    status = confined("4", NULL, "read", WORKSPACE "/note.txt");
+    check(status == 0, "confine-read-allowed", "exit %d", status);
+    status = confined("4", NULL, "read", OUTSIDE "/seed.txt");
+    check(status == EACCES, "confine-read-outside-denied", "exit %d", status);
+    status = confined("4", NULL, "write", SCRATCH "/made.txt");
+    check(status == 0 && exists(SCRATCH "/made.txt"), "confine-write-root-allowed", "exit %d", status);
+    status = confined("4", NULL, "write", WORKSPACE "/confine-made.txt");
+    check(status == EACCES && !exists(WORKSPACE "/confine-made.txt"), "confine-write-elsewhere-denied",
+        "exit %d", status);
+    status = confined("4", NULL, "nnp", "-");
+    check(status == 0, "confine-no-new-privs-set", "exit %d", status);
+
+    status = confined("4", NULL, "tcp", port_a);
+    check(status == EACCES, "confine-tcp-denied", "exit %d", status);
+    status = confined("4", port_a, "tcp", port_a);
+    check(status == 0, "confine-tcp-listed-port-allowed", "exit %d", status);
+    status = confined("4", port_a, "tcp", port_b);
+    check(status == EACCES, "confine-tcp-other-port-denied", "exit %d", status);
+
+    status = confined("999", NULL, "write", SCRATCH "/floor-ran");
+    check(status == ESTABLISH_FAILED && !exists(SCRATCH "/floor-ran"), "confine-floor-above-abi-refuses",
+        "exit %d", status);
+    status = confined("3", NULL, "write", SCRATCH "/low-floor-ran");
+    check(status == ESTABLISH_FAILED && !exists(SCRATCH "/low-floor-ran"), "confine-floor-below-4-refuses",
+        "exit %d", status);
+
+    status = confined("4", NULL, "abstract", ABSTRACT_SOCKET);
+    check(status == (abi >= 6 ? EPERM : 0), "confine-abstract-unix-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "signal", "1");
+    check(status == (abi >= 6 ? EPERM : 0), "confine-signal-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "unix", UNIX_SOCKET);
+    check(status == (abi >= 9 ? EACCES : 0), "confine-pathname-unix-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "udp", "9");
+    check(status == (abi >= 10 ? EACCES : 0), "confine-udp-by-abi", "abi %ld exit %d", abi, status);
+}
+
 static void console_fallback(void) {
     int fd = open("/dev/console", O_WRONLY);
     if (fd < 0 && mknod("/dev/console", S_IFCHR | 0600, makedev(5, 1)) == 0) {
@@ -440,6 +621,11 @@ int main(int argc, char **argv) {
         enforcement_cases();
     } else {
         refusal_cases();
+    }
+    if (live >= 4) {
+        confine_cases(live);
+    } else {
+        confine_refusal_cases();
     }
     finish(live, uts.release);
     return 1;

@@ -26,8 +26,10 @@ ABI 1 and 2 are refused because they cannot handle `TRUNCATE`.
 | --- | --- | --- |
 | 5.10 | none (ENOSYS) | valid argv exits 125, inner never runs, no write or truncate outside |
 | 6.1 | ABI 2 | same refusal: no downgrade to a ruleset without TRUNCATE |
-| 6.6 | ABI 3 (the floor) | enforcement (below) |
-| 6.12 | ABI 6 | enforcement (below) |
+| 6.6 | ABI 3 (the floor) | enforcement (below); MCP confinement refuses |
+| 6.8 | ABI 4 | enforcement; MCP confinement (below) |
+| 6.12 | ABI 6 | enforcement; MCP confinement |
+| 7.3 | ABI 11 | enforcement; MCP confinement |
 
 Enforcement means that inside the workspace, write, read and mkdir succeed.
 Outside it, write, read, readdir, mkdir and truncate fail with `EACCES`. A
@@ -46,12 +48,28 @@ a missing `--`), a missing workspace and a non-canonical (symlinked)
 workspace. Each must exit 125 and never exec. The 5.10 and 6.1 lanes skip
 those cases: below ABI 3 the trampoline exits 125 for every argv, so they
 could not tell the argv lock from the ABI refusal. Those lanes prove only the
-refusal. The host script pins the exact number of checks each regime runs (5
-below ABI 3, 21 at 3+), so a dropped case fails the lane.
+refusal. The host script pins the exact number of checks each regime runs (7
+below ABI 3, 23 at ABI 3, 35 from ABI 4), so a dropped case fails the lane.
 The guest compares the live Landlock ABI with the lane's expected ABI, so a
 kernel that boots with Landlock disabled fails its lane instead of quietly
 testing the wrong regime. The kernel command line passes `lsm=landlock` so
 the regime comes from the kernel version, not from the distro's LSM list.
+
+## MCP server confinement
+
+`rv-isolation-exec --confine` (the cage `rv mcp serve` puts each local MCP
+server in; [mcp-linux-sandbox.md](mcp-linux-sandbox.md)) needs Landlock ABI
+4. Below it (the 5.10, 6.1 and 6.6 lanes) a valid request exits 125 and the
+inner never runs. From ABI 4 the guest checks, with listeners it holds
+outside the cage: a read and a write inside the granted paths succeed and
+outside them fail with `EACCES`; `NO_NEW_PRIVS` is set; a TCP connection is
+refused without a port rule, accepted on the listed port and refused on
+another; a floor above the kernel's ABI, or below 4, exits 125 and runs
+nothing. Four channels are checked against the lane's ABI, open below the
+ABI that closes them and closed from it on: an abstract Unix socket and a
+signal to PID 1 (`EPERM` from ABI 6), a pathname Unix socket (`EACCES` from
+ABI 9), and a UDP datagram (`EACCES` from ABI 10). So 6.8 shows all four
+open, 6.12 two, and 7.3 none.
 
 ## Image route
 
@@ -74,7 +92,7 @@ On an x86_64 Linux host with `qemu-system-x86_64`, `cc` with static glibc
 (`libc6-dev`), `cpio`, `binutils` and `curl` installed:
 
 ```sh
-Scripts/linux-kernel-e2e.sh all        # or: 5.10 6.1 6.6 6.12
+Scripts/linux-kernel-e2e.sh all        # or: 5.10 6.1 6.6 6.8 6.12 7.3
 Scripts/linux-kernel-e2e.sh --accel tcg 6.12
 ```
 
