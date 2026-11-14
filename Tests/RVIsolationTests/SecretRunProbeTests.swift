@@ -24,15 +24,16 @@ struct SecretRunProbeTests {
         let probe = try spawnProbe(["guards"], environment: [], log: log)
         let status = waitBounded(probe, killing: [])
         expectNoFailures(log)
-        #expect(status == 0, "\(probeOutput(log))")
+        #expect(status.flatMap(exitCode) == 0, "\(probeOutput(log))")
     }
 
     /// The production path, real handlers and a live command: a SIGTERM
-    /// sent to rv alone ends the command's group, rv exits 143, the gateway
+    /// sent to rv alone ends the command's group, rv exits 143 (rather than
+    /// dying of the SIGTERM), the gateway
     /// is gone and rv's dispositions are back. Under `nohup` and a parent
     /// that ignores SIGPIPE, the command keeps both ignored and gets the
     /// default for every signal rv ignores itself.
-    @Test(.timeLimit(.minutes(1)))
+    @Test(.enabled(if: hostRunsSecretRun), .timeLimit(.minutes(1)))
     func aSignalToRvReachesTheCommandAndTheRunIsUndone() throws {
         let directory = try probeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -52,13 +53,19 @@ struct SecretRunProbeTests {
         let log = directory.appendingPathComponent("log")
         let probe = try spawnProbe(
             ["run", directory.path, "/bin/sh", "-c", script, "sh", directory.path],
-            environment: ["HOME=\(home.path)", "PATH=/usr/bin:/bin", "FAKE_OPENAI=sk-live-PROBE-0123456789"],
+            environment: [
+                "HOME=\(home.path)", "TMPDIR=\(FileManager.default.temporaryDirectory.path)", "PATH=/usr/bin:/bin",
+                "FAKE_OPENAI=sk-live-PROBE-0123456789",
+            ],
             log: log)
-        let command = waitForMarker(directory.appendingPathComponent("pid").path, while: probe)
+        let marker = directory.appendingPathComponent("pid").path
+        let command = waitForMarker(marker, while: probe)
         guard command > 1 else {
             Issue.record("the command never ran: \(probeOutput(log))")
             _ = kill(-probe, SIGKILL)
             _ = waitBounded(probe, killing: [])
+            // The command may have started after all, too late for the marker.
+            endLeftover(pid_t(markerText(marker)) ?? 0)
             expectNoFailures(log)
             return
         }
@@ -82,10 +89,36 @@ struct SecretRunProbeTests {
 
         #expect(kill(probe, SIGTERM) == 0)
         let status = waitBounded(probe, killing: [command])
+        // Read before the cleanup below ends a group rv left behind.
+        let commandGone = kill(-command, 0) == -1 && errno == ESRCH
+        endLeftover(command)
         expectNoFailures(log)
-        #expect(status == 128 + SIGTERM, "\(probeOutput(log))")
-        #expect(kill(-command, 0) == -1 && errno == ESRCH)
+        // rv exits 143 itself; a SIGTERM that killed it is a missing guard.
+        #expect(
+            status.flatMap(exitCode) == 128 + SIGTERM,
+            "wait status \(String(describing: status)): \(probeOutput(log))")
+        #expect(commandGone)
     }
+}
+
+/// Whether the real spawn and kernel peer check work here, as for the
+/// in-process launches in `SecretRunTests`.
+private let hostRunsSecretRun = SecretRunCapability.check(.runtime) == nil
+
+/// The exit code in a raw wait status; nil if a signal ended the process
+/// (or it is stopped).
+private func exitCode(_ status: Int32) -> Int32? {
+    status & 0x7f == 0 ? (status >> 8) & 0xff : nil
+}
+
+/// Kills the command's group if rv left it behind (blocked on the fifo,
+/// nothing else would end it). Called once the probe is reaped. While any
+/// member lives the kernel hands out no pid equal to the group id, and pids
+/// are handed out in sequence, so the id is not someone else's this soon.
+private func endLeftover(_ command: pid_t) {
+    guard command > 1, kill(-command, 0) == 0 else { return }
+    Issue.record("the command's group outlived rv")
+    _ = kill(-command, SIGKILL)
 }
 
 private let probeSecrets = """
@@ -105,15 +138,15 @@ private func probeDirectory() throws -> URL {
 
 private struct MissingRunProbe: Error {}
 
+/// The probe built with this test bundle (beside it) first, so a probe left
+/// in another configuration's directory never stands in for it.
 private func builtRunProbe() throws -> URL {
     let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
     var candidates = [
-        root.appendingPathComponent(".build/out/Products/Debug/rv-run-probe"),
-        root.appendingPathComponent(".build/debug/rv-run-probe"),
-        root.appendingPathComponent(".build/arm64-apple-macosx/debug/rv-run-probe"),
+        Bundle(for: ProbeExit.self).bundleURL.deletingLastPathComponent().appendingPathComponent("rv-run-probe")
     ]
     var directory = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
     for _ in 0..<8 {
@@ -122,6 +155,11 @@ private func builtRunProbe() throws -> URL {
         if parent.path == directory.path { break }
         directory = parent
     }
+    candidates += [
+        root.appendingPathComponent(".build/out/Products/Debug/rv-run-probe"),
+        root.appendingPathComponent(".build/debug/rv-run-probe"),
+        root.appendingPathComponent(".build/arm64-apple-macosx/debug/rv-run-probe"),
+    ]
     if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {
         return found
     }
@@ -167,16 +205,16 @@ private func spawnProbe(_ arguments: [String], environment: [String], log: URL) 
     return pid
 }
 
-/// The probe's exit code (or 128 plus the signal that ended it), once it
-/// exits. After 30 seconds the probe's session and the `groups` are killed
-/// and the hang recorded.
+/// The probe's raw wait status, once it exits (so an exit with 143 and a
+/// death by SIGTERM stay apart). After 30 seconds the probe's session and
+/// the `groups` are killed and the hang recorded.
 private func waitBounded(_ probe: pid_t, killing groups: [pid_t]) -> Int32? {
     let outcome = ProbeExit()
     let finished = DispatchSemaphore(value: 0)
     Thread.detachNewThread {
         var status: Int32 = 0
         let reaped = waitpidRetrying(probe, &status)
-        outcome.code.withLock { $0 = reaped ? SecretRunExit.code(waitStatus: status) : nil }
+        outcome.code.withLock { $0 = reaped ? status : nil }
         finished.signal()
     }
     if finished.wait(timeout: .now() + 30) == .timedOut {
@@ -205,14 +243,17 @@ private func waitpidRetrying(_ pid: pid_t, _ status: inout Int32) -> Bool {
 private func waitForMarker(_ marker: String, while probe: pid_t) -> pid_t {
     let deadline = Date().addingTimeInterval(20)
     while Date() < deadline {
-        let text = (try? String(contentsOfFile: marker, encoding: .utf8)) ?? ""
-        if let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 { return pid }
+        if let pid = pid_t(markerText(marker)), pid > 1 { return pid }
         var info = siginfo_t()
         // WNOWAIT: only looks; `waitBounded` reaps it.
         if waitid(P_PID, id_t(probe), &info, WEXITED | WNOHANG | WNOWAIT) == 0, info.si_pid == probe { return 0 }
         usleep(5_000)
     }
     return 0
+}
+
+private func markerText(_ marker: String) -> String {
+    ((try? String(contentsOfFile: marker, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 /// What the probe (and rv, and the command) wrote to stdout and stderr.

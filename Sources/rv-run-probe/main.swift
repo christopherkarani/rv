@@ -5,6 +5,7 @@
 //
 //   rv-run-probe guards                     the shared installation
 //   rv-run-probe run DIRECTORY COMMAND...   `rv run --secret OPENAI_API_KEY`
+//                                           (only with HOME under TMPDIR)
 //
 // Each failed check is one `rv-run-probe: FAIL` line on stderr.
 #if os(macOS)
@@ -97,6 +98,23 @@ enum RunProbe {
         }
     }
 
+    /// `run` stages what `$HOME/.config/rv` holds, so it runs only with a
+    /// HOME under the temporary directory (as the test sets it), never with
+    /// a real one when started by hand. Both paths resolved: /var is
+    /// /private/var.
+    static func homeIsTemporary() -> Bool {
+        guard let home = ProcessInfo.processInfo.environment["HOME"].flatMap(resolved),
+            let temporary = resolved(FileManager.default.temporaryDirectory.path), temporary != "/"
+        else { return false }
+        return home.hasPrefix(temporary + "/")
+    }
+
+    static func resolved(_ path: String) -> String? {
+        guard let pointer = realpath(path, nil) else { return nil }
+        defer { free(pointer) }
+        return String(cString: pointer)
+    }
+
     static let ignored = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
 
     /// The handler for `number`, as a number: 0 is SIG_DFL.
@@ -129,6 +147,9 @@ enum RunProbe {
         case "guards" where arguments.count == 1:
             failures = guards()
             code = failures.isEmpty ? 0 : 1
+        case "run" where arguments.count >= 3 && homeIsTemporary() == false:
+            failures = ["run: HOME is not under the temporary directory; refusing to read its rv configuration"]
+            code = 2
         case "run" where arguments.count >= 3:
             let outcome = run(directory: arguments[1], command: Array(arguments.dropFirst(2)))
             code = outcome.code
