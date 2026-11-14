@@ -493,6 +493,31 @@ struct SecretRunLaunchTests {
         #expect(notices.all.first?.contains("terminal") == true)
     }
 
+    /// The pipeline's other command joins rv's group after the check
+    /// before the spawn: the launch keeps the terminal back without a word
+    /// (nothing is written between the spawn and the resume), and rv says
+    /// why once it next can, after the command's stop.
+    @Test(.timeLimit(.minutes(1)))
+    func aGroupSharedOnlyByTheLaunchIsToldAtTheNextHandOff() {
+        let terminal = RecordingTerminal()
+        let notices = Notices()
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            SecretRunProcess.launch(
+                executable: "/bin/sh", arguments: ["sh", "-c", "kill -STOP $$; exit 5"],
+                environment: ["PATH=/usr/bin:/bin"], terminal: terminal, signals: SecretRunSignals(detached: []),
+                notice: notices.sink
+            ) { group in
+                bound.set(group.pgid.rawValue)
+                terminal.sharesGroup = true
+                return .success(())
+            }
+        }
+        #expect(result == .success(5 << 8))
+        #expect(terminal.events == ["stopSelf"])
+        #expect(notices.all == [SecretRunJobControl.heldBackNotice])
+    }
+
     /// rv started as an asynchronous list by a shell without job control
     /// inherits SIGINT ignored: the terminal stays with the script.
     @Test(.timeLimit(.minutes(1)))
@@ -840,17 +865,23 @@ private final class RecordingTerminal: SecretRunTerminalControl, Sendable {
     private struct State {
         var events: [String] = []
         var foreground = getpgrp()
+        var shares = false
     }
 
     private let state = Mutex(State())
-    /// Whether rv's group holds another job (a pipeline).
-    let sharesGroup: Bool
 
     init(shares: Bool = false) {
-        sharesGroup = shares
+        state.withLock { $0.shares = shares }
     }
 
     var events: [String] { state.withLock { $0.events } }
+
+    /// Whether rv's group holds another job (a pipeline); a test sets it
+    /// to play a pipeline that forms during the launch.
+    var sharesGroup: Bool {
+        get { state.withLock { $0.shares } }
+        set { state.withLock { $0.shares = newValue } }
+    }
 
     /// The terminal's foreground group; a test sets it to play the shell.
     var foreground: pid_t {
