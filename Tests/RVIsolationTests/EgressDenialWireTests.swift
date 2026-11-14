@@ -210,7 +210,11 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     #expect(dns.json?["reason"] as? String == "dial-failed")
     #expect(dns.json?["proposal_id"] == nil)
     _ = denyWireExchange(port: port, request: "BREW pot HTTP/1.1\r\n\r\n")
-    #expect(calls.all.isEmpty)
+    // Sentinel: hooks run in order on one serial queue, so once this policy
+    // denial reaches the hook any earlier dispatch would already show.
+    _ = denyWireExchange(port: port, request: "CONNECT sentinel.example:22 HTTP/1.1\r\n\r\n")
+    denyWireAwait(calls, count: 1)
+    #expect(calls.all.map(\.host) == ["sentinel.example"])
 }
 
 // A stuck review queue must not turn a deny into a hang: the proxy waits a
@@ -222,14 +226,14 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
         review: denyWireHook(DenyWireCalls(), answerAfter: nil))
     let port = try proxy.start().get()
     defer { proxy.stop() }
-    let started = Date()
+    // The exchange's own deadline is the hang check: a deny held on the
+    // stuck hook would leave it with no bytes.
     let raw = denyWireExchange(port: port, request: "CONNECT other.example:443 HTTP/1.1\r\n\r\n")
-    let elapsed = Date().timeIntervalSince(started)
     let response = try #require(DenyWireResponse(raw))
     #expect(response.statusLine == "HTTP/1.1 403 Forbidden")
     #expect(response.json?["proposal_id"] == nil)
     #expect(response.json?["next_step"] as? String == "rv egress denials")
-    #expect(elapsed < 5, "deny waited \(elapsed)s on a stuck review")
+    denyWireAwait(records, count: 1)
     #expect(records.all.map(\.reason) == [.deniedPolicy])
 }
 
@@ -266,7 +270,16 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     #expect(mismatchBytes == baseline)
     #expect(unattributedBytes == baseline)
     #expect(String(decoding: mismatchBytes, as: UTF8.self).contains("/opt") == false)
-    #expect(calls.all.isEmpty)
+    // Sentinel on the shared serial hook queue: a policy denial from an
+    // unscoped proxy with the same hook. Any hook the mismatch deny queued
+    // would run first.
+    let sentinel = EgressProxy(
+        policy: denyWirePolicy, grants: nil, record: { _ in }, review: denyWireHook(calls))
+    let sentinelPort = try sentinel.start().get()
+    defer { sentinel.stop() }
+    _ = denyWireExchange(port: sentinelPort, request: "CONNECT sentinel.example:443 HTTP/1.1\r\n\r\n")
+    denyWireAwait(calls, count: 1)
+    #expect(calls.all.map(\.host) == ["sentinel.example"])
 }
 
 // Oracle: the resolver's answer (NXDOMAIN vs a private address) is not
@@ -286,6 +299,7 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     let filteredBytes = denyWireExchange(port: filteredPort, request: request)
     #expect(nxBytes.isEmpty == false)
     #expect(nxBytes == filteredBytes)
+    denyWireAwait(records, count: 1)
     #expect(records.all.map(\.reason) == [.addressFiltered])
 }
 
@@ -361,7 +375,8 @@ private func denyWireAwait(_ calls: DenyWireCalls, count: Int, seconds: TimeInte
         size: 128, mtimeSeconds: 1_700_000_000, mtimeNanoseconds: 0,
         ctimeSeconds: 1_700_000_000, ctimeNanoseconds: 0, device: 1, inode: 7)
     let calls = DenyWireCalls()
-    // A hook that never answers plus a long wait: any wait would show.
+    // A hook that never answers plus a wait longer than the exchange
+    // deadline: any wait would leave the exchange with no bytes.
     let scoped = EgressProxy(
         policy: denyWirePolicy, grants: nil,
         binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
@@ -369,44 +384,102 @@ private func denyWireAwait(_ calls: DenyWireCalls, count: Int, seconds: TimeInte
         pins: EgressBinaryPinCache(fingerprint: { _ in fingerprint }, hashFile: { _ in "golden" }),
         record: { _ in },
         review: denyWireHook(calls, answerAfter: nil),
-        proposalWait: 10)
+        proposalWait: 60)
     #expect(scoped.advertisesProposals == false)
     let scopedPort = try scoped.start().get()
     defer { scoped.stop() }
-    let started = Date()
     let bytes = denyWireExchange(port: scopedPort, request: request)
-    let elapsed = Date().timeIntervalSince(started)
     #expect(baseline.isEmpty == false)
     #expect(bytes == baseline)
-    #expect(elapsed < 5, "binary-scoped deny waited \(elapsed)s")
     denyWireAwait(calls, count: 1)
     #expect(calls.all.map(\.reason) == [.deniedPolicy])
 }
 
-// A flood of denials against a stuck queue: past the waiter cap the deny
-// goes out at once, and every denial still reaches intake.
+/// Answer closures a test hook holds until the test releases them.
+private final class DenyWireHeld: @unchecked Sendable {
+    private let lock = NSLock()
+    private var answers: [@Sendable (String?) -> Void] = []
+
+    func hold(_ answer: @escaping @Sendable (String?) -> Void) {
+        lock.lock()
+        answers.append(answer)
+        lock.unlock()
+    }
+
+    func releaseAll(_ id: String) {
+        lock.lock()
+        let taken = answers
+        answers = []
+        lock.unlock()
+        for answer in taken { answer(id) }
+    }
+}
+
+private final class DenyWireReplies: @unchecked Sendable {
+    private let lock = NSLock()
+    private var replies: [[UInt8]] = []
+
+    func add(_ reply: [UInt8]) {
+        lock.lock()
+        replies.append(reply)
+        lock.unlock()
+    }
+
+    var all: [[UInt8]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return replies
+    }
+}
+
+// The waiter cap: with `maximumProposalWaiters` denials parked on held
+// answers (and a wait longer than the exchange deadline), further policy
+// denials still go out at once without an id, and their intake still runs.
+// Without the cap the extras would park too and come back empty.
 @Test func reviewWaitersAreCappedAndIntakeStillRuns() throws {
     let calls = DenyWireCalls()
+    let held = DenyWireHeld()
+    let hook: EgressReviewHook = { denial, answer in
+        calls.note(denial)
+        held.hold(answer)
+    }
     let proxy = EgressProxy(
-        policy: denyWirePolicy, grants: nil, record: { _ in },
-        review: denyWireHook(calls, answerAfter: nil))
+        policy: denyWirePolicy, grants: nil, record: { _ in }, review: hook, proposalWait: 120)
     let port = try proxy.start().get()
     defer { proxy.stop() }
-    let flood = 3 * EgressProxy.maximumProposalWaiters
-    let replies = Mutex<[[UInt8]]>([])
-    let started = Date()
-    DispatchQueue.concurrentPerform(iterations: flood) { index in
-        let reply = denyWireExchange(port: port, request: "CONNECT host\(index).example:443 HTTP/1.1\r\n\r\n")
-        replies.withLock { $0.append(reply) }
+    let cap = EgressProxy.maximumProposalWaiters
+    let parked = DenyWireReplies()
+    let parkedDone = DispatchGroup()
+    // Plain threads, not a width-limited pool: every parked client must be
+    // connected at once on a small CI host.
+    for index in 0..<cap {
+        parkedDone.enter()
+        Thread {
+            parked.add(denyWireExchange(
+                port: port, request: "CONNECT held\(index).example:443 HTTP/1.1\r\n\r\n", deadlineSeconds: 180))
+            parkedDone.leave()
+        }.start()
     }
-    let elapsed = Date().timeIntervalSince(started)
-    let all = replies.withLock { $0 }
-    #expect(all.count == flood)
-    #expect(all.allSatisfy { DenyWireResponse($0)?.statusLine == "HTTP/1.1 403 Forbidden" })
-    #expect(all.allSatisfy { DenyWireResponse($0)?.json?["proposal_id"] == nil })
-    #expect(elapsed < 10, "flood took \(elapsed)s")
-    denyWireAwait(calls, count: flood)
-    #expect(calls.all.count == flood)
+    denyWireAwait(calls, count: cap)
+    #expect(calls.all.count == cap)
+
+    let extras = 2
+    for index in 0..<extras {
+        let reply = DenyWireResponse(
+            denyWireExchange(port: port, request: "CONNECT extra\(index).example:443 HTTP/1.1\r\n\r\n"))
+        #expect(reply?.statusLine == "HTTP/1.1 403 Forbidden")
+        #expect(reply?.json?["reason"] as? String == "denied-policy")
+        #expect(reply?.json?["proposal_id"] == nil)
+    }
+    #expect(parked.all.isEmpty, "a parked deny returned before its answer was released")
+    denyWireAwait(calls, count: cap + extras)
+    #expect(calls.all.count == cap + extras)
+
+    held.releaseAll(denyWireProposal)
+    #expect(parkedDone.wait(timeout: .now() + 60) == .success)
+    let replies = parked.all
+    #expect(replies.count == cap)
+    #expect(replies.allSatisfy { DenyWireResponse($0)?.json?["proposal_id"] as? String == denyWireProposal })
 }
 
 // MARK: - Approve, then retry: the body promises only what approval does.
