@@ -34,6 +34,10 @@ public struct PackID: RawRepresentable, Hashable, Sendable, Equatable, Codable {
     /// loadable pack; the ID exists so pin derivation survives IPC, where
     /// `boundReview` is intentionally stripped.
     public static let coreJudge = PackID(rawValue: "core.judge")
+    /// Host MCP config writes while rv's MCP gateway is in use
+    /// (`MCPHostConfigPaths`). Not a loadable pack: an owner may approve
+    /// one through allow-once, so it must not pin like `core.secrets`.
+    public static let coreMCP = PackID(rawValue: "core.mcp")
     public static let systemDisk = PackID(rawValue: "system.disk")
 
     public static func isValid(_ rawValue: String) -> Bool {
