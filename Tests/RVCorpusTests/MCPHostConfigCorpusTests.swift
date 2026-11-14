@@ -26,6 +26,24 @@ struct MCPHostConfigCorpusTests {
         }
     }
 
+    /// Rows an earlier stage judges indeterminate before the guard runs
+    /// (each row's `note` says which): so with the guard on or off.
+    @Test func indeterminateRowsStayIndeterminateWithOrWithoutTheGuard() throws {
+        let harness = try StressHarness.dayOne()
+        let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "indeterminate" }
+        #expect(rows.isEmpty == false)
+        for row in rows {
+            guard let command = row.command else { continue }
+            for guarded in [true, false] {
+                let result = door(harness, command, guarded: guarded)
+                guard case .indeterminate = result.decision else {
+                    Issue.record("\(row.id) must be indeterminate, got \(describeDecision(result)): \(command)")
+                    continue
+                }
+            }
+        }
+    }
+
     @Test func allowRowsStayAllowedWhileTheGatewayIsInUse() throws {
         let harness = try StressHarness.dayOne()
         let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "allow" }
@@ -41,7 +59,10 @@ struct MCPHostConfigCorpusTests {
 
     /// In-repository writes that only the MCP guard denies: the guard owns
     /// the verdict, an owner can approve it (not pinned), and with no gateway
-    /// configured the same commands allow.
+    /// configured the same commands allow. (`echo .mcp.json | python3
+    /// edit.py` is not here: the unwrap stage pins a deny on it,
+    /// `builtin.action:unwrap-limited`, guard or not; its corpus row still
+    /// checks the deny.)
     @Test("in-repository config writes are core.mcp and unlockable", arguments: [
         "echo '{\"mcpServers\":{}}' > .mcp.json",
         "printf '{}' | tee .cursor/mcp.json",
@@ -58,7 +79,6 @@ struct MCPHostConfigCorpusTests {
         "cp -r evil .cursor",
         "claude plugin marketplace add evil/market",
         "cp evil.json mcp.json -v",
-        "echo .mcp.json | python3 edit.py",
     ])
     func guardOwnsInRepositoryWrites(command: String) throws {
         let harness = try StressHarness.dayOne()
