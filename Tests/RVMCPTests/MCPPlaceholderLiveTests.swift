@@ -67,21 +67,18 @@ private func loopbackStatus(port: Int, _ request: String) -> Int? {
     return line.split(separator: " ").dropFirst().first.flatMap { Int($0) }
 }
 
-/// A stdio MCP server through the real planner, runtime and `sandbox-exec`.
+/// A stdio MCP server through the real planner, serve's own sandbox hook
+/// (`MCPSandbox.apply`), the runtime and `sandbox-exec`.
 @Suite("MCP server placeholders (live sandbox-exec)")
 struct MCPPlaceholderLiveTests {
-    @Test(.enabled(if: hostBindsPlaceholders), .timeLimit(.minutes(2)))
+    @Test(.enabled(if: hostBindsPlaceholders && MCPSandbox.enforced), .timeLimit(.minutes(2)))
     func aCagedServerSpendsItsPlaceholderAndServeEndsItsWholeGroup() throws {
-        // Under the real home directory, never the checkout: a checkout
-        // under /tmp sits inside the cage's writable temp roots by design.
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".rv-cage-test-placeholders-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let home = root.appendingPathComponent("home")
-        let config = home.appendingPathComponent(".config/rv")
-        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
-        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/bound", isDirectory: true)
-        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        // apply() takes only the account's own home; the server's scratch is
+        // its rv-mcp cache directory there, under a name no other test uses.
+        let home = URL(fileURLWithPath: try #require(MCPSandbox.passwdHome()), isDirectory: true)
+        let name = "placeholder-live-" + UUID().uuidString.prefix(8).lowercased()
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(name)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
         let fixture = try PlaceholderSecretsFixture()
         defer { fixture.tearDown() }
         let upstream = FixtureUpstream()
@@ -91,10 +88,12 @@ struct MCPPlaceholderLiveTests {
 
         // The server answers nothing and ignores its stdin closing and
         // SIGTERM's grandchild: only the group kill after the leader exits
-        // ends `sleep`.
+        // ends `sleep`. `ps eww` asks for its parent's environment, which is
+        // where a secret read from rv's own environment would be.
         let script = """
             out="$1"
-            env > "$out/env"; printf '%s %s' "$*" > "$out/argv"; echo $$ > "$out/pid"
+            env > "$out/env"; printf '%s %s' "$*" > "$out/argv"; echo $$ > "$out/pid"; echo $PPID > "$out/ppid"
+            /bin/ps eww -p $PPID > "$out/ps" 2>&1
             /usr/bin/curl -s --max-time 10 --noproxy '*' -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models" > "$out/status"
             /bin/sh -c 'trap "" TERM; /bin/sleep 60' & echo $! > "$out/grandchild"
@@ -102,35 +101,21 @@ struct MCPPlaceholderLiveTests {
             while :; do /bin/sleep 0.05; done
             """
         let definition = MCPServerDefinition(
-            name: "bound", command: "/bin/sh", args: ["-c", script, "sh", scratch.path],
+            name: name, command: "/bin/sh", args: ["-c", script, "sh", scratch.path],
             sandbox: MCPSandboxPolicy(network: false), placeholders: ["OPENAI_API_KEY"])
         let configuration = MCPConfiguration(servers: [definition])
-        let cage: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { server, launch in
-            guard let policy = server.sandbox else { return .failure(.sandbox("no sandbox")) }
-            // Built from profile() directly: apply() refuses a home that is
-            // not the passwd home, and this fixture's home is deliberately fake.
-            return MCPSandbox.profile(
-                policy: policy, scratch: scratch.path, home: home.path, configDirectory: config.path,
-                temporaryDirectory: NSTemporaryDirectory(),
-                loopbackPorts: MCPSandbox.loopbackPorts(proxy: nil, gateway: launch.gatewayPort)
-            ).map { text in
-                var caged = launch
-                caged.executable = MCPSandbox.sandboxExec
-                caged.arguments = ["-p", text, launch.executable] + launch.arguments
-                caged.workingDirectory = scratch.path
-                return caged
-            }
-        }
         let planned = try MCPLaunchPlanner.plan(
-            servers: ["bound"], configuration: configuration, secrets: PlaceholderSecretsFixture.definitions(),
+            servers: [name], configuration: configuration, secrets: PlaceholderSecretsFixture.definitions(),
             resolver: CountingResolver().resolver, baseEnvironment: ["PATH": "/usr/bin:/bin"], requireSandbox: true,
-            sandbox: cage, placeholders: .broker(broker)
+            sandbox: MCPSandbox.apply(configDirectory: fixture.directory, home: home), placeholders: .broker(broker)
         ).get()
-        guard case .placeholderBound(let launch, _) = planned.first?.1 else {
+        guard case .placeholderBound(let launch, let binding) = planned.first?.1 else {
             Issue.record("not bound: \(String(describing: planned.first?.1))")
             return
         }
-        let port = try #require(launch.gatewayPort)
+        let port = binding.lease.gatewayPort
+        #expect(launch.executable == MCPSandbox.sandboxExec)
+        #expect(launch.arguments.contains { $0.contains("(remote tcp \"localhost:\(port)\")") })
 
         let client = LineClient()
         let core = MCPGatewayCore(
@@ -160,9 +145,14 @@ struct MCPPlaceholderLiveTests {
         }
         try #require(eventually { contents(scratch, "ready") == "ready" }, "the server never got going")
 
-        // sandbox-exec and env exec in place: the shell is the group leader rv spawned.
+        // sandbox-exec and env exec in place: the shell is the group leader
+        // rv spawned, and its parent is this process, not a wrapper.
         let leader = try #require(pid_t(contents(scratch, "pid")))
         #expect(getpgid(leader) == leader)
+        #expect(pid_t(contents(scratch, "ppid")) == getpid())
+        // The cage cannot run setuid ps, and the kernel shows no other
+        // process's environment to a same-user process: rv's stays unread.
+        #expect(contents(scratch, "ps").contains("HOME=") == false, "\(contents(scratch, "ps"))")
         let environment = contents(scratch, "env")
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("OPENAI_BASE_URL=http://127.0.0.1:\(port)/s/OPENAI_API_KEY"))
@@ -189,7 +179,7 @@ struct MCPPlaceholderLiveTests {
         #expect(grandchildGone)
         if grandchildGone == false { _ = kill(grandchild, SIGKILL) }
         #expect(broker.broker.liveCount == 0)
-        #expect(fixture.auditText.contains("\"runtime\":\"mcp:bound\""))
+        #expect(fixture.auditText.contains("\"runtime\":\"mcp:\(name)\""))
         #expect(fixture.auditText.contains(placeholderRealValue) == false)
     }
 }
