@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "anthropic",
+      "displayName": "Anthropic",
+      "description": "Anthropic API (Claude models), key sent in the x-api-key header",
+      "endpoints": [
+        {"name": "api", "upstream": "https://api.anthropic.com"}
+      ],
+      "credentials": [
+        {"variable": "ANTHROPIC_API_KEY", "baseURLEnv": "ANTHROPIC_BASE_URL", "placeholderPrefix": "sk-ant-", "endpoint": "api"}
+      ]
+    },
+    {
+      "id": "openai",
+      "displayName": "OpenAI",
+      "description": "OpenAI API, bearer key in the Authorization header",
+      "endpoints": [
+        {"name": "api", "upstream": "https://api.openai.com/v1"}
+      ],
+      "credentials": [
+        {"variable": "OPENAI_API_KEY", "baseURLEnv": "OPENAI_BASE_URL", "placeholderPrefix": "sk-", "endpoint": "api"}
+      ]
+    },
+    {
+      "id": "openrouter",
+      "displayName": "OpenRouter",
+      "description": "OpenRouter's OpenAI-compatible API, bearer key in the Authorization header",
+      "endpoints": [
+        {"name": "api", "upstream": "https://openrouter.ai/api/v1"}
+      ],
+      "credentials": [
+        {"variable": "OPENROUTER_API_KEY", "baseURLEnv": "OPENROUTER_BASE_URL", "endpoint": "api"}
+      ],
+      "notes": [
+        "OpenAI-compatible clients take $OPENROUTER_BASE_URL as their base URL"
+      ]
+    },
+    {
+      "id": "github",
+      "displayName": "GitHub",
+      "description": "GitHub REST API read-only, and git clone/fetch; push (git-receive-pack) is refused",
+      "endpoints": [
+        {"name": "api", "upstream": "https://api.github.com", "allow": ["github-read"]},
+        {"name": "git", "upstream": "https://github.com", "allow": ["github-clone"]}
+      ],
+      "credentials": [
+        {"variable": "GITHUB_TOKEN", "baseURLEnv": "GITHUB_API_URL", "endpoint": "api"},
+        {"variable": "GH_TOKEN", "baseURLEnv": "GH_API_URL", "endpoint": "api"}
+      ],
+      "notes": [
+        "GraphQL needs POST, which a read-only rule cannot tell from a mutation, so gh commands that use it are refused",
+        "For git over https bind a second secret: rv secrets set NAME --provider github:git --base-url-env VAR"
+      ]
+    },
+    {
+      "id": "vercel",
+      "displayName": "Vercel",
+      "description": "Vercel REST API, bearer token in the Authorization header",
+      "endpoints": [
+        {"name": "api", "upstream": "https://api.vercel.com"}
+      ],
+      "credentials": [
+        {"variable": "VERCEL_TOKEN", "baseURLEnv": "VERCEL_BASE_URL", "endpoint": "api"}
+      ]
+    },
+    {
+      "id": "stripe",
+      "displayName": "Stripe",
+      "description": "Stripe API, secret key in the Authorization header",
+      "endpoints": [
+        {"name": "api", "upstream": "https://api.stripe.com"}
+      ],
+      "credentials": [
+        {"variable": "STRIPE_SECRET_KEY", "baseURLEnv": "STRIPE_API_BASE", "placeholderPrefix": "sk-", "endpoint": "api"}
+      ]
+    },
+    {
+      "id": "npm",
+      "displayName": "npm registry",
+      "description": "Publish to registry.npmjs.org: PUT of a package document only (publish, deprecate)",
+      "endpoints": [
+        {"name": "publish", "upstream": "https://registry.npmjs.org", "allow": [{"methods": ["PUT"], "path": "/*"}]}
+      ],
+      "credentials": [
+        {"variable": "NPM_TOKEN", "baseURLEnv": "NPM_PUBLISH_REGISTRY", "endpoint": "publish"}
+      ],
+      "notes": [
+        "npm publish --registry \"$NPM_PUBLISH_REGISTRY/\" with //127.0.0.1:<port>/s/NPM_TOKEN/:_authToken=${NPM_TOKEN} in .npmrc",
+        "Installs, unpublish, dist-tags and owner changes are refused; scoped names (@scope%2fname) are refused as ambiguous paths"
+      ]
+    },
+    {
+      "id": "pypi",
+      "displayName": "PyPI",
+      "description": "Upload to PyPI: POST /legacy/ on upload.pypi.org only",
+      "endpoints": [
+        {"name": "upload", "upstream": "https://upload.pypi.org/legacy", "allow": [{"methods": ["POST"], "path": "/legacy/"}]}
+      ],
+      "credentials": [
+        {"variable": "TWINE_PASSWORD", "baseURLEnv": "TWINE_REPOSITORY_URL", "endpoint": "upload"},
+        {"variable": "UV_PUBLISH_TOKEN", "baseURLEnv": "UV_PUBLISH_URL", "endpoint": "upload"}
+      ],
+      "notes": [
+        "Upload to the base URL with a trailing slash: twine upload --repository-url \"$TWINE_REPOSITORY_URL/\" (TWINE_USERNAME=__token__)",
+        "or uv publish --publish-url \"$UV_PUBLISH_URL/\""
+      ]
+    }
+  ]
+}

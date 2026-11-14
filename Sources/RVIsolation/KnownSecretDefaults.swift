@@ -1,6 +1,7 @@
 import Foundation
 
-/// Curated gateway defaults for well-known secret names, so
+/// Curated gateway defaults for well-known secret names, from the provider
+/// catalog (`ProviderCatalog.shipped`), so
 /// `rv secrets set OPENAI_API_KEY` needs no flags. Explicit `--gateway`,
 /// `--base-url-env`, `--placeholder-prefix`, and `--environment` always win;
 /// this table only fills in what the flags leave out. Upstreams are fixed
@@ -20,34 +21,16 @@ public enum KnownSecretDefaults {
 
     /// Gateway defaults for `name`, or nil when rv knows nothing about it.
     /// Names match exactly; the caller already validated the variable grammar.
-    public static func gateway(for name: String) -> Gateway? {
-        switch name {
-        case "OPENAI_API_KEY":
-            Gateway(
-                upstream: "https://api.openai.com/v1", baseURLEnv: "OPENAI_BASE_URL",
-                placeholderPrefix: "sk-")
-        case "ANTHROPIC_API_KEY":
-            Gateway(
-                upstream: "https://api.anthropic.com", baseURLEnv: "ANTHROPIC_BASE_URL",
-                placeholderPrefix: "sk-ant-")
-        case "STRIPE_SECRET_KEY":
-            Gateway(
-                upstream: "https://api.stripe.com", baseURLEnv: "STRIPE_API_BASE",
-                placeholderPrefix: "sk-")
-        case "GITHUB_TOKEN":
-            Gateway(
-                upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL",
-                placeholderPrefix: "")
-        case "GH_TOKEN":
-            Gateway(
-                upstream: "https://api.github.com", baseURLEnv: "GH_API_URL",
-                placeholderPrefix: "")
-        case "VERCEL_TOKEN":
-            Gateway(
-                upstream: "https://api.vercel.com", baseURLEnv: "VERCEL_BASE_URL",
-                placeholderPrefix: "")
-        default:
-            nil
-        }
+    /// Read from the provider catalog's credentials: only the upstream and
+    /// variable names, never the profile's allow rules, so a bare
+    /// `rv secrets set GITHUB_TOKEN` keeps allowing any method and path.
+    /// An invalid catalog answers nil for every name, so nothing is inferred.
+    public static func gateway(
+        for name: String, catalog: Result<ProviderCatalog, ProviderCatalogError> = ProviderCatalog.shipped
+    ) -> Gateway? {
+        guard case .success(let catalog) = catalog, let found = catalog.credential(for: name) else { return nil }
+        return Gateway(
+            upstream: found.endpoint.upstream.absoluteString, baseURLEnv: found.credential.baseURLEnv,
+            placeholderPrefix: found.credential.placeholderPrefix)
     }
 }
