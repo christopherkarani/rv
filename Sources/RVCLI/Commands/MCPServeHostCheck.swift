@@ -1,8 +1,3 @@
-#if canImport(Glibc)
-import Glibc
-#elseif canImport(Darwin)
-import Darwin
-#endif
 import Dispatch
 import Foundation
 import RVDomain
@@ -80,10 +75,11 @@ extension MCPRun {
 
     /// Runs `count`, then `audit` with the event, on their own thread, and
     /// waits for both at most `timeout` in all; whatever is still running
-    /// then is left to finish on its own. A count past the deadline is one
-    /// line. Ungoverned entries are one line and one event, counts only, so
-    /// no text from a host config reaches either. A late or failed audit
-    /// write is said on `log` and changes nothing else. Never writes stdout.
+    /// then is left to finish on its own, and one line says which. A count
+    /// that finishes late may still append its event. Ungoverned entries
+    /// are one line and one event, counts only, so no text from a host
+    /// config reaches either. A late or failed audit write is said on `log`
+    /// and changes nothing else. Never writes stdout.
     static func checkHosts(
         timeout: TimeInterval = hostCheckTimeout,
         count: @escaping @Sendable () -> HostCheckCounts,
@@ -108,13 +104,15 @@ extension MCPRun {
             auditDone.signal()
         }
         guard countDone.wait(timeout: deadline) == .success, let found = counted.withLock({ $0 }) else {
-            log("could not check host MCP configs within \(shownTimeout) s; run `rv mcp check` to see them")
+            log(
+                "still checking host MCP configs after \(shownTimeout) s; serving without waiting; "
+                    + "run `rv mcp check` to see them")
             return
         }
         guard let notice = found else { return }
         log(notice.line)
         guard auditDone.wait(timeout: deadline) == .success else {
-            log("could not append the audit log within \(shownTimeout) s")
+            log("audit append still running after \(shownTimeout) s; serving without waiting")
             return
         }
         if audited.withLock({ $0 }) != true { log("could not append the audit log") }
@@ -136,22 +134,5 @@ extension MCPRun {
             source: "mcp-gateway",
             detail: ["bypass": String(counts.bypass), "blocked": String(counts.blocked), "unreviewed": String(counts.unreviewed)])
         return HostCheckNotice(line: line, event: event)
-    }
-
-    /// One `rv mcp serve` stderr line through write(2), which fails with
-    /// EPIPE once SIGPIPE is ignored; `FileHandle.write` raises instead.
-    /// A short or failed write is dropped: stderr is not worth stopping for.
-    static func writeServeStderr(_ text: String) {
-        let bytes = Array(text.utf8)
-        var written = 0
-        while written < bytes.count {
-            let n = bytes.withUnsafeBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return write(STDERR_FILENO, base + written, raw.count - written)
-            }
-            if n < 0, errno == EINTR { continue }
-            guard n > 0 else { return }
-            written += n
-        }
     }
 }

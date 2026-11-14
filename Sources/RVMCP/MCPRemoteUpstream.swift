@@ -71,7 +71,7 @@ public struct MCPRemoteAuthorizer: Sendable {
 /// from the server go to `deliver`; a request that gets no answer (network
 /// error, HTTP error, closed stream) is answered with a JSON-RPC error, so the
 /// gateway core needs no transport knowledge. Redirects are never followed.
-final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private struct Exchange {
         enum Kind {
             case post(JSONValue, retried: Bool)
@@ -102,7 +102,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
     private var held: [JSONValue] = []
     private var stopped = false
 
-    init(
+    package init(
         launch: MCPRemoteLaunch,
         authorizer: MCPRemoteAuthorizer? = nil,
         deliver: @escaping @Sendable (JSONValue) -> Void,
@@ -125,16 +125,15 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         return body()
     }
 
-    func start() {
+    package func start() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = MCPHTTPExchange.requestTimeout
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        let session = URLSession(
+            configuration: configuration, delegate: self, delegateQueue: MCPHTTPExchange.delegateQueue("rv.mcp.remote"))
         locked { self.session = session }
         guard launch.transport == .sse else { return }
         openStream(session: session, retried: false)
@@ -156,7 +155,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         task?.resume()
     }
 
-    func send(_ message: JSONValue) {
+    package func send(_ message: JSONValue) {
         let target: URL? = locked {
             if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
             guard launch.transport == .sse else { return launch.url }
@@ -169,7 +168,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         if let target { post(message, to: target, retried: false) }
     }
 
-    func stop() {
+    package func stop() {
         let (session, closing): (URLSession?, String?) = locked {
             stopped = true
             return (self.session, launch.transport == .http ? sessionID : nil)
@@ -211,14 +210,14 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
 
     // MARK: URLSessionDataDelegate (serial delegate queue)
 
-    func urlSession(
+    package func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(nil)
     }
 
-    func urlSession(
+    package func urlSession(
         _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
@@ -239,7 +238,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         completionHandler(.allow)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = dataTask.taskIdentifier
         guard var exchange = locked({ exchanges[id] }) else { return }
         var incoming: [JSONValue] = []
@@ -269,7 +268,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         incoming.forEach(deliver)
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    package func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let id = task.taskIdentifier
         guard let exchange = locked({ exchanges.removeValue(forKey: id) }), locked({ stopped }) == false else {
             return

@@ -11,6 +11,16 @@
 // through `sysctl` `KERN_PROCARGS2`, as a caged server could, and prints what
 // it got back: never the values, only counts and whether `HOME=` was there.
 // `rv-mcp-probe procargs-bytes <hex>` runs the same parse over a given buffer.
+// `rv-mcp-probe remote-starved <url>` fills GCD's shared global pool with
+// work that never ends, then sends `initialize` to the MCP server at `url`
+// through `MCPRemoteUpstream` and a GET through `MCPOAuthHTTP.live`, and
+// prints how long each took to answer ("none" after 10 s).
+// `rv-mcp-probe stderr <bytes> [interrupted|closed]` ignores SIGPIPE as serve
+// does, then writes one line of `bytes` x's through the gateway's stderr
+// writer: `interrupted` under a 1 ms SIGALRM without SA_RESTART, `closed`
+// after its stdin ends (the test closes stderr's read end first). Prints
+// "returned" once the write returns.
+// `rv-mcp-probe pipe-disposition <file>` writes `PIPE=<disposition>` to `file`.
 import Darwin
 import Foundation
 import RVMCP
@@ -111,8 +121,90 @@ private func parseProcargs(_ data: [UInt8]) -> String {
     return "ok argc=\(argc) strings=\(rest.count) home=\(home ? "yes" : "no")"
 }
 
+/// Milliseconds since `start`, or "none" when `answered` timed out.
+private func elapsed(_ start: Date, _ answered: Bool) -> String {
+    answered ? String(Int(Date().timeIntervalSince(start) * 1000)) : "none"
+}
+
+/// GCD hands out at most `kern.wq_max_constrained_threads` (64-70) threads
+/// for the global queues; 256 blocked items take every one of them.
+private func remoteWhileStarved(_ url: URL) -> Int32 {
+    let held = DispatchSemaphore(value: 0)
+    for _ in 0..<256 { DispatchQueue.global().async { held.wait() } }
+    usleep(500_000)
+
+    let answered = DispatchSemaphore(value: 0)
+    let upstream = MCPRemoteUpstream(
+        launch: MCPRemoteLaunch(server: "starved", url: url),
+        deliver: { _ in answered.signal() }, exited: {}, log: { _ in })
+    let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}"#
+    guard let message = try? JSONValue.parse(initialize) else { return 1 }
+    var start = Date()
+    upstream.start()
+    upstream.send(message)
+    say("upstream " + elapsed(start, answered.wait(timeout: .now() + 10) == .success))
+
+    start = Date()
+    let status = MCPOAuthHTTP.live(URLRequest(url: url, timeoutInterval: 10))?.status
+    say("live " + elapsed(start, status != nil) + " status \(status.map { String($0) } ?? "none")")
+    // The held work never ends; exit rather than return to it.
+    exit(0)
+}
+
+/// `pipe-disposition`: what this process got for SIGPIPE.
+private func pipeDisposition() -> String {
+    var current = sigaction()
+    guard sigaction(SIGPIPE, nil, &current) == 0 else { return "PIPE=unreadable" }
+    let handler = unsafeBitCast(current.__sigaction_u.__sa_handler, to: Int.self)
+    let ignore = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+    return "PIPE=" + (handler == 0 ? "default" : handler == ignore ? "ignore" : "handler")
+}
+
+private func writeStderrLine(_ count: Int, _ mode: String?) -> Int32 {
+    signal(SIGPIPE, SIG_IGN)
+    switch mode {
+    case "interrupted":
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = { _ in }
+        sigemptyset(&action.sa_mask)
+        action.sa_flags = 0
+        sigaction(SIGALRM, &action, nil)
+        var timer = itimerval(it_interval: timeval(tv_sec: 0, tv_usec: 1000), it_value: timeval(tv_sec: 0, tv_usec: 1000))
+        setitimer(ITIMER_REAL, &timer, nil)
+    case "closed":
+        _ = FileHandle.standardInput.readDataToEndOfFile()
+    case nil: break
+    default: return 2
+    }
+    MCPGatewayRuntime.writeStderrLine(String(repeating: "x", count: count) + "\n")
+    var off = itimerval()
+    setitimer(ITIMER_REAL, &off, nil)
+    say("returned")
+    return 0
+}
+
 let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first ?? "" {
+case "remote-starved":
+    guard arguments.count == 2, let url = URL(string: arguments[1]) else {
+        say("usage: rv-mcp-probe remote-starved <url>")
+        exit(2)
+    }
+    exit(remoteWhileStarved(url))
+case "stderr":
+    guard (2...3).contains(arguments.count), let count = Int(arguments[1]), count >= 0,
+        writeStderrLine(count, arguments.count == 3 ? arguments[2] : nil) == 0
+    else {
+        say("usage: rv-mcp-probe stderr <bytes> [interrupted|closed]")
+        exit(2)
+    }
+    exit(0)
+case "pipe-disposition":
+    guard arguments.count == 2 else {
+        say("usage: rv-mcp-probe pipe-disposition <file>")
+        exit(2)
+    }
+    exit(FileManager.default.createFile(atPath: arguments[1], contents: Data(pipeDisposition().utf8)) ? 0 : 1)
 case "report":
     say(dispositions())
     exit(0)
@@ -152,6 +244,7 @@ case "procargs-bytes":
     say(parseProcargs(bytes))
     exit(0)
 default:
-    say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>")
+    say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>"
+        + " | remote-starved <url> | stderr <bytes> [interrupted|closed] | pipe-disposition <file>")
     exit(2)
 }

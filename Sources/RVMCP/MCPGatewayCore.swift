@@ -507,13 +507,14 @@ public struct MCPGatewayCore {
             ]
         }
         // Refused as `callTool` would now: the prompt may predate a listing
-        // that left an untracked tool's binding unchanged.
+        // that left an untracked tool's binding unchanged. The record closes
+        // the prompt's `ask` row, as a changed binding's does.
         if let reason = hiddenRefusal(server: call.server, tool: call.tool) {
             let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
             return [
                 .audit(MCPCallRecord(
-                    server: call.server, tool: call.tool, decision: .deny, argumentKeys: call.keys, isError: true,
-                    reason: reason, outcome: .notRun)),
+                    server: call.server, tool: call.tool, decision: .ask, argumentKeys: call.keys, isError: true,
+                    reason: reason, outcome: .declined(approvalID: key))),
                 .toClient(Self.error(id: call.client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }

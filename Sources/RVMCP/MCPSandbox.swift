@@ -103,7 +103,7 @@ public enum MCPSandbox {
     /// the kernel's Landlock leaves open); it goes to stderr by default.
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
-        notice: @escaping @Sendable (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
+        notice: @escaping @Sendable (String) -> Void = { MCPGatewayRuntime.writeStderrLine($0 + "\n") },
         denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
     ) -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch, reach in
