@@ -645,8 +645,7 @@ public struct MCPGatewayCore {
         }
         // Not listed either: its schema names a property a client may show
         // raw, or it may and rv could not track it.
-        let untrackedOnHidingServer = hidingUntracked.contains(server) && observed[server]?[tool] == nil
-        guard hidingSchemas[server]?.contains(tool) != true, untrackedOnHidingServer == false else {
+        guard refusesAsHidden(server: server, tool: tool) == false else {
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
@@ -1161,7 +1160,20 @@ public struct MCPGatewayCore {
                 }
             }
         }
-        return (listed.compactMap { exposedTool($0, upstream: upstream) }, outputs)
+        // A name refused as hidden is not listed either, whichever of its
+        // entries (a clean duplicate, one on another page) is exposed.
+        let shown = listed.filter { tool in
+            scrub(tool, for: server)["name"]?.stringValue.map { refusesAsHidden(server: server, tool: $0) } != true
+        }
+        return (shown.compactMap { exposedTool($0, upstream: upstream) }, outputs)
+    }
+
+    /// True when a call to `tool` on `server` is refused as hidden: it was
+    /// listed with a schema `schemaNamesHideText` rejects, or its server
+    /// listed such a tool rv could not track and rv does not track this one.
+    func refusesAsHidden(server: String, tool: String) -> Bool {
+        hidingSchemas[server]?.contains(tool) == true
+            || (hidingUntracked.contains(server) && observed[server]?[tool] == nil)
     }
 
     /// Tools whose name or description holds every term; name matches first.
