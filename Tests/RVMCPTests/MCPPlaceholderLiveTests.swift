@@ -67,18 +67,24 @@ private func loopbackStatus(port: Int, _ request: String) -> Int? {
     return line.split(separator: " ").dropFirst().first.flatMap { Int($0) }
 }
 
-/// A stdio MCP server through the real planner, serve's own sandbox hook
-/// (`MCPSandbox.apply`), the runtime and `sandbox-exec`.
+/// A stdio MCP server through the real planner, the runtime and
+/// `sandbox-exec`, caged by `cage(home:configDirectory:)`.
 @Suite("MCP server placeholders (live sandbox-exec)")
 struct MCPPlaceholderLiveTests {
     @Test(.enabled(if: hostBindsPlaceholders && MCPSandbox.enforced), .timeLimit(.minutes(2)))
     func aCagedServerSpendsItsPlaceholderAndServeEndsItsWholeGroup() throws {
-        // apply() takes only the account's own home; the server's scratch is
-        // its rv-mcp cache directory there, under a name no other test uses.
-        let home = URL(fileURLWithPath: try #require(MCPSandbox.passwdHome()), isDirectory: true)
-        let name = "placeholder-live-" + UUID().uuidString.prefix(8).lowercased()
+        // A fake home, never the real one. Spelled as the kernel resolves it
+        // (no /var firmlink), since the cage refuses a write root that
+        // resolves elsewhere.
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-placeholder-live-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent("Library/Caches"), withIntermediateDirectories: true)
+        let name = "placeholder-live"
         let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(name)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: scratch) }
         let fixture = try PlaceholderSecretsFixture()
         defer { fixture.tearDown() }
         let upstream = FixtureUpstream()
@@ -109,7 +115,7 @@ struct MCPPlaceholderLiveTests {
         let planned = try MCPLaunchPlanner.plan(
             servers: [name], configuration: configuration, secrets: PlaceholderSecretsFixture.definitions(),
             resolver: CountingResolver().resolver, baseEnvironment: ["PATH": "/usr/bin:/bin"], requireSandbox: true,
-            sandbox: MCPSandbox.apply(configDirectory: fixture.directory, home: home), placeholders: .broker(broker)
+            sandbox: Self.cage(home: home, configDirectory: fixture.directory), placeholders: .broker(broker)
         ).get()
         guard case .placeholderBound(let launch, let binding) = planned.first?.1 else {
             Issue.record("not bound: \(String(describing: planned.first?.1))")
@@ -196,6 +202,34 @@ struct MCPPlaceholderLiveTests {
         #expect(broker.broker.liveCount == 0)
         #expect(fixture.auditText.contains("\"runtime\":\"mcp:\(name)\""))
         #expect(fixture.auditText.contains(placeholderRealValue) == false)
+    }
+
+    /// The cage `MCPSandbox.apply` builds, for a fake home: apply() takes only
+    /// the passwd home (`unreviewedHome`), and a test must not write there.
+    /// Same scratch, network reach, profile and launch rewrite.
+    private static func cage(
+        home: URL, configDirectory: URL
+    ) -> (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
+        { definition, launch, reach in
+            guard let policy = definition.sandbox else { return .failure(.sandbox("no sandbox policy")) }
+            let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(definition.name)", isDirectory: true)
+            guard MCPSandbox.createCheckedDirectory(scratch.path) else {
+                return .failure(.sandbox(MCPSandbox.scratchCreationFailure(scratch.path)))
+            }
+            let network = MCPSandbox.cageNetwork(launch.environment, proxy: nil, reach: reach)
+            return MCPSandbox.profile(
+                policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
+                temporaryDirectory: launch.environment["TMPDIR"] ?? NSTemporaryDirectory(),
+                loopbackPorts: network.loopbackPorts
+            ).map { text in
+                var caged = launch
+                caged.environment = network.environment
+                caged.executable = MCPSandbox.sandboxExec
+                caged.arguments = ["-p", text, launch.executable] + launch.arguments
+                caged.workingDirectory = scratch.path
+                return caged
+            }
+        }
     }
 
     /// Whether `pid` is a child of this process not yet reaped, running or
