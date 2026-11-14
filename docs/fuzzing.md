@@ -10,6 +10,7 @@ secret gateway's rewrites of them:
 | `rv-fuzz-normalize` (`Fuzz/Normalize`) | `Normalize`, pin `evaluate`, and the door `evaluateWithSemantics` over day-one packs | `RVCorpusTests` `NormalizeFuzzTests` |
 | `rv-fuzz-mcp-json` (`Fuzz/MCPJSON`) | MCP gateway line framing (`MCPGatewayRuntime.readLines`) and `JSONValue.parse` (`JSONSpellingParser`) in the gateway, `mcp.json`, and lenient host-config modes | `RVMCPTests` `MCPJSONFuzzTests` |
 | `rv-fuzz-secret-rewrite` (`Fuzz/SecretRewrite`) | Secret gateway placeholder substitution (header, Basic user and password, path, query) and the streaming response scrubber | `RVIsolationTests` `SecretRewriteFuzzTests` |
+| `rv-fuzz-procfs` (`Fuzz/ProcFS`) | The Linux `/proc` readers behind the secrets gateway's peer binding (`ProcFSParse`): `stat`, `status`, `net/tcp` and `tcp6`, `mountinfo`, an io_uring `fdinfo`, `fd` links | `RVIsolationTests` `ProcFSFuzzTests` |
 
 Each harness traps on a crash and on a broken invariant: a parsed gateway
 head must reparse to itself and its route must stay on the binding's host;
@@ -28,13 +29,26 @@ chunking of a body holding the secret raw, percent-encoded,
 JSON-escaped, in base64 or base64url at any alignment, or in hex, the
 scrubbed output must not hold that form.
 
+The `/proc` readers take text that other processes partly choose (a
+process name, a mount point, a file path). Whatever a name holds, the
+`stat` fields after it are the kernel's, and a `stat` cut short is
+refused; a `Name:` cannot supply the uids; a socket table reads the same
+on either byte order but for its address words, a match is the one held
+client row beside the gateway's own, row order does not matter, and one
+more row can only turn a match into "cannot tell", never into another
+socket; a mount elsewhere cannot make a `/proc` that hides processes read
+as one that shows them; and a path registered with an io_uring instance
+is one entry that never reads as a socket.
+
 ## In the test suite
 
 The twins are seeded, fixed-iteration mutation runs over the corpora in
 `Tests/RVEngineTests/Fixtures/corpus`, generated ClientHellos, and each
 harness's `seeds`. `SecretRewriteFuzzTests` decodes the same input
 layout as its harness and draws the same choices from it, so a libFuzzer
-crash file replays through `SecretRewriteFuzzTests.violations(_:)`. They
+crash file replays through `SecretRewriteFuzzTests.violations(_:)`;
+`ProcFSFuzzTests` holds the same properties as its harness and replays one
+the same way. They
 run with `swift test` on every platform and finish in seconds. For a longer
 or different run:
 
@@ -73,11 +87,13 @@ directory with the `command` strings from
 workflow's "Seed corpus" step does this); the others start from
 `Fuzz/<Harness>/seeds`. Pass the harness's dictionary
 (`Fuzz/Normalize/shell.dict`, `Fuzz/GatewayRequest/http.dict`,
-`Fuzz/MCPJSON/json.dict`, `Fuzz/SecretRewrite/rewrite.dict`), and a
+`Fuzz/MCPJSON/json.dict`, `Fuzz/SecretRewrite/rewrite.dict`,
+`Fuzz/ProcFS/procfs.dict`), and a
 `-max_len` past the parser's cap (CI uses 70000 for normalize, so
 commands over the 65,536-byte `commandByteCap` are generated, 140000 for
-mcp-json, so lines span two 64 KiB reads, and 1600 for secret-rewrite,
-its whole input layout).
+mcp-json, so lines span two 64 KiB reads, 1600 for secret-rewrite,
+its whole input layout, and 4096 for procfs, a socket table of a few
+dozen rows).
 
 The MCP gateway caps a line at 64 MiB (`MCPGatewayRuntime.maximumLineBytes`),
 a constant too large to fuzz. The harness and the `crlf-at-read-boundary`
@@ -93,7 +109,7 @@ alive (the normalize harness's compiled packs, Foundation's pattern cache).
 Any other leak fails the run.
 
 Replace `normalize` with `gateway-request`, `tls-client-hello`, `mcp-json`,
-or `secret-rewrite`. Pass a crash file instead of a directory to replay it:
+`secret-rewrite`, or `procfs`. Pass a crash file instead of a directory to replay it:
 `.build/fuzz/debug/rv-fuzz-normalize crash-<sha>`.
 
 A crash in gate verdict logic gets a failing regression test first (the

@@ -222,13 +222,13 @@ struct SecretRunPlanTests {
     /// back only if it gave it: a backgrounded rv leaves it with the shell.
     @Test func terminalIsHandedFromTheForegroundAndReclaimedOnlyIfHanded() {
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
-        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true))  // Ctrl-Z
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100) == true)
+        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == true)  // Ctrl-Z
         #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == false)  // nothing left to take back
         #expect(job.handsTerminal(rvInForeground: false, sharesGroup: false, to: 100) == false)  // `bg`
         #expect(job.reclaimsTerminal(foreground: 7, foregroundAlive: true) == false)  // stops in the background
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))  // `fg`
-        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: false))  // the command's group is gone
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100) == true)  // `fg`
+        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: false) == true)  // the command's group is gone
 
         var background = SecretRunJobControl()
         #expect(background.handsTerminal(rvInForeground: false, sharesGroup: false, to: 100) == false)  // `rv run … &`
@@ -240,14 +240,14 @@ struct SecretRunPlanTests {
     /// group nobody is in any more, and never when the foreground is unknown.
     @Test func terminalAnotherJobHoldsIsNotTakenBack() {
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100) == true)
         #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: true) == false)
         #expect(job.handedTo == nil)
 
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
-        #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: false))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100) == true)
+        #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: false) == true)
 
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100) == true)
         #expect(job.reclaimsTerminal(foreground: nil, foregroundAlive: false) == false)
     }
 
@@ -347,7 +347,7 @@ struct SecretRunLaunchTests {
         #expect(lease.definitions.map(\.name) == ["OPENAI_API_KEY"])
     }
 
-    #if os(macOS)
+    #if os(macOS) || os(Linux)
     /// The stop a supervisor observed may be followed at once by the
     /// leader's exit. Consuming the stop must not reap that exit: the zombie
     /// is what keeps the group id from being reused before the group kill.
@@ -362,6 +362,32 @@ struct SecretRunLaunchTests {
         #expect(kill(pid, 0) == 0)  // still an unreaped zombie
         var status: Int32 = 0
         #expect(waitpid(pid, &status, 0) == pid)
+    }
+
+    /// rv started with a standard descriptor closed (`rv run ... <&-`) has
+    /// since opened something of its own at that number. "Inherit stdin as
+    /// it is" must give the command that number closed, not rv's file.
+    @Test(.timeLimit(.minutes(1)))
+    func aStandardDescriptorRvOpenedItselfIsClosedInTheCommand() throws {
+        let saved = dup(STDIN_FILENO)
+        try #require(saved >= 0)
+        let own = open("/dev/null", O_RDONLY | O_CLOEXEC)
+        try #require(own >= 0)
+        // What rv's own open would have left at 0: a close-on-exec descriptor.
+        try #require(dup2(own, STDIN_FILENO) == STDIN_FILENO)
+        try #require(fcntl(STDIN_FILENO, F_SETFD, FD_CLOEXEC) == 0)
+        _ = close(own)
+        let spawned = SecretRunProcess.spawnSuspended(
+            executable: "/bin/sh", arguments: ["sh", "-c", "if [ -e /dev/fd/0 ]; then exit 7; fi; exit 4"],
+            environment: ["PATH=/usr/bin:/bin"],
+            descriptors: [STDIN_FILENO: STDIN_FILENO, STDOUT_FILENO: STDOUT_FILENO, STDERR_FILENO: STDERR_FILENO])
+        #expect(dup2(saved, STDIN_FILENO) == STDIN_FILENO)
+        _ = close(saved)
+        let pid = try spawned.get()
+        #expect(kill(pid, SIGCONT) == 0)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+        #expect(status == 4 << 8, "the command was given rv's own descriptor as its stdin")
     }
 
     /// A real child stops itself (as Ctrl-Z would stop it): rv takes the
@@ -417,9 +443,18 @@ struct SecretRunLaunchTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let marker = directory.appendingPathComponent("pid").path
         let signals = SecretRunSignals()
-        defer { signals.restore() }
+        // Whether the guard is still up: the signal is sent to this whole
+        // process, and after `restore` it would end the test run.
+        let guarded = Mutex(true)
+        defer {
+            guarded.withLock { $0 = false }
+            signals.restore()
+        }
         Thread.detachNewThread {
-            let deadline = Date().addingTimeInterval(20)
+            // As long as the test may take: on a loaded machine the command
+            // can take tens of seconds to start. A signal sent before it has
+            // stopped would abandon the launch, which is another test.
+            let deadline = Date().addingTimeInterval(55)
             var pid: pid_t = 0
             while pid == 0, Date() < deadline {
                 let text = (try? String(contentsOfFile: marker, encoding: .utf8)) ?? ""
@@ -427,7 +462,7 @@ struct SecretRunLaunchTests {
                 usleep(10_000)
             }
             while isStopped(pid) == false, Date() < deadline { usleep(10_000) }
-            _ = kill(getpid(), number)
+            guarded.withLock { if $0 { _ = kill(getpid(), number) } }
         }
         let script = "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; exit 0"
         let result = SecretRunProcess.launch(
@@ -454,6 +489,68 @@ struct SecretRunLaunchTests {
         #expect(result == .success(4 << 8))
     }
 
+    /// `rv run` opens two guards in turn: one around its capability probe,
+    /// one around the launch. The first must put every disposition back,
+    /// an ignored one included, or the second sees its own leftovers as
+    /// what rv inherited and the command loses `nohup`.
+    @Test(.timeLimit(.minutes(1)))
+    func aSignalRvInheritedIgnoredStaysIgnoredAcrossTheProbeAndTheLaunch() {
+        let previous = signal(SIGHUP, SIG_IGN)
+        defer { _ = signal(SIGHUP, previous) }
+        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD]
+        let before = watched.map(disposition)
+        let probing = SecretRunSignals()
+        #expect(probing.inheritedIgnored == [SIGHUP])
+        probing.restore()
+        #expect(watched.map(disposition) == before)
+        let signals = SecretRunSignals()
+        defer { signals.restore() }
+        #expect(signals.inheritedIgnored == [SIGHUP])
+        // A hangup while rv waits is ignored, as rv was told to: it is not an interrupt.
+        _ = kill(getpid(), SIGHUP)
+        usleep(100_000)
+        #expect(signals.interrupted == nil)
+        let result = SecretRunProcess.launch(
+            executable: "/bin/sh", arguments: ["sh", "-c", "kill -HUP $$; exit 4"],
+            environment: ["PATH=/usr/bin:/bin"], terminal: nil, signals: signals
+        ) { _ in .success(()) }
+        #expect(result == .success(4 << 8))
+    }
+
+    /// Signals arriving while guards open and close must not wedge the
+    /// guard: closing one waits on nothing a delivery holds.
+    @Test(.timeLimit(.minutes(2)))
+    func guardsOpenAndCloseUnderAStormOfSignals() {
+        // A handler, so a signal that lands between two guards is harmless.
+        let noted: sig_t = { _ in }
+        let previous = signal(SIGQUIT, noted)
+        defer { _ = signal(SIGQUIT, previous) }
+        let storming = Mutex(true)
+        let stormed = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            while storming.withLock({ $0 }) {
+                _ = kill(getpid(), SIGQUIT)
+                usleep(200)
+            }
+            stormed.signal()
+        }
+        let finished = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            for _ in 0..<2_000 {
+                let signals = SecretRunSignals()
+                _ = signals.target(Int32.max)  // no such group: forwarding sends nothing
+                signals.restore()
+            }
+            finished.signal()
+        }
+        let done = finished.wait(timeout: .now() + 60)
+        storming.withLock { $0 = false }
+        #expect(done == .success, "opening and closing guards under signals did not finish")
+        _ = stormed.wait(timeout: .now() + 10)
+        // `installed` takes the table's lock: not asked of a run that hung.
+        #expect(done != .success || SecretRunSignals.installed == false)
+    }
+
     /// Dispositions are process-wide: every guard shares one installation,
     /// which the last one out restores, whichever order they leave in.
     /// While installed, SIGCHLD is default so nothing reaps behind rv.
@@ -466,12 +563,13 @@ struct SecretRunLaunchTests {
         for lastOut in [0, 1] {
             let guards = [SecretRunSignals(), SecretRunSignals()]
             #expect(SecretRunSignals.installed)
-            #expect(disposition(SIGINT) == ignoredDisposition)
+            #expect(isGuarded(SIGINT))
+            #expect(disposition(SIGTTOU) == ignoredDisposition)
             #expect(disposition(SIGCHLD) == 0)
             guards[1 - lastOut].restore()
             guards[1 - lastOut].restore()  // idempotent: it does not leave on the other's behalf
             #expect(SecretRunSignals.installed)
-            #expect(disposition(SIGTERM) == ignoredDisposition)
+            #expect(isGuarded(SIGTERM))
             guards[lastOut].restore()
             #expect(SecretRunSignals.installed == false)
             #expect(watched.map(disposition) == before)
@@ -508,8 +606,8 @@ struct SecretRunLaunchTests {
         let unavailable: SecretRunRefusal? = SecretRunProcess.isAvailable ? .peerBindingUnavailable : .spawnUnavailable
         #expect(SecretRunCapability.check(.alwaysMember) == unavailable)
         #expect(SecretRunCapability.check(.neverAnswers) == unavailable)
-        #if os(macOS)
-        // The kernel check (libproc) binds here; elsewhere it is whatever that platform offers.
+        #if os(macOS) || os(Linux)
+        // The kernel check (libproc, /proc) binds here; elsewhere it is whatever that platform offers.
         #expect(SecretRunCapability.check(.runtime) == nil)
         #endif
     }
@@ -693,7 +791,7 @@ struct SecretRunLaunchTests {
     }
 }
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
 /// Stands in for rv's terminal: models which group holds the foreground and
 /// records what `supervise` asks of it. rv never stops itself here.
 private final class RecordingTerminal: SecretRunTerminalControl {
@@ -722,15 +820,36 @@ private final class RecordingTerminal: SecretRunTerminalControl {
 private func disposition(_ number: Int32) -> Int {
     var action = sigaction()
     _ = sigaction(number, nil, &action)
+    #if canImport(Darwin)
     return unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self)
+    #else
+    return unsafeBitCast(action.__sigaction_handler.sa_handler, to: Int.self)
+    #endif
 }
 
 private let ignoredDisposition = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
 
-/// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`).
+/// Whether rv's guard holds `number`: ignored and read from a signal source
+/// on macOS; a handler on Linux, which drops ignored signals unread.
+private func isGuarded(_ number: Int32) -> Bool {
+    #if os(macOS)
+    disposition(number) == ignoredDisposition
+    #else
+    disposition(number) != 0 && disposition(number) != ignoredDisposition
+    #endif
+}
+
+/// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`; `T` in `stat`).
 private func isStopped(_ pid: pid_t) -> Bool {
+    #if os(macOS)
     guard pid > 1, case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return false }
     return info.pbi_status == 4
+    #else
+    guard pid > 1, case .value(let bytes) = ProcFSReader.file("/proc/\(pid)/stat"),
+        let stat = ProcFSParse.stat(bytes)
+    else { return false }
+    return stat.state == UInt8(ascii: "T")
+    #endif
 }
 #endif
 

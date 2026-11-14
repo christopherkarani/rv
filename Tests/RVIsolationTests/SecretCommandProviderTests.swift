@@ -147,6 +147,14 @@ struct SecretCommandProviderTests {
         #expect(oversized.message.contains("1 MiB") || oversized.message.contains("did not return"))
         #expect(BoundedProcess.run("/bin/sleep", ["2"], environment: [:], timeout: 0.2) == nil)
     }
+
+    /// A child starts in the directory it is given, not where rv happens
+    /// to be: a caller that names one works from a directory this user
+    /// may not enter.
+    @Test func aChildStartsInTheDirectoryItIsGiven() throws {
+        let outcome = try #require(BoundedProcess.run("/bin/pwd", [], environment: [:], workingDirectory: "/"))
+        #expect(outcome.status == 0 && String(decoding: outcome.stdout, as: UTF8.self) == "/\n")
+    }
 }
 
 /// Opt in per provider. Each test checks that a real CLI returns a value and

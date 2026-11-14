@@ -34,7 +34,9 @@ func isHostMCPMutation(_ command: LaunchedCommand) -> Bool {
         // A runner given a command line as one word (`watch 'claude mcp
         // add x'`, `su -c '…'`, `parallel '…' ::: x`, Linux `script -c`).
         if index > 0, hostRunners.contains(head), carriesHostMCPMutation(word) { return true }
-        guard let host = hostCLI(word) else { continue }
+        // argv0 is the program's `commandName`; only the head as written
+        // keeps the path that names a native build or a package's script.
+        guard let host = hostCLI(word) ?? (index == 0 ? hostCLI(foldedWord(command.head)) : nil) else { continue }
         let rest = Array(words[(index + 1)...])
         if editorHosts.contains(host) {
             if rest.contains(where: { $0 == "--add-mcp" || $0.hasPrefix("--add-mcp=") }) { return true }

@@ -41,7 +41,9 @@ struct MCPHostConfigCorpusTests {
 
     /// In-repository writes that only the MCP guard denies: the guard owns
     /// the verdict, an owner can approve it (not pinned), and with no gateway
-    /// configured the same commands allow.
+    /// configured the same commands allow. A name piped to `python3 x.py`
+    /// is not one of them: that unwrap is limited with or without the guard
+    /// (`mcp.deny.review3.echo-python`), so the stdin row is `perl -ne`.
     @Test("in-repository config writes are core.mcp and unlockable", arguments: [
         "echo '{\"mcpServers\":{}}' > .mcp.json",
         "printf '{}' | tee .cursor/mcp.json",
@@ -58,7 +60,8 @@ struct MCPHostConfigCorpusTests {
         "cp -r evil .cursor",
         "claude plugin marketplace add evil/market",
         "cp evil.json mcp.json -v",
-        "echo .mcp.json | python3 edit.py",
+        "echo .cursor/mcp.json | perl -ne 'print'",
+        "python3 edit.py .MCP.JSON",
     ])
     func guardOwnsInRepositoryWrites(command: String) throws {
         let harness = try StressHarness.dayOne()

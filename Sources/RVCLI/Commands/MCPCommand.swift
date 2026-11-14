@@ -598,13 +598,18 @@ enum MCPRun {
             configDirectory: configDirectory)
     }
 
-    /// Why a signing operation failed, in the operator's terms. On macOS
-    /// the key lives in the approvals custodian; when it cannot be
-    /// reached, approvals stay disabled and the message says so.
+    /// Why a signing operation failed, in the operator's terms. The key
+    /// lives in the approvals custodian; when it cannot be reached,
+    /// approvals stay disabled and the message says so.
     static func signingFailureText(status: MCPApprovalKeyStatus) -> String {
         #if os(macOS)
         if status == .unavailable {
             return "rv's approvals custodian is unavailable — reinstall rv or run `rv setup`; MCP approvals stay disabled until it is reachable"
+        }
+        #elseif os(Linux)
+        if status == .unavailable {
+            return "rv's approvals custodian is not answering (systemctl status rv-mcp-custodian); MCP approvals "
+                + "stay disabled until it is"
         }
         #endif
         return status == .enrolled
@@ -1033,7 +1038,7 @@ enum MCPRun {
 
     /// Sandbox network and writable paths, or `no sandbox` when the
     /// server declares none (serve refuses it where the cage is
-    /// enforced; elsewhere it runs uncaged until the Linux cage lands).
+    /// enforced; on a host without one it runs uncaged).
     static func sandboxLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
         guard let sandbox = server.sandbox else { return ["\(indent)no sandbox"] }
         let writable = quotedReviewFields(
@@ -1486,7 +1491,7 @@ struct MCP: AsyncParsableCommand {
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
             MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPOnboard.self, MCPServe.self,
-            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self,
+            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self, MCPCustodian.self,
         ],
         defaultSubcommand: MCPList.self
     )

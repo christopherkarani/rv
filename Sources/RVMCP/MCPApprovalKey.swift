@@ -164,14 +164,32 @@ public struct MCPApprovalSigning: Sendable {
     /// bare rv binary cannot be provisioned for the item's access group,
     /// so this process never touches the keychain for approvals — it asks
     /// the custodian over XPC and fails closed when the custodian is
-    /// unreachable or unverifiable. Linux has no OS secret store, so the
-    /// key is a 0600 file in the rv config directory, which a process
-    /// running as the same user can read; approvals and mcp.json integrity
-    /// there fail closed instead of trusting MACs anyone could mint.
+    /// unreachable or unverifiable. Linux has no OS secret store. Where the
+    /// approvals custodian is installed (`sudo rv mcp custodian install`),
+    /// the key is held by its daemon under another account and this
+    /// process asks it over a Unix socket. Without it the key is a 0600
+    /// file in the rv config directory, which a process running as the
+    /// same user can read; approvals and mcp.json integrity there fail
+    /// closed instead of trusting MACs anyone could mint.
     public static func live(configDirectory: URL, home: String) -> MCPApprovalSigning {
         #if os(macOS)
         _ = configDirectory
         return .custodian(transport: MCPCustodianXPCClient.liveTransport(home: home))
+        #elseif os(Linux)
+        _ = home
+        // With the custodian installed the key is its own: a custodian
+        // that is installed and not answering is `unavailable`, never a
+        // reason to go back to a key file this user can read.
+        let client = MCPCustodianSocketClient.shared
+        if client.isInstalled {
+            // The directory as resolved, so one configuration has one scope
+            // however it is spelled; as given when it does not exist yet.
+            let resolved = realpath(configDirectory.path, nil)
+            defer { free(resolved) }
+            let scope = resolved.map { String(cString: $0) } ?? configDirectory.standardizedFileURL.path
+            return .custodian(transport: client.transport(scope: scope))
+        }
+        return .file(configDirectory: configDirectory, honorsGrants: false)
         #else
         _ = home
         return .file(configDirectory: configDirectory, honorsGrants: false)

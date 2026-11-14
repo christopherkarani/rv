@@ -146,7 +146,9 @@ struct ProcFSParseTests {
         #expect(ProcFSParse.sockets(bytes(Self.header)) == [])
     }
 
-    @Test(arguments: [
+    /// Typed here, not inline in `@Test`: the macro expansion of a literal
+    /// this long does not type-check in reasonable time on Linux.
+    static let malformedTables: [String] = [
         "",
         "  sl  local_address\n" + "garbage\n",
         String(header.dropLast()),
@@ -157,9 +159,34 @@ struct ProcFSParseTests {
         header + row(0, "0100007F:C350", "0100007F:1F90", inode: 1).replacingOccurrences(of: " 1000 ", with: " -1 "),
         header + "   0: 0100007F:C350 0100007F:1F90 01\n",
         row(0, "0100007F:C350", "0100007F:1F90", inode: 1),
-    ])
+    ]
+
+    @Test(arguments: malformedTables)
     func truncatedOrMalformedTablesAreRefused(text: String) {
         #expect(ProcFSParse.sockets(bytes(text), littleEndian: true) == nil)
+    }
+
+    // MARK: io_uring fdinfo
+
+    @Test func ringFilesAreTheEntriesUnderUserFiles() throws {
+        let info = "pos:\t0\nflags:\t02000002\nmnt_id:\t17\nino:\t9\nSqThread:\t-1\nUserFiles:\t3\n"
+            + "    0: socket:[1597614]\n    2: /tmp/a\\040file\n   17: anon_inode:[io_uring]\nUserBufs:\t1\n"
+            + "    0: 0x7f00/4096\nPollList:\n"
+        let files = try #require(ProcFSParse.ringFiles(fdinfo: bytes(info)))
+        #expect(files.map { String(decoding: $0, as: UTF8.self) }
+            == ["socket:[1597614]", "/tmp/a\\040file", "anon_inode:[io_uring]"])
+        #expect(files.compactMap { ProcFSParse.socketInode(link: $0) } == [1_597_614])
+    }
+
+    @Test func aRingWithNoFilesHasAnEmptyList() {
+        #expect(ProcFSParse.ringFiles(fdinfo: bytes("ino:\t9\nUserFiles:\t0\nUserBufs:\t0\n")) == [])
+        #expect(ProcFSParse.ringFiles(fdinfo: bytes("UserFiles:\t0")) == [])
+    }
+
+    @Test(arguments: ["", "pos:\t0\nflags:\t02000002\n", "UserFiles:\n", "UserFiles:\tx\n", " UserFiles:\t1\n",
+        "UserFiles:\t99999999999\n"])
+    func aRingWhoseFilesAreNotListedIsUnknown(text: String) {
+        #expect(ProcFSParse.ringFiles(fdinfo: bytes(text)) == nil)
     }
 
     // MARK: matching a connection
