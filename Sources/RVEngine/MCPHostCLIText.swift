@@ -40,6 +40,13 @@ struct HostTextReads {
     /// message): only literal words count there, as they did before brace
     /// and glob spellings were resolved.
     private(set) var literal = false
+    /// No command on the line may be defined or redefined (no function,
+    /// alias, `PATH` change, sourced file, `eval` or dynamic program:
+    /// `commandsMayBeRedefined`), so a plain command name is the program it
+    /// names. Until the guard has checked the line it is false, and the
+    /// operand list (`leavesOperandsAlone`) and a runner's own operands
+    /// (`runnerOwnOperands`) do not apply.
+    var commandsArePlain = false
     /// The work budget for brace and glob spellings, across every read.
     var spelling = SpellingBudget()
     /// Words `isHostMCPMutation` visited, across every read: a structural
@@ -172,8 +179,10 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         // literal words count. It may still print one (`rg -r TEXT`, `grep
         // --label`); that output is still read literally only. So are the
         // operands of a command that never runs one (`leavesOperandsAlone`:
-        // `ls mcp $DIR` re-read as `mcp $DIR`), as written.
-        let literalOnly = isPrinter == false && (isNonExecutor(command) || leavesOperandsAlone(command))
+        // `ls mcp $DIR` re-read as `mcp $DIR`), as written, on a line that
+        // defines no command (`commandsArePlain`).
+        let operandsStayWords = reads.commandsArePlain && leavesOperandsAlone(command)
+        let literalOnly = isPrinter == false && (isNonExecutor(command) || operandsStayWords)
         for word in args + values {
             for variant in Set([word, word.ansiCDecodedIfMarked, decodedWord(word)])
             where variant.contains(where: \.isWhitespace) {

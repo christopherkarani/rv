@@ -32,7 +32,8 @@ import RVDomain
 /// after a host, a brace word the shell splits into a whole host command
 /// (`{claude,mcp} add`), and a brace or glob word rv cannot expand within
 /// `SpellingBudget`. Elsewhere (an operand of a command that never runs one,
-/// `leavesOperandsAlone`), and in text a non-executor or such a command
+/// `leavesOperandsAlone`, on a line that defines no command,
+/// `reads.commandsArePlain`), and in text a non-executor or such a command
 /// carries (`reads.literal`), only literal words count. Linear in the words: each is
 /// spelled once and the facts about the words after it come from one pass
 /// (`LaterWords`).
@@ -58,9 +59,13 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
     // A dynamic word rv cannot read, used as the program at the head or after
     // a runner the parser does not strip (`stdbuf -o0 $c mcp add`), with a
     // group word (literal or a brace/glob spelling) after it: treated like a
-    // dynamic head, which `headIsDynamic` only catches at index 0.
+    // dynamic head, which `headIsDynamic` only catches at index 0. Not one
+    // the runner heading the command takes as its own operand (`find
+    // "$DIR" -name config`, `xargs -P "$N" grep config`).
+    let ownOperands = reads.commandsArePlain ? runnerOwnOperands(command, words) : nil
     for index in words.indices {
         reads.visit(words: 1)
+        if ownOperands?[index] == true { continue }
         if runs(index), later.spelledGroups[index] != 0, wordIsDynamic(words[index]) { return true }
     }
     // argv holds the head's basename; the head as written is judged too, as
@@ -77,7 +82,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
         judged.append((index: 0, word: name, spelling: spell(name, &reads.spelling)))
     }
     let operandsRun = reads.inert == false && isNonExecutor(command) == false
-    let operandsStayWords = leavesOperandsAlone(command)
+    let operandsStayWords = reads.commandsArePlain && leavesOperandsAlone(command)
     // A build tool's own directory options, or any of them heading a
     // re-split of operands already judged in their own command (`-C mcp
     // install`, `joinedReadsRun`).
@@ -302,10 +307,7 @@ func isNonExecutor(_ command: LaunchedCommand) -> Bool {
 /// is given is never run (`ls mcp *`, `cp -r packages/mcp "$DEST"`, `touch
 /// {a..z}{0..9}`).
 func leavesOperandsAlone(_ command: LaunchedCommand) -> Bool {
-    let head = foldedWord(command.head)
-    guard command.headIsDynamic == false, head.contains("/") == false, commandName(command.head) == head else {
-        return false
-    }
+    guard let head = plainName(command) else { return false }
     switch head {
     case "ls", "cp", "mv", "rm", "mkdir", "touch", "cat":
         return true
@@ -316,6 +318,73 @@ func leavesOperandsAlone(_ command: LaunchedCommand) -> Bool {
         return false
     }
 }
+
+/// The head's name when it is written as a plain name (no path, no
+/// expansion), so it is the program by that name.
+private func plainName(_ command: LaunchedCommand) -> String? {
+    let head = foldedWord(command.head)
+    guard command.headIsDynamic == false, head.contains("/") == false, commandName(command.head) == head else {
+        return nil
+    }
+    return head
+}
+
+/// For a runner heading `command` by its plain name, which of `words` it
+/// takes as its own operands and never runs as the program: `find`'s start
+/// paths, options and primaries outside an `-exec`, `-execdir`, `-ok` or
+/// `-okdir` clause (to its `;`, or a `+` after `{}`), and the values of the
+/// `xargs` and `watch` options that take one, written as a separate word
+/// before the program (`-P "$N"`, `-n "$SECS"`). Option letters are read
+/// as written, since case tells `-P` from `-p`; an option rv does not know,
+/// or a cluster (`-0P`), takes no value, so the next word may be the
+/// program. Nil for any other command.
+func runnerOwnOperands(_ command: LaunchedCommand, _ words: [String]) -> [Bool]? {
+    guard let head = plainName(command), words.count == command.guardArgv.count else { return nil }
+    switch head {
+    case "find":
+        var own = Array(repeating: true, count: words.count)
+        var inClause = false
+        for index in words.indices.dropFirst() {
+            let word = words[index]
+            if inClause {
+                own[index] = false
+                if word == ";" || (word == "+" && words[index - 1] == "{}") { inClause = false }
+            } else if findRunPrimaries.contains(word) {
+                inClause = true
+            }
+        }
+        return own
+    case "xargs", "watch":
+        let valued = head == "xargs" ? xargsValueOptions : watchValueOptions
+        var own = Array(repeating: false, count: words.count)
+        var index = 1
+        while index < words.count {
+            let word = unescapeBackslashPairs(command.guardArgv[index])
+            guard word.hasPrefix("-"), word != "-", word != "--" else { break }
+            if valued.contains(word), index + 1 < words.count {
+                own[index + 1] = true
+                index += 2
+            } else {
+                index += 1
+            }
+        }
+        return own
+    default:
+        return nil
+    }
+}
+
+private let findRunPrimaries: Set<String> = ["-exec", "-execdir", "-ok", "-okdir"]
+
+/// GNU and BSD `xargs` options that take a separate value; each is either
+/// that or an error before anything runs.
+private let xargsValueOptions: Set<String> = [
+    "-a", "-d", "-E", "-I", "-J", "-L", "-n", "-P", "-R", "-S", "-s",
+    "--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars", "--process-slot-var",
+]
+
+/// procps `watch` options that take a separate value.
+private let watchValueOptions: Set<String> = ["-n", "-q", "--interval", "--equexit"]
 
 /// Whether the host CLI `host`, run by the word at `index`, is given words
 /// that make it mutate, judged from the facts about the words after it.
