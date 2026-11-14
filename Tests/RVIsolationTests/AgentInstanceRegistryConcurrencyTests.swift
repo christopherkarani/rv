@@ -104,7 +104,11 @@ private func race<T: Sendable>(
     let results = Mutex<[T?]>(Array(repeating: nil, count: parties))
     for index in 0..<parties {
         group.enter()
-        DispatchQueue.global().async {
+        // A thread each, not the shared dispatch queue: every party blocks
+        // until all have arrived, and on Linux that queue adds a thread
+        // only every few seconds, so sixteen blocked parties held it (and
+        // every other test's async work behind it) for tens of seconds.
+        Thread.detachNewThread {
             arrived.signal()
             release.wait()
             let value = work(index)
