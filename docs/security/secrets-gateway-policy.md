@@ -526,14 +526,22 @@ but the last two have passed.
 A `hostEnvironment` source is refused because its value sits in the
 environment rv was started with, which the MCP client that started rv
 also holds and may pass to every other server it starts. What the cage
-itself allows, as tested on macOS 27: `/bin/ps eww -p $PPID` fails with
-"Operation not permitted" (`ps` is setuid), and `sysctl` `KERN_PROCARGS2`
-of its parent answers with the arguments but no environment (a same-user,
-non-root caller sees none, caged or not); the live test asserts the
-second for one parent: the test process, which runs serve's runtime
-in-process and was started with `HOME` set, so `HOME=` would come back if
-any environment did. It does not run `rv mcp serve` as the parent, and
-the uncaged case was checked by hand, not by a test. Other ways to read rv's memory (`task_for_pid` and the like) were
+itself allows, as measured on macOS 27: `/bin/ps eww -p $PPID` fails with
+"Operation not permitted" (`ps` is setuid), but `sysctl` `KERN_PROCARGS2`
+answers a same-user caller, caged or not, with the arguments and the
+whole exec-time environment of any of your processes that is not an
+Apple platform binary (plain, ad hoc signed and hardened-runtime
+programs alike; `/bin/sh` and the other binaries macOS ships show none).
+That includes `rv mcp serve`, the MCP client that started it, and every
+other program you run, so a caged server can read every variable they
+were started with. The cage does not stop it: `(deny process-info*
+(target others))` and `sysctl-read` or `sysctl*` denies by the name
+`kern.procargs2`, a name prefix or a regex all left it readable; only
+denying every `sysctl-read` and `process-info*` did, which also refuses
+the server's own reads (the workspace cage's runtime boundary records
+the same limit as R4). The live test checks only that the server's read
+of its parent (the test process, running serve's runtime in-process)
+parses. Other ways to read rv's memory (`task_for_pid` and the like) were
 not tested; the refusal does not depend on them.
 
 How it starts the server:
@@ -591,16 +599,26 @@ What it does not:
   `~/.npm`, `~/.cache`, and any `sandbox.writable`), hard links
   except among those, clones of directories outside those (the kernel
   copies a cloned directory's whole tree while Seatbelt checks only its
-  top, so cloning `~/.config` would copy `~/.config/gh`), clones and
-  renames of a credential's ancestors that lie inside those, reads,
-  writes, links and clones of credential directories and rv's config
-  directory, and the network but for the gateway (and proxy) port. File
-  copies and file clones are not affected: `cp -c -R`, uv, Rust's
-  `std::fs::copy` and Node's `fs.cpSync` copy a tree file by file; only a
-  raw `clonefile(2)` of a directory from outside those is refused. A
-  credential that is a symlink is denied at the link and at the target it
+  top, so cloning `~/.config` would copy `~/.config/gh`), clones,
+  renames and removals of a credential's ancestors that lie inside
+  those, reads, writes, links and clones of credential directories and
+  rv's config directory, and the network but for the gateway (and proxy)
+  port. An ancestor that is a symlink is named at the link itself as well
+  as where it resolves, since a rename or removal acts on the link: it
+  can be neither moved, removed, renamed over nor swapped for another
+  link (live test). File copies and file clones are not affected:
+  `cp -c -R`, uv, Rust's `std::fs::copy` and Node's `fs.cpSync` copy a
+  tree file by file; only a raw `clonefile(2)` of a directory from
+  outside those is refused, so a tool that clones whole package
+  directories out of a cache elsewhere (bun's `clonefile` backend, with
+  its cache in `~/.bun/install/cache`) gets "Operation not permitted":
+  add that cache to `sandbox.writable`. A profile over 256 KB is refused
+  before launch rather than compiled (an everyday one is about 24 KB; a
+  home under the temporary directory, spelled through `/var`, can pass
+  it). A credential reached through a symlink (the credential itself or
+  a directory above it) is denied at the link and at the target it
   resolves to when the server starts; if a process outside the cage
-  retargets the link while the server runs, the new target stays
+  retargets that link while the server runs, the new target stays
   readable until the server restarts. Seatbelt checks paths, not inodes:
   a hard link that another process, running as you outside the cage,
   made under one of those directories before or while the server runs
@@ -624,8 +642,9 @@ What it does not:
 - Tested (macOS, live test through the real planner, sandbox hook and
   `sandbox-exec`): the server's environment and arguments hold the
   placeholder and not the real value; the placeholder is spent from the
-  server and refused from outside its group; its parent's
-  `KERN_PROCARGS2` shows no environment; the whole group ends with
+  server and refused from outside its group; its read of its parent's
+  `KERN_PROCARGS2` parses (the environment comes back too, see above);
+  the whole group ends with
   serve. Not tested: keychain or provider access from inside the cage,
   `task_for_pid`, and `nsurlsessiond` or other XPC services reached from
   it.
