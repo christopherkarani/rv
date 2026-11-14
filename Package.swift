@@ -47,13 +47,13 @@ let isolationExecTargets: [Target] = [
 ]
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec"]
 // The products these suites run: the cage's helper, the custodian binary.
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "rv-isolation-exec"]
+let mcpTestHelperDependencies: [Target.Dependency] = ["rv-isolation-exec"]
 let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService", "rv-mcp-custodian"]
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP"]
+let mcpTestHelperDependencies: [Target.Dependency] = []
 let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService"]
 #endif
 
@@ -77,11 +77,11 @@ let terminalProbeTargets: [Target] = [
     // what a caged server can read of its parent.
     .executableTarget(name: "rv-mcp-probe", dependencies: ["RVMCP"]),
 ]
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-probe"]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation", "rv-mcp-probe"] + mcpTestHelperDependencies
 #else
 let terminalProbeProducts: [Product] = []
 let terminalProbeTargets: [Target] = []
-let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation"]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "RVIsolation"] + mcpTestHelperDependencies
 #endif
 
 let coreLibraryTargets: [Target] = [
