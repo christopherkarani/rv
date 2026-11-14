@@ -45,22 +45,20 @@ private let maxXargsDepth = 4
 /// string swapped for the stdin stand-in; the stand-in is appended unless
 /// replace mode alone is in effect. A dynamic head may be xargs too.
 ///
-/// Fail closed rather than model xargs precisely: a literal xargs whose
-/// options do not parse exactly (`parseXargsOptions` nil) is refused
-/// whenever any of its words could reach rv (`uncertainXargsMayReachRV`).
-/// A line with no such word is left to the other stages, so the
-/// self-protection floor does not mask their deny (`xargs --frobnicate
-/// rm -r` stays denied). Relative to main this only adds refusals. A
-/// dynamic head is judged as xargs only when its options parse, since
-/// `$PYTHON -m x` is far likelier than a variable naming xargs; it is
-/// still judged as rv and as a launcher elsewhere.
+/// Fail closed rather than model xargs precisely: when the options do not
+/// parse exactly (`parseXargsOptions` nil), for a literal, dynamic, or
+/// glob head alike, the line is refused whenever any word could reach a
+/// weakening rv invocation (`uncertainXargsMayReachRV`). A line with no
+/// such word is left to the other stages, so the self-protection floor
+/// does not mask their deny (`xargs --frobnicate rm -r` stays denied).
+/// Relative to main this only adds refusals.
 private func xargsFeedsWeakeningInvocation(_ launched: LaunchedCommand, depth: Int) -> Bool {
     guard let name = launched.guardArgv.first,
           launched.headIsDynamic || xargsProgramNames.contains(name) else { return false }
     guard depth < maxXargsDepth else { return true }
     let words = Array(launched.guardArgv.dropFirst())
     guard let parsed = parseXargsOptions(words) else {
-        return launched.headIsDynamic == false && uncertainXargsMayReachRV(words)
+        return uncertainXargsMayReachRV(words)
     }
     // No program: xargs runs echo.
     guard let start = parsed.programStart else { return false }
@@ -81,35 +79,64 @@ private let xargsExecNames: Set<String> = plainLaunchers.union(shellNames).union
     "sudo", "env", "timeout", "busybox", "eval", "stdbuf", "ionice", "xargs", "gxargs",
 ])
 
+/// Words a weakening rv invocation needs literally (`isWeakeningVerb` /
+/// `isWeakeningSub`): verbs, subcommands, and flags.
+private let weakeningWords: Set<String> = subcommandVerbs.union([
+    "uninstall", "setup", "--observe", "--save", "apply", "draft", "rollback", "disable", "add",
+    "add-command", "redeem", "mint", "approve", "trust", "set", "remove", "import", "oauth-reset",
+    "hook", "sign", "mode",
+])
+
+/// Past this many words or characters, the uncertain scan (quadratic in
+/// the worst case) is not attempted: fail closed.
+private let maxUncertainXargsWords = 256
+private let maxUncertainXargsCharacters = 4096
+
 /// With options that do not parse, any word may be the program, a value,
-/// or a replace string. A word could reach rv when it names rv (any
-/// spelling containing `rv`), is unmodelled, names a program that runs
-/// other commands, has no letter or digit (a possible replace string in
-/// head position, `-` included), or when a possible option value occurs
-/// again in a later word (a possible replace string, `--repl=X X`).
+/// or a replace string. rv is reached only through a literal rv program,
+/// a program that runs other commands, or a replace string, so the line
+/// is refused when any word is a weakening verb or flag, contains `rv`,
+/// names such a program, is unmodelled, has no letter or digit (a
+/// possible replace string in head position, `-` included), or when a
+/// possible option value occurs again in a later word (`possibleOptionValues`).
 private func uncertainXargsMayReachRV(_ words: [String]) -> Bool {
+    if words.count > maxUncertainXargsWords
+        || words.reduce(0, { $0 + $1.count }) > maxUncertainXargsCharacters {
+        return true
+    }
     let unescaped = words.map(unescapeBackslashPairs)
     for (index, word) in unescaped.enumerated() {
         if word == "--" { continue }
-        if word.lowercased().contains("rv") || isUnmodelledWord(word) { return true }
+        let folded = foldedWord(word)
+        if weakeningWords.contains(folded) || folded.contains("rv") { return true }
         if xargsExecNames.contains(commandName(word)) { return true }
-        if word.contains(where: { $0.isLetter || $0.isNumber }) == false { return true }
+        if isUnmodelledWord(word) || word.contains(where: { $0.isLetter || $0.isNumber }) == false { return true }
         guard word.hasPrefix("-") else { continue }
-        // (value, first word after it): attached, then the next word.
-        var values: [(String, Int)] = []
-        if let equals = word.firstIndex(of: "=") {
-            values.append((String(word[word.index(after: equals)...]), index + 1))
-        } else if word.hasPrefix("--") == false, word.count > 2 {
-            values.append((String(word.dropFirst(2)), index + 1))
-        }
-        if index + 1 < unescaped.count { values.append((unescaped[index + 1], index + 2)) }
-        if values.contains(where: { value, after in
+        if possibleOptionValues(word, at: index, in: unescaped).contains(where: { value, after in
             value.isEmpty == false && unescaped.dropFirst(after).contains { $0.contains(value) }
         }) {
             return true
         }
     }
     return false
+}
+
+/// (value, index of the first word after it) for each value an option word
+/// may carry: an attached `=value`, every suffix of a short cluster after
+/// its first letter (`-rIX` may name `IX` or `X`), and the next word. Each
+/// such suffix ends in the cluster's last character, and a later word
+/// holding a suffix holds that character, so the last character alone
+/// stands for them all.
+private func possibleOptionValues(_ word: String, at index: Int, in words: [String]) -> [(String, Int)] {
+    var values: [(String, Int)] = []
+    if let equals = word.firstIndex(of: "=") {
+        values.append((String(word[word.index(after: equals)...]), index + 1))
+    }
+    if word.hasPrefix("--") == false, word.count > 2, let last = word.last {
+        values.append((String(last), index + 1))
+    }
+    if index + 1 < words.count { values.append((words[index + 1], index + 2)) }
+    return values
 }
 
 /// xargs replaces each occurrence of its replace string (`-I`/`-J`/`-i`/

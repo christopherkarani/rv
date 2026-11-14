@@ -103,6 +103,27 @@ struct SelfProtectionGuardTests {
         "X=xargs; echo uninstall | $X -I% rv %",
         "X=xargs; echo uninstall | $X rv",
         "echo uninstall | \"$(which xargs)\" -0 rv",
+        // An uncertain parse (`-E -z`): a replace string may hide in any
+        // suffix of a short cluster (`-rIX` names `X`).
+        "echo rv | xargs -E -z -rIX X policy rollback 3 --save",
+        "echo rv | xargs -E -z -rIX X uninstall",
+        "echo rv | xargs -E -z -rIX X policy apply x",
+        "echo rv | xargs -E -z -rIX X egress approve 1",
+        "echo rv | xargs -E -z -rIX X secrets set K",
+        "echo rv | sudo xargs -E -z -rIX X policy rollback 3 --save",
+        "echo rv | env xargs -E -z -rIX X policy rollback 3 --save",
+        "echo rv | gxargs -E -z -rIX X policy rollback 3 --save",
+        "bash -c 'echo rv | xargs -E -z -rIX X policy rollback 3 --save'",
+        "echo rv | xargs -E -z -rIvv vv uninstall",
+        "echo rv | xargs -E -z -0iX X uninstall",
+        "echo rv | xargs -E -z -rIXX XX uninstall",
+        "echo rv | xargs -E -z -tiX X uninstall",
+        "echo 'rv uninstall' | xargs -E -z -rIX X",
+        "echo x | xargs --no-run rv uninstall",
+        // A glob head may be xargs, parsed or not.
+        "echo --save | /usr/bin/xarg? -E -z rv policy rollback 3",
+        "echo --save | x[a]rgs -E -z rv policy rollback 3",
+        "echo --save | /usr/bin/x*rgs -E -z rv policy rollback 3",
         "rv egress approve 1",
         "rv mcp approve 1",
         "rv mcp trust",
@@ -168,6 +189,8 @@ struct SelfProtectionGuardTests {
         "$PYTHON -m pytest",
         "echo x | xargs --frobnicate grep -l foo",
         "$CC -o out main.c",
+        "$CC -Wall main.c",
+        "$PYTHON -m x",
         "\"$(which python3)\" -c 'print(1)'",
         "rv allowlist list",
         "rv allow-once list",
@@ -204,5 +227,19 @@ struct SelfProtectionGuardTests {
     @Test("read-only and strengthening rv commands are not", arguments: harmless)
     func harmlessPass(command: String) {
         #expect(SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: command)) == false, "\(command)")
+    }
+
+    @Test("an uncertain xargs line is judged in bounded time")
+    func uncertainXargsIsBounded() {
+        let distinct = "echo x | xargs -E -z " + (0..<1_500).map { "w\($0)" }.joined(separator: " ")
+        // Under the caps, every word is scanned and none matches.
+        let scanned = "echo x | xargs -E -z " + (0..<125).map { "--o\($0)x k\($0)k" }.joined(separator: " ")
+        let clock = ContinuousClock()
+        var verdicts: [Bool] = []
+        let elapsed = clock.measure {
+            verdicts = [distinct, scanned].map { SelfProtectionGuard.weakensPolicy(ShellCommand(rawValue: $0)) }
+        }
+        #expect(verdicts == [true, false])
+        #expect(elapsed < .seconds(5), "took \(elapsed)")
     }
 }
