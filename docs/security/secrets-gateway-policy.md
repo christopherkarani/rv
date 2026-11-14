@@ -189,16 +189,24 @@ How it starts the command:
   Nothing selected is refused.
 - The command's environment is rv's own, minus every variable a selected
   secret stages (the shell's copy of the real value among them, and
-  `AWS_SESSION_TOKEN`/`AWS_SECURITY_TOKEN` for an AWS secret), plus the
-  lease: placeholders, base URLs, and the AWS endpoint, key id and a
-  throwaway signing key.
+  `AWS_SESSION_TOKEN`/`AWS_SECURITY_TOKEN` for an AWS secret), minus the
+  variable a `hostEnvironment` source reads, minus any variable whose
+  value (trimmed of surrounding whitespace or not) is a selected secret's
+  real value or one part of an AWS credential set, plus the lease:
+  placeholders, base URLs, and the AWS endpoint, key id and a throwaway
+  signing key. Values are compared in memory; the names removed by value
+  are listed on stderr. A variable that only contains a value (a
+  connection URL with a password in it) is not recognised.
 - On macOS, `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and
   `POSIX_SPAWN_START_SUSPENDED` creates the command as its own group leader
   and stops it before its first instruction. rv records the leader's pid
   and start time, binds the lease to it, hands it the terminal, and only
   then sends `SIGCONT`. If any step fails, the stopped child is killed.
   Only stdio is inherited.
-- `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv go to the command's group.
+- `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv go to the command's group,
+  until the leader exits; nothing is signalled once it is reaped. rv
+  takes its terminal from `/dev/tty`, so a command reading the terminal
+  while stdin is a pipe still stops and resumes with job control.
   Ctrl-Z stops rv with the command, and `fg` resumes both; `bg` resumes
   both and leaves the terminal with the shell. rv hands the terminal on
   only while it holds the foreground. rv exits with

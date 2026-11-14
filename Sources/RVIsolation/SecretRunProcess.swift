@@ -43,7 +43,7 @@ struct SecretRunJobControl: Equatable {
     /// When the command stops or exits.
     mutating func reclaimsTerminal() -> Bool {
         defer { handed = false }
-        return true  // RED: reclaims unconditionally, as before the fix.
+        return handed
     }
 }
 
@@ -82,7 +82,10 @@ final class SecretRunSignalTarget: @unchecked Sendable {
 
     /// No signal is sent after this returns.
     func release() {
-        // RED: not implemented yet.
+        lock.lock()
+        defer { lock.unlock() }
+        released = true
+        group = nil
     }
 }
 
@@ -104,6 +107,7 @@ enum SecretRunProcess {
         bind: (ProcessGroupFact) -> Result<Void, SecretRunRefusal>
     ) -> Result<Int32, SecretRunRefusal> {
         let terminal = manageTerminal ? SecretRunTerminal.controlling() : nil
+        defer { terminal?.close() }
         var job = SecretRunJobControl()
         let signals = SecretRunSignals()
         defer { signals.restore() }
@@ -253,12 +257,11 @@ enum SecretRunProcess {
     /// signal). Never reaps, even if the leader has exited since its stop
     /// was observed: the zombie keeps its group id from being reused.
     static func consumeStop(_ pid: pid_t) -> Int32? {
-        // RED: the old consume, which reaps an exit that raced the stop.
-        var status: Int32 = 0
-        guard waitpid(pid, &status, WUNTRACED | WNOHANG) == pid, SecretRunExit.isStopped(waitStatus: status) else {
-            return nil
-        }
-        return (status >> 8) & 0xff
+        var stop = siginfo_t()
+        guard waitid(P_PID, id_t(pid), &stop, WSTOPPED | WNOHANG) == 0, stop.si_pid == pid,
+            stop.si_code == CLD_STOPPED, stop.si_status != 0
+        else { return nil }
+        return stop.si_status
     }
 
     /// The kernel peer check binds here when a suspended probe child holding
@@ -359,14 +362,24 @@ struct SecretRunTerminal {
     let fd: Int32
     private let saved: termios
 
-    /// Nil when `fd` is not rv's controlling terminal. rv may be in the
-    /// background: it then hands nothing until the shell gives it the
-    /// foreground with `fg`.
-    static func controlling(_ fd: Int32 = STDIN_FILENO) -> SecretRunTerminal? {
-        guard isatty(fd) == 1, tcgetpgrp(fd) > 0 else { return nil }
+    /// rv's controlling terminal, opened as `/dev/tty` whatever stdio is
+    /// redirected to (with stdin a pipe the command can still read the
+    /// terminal, and its stops must be passed on), or nil when rv has none.
+    /// rv may be in the background: it then hands nothing until the shell
+    /// gives it the foreground with `fg`. `close` when done.
+    static func controlling() -> SecretRunTerminal? {
+        let fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
         var modes = termios()
-        guard tcgetattr(fd, &modes) == 0 else { return nil }
+        guard tcgetpgrp(fd) > 0, tcgetattr(fd, &modes) == 0 else {
+            _ = Darwin.close(fd)
+            return nil
+        }
         return SecretRunTerminal(fd: fd, saved: modes)
+    }
+
+    func close() {
+        _ = Darwin.close(fd)
     }
 
     private init(fd: Int32, saved: termios) {

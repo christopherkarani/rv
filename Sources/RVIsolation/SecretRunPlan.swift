@@ -137,7 +137,7 @@ package enum SecretRunEnvironment {
         var environment = parent
         for definition in selected {
             for variable in definition.stagedVariables { environment[variable] = nil }
-            // RED: the source variable is not dropped yet.
+            if case .hostEnvironment(let variable) = definition.source { environment[variable] = nil }
             if case .awsSigV4 = definition.delivery {
                 for variable in awsCredentialVariables { environment[variable] = nil }
             }
@@ -149,8 +149,14 @@ package enum SecretRunEnvironment {
 
     /// The parent's variables, by name, whose value is one of `realValues`.
     /// Compared in memory; the values are never printed.
-    static func copies(parent _: [String: String], realValues _: [SecretValue]) -> [String] {
-        []  // RED: not implemented yet.
+    static func copies(parent: [String: String], realValues: [SecretValue]) -> [String] {
+        let real = Set(realValues.map { $0.revealed() })
+        guard real.isEmpty == false else { return [] }
+        return parent.compactMap { name, value in
+            let padded = Array(value.utf8)
+            let trimmed = Array(value.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
+            return real.contains(padded) || real.contains(trimmed) ? name : nil
+        }.sorted()
     }
 
     /// `NAME=value` entries in a stable order, for `posix_spawn`.

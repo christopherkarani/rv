@@ -123,7 +123,7 @@ enum HelpCatalog {
                 HelpRow(name: "--", description: "Everything after it is the command, including --help"),
             ]),
             HelpSection(heading: "Protects", rows: [
-                HelpRow(name: "values", description: "The command's environment holds per-launch placeholders, never the real values (the parent's copies of those variables are removed), so it cannot print, log, or paste into a transcript a value it was never given"),
+                HelpRow(name: "values", description: "The command's environment holds per-launch placeholders, never the real values: the parent's copies of those variables, a hostEnvironment source's variable, and any variable holding one of those values are removed (named on stderr), so it cannot print, log, or paste into a transcript a value it was never given"),
                 HelpRow(name: "use", description: "The loopback gateway swaps a placeholder for the real value only on a connection from the command or a process it started, and only for requests the secret's allow rules permit. Requests an approve rule matches are refused: there is no approver outside a workspace"),
                 HelpRow(name: "lifetime", description: "When the command exits, its placeholders are revoked, the gateway stops, and what is left of its process group is killed"),
             ]),
@@ -136,7 +136,7 @@ enum HelpCatalog {
                 HelpRow(name: "command", description: "A bare name is searched in PATH's absolute directories; a name with a slash is a path"),
                 HelpRow(name: "terminal", description: "The command gets the terminal; Ctrl-C and Ctrl-Z reach it, and SIGINT, SIGTERM, SIGHUP sent to rv are forwarded to its process group"),
                 HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
-                HelpRow(name: "platform", description: "The gateway must tell which process sent each request. Linux cannot yet, so rv run refuses there rather than run an unbound gateway"),
+                HelpRow(name: "platform", description: "Before reading any secret, rv run checks by doing it that it can start the command suspended and that the gateway can tell which process sent a request; otherwise it refuses rather than run an unbound gateway. Linux has no suspended start in rv run yet, so it refuses there"),
             ]),
         ],
         examples: [
