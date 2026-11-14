@@ -152,8 +152,9 @@ therefore honored only on a connection from the runtime it was leased to.
   could otherwise join this one. The same flag, and `POSIX_SPAWN_SETSID`
   (Node's `detached: true`), moves a child out of the group, and the
   descendant walk keeps those children in.
-- On each request, rv takes the connection's port pair and looks, with
-  libproc, for one of those processes holding the client socket: the leader
+- On each request, rv takes the connection's port pair and looks (libproc
+  on macOS, `/proc` on Linux; see below) for one of those processes holding
+  the client socket: the leader
   first, then the descendants (at most 4096), then the session. Each match
   is re-checked after the scan so a reused pid does not count. Every
   placeholder in the request is checked, so one runtime cannot spend
@@ -162,7 +163,7 @@ therefore honored only on a connection from the runtime it was leased to.
   finding. Another runtime, a host shell, or any other local process
   holding a copied placeholder lands here.
 - Cannot tell: `403`, refusal `runtimeUnverified`, no misuse finding. This
-  covers a libproc failure, a group whose leader is gone or was reused, a
+  covers a kernel read that failed, a group whose leader is gone or was reused, a
   descendant walk past its bound, and a placeholder whose runtime has no
   recorded group. The gateway fails closed.
 
@@ -171,9 +172,47 @@ its processes may spend the placeholder unless the secret lists `binaries`
 (next section). A process whose parent exited
 (reparented to launchd) is no longer a descendant, even if it stayed in the
 leader's group; unless it is in a terminal runtime's session, its requests are refused as
-`runtimeMismatch`. Linux has no check (no
-libproc), so every gateway request there is `runtimeUnverified`. Contained
-launches on Linux are already refused before exec.
+`runtimeMismatch`. On Linux the parent is init or the nearest subreaper
+(`systemd --user`), with the same effect.
+
+### Linux
+
+The check is the same scan; only the reads differ.
+
+- The connection is found in `/proc/self/net/tcp` and `tcp6`, which show
+  the reader's network namespace, the gateway's: the client end is the row
+  `127.0.0.1:<client port> -> 127.0.0.1:<gateway port>` (IPv4, or IPv6
+  v4-mapped for a dual-stack client socket). The gateway's own end must be
+  in the same tables, and exactly one held client end (inode not 0) must
+  be. A process holds it when one of its `/proc/<pid>/fd/*` links reads
+  `socket:[<inode>]`. A forked child that inherited the socket is a holder
+  too.
+- A process is identified by its pid and its start time (`/proc/<pid>/stat`
+  field 22, clock ticks after boot). The `comm` field is read from the last
+  `)`, as bytes, so a process cannot forge the fields after its name.
+- Descendants come from one pass over every process's `stat`, so every
+  `stat` on the host must be readable.
+- Each candidate's `stat` is read before and after its descriptors. A
+  change in between, or a process that exits after the scan listed it (it
+  may have been the holder), leaves the scan undecided: unless another
+  candidate is a holder, the answer is `runtimeUnverified`, not
+  `runtimeMismatch`. A process already gone when
+  the scan lists processes, or a zombie, is skipped, as on macOS.
+- `runtimeUnverified` also covers: a `/proc` whose `self` is not rv's pid
+  (another pid namespace's), a `/proc` mounted with `hidepid` other than
+  `0`/`off` (a descendant running as another user could not be seen), an
+  unreadable descriptor table (a setuid or non-dumpable process, or one
+  that exited mid-read), a socket table that is missing, truncated,
+  malformed, ambiguous, or lacks the gateway's end, and a client end no
+  process holds (inode 0: time-wait or orphaned).
+- A process in another network namespace cannot reach the gateway's
+  loopback, so it is never a holder. A listening socket shared with
+  `SO_REUSEPORT` does not matter: a connected 4-tuple is unique within a
+  namespace.
+- Limits beyond macOS's: a thread that unshared its descriptor table
+  (`unshare(CLONE_FILES)`) is not scanned, so a socket only it holds reads
+  as `runtimeMismatch`. A recorded group's start time is ticks after boot,
+  so it names a process only until the host reboots.
 
 ## Binary binding
 
@@ -213,6 +252,15 @@ to the processes running listed programs:
   scan and the walk, or during it, is `unverifiable`, as is a walk that
   hits the 64-level bound before reaching the leader or launchd. The kernel reports an executable by its real path, so a script's
   interpreter is what is matched.
+- What is compared. macOS: the path libproc reports (`proc_pidpath`) must
+  be the pinned path, and the file at that path must still be the pinned
+  file. Linux: the same, and the file the process actually runs, read
+  through `/proc/<pid>/exe` (`stat` follows it even to an unlinked file),
+  must be the pinned file too: same device, inode, size and change time.
+  That catches a process that bind-mounts another binary over the pinned
+  path in its own mount namespace. A target the kernel marks ` (deleted)`
+  (the binary was replaced or removed) never matches. Neither platform
+  compares a code signature or a content hash.
 - Mismatch: `403`, refusal `binaryMismatch`, and a `secret.misuse`
   finding. Cannot tell (a process exited or changed mid-walk, a descriptor
   table or path could not be read): `403`, `runtimeUnverified`, no
