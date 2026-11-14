@@ -100,6 +100,9 @@ final class SecretRunTerminal: SecretRunTerminalControl {
 /// `deliver` hands it.
 final class SecretRunSignals: Sendable {
     static let forwarded = [SIGINT, SIGQUIT, SIGTERM, SIGHUP]
+    /// Signals rv resets for the command but never changes itself; with
+    /// `forwarded` and `SIGTTOU`, every signal the command gets the default for.
+    static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH, SIGINFO]
 
     private let forwarding = SecretRunSignalTarget()
     /// nil while installed: the table knows what rv inherited ignored.
@@ -116,6 +119,9 @@ final class SecretRunSignals: Sendable {
     }
 
     deinit { restore() }
+
+    /// Whether this guard changed the process's dispositions.
+    var installs: Bool { detachedIgnored == nil }
 
     func target(_ group: pid_t) -> Int32? { forwarding.target(group) }
 
@@ -158,9 +164,6 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     private var ignoredBefore: Set<Int32> = []
     private var delivered = 0
 
-    /// Signals rv resets for the command but never changes itself.
-    private static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH, SIGINFO]
-
     var installed: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -170,7 +173,7 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     var inheritedIgnored: Set<Int32> {
         lock.lock()
         defer { lock.unlock() }
-        return ignoredBefore.union(Self.untouched.filter(Self.ignoredNow))
+        return ignoredBefore.union(SecretRunSignals.untouched.filter(Self.ignoredNow))
     }
 
     var deliveredCount: Int {
@@ -302,6 +305,7 @@ struct SecretRunLoopback {
 final class SecretRunSignals: Sendable {
     init() {}
     init(detached _: Set<Int32>) {}
+    var installs: Bool { false }
     func target(_: pid_t) -> Int32? { nil }
     var interrupted: Int32? { nil }
     var inheritedIgnored: Set<Int32> { [] }

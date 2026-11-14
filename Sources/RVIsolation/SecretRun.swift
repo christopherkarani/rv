@@ -32,6 +32,9 @@ package struct SecretRunContext: Sendable {
     /// Opens the signal guard for the probe and for the launch. Tests open
     /// detached ones, so the test process keeps its dispositions.
     var signals: @Sendable () -> SecretRunSignals = { SecretRunSignals() }
+    /// Told the command's group once it is bound; tests record it to kill
+    /// the group if a launch hangs.
+    var bound: @Sendable (ProcessGroupFact) -> Void = { _ in }
 
     /// `~/.config/rv` from a validated HOME, the live providers, and the
     /// kernel peer check.
@@ -123,6 +126,7 @@ package enum SecretRun {
         ) { group in
             broker.bind(lease, runtime: runtime)
             broker.bind(lease, processGroup: group)
+            context.bound(group)
             return .success(())
         }
         return launched.map(SecretRunExit.code(waitStatus:))

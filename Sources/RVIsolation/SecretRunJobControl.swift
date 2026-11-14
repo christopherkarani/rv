@@ -12,7 +12,8 @@ import Foundation
 /// other job shares its process group (a pipeline: `rv run -- x | less`
 /// would leave `less` in the background), and it did not inherit SIGINT
 /// ignored (an asynchronous list in a shell without job control, whose
-/// script keeps the terminal). It takes the terminal back only
+/// script keeps the terminal; stops are still passed on there, so a command
+/// reading `/dev/tty` stays stopped). It takes the terminal back only
 /// if it gave it away and nobody else has it now: while rv was stopped the
 /// shell may have given it to another job, which keeps it.
 struct SecretRunJobControl: Equatable {

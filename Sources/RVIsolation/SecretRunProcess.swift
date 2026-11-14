@@ -62,6 +62,13 @@ enum SecretRunProcess {
         bind: (ProcessGroupFact) -> Result<Void, SecretRunRefusal>
     ) -> Result<Int32, SecretRunRefusal> {
         var job = SecretRunJobControl()
+        // Said before the spawn: no I/O between the spawn and the resume.
+        if let terminal,
+            job.tellsHeldBack(
+                rvInForeground: terminal.rvInForeground, sharesGroup: terminal.rvInForeground && terminal.sharesGroup)
+        {
+            notice(SecretRunJobControl.heldBackNotice)
+        }
         let pid: pid_t
         switch spawnSuspended(
             executable: executable, arguments: arguments, environment: environment,
@@ -84,7 +91,7 @@ enum SecretRunProcess {
             abandon()
             return .failure(refusal)
         }
-        if let terminal, handOff(terminal, to: pid, job: &job, signals: signals, notice: notice) == false {
+        if let terminal, handOff(terminal, to: pid, job: &job, signals: signals, notice: { _ in }) == false {
             abandon()
             return .failure(.spawnFailed("could not give it the terminal"))
         }
@@ -189,8 +196,7 @@ enum SecretRunProcess {
     /// rv inherited ignored, which the command keeps ignoring as a shell's
     /// child would.
     static func defaultedSignals(keepIgnored: Set<Int32>) -> [Int32] {
-        [SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU, SIGPIPE, SIGWINCH, SIGINFO]
-            .filter { keepIgnored.contains($0) == false }
+        (SecretRunSignals.forwarded + [SIGTTOU] + SecretRunSignals.untouched).filter { keepIgnored.contains($0) == false }
     }
 
     /// For a child that must never run: kills its group and reaps it. The
