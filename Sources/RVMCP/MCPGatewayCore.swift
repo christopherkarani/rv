@@ -1195,6 +1195,11 @@ public struct MCPGatewayCore {
 }
 
 extension MCPCallRecord {
+    /// Bounds on what one `mcp.call` event carries from the client.
+    public static let maximumAuditedKeys = 64
+    public static let maximumAuditedKeyBytes = 256
+    public static let maximumAuditedSubjectBytes = 512
+
     /// The unified `mcp.call` audit event. An `ask` call that was granted is
     /// `allowed`, even if it then failed; one still waiting on an approval is
     /// `pending`; one refused, by the user or by rv, is `denied`.
