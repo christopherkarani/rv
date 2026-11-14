@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVFileStore
+import RVHistory
 
 /// Shared read/update for `~/.config/rv/config.json` object keys.
 /// `update` is the only writer; it serializes load-mutate-write under
@@ -27,12 +28,19 @@ enum MachineConfigJSON {
         file.appendingPathExtension("lock")
     }
 
-    static func update(file: URL, mutate: (inout [String: JSONValue]) -> Void) throws {
+    /// The audit event for a write, from the object before and after
+    /// `mutate`; nil when nothing the audit trail tracks changed.
+    typealias ChangeEvent = (_ before: [String: JSONValue], _ after: [String: JSONValue]) -> AuditEvent?
+
+    static func update(
+        file: URL, audit: ChangeEvent? = nil, mutate: (inout [String: JSONValue]) -> Void
+    ) throws {
         try prepareDirectory(of: file)
         try ExclusiveFileLock.withLock(at: lockURL(for: file)) {
-            var root = load(from: file)
+            let before = load(from: file)
+            var root = before
             mutate(&root)
-            try write(root, to: file)
+            try write(root, to: file, audit: audit?(before, root))
         }
     }
 
@@ -42,13 +50,15 @@ enum MachineConfigJSON {
     /// written. `mutate` may throw; nothing is written then either.
     static func updateExistingObject(
         file: URL,
+        audit: ChangeEvent? = nil,
         mutate: (inout [String: JSONValue]) throws -> Void
     ) throws {
         try prepareDirectory(of: file)
         try ExclusiveFileLock.withLock(at: lockURL(for: file)) {
-            var root = try loadObject(from: file)
+            let before = try loadObject(from: file)
+            var root = before
             try mutate(&root)
-            try write(root, to: file)
+            try write(root, to: file, audit: audit?(before, root))
         }
     }
 
@@ -63,12 +73,22 @@ enum MachineConfigJSON {
         return root
     }
 
-    private static func write(_ root: [String: JSONValue], to file: URL) throws {
+    /// Writes `root`; with an `audit` event, write-ahead through
+    /// `ConfigChangeAudit.commit`, so a change the log cannot hold is not
+    /// written. The caller holds the lock, so prior and new are exact.
+    private static func write(_ root: [String: JSONValue], to file: URL, audit: AuditEvent?) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         guard let data = try? encoder.encode(JSONValue.object(root)) else {
             throw SafetyStoreError.invalidFile
         }
+        guard let audit else { return try replace(file, with: data) }
+        try ConfigChangeAudit.commit(audit, configDirectory: file.deletingLastPathComponent()) {
+            try replace(file, with: data)
+        }
+    }
+
+    private static func replace(_ file: URL, with data: Data) throws {
         try data.write(to: file, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],

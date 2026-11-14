@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVPresentation
 import RVService
@@ -213,8 +214,11 @@ enum PacksListFilter {
 }
 
 private func mutate(ids: [String], enabling: Bool) async throws {
-    try await OwnerConfirmation.require("\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
-    try applyPackMutation(ids: ids, enabling: enabling)
+    let authorization = try await OwnerConfirmation.require(
+        "\(enabling ? "enable" : "disable") packs \(ids.joined(separator: ", "))")
+    try await ConfigChangeAudit.$authorization.withValue(authorization) {
+        try applyPackMutation(ids: ids, enabling: enabling)
+    }
 }
 
 /// Pack enable/disable, run after the owner gate approved it.

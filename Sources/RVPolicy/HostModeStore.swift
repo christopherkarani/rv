@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 
 /// How rv guards one hook host. `block` enforces, `observe` allows and logs
 /// what enforcement would have blocked, `off` leaves the host unwired. A
@@ -65,9 +66,16 @@ public struct HostModeStore: Sendable {
     /// read, the checks and the write share one lock; a config that is not
     /// an object, or a non-object `guard` / `guard.hosts`, throws
     /// `unreadableConfig` and nothing is written.
+    /// Records `config.changed` (`guard.hosts.<host>`) write-ahead when the
+    /// stored entry changes.
     public func save(_ mode: HostMode, for host: HookHost) throws {
+        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
+            let prior = before["guard"]?["hosts"]?[host.rawValue]?.string ?? ConfigChangeAudit.unset
+            guard prior != mode.rawValue else { return nil }
+            return ConfigChangeAudit.setting("guard.hosts.\(host.rawValue)", from: prior, to: mode.rawValue)
+        }
         do {
-            try MachineConfigJSON.updateExistingObject(file: configFile) { root in
+            try MachineConfigJSON.updateExistingObject(file: configFile, audit: audit) { root in
                 var guardObject = try Self.object(root["guard"])
                 var hosts = try Self.object(guardObject["hosts"])
                 hosts[host.rawValue] = .string(mode.rawValue)
@@ -83,8 +91,13 @@ public struct HostModeStore: Sendable {
     /// Stored `guard.hosts` entries, and every other key, are kept; the
     /// same `unreadableConfig` rule as `save` applies.
     public func saveGlobalObserve() throws {
+        let audit: MachineConfigJSON.ChangeEvent = { before, _ in
+            let prior = before["guard"]?["mode"]?.string ?? ConfigChangeAudit.unset
+            guard prior != "observe" else { return nil }
+            return ConfigChangeAudit.setting("guard.mode", from: prior, to: "observe")
+        }
         do {
-            try MachineConfigJSON.updateExistingObject(file: configFile) { root in
+            try MachineConfigJSON.updateExistingObject(file: configFile, audit: audit) { root in
                 var guardObject = try Self.object(root["guard"])
                 guardObject["mode"] = .string("observe")
                 root["guard"] = .object(guardObject)

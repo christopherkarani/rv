@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVHistory
 
 /// Persisted `[packs]` section under `$HOME/.config/rv/config.toml`.
 public struct PacksConfig: Equatable, Sendable {
@@ -76,11 +77,30 @@ public enum PacksConfigStore {
         guard let data = body.data(using: .utf8) else {
             throw PacksConfigError.unwritable
         }
-        do {
-            try data.write(to: url, options: .atomic)
-        } catch {
-            throw PacksConfigError.unwritable
+        let write: () throws -> Void = {
+            do {
+                try data.write(to: url, options: .atomic)
+            } catch {
+                throw PacksConfigError.unwritable
+            }
         }
+        guard let audit = changeEvent(from: parse(existing), to: config) else { return try write() }
+        try ConfigChangeAudit.commit(audit, configDirectory: directory, write)
+    }
+
+    /// `config.changed` (`packs`) with the enabled and disabled lists before
+    /// and after; nil when neither changed. Pack ids, never file contents.
+    static func changeEvent(from prior: PacksConfig, to new: PacksConfig) -> AuditEvent? {
+        guard prior != new else { return nil }
+        func summary(_ config: PacksConfig) -> String {
+            "enabled=[\(config.enabled.joined(separator: ","))] disabled=[\(config.disabled.joined(separator: ","))]"
+        }
+        return ConfigChangeAudit.setting(
+            "packs", from: summary(prior), to: summary(new),
+            detail: [
+                "enabled": ConfigChangeAudit.list(Set(new.enabled).subtracting(prior.enabled)),
+                "disabled": ConfigChangeAudit.list(Set(new.disabled).subtracting(prior.disabled)),
+            ].filter { $0.value.isEmpty == false })
     }
 
     /// Replace or append `[packs]` while leaving other TOML sections intact.

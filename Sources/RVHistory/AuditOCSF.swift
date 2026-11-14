@@ -65,6 +65,10 @@ public enum AuditOCSF {
             object["src_endpoint"] = ["hostname": hostName]
         case 1007:
             object["process"] = ["name": event.detail["tool"] ?? "command"]
+        case 5019:
+            // Device Config State Change: the gate itself changed.
+            object["state_id"] = event.decision == .failed ? 99 : 2
+            object["state"] = event.decision == .failed ? "Other" : "Enabled"
         case 2004:
             object["is_alert"] = true
             object["finding_info"] = [
@@ -111,6 +115,9 @@ public enum AuditOCSF {
         }
         if kind == .secretMisuse {
             return Class(uid: 2004, name: "Detection Finding", category: 2, categoryName: "Findings", activity: 1, activityName: "Create")
+        }
+        if kind == .policyChanged || kind == .policyManaged || kind == .configChanged {
+            return Class(uid: 5019, name: "Device Config State Change", category: 5, categoryName: "Discovery", activity: 1, activityName: "Log")
         }
         if kind == .egressDenied {
             return Class(uid: 4001, name: "Network Activity", category: 4, categoryName: "Network Activity", activity: 5, activityName: "Refuse")

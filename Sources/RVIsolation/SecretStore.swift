@@ -8,6 +8,7 @@ import Security
 #endif
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 
 extension SecretSource {
@@ -229,13 +230,45 @@ extension SecretsConfiguration {
     }
 
     /// Validates, then atomically replaces secrets.json (0600, owner-only directory).
+    /// A change to the definitions is recorded write-ahead (`config.changed`,
+    /// `secrets`): names only, never values or sources. A change the audit
+    /// log cannot hold is not written (`unrecorded`).
     public func write(configDirectory: URL) -> Result<Void, SecretsConfigurationError> {
         let data = encoded()
         if case .failure(let error) = Self.decode(data) { return .failure(error) }
-        guard OwnerOnlyFile.write(data, to: Self.fileURL(configDirectory: configDirectory)) else {
-            return .failure(.unreadable)
+        let url = Self.fileURL(configDirectory: configDirectory)
+        let prior = (try? Self.load(configDirectory: configDirectory).get()) ?? SecretsConfiguration(secrets: [])
+        guard let audit = Self.changeEvent(from: prior, to: self) else {
+            return OwnerOnlyFile.write(data, to: url) ? .success(()) : .failure(.unreadable)
         }
-        return .success(())
+        do {
+            try ConfigChangeAudit.commit(audit, configDirectory: configDirectory) {
+                guard OwnerOnlyFile.write(data, to: url) else { throw SecretsConfigurationError.unreadable }
+            }
+            return .success(())
+        } catch let error as SecretsConfigurationError {
+            return .failure(error)
+        } catch {
+            return .failure(.unrecorded)
+        }
+    }
+
+    /// `config.changed` (`secrets`): the definition count before and after
+    /// and the names added, removed or redefined. Nil when nothing changed.
+    static func changeEvent(from prior: SecretsConfiguration, to new: SecretsConfiguration) -> AuditEvent? {
+        let before = Dictionary(prior.secrets.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let after = Dictionary(new.secrets.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let added = after.keys.filter { before[$0] == nil }
+        let removed = before.keys.filter { after[$0] == nil }
+        let changed = after.keys.filter { name in before[name].map { $0 != after[name] } ?? false }
+        guard added.isEmpty == false || removed.isEmpty == false || changed.isEmpty == false else { return nil }
+        var detail: [String: String] = [:]
+        if added.isEmpty == false { detail["added"] = ConfigChangeAudit.list(added) }
+        if removed.isEmpty == false { detail["removed"] = ConfigChangeAudit.list(removed) }
+        if changed.isEmpty == false { detail["changed"] = ConfigChangeAudit.list(changed) }
+        return ConfigChangeAudit.setting(
+            "secrets", from: "\(prior.secrets.count) definitions", to: "\(new.secrets.count) definitions",
+            detail: detail)
     }
 }
 

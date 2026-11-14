@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVService
 
@@ -115,9 +116,12 @@ enum HostModeRun {
             }
             let store = store(env)
             let current = store.mode(for: host)
+            // Only loosening asks the owner; tightening needs no check.
+            var authorization: String?
             if mode.isLooser(than: current) {
                 do {
                     try await authenticate()
+                    authorization = "owner (loosening check)"
                 } catch {
                     throw SetupError.ownerAuthenticationRequired
                 }
@@ -138,7 +142,9 @@ enum HostModeRun {
                 try SetupRun.requireTrustedDaemon(env)
             }
             do {
-                try store.save(mode, for: host)
+                try await ConfigChangeAudit.$authorization.withValue(authorization) {
+                    try store.save(mode, for: host)
+                }
             } catch {
                 return SetupOutcome(
                     stdout: "", stderr: "rv host mode failed: unable to write config.json\n",

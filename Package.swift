@@ -13,6 +13,7 @@ let extraPackageDependencies: [Package.Dependency] = [
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
     "RVFileStore",
+    "RVHistory",
     .product(name: "Crypto", package: "swift-crypto"),
     .product(name: "OrderedCollections", package: "swift-collections"),
 ]
@@ -26,6 +27,7 @@ let extraPackageDependencies: [Package.Dependency] = []
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
     "RVFileStore",
+    "RVHistory",
     .product(name: "OrderedCollections", package: "swift-collections"),
 ]
 let scanLinkerSettings: [LinkerSetting] = []
@@ -170,7 +172,7 @@ let coreTestTargets: [Target] = [
         exclude: ["Fixtures"],
         linkerSettings: scanLinkerSettings
     ),
-    .testTarget(name: "RVPolicyTests", dependencies: ["RVPolicy"]),
+    .testTarget(name: "RVPolicyTests", dependencies: ["RVPolicy", "RVHistory"]),
     .testTarget(
         name: "RVHooksTests",
         dependencies: ["RVHooks", "RVEngine"],
