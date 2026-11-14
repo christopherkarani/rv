@@ -413,6 +413,64 @@ struct MCPToolPinTests {
         #expect(called.audits.first?.decision == .ask)
     }
 
+    static let cleanPush = #"{"name":"push","inputSchema":{"type":"object","properties":{"repo":{"type":"string"}}}}"#
+
+    /// One page of the tools/list reply to upstream request `id`.
+    static func page(_ harness: inout GatewayHarness, id: Int, _ tools: [String], next: String? = nil) -> [MCPGatewayOutput] {
+        let cursor = next.map { #","nextCursor":"\#($0)""# } ?? ""
+        return harness.upstream(
+            "github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"tools":[\#(tools.joined(separator: ","))]\#(cursor)}}"#)
+    }
+
+    /// Round 6 A4: a hiding entry and a clean one of the same name in one
+    /// listing, in either order: the tool is neither listed nor called.
+    @Test func aHidingAndACleanEntryOfOneNameInOneListingHideIt() {
+        for order in [[Self.hidingSchemaTools[0], Self.cleanPush], [Self.cleanPush, Self.hidingSchemaTools[0]]] {
+            var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+            let listing = Self.list(&harness, [Self.search] + order)
+            #expect(Self.listed(listing).keys.sorted() == ["search"])
+            Self.expectHidden(Self.call(&harness, "push"), "hiding and clean")
+        }
+    }
+
+    /// Round 6 A4: a listing over pages settles once, so a clean entry on a
+    /// later page neither clears nor lists a tool an earlier page hid.
+    @Test func aCleanEntryOnALaterPageDoesNotClearAHidingOne() throws {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        let request = harness.client(#"{"jsonrpc":"2.0","id":"l","method":"tools/list"}"#)
+        let first = try #require(request.toUpstream.first?.1["id"]?.intValue)
+        let more = Self.page(&harness, id: first, [Self.search, Self.hidingSchemaTools[0]], next: "p2")
+        let second = try #require(more.toUpstream.first?.1["id"]?.intValue)
+        let last = Self.page(&harness, id: second, [Self.cleanPush])
+        #expect(Self.listed(last).keys.sorted() == ["search"])
+        Self.expectHidden(Self.call(&harness, "push"), "clean on page two")
+    }
+
+    /// Round 6 A4: an upstream that exits mid-listing settles only what it
+    /// sent: a tool hidden earlier stays refused, and one hidden on the
+    /// partial page is refused too.
+    @Test func anUpstreamExitMidListingClearsNoHiddenTool() throws {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        _ = Self.list(&harness, [Self.search, Self.hidingSchemaTools[0]])
+        let request = harness.client(#"{"jsonrpc":"2.0","id":"l","method":"tools/list"}"#)
+        let first = try #require(request.toUpstream.first?.1["id"]?.intValue)
+        _ = Self.page(&harness, id: first, [Self.search, Self.hidingSchemaTools[1]], next: "p2")
+        let exited = harness.core.handle(.upstreamExited(server: "github"))
+        #expect(exited.logs.contains("MCP server github exited"))
+        Self.expectHidden(Self.call(&harness, "push"), "hidden before the exit")
+        Self.expectHidden(Self.call(&harness, "tag"), "hidden on the partial page")
+    }
+
+    /// Round 6 A4: a hidden tool's definition is audited once; listing it
+    /// again writes no second event.
+    @Test func aRepeatedHidingListingWritesNoSecondEvent() {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        let tag = Self.hidingSchemaTools[1]
+        #expect(Self.changeEvents(Self.list(&harness, [tag])).map(\.subject) == ["github/tag"])
+        #expect(Self.changeEvents(Self.list(&harness, [tag])).isEmpty)
+        Self.expectHidden(Self.call(&harness, "tag"), "after two listings")
+    }
+
     /// L2: hiding a definition still checks it against the pin, so a pinned
     /// tool listed once with a hiding schema stays changed when its pinned
     /// definition comes back; and a clean listing serves it again.
@@ -438,6 +496,25 @@ struct MCPToolPinTests {
         #expect(listing.logs.filter { $0.contains(Self.schemaNotice) }.count == 1)
         #expect(Self.call(&harness, "push").toUpstream.isEmpty)
         #expect(Self.call(&harness, "search").toUpstream.count == 1)
+    }
+
+    /// Round 6 A1: the hidden set is bounded with `observed`. A hiding tool
+    /// past `maximumTrackedTools` is not kept in it, so its server then
+    /// refuses every tool rv does not track: such a tool stays refused and
+    /// never asks.
+    @Test func theHiddenSetIsBoundedAndAHidingToolPastTheCapIsStillRefused() {
+        let cap = MCPGatewayCore.maximumTrackedTools
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        for round in 0..<3 {
+            let tools = (0..<cap).map { #"{"name":"h\#(round)_\#($0)","inputSchema":{"type":"object","required":["a\u001b"]}}"# }
+            _ = Self.list(&harness, tools)
+            #expect((harness.core.hidingSchemas["github"]?.count ?? 0) <= cap, "round \(round)")
+        }
+        #expect(harness.core.observed["github"]?.count == cap)
+        Self.expectHidden(Self.call(&harness, "h0_0"), "tracked")
+        Self.expectHidden(Self.call(&harness, "h1_7"), "past the cap, an earlier listing")
+        Self.expectHidden(Self.call(&harness, "h2_0"), "past the cap, the latest listing")
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
     }
 
     /// L2: a pinned tool's other display text. `$comment` and
