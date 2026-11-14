@@ -337,7 +337,8 @@ How it starts the command:
   one is never passed on (the same rule applies on macOS). The launcher
   is told rv's pid and checks that rv is still its parent before it stops
   and after it is continued: if rv has died, it exits without running the
-  command. The rest is the same code as on macOS:
+  command (if rv dies while it is stopped and nothing continues it, it
+  stays stopped and never runs). The rest is the same code as on macOS:
   rv records the stopped process's pid and start time, which survive
   `exec`, binds the lease, hands over the terminal and sends `SIGCONT`.
   So the command's image runs no instruction before its placeholders are

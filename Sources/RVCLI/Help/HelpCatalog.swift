@@ -137,7 +137,7 @@ enum HelpCatalog {
                 HelpRow(name: "terminal", description: "When rv holds the terminal alone, the command gets it, so Ctrl-C and Ctrl-Z reach it. In a pipeline (rv run -- x | less) the terminal stays with the pipeline: Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops rv but not the command. SIGINT, SIGQUIT, SIGTERM and SIGHUP sent to rv are forwarded to its process group; one rv inherited ignored (nohup) stays ignored for the command"),
                 HelpRow(name: "store login", description: "When a selected secret comes from Vault, rv's own Vault login (VAULT_TOKEN) is removed as well; ~/.vault-token is not. Provider CLIs (op, aws, infisical, bws, gcloud, az) keep their own logins and files, which the command can use as you can"),
                 HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
-                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. Linux has no suspended start yet, so it refuses there"),
+                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. On Linux the suspended start needs rv-isolation-exec installed beside rv"),
             ]),
         ],
         examples: [

@@ -151,17 +151,22 @@ extension SecretRunLaunchTests {
         ["--stopped", "99999999999", "SELF", "--", "/bin/true", "true"],
         ["--stopped", "3", "SELF", "--", "true", "true"],
         ["--stopped", "3", "SELF", "--", "", "true"],
-        // Not the process that started it: 1, nobody, and a malformed pid.
+        // Not the process that started it: init, this process's own parent
+        // (a well-formed pid of a live process), nobody, a malformed pid.
         ["--stopped", "3", "1", "--", "/bin/true", "true"],
+        ["--stopped", "3", "PARENT", "--", "/bin/true", "true"],
         ["--stopped", "3", "0", "--", "/bin/true", "true"],
         ["--stopped", "3", "", "--", "/bin/true", "true"],
         ["--stopped", "3", "SELFx", "--", "/bin/true", "true"],
         ["--stopped", "3", "-SELF", "--", "/bin/true", "true"],
     ])
     func theLauncherRefusesArgumentsItDoesNotUnderstand(arguments: [String]) throws {
-        // SELF: this process, the launcher's real parent.
+        // SELF: this process, the launcher's real parent. PARENT: its parent.
         let own = String(getpid())
-        #expect(try launcherExit(arguments.map { $0.replacingOccurrences(of: "SELF", with: own) }) == 125)
+        let parent = String(getppid())
+        #expect(try launcherExit(arguments.map {
+            $0.replacingOccurrences(of: "SELF", with: own).replacingOccurrences(of: "PARENT", with: parent)
+        }) == 125)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -357,14 +362,15 @@ extension SecretRunLaunchTests {
             while [ "$(cut -d' ' -f3 /proc/$!/stat 2>/dev/null)" != T ] && [ $tries -lt 1000 ]; do
               sleep 0.01; tries=$((tries + 1))
             done
-            echo $! > "$3"
+            [ "$(cut -d' ' -f3 /proc/$!/stat 2>/dev/null)" = T ] && echo $! > "$3"
             """
         let parent = Process()
         parent.executableURL = URL(fileURLWithPath: "/bin/sh")
         parent.arguments = ["-c", script, "sh", launcher, marker, pidFile]
         try parent.run()
         parent.waitUntilExit()
-        let pid = try #require(pid_t(read(URL(fileURLWithPath: pidFile))))
+        // No pid: the launcher never stopped, which is not what this tests.
+        let pid = try #require(pid_t(read(URL(fileURLWithPath: pidFile))), "the launcher did not stop")
         defer { kill(pid, SIGKILL) }
         let deadline = Date().addingTimeInterval(20)
         func state() -> UInt8? {
@@ -377,6 +383,40 @@ extension SecretRunLaunchTests {
         while state() != nil, state() != UInt8(ascii: "Z"), Date() < deadline { usleep(5_000) }
         #expect(state() == nil || state() == UInt8(ascii: "Z"), "the orphaned launcher is still running")
         #expect(FileManager.default.fileExists(atPath: marker) == false)
+    }
+
+    /// rv is pid 1 when it is a container's entry point: a parent of 1 is
+    /// a parent like any other, and the launcher stops for it and runs.
+    @Test(.enabled(if: getuid() == 0 && FileManager.default.isExecutableFile(atPath: "/usr/bin/unshare"),
+        "needs root for a pid namespace"), .timeLimit(.minutes(1)))
+    func aLauncherStartedByPidOneStopsAndRuns() throws {
+        let launcher = try #require(SecretRunLauncher.path())
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = directory.appendingPathComponent("ran").path
+        // No `wait`: a shell started from a test thread inherits its
+        // blocked signals, SIGCHLD among them.
+        let script = """
+            "$1" --stopped 3 $$ -- /usr/bin/touch touch "$2" &
+            tries=0
+            while [ "$(cut -d' ' -f3 /proc/$!/stat 2>/dev/null)" != T ] && [ $tries -lt 1000 ]; do
+              sleep 0.01; tries=$((tries + 1))
+            done
+            echo "$$ $(cut -d' ' -f3 /proc/$!/stat 2>/dev/null) $([ -e "$2" ] && echo ran || echo waiting)"
+            kill -CONT $!
+            tries=0
+            while [ ! -e "$2" ] && [ $tries -lt 1000 ]; do sleep 0.01; tries=$((tries + 1)); done
+            """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unshare")
+        process.arguments = ["--pid", "--fork", "--mount-proc", "/bin/sh", "-c", script, "sh", launcher, marker]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        #expect(text == "1 T waiting\n", "\(text)")
+        #expect(FileManager.default.fileExists(atPath: marker))
     }
 
     /// The file was there when rv resolved it and gone at `exec`: the

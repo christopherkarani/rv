@@ -142,6 +142,8 @@ extension SecretRunProcess {
         defer { posix_spawn_file_actions_destroy(&actions) }
         // Every number below the floor is given or closed: the launcher
         // closes from the floor up, and nothing else of rv's may be left.
+        // In number order, so a source below the floor must be a number
+        // that is itself passed on (every caller's is, or is above it).
         for target in 0..<floor.rawValue {
             let source = descriptors[target]
             let passed = source.map { $0 != target || passesOn(descriptorFlags: fcntl($0, F_GETFD)) } ?? false

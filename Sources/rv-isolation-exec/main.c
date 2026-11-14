@@ -55,8 +55,9 @@
 
 extern char **environ;
 
-/* FLOOR: decimal digits only, 3 or more (stdio is never closed here). */
-static int rv_parse_floor(const char *text, unsigned int *floor) {
+/* Decimal digits only, from `least` to INT_MAX. FLOOR is 3 or more: stdio
+ * is never closed here. */
+static int rv_parse_number(const char *text, unsigned long least, unsigned int *number) {
     unsigned long value = 0;
     const char *digit = text;
     if (*digit == '\0') {
@@ -71,10 +72,10 @@ static int rv_parse_floor(const char *text, unsigned int *floor) {
             return -1;
         }
     }
-    if (value < 3) {
+    if (value < least) {
         return -1;
     }
-    *floor = (unsigned int)value;
+    *number = (unsigned int)value;
     return 0;
 }
 
@@ -83,9 +84,8 @@ static int rv_run_stopped(int argc, char **argv) {
     unsigned int parent;
     int failure;
 
-    /* PARENT has the same form as FLOOR; no process has a pid below 3 here
-     * that could be rv. */
-    if (argc < 7 || rv_parse_floor(argv[2], &floor) != 0 || rv_parse_floor(argv[3], &parent) != 0) {
+    /* PARENT: any pid. rv is pid 1 or 2 when it is a container's entry point. */
+    if (argc < 7 || rv_parse_number(argv[2], 3, &floor) != 0 || rv_parse_number(argv[3], 1, &parent) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     if (strcmp(argv[4], "--") != 0 || argv[5][0] != '/') {
@@ -107,8 +107,10 @@ static int rv_run_stopped(int argc, char **argv) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     /* Continued by someone other than the rv that started this: rv died
-     * while this was stopped (the kernel continues an orphaned stopped
-     * group), so nothing bound the command and nothing will serve it. */
+     * while this was stopped, so nothing bound the command and nothing
+     * will serve it. (The kernel continues a stopped group that its
+     * parent's death orphans; where the new parent shares the session it
+     * does not, and this stays stopped until someone continues it.) */
     if ((unsigned int)getppid() != parent) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
