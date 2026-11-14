@@ -46,6 +46,8 @@ public enum WorkspaceControlRequestPayload: Sendable, Equatable {
         public var io: String?
         public var rows: Int?
         public var columns: Int?
+        /// Wall-clock deadline in seconds; the policy value caps it.
+        public var timeoutSeconds: UInt64?
 
         public init(
             executable: String? = nil,
@@ -55,8 +57,10 @@ public enum WorkspaceControlRequestPayload: Sendable, Equatable {
             hook: String? = nil,
             io: String? = nil,
             rows: Int? = nil,
-            columns: Int? = nil
+            columns: Int? = nil,
+            timeoutSeconds: UInt64? = nil
         ) {
+            self.timeoutSeconds = timeoutSeconds
             self.executable = executable
             self.arguments = arguments
             self.resourceProfileID = resourceProfileID

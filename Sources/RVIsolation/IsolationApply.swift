@@ -108,6 +108,9 @@ enum RuntimeSpawnFault: Equatable, Sendable {
     case slave
     case spawn
     case register
+    /// `rv-pty-claim` asks the kernel for a limit it refuses, so the leader
+    /// exits before exec. Applies to Seatbelt launches.
+    case rlimit
 }
 
 /// Prepared launch. Not established. Production construction is `prepare`.

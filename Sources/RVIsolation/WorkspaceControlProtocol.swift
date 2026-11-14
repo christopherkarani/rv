@@ -102,6 +102,8 @@ enum WorkspaceControlFeature {
     static let terminalReplayBatchesV1 = "terminalReplayBatchesV1"
     /// `launchRuntime` accepts `microvm`: run the command in a Linux micro-VM.
     static let microVMLaunchV1 = "microVMLaunchV1"
+    /// `launchRuntime` accepts `timeout`: a wall-clock deadline in seconds.
+    static let runtimeTimeoutV1 = "runtimeTimeoutV1"
     /// A subscriber opts in by naming this feature in its subscribe request.
     /// The host sends `terminalWindow` only to opted-in subscribers, so an
     /// older client (whose reader fails closed on unknown ops) never sees it.
@@ -210,7 +212,7 @@ enum WorkspaceControlCodec {
         "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "microvm", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
         "attached", "running", "io", "rows", "cols", "sequence", "batch",
         "truncated", "replayLength", "bytes", "exit",
-        "terminal", "input", "created", "features",
+        "terminal", "input", "created", "features", "timeout",
     ]
 
     static func decodeRequest(_ data: Data) -> WorkspaceControlRequestDecode {
@@ -330,6 +332,7 @@ enum WorkspaceControlCodec {
             fits(envelope.phase, 32),
             fits(envelope.project, WorkspaceControlLimits.maxProjectBytes),
             featuresFit(envelope.features),
+            timeoutFits(envelope.timeoutSeconds),
             argumentsFit(envelope.arguments),
             attachedFits(envelope.attached),
             ioFits(envelope.io),
@@ -355,6 +358,11 @@ enum WorkspaceControlCodec {
         return values.allSatisfy {
             $0.utf8.count <= WorkspaceControlLimits.maxArgumentBytes && $0.contains("\0") == false
         }
+    }
+
+    /// A launch deadline lies in the policy's own range.
+    static func timeoutFits(_ seconds: UInt64?) -> Bool {
+        seconds.map(RuntimeProcessLimits.timeoutSecondsRange.contains) ?? true
     }
 
     static func agentDefinitionIDFits(_ id: String?) -> Bool {
@@ -495,7 +503,8 @@ enum WorkspaceControlCodec {
             hook: e.hook,
             io: e.io,
             rows: e.rows,
-            columns: e.columns
+            columns: e.columns,
+            timeoutSeconds: e.timeoutSeconds
         )
     }
 
@@ -551,6 +560,7 @@ enum WorkspaceControlCodec {
         e.io = p.io
         e.rows = p.rows
         e.columns = p.columns
+        e.timeoutSeconds = p.timeoutSeconds
     }
 
     private static func responsePayload(_ e: Envelope) -> WorkspaceControlResponsePayload {
@@ -806,6 +816,7 @@ private struct Envelope {
     var inputOwner: Bool? = nil
     var created: Bool? = nil
     var features: [String]? = nil
+    var timeoutSeconds: UInt64? = nil
 
     struct RuntimeWire {
         var runtime: UUID
@@ -853,6 +864,7 @@ private struct Envelope {
         case inputOwner = "input"
         case created
         case features
+        case timeoutSeconds = "timeout"
     }
 }
 
@@ -921,7 +933,7 @@ extension Envelope: Codable {
             "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "microvm", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
             "attached", "running", "io", "rows", "cols", "sequence", "batch",
             "truncated", "replayLength", "bytes", "exit",
-            "terminal", "input", "created", "features",
+            "terminal", "input", "created", "features", "timeout",
         ]) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown field")
@@ -963,6 +975,7 @@ extension Envelope: Codable {
         inputOwner = try container.decodeIfPresent(Bool.self, forKey: .inputOwner)
         created = try container.decodeIfPresent(Bool.self, forKey: .created)
         features = try container.decodeIfPresent([String].self, forKey: .features)
+        timeoutSeconds = try container.decodeIfPresent(UInt64.self, forKey: .timeoutSeconds)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1002,6 +1015,7 @@ extension Envelope: Codable {
         try container.encodeIfPresent(inputOwner, forKey: .inputOwner)
         try container.encodeIfPresent(created, forKey: .created)
         try container.encodeIfPresent(features, forKey: .features)
+        try container.encodeIfPresent(timeoutSeconds, forKey: .timeoutSeconds)
     }
 }
 

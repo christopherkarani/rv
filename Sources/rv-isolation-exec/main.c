@@ -4,6 +4,10 @@
  * this helper exists (fork-from-Swift is unsafe).
  *
  * Argv lock: rv-isolation-exec --workspace RESOLVED -- INNER...
+ * Core dumps are disabled before exec (soft and hard RLIMIT_CORE = 0):
+ * a core file can hold injected secrets or gateway placeholders. This
+ * mirrors rv-pty-claim on Darwin; the configurable caps stay Darwin-only
+ * because Linux contained launch still refuses before exec.
  * Apply failure or bad argv exits 125 and does not exec.
  * Successful apply then failed execve exits 126 and does not claim
  * the inner ran.
@@ -17,6 +21,7 @@
 
 #include <limits.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -49,6 +54,10 @@ int main(int argc, char **argv) {
      * Only the deliberately supplied stdio descriptors survive the boundary.
      * A blocked or unsupported close_range must not run the inner command. */
     if (syscall(SYS_close_range, 3u, UINT_MAX, 0u) != 0) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    struct rlimit no_core = {0, 0};
+    if (setrlimit(RLIMIT_CORE, &no_core) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     if (rv_landlock_restrict_self_to_workspace(argv[2]) != 0) {

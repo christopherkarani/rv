@@ -83,6 +83,20 @@ struct AuditLedgerTests {
         #expect(blocked.reason == "busy")
     }
 
+    @Test func runtimeEndedCarriesTheTimeoutReason() throws {
+        let timedOut = #"{"endReason":"timeout","kind":"runtimeEnded","originalPath":"\/repo","protectedPath":"\/repo","recordedAt":1791826705,"runtime":"R1","workspace":"W1"}"#
+        let event = try #require(
+            AuditLedger.event(fromLine: Substring(timedOut), source: .workspaceSessions))
+        #expect(event.kind == .runtimeEnded)
+        #expect(event.kind.rawValue == "runtime.ended")
+        #expect(event.decision == .info)
+        #expect(event.reason == "timeout")
+        let ended = #"{"kind":"runtimeEnded","originalPath":"\/repo","protectedPath":"\/repo","recordedAt":1791826705,"runtime":"R1","workspace":"W1"}"#
+        let plain = try #require(
+            AuditLedger.event(fromLine: Substring(ended), source: .workspaceSessions))
+        #expect(plain.reason == nil)
+    }
+
     @Test func runtimeSessionAndAgentInstanceMap() throws {
         let session = try #require(
             AuditLedger.event(fromLine: Substring(Lines.runtimeSession), source: .runtimeSessions))

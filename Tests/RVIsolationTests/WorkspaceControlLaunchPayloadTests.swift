@@ -88,6 +88,21 @@ struct LaunchParityWireTests {
             #expect(WorkspaceControlCodec.encodeRequest(decoded) == body)
         }
     }
+
+    @Test func launchTimeoutRoundTripsAndOutOfRangeIsRefused() throws {
+        let request = WorkspaceControlRequestFrame(
+            id: LaunchParityFixtures.id,
+            payload: .launchRuntime(.init(executable: "/bin/sh", timeoutSeconds: 90))
+        )
+        let body = try #require(WorkspaceControlCodec.encodeRequest(request))
+        #expect(String(decoding: body, as: UTF8.self).contains("\"timeout\":90"))
+        #expect(WorkspaceControlCodec.decodeRequest(body) == .frame(request))
+        let range = RuntimeProcessLimits.timeoutSecondsRange
+        for seconds in [0, range.upperBound + 1] {
+            let raw = "{\"v\":1,\"op\":\"launchRuntime\",\"executable\":\"/bin/sh\",\"timeout\":\(seconds)}"
+            #expect(WorkspaceControlCodec.decodeRequest(Data(raw.utf8)) == .invalid, "timeout \(seconds)")
+        }
+    }
 }
 
 @Suite("Launch payload parse")
@@ -252,6 +267,10 @@ struct LaunchPayloadParseTests {
         #expect(EnsureTerminalRuntimePayload.parse(
             LaunchFields(hook: "not a tag!", io: "terminal", rows: 24, columns: 80)
         ) == .failure(.invalidRequest))
+        // A reused runtime keeps its deadline; a new one is not dropped silently.
+        #expect(EnsureTerminalRuntimePayload.parse(LaunchFields(
+            executable: "/bin/sh", io: "terminal", rows: 24, columns: 80, timeoutSeconds: 30
+        )) == .failure(.invalidRequest))
     }
 
     @Test func ensureParseDefersProfileLookup() {

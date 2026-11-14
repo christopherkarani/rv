@@ -370,6 +370,8 @@ struct AdmittedLaunchContext: Sendable, Equatable {
     /// command reuses them instead of re-resolving (probes plus
     /// idempotent `ensure`) per command.
     var productive: ProductiveWorkspaceResolution? = nil
+    /// Kernel caps each admitted one-shot's leader applies before exec.
+    var processLimits: CageProcessLimits = .standard
 }
 
 /// One ASK parked for a human decision (Step 6). Host memory only.

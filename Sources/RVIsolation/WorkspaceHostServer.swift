@@ -245,6 +245,8 @@ final class WorkspaceHostServer: Sendable {
             _ = endpointFile.path.withCString { unlink($0) }
             return .failure(.endpointUnavailable)
         }
+        // Before the first launch can arrive: every runtime starts capped.
+        supervisor.configureProcessLimits(resourcePolicy.limits)
         let server = WorkspaceHostServer(
             supervisor: supervisor,
             hostID: hostID,
@@ -260,6 +262,7 @@ final class WorkspaceHostServer: Sendable {
                 WorkspaceControlFeature.runtimeResourceProfilesV1,
                 WorkspaceControlFeature.terminalReplayBatchesV1,
                 WorkspaceControlFeature.microVMLaunchV1,
+                WorkspaceControlFeature.runtimeTimeoutV1,
             ],
             admission: admission,
             listenFD: listened.0,
@@ -756,7 +759,8 @@ final class WorkspaceHostServer: Sendable {
             microVM: payload.microVM,
             admission: admission,
             sessionStore: sessionStore,
-            runningLimit: WorkspaceControlLimits.maxRuntimes
+            runningLimit: WorkspaceControlLimits.maxRuntimes,
+            timeoutSeconds: payload.timeoutSeconds
         )
         return launchResponse(request, responseOp: responseOp, io: payload.io, result: result)
     }

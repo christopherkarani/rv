@@ -160,6 +160,10 @@ public final class WorkspaceClient: Sendable {
         io.withLock { $0.supportsMicroVMLaunch }
     }
 
+    var supportsRuntimeTimeout: Bool {
+        io.withLock { $0.supportsRuntimeTimeout }
+    }
+
     private struct ClientState {
         var fd: Int32
         var open: Bool
@@ -167,6 +171,7 @@ public final class WorkspaceClient: Sendable {
         var supportsResourceProfiles: Bool
         var supportsIdentityAgentLaunch: Bool
         var supportsMicroVMLaunch: Bool = false
+        var supportsRuntimeTimeout: Bool = false
     }
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
@@ -254,6 +259,9 @@ public final class WorkspaceClient: Sendable {
                     $0.supportsMicroVMLaunch = features.contains(
                         WorkspaceControlFeature.microVMLaunchV1
                     )
+                    $0.supportsRuntimeTimeout = features.contains(
+                        WorkspaceControlFeature.runtimeTimeoutV1
+                    )
                 }
                 client.events.setSupportsReplayBatches(
                     features.contains(WorkspaceControlFeature.terminalReplayBatchesV1)
@@ -299,10 +307,19 @@ public final class WorkspaceClient: Sendable {
         terminalRows: Int? = nil,
         terminalColumns: Int? = nil,
         resourceProfileID: String? = nil,
-        microVM: MicroVMLaunchOptions? = nil
+        microVM: MicroVMLaunchOptions? = nil,
+        timeoutSeconds: UInt64? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
             return .failure(.requestTooLarge)
+        }
+        guard WorkspaceControlCodec.timeoutFits(timeoutSeconds) else {
+            return .failure(.invalidRequest)
+        }
+        // An older host would refuse the field as malformed, and a host that
+        // ignored it would run without the deadline; say why instead.
+        if timeoutSeconds != nil, supportsRuntimeTimeout == false {
+            return .failure(.incompatibleProtocol)
         }
         guard WorkspaceControlCodec.resourceProfileIDFits(resourceProfileID) else {
             return .failure(.invalidRequest)
@@ -319,7 +336,8 @@ public final class WorkspaceClient: Sendable {
             arguments: arguments,
             resourceProfileID: resourceProfileID,
             microvm: microVM,
-            hook: hookHost?.rawValue
+            hook: hookHost?.rawValue,
+            timeoutSeconds: timeoutSeconds
         )
         switch (terminalRows, terminalColumns) {
         case (nil, nil):

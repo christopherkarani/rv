@@ -310,7 +310,16 @@ private func spawnAdmittedCommand(
         return .failure(.spawnFailed)
     }
 
-    var arguments = [
+    // The one-shot leader applies the cage's resource limits in
+    // `rv-pty-claim` before it execs sandbox-exec; without the helper
+    // nothing would, so a missing helper refuses the command.
+    guard let helper = resolvedPtyClaimPath(workspace: launch.workspacePath) else {
+        return .failure(.spawnFailed)
+    }
+    var arguments = [helper]
+    arguments.append(contentsOf: launch.processLimits.withoutDeadline.helperArguments())
+    arguments.append(contentsOf: [
+        "-",
         IsolationBackends.sandboxExecPath,
         "-p",
         launch.profileSource,
@@ -320,7 +329,7 @@ private func spawnAdmittedCommand(
         "rv-admit",
         nonce,
         command.executable,
-    ]
+    ])
     arguments.append(contentsOf: command.arguments)
     let environment = admittedOneShotEnvironment(launch: launch)
     let argv = SpawnPointers(arguments)
@@ -334,7 +343,7 @@ private func spawnAdmittedCommand(
         envp.withPointers { envPointer in
             posix_spawn(
                 &pid,
-                IsolationBackends.sandboxExecPath,
+                helper,
                 &actions,
                 &attributes,
                 argvPointer,

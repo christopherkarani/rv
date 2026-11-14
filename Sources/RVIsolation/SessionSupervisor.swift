@@ -136,6 +136,10 @@ final class LiveSeatbeltChild: Sendable {
     let resources: RuntimeResourceManifest?
     /// Workspace whose micro-VM control placeholders this run holds.
     let placeholderWorkspace: String?
+    /// Wall-clock deadline. The watch kills the group here, the way a
+    /// cancel does; `rv-pty-claim`'s watchdog backs it up if this host dies.
+    let deadline: Date?
+    private let timedOut = Mutex(false)
     private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
 
     private struct HandshakeIO: Sendable {
@@ -179,8 +183,10 @@ final class LiveSeatbeltChild: Sendable {
         handshakeRead: Int32,
         terminal: RuntimeTerminal?,
         resources: RuntimeResourceManifest?,
-        placeholderWorkspace: String? = nil
+        placeholderWorkspace: String? = nil,
+        deadline: Date? = nil
     ) {
+        self.deadline = deadline
         self.session = session
         self.capability = capability
         self.pid = pid
@@ -204,6 +210,16 @@ final class LiveSeatbeltChild: Sendable {
     }
 
     var isEstablished: Bool { established.withLock { $0 } }
+
+    /// The watch stopped this runtime at its deadline.
+    var didTimeOut: Bool { timedOut.withLock { $0 } }
+
+    func markTimedOut() {
+        timedOut.withLock { $0 = true }
+    }
+
+    /// The lifecycle `endReason` for this runtime, nil for an ordinary end.
+    var endReason: String? { didTimeOut ? "timeout" : nil }
 
     func markEstablished() {
         established.withLock { $0 = true }
@@ -350,7 +366,8 @@ func spawnSeatbeltProcess(
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
     preparedEnvironment: [String]? = nil,
-    cwdVerification: CwdCommitVerification? = nil
+    cwdVerification: CwdCommitVerification? = nil,
+    limits: CageProcessLimits = .standard
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     let first = spawnSeatbeltProcessBody(
         request,
@@ -366,7 +383,8 @@ func spawnSeatbeltProcess(
         stagingAgent: stagingAgent,
         keychain: keychain,
         preparedEnvironment: preparedEnvironment,
-        cwdVerification: cwdVerification
+        cwdVerification: cwdVerification,
+        limits: limits
     )
     guard case .failure(.processSpawnFailed) = first else { return first }
     if blockingWorkIsCancelled() { return first }
@@ -390,7 +408,8 @@ func spawnSeatbeltProcess(
         stagingAgent: stagingAgent,
         keychain: keychain,
         preparedEnvironment: preparedEnvironment,
-        cwdVerification: cwdVerification
+        cwdVerification: cwdVerification,
+        limits: limits
     )
 }
 
@@ -406,7 +425,7 @@ func terminalOpenFault(for fault: RuntimeSpawnFault?) -> TerminalOpenFault? {
         return .unlock
     case .slave:
         return .slaveOpen
-    case .spawn, .register, nil:
+    case .spawn, .register, .rlimit, nil:
         return nil
     }
 }
@@ -425,7 +444,8 @@ func spawnSeatbeltProcessBody(
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
     preparedEnvironment: [String]? = nil,
-    cwdVerification: CwdCommitVerification? = nil
+    cwdVerification: CwdCommitVerification? = nil,
+    limits: CageProcessLimits = .standard
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     // Exactly one backend: a compiler-provenanced Seatbelt profile, or a
     // micro-VM launch. Provenance rides the profile value, not a text scan
@@ -440,6 +460,12 @@ func spawnSeatbeltProcessBody(
         // A prepared environment is a Seatbelt cage environment; a micro-VM
         // launch builds its own.
         guard microVM.workspacePath == workspace, preparedEnvironment == nil else {
+            return .failure(.backendMismatch)
+        }
+        // Cage limits and the deadline watchdog ride the Seatbelt leader;
+        // a VM is sized by its own options. Refuse rather than run a
+        // requested deadline that nothing outside this host would enforce.
+        guard limits.timeoutSeconds == nil else {
             return .failure(.backendMismatch)
         }
     default:
@@ -642,7 +668,8 @@ func spawnSeatbeltProcessBody(
             egressProxyCredential: egressProxyCredential,
             stagingAgent: stagingAgent,
             keychain: keychain,
-            preparedEnvironment: preparedEnvironment
+            preparedEnvironment: preparedEnvironment,
+            limits: limits
         )
         switch seatbelt {
         case .failure(let error):
@@ -778,7 +805,8 @@ func spawnSeatbeltProcessBody(
             workspacePath: workspace,
             sessionLeader: pid,
             egressProxyPort: egressProxyPort,
-            productive: productive
+            productive: productive,
+            processLimits: limits.withoutDeadline
         ),
         requestRead: parentRead,
         responseWrite: parentWrite
@@ -799,7 +827,8 @@ func spawnSeatbeltProcessBody(
         handshakeRead: ownedRead,
         terminal: terminal,
         resources: request.resources,
-        placeholderWorkspace: placeholdersHeld ? workspace : nil
+        placeholderWorkspace: placeholdersHeld ? workspace : nil,
+        deadline: limits.timeoutSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
     )
     handedOff = true
     resourceStageHandedOff = true
@@ -826,27 +855,26 @@ private func seatbeltSpawnSetup(
     egressProxyCredential: EgressProxyCredential?,
     stagingAgent: DefinitionStagingTag?,
     keychain: [(name: String, value: String)],
-    preparedEnvironment: [String]?
+    preparedEnvironment: [String]?,
+    limits: CageProcessLimits
 ) -> Result<SeatbeltSpawnSetup, IsolationApplyError> {
-    // Missing claim helper fails closed. Do not spawn sandbox-exec directly:
-    // the parent cannot install the controlling terminal from outside the
-    // child's session, and a live unclaimed group is the boundary failure.
+    // Missing helper fails closed. Do not spawn sandbox-exec directly: the
+    // helper is where the leader gets its resource limits (posix_spawn
+    // cannot set rlimits) and its deadline watchdog, and for a PTY the
+    // parent cannot install the controlling terminal from outside the
+    // child's session; a live unclaimed group is the boundary failure.
     let handshakeScript = spawnHandshakeScript
-    let spawnPath: String
-    var arguments: [String]
-    if let terminal {
-        guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
-            return .failure(.lifetimeBoundaryFailed)
-        }
-        // argv[1] is the slave. The helper reopens it after SETSID. The
-        // payload starts at argv[2], so sandbox-exec still sees its own path
-        // as argv[0].
-        spawnPath = claim
-        arguments = [claim, terminal.slavePath, IsolationBackends.sandboxExecPath]
-    } else {
-        spawnPath = IsolationBackends.sandboxExecPath
-        arguments = [IsolationBackends.sandboxExecPath]
+    guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
+        return .failure(.lifetimeBoundaryFailed)
     }
+    // Limit options, then the slave ("-" without a terminal; the helper
+    // reopens a slave after SETSID), then the payload, so sandbox-exec
+    // still sees its own path as argv[0].
+    let spawnPath = claim
+    var arguments = [claim]
+    arguments.append(contentsOf: limits.helperArguments(injectFailure: request.spawnFault == .rlimit))
+    arguments.append(terminal?.slavePath ?? "-")
+    arguments.append(IsolationBackends.sandboxExecPath)
     arguments.append(contentsOf: [
         "-p",
         profile.source,
@@ -1267,6 +1295,8 @@ func watchSeatbeltProcess(
         preface: live.handshakePreface,
         admission: live.admission,
         stop: stop,
+        deadline: live.deadline,
+        onTimedOut: { live.markTimedOut() },
         onEstablished: { live.markEstablished() },
         drain: { live.drainPending() },
         onDeathObserved: onDeathObserved
@@ -1299,6 +1329,8 @@ func watchSeatbeltProcess(
     case .cancelled:
         // The leader is dead. Publish only when the handshake completed.
         // Teardown still has to unmount; a mounted volume is not .cancelled.
+        // A deadline stop is a cancel the watch requested itself; the
+        // lifecycle record carries `endReason` "timeout" (`live.endReason`).
         mounted = MountedSeatbeltOutcome(
             result: .failure(.cancelled),
             publish: outcome.established
@@ -1359,6 +1391,8 @@ private func waitForSeatbeltSession(
     preface: Data = Data(),
     admission: RuntimeAdmissionSession,
     stop: RuntimeCancellation,
+    deadline: Date? = nil,
+    onTimedOut: () -> Void = {},
     onEstablished: () -> Void,
     drain: () -> Void,
     onDeathObserved: (() -> Void)? = nil
@@ -1367,7 +1401,16 @@ private func waitForSeatbeltSession(
     let expected = Data(nonce.utf8)
     var matcher = HandshakePrefixMatcher(expected: expected, preface: preface)
     var recorded: Set<pid_t> = [root]
+    var deadlineReached = false
     while true {
+        // The deadline reuses the cancel path below: the same group kill,
+        // reap and teardown budget. Marked before the request, so whoever
+        // reads the cancel also sees why.
+        if let deadline, deadlineReached == false, stop.isRequested == false, Date() >= deadline {
+            deadlineReached = true
+            onTimedOut()
+            stop.request()
+        }
         if blockingWorkIsCancelled() || stop.isRequested {
             outcome.cancelled = true
             // Arm the shared clock before the leader reap. Detach later
