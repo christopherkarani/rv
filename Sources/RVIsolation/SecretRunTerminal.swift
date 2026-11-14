@@ -96,26 +96,45 @@ final class SecretRunTerminal: SecretRunTerminalControl {
 ///
 /// Dispositions are process-wide, so every guard shares one installation:
 /// the first in sets them, the last out restores what was there before.
-final class SecretRunSignals: @unchecked Sendable {
+/// A detached guard (tests) installs nothing and forwards only what
+/// `deliver` hands it.
+final class SecretRunSignals: Sendable {
     static let forwarded = [SIGINT, SIGQUIT, SIGTERM, SIGHUP]
 
     private let forwarding = SecretRunSignalTarget()
+    /// nil while installed: the table knows what rv inherited ignored.
+    private let detachedIgnored: Set<Int32>?
 
     init() {
+        detachedIgnored = nil
         SecretRunSignalTable.shared.join(forwarding)
     }
+
+    /// Changes no disposition; reports `inheritedIgnored` as given.
+    init(detached inheritedIgnored: Set<Int32>) {
+        detachedIgnored = inheritedIgnored
+    }
+
+    deinit { restore() }
 
     func target(_ group: pid_t) -> Int32? { forwarding.target(group) }
 
     /// A signal that arrived before any group was targeted.
     var interrupted: Int32? { forwarding.interrupted }
 
-    /// Forwarded signals rv had ignored before any guard: the command keeps
-    /// ignoring them (`nohup`, an asynchronous list in a script).
-    var inheritedIgnored: Set<Int32> { SecretRunSignalTable.shared.inheritedIgnored }
+    /// Signals rv had ignored before any guard, among those rv resets for
+    /// the command: the command keeps ignoring them (`nohup`, an
+    /// asynchronous list in a script, a parent that ignores SIGPIPE).
+    var inheritedIgnored: Set<Int32> { detachedIgnored ?? SecretRunSignalTable.shared.inheritedIgnored }
+
+    /// As if rv had received `number`.
+    func deliver(_ number: Int32) { forwarding.deliver(number) }
 
     /// Whether any guard is installed now.
     static var installed: Bool { SecretRunSignalTable.shared.installed }
+
+    /// How many received signals have been passed to every guard so far.
+    static var deliveredCount: Int { SecretRunSignalTable.shared.deliveredCount }
 
     /// Before the leader is reaped.
     func release() { forwarding.release() }
@@ -123,7 +142,7 @@ final class SecretRunSignals: @unchecked Sendable {
     /// Leaves the shared installation; the last one out restores. Idempotent.
     func restore() {
         forwarding.release()
-        SecretRunSignalTable.shared.leave(forwarding)
+        if detachedIgnored == nil { SecretRunSignalTable.shared.leave(forwarding) }
     }
 }
 
@@ -137,6 +156,10 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     private var sources: [any DispatchSourceSignal] = []
     private var previous: [(number: Int32, handler: sig_t?)] = []
     private var ignoredBefore: Set<Int32> = []
+    private var delivered = 0
+
+    /// Signals rv resets for the command but never changes itself.
+    private static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH, SIGINFO]
 
     var installed: Bool {
         lock.lock()
@@ -147,7 +170,13 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     var inheritedIgnored: Set<Int32> {
         lock.lock()
         defer { lock.unlock() }
-        return ignoredBefore
+        return ignoredBefore.union(Self.untouched.filter(Self.ignoredNow))
+    }
+
+    var deliveredCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return delivered
     }
 
     func join(_ target: SecretRunSignalTarget) {
@@ -173,6 +202,9 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         let targets = Array(members.values)
         lock.unlock()
         for target in targets { target.deliver(number) }
+        lock.lock()
+        delivered += 1
+        lock.unlock()
     }
 
     /// Under `lock`, by the first member.
@@ -193,6 +225,13 @@ private final class SecretRunSignalTable: @unchecked Sendable {
 
     private static func ignores(_ handler: sig_t?) -> Bool {
         unsafeBitCast(handler, to: Int.self) == unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+    }
+
+    /// Read without changing it.
+    private static func ignoredNow(_ number: Int32) -> Bool {
+        var action = sigaction()
+        guard sigaction(number, nil, &action) == 0 else { return false }
+        return ignores(action.__sigaction_u.__sa_handler)
     }
 }
 
@@ -260,12 +299,15 @@ struct SecretRunLoopback {
 }
 #else
 /// No `rv run` here: nothing is installed and nothing is forwarded.
-final class SecretRunSignals: @unchecked Sendable {
+final class SecretRunSignals: Sendable {
     init() {}
+    init(detached _: Set<Int32>) {}
     func target(_: pid_t) -> Int32? { nil }
     var interrupted: Int32? { nil }
     var inheritedIgnored: Set<Int32> { [] }
+    func deliver(_: Int32) {}
     static var installed: Bool { false }
+    static var deliveredCount: Int { 0 }
     func release() {}
     func restore() {}
 }
