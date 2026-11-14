@@ -137,9 +137,10 @@ private func hostWordMutates(_ host: String, rest: [String], place: HostWordPlac
     }
     // `--` ends options and leaves the subcommand (`mcp -- install s`). A
     // brace or glob spelling that can produce `install` counts (`mcp
-    // {a,install}`, `mcp instal?`).
+    // {a,install}`, `mcp instal?`), as does a value rv cannot read after
+    // the literal host (`mcp $(printf install) srv`, `mcp $SUB srv`).
     let subcommand = rest.first { $0 != "--" }
-    let installs = subcommand.map { wordMayBe($0, "install") } == true
+    let installs = subcommand.map { wordMayBe($0, "install") || wordIsDynamic($0) } == true
     if host == "fastmcp" { return installs }
     if host == "mcp" {
         // `mcp` is a common directory and package name (`make -C mcp
@@ -526,6 +527,16 @@ func globCanMatch(_ pattern: String, _ text: String) -> Bool {
         while pi < p.count {
             let key = pi * width + ti
             if failed.contains(key) { return false }
+            // A closed `[…]` class; an unclosed `[` is a literal (`default`).
+            if p[pi] == "[", let close = classEnd(pi) {
+                guard ti < t.count, classMatches(p[(pi + 1)..<close], t[ti]) else {
+                    failed.insert(key)
+                    return false
+                }
+                pi = close + 1
+                ti += 1
+                continue
+            }
             switch p[pi] {
             case "*":
                 var np = pi
@@ -542,12 +553,6 @@ func globCanMatch(_ pattern: String, _ text: String) -> Bool {
                 if ti >= t.count { failed.insert(key); return false }
                 pi += 1
                 ti += 1
-            case "[" where classEnd(pi) != nil:
-                let close = classEnd(pi)!
-                if ti < t.count, classMatches(p[(pi + 1)..<close], t[ti]) {
-                    pi = close + 1
-                    ti += 1
-                } else { failed.insert(key); return false }
             default:
                 if ti >= t.count || p[pi] != t[ti] { failed.insert(key); return false }
                 pi += 1

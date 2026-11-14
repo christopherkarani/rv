@@ -234,6 +234,8 @@ struct MCPHostConfigCorpusTests {
         // Brace, glob and dynamic look-alikes that name no host and no `mcp`.
         "ls *.md", "cp {a,b}.txt dst/", "make install", "echo ${HOME}",
         "npm install {lodash,react}", "git add src/*.swift",
+        // A dynamic word or `$IFS` with no host word and no stem.
+        "npm install $PKG", "echo $IFS", "make $TARGET install",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()
