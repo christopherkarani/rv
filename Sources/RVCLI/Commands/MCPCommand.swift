@@ -646,6 +646,11 @@ enum MCPRun {
             case .success(let review): tools = review
             }
         }
+        // Nothing of a configured server to pin: still drop queued tools of
+        // servers no longer in mcp.json, so they stop taking queue space.
+        if tools.isEmpty, environment.approvalSigning.honorsGrants, pinningSkipped == nil {
+            pinStore.pruneReview(configured: Set(configuration.servers.map(\.name)))
+        }
         if configTrusted, tools.isEmpty {
             return .success("mcp.json already matches rv's signature; nothing to trust\n" + tools.waitingHint)
         }
@@ -1592,9 +1597,10 @@ struct MCPServe: AsyncParsableCommand {
         }
         // Read and verified once, beside the mcp.json check above. An
         // unreadable or unverifiable store pins nothing: every tool asks.
-        let (pinning, pinFailure) = MCPToolPinStore(
-            configDirectory: configDirectory, signing: environment.approvalSigning
-        ).pinning()
+        // Each server in mcp.json gets an equal share of the review queue.
+        var pinStore = MCPToolPinStore(configDirectory: configDirectory, signing: environment.approvalSigning)
+        pinStore.configuredServers = configuration.servers.count
+        let (pinning, pinFailure) = pinStore.pinning()
         if pinFailure == .unprotected {
             log("\(MCPToolPinStore.LoadFailure.unprotected.reason); every MCP tool asks")
         } else if let pinFailure {

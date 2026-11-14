@@ -211,6 +211,13 @@ public struct MCPGatewayCore {
     /// event says the rest are suppressed. Those tools still ask and are
     /// still queued for `rv mcp trust`, within the queue's budget.
     static let maximumChangeEvents = 64
+    /// Tools per server whose definitions a session tracks against the
+    /// pins, across all of its listings. A tool past this is never pinned:
+    /// it asks. One listing already lists at most this many.
+    static let maximumTrackedTools = maximumListedTools
+    /// Definitions per server a session offers to the review queue. Past
+    /// this a new definition is not queued (its tool still asks).
+    static let maximumTrackedChanges = 1024
     /// Longest progress `message` passed to the client, in UTF-8 bytes.
     static let maximumProgressMessageBytes = 512
     /// Longest spelling of a forwarded progress `progress` or `total`.
@@ -248,14 +255,26 @@ public struct MCPGatewayCore {
     /// server → tool → definition hash the user trusted; nil when the pin
     /// store could not be read or verified. The gateway never adds pins.
     let pins: [String: [String: String]]?
-    /// server → tool → hash of the definition this session last listed.
+    /// server → tool → hash of the definition this session last listed. At
+    /// most `maximumTrackedTools` tools per server; a tool past that is
+    /// never observed, so it is unverified and asks.
     var observed: [String: [String: String]] = [:]
     /// `server\0tool` listed this session with a definition that differs
     /// from its pin or from another listing. Sticky: such a tool is never
-    /// pinned again this session, whatever it lists next.
+    /// pinned again this session, whatever it lists next. Only observed
+    /// tools are tainted, so this is bounded with `observed`.
     var tainted: Set<String> = []
-    /// `server\0tool\0hash` already audited as not pinned.
-    var reportedChanges: Set<String> = []
+    /// server → `tool\0hash` offered to the review queue and not dropped by
+    /// it; at most `maximumTrackedChanges` per server.
+    var reportedChanges: [String: Set<String>] = [:]
+    /// server → `tool\0hash` already audited as not pinned; bounded by
+    /// `maximumChangeEvents` per server.
+    var eventedChanges: [String: Set<String>] = [:]
+    /// Servers already told on stderr that the review queue did not keep
+    /// some of their tools.
+    var queueNoticed: Set<String> = []
+    /// Servers already told on stderr that they list more tools than rv tracks.
+    var untrackedNoticed: Set<String> = []
     /// Servers already reported on stderr as having untrusted tools.
     var untrustedNoticed: Set<String> = []
     /// Servers already reported on stderr as listing names rv does not serve.
@@ -973,10 +992,22 @@ public struct MCPGatewayCore {
         if pinning.enforced {
             var seen: [String: String] = [:]
             var definitions: [String: JSONValue] = [:]
+            let known = observed[server] ?? [:]
+            var tracked = known.count
+            var untracked = 0
             for tool in listed {
                 guard let definition = MCPToolPinStore.definition(of: scrub(tool, for: server)),
                     let name = definition["name"]?.stringValue, Self.servesToolName(name)
                 else { continue }
+                // Past the per-server cap a new name is never observed, so
+                // it stays unverified and asks; it is not queued either.
+                if known[name] == nil, seen[name] == nil {
+                    guard tracked < Self.maximumTrackedTools else {
+                        untracked += 1
+                        continue
+                    }
+                    tracked += 1
+                }
                 let hash = MCPToolPinStore.hash(definition)
                 if let earlier = seen[name] ?? observed[server]?[name], earlier != hash {
                     tainted.insert(server + "\0" + name)
@@ -986,6 +1017,11 @@ public struct MCPGatewayCore {
                 definitions[name] = definition
             }
             observed[server, default: [:]].merge(seen) { _, new in new }
+            if untracked > 0, untrackedNoticed.insert(server).inserted {
+                outputs.append(.log(
+                    "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools; "
+                        + "rv cannot check the rest against your trusted tools, so they always ask"))
+            }
             var unpinned: [String: JSONValue] = [:]
             var untrusted = 0
             for name in seen.keys.sorted() where configuration.decision(server: upstream.definition, tool: name) != .deny {
@@ -993,10 +1029,21 @@ public struct MCPGatewayCore {
                 guard status != .pinned else { continue }
                 untrusted += 1
                 let hash = seen[name] ?? ""
-                guard reportedChanges.insert(server + "\0" + name + "\0" + hash).inserted else { continue }
-                // The pinned definition itself, listed again after another
-                // one, asks for this session but has nothing to review.
-                if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                let change = name + "\0" + hash
+                // Offered to the review queue once per definition, again
+                // only after the queue did not keep it; at most
+                // `maximumTrackedChanges` per server, and the tool asks either way.
+                if reportedChanges[server]?.contains(change) != true,
+                    (reportedChanges[server]?.count ?? 0) < Self.maximumTrackedChanges
+                {
+                    reportedChanges[server, default: []].insert(change)
+                    // The pinned definition itself, listed again after another
+                    // one, asks for this session but has nothing to review.
+                    if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                }
+                // Audited once per definition, even when the queue keeps
+                // offering it; a later, different definition is audited anew.
+                guard eventedChanges[server]?.contains(change) != true else { continue }
                 let written = changeEvents[server, default: 0]
                 guard written <= Self.maximumChangeEvents else { continue }
                 changeEvents[server] = written + 1
@@ -1008,6 +1055,7 @@ public struct MCPGatewayCore {
                         source: "mcp-gateway", detail: ["server": server, "suppressed": "true"])))
                     continue
                 }
+                eventedChanges[server, default: []].insert(change)
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpToolChanged, decision: .pending, subject: "\(server)/\(name)",
                     reason: "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
@@ -1024,14 +1072,19 @@ public struct MCPGatewayCore {
                 case .recorded:
                     break
                 case .dropped(let names):
-                    // Not kept, so not reported: a later listing offers them again.
-                    for name in names { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
-                    outputs.append(.log(
-                        "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                    // Not kept: a later listing offers them again, without a
+                    // second audit event or stderr line.
+                    for name in names { reportedChanges[server]?.remove(name + "\0" + (seen[name] ?? "")) }
+                    if queueNoticed.insert(server).inserted {
+                        outputs.append(.log(
+                            "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                    }
                 case .failed:
-                    for name in unpinned.keys { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
-                    outputs.append(.log(
-                        "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                    for name in unpinned.keys { reportedChanges[server]?.remove(name + "\0" + (seen[name] ?? "")) }
+                    if queueNoticed.insert(server).inserted {
+                        outputs.append(.log(
+                            "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                    }
                 }
             }
         }

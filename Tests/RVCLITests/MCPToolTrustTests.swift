@@ -183,4 +183,16 @@ struct MCPToolTrustTests {
         _ = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(try store.contents().get().changed.isEmpty)
     }
+
+    /// Q1: a queue holding only tools of removed servers is pruned too,
+    /// though there is nothing to trust; nothing is pinned.
+    @Test func aStaleOnlyQueueIsPrunedWhenThereIsNothingToTrust() async throws {
+        let (fixture, store) = try Self.signedFixture()
+        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
+        let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
+        #expect(result.hasPrefix("mcp.json already matches rv's signature; nothing to trust\n"), "\(result)")
+        #expect(try store.contents().get().changed.isEmpty)
+        #expect(try store.load().get() == [:])
+    }
 }
