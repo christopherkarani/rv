@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 import RVPolicy
 import RVPresentation
 @testable import RVCLI
@@ -206,6 +207,25 @@ struct HostCommandTests {
                 .off, for: .grok, env: environment, json: true, authenticate: retry.authenticate)
             #expect(again.exitCode == 77)
             #expect(retry.calls == 1)
+        }
+    }
+
+    /// `off` is recorded before the hooks come out: when the audit log
+    /// cannot take it, the hooks stay and nothing is stored.
+    @Test func off_whenTheChangeCannotBeRecorded_exits74AndKeepsTheHooks() async throws {
+        try await withTempHomeAsync { home, layout, base in
+            try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+            #expect(SetupRun.setup(base).exitCode == 0)
+            let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+            let log = AuditLog.fileURL(configDirectory: config)
+            try? FileManager.default.removeItem(at: log)
+            try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+            let off = await HostModeRun.setMode(
+                .off, for: .grok, env: base, json: true, authenticate: AuthProbe(allow: true).authenticate)
+            #expect(off.exitCode == 74)
+            #expect(off.stderr.hasPrefix("rv host mode: the audit log could not record the guard.hosts.grok change"))
+            #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+            #expect(store(home).load().isEmpty)
         }
     }
 

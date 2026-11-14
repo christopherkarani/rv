@@ -388,11 +388,15 @@ enum SecretsRun {
         {
             return .failure(CommandFailure("organization policy: \(reason)"))
         }
-        guard environment.keychain.store(SecretKeychain.service, name, value) else {
-            return .failure(CommandFailure("could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)"))
-        }
+        // The definition is written (and recorded) before the value moves: a
+        // change the audit log refuses leaves the keychain untouched. A
+        // definition whose value then fails to store resolves nothing, so
+        // launches that need it fail closed until a retry stores it.
         if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
             return .failure(CommandFailure(error.message))
+        }
+        guard environment.keychain.store(SecretKeychain.service, name, value) else {
+            return .failure(CommandFailure("could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)"))
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
         var text = "Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
@@ -418,6 +422,15 @@ enum SecretsRun {
         let ownSource = SecretSource.keychain(service: SecretKeychain.service, account: name)
         let existing = current.secret(named: name)
         var lines: [String] = []
+        // The definition goes first (and is recorded): a write the audit log
+        // refuses leaves the value in the keychain.
+        if existing != nil {
+            var updated = current
+            updated.secrets.removeAll { $0.name == name }
+            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                return .failure(CommandFailure(error.message))
+            }
+        }
         if existing == nil || existing?.source == ownSource {
             guard environment.keychain.delete(SecretKeychain.service, name) else {
                 return .failure(CommandFailure("could not delete \(DisplayedText.field(name)) from \(SecretKeychain.storeName)"))
@@ -427,11 +440,6 @@ enum SecretsRun {
             lines.append("Left the value in place at \(existing.source.locator).")
         }
         if existing != nil {
-            var updated = current
-            updated.secrets.removeAll { $0.name == name }
-            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-                return .failure(CommandFailure(error.message))
-            }
             lines.append("Removed \(DisplayedText.field(name)) from secrets.json.")
         }
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)

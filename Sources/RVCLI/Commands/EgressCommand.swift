@@ -291,6 +291,8 @@ enum EgressReviewRun {
     /// Map a resolve-CAS failure: binding/state losses mean the proposal
     /// changed under review (retry), never a store outage.
     static func mapResolveError(_ error: Error) -> Error {
+        // An unrecorded review keeps its own line and exit code.
+        if error is ConfigChangeUnrecorded { return error }
         guard let pending = error as? PendingApprovalError else {
             return EgressReviewError.storeUnavailable
         }
@@ -364,8 +366,9 @@ enum EgressReviewRun {
     /// hold is not resolved (the proposal stays pending, which denies).
     /// Host, port and approval id; never the deny reason's free text.
     static func reviewEvent(id: ApprovalID, rule: LiveNetworkRule, decision: String, authorization: String) -> AuditEvent {
+        // A deny only tightens; an allow-once grants.
         ConfigChangeAudit.setting(
-            "egress.rule", from: "proposed", to: decision,
+            "egress.rule", from: "proposed", to: decision, direction: decision == "deny" ? .tightening : .loosening,
             detail: [
                 "host": rule.host, "port": String(rule.port), "approval": id.rawValue,
                 "authorized_by": authorization,

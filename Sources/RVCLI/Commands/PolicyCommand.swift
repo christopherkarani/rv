@@ -270,6 +270,8 @@ struct Policy: AsyncParsableCommand {
                     _ = try await ConfigChangeAudit.$authorization.withValue(authorization) {
                         try session.mergeIncoming(incoming, layer: layer, save: true)
                     }
+                } catch let unrecorded as ConfigChangeUnrecorded {
+                    try ConfigChangeRefusal.fail(command: "policy apply", unrecorded)
                 } catch {
                     try CommandContext.fail("rv policy apply: write failed\n")
                 }

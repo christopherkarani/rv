@@ -447,6 +447,21 @@ struct SecretsCommandTests {
         #expect(rows.first?.fingerprint == nil)
     }
 
+    /// The definition is written (and recorded) before the value is
+    /// stored: a change the audit log cannot hold leaves the keychain alone.
+    @Test func setWhenTheChangeCannotBeRecordedStoresNoValue() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        try FileManager.default.createDirectory(
+            at: fixture.directory.appendingPathComponent("audit.jsonl"), withIntermediateDirectories: true)
+        let result = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: fixture.environment())
+        #expect((try? result.get()) == nil)
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+        #expect(FileManager.default.fileExists(atPath: fixture.secretsFile.path) == false)
+    }
+
     @Test func removeDeletesTheDefinitionAndTheStoredValue() throws {
         let fixture = try SecretsCLIFixture()
         defer { fixture.tearDown() }

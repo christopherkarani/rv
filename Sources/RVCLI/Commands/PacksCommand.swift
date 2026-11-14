@@ -239,6 +239,8 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     } catch PacksCommandError.configUnreadable {
         try CommandContext.fail(
             "\(PacksConfigStore.configURL(home: home).path) cannot be read; every bundled pack is enforced until you fix or remove it\n")
+    } catch let unrecorded as ConfigChangeUnrecorded {
+        try ConfigChangeRefusal.fail(command: "packs", unrecorded)
     } catch {
         throw ExitCode(1)
     }

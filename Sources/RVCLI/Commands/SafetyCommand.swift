@@ -41,6 +41,8 @@ struct Safety: AsyncParsableCommand {
                 // Owner check refused (its line is already on stderr), not
                 // "could not write config".
                 throw refusal
+            } catch let unrecorded as ConfigChangeUnrecorded {
+                try ConfigChangeRefusal.fail(command: "safety", unrecorded)
             } catch {
                 try CommandContext.fail("rv safety: could not write config\n")
             }
