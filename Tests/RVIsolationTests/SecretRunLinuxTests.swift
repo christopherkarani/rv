@@ -296,20 +296,23 @@ extension SecretRunLaunchTests {
     /// stops, is killed and reaped, and nothing is bound to it.
     @Test(.timeLimit(.minutes(1)), arguments: [
         ("kill -TSTP $$; sleep 300", "the launcher was stopped by signal \(SIGTSTP) before it was ready"),
-        ("exec sleep 300", "the launcher did not stop within 1 seconds"),
+        ("sleep 300", "the launcher did not stop within 1 seconds"),
         ("exit 0", "the launcher refused to start it (exit 0)"),
         ("kill -KILL $$", "the launcher was killed by signal \(SIGKILL)"),
     ])
     func aLauncherThatDoesNotStopItselfIsKilledAndRefused(script: String, reason: String) throws {
         let fake = try fakeLauncher(script)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
-        let before = Set(ProcFSProcessTable().children(of: getpid()) ?? [])
         let result = SecretRunProcess.spawnSuspended(
             executable: "/bin/true", arguments: ["true"], environment: ["PATH=/usr/bin:/bin"],
             descriptors: [0: 0, 1: 1, 2: 2], launcher: fake.path, deadline: 1)
         #expect(result == .failure(.spawnFailed(reason)))
-        let left = Set(ProcFSProcessTable().children(of: getpid()) ?? []).subtracting(before)
-        #expect(left.isEmpty, "the stand-in launcher was left running")
+        // The shell running the stand-in has its path in its command line.
+        let running = (ProcFSProcessTable().children(of: getpid()) ?? []).filter { child in
+            guard case .value(let bytes) = ProcFSReader.file("/proc/\(child)/cmdline") else { return false }
+            return String(decoding: bytes, as: UTF8.self).contains(fake.path)
+        }
+        #expect(running.isEmpty, "the stand-in launcher was left running")
     }
 
     @Test func aMissingLauncherIsARefusalThatSaysWhatToInstall() {
