@@ -257,22 +257,38 @@ rv is one binary, 25 commands. The rest of the surface:
   to leave its operands alone), a brace or glob spelling of a host
   program, its group word or `mcp install` is resolved by every word it
   can produce, as bash expands comma groups and `{x..y}` ranges, into
-  several words where bash splits them (`claude m{c,}p add`, `clau?e mcp
-  add`, `chronic m[c]p install`, `chronic mc{o..p} install`, `{claude,mcp}
-  add`, `mcp {,} install`); a POSIX class matches any one character, a
-  quoted word holding a blank is only itself, and a word past the
-  spelling budget (over 256 characters, over 64 brace words, or 1,000,000
-  matching steps per command) may be any words. Carried text is read when
-  it holds a host stem or such a word (`watch 'chronic m?p install
-  srv'`). Where nothing runs the word (a `grep` or `rg` operand, a commit
-  message) and in text such a command carries, only literal words count
-  (`grep -rn claude * | head` allows). A variable or substitution rv
-  cannot read, used as the program at any position after a runner it does
-  not strip and followed anywhere by a group word (`stdbuf -o0 $c mcp
-  add`), or in a completing position of a `claude`, `codex`, `gemini`,
-  `opencode` or `cursor-agent` mutation, counts as that word; so does one
-  in the subcommand position after a literal `mcp` or `fastmcp` where it
-  may run (`chronic mcp $(…) srv`, `ls mcp $X`). `$IFS` or
+  several words where bash splits them, a blank inside an alternative
+  included (`claude m{c,}p add`, `clau?e mcp add`, `chronic m[c]p
+  install`, `chronic mc{o..p} install`, `{claude,mcp} add`, `claude
+  {mcp,add,srv,"x y"}`, `mcp {,} install`). The filesystem is not
+  consulted, so a wildcard or class is assumed satisfiable; a POSIX class
+  matches any one character, and a bracket range is judged as any range
+  its case-folded text may have been (`cl[M-c]ude` and `cl[!A-Z]ude` may
+  be `claude`). A word with a blank outside every brace is only itself,
+  and a word past the spelling budget (over 256 characters, unless it
+  holds no brace and its shortest match is longer than any host word,
+  such as a presigned URL; over 64 brace words; or 1,000,000 matching
+  steps per command) may be any words. `ls`, `cp`, `mv`, `rm`, `mkdir`,
+  `touch`, `cat` and `git add|status|diff|rm`, run by their plain names
+  (no path or wrapper, no git option first), never run an operand, so
+  only their operands' literal words and carried text count (`ls mcp *`,
+  `cp -r packages/mcp "$DEST"`, `touch {a..z}{0..9}` allow; `ls mcp
+  install` and `stdbuf -o0 ls mcp $DIR` ask). A segment rv's splitter
+  cannot scan (a head still `{` or `(` that does not peel, such as
+  `{claude,zzqx} mcp add`) asks when its line may name a host CLI.
+  Carried text is read when it holds a host stem or such a word (`watch
+  'chronic m?p install srv'`). Where nothing runs the word (a `grep` or
+  `rg` operand, a commit message) and in text such a command carries,
+  only literal words count (`grep -rn claude * | head` allows). A
+  variable or substitution rv cannot read (`$c`, `"$SUB"`, `${x}`,
+  `$(…)`, and ANSI-C `$'…'`, which rv cannot tell from a variable there),
+  used as the program at any position after a runner it does not strip
+  and followed anywhere by a group word (`stdbuf -o0 $c mcp add`, and so
+  `find "$DIR" -name config` and `node "$ENTRY" mcp list`), or in a
+  completing position of a `claude`, `codex`, `gemini`, `opencode` or
+  `cursor-agent` mutation, counts as that word; so does one in the
+  subcommand position after a literal `mcp` or `fastmcp` where it may run
+  (`chronic mcp "$SUB" srv`, `chronic mcp $(…) srv`). `$IFS` or
   `${IFS}`, in any quoting, on a line that runs something and may name a
   host CLI asks as text rv's tokenizer cannot follow (`claude${IFS}mcp
   add`, `sh -c 'claude${IFS}mcp add'`). *Known limits:* a nested agent
@@ -318,11 +334,14 @@ rv is one binary, 25 commands. The rest of the surface:
   that rv's shell tokenizer cannot follow asks on any other line: a
   backslash before a quote or blank (`watch "sh -c \"claude mcp add
   x\""`, `'\''`, `claude\ mcp`), `\'` inside `$'…'`, and zsh `=(…)`; so
-  does such text with a glob that may be a host word. This also asks for
-  some harmless commands, such as `cat ~/Library/Application\
-  Support/Claude/…`, `ls ~/Library/Application\ Support/*`, `jq
-  ".a[\"x\"]" config.json` or a commit message with
-  `\"` after `cd x &&`. zsh `=claude` counts as `claude`.
+  does such text with a glob that may be a host word, which any bare `*`
+  or `dir/*` word may be. This also asks for some harmless commands, such
+  as `cat ~/Library/Application\ Support/Claude/…`, any such line with a
+  bare wildcard (`ls ~/Library/Application\ Support/*`, `grep -rn
+  "\"version\"" * | head`), `jq ".a[\"x\"]" config.json` or a commit
+  message with `\"` after `cd x &&`; and for a brace word over 256
+  characters where it may run, such as a long JSON body given to `curl
+  -d`. zsh `=claude` counts as `claude`.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review

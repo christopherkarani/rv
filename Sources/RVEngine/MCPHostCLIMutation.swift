@@ -31,8 +31,9 @@ import RVDomain
 /// `clau?e` or `m{c,}p`, a group or `install` spelled `m[c]p` or `{install,x}`
 /// after a host, a brace word the shell splits into a whole host command
 /// (`{claude,mcp} add`), and a brace or glob word rv cannot expand within
-/// `SpellingBudget`. Elsewhere, and in text a non-executor carries
-/// (`reads.literal`), only literal words count. Linear in the words: each is
+/// `SpellingBudget`. Elsewhere (an operand of a command that never runs one,
+/// `leavesOperandsAlone`), and in text a non-executor or such a command
+/// carries (`reads.literal`), only literal words count. Linear in the words: each is
 /// spelled once and the facts about the words after it come from one pass
 /// (`LaterWords`).
 func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -> Bool {
