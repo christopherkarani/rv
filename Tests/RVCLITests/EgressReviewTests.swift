@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVIPC
 import RVPolicy
 @testable import RVCLI
 
@@ -274,6 +275,84 @@ struct EgressReviewTests {
                 )
             }
         }
+    }
+
+    private static let reviewTTY = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+
+    private static func approveShown(
+        _ record: PendingApproval, _ token: EgressReviewToken?, store: PendingApprovalStore,
+        auth: UIAuthenticationOutcome = .authenticated
+    ) async throws -> EgressProposalView {
+        let now = Date()
+        return try await withCLIProcess(ownerAuthOutcome: auth) {
+            try await EgressReviewRun.approve(
+                id: record.id, basis: .shown(token), tty: reviewTTY, robot: false,
+                store: store, now: now, refreshedNow: { now }
+            )
+        }
+    }
+
+    @Test func shownApprovalResolvesWhenNothingChanged() async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let created = try await egressCLIProposal(store: store)
+        let shown = try await EgressReviewRun.loadReview(id: created.id, store: store, now: Date()).token
+        let view = try await Self.approveShown(created, shown, store: store)
+        #expect(view.state == "resolved-allowOnce")
+    }
+
+    /// The owner reviewed the proposal, then the workspace's grant set
+    /// moved (rv's egress policy save) before the approval applied: the
+    /// approval is refused before any prompt and nothing resolves.
+    @Test func shownApprovalRefusedAfterPolicyMovedInBetween() async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let workspace = WorkspaceSessionID()
+        let directory = try #require(WorkingDirectory(validating: "/tmp/rv-egress-cli"))
+        func propose(_ host: String, _ port: Int) async throws -> PendingApproval {
+            let rule = try #require(LiveNetworkRule(host: host, port: port))
+            let request = try #require(EgressProposal.request(
+                id: PendingApprovalStore.makeID(), rule: rule,
+                workspaceSession: workspace, workspaceDirectory: directory
+            ))
+            return try await store.create(request, now: Date())
+        }
+        let created = try await propose("api.example.com", 443)
+        let sameHost = try await propose("api.example.com", 80)
+        let shown = try await EgressReviewRun.loadReview(id: created.id, store: store, now: Date()).token
+        _ = try await store.resolve(
+            id: sameHost.id, decision: .allowOnce,
+            fingerprint: sameHost.fingerprint, identity: sameHost.identity, now: Date()
+        )
+        // `.failed` auth proves the refusal comes before the prompt.
+        await #expect(throws: EgressReviewError.reviewChanged) {
+            _ = try await Self.approveShown(created, shown, store: store, auth: .failed)
+        }
+        guard case .awaitingHuman = try await store.load(id: created.id, now: Date()).state else {
+            Issue.record("a refused approval must leave the row awaiting")
+            return
+        }
+    }
+
+    @Test func shownApprovalRefusesMissingOrForeignToken() async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let created = try await egressCLIProposal(store: store)
+        let other = try await egressCLIProposal(store: store, host: "api.example.org")
+        let foreign = try await EgressReviewRun.loadReview(id: other.id, store: store, now: Date()).token
+        await #expect(throws: EgressReviewError.reviewTokenMissing) {
+            _ = try await Self.approveShown(created, nil, store: store)
+        }
+        await #expect(throws: EgressReviewError.reviewChanged) {
+            _ = try await Self.approveShown(created, foreign, store: store)
+        }
+        guard case .awaitingHuman = try await store.load(id: created.id, now: Date()).state else {
+            Issue.record("a refused approval must leave the row awaiting")
+            return
+        }
+    }
+
+    @Test func reviewChangedMessageNamesTheRetry() {
+        #expect(
+            EgressReviewRun.reviewChangedText(id: "p1")
+                == "policy changed since you reviewed this; run rv egress show p1 / rv egress approve p1 again")
     }
 
     // No owner authentication (seamed context, no `.authenticated`

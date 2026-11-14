@@ -432,6 +432,24 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         #expect(reread.state.review.items.isEmpty)
     }
 
+    /// The approve binds what the owner was shown: the shown row's review
+    /// token travels with the ceremony, and a re-read that moved the
+    /// state hands the newer token instead.
+    @Test func approveCarriesTheShownRowsReviewToken() {
+        var shown = egress("p1", "api.example.com", ageSeconds: 10)
+        shown.reviewToken = "t1"
+        let state = openReview([shown])
+        #expect(press(state, .character("a")).effects == [.approveEgress(id: "p1", reviewToken: "t1")])
+        var moved = shown
+        moved.reviewToken = "t2"
+        let reread = reduce(
+            state, .tick(now: reviewEpoch.addingTimeInterval(10)),
+            .reviewLoaded(sequence: 2, result: .loaded([moved]))
+        ).state
+        #expect(reread.review.items == [moved])
+        #expect(press(reread, .character("a")).effects == [.approveEgress(id: "p1", reviewToken: "t2")])
+    }
+
     @Test func refusedApproveKeepsRowAndRereads() {
         let state = openReview([egress("p1", "api.example.com", ageSeconds: 10)])
         let approving = press(state, .character("a"))
@@ -746,9 +764,9 @@ private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
         }
     }
 
-    func approve(egress id: String) async -> ReviewActionOutcome {
+    func approve(egress id: String, reviewToken: String?) async -> ReviewActionOutcome {
         lock.withLock {
-            calls.append("approve \(id)")
+            calls.append(reviewToken.map { "approve \(id) token \($0)" } ?? "approve \(id)")
             queue.removeAll { $0.id == .egress(id) }
             return .completed("approved \(id)")
         }
@@ -784,6 +802,25 @@ private final class FakeReviewSource: ReviewQueueSource, @unchecked Sendable {
     #expect(review.items.map(\.id) == [.block("b1")])
     #expect(review.notice?.text == "approved p1")
     #expect(review.action == nil)
+}
+
+@Test func modelApproveHandsTheShownTokenToTheSource() async {
+    var shown = egress("p1", "api.example.com", ageSeconds: 5)
+    shown.reviewToken = "t1"
+    let source = FakeReviewSource([shown])
+    let model = WorkspaceTUIModel(
+        session: FakeWorkspaceSession(),
+        summary: WorkspaceTUISummary(project: "/tmp/project", phase: "active", protected: true, workspace: UUID()),
+        launcher: [],
+        review: source
+    )
+    model.handle(.control("b"))
+    model.handle(.character("R"))
+    #expect(await model.waitForReviewWork())
+    model.noteReviewPane(rows: 40, columns: 100)
+    model.handle(.character("a"))
+    #expect(await model.waitForReviewWork())
+    #expect(source.recorded == ["load", "approve p1 token t1", "load"])
 }
 
 @Test func modelRefusesApproveWhilePaneTooSmallOrUnmeasured() async {

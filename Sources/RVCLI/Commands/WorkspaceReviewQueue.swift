@@ -15,7 +15,10 @@ import RVWorkspaceTUI
 /// `EgressReviewRun.ownerApprove` / `ownerDeny`, the same doors as
 /// `rv egress approve` / `rv egress deny`, so the local control boundary,
 /// TTY and robot gates, prompt throttle, device-owner authentication, and
-/// the post-prompt re-read all apply unchanged. Nothing here writes to
+/// the post-prompt re-read all apply unchanged. Each pending row carries
+/// the review token for the state it shows, and approve hands it back, so
+/// a grant landing after the row was shown refuses the approval
+/// (`EgressReviewBasis.shown`). Nothing here writes to
 /// stdout or stderr: the TUI owns the screen, and every failure comes back
 /// as text the pane shows.
 struct WorkspaceReviewQueue: ReviewQueueSource {
@@ -26,24 +29,28 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
     func load(now: Date) async -> ReviewLoadResult {
         guard let home = CLIProcess.home() else { return .failed(Self.homeMissing) }
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
-        let pending: [EgressProposalView]
+        let pending: [(view: EgressProposalView, token: EgressReviewToken)]
         do {
-            pending = try await EgressReviewRun.pending(store: EgressReviewRun.store(home: home), now: now)
+            pending = try await EgressReviewRun.pendingReviews(store: EgressReviewRun.store(home: home), now: now)
         } catch {
             return .failed("egress store unavailable")
         }
         let loaded = EgressReviewRun.loadedSnapshot(configDirectory: configDirectory)
         let records = DenialLedger(configDirectory: configDirectory).records(asOf: now)
         return .loaded(
-            pending.map { Self.item(for: $0, loaded: loaded) }
+            pending.map { Self.item(for: $0.view, loaded: loaded, reviewToken: $0.token) }
                 + Self.blockItems(Array(records.prefix(Self.blockLimit)))
         )
     }
 
-    func approve(egress id: String) async -> ReviewActionOutcome {
+    func approve(egress id: String, reviewToken: String?) async -> ReviewActionOutcome {
         guard CLIProcess.home() != nil else { return .refused("approve refused: \(Self.homeMissing)") }
         do {
-            let view = try await EgressReviewRun.ownerApprove(id: ApprovalID(rawValue: id), ctx: Self.context("approve"))
+            let view = try await EgressReviewRun.ownerApprove(
+                id: ApprovalID(rawValue: id),
+                basis: .shown(reviewToken.map(EgressReviewToken.init(rawValue:))),
+                ctx: Self.context("approve")
+            )
             return .completed(
                 "approved \(DisplayedText.field(view.host)):\(view.port) (live within seconds; no restart)"
             )
@@ -80,11 +87,15 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
         case EgressReviewError.notNetworkProposal: return "not a network proposal"
         case EgressReviewError.notAwaiting(let state): return "proposal is \(state)"
         case EgressReviewError.reasonRequired: return "a reason is required (one line, 500 chars)"
+        case EgressReviewError.reviewChanged: return "policy changed since you reviewed this; review it again"
+        case EgressReviewError.reviewTokenMissing: return "nothing binds this approval to what you reviewed; review it again"
         default: return "unexpected error"
         }
     }
 
-    static func item(for view: EgressProposalView, loaded: EgressLoadedSnapshot?) -> ReviewItem {
+    static func item(
+        for view: EgressProposalView, loaded: EgressLoadedSnapshot?, reviewToken: EgressReviewToken
+    ) -> ReviewItem {
         ReviewItem(
             id: .egress(view.id),
             kind: .pendingEgress,
@@ -92,7 +103,8 @@ struct WorkspaceReviewQueue: ReviewQueueSource {
             summary: "\(DisplayedText.field(view.host)):\(view.port)",
             detail: EgressReviewRun.prettyShow(view, rejectionReason: nil, loaded: loaded)
                 .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-                .filter { $0.isEmpty == false }
+                .filter { $0.isEmpty == false },
+            reviewToken: reviewToken.rawValue
         )
     }
 

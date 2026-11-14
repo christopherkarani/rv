@@ -47,6 +47,22 @@ enum EgressReviewError: Error, Sendable, Equatable {
     case notNetworkProposal
     case reasonRequired
     case storeUnavailable
+    /// The proposal or the workspace's egress grants moved since the
+    /// owner was shown the proposal (`EgressReview`). Review it again.
+    case reviewChanged
+    /// The approval names no review token: nothing ties it to what the
+    /// owner was shown, so it is refused.
+    case reviewTokenMissing
+}
+
+/// What the owner was shown before approving, which the approval binds.
+enum EgressReviewBasis: Sendable, Equatable {
+    /// `rv egress approve <id>`: the owner prompt is the display, so the
+    /// state read right before the prompt is what the approval binds.
+    case ownerPrompt
+    /// `rv tui`: the review pane showed the proposal earlier with this
+    /// token. Nil (the pane bound nothing) is refused.
+    case shown(EgressReviewToken?)
 }
 
 enum EgressReviewRun {
@@ -66,6 +82,33 @@ enum EgressReviewRun {
             throw EgressReviewError.storeUnavailable
         }
         return records.compactMap(view(for:)).sorted(by: { $0.createdAt < $1.createdAt })
+    }
+
+    /// Awaiting network proposals, oldest first, each with the review
+    /// token for the state it is shown in. One store snapshot feeds both,
+    /// so the token binds exactly what the view displays.
+    static func pendingReviews(
+        store: PendingApprovalStore,
+        now: Date
+    ) async throws -> [(view: EgressProposalView, token: EgressReviewToken)] {
+        let records: [PendingApproval]
+        do {
+            records = try await store.records(now: now)
+        } catch {
+            throw EgressReviewError.storeUnavailable
+        }
+        return records.compactMap { record -> (view: EgressProposalView, token: EgressReviewToken)? in
+            guard let view = view(for: record),
+                let token = EgressReview.token(for: record.id, in: records)
+            else { return nil }
+            return (view, token)
+        }
+        .sorted(by: { $0.view.createdAt < $1.view.createdAt })
+    }
+
+    static func reviewChangedText(id: String) -> String {
+        let id = DisplayedText.field(id)
+        return "policy changed since you reviewed this; run rv egress show \(id) / rv egress approve \(id) again"
     }
 
     static func view(for record: PendingApproval) -> EgressProposalView? {
@@ -307,8 +350,14 @@ enum EgressReviewRun {
     /// Approve ceremony. Order mirrors the allow-once redeem tripwire:
     /// gates, pre-LA load, device-owner authentication, re-read plus
     /// compare, resolve CAS. No auto-approve path exists.
+    ///
+    /// Review binding (`EgressReview`): the pre-LA load also yields the
+    /// review token for the state the owner is shown (`basis`), and the
+    /// resolve CAS re-checks it under the store lock. A grant landing in
+    /// between refuses the approval (`reviewChanged`).
     static func approve(
         id: ApprovalID,
+        basis: EgressReviewBasis = .ownerPrompt,
         tty: TTYCapability,
         robot: Bool,
         store: PendingApprovalStore,
@@ -317,7 +366,11 @@ enum EgressReviewRun {
     ) async throws -> EgressProposalView {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
-        let before = try await loadAwaitingNetworkProposal(id: id, store: store, now: now)
+        if case .shown(nil) = basis { throw EgressReviewError.reviewTokenMissing }
+        let (before, current) = try await loadReview(id: id, store: store, now: now)
+        if case .shown(let shown) = basis, shown != current {
+            throw EgressReviewError.reviewChanged
+        }
         guard let rule = EgressProposal.rule(for: before) else {
             throw EgressReviewError.notNetworkProposal
         }
@@ -337,18 +390,20 @@ enum EgressReviewRun {
         guard reviewUnchanged(before: before, after: after) else {
             throw AllowOnceError.redemptionChanged
         }
-        let resolved: PendingApproval
+        let resolved: PendingApproval?
         do {
             resolved = try await store.resolve(
                 id: id,
                 decision: .allowOnce,
                 fingerprint: after.fingerprint,
                 identity: after.identity,
-                now: afterNow
+                now: afterNow,
+                onlyIf: { EgressReview.token(for: id, in: $0) == current }
             )
         } catch {
             throw mapResolveError(error)
         }
+        guard let resolved else { throw EgressReviewError.reviewChanged }
         guard let view = view(for: resolved) else {
             throw EgressReviewError.notNetworkProposal
         }
@@ -414,9 +469,14 @@ enum EgressReviewRun {
     /// review pane both enter here, so neither can skip any gate of
     /// `approve` (TTY, robot, throttle, device-owner authentication, which
     /// rvd verifies on Linux, and the re-read).
-    static func ownerApprove(id: ApprovalID, ctx: CommandContext) async throws -> EgressProposalView {
+    static func ownerApprove(
+        id: ApprovalID,
+        basis: EgressReviewBasis = .ownerPrompt,
+        ctx: CommandContext
+    ) async throws -> EgressProposalView {
         try await approve(
             id: id,
+            basis: basis,
             tty: ctx.tty,
             robot: ctx.explicitRobot,
             store: store(home: try ctx.requireHome()),
@@ -434,6 +494,36 @@ enum EgressReviewRun {
             store: store(home: try ctx.requireHome()),
             now: Date()
         )
+    }
+
+    /// The awaiting network proposal plus its review token, from one
+    /// store snapshot. Same refusals as `loadAwaitingNetworkProposal`.
+    static func loadReview(
+        id: ApprovalID,
+        store: PendingApprovalStore,
+        now: Date
+    ) async throws -> (record: PendingApproval, token: EgressReviewToken) {
+        let records: [PendingApproval]
+        do {
+            records = try await store.records(now: now)
+        } catch {
+            throw EgressReviewError.storeUnavailable
+        }
+        guard let record = records.first(where: { $0.id == id }) else {
+            throw EgressReviewError.unknownProposal
+        }
+        guard EgressProposal.isNetworkProposal(record) else {
+            throw EgressReviewError.notNetworkProposal
+        }
+        guard case .awaitingHuman = record.state else {
+            throw EgressReviewError.notAwaiting(stateText(record.state))
+        }
+        // Unreachable for an awaiting network row; refuse rather than
+        // approve unbound.
+        guard let token = EgressReview.token(for: id, in: records) else {
+            throw EgressReviewError.reviewTokenMissing
+        }
+        return (record, token)
     }
 
     static func loadAwaitingNetworkProposal(
@@ -564,6 +654,8 @@ struct EgressApprove: AsyncParsableCommand {
             try ctx.fail("rv egress approve: not a network proposal\n", exitCode: 2)
         } catch EgressReviewError.notAwaiting(let state) {
             try ctx.fail("rv egress approve: proposal is \(state)\n", exitCode: 2)
+        } catch EgressReviewError.reviewChanged, EgressReviewError.reviewTokenMissing {
+            try ctx.fail("rv egress approve: \(EgressReviewRun.reviewChangedText(id: id))\n", exitCode: 2)
         } catch {
             try ctx.failOwnerGate(error, command: "egress approve", subject: .proposal)
         }

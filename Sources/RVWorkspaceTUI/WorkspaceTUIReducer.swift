@@ -566,8 +566,9 @@ enum TUIRuntimeEffect: Equatable, Sendable {
     case dropEmulator(binding: PaneBindingKey)
     /// Read the review stores off the reducing thread; feeds `.reviewLoaded`.
     case loadReview(sequence: UInt64)
-    /// Start the owner-authenticated approve ceremony for one proposal.
-    case approveEgress(id: String)
+    /// Start the owner-authenticated approve ceremony for one proposal,
+    /// bound to the review token of the row the owner was shown.
+    case approveEgress(id: String, reviewToken: String? = nil)
     /// Start the owner-authenticated deny ceremony for one proposal.
     case denyEgress(id: String, reason: String)
 }

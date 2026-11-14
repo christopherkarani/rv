@@ -159,7 +159,7 @@ extension WorkspaceTUIReducer {
             let summary = next.review.selectedItem?.summary ?? id
             next.review.action = .approving(id)
             next.review.notice = .init(text: "Approving \(summary): authenticate to continue", isError: false)
-            effects.append(.approveEgress(id: id))
+            effects.append(.approveEgress(id: id, reviewToken: next.review.selectedItem?.reviewToken))
         case .reviewDenyStart:
             guard let id = actionableEgress(in: &next, verb: "deny") else { break }
             next.mode = .reviewDenyReason(id: id, input: "")
