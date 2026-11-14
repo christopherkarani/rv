@@ -86,7 +86,27 @@ struct GatewayBinaryPin: Sendable, Equatable {
         executable == path && Self.identity(path) == self
     }
 
-    private static func identity(_ path: String) -> GatewayBinaryPin? {
+    /// On Linux the file the process runs must be the pinned file too, not
+    /// only the path: a process can bind-mount another file over the path in
+    /// its own mount namespace. A path the kernel marks ` (deleted)` names a
+    /// file that is no longer there and never matches.
+    func matches(_ executable: ProcessExecutable) -> Bool {
+        switch executable {
+        case .path(let path):
+            matches(path)
+        case .file(let path, let running):
+            path.hasSuffix(ProcFSParse.deletedSuffix) == false && matches(path) && sameFile(running)
+        }
+    }
+
+    /// Everything but the path.
+    func sameFile(_ other: GatewayBinaryPin) -> Bool {
+        device == other.device && inode == other.inode && size == other.size
+            && changedSeconds == other.changedSeconds && changedNanoseconds == other.changedNanoseconds
+    }
+
+    /// `path`'s file, links followed (`stat`); nil unless it is a regular file.
+    static func identity(_ path: String) -> GatewayBinaryPin? {
         var info = stat()
         guard stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
         #if canImport(Darwin)
@@ -107,7 +127,6 @@ enum GatewayBinaryVerdict: Equatable, Sendable {
     case unverifiable
 }
 
-#if os(macOS)
 /// A process holding the connection, with the start time read before its
 /// descriptors were, so a pid reused in between is caught.
 struct GatewayHolder: Equatable, Sendable {
@@ -128,41 +147,49 @@ enum GatewayBinaryScan {
         var microseconds: UInt64
     }
 
+    static func verdict(
+        holder: GatewayHolder, leader: pid_t, pins: [GatewayBinaryPin], limit: Int = maximumAncestors
+    ) -> GatewayBinaryVerdict {
+        verdict(holder: holder, leader: leader, pins: pins, limit: limit, in: HostProcessTable.make())
+    }
+
     /// Allowed when `holder`, or an ancestor up to and including `leader`,
     /// runs a pinned binary. `unverifiable` when the holder is not the
     /// process whose descriptors were read, when the walk ends before the
-    /// leader or launchd, or when any process walked changed meanwhile.
+    /// leader or the top of the tree (a parent of 0 or 1: launchd, init), or
+    /// when any process walked changed meanwhile.
     static func verdict(
-        holder: GatewayHolder, leader: pid_t, pins: [GatewayBinaryPin], limit: Int = maximumAncestors
+        holder: GatewayHolder, leader: pid_t, pins: [GatewayBinaryPin], limit: Int = maximumAncestors,
+        in table: some ProcessTable
     ) -> GatewayBinaryVerdict {
         var walked: [Link] = []
         var allowed = false
         var ended = false
         var pid = holder.pid
         for _ in 0..<limit {
-            guard case .found(let info) = ProcessGroupRecovery.lookup(pid), let path = executablePath(pid) else {
+            guard case .found(let info) = table.lookup(pid), let executable = table.executable(pid) else {
                 return .unverifiable
             }
-            let link = Link(pid: pid, parent: info.pbi_ppid, seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
+            let link = Link(pid: pid, parent: info.parent, seconds: info.startSeconds, microseconds: info.startMicroseconds)
             if walked.isEmpty, link.seconds != holder.startSeconds || link.microseconds != holder.startMicroseconds {
                 return .unverifiable
             }
             walked.append(link)
-            if pins.contains(where: { $0.matches(path) }) {
+            if pins.contains(where: { $0.matches(executable) }) {
                 allowed = true
                 break
             }
-            if pid == leader || info.pbi_ppid <= 1 {
+            if pid == leader || info.parent <= 1 {
                 ended = true
                 break
             }
-            pid = pid_t(info.pbi_ppid)
+            pid = pid_t(info.parent)
         }
         guard allowed || ended, ordered(walked) else { return .unverifiable }
         for process in walked {
-            guard case .found(let info) = ProcessGroupRecovery.lookup(process.pid),
-                info.pbi_start_tvsec == process.seconds, info.pbi_start_tvusec == process.microseconds,
-                info.pbi_ppid == process.parent
+            guard case .found(let info) = table.lookup(process.pid),
+                info.startSeconds == process.seconds, info.startMicroseconds == process.microseconds,
+                info.parent == process.parent
             else { return .unverifiable }
         }
         return allowed ? .allowed : .mismatch
@@ -176,10 +203,11 @@ enum GatewayBinaryScan {
         }
     }
 
+    #if os(macOS)
     static func executablePath(_ pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE
         guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
         return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
+    #endif
 }
-#endif

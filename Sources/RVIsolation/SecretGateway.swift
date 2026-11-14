@@ -256,7 +256,7 @@ public final class SecretGateway: @unchecked Sendable {
     /// creates. The original is closed once, including when `socket`
     /// returned 0, 1, or 2, because that slot was free and the number is
     /// this socket. `close` is not retried.
-    private static func openStreamSocket() -> Int32 {
+    static func openStreamSocket() -> Int32 {
         #if canImport(Darwin)
         return publishCloexecSocket(raw: socket(AF_INET, SOCK_STREAM, 0), above: socketFloor)
         #else

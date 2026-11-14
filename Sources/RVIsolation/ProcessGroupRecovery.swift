@@ -1,6 +1,8 @@
 import Foundation
-#if os(macOS)
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
 #endif
 
 /// Start time and process-group id captured from the kernel after spawn.
@@ -39,7 +41,6 @@ struct RecordedProcessGroup: Equatable, Sendable {
     var startMicroseconds: Int64
 }
 
-#if os(macOS)
 enum ProcessGroupStop: Error, Equatable, Sendable {
     /// The kernel did not answer. Do not signal.
     case queryFailed
@@ -52,14 +53,18 @@ enum ProcessGroupStop: Error, Equatable, Sendable {
 /// A reused PGID has a different start time. That process is left alone.
 enum ProcessGroupRecovery {
     static func capture(pid: pid_t) -> ProcessGroupFact? {
+        capture(pid: pid, in: HostProcessTable.make())
+    }
+
+    static func capture(pid: pid_t, in table: some ProcessTable) -> ProcessGroupFact? {
         guard let pgid = ValidatedPGID(pid) else { return nil }
-        switch lookup(pid) {
+        switch table.lookup(pid) {
         case .found(let info):
-            guard info.pbi_pid == UInt32(pid), info.pbi_pgid == UInt32(pid) else { return nil }
+            guard info.pid == UInt32(pid), info.group == UInt32(pid) else { return nil }
             return ProcessGroupFact(
                 pgid: pgid,
-                startSeconds: Int64(info.pbi_start_tvsec),
-                startMicroseconds: Int64(info.pbi_start_tvusec)
+                startSeconds: Int64(info.startSeconds),
+                startMicroseconds: Int64(info.startMicroseconds)
             )
         case .absent, .unavailable:
             return nil
@@ -70,9 +75,10 @@ enum ProcessGroupRecovery {
     static func terminate(
         _ group: RecordedProcessGroup
     ) -> Result<Void, ProcessGroupStop> {
+        let table = HostProcessTable.make()
         // No pgid guard: `ValidatedPGID` admits only signallable ids.
         for _ in 0..<50 {
-            switch prove(group) {
+            switch prove(group, in: table) {
             case .absent:
                 return .success(())
             case .queryFailed:
@@ -80,11 +86,11 @@ enum ProcessGroupRecovery {
             case .refusedIdentity:
                 return .failure(.refusedIdentity)
             case .owned:
-                _ = kill(-group.pgid.rawValue, SIGKILL)
+                stop(group, in: table)
             }
             usleep(10_000)
         }
-        switch prove(group) {
+        switch prove(group, in: table) {
         case .absent:
             return .success(())
         case .queryFailed:
@@ -94,31 +100,56 @@ enum ProcessGroupRecovery {
         }
     }
 
-    private enum Proof {
+    private enum Proof: Equatable {
         case owned
         case absent
         case queryFailed
         case refusedIdentity
     }
 
-    private static func prove(_ group: RecordedProcessGroup) -> Proof {
-        switch lookup(group.pgid.rawValue) {
+    private static func prove(_ group: RecordedProcessGroup, in table: some ProcessTable) -> Proof {
+        switch table.lookup(group.pgid.rawValue) {
         case .absent:
             return .absent
         case .unavailable:
             return .queryFailed
         case .found(let info):
-            guard info.pbi_pid == UInt32(group.pgid.rawValue) else { return .queryFailed }
-            let sameStart = Int64(info.pbi_start_tvsec) == group.startSeconds
-                && Int64(info.pbi_start_tvusec) == group.startMicroseconds
+            guard info.pid == UInt32(group.pgid.rawValue) else { return .queryFailed }
+            let sameStart = Int64(info.startSeconds) == group.startSeconds
+                && Int64(info.startMicroseconds) == group.startMicroseconds
             if sameStart == false {
                 return .absent
             }
-            guard info.pbi_pgid == UInt32(group.pgid.rawValue) else { return .refusedIdentity }
+            guard info.group == UInt32(group.pgid.rawValue) else { return .refusedIdentity }
             return .owned
         }
     }
 
+    /// Called right after `prove` said `owned`.
+    private static func stop(_ group: RecordedProcessGroup, in table: some ProcessTable) {
+        let pgid = group.pgid.rawValue
+        #if os(Linux)
+        // A pidfd names one process, so a pid recycled after the proof is not
+        // signalled through it. It is opened and the group proved again: a
+        // match means it is the leader. The leader dies first; dead and
+        // unreaped it keeps its pid, so `-pgid` is still its group. Without
+        // pidfds (kernel before 5.3, glibc before 2.36, a seccomp filter)
+        // this is the identity-checked `kill` macOS uses.
+        switch PidFD.open(pgid) {
+        case .gone:
+            return  // the next proof sees it
+        case .unsupported:
+            break
+        case .descriptor(let descriptor):
+            defer { close(descriptor) }
+            guard prove(group, in: table) == .owned else { return }
+            _ = PidFD.signal(descriptor, SIGKILL)
+        }
+        #endif
+        _ = kill(-pgid, SIGKILL)
+    }
+
+    #if os(macOS)
     enum Lookup {
         case found(proc_bsdinfo)
         case absent
@@ -138,5 +169,40 @@ enum ProcessGroupRecovery {
         }
         return .unavailable
     }
+    #endif
 }
-#endif
+
+/// `pidfd_open` and `pidfd_send_signal`, looked up at run time: glibc
+/// exports them from 2.36, and a kernel before 5.3 or a seccomp filter
+/// refuses them with `ENOSYS`/`EPERM`. Elsewhere (macOS) the lookup finds
+/// nothing and every call is `unsupported`.
+enum PidFD {
+    private typealias Open = @convention(c) (pid_t, UInt32) -> Int32
+    private typealias Send = @convention(c) (Int32, Int32, UnsafeMutableRawPointer?, UInt32) -> Int32
+
+    enum Opened: Equatable {
+        case descriptor(Int32)
+        /// `ESRCH`: no process has the pid.
+        case gone
+        case unsupported
+    }
+
+    static func open(_ pid: pid_t) -> Opened {
+        guard let call: Open = symbol("pidfd_open") else { return .unsupported }
+        let descriptor = call(pid, 0)
+        if descriptor >= 0 { return .descriptor(descriptor) }
+        return errno == ESRCH ? .gone : .unsupported
+    }
+
+    static func signal(_ descriptor: Int32, _ number: Int32) -> Bool {
+        guard let call: Send = symbol("pidfd_send_signal") else { return false }
+        return call(descriptor, number, nil, 0) == 0
+    }
+
+    private static func symbol<Function>(_ name: String) -> Function? {
+        guard let library = dlopen(nil, RTLD_NOW) else { return nil }
+        defer { dlclose(library) }
+        guard let address = dlsym(library, name) else { return nil }
+        return unsafeBitCast(address, to: Function.self)
+    }
+}
