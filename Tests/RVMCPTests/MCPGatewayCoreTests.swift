@@ -315,6 +315,8 @@ struct MCPGatewayCoreTests {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.ready()
 
+        let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":1}}}"#)
+        let upstreamID = call.toUpstream.first?.1["id"]?.intValue ?? -1
         let progress = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
             "params": .object(["progressToken": .int(1), "progress": .int(1), "message": .string(raw)]),
@@ -324,8 +326,6 @@ struct MCPGatewayCoreTests {
         #expect(shownProgress.contains("\\u001b[2J"))
         #expect(shownProgress.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
 
-        let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
-        let upstreamID = call.toUpstream.first?.1["id"]?.intValue ?? -1
         let errorReply = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "id": .int(upstreamID),
             "error": .object(["code": .int(-32000), "message": .string(raw)]),
@@ -361,10 +361,45 @@ struct MCPGatewayCoreTests {
         #expect(description.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(description.contains("\\u001b[2J"))
         #expect(description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
-        let listedName = tools.dropFirst().first?["name"]?.stringValue ?? ""
-        #expect(listedName.unicodeScalars.contains { $0.value == 0x1B } == false)
-        #expect(listedName.contains("\\u001b[2J"))
-        #expect(listedName.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+        // N2: a tool named with controls or prose is not listed at all.
+        #expect(tools.map { $0["name"] } == [.string("list_issues")])
+        #expect(listed.toClient.first?.compactText.contains(sentence) == false)
+    }
+
+    /// N6: progress reaches the client only for a call this upstream is
+    /// running, rebuilt from the protocol's fields with a bounded message.
+    @Test func progressIsForwardedOnlyForAPendingCallsToken() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github, Self.notes]))
+        _ = harness.ready()
+        func progress(_ server: String, _ params: JSONObject) -> [JSONValue] {
+            harness.core.handle(.upstream(server: server, message: .object([
+                "jsonrpc": .string("2.0"), "method": .string("notifications/progress"), "params": .object(params),
+            ]))).toClient
+        }
+        #expect(progress("github", ["progressToken": .int(1), "progress": .int(1)]).isEmpty)
+        let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"github__list_issues","arguments":{},"_meta":{"progressToken":1}}}"#)
+        let upstreamID = call.toUpstream.first?.1["id"]?.intValue ?? -1
+        #expect(upstreamID >= 0)
+        let long = "\u{1B}[2J" + String(repeating: "m", count: 2000)
+        let shown = progress("github", [
+            "progressToken": .int(1), "progress": .int(2), "total": .int(3), "message": .string(long),
+            "_meta": .object(["inject": .string("x")]), "extra": .string("y"),
+        ])
+        let params = shown.first?["params"]
+        #expect(params?["progressToken"] == .int(1))
+        #expect(params?["progress"] == .int(2))
+        #expect(params?["total"] == .int(3))
+        #expect(params?["_meta"] == nil)
+        #expect(params?["extra"] == nil)
+        let message = params?["message"]?.stringValue ?? ""
+        #expect(message.hasPrefix("\\u001b[2J"))
+        #expect(message.utf8.count <= MCPGatewayCore.maximumProgressMessageBytes)
+        // Another upstream, a token no call holds, or no numeric progress: dropped.
+        #expect(progress("notes", ["progressToken": .int(1), "progress": .int(1)]).isEmpty)
+        #expect(progress("github", ["progressToken": .int(2), "progress": .int(1)]).isEmpty)
+        #expect(progress("github", ["progressToken": .int(1), "progress": .string("1")]).isEmpty)
+        _ = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(upstreamID),"result":{"content":[]}}"#)
+        #expect(progress("github", ["progressToken": .int(1), "progress": .int(3)]).isEmpty)
     }
 
     @Test func pingClientIdEscapesRightToLeftOverride() throws {
@@ -499,17 +534,20 @@ struct MCPGatewayCoreTests {
         faithful(tool?["inputSchema"]?["description"], raw, in: listed.toClient.first)
         faithful(tool?["outputSchema"]?["description"], bidi, in: listed.toClient.first)
 
-        let tokenOnly = harness.core.handle(.upstream(server: "github", message: .object([
+        // Progress is display text: only for a pending call's own token,
+        // which is echoed as the client sent it; the message is escaped.
+        let unsolicited = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
-            "params": .object(["progressToken": .string(raw)]),
+            "params": .object(["progressToken": .string(raw), "progress": .int(1)]),
         ])))
-        escaped(shown(tokenOnly.toClient.first?["params"]?["progressToken"]))
-        let tokenAndMessage = harness.core.handle(.upstream(server: "github", message: .object([
+        #expect(unsolicited.toClient.isEmpty)
+        _ = harness.client(#"{"jsonrpc":"2.0","id":"p","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":"tok"}}}"#)
+        let progress = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
-            "params": .object(["progressToken": .string(lineBreak), "message": .string("working")]),
+            "params": .object(["progressToken": .string("tok"), "progress": .int(1), "message": .string(lineBreak)]),
         ])))
-        escaped(shown(tokenAndMessage.toClient.first?["params"]?["progressToken"]))
-        #expect(shown(tokenAndMessage.toClient.first?["params"]?["message"]) == "working")
+        #expect(progress.toClient.first?["params"]?["progressToken"] == .string("tok"))
+        escaped(shown(progress.toClient.first?["params"]?["message"]))
     }
 
     @Test func askRecordsARequestThenAGrantLetsTheSameCallThroughOnce() {
@@ -679,6 +717,9 @@ struct MCPGatewayCoreTests {
         #expect(logs == ["MCP server github failed to initialize: bad [redacted:TOKEN]"])
         let later = harness.client(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_issues"}}"#)
         #expect(later.toClient.first?.compactText.contains("sekret") == false)
+        // N7: the upstream's text goes to stderr only; the client gets rv's.
+        #expect(later.toClient.first?.compactText.contains("bad") == false)
+        #expect(later.toClient.first?.compactText.contains("it failed to initialize") == true)
     }
 
     @Test func initializeFailureLogEscapesTerminalControls() {

@@ -114,7 +114,9 @@ struct MCPGatewayElicitationTests {
         _ = harness.ready()
         _ = harness.client(
             #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#)
-        let call = #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"\u001b[2J\u001b[H\u009eread_ssh\u009c","arguments":{"note":"\u009bsecret","path":"\#(payload)"}}}"#
+        // rv never serves a tool named with controls (N2), so the held call
+        // carries them in its arguments only.
+        let call = #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"read_ssh","arguments":{"note":"\u009bsecret","path":"\#(payload)"}}}"#
         let held = harness.client(call)
         let prompt = held.toClient.first?["params"]?["message"]?.stringValue ?? ""
         #expect(prompt.unicodeScalars.contains { $0.value == 0x1B } == false)
@@ -124,7 +126,7 @@ struct MCPGatewayElicitationTests {
         let id = held.toClient.first?["id"]?.stringValue ?? ""
         let accepted = harness.client(Self.answer(id, #"{"action":"accept","content":{"approve":true}}"#))
         let forwarded = accepted.toUpstream.first?.1["params"]
-        #expect(forwarded?["name"]?.stringValue == tool)
+        #expect(forwarded?["name"]?.stringValue == "read_ssh")
         #expect(forwarded?["arguments"]?["path"] == .string(payload))
         #expect(forwarded?["arguments"]?["note"] == .string("\u{009B}secret"))
     }
