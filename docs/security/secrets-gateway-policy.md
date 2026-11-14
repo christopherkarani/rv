@@ -280,7 +280,10 @@ How it starts the command:
   the other commands share rv's group, so the terminal stays with them:
   Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops
   rv but not the command. rv says so once on stderr, also when the group
-  could not be read. rv takes the terminal back only from the command's
+  could not be read. If the group comes to be shared only after rv's
+  check before the spawn, rv says so at the command's first stop, and
+  says nothing if the command never stops (nothing is written between the
+  spawn and the resume). rv takes the terminal back only from the command's
   group, or from a group nobody is in any more: if the shell gave it to
   another job while rv was stopped, that job keeps it. Terminal modes are
   saved when rv takes it back and re-applied when it hands it on. rv
