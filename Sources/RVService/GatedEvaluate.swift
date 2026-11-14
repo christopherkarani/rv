@@ -464,13 +464,13 @@ public struct GatedEvaluate: Sendable {
         // task-local). Checked on every apply, allow included: past the
         // deadline the check trips it and `HookDoor` swaps in the timeout
         // deny, so no denial row is emitted for a reply nobody reads.
-        if verb.recordsDenial, HookDeadline.permitsSideEffects(),
-           let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
+        let denialInTime = verb.recordsDenial && HookDeadline.permitsSideEffects()
+        if denialInTime, let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
             effects.append(row)
         }
         if verb.recordsDenial,
            let row = Self.overrideAudit(candidate: candidate, finished: finished, override: override,
-                                        host: host, tool: tool, cwd: cwd, now: now) {
+                                        host: host, tool: tool, cwd: cwd, now: now, withDenial: denialInTime) {
             effects.append(row)
         }
         return (finished, effects)
@@ -928,6 +928,8 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// The audit row for a deny the Policy gate overrode; nil otherwise.
+    /// `withDenial` is false past the hook deadline: the row then carries no
+    /// deny rows, as no deny row is written then.
     private static func overrideAudit(
         candidate: EvaluationResult,
         finished: EvaluationResult,
@@ -935,13 +937,16 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool,
         cwd: WorkingDirectory?,
-        now: Date
+        now: Date,
+        withDenial: Bool
     ) -> GatedEffect? {
         guard case .deny(let deny) = candidate.decision, case .allow = finished.decision else { return nil }
-        // The deny's rows for when the override row does not land. Always
-        // built, so the override row itself is never skipped.
-        let denial: GatedEffect.DenialRow
-        if case .denialRow(let row)? = denialRow(for: candidate, path: nil, host: host, tool: tool, now: now) {
+        // The deny's rows for when the override row does not land. Built
+        // whenever in time, so the override row itself is never skipped.
+        let denial: GatedEffect.DenialRow?
+        if withDenial == false {
+            denial = nil
+        } else if case .denialRow(let row)? = denialRow(for: candidate, path: nil, host: host, tool: tool, now: now) {
             denial = row
         } else {
             denial = GatedEffect.DenialRow(
@@ -1018,8 +1023,14 @@ public struct GatedEvaluate: Sendable {
     /// the exemption audit and judge log are not deadline-gated.
     /// Returns false when a `command.override` row did not land; the shell
     /// door then keeps the deny (only that door emits override rows).
+    /// An override row and its fallback deny row share one `lockWait`, so
+    /// a held lock costs the command one wait, not two. `lockWait` is a
+    /// seam for tests.
     @discardableResult
-    static func perform(_ effects: [GatedEffect], home: HomeDirectory?) -> Bool {
+    static func perform(
+        _ effects: [GatedEffect], home: HomeDirectory?,
+        lockWait: () -> AuditLog.LockWait = { AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout) }
+    ) -> Bool {
         guard let home else { return true }
         var overridesRecorded = true
         for effect in effects {
@@ -1034,15 +1045,19 @@ public struct GatedEvaluate: Sendable {
                 auditDenial(row, home: home)
                 recordDenial(row, home: home)
             case .overrideAudit(let row):
-                guard auditOverride(row, home: home) == false else { continue }
+                let wait = lockWait()
+                guard auditOverride(row, home: home, wait: wait) == false else { continue }
                 overridesRecorded = false
                 AuditDropLog.shared.report(
                     .commandOverride, file: auditFile(home),
                     consequence: "the override of \(row.ruleID.rawValue) was not applied and the command stays denied")
-                // The deny the shell door now returns gets its own rows;
-                // either may fail too, which changes nothing.
-                auditDenial(row.denial, home: home)
-                recordDenial(row.denial, home: home)
+                // The deny the shell door now returns gets its own rows,
+                // within what is left of the same lock wait; either may
+                // fail too, which changes nothing.
+                if let denial = row.denial {
+                    auditDenial(denial, home: home, wait: wait)
+                    recordDenial(denial, home: home)
+                }
             }
         }
         return overridesRecorded
@@ -1054,7 +1069,10 @@ public struct GatedEvaluate: Sendable {
     /// ledger is a pruned convenience view, the chain is the record.
     /// Carries the rule, host, tool and redacted path, never the command
     /// text.
-    private static func auditDenial(_ row: GatedEffect.DenialRow, home: HomeDirectory) {
+    private static func auditDenial(
+        _ row: GatedEffect.DenialRow, home: HomeDirectory,
+        wait: AuditLog.LockWait = AuditLog.LockWait(timeout: AuditLog.defaultLockTimeout)
+    ) {
         var detail = ["host": row.host.rawValue, "tool": row.tool.rawValue, "category": row.category.rawValue]
         let path = DenialPathRedaction.redact(row.path, home: home)
         if path.isEmpty == false { detail["path"] = path }
@@ -1067,7 +1085,8 @@ public struct GatedEvaluate: Sendable {
                 subject: row.ruleID.rawValue, agent: row.host == .tty ? nil : row.host.rawValue,
                 source: AuditLedger.Source.audit.rawValue, detail: detail
             ),
-            configDirectory: RVPolicyPaths.configDirectory(home: home)
+            configDirectory: RVPolicyPaths.configDirectory(home: home),
+            wait: wait
         )
         // The verdict stands either way; say that its chained record is missing.
         if recorded == false {
@@ -1086,7 +1105,9 @@ public struct GatedEvaluate: Sendable {
     /// Appends a `command.override` event: a deny a human-granted or policy
     /// override turned into an allow. The rule and override kind only.
     /// Returns whether the row landed.
-    private static func auditOverride(_ row: GatedEffect.OverrideRow, home: HomeDirectory) -> Bool {
+    private static func auditOverride(
+        _ row: GatedEffect.OverrideRow, home: HomeDirectory, wait: AuditLog.LockWait
+    ) -> Bool {
         AuditLog.append(
             AuditEvent(
                 time: row.at, kind: .commandOverride, decision: .allowed,
@@ -1096,7 +1117,8 @@ public struct GatedEvaluate: Sendable {
                 source: AuditLedger.Source.audit.rawValue,
                 detail: ["host": row.host.rawValue, "override": row.override]
             ),
-            configDirectory: RVPolicyPaths.configDirectory(home: home)
+            configDirectory: RVPolicyPaths.configDirectory(home: home),
+            wait: wait
         )
     }
 

@@ -34,15 +34,16 @@ public enum AuditLog {
         append(event, configDirectory: configDirectory, wait: LockWait(timeout: lockTimeout))
     }
 
-    /// One append's lock budget: a deadline fixed when the append starts,
-    /// shared by the in-process lock and `flock`. `now` and `pause` are seams
-    /// for tests.
-    struct LockWait: Sendable {
+    /// One append's lock budget: a deadline fixed when it is made, shared by
+    /// the in-process lock and `flock`. Several appends given the same value
+    /// share its deadline: a second append after a failed first one waits
+    /// only for what is left. `now` and `pause` are seams for tests.
+    public struct LockWait: Sendable {
         let now: @Sendable () -> ContinuousClock.Instant
         let pause: @Sendable () -> Void
         let deadline: ContinuousClock.Instant
 
-        init(
+        public init(
             timeout: TimeInterval,
             now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
             pause: @escaping @Sendable () -> Void = { usleep(2_000) }
@@ -58,7 +59,8 @@ public enum AuditLog {
         var expired: Bool { now() >= deadline }
     }
 
-    static func append(_ event: AuditEvent, configDirectory: URL, wait: LockWait) -> Bool {
+    @discardableResult
+    public static func append(_ event: AuditEvent, configDirectory: URL, wait: LockWait) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
