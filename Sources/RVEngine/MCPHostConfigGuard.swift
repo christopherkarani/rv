@@ -28,6 +28,25 @@ func mcpHostConfigDeny(pack: EvaluationResult, analysis: SemanticAnalysis) -> Ev
     )
 }
 
+/// `world` with the guard attached while rv's MCP gateway is in use (`nil`:
+/// not in use, `world` unchanged). The guard never drops with the probe: a
+/// world that was not probed becomes a probed one with no working directory
+/// and no path facts, where every modeled write still counts and any
+/// guarded name asks (`mcpHostConfigUnmodeledWrite`). The live probe always
+/// answers `.probed`, so that branch only fails closed should it change.
+public func attachingMCPHostConfigGuard(
+    _ guarded: MCPHostConfigGuard?, to world: FilesystemAnalysisWorld, homeDirectory: HomePath?
+) -> FilesystemAnalysisWorld {
+    guard let guarded else { return world }
+    switch world {
+    case .probed(var context):
+        context.mcpHostConfigGuard = guarded
+        return .probed(context)
+    case .unprobed:
+        return .probed(FilesystemAnalysisContext(homeDirectory: homeDirectory, mcpHostConfigGuard: guarded))
+    }
+}
+
 /// The guard when the world carries one.
 func mcpHostConfigGuard(_ world: FilesystemAnalysisWorld) -> (MCPHostConfigGuard, home: String)? {
     guard case .probed(let context) = world, let guarded = context.mcpHostConfigGuard else { return nil }
@@ -87,6 +106,9 @@ func mcpHostConfigUnmodeledWrite(
         total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }
     }
     guard mentionCount(raw) > 0 || argvMentions > 0 else { return false }
+    // No working directory (or no probe, `attachingMCPHostConfigGuard`):
+    // a relative name cannot be placed, so no name is known to be read only.
+    guard context.workingDirectory != nil else { return true }
     let copyIsPlain = launched.contains(where: mayShadowOrMoveCopy) == false && mayDefineCommands(raw) == false
     var unknown = false
     for command in launched {
@@ -123,19 +145,32 @@ private func mentionCount(_ text: String) -> Int {
 
 /// BSD getopt (macOS `cp`, `mv`, `ln`, `install`) stops at the first
 /// operand: a later `-x` word is an operand, and the last word the real
-/// destination, which the GNU-style writer parse does not see.
+/// destination, which the GNU-style writer parse does not see. A `--`
+/// after an operand is itself an operand there (`cp a -- b` also copies a
+/// file named `--`), and any `-x` word after a `--` is one in both
+/// grammars: neither is modelled here, so both count.
 private func hasOptionAfterOperand(_ command: LaunchedCommand) -> Bool {
     let name = commandName(command.head)
     guard ["cp", "mv", "ln", "install"].contains(name) else { return false }
     var sawOperand = false
+    var optionsEnded = false
     var skipValue = false
     for word in command.guardArgv.dropFirst().map(unescapeBackslashPairs) {
         if skipValue {
             skipValue = false
             continue
         }
-        if word == "--" { return false }
-        if word.hasPrefix("-"), word != "-" {
+        let dashWord = word.hasPrefix("-") && word != "-"
+        if optionsEnded {
+            if dashWord { return true }
+            continue
+        }
+        if word == "--" {
+            if sawOperand { return true }
+            optionsEnded = true
+            continue
+        }
+        if dashWord {
             if sawOperand { return true }
             skipValue = name == "install" && ["-m", "-o", "-g"].contains(word)
             continue
@@ -175,6 +210,12 @@ private func classify(_ command: LaunchedCommand) -> MCPCommandClass {
         return operands.contains(where: acting.contains) ? .unknown : .reader
     }
     if name == "rg", operands.contains(where: { $0 == "--pre" || $0.hasPrefix("--pre=") }) { return .unknown }
+    if name == "less" || name == "more", operands.contains(where: lessRunsCode) { return .unknown }
+    if ["bat", "ack", "ag"].contains(name),
+       operands.contains(where: { abbreviatesLong($0, of: ["--pager", "--ackrc"]) })
+    {
+        return .unknown
+    }
     if readerPrograms.contains(name) { return .reader }
     if modeledPrograms.contains(name) { return .modeled }
     if copyPrograms.contains(name) { return .copy }
@@ -195,6 +236,13 @@ private func gitClass(_ command: LaunchedCommand) -> MCPCommandClass {
     if overrides { return .unknown }
     let sub = foldedWord(words[index])
     let rest = words[(index + 1)...]
+    // `git grep -O<cmd>` runs a program on the matches; `--output=<file>`
+    // (diff, log, show) writes one.
+    let runsOrWrites = rest.contains { word in
+        (word.hasPrefix("-") && word.hasPrefix("--") == false && word.contains("O"))
+            || abbreviatesLong(word, of: ["--open-files-in-pager", "--output"])
+    }
+    if runsOrWrites { return .unknown }
     if sub == "commit" {
         let message = rest.contains {
             ["-m", "-am", "-F", "--message", "--file"].contains($0)
@@ -205,6 +253,28 @@ private func gitClass(_ command: LaunchedCommand) -> MCPCommandClass {
         return message && edits == false && named == false ? .reader : .unknown
     }
     return gitReadOnly.contains(sub) ? .reader : .unknown
+}
+
+/// `less`/`more` (macOS `more` is `less`) words that run a program or
+/// write a file: `+cmd` (`+!cmd` runs a shell command at start), a lesskey
+/// file (`-k`, `--lesskey-*`; its `#env` section can set `LESSOPEN`), and a
+/// log file (`-o`, `-O`, `--log-file`). Words come case-folded; only the
+/// motions `+G` and `+F` are known not to.
+private func lessRunsCode(_ word: String) -> Bool {
+    if word.hasPrefix("+") { return word != "+g" && word != "+f" }
+    if word.hasPrefix("--") {
+        return abbreviatesLong(word, of: ["--lesskey-file", "--lesskey-src", "--lesskey-content", "--log-file"])
+    }
+    return word.hasPrefix("-") && word.dropFirst().contains { $0 == "k" || $0 == "o" }
+}
+
+/// Whether `word` (`--name` or `--name=value`) may name one of `longs`:
+/// getopt_long, git and Getopt::Long take any unambiguous prefix.
+private func abbreviatesLong(_ word: String, of longs: [String]) -> Bool {
+    guard word.hasPrefix("--") else { return false }
+    let name = String(word.prefix { $0 != "=" })
+    guard name.count > 2 else { return false }
+    return longs.contains { $0.hasPrefix(name) }
 }
 
 private let gitReadOnly: Set<String> = [
