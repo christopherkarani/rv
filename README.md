@@ -230,7 +230,10 @@ rv is one binary, 25 commands. The rest of the surface:
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
   Tool definitions are pinned only by `rv mcp trust`, which shows every
   field it pins: a tool that is new or changed since you trusted it
-  always asks and reaches the agent without the server's prose. Start
+  always asks and reaches the agent as its name, rv's marker saying it
+  is not trusted, an empty object schema and four boolean hints, nothing
+  else.
+  Tools named other than 1-64 of `A-Z a-z 0-9 _ . -` are hidden. Start
   your MCP host once so `rv mcp serve` queues the tools, run
   `rv mcp trust`, then restart the host (a running serve keeps the pins
   it started with). Tool result text is forwarded byte for byte;
