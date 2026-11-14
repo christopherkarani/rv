@@ -173,7 +173,66 @@ its processes may spend the placeholder unless the secret lists `binaries`
 leader's group; unless it is in a terminal runtime's session, its requests are refused as
 `runtimeMismatch`. Linux has no check (no
 libproc), so every gateway request there is `runtimeUnverified`. Contained
-launches on Linux are already refused before exec.
+launches on Linux are already refused before exec, and so is `rv run`.
+
+## Uncontained launches (`rv run`)
+
+`rv run --secret NAME -- COMMAND` (or `--all`) starts a command with no
+cage and the gateway in front of it. It is for running `claude`, `codex`,
+or a script with placeholders instead of real values, without a workspace.
+
+How it starts the command:
+
+- Only `gateway` and `awsSigV4` secrets are staged. A named secret with
+  `environment` delivery, or with an `agents` filter (`rv run` carries no
+  agent tag), is refused; `--all` skips those and names them on stderr.
+  Nothing selected is refused.
+- The command's environment is rv's own, minus every variable a selected
+  secret stages (the shell's copy of the real value among them, and
+  `AWS_SESSION_TOKEN`/`AWS_SECURITY_TOKEN` for an AWS secret), plus the
+  lease: placeholders, base URLs, and the AWS endpoint, key id and a
+  throwaway signing key.
+- On macOS, `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and
+  `POSIX_SPAWN_START_SUSPENDED` creates the command as its own group leader
+  and stops it before its first instruction. rv records the leader's pid
+  and start time, binds the lease to it, hands it the terminal, and only
+  then sends `SIGCONT`. If any step fails, the stopped child is killed.
+  Only stdio is inherited.
+- `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv go to the command's group.
+  Ctrl-Z stops rv with the command, and `fg` resumes both. rv exits with
+  the command's code, or 128 plus the signal that ended it; 125 means
+  `rv run` refused and the command never ran (126: could not be started,
+  127: not found).
+- When the leader exits, rv kills what is left of its process group,
+  revokes the placeholders and stops the gateway, on every path.
+
+What it protects:
+
+- The real values are never in the command's environment, so it cannot
+  print, log, or paste into a transcript a value it was never given.
+- A placeholder is spent only on a connection from the command or a process
+  it started ([runtime binding](#runtime-binding)), only for requests the
+  secret's `allow` rules permit, and only while the command runs. Requests an
+  `approve` rule matches are refused: there is no approver outside a
+  workspace.
+
+What it does not:
+
+- It is not a sandbox. The command runs as you, with your files and
+  network. It can read whatever your user can, which may include where the
+  real values are stored: a `.env` file, `~/.aws/credentials`, a signed-in
+  password manager CLI, a keychain item it is allowed to read.
+- Other variables pass through unchanged, including secrets you did not
+  select.
+- A process that leaves the command's tree (reparented to launchd, or in a
+  new group made with `setsid`) cannot spend the placeholders, but it is not
+  killed when the command exits.
+
+Linux: refused (`rv run: the secrets gateway cannot tell which process sent
+a request on this platform ...`, exit 125) until the gateway's peer check
+binds process groups there and a no-window spawn exists. Both are
+capabilities `rv run` checks (`GatewayPeerCheck.bindsProcessGroups`,
+`SecretRunProcess.isAvailable`), not platform tests in the command.
 
 ## Binary binding
 
