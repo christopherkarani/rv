@@ -9,7 +9,7 @@ import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
-        try RVDLaunch.requireHome(HomeDirectory.processValidatedHome())
+        try RVDLaunch.requireHome(environment: ProcessInfo.processInfo.environment)
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProductVersion.semver)
         let hosts = LiveWorkspaceHostRegistry()
@@ -88,7 +88,7 @@ import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
-        try RVDLaunch.requireHome(HomeDirectory.processValidatedHome())
+        try RVDLaunch.requireHome(environment: ProcessInfo.processInfo.environment)
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProductVersion.semver)
         let ceremonies = WorkspaceOperatorCeremonyService()
