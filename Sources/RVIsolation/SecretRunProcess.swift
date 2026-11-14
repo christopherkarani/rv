@@ -111,10 +111,11 @@ enum SecretRunProcess {
     /// image runs, so there is no moment where it executes unbound. Only
     /// `descriptors` (child fd: rv fd) are inherited; every other descriptor
     /// (the gateway listener among them) stays in rv. A signal in
-    /// `keepIgnored` stays ignored for the child, as rv inherited it.
+    /// `keepIgnored` stays ignored for the child, as rv inherited it. The
+    /// child starts in `workingDirectory` when one is given, rv's otherwise.
     static func spawnSuspended(
         executable: String, arguments: [String], environment: [String], descriptors: [Int32: Int32],
-        keepIgnored: Set<Int32> = []
+        keepIgnored: Set<Int32> = [], workingDirectory: String? = nil
     ) -> Result<pid_t, SecretRunRefusal> {
         var attributes: posix_spawnattr_t?
         guard posix_spawnattr_init(&attributes) == 0 else { return .failure(.spawnFailed("spawn attributes")) }
@@ -144,6 +145,9 @@ enum SecretRunProcess {
                 ? posix_spawn_file_actions_addinherit_np(&actions, target)
                 : posix_spawn_file_actions_adddup2(&actions, source, target)
             guard added == 0 else { return .failure(.spawnFailed("spawn file actions")) }
+        }
+        if let workingDirectory, posix_spawn_file_actions_addchdir_np(&actions, workingDirectory) != 0 {
+            return .failure(.spawnFailed("spawn working directory"))
         }
         let argv = SpawnPointers(arguments)
         let envp = SpawnPointers(environment)
