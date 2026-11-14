@@ -59,7 +59,8 @@ struct MCPApprovePinTests {
         #expect(shown.contains("(CHANGED since you trusted it; definition sha256 abc123) "), "\(shown)")
         #expect(shown.hasSuffix(" once"))
         #expect(Self.hasHidingScalar(shown) == false)
-        #expect(shown.contains(#"push a\u001b[2Jb\u202ec\ue0041d"#), "\(shown)")
+        // The tool is named "push" + hostile, with no space: "pusha...".
+        #expect(shown.contains(#"tool pusha\u001b[2Jb\u202ec\ue0041d ("#), "\(shown)")
         // Argument names are quoted, so their escapes' backslashes double.
         #expect(shown.contains(#"keys "ka\\u001b[2Jb\\u202ec\\ue0041d""#), "\(shown)")
         #expect(Self.hasHidingScalar(approved) == false)
