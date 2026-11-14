@@ -146,18 +146,25 @@ struct ProcFSParseTests {
         #expect(ProcFSParse.sockets(bytes(Self.header)) == [])
     }
 
-    @Test(arguments: [
-        "",
-        "  sl  local_address\n" + "garbage\n",
-        String(header.dropLast()),
-        header + String(row(0, "0100007F:C350", "0100007F:1F90", inode: 1).dropLast()),
-        header + row(0, "0100007F:C35", "0100007F:1F90", inode: 1),
-        header + row(0, "0100007G:C350", "0100007F:1F90", inode: 1),
-        header + row(0, "0100007F:C350", "0100007F:1F90", state: "1", inode: 1),
-        header + row(0, "0100007F:C350", "0100007F:1F90", inode: 1).replacingOccurrences(of: " 1000 ", with: " -1 "),
-        header + "   0: 0100007F:C350 0100007F:1F90 01\n",
-        row(0, "0100007F:C350", "0100007F:1F90", inode: 1),
-    ])
+    /// Built one statement at a time: as a single array literal of string
+    /// concatenations the compiler cannot type-check it in reasonable time.
+    static let malformedTables: [String] = {
+        let good: String = ProcFSParseTests.row(0, "0100007F:C350", "0100007F:1F90", inode: 1)
+        let header: String = ProcFSParseTests.header
+        var tables: [String] = [""]
+        tables.append("  sl  local_address\ngarbage\n")
+        tables.append(String(header.dropLast()))
+        tables.append(header + String(good.dropLast()))
+        tables.append(header + ProcFSParseTests.row(0, "0100007F:C35", "0100007F:1F90", inode: 1))
+        tables.append(header + ProcFSParseTests.row(0, "0100007G:C350", "0100007F:1F90", inode: 1))
+        tables.append(header + ProcFSParseTests.row(0, "0100007F:C350", "0100007F:1F90", state: "1", inode: 1))
+        tables.append(header + good.replacingOccurrences(of: " 1000 ", with: " -1 "))
+        tables.append(header + "   0: 0100007F:C350 0100007F:1F90 01\n")
+        tables.append(good)
+        return tables
+    }()
+
+    @Test(arguments: malformedTables)
     func truncatedOrMalformedTablesAreRefused(text: String) {
         #expect(ProcFSParse.sockets(bytes(text), littleEndian: true) == nil)
     }
