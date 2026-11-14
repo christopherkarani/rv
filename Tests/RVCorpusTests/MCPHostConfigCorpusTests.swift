@@ -231,6 +231,9 @@ struct MCPHostConfigCorpusTests {
         "gh pr create --title 'mcp install docs' --body 'run mcp install srv'",
         "make --directory mcp install", "npm -w mcp install lodash", "bun --cwd mcp install",
         "git commit -m \"fix \\\"mcp install\\\" docs\"",
+        // Brace, glob and dynamic look-alikes that name no host and no `mcp`.
+        "ls *.md", "cp {a,b}.txt dst/", "make install", "echo ${HOME}",
+        "npm install {lodash,react}", "git add src/*.swift",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()
