@@ -72,7 +72,7 @@ public enum MCPLaunchPlanner {
         baseEnvironment: [String: String],
         requireSandbox: Bool = MCPSandbox.enforced,
         oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
-        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) },
+        sandbox: (MCPServerDefinition, MCPUpstreamLaunch, MCPCageReach) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { _, launch, _ in .success(launch) },
         placeholders: MCPPlaceholderLeasing = .unavailable,
         now: @escaping @Sendable () -> Date = { Date() }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
