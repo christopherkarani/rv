@@ -33,7 +33,7 @@ public enum MCPSandbox {
         #if os(Linux)
         if let reason = MCPLinuxCage.unavailability(linuxSupport) { return reason }
         #endif
-        return "it needs macOS, or Linux 6.7 or later"
+        return "it needs macOS"
     }
 
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]

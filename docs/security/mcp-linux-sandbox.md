@@ -15,6 +15,8 @@ Linux behaves as a host without a sandbox. A server with a `sandbox` entry
 is refused, with the reason; a server without one runs uncaged, with a
 warning; under an organization's `requireSandbox` no local server runs.
 Switching it on is one constant, and a decision for the project's owner.
+While it is off, `rv mcp check` and a refusal say only that; they do not
+suggest a newer kernel or a reinstall, which would change nothing.
 
 This page maps the Seatbelt profile to Landlock rule by rule and lists what
 Landlock does not cover. The limits are measured, not assumed:
@@ -26,15 +28,22 @@ ABI closes on Linux 6.6, 6.8, 6.12 and 7.3.
 
 Landlock's network rules cover two calls on a TCP socket, `bind` and
 `connect` (ABI 4), and from ABI 10 the same for UDP. A caged process
-reaches the network without either, on every kernel tested (6.8 to 7.3):
+reaches the network without either. Which route is open depends on the
+kernel; every kernel measured leaves at least two:
 
-- an MPTCP socket (`IPPROTO_MPTCP`) connects to any TCP server and is not
-  a TCP socket to Landlock (`net.mptcp.enabled` is 1 by default);
-- `sendto` with `MSG_FASTOPEN` opens a TCP connection without `connect`;
-- `listen` on a socket that was never bound picks a port and accepts
-  connections;
-- before ABI 10, UDP to any address; at every ABI, ICMP echo sockets, SCTP
-  and other families.
+| Route | 6.8 (ABI 4) | 6.12 (ABI 6) | 6.18 (ABI 7) | 7.3 (ABI 11) |
+| --- | --- | --- | --- | --- |
+| `connect` on an MPTCP socket (`IPPROTO_MPTCP`), which reaches any TCP server | denied | denied | open | open |
+| `sendto` with `MSG_FASTOPEN` on a TCP socket, which connects without `connect` | open | open | open | denied |
+| the same on an MPTCP socket | open | open | open | open |
+| `listen` on a socket never bound, which picks a port and accepts | open | open | open | open |
+| UDP to any address | open | open | open | denied |
+| ICMP echo sockets, SCTP and other families | open | open | open | open |
+
+The 6.18 column is the host `MCPLinuxSandboxTests` ran on; the others are
+the pinned guests of `Scripts/linux-kernel-e2e.sh`, which print each TCP
+route's result and fail unless `listen` without `bind` and one of the
+three others get through.
 
 So `network: false` and `sandbox.hosts` cannot be enforced against a
 server that means to get out, and a server with `sandbox.hosts` can go
@@ -80,7 +89,7 @@ the loader would act on it in the helper, before the cage.
 | --- | --- | --- |
 | `(allow default)` | Everything not denied below is allowed: reads, exec, process and IPC operations. | Landlock only grants. Reads and exec are granted on every path except the protected ones (next rows). Operations Landlock does not mediate stay allowed. |
 | `(deny file-write*)` then `(allow file-write* ...)` | Writes only beneath the scratch directory, the temp directory, `/dev`, `~/.npm`, `~/.cache`, `~/Library/Caches`, and `sandbox.writable`. | The same list with Linux paths: `~/.cache/rv-mcp/<server>` (scratch and working directory), `/tmp`, `/dev`, `~/.npm`, `~/.cache`, `sandbox.writable`. Each gets every file right Landlock has beneath it; nothing else can be written, truncated, created, removed or renamed. A file cannot be hard-linked or renamed out of an unreadable directory into a writable one. Mode, owner and times are not file rights to Landlock: see the limits. |
-| `(deny file-read* file-write* <stores>)` | No read of credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.config/gcloud`, `~/.azure`, keychains, browser profiles, `~/.netrc`, `~/.npmrc`, `~/.pypirc`), of other hosts' MCP configuration (`~/.claude.json`, `~/.codex`, `~/.cursor`, ...), or of rv's own configuration directory. | The same list, plus where Linux keeps what macOS has under `~/Library` or in the Keychain: `~/.local/share/keyrings`, `~/.local/share/kwalletd`, `~/.password-store`, `~/.git-credentials`, `~/.config/google-chrome`, `~/.config/chromium`, `~/.mozilla`, `~/.config/BraveSoftware`, `~/snap/firefox`, `~/snap/chromium`, `~/.var/app` (Flatpak), `~/.config/Claude`, `~/.claude/.credentials.json`, `~/.config/containers/auth.json`, `~/.Xauthority`. Landlock cannot deny beneath an allowed directory, so rv grants everything *beside* each protected path instead, at every level from `/` down. |
+| `(deny file-read* file-write* <stores>)` | No read of credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.config/gh`, `~/.config/gcloud`, `~/.azure`, keychains, browser profiles, `~/.netrc`, `~/.npmrc`, `~/.pypirc`), of other hosts' MCP configuration (`~/.claude.json`, `~/.codex`, `~/.cursor`, ...), or of rv's own configuration directory. | The same list, plus where Linux keeps what macOS has under `~/Library` or in the Keychain: `~/.local/share/keyrings`, `~/.local/share/kwalletd`, `~/.password-store`, `~/.git-credentials`, `~/.config/google-chrome`, `~/.config/chromium`, `~/.mozilla`, `~/.config/BraveSoftware`, `~/snap/firefox`, `~/snap/chromium`, `~/.var/app` (Flatpak), `~/.config/Claude`, `~/.claude/.credentials.json`, `~/.config/containers/auth.json`, `~/.Xauthority`, `~/.config/git/credentials`, `~/.vault-token`, and the session's runtime directory `/run/user/<uid>` (container and X authority files, session sockets). Landlock cannot deny beneath an allowed directory, so rv grants everything *beside* each protected path instead, at every level from `/` down. |
 | symlink denies | A store that is a symlink is denied at its target too. | Each protected path is protected as spelled and as resolved. Rules attach to directories opened without following links, and a link itself is never granted: access through one is checked where it leads. |
 | `(deny network*)` | No sockets at all: TCP, UDP, Unix. | `bind` and `connect` on a TCP socket are denied on every port (ABI 4). That is not "no TCP": see "The network limit". |
 | `(allow network-outbound (remote tcp "localhost:<port>"))` | With `sandbox.hosts`, the allowlist proxy's port only. | `connect` is allowed to the proxy's port and no other. Landlock rules name a port, not an address. |
@@ -102,9 +111,12 @@ The environment is the same on both: `PATH`, `HOME`, `TMPDIR`, `LANG`,
   `/`, a directory that holds a protected path, or a path inside one: rv
   refuses the server, because Landlock would then expose the store.
 - `TMPDIR` must be `/tmp` or inside it. From ABI 9 a server cannot connect
-  to a socket it creates there; its scratch directory is the place.
+  to a socket another program created in `/tmp`, `/dev` or the caches.
 - A terminal or other device the server opens itself cannot be controlled
-  with `ioctl` from ABI 5.
+  with `ioctl` from ABI 5, so it cannot allocate a pseudo-terminal.
+- A file beside a protected one that carries its name (`.netrc.tmp`,
+  `gh.bak`) is not readable either.
+- The session's runtime directory (`/run/user/<uid>`) is not readable.
 - A home with more than 16,384 entries beside the protected paths, or
   more than 1 MiB of their names, is refused.
 
@@ -116,19 +128,20 @@ what that kernel does not block.
 
 | Not blocked | Until | Consequence |
 | --- | --- | --- |
-| TCP by MPTCP, fast open, or `listen` without `bind` | no ABI | See "The network limit". |
+| TCP by a route the rules miss: MPTCP, fast open, `listen` without `bind` | no ABI closes them all | See "The network limit". |
 | Sockets that are neither TCP, UDP nor Unix | no ABI | ICMP echo sockets (where `net.ipv4.ping_group_range` allows them, the default on most distributions), SCTP, and other families an unprivileged process may open. |
 | UDP | ABI 10 | UDP to and from any address, DNS included. |
-| Connecting to pathname Unix sockets | ABI 9 | The server can talk to whatever listens on a socket the user may open: the D-Bus session bus (and through it the Secret Service and `systemd --user`, which will run commands outside the cage), an SSH or GPG agent, a container daemon, rv's own daemon socket. This is the counterpart of Mach services on macOS, which `(allow default)` leaves reachable. From ABI 9 a socket is reachable only in the server's own writable directories (the scratch directory, `~/.npm`, `~/.cache`, `sandbox.writable`), not in `/tmp` or `/dev`. |
+| Connecting to pathname Unix sockets | ABI 9 | The server can talk to whatever listens on a socket the user may open: the D-Bus session bus (and through it the Secret Service and `systemd --user`, which will run commands outside the cage), an SSH or GPG agent, a container daemon, rv's own daemon socket. This is the counterpart of Mach services on macOS, which `(allow default)` leaves reachable. From ABI 9 a socket another program made is reachable only in the scratch directory and `sandbox.writable`, not in `/tmp`, `/dev`, `~/.npm` or `~/.cache`; the server still reaches sockets it makes itself. |
 | Abstract Unix sockets; signals to other processes | ABI 6 (Linux 6.12) | The server can reach an abstract socket (an X server, an old session bus) and signal the user's other processes. |
-| `ioctl` on device files the server opens | ABI 5 (Linux 6.10) | Terminal and device control on `/dev` nodes, including typing into the user's terminal where `dev.tty.legacy_tiocsti` is on. |
+| `ioctl` on device files the server opens | ABI 5 (Linux 6.10) | Terminal and device control on `/dev` nodes, including typing into the user's terminal where `dev.tty.legacy_tiocsti` is on. From ABI 5 it is denied on every device, so a server cannot allocate a pseudo-terminal (`grantpt` fails) or drive a GPU, camera or sound device. |
 | Mode, owner and times of any file the user owns | no ABI | Landlock does not mediate `chmod`, `chown`, `utimes` or extended attributes. A server cannot read `~/.ssh/id_ed25519`, but it can make it world-readable for another local account, or take the owner's own access away. |
 | Everything in `/tmp` and `/dev` | no ABI | Both are write roots, as on macOS. Other programs' temporary files and sockets the user may open (a Kerberos ticket cache `/tmp/krb5cc_<uid>`, before ABI 9 an X11, tmux or agent socket), `/dev/shm`, and other sessions' terminals in `/dev/pts` (the server can write text to them). |
-| A protected file that has another name | no ABI | Rules follow paths. A hard link to a key that already exists in a readable directory, or a bind mount of a store, is readable. The server cannot make such a link itself. |
+| A protected file that has another name | no ABI | Rules follow files, not names. A hard link to a key that already exists in a readable directory, or a bind mount of a store, is readable; the server cannot make such a link itself. A file that was beside a protected one when the server started and is then renamed over it (how many programs save) is readable for the rest of the server's life: rv does not grant a neighbour named after a protected file (`.git-credentials.lock`), but a temporary file with an unrelated name is granted. |
 | The allowlist port on other hosts | no ABI | With `sandbox.hosts`, the server may connect to the proxy's port number on any address, not only loopback. The port is random per launch; a remote host listening on it is reachable. |
 | Other processes' command lines | no ABI | `/proc/<pid>/cmdline` is world-readable. |
 | User namespaces, kernel keyrings, System V and POSIX IPC | no ABI rv handles | Not mediated by the rights rv applies. A user namespace gives the server no access the cage denies. |
-| Root | no ABI | A gateway run as root gives servers `CAP_PERFMON` and `CAP_DAC_OVERRIDE`, which let them read other processes' environments and memory maps and open block devices despite Landlock. Do not run `rv mcp serve` as root. |
+| Root | no ABI | A gateway run as root gives servers `CAP_PERFMON`, which lets them read other processes' environments and memory maps despite Landlock, and lets them open the block devices in `/dev`, a write root. Do not run `rv mcp serve` as root. |
+| A request too large to start | — | The readable-path list is bounded at 16,384 paths and 1 MiB, but with a very large environment or a small stack limit the kernel can still refuse the helper's arguments. The server then fails to start with a generic error, not this one. |
 
 ## Evidence
 
@@ -140,8 +153,9 @@ what that kernel does not block.
 - `MCPLinuxSandboxTests` (real kernel, as root and as a user): the default
   refusal; credential stores and rv's configuration unreadable directly,
   through a link, and at a link's target; writes confined; TCP `connect`
-  and `bind` denied where the same script succeeds uncaged; MPTCP, `listen`
-  without `bind` and ICMP as open in the cage as outside it; only the
+  and `bind` denied where the same script succeeds uncaged; `listen`
+  without `bind`, and at least one of MPTCP and TCP fast open, open in the
+  cage (and no route open in the cage that is not open outside it); only the
   proxy's port with an allowlist; `NO_NEW_PRIVS` and a setuid binary; other
   processes unreadable; Unix sockets, signals, UDP and device `ioctl` open
   or closed as the table says for the kernel's ABI; `chmod` of a protected
@@ -152,6 +166,7 @@ what that kernel does not block.
   6.6 (ABI none, 2, 3) refuse and run nothing; 6.8 (ABI 4), 6.12 (ABI 6)
   and 7.3 (ABI 11) enforce, with the channels each ABI closes checked per
   lane.
-- Not asserted by a test: TCP fast open (the route exists on the kernels
-  tested; a loopback probe cannot tell it from a refused `connect`), SCTP,
-  the proxy's port on a non-loopback address, hard links and bind mounts.
+- Not asserted by a test: ICMP and SCTP sockets, the proxy's port on a
+  non-loopback address, hard links, bind mounts, and a rename over a
+  protected file. ABI 5 has no lane of its own (6.8 is ABI 4, 6.12 is ABI
+  6); a GitHub runner's kernel may be one.

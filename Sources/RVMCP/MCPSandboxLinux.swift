@@ -16,6 +16,7 @@ extension MCPSandbox {
     /// in the Keychain instead.
     static let linuxDeniedReads = [
         "~/.local/share/keyrings", "~/.local/share/kwalletd", "~/.password-store", "~/.git-credentials",
+        "~/.config/git/credentials", "~/.vault-token",
         "~/.config/google-chrome", "~/.config/chromium", "~/.mozilla", "~/.config/BraveSoftware",
         "~/snap/firefox", "~/snap/chromium", "~/.var/app", "~/.config/Claude", "~/.claude/.credentials.json",
         "~/.config/containers/auth.json", "~/.Xauthority",
@@ -75,8 +76,10 @@ extension MCPSandbox {
     /// does not leave its target readable.
     static func linuxProtectedPaths(home: String, configDirectory: String) -> Set<String> {
         var protected: Set<String> = []
+        // The runtime directory holds the session's sockets and tokens
+        // (container and X authority files among them).
         for path in (deniedReads + linuxDeniedReads).map({ $0.hasPrefix("~/") ? home + $0.dropFirst(1) : $0 })
-            + [configDirectory]
+            + [configDirectory, "/run/user/\(getuid())"]
         {
             protected.insert(lexicalAbsolute(path))
             protected.insert(lexicalAbsolute(deniedRealPath(path)))
@@ -154,10 +157,11 @@ extension MCPSandbox {
                         + "which was not the path reviewed"))
             }
         }
-        let writable = [scratch] + (defaults + requested).map(lexicalAbsolute)
+        let writable = [scratch] + requested.map(lexicalAbsolute)
+        let shared = landlockSharedRoots + defaults.map(lexicalAbsolute)
 
         let protected = linuxProtectedPaths(home: homePath, configDirectory: configDirectory.path)
-        if let conflict = MCPLinuxCage.writableConflict(writable + landlockSharedRoots, protected: protected) {
+        if let conflict = MCPLinuxCage.writableConflict(writable + shared, protected: protected) {
             return .failure(linuxRefusal(server, conflict.reason))
         }
         let readable: [String]
@@ -185,7 +189,7 @@ extension MCPSandbox {
         }
 
         let plan = MCPLinuxCage.Plan(
-            readable: readable, writable: writable, shared: landlockSharedRoots, tcpPorts: ports)
+            readable: readable, writable: writable, shared: shared, tcpPorts: ports)
         notice(MCPLinuxCage.notice(server: server, abi: abi))
         var caged = launch
         caged.environment = environment

@@ -94,11 +94,16 @@ struct MCPLinuxCageTests {
         for unavailable in [
             MCPLinuxCageSupport.Unavailable.helperMissing, .probeFailed, .noLandlock, .tooOld(abi(3)),
         ] {
-            for network in [MCPLinuxCage.NetworkLimit.refuse, .disclose] {
-                #expect(MCPLinuxCage.admit(.unavailable(unavailable), network: network) == .failure(.unavailable(unavailable)))
-                #expect(MCPLinuxCage.unavailability(.unavailable(unavailable), network: network) == unavailable.reason)
-            }
-            #expect(MCPLinuxCage.isRequired(.unavailable(unavailable)) == false)
+            let support = MCPLinuxCageSupport.unavailable(unavailable)
+            #expect(MCPLinuxCage.admit(support, network: .disclose) == .failure(.unavailable(unavailable)))
+            #expect(MCPLinuxCage.unavailability(support, network: .disclose) == unavailable.reason)
+            // While the release refuses, no reinstall or kernel changes the
+            // answer, so none is suggested.
+            #expect(MCPLinuxCage.admit(support) == .failure(.networkNotConfined(nil)))
+            let reason = MCPLinuxCage.unavailability(support) ?? ""
+            #expect(reason.contains("cannot keep a server off the network on any kernel"))
+            #expect(reason.contains("reinstall") == false && reason.contains("6.7") == false)
+            #expect(MCPLinuxCage.isRequired(support) == false)
         }
         // A host that should cage and cannot say so refuses local servers;
         // one whose kernel has no cage runs them bare, as before.
@@ -108,7 +113,7 @@ struct MCPLinuxCageTests {
         #expect(MCPLinuxCage.isRequired(.unavailable(.tooOld(abi(3))), network: .disclose) == false)
         let reason = MCPLinuxCage.Refusal.networkNotConfined(abi(7)).reason
         #expect(reason.contains("ABI 7") && reason.contains("UDP") && reason.contains("MPTCP")
-            && reason.contains("ioctl") == false)
+            && reason.contains("depends on the kernel") && reason.contains("ioctl") == false)
         #expect(MCPLinuxCage.Refusal.networkNotConfined(abi(10)).reason.contains("UDP;") == false)
     }
 
@@ -164,6 +169,28 @@ struct MCPLinuxCageTests {
             "/data": [("me", .directory)], "/data/me": [(".ssh", .directory), ("code", .directory)]])
         let paths = try MCPLinuxCage.readable(protecting: ["/home/me/.ssh", "/data/me/.ssh"], list: list).get()
         #expect(paths == ["/data/me/code"])
+    }
+
+    /// A save writes `name.lock` or `.name.tmp` beside a file and renames
+    /// it over: a grant follows the file, so a sibling that carries a
+    /// protected name as a whole word is not granted.
+    @Test func aSiblingNamedAfterAProtectedFileIsNotGranted() throws {
+        let list = tree([
+            "/": [("home", .directory)],
+            "/home": [
+                (".git-credentials", .file), (".git-credentials.lock", .file), (".git-credentials~", .file),
+                ("#.git-credentials#", .file), (".netrc.tmp.123", .file), (".config", .directory), ("notes", .file),
+                (".netrcx", .file), ("my.netrc", .file),
+            ],
+            "/home/.config": [("gh", .directory), ("gh.bak", .directory), ("ghostty", .directory), ("light", .directory)],
+        ])
+        let paths = try MCPLinuxCage.readable(
+            protecting: ["/home/.git-credentials", "/home/.netrc", "/home/.config/gh"], list: list
+        ).get()
+        #expect(paths == ["/home/.config/ghostty", "/home/.config/light", "/home/.netrcx", "/home/notes"])
+        #expect(MCPLinuxCage.names(".git-credentials.lock", ".git-credentials"))
+        #expect(MCPLinuxCage.names("ghostty", "gh") == false && MCPLinuxCage.names("gh", "gh") == false)
+        #expect(MCPLinuxCage.names("x", "") == false && MCPLinuxCage.names("a.gh", "gh") && MCPLinuxCage.names("high", "gh") == false)
     }
 
     @Test func tooManyEntriesBesideAProtectedPathIsARefusal() {

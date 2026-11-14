@@ -50,7 +50,9 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
     case udp
     /// TCP that never passes the two calls Landlock's rules cover (`bind`
     /// and `connect` on a TCP socket): an MPTCP socket, a connection opened
-    /// by `sendto` with TCP fast open, and `listen` on a socket never bound.
+    /// by `sendto` with TCP fast open, and `listen` on a socket never
+    /// bound. Which of these a kernel leaves open varies; every kernel
+    /// measured leaves at least two.
     case tcpOutsideTheRules
     /// Sockets that are neither TCP, UDP nor Unix: ICMP echo, SCTP and other
     /// families the kernel lets an unprivileged process open.
@@ -82,7 +84,9 @@ public enum MCPLinuxCageGap: String, CaseIterable, Sendable {
         case .abstractSocketsAndSignals: "abstract Unix sockets and signals to other processes"
         case .pathnameUnixSockets: "connections to Unix sockets (session bus, SSH and GPG agents, container daemons)"
         case .udp: "UDP"
-        case .tcpOutsideTheRules: "TCP over MPTCP sockets, TCP fast open, and listening without a bind"
+        case .tcpOutsideTheRules:
+            "TCP by a route the rules miss (which ones depends on the kernel: MPTCP sockets, TCP fast open, "
+                + "listening without a bind)"
         case .otherSockets: "sockets that are not TCP, UDP or Unix (ICMP echo, SCTP)"
         }
     }
@@ -163,8 +167,9 @@ public enum MCPLinuxCage {
     /// Why a server does not start in a cage.
     public enum Refusal: Error, Equatable, Sendable {
         case unavailable(MCPLinuxCageSupport.Unavailable)
-        /// The kernel cages files, but cannot hold the policy's network limit.
-        case networkNotConfined(LandlockABI)
+        /// Landlock cannot hold the policy's network limit. The ABI is this
+        /// kernel's, when the host could say.
+        case networkNotConfined(LandlockABI?)
         /// A variable the dynamic loader acts on, set for the server: it
         /// would take effect in rv's helper, before the cage.
         case loaderVariable(String)
@@ -179,10 +184,13 @@ public enum MCPLinuxCage {
             switch self {
             case .unavailable(let unavailable):
                 unavailable.reason
-            case .networkNotConfined(let abi):
+            case .networkNotConfined(let abi?):
                 "Landlock (ABI \(abi) on this kernel) cannot keep a server off the network: "
                     + MCPLinuxCageGap.open(at: abi).filter(\.reachesTheNetwork).map(\.summary).joined(separator: "; ")
                     + " stay open, and every sandbox policy limits the network"
+            case .networkNotConfined(nil):
+                "Landlock cannot keep a server off the network on any kernel, and every sandbox policy limits "
+                    + "the network"
             case .loaderVariable(let name):
                 "its environment sets \(name), which the dynamic loader would act on in rv's helper before the "
                     + "sandbox applies; set it in the server's own command instead (env \(name)=... command)"
@@ -202,8 +210,9 @@ public enum MCPLinuxCage {
         _ support: MCPLinuxCageSupport, network: NetworkLimit = MCPLinuxCage.networkLimit
     ) -> Result<LandlockABI, Refusal> {
         switch (support, network) {
-        case (.unavailable(let unavailable), _): .failure(.unavailable(unavailable))
-        case (.confines(let abi), .refuse): .failure(.networkNotConfined(abi))
+        // No kernel or reinstall would change the answer: say only that.
+        case (_, .refuse): .failure(.networkNotConfined(support.abi))
+        case (.unavailable(let unavailable), .disclose): .failure(.unavailable(unavailable))
         case (.confines(let abi), .disclose): .success(abi)
         }
     }
@@ -281,11 +290,22 @@ public enum MCPLinuxCage {
             let prefix = path == "/" ? "/" : path + "/"
             return protected.contains { $0.hasPrefix(prefix) }
         }
+        // A file written beside a protected one under its name (`name.lock`,
+        // `.name.tmp`) is what a save renames over it: a grant follows the
+        // file, so that one is not granted either.
+        func shadowsProtected(_ name: String, in directory: String) -> Bool {
+            let prefix = directory == "/" ? "/" : directory + "/"
+            return protected.contains { path in
+                guard path.hasPrefix(prefix) else { return false }
+                let guarded = path.dropFirst(prefix.count)
+                return guarded.contains("/") == false && Self.names(name, String(guarded))
+            }
+        }
         func walk(_ directory: String) -> Refusal? {
             guard let entries = list(directory) else { return .unlistable(directory) }
             for entry in entries.sorted(by: { $0.name < $1.name }) {
                 let path = directory == "/" ? "/" + entry.name : directory + "/" + entry.name
-                if protected.contains(path) { continue }
+                if protected.contains(path) || shadowsProtected(entry.name, in: directory) { continue }
                 switch entry.kind {
                 case .symlink, .other:
                     continue
@@ -310,6 +330,25 @@ public enum MCPLinuxCage {
         return .success(paths)
     }
 
+    /// Whether `name` carries `guarded` as a whole word: not run together
+    /// with a letter or digit on either side. `.git-credentials.lock` and
+    /// `my.netrc` name `.git-credentials` and `.netrc`; `ghostty` does not
+    /// name `gh`.
+    static func names(_ name: String, _ guarded: String) -> Bool {
+        guard guarded.isEmpty == false, name != guarded else { return false }
+        let text = Array(name.unicodeScalars)
+        let word = Array(guarded.unicodeScalars)
+        guard text.count > word.count else { return false }
+        func isWord(_ scalar: Unicode.Scalar) -> Bool { scalar.properties.isAlphabetic || scalar.properties.numericType != nil }
+        for start in 0...(text.count - word.count) where Array(text[start..<(start + word.count)]) == word {
+            let before = start == 0 || isWord(text[start - 1]) == false || isWord(word[0]) == false
+            let end = start + word.count
+            let after = end == text.count || isWord(text[end]) == false || isWord(word[word.count - 1]) == false
+            if before, after { return true }
+        }
+        return false
+    }
+
     /// A writable path that would undo a protected one: Landlock grants
     /// beneath a directory with no way to carve a hole, so a write root may
     /// not be `/`, hold a protected path, be one, or sit inside one.
@@ -331,8 +370,9 @@ public enum MCPLinuxCage {
         public var readable: [String]
         /// The server's own directories: every file right beneath them.
         public var writable: [String]
-        /// Directories it shares with every other program (`/tmp`, `/dev`):
-        /// as `writable`, but a socket there is not the server's to reach.
+        /// Directories it shares with other programs (`/tmp`, `/dev`, the
+        /// user's caches): as `writable`, but a socket another program
+        /// made there is not the server's to reach.
         public var shared: [String]
         /// TCP ports the server may connect to: the allowlist proxy's, or none.
         public var tcpPorts: [UInt16]

@@ -223,44 +223,53 @@ struct MCPLinuxSandboxTests {
     }
 
     /// Why `MCPLinuxCage.networkLimit` refuses: TCP that passes neither of
-    /// those two calls is not denied on any kernel. Each route is tried
-    /// outside the cage first; one this host has (MPTCP may be switched
-    /// off) must be as open inside the cage. If a kernel closes one, this
-    /// fails and the limits in docs/security/mcp-linux-sandbox.md change.
+    /// those two calls. Which route a kernel leaves open varies (MPTCP is
+    /// denied on some, fast open on others), so each is tried outside the
+    /// cage first: the cage may deny a route, never open one, and it
+    /// leaves `listen` without `bind` and at least one way out open. If a
+    /// kernel closes them all, this fails and the limits in
+    /// docs/security/mcp-linux-sandbox.md change.
     @Test(.timeLimit(.minutes(2)))
-    func tcpThatPassesNeitherConnectNorBindIsNotDenied() throws {
+    func tcpThatPassesNeitherConnectNorBindIsNotAllDenied() throws {
         let home = try Home()
         let open = try listener()
         defer { close(open.fd) }
         let python = """
             import socket, sys
             port = int(sys.argv[1])
+            FASTOPEN = 0x20000000
             def attempt(label, action):
                 try:
                     action(); print(label + "=ok")
                 except OSError:
                     print(label + "=denied")
             def mptcp():
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262); s.settimeout(5)
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262)
                 s.connect(("127.0.0.1", port)); s.send(b"x")
+            def fast_open(protocol):
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, protocol)
+                if s.sendto(b"hello", FASTOPEN, ("127.0.0.1", port)) != 5: raise OSError("not sent")
             def listen_unbound():
                 s = socket.socket(); s.listen(1)
                 if s.getsockname()[1] == 0: raise OSError("not listening")
-            def icmp():
-                socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP).sendto(
-                    b"\\x08\\x00\\xf7\\xff\\x00\\x00\\x00\\x00", ("127.0.0.1", 0))
             attempt("mptcp", mptcp)
+            attempt("fast-open", lambda: fast_open(0))
+            attempt("mptcp-fast-open", lambda: fast_open(262))
             attempt("listen-unbound", listen_unbound)
-            attempt("icmp", icmp)
             """
         try home.write("project/routes.py", python)
         let control = results(try run(MCPUpstreamLaunch(
             server: "control", executable: "/usr/bin/env",
             arguments: ["python3", home.path + "/project/routes.py", String(open.port)],
             environment: ["PATH": "/usr/bin:/bin"])))
-        #expect(control["listen-unbound"] == "ok", "\(control)")
+        #expect(control["listen-unbound"] == "ok" && control["fast-open"] == "ok", "\(control)")
         let inside = results(try caged(home, "python3 ~/project/routes.py \(open.port)"))
-        #expect(inside == control, "a route is denied in the cage: update MCPLinuxCageGap and the document")
+        #expect(Set(inside.keys) == Set(control.keys))
+        for (route, outcome) in inside where outcome == "ok" {
+            #expect(control[route] == "ok", "\(route) is open in the cage and not outside it")
+        }
+        #expect(inside["listen-unbound"] == "ok", "\(inside)")
+        #expect(["mptcp", "fast-open", "mptcp-fast-open"].contains { inside[$0] == "ok" }, "\(inside)")
     }
 
     /// `hosts`: the one port the cage may connect to is the allowlist
@@ -567,6 +576,14 @@ struct MCPLinuxSandboxTests {
         #expect(FileManager.default.fileExists(atPath: home.path + "/.cache/rv-mcp") == false)
         #expect(MCPSandbox.enforced == false)
         #expect(MCPSandbox.unavailability.contains("cannot keep a server off the network"))
+        // Not a missing helper or an old kernel: nothing here says to fix one.
+        for support in [MCPLinuxCageSupport.unavailable(.helperMissing), .unavailable(.noLandlock)] {
+            guard case .failure(.sandbox(let reason)) = cage(home, "true", support: support, network: .refuse) else {
+                Issue.record("\(support) built a launch")
+                continue
+            }
+            #expect(reason.contains("on any kernel") && reason.contains("reinstall") == false, "\(reason)")
+        }
     }
 
     /// A loader variable in the server's environment would act in the
@@ -606,6 +623,9 @@ struct MCPLinuxSandboxTests {
         ["--confine", "4", "--", "/usr/bin/true"], ["--confine", "4", "--read"],
         ["--confine", "4", "--read", "relative", "--", "/usr/bin/true", "true"],
         ["--confine", "4", "--write", "/no/such/dir", "--", "/usr/bin/true", "true"],
+        ["--confine", "4", "--temp", "/no/such/dir", "--", "/usr/bin/true", "true"],
+        ["--confine", "4", "--temp", "relative", "--", "/usr/bin/true", "true"],
+        ["--confine", "4", "--temp", "--", "/usr/bin/true", "true"],
         ["--confine", "4", "--tcp", "0", "--", "/usr/bin/true", "true"],
         ["--confine", "4", "--tcp", "65536", "--", "/usr/bin/true", "true"],
         ["--confine", "4", "--tcp", "80x", "--", "/usr/bin/true", "true"],

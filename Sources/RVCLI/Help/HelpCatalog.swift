@@ -52,7 +52,7 @@ enum HelpCatalog {
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
-                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox, macOS only)"),
+                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),

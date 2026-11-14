@@ -22,7 +22,8 @@
  *
  * Third form, for an MCP server (Sources/RVIsolation/landlock_confine.c):
  *   rv-isolation-exec --confine FLOOR [--read PATH]... [--write PATH]...
- *                     [--tcp PORT]... -- EXECUTABLE ARGV0 [ARG...]
+ *                     [--temp PATH]... [--tcp PORT]...
+ *                     -- EXECUTABLE ARGV0 [ARG...]
  * closes inherited descriptors, sets NO_NEW_PRIVS, applies the Landlock
  * ruleset the request describes and execs. Anything that fails exits 125
  * with a line on stderr and does not exec.

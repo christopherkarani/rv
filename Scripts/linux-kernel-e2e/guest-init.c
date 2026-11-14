@@ -146,6 +146,29 @@ static int probe(int argc, char **argv) {
     if (strcmp(op, "signal") == 0) {
         return probe_exit(kill(atoi(argv[3]), 0) == 0);
     }
+    /* TCP by routes that pass neither connect() nor bind() on a TCP socket. */
+    if (strcmp(op, "mptcp") == 0 || strcmp(op, "tfo") == 0 || strcmp(op, "mptcp-tfo") == 0) {
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons((unsigned short)atoi(argv[3]));
+        fd = socket(AF_INET, SOCK_STREAM, strcmp(op, "tfo") == 0 ? 0 : IPPROTO_MPTCP);
+        if (fd < 0) {
+            return errno;
+        }
+        if (strcmp(op, "mptcp") == 0) {
+            return probe_exit(connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+        }
+        return probe_exit(sendto(fd, "x", 1, MSG_FASTOPEN, (struct sockaddr *)&address, sizeof(address)) == 1);
+    }
+    if (strcmp(op, "listen") == 0) {
+        struct sockaddr_in address;
+        socklen_t length = sizeof(address);
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        return probe_exit(fd >= 0 && listen(fd, 1) == 0
+            && getsockname(fd, (struct sockaddr *)&address, &length) == 0 && address.sin_port != 0);
+    }
     if (strcmp(op, "ioctl") == 0) {
         struct termios modes;
         fd = open(argv[3], O_RDWR);
@@ -537,6 +560,20 @@ static void confine_cases(long abi) {
     /* ioctl on a device the server opens: granted nowhere, /dev included. */
     status = confined("4", NULL, "ioctl", "/dev/null");
     check(status == (abi >= 5 ? EACCES : 0), "confine-device-ioctl-by-abi", "abi %ld exit %d", abi, status);
+    /* What no ABI closes, and why a network limit cannot be held: a socket
+     * never bound still listens, and at least one of MPTCP and TCP fast
+     * open reaches a listener with no port rule. Which one varies by
+     * kernel; each is printed. */
+    status = confined("4", NULL, "listen", "-");
+    check(status == 0, "confine-listen-without-bind-open", "abi %ld exit %d", abi, status);
+    {
+        int mptcp = confined("4", NULL, "mptcp", port_a);
+        int tfo = confined("4", NULL, "tfo", port_a);
+        int both = confined("4", NULL, "mptcp-tfo", port_a);
+        printf("rv-kernel-e2e: INFO tcp-routes abi=%ld mptcp=%d tfo=%d mptcp-tfo=%d\n", abi, mptcp, tfo, both);
+        check(mptcp == 0 || tfo == 0 || both == 0, "confine-tcp-route-past-the-rules-open",
+            "abi %ld mptcp %d tfo %d mptcp-tfo %d", abi, mptcp, tfo, both);
+    }
     status = confined("4", NULL, "udp", "9");
     check(status == (abi >= 10 ? EACCES : 0), "confine-udp-by-abi", "abi %ld exit %d", abi, status);
 }
