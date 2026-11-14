@@ -60,6 +60,12 @@ public struct EgressHostPolicy: Sendable, Equatable {
     /// Single admitted port. Allowlist mode only; ignored in
     /// `.publicHTTPS`, which admits the web ports (80/443).
     public private(set) var allowedPort: Int
+    /// Owner-set private networks per allowlisted host (canonical name).
+    /// A host listed here may reach non-public addresses inside its list;
+    /// every other host stays public-unicast only. Allowlist hosts only:
+    /// keys outside `allowedHosts` drop, and two spellings of one host
+    /// with different lists drop that host (narrow, never the union).
+    public private(set) var allowedIPs: [String: EgressAllowedIPs]
     public private(set) var mode: ExternalMode
     /// When false, loopback CONNECT and absolute-URI targets are denied.
     /// A cage that can dial only the proxy (MCP `sandbox.hosts`) must set
@@ -69,11 +75,26 @@ public struct EgressHostPolicy: Sendable, Equatable {
     public init(
         allowedHosts: Set<String>,
         allowedPort: Int = httpsPort,
+        allowedIPs: [String: EgressAllowedIPs] = [:],
         mode: ExternalMode = .allowlist,
         relaysLoopback: Bool = true
     ) {
-        self.allowedHosts = Set(allowedHosts.compactMap(canonicalEgressDNSName))
+        let hosts = Set(allowedHosts.compactMap(canonicalEgressDNSName))
+        self.allowedHosts = hosts
         self.allowedPort = allowedPort
+        var ranges: [String: EgressAllowedIPs] = [:]
+        var ambiguous = Set<String>()
+        for (raw, list) in allowedIPs {
+            guard let name = canonicalEgressDNSName(raw), hosts.contains(name) else { continue }
+            if let existing = ranges[name], existing != list {
+                ambiguous.insert(name)
+            }
+            ranges[name] = list
+        }
+        for name in ambiguous {
+            ranges[name] = nil
+        }
+        self.allowedIPs = mode == .allowlist ? ranges : [:]
         self.mode = mode
         self.relaysLoopback = relaysLoopback
     }
@@ -88,6 +109,13 @@ public struct EgressHostPolicy: Sendable, Equatable {
             guard port == Self.httpsPort || port == Self.httpPort else { return false }
             return canonicalEgressDNSName(host) != nil
         }
+    }
+
+    /// The owner-set private networks for `host`, or nil when the host
+    /// may reach public unicast only.
+    public func allowedIPs(forHost host: String) -> EgressAllowedIPs? {
+        guard let name = canonicalEgressDNSName(host) else { return nil }
+        return allowedIPs[name]
     }
 
     /// Loopback CONNECT targets on any port. Workspace cages can already
