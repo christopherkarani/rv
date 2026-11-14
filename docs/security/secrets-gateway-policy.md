@@ -400,7 +400,10 @@ itself allows, as tested on macOS 27: `/bin/ps eww -p $PPID` fails with
 "Operation not permitted" (`ps` is setuid), and `sysctl` `KERN_PROCARGS2`
 of its parent answers with the arguments but no environment (a same-user,
 non-root caller sees none, caged or not); the live test asserts the
-second. Other ways to read rv's memory (`task_for_pid` and the like) were
+second for one parent: the test process, which runs serve's runtime
+in-process and was started with `HOME` set, so `HOME=` would come back if
+any environment did. It does not run `rv mcp serve` as the parent, and
+the uncaged case was checked by hand, not by a test. Other ways to read rv's memory (`task_for_pid` and the like) were
 not tested; the refusal does not depend on them.
 
 How it starts the server:
