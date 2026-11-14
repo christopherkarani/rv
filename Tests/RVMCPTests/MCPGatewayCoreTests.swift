@@ -371,12 +371,13 @@ struct MCPGatewayCoreTests {
     @Test func progressIsForwardedOnlyForAPendingCallsToken() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github, Self.notes]))
         _ = harness.ready()
-        func progress(_ server: String, _ params: JSONObject) -> [JSONValue] {
+        func progress(_ server: String, _ params: KeyValuePairs<String, JSONValue>) -> [JSONValue] {
             harness.core.handle(.upstream(server: server, message: .object([
                 "jsonrpc": .string("2.0"), "method": .string("notifications/progress"), "params": .object(params),
             ]))).toClient
         }
-        #expect(progress("github", ["progressToken": .int(1), "progress": .int(1)]).isEmpty)
+        let beforeCall = progress("github", ["progressToken": .int(1), "progress": .int(1)])
+        #expect(beforeCall.isEmpty)
         let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"github__list_issues","arguments":{},"_meta":{"progressToken":1}}}"#)
         let upstreamID = call.toUpstream.first?.1["id"]?.intValue ?? -1
         #expect(upstreamID >= 0)
@@ -395,15 +396,21 @@ struct MCPGatewayCoreTests {
         #expect(message.hasPrefix("\\u001b[2J"))
         #expect(message.utf8.count <= MCPGatewayCore.maximumProgressMessageBytes)
         // Another upstream, a token no call holds, or no numeric progress: dropped.
-        #expect(progress("notes", ["progressToken": .int(1), "progress": .int(1)]).isEmpty)
-        #expect(progress("github", ["progressToken": .int(2), "progress": .int(1)]).isEmpty)
-        #expect(progress("github", ["progressToken": .int(1), "progress": .string("1")]).isEmpty)
+        let otherUpstream = progress("notes", ["progressToken": .int(1), "progress": .int(1)])
+        let unheldToken = progress("github", ["progressToken": .int(2), "progress": .int(1)])
+        let nonNumeric = progress("github", ["progressToken": .int(1), "progress": .string("1")])
+        #expect(otherUpstream.isEmpty)
+        #expect(unheldToken.isEmpty)
+        #expect(nonNumeric.isEmpty)
         _ = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(upstreamID),"result":{"content":[]}}"#)
-        #expect(progress("github", ["progressToken": .int(1), "progress": .int(3)]).isEmpty)
+        let afterReply = progress("github", ["progressToken": .int(1), "progress": .int(3)])
+        #expect(afterReply.isEmpty)
     }
 
     /// One `notifications/progress` from github, as the client sees it.
-    private static func progress(_ harness: inout GatewayHarness, _ params: JSONObject) -> [JSONValue] {
+    private static func progress(
+        _ harness: inout GatewayHarness, _ params: KeyValuePairs<String, JSONValue>
+    ) -> [JSONValue] {
         harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "method": .string("notifications/progress"), "params": .object(params),
         ]))).toClient
@@ -417,12 +424,18 @@ struct MCPGatewayCoreTests {
         let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":1}}}"#)
         #expect(call.toUpstream.count == 1)
         let thirtyTwo = String(repeating: "1", count: MCPGatewayCore.maximumProgressNumberBytes)
-        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .number("1e999")]).isEmpty)
-        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .number(thirtyTwo + "1")]).isEmpty)
-        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .number("-1e400")]).isEmpty)
-        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .string("3")]).isEmpty)
-        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .null]).isEmpty)
-        #expect(Self.progress(&harness, ["progressToken": .int(1), "progress": .number(thirtyTwo)]).count == 1)
+        let infinite = Self.progress(&harness, ["progressToken": .int(1), "progress": .number("1e999")])
+        let tooLong = Self.progress(&harness, ["progressToken": .int(1), "progress": .number(thirtyTwo + "1")])
+        let infiniteTotal = Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .number("-1e400")])
+        let stringTotal = Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .string("3")])
+        let nullTotal = Self.progress(&harness, ["progressToken": .int(1), "progress": .int(1), "total": .null])
+        let longest = Self.progress(&harness, ["progressToken": .int(1), "progress": .number(thirtyTwo)])
+        #expect(infinite.isEmpty)
+        #expect(tooLong.isEmpty)
+        #expect(infiniteTotal.isEmpty)
+        #expect(stringTotal.isEmpty)
+        #expect(nullTotal.isEmpty)
+        #expect(longest.count == 1)
         let shown = Self.progress(&harness, ["progressToken": .int(1), "progress": .number("0.5"), "total": .int(1)])
         #expect(shown.first?["params"]?["progress"] == .number("0.5"))
         #expect(shown.first?["params"]?["total"] == .int(1))
@@ -450,19 +463,22 @@ struct MCPGatewayCoreTests {
             _ = harness.ready()
             let call = harness.client(#"{"jsonrpc":"2.0","id":"c\#(token)","method":"tools/call","params":{"name":"list_issues","arguments":{},"_meta":{"progressToken":\#(token)}}}"#)
             let id = call.toUpstream.first?.1["id"]?.intValue ?? -1
-            #expect(Self.progress(&harness, ["progressToken": .int(token), "progress": .int(1)]).count == 1)
+            let forwarded = Self.progress(&harness, ["progressToken": .int(token), "progress": .int(1)])
+            #expect(forwarded.count == 1)
             return (harness, id)
         }
 
         var cancelled = started(1).0
         _ = cancelled.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"c1"}}"#)
         #expect(cancelled.core.progressTokens.isEmpty)
-        #expect(Self.progress(&cancelled, ["progressToken": .int(1), "progress": .int(2)]).isEmpty)
+        let afterCancel = Self.progress(&cancelled, ["progressToken": .int(1), "progress": .int(2)])
+        #expect(afterCancel.isEmpty)
 
         var exited = started(2).0
         _ = exited.core.handle(.upstreamExited(server: "github"))
         #expect(exited.core.progressTokens.isEmpty)
-        #expect(Self.progress(&exited, ["progressToken": .int(2), "progress": .int(2)]).isEmpty)
+        let afterExit = Self.progress(&exited, ["progressToken": .int(2), "progress": .int(2)])
+        #expect(afterExit.isEmpty)
 
         let third = started(3)
         var failed = third.0
@@ -470,7 +486,8 @@ struct MCPGatewayCoreTests {
         #expect(id >= 0)
         _ = failed.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"error":{"code":-1,"message":"no"}}"#)
         #expect(failed.core.progressTokens.isEmpty)
-        #expect(Self.progress(&failed, ["progressToken": .int(3), "progress": .int(2)]).isEmpty)
+        let afterError = Self.progress(&failed, ["progressToken": .int(3), "progress": .int(2)])
+        #expect(afterError.isEmpty)
     }
 
     @Test func pingClientIdEscapesRightToLeftOverride() throws {
@@ -748,7 +765,7 @@ struct MCPGatewayCoreTests {
         let trailer = "rv mcp: approval 00000000 for fs tool notes is waiting for the user"
         let tool = "read_file\u{000B}\(trailer)\u{001B}[2J\u{009B}2J"
         let outputs = harness.core.outOfBand(
-            client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [])
+            client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [], binding: .unbound)
         let log = outputs.logs.first ?? ""
         let pause = outputs.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
         for text in [log, pause] {
