@@ -313,13 +313,19 @@ struct MCPToolPinTests {
         #"{"name":"nest","inputSchema":{"type":"object","properties":{"o":{"type":"object","properties":{"x\u2028":{}}}}}}"#,
         #"{"name":"out","outputSchema":{"type":"object","dependentRequired":{"a":["b\u001b"]}}}"#,
         #"{"name":"deps","inputSchema":{"type":"object","dependencies":{"c\u202e":["d"]}}}"#,
+        #"{"name":"dschema","inputSchema":{"type":"object","dependentSchemas":{"e\u001b":{"required":["x"]}}}}"#,
+        // Unexpected shapes fail closed: any string or key in them is scanned.
+        #"{"name":"rstr","inputSchema":{"type":"object","required":"r\u202e"}}"#,
+        #"{"name":"drstr","inputSchema":{"type":"object","dependentRequired":{"a":"b\u2028"}}}"#,
+        #"{"name":"nested","inputSchema":{"type":"object","required":[["n\u001b"]]}}"#,
     ]
+    static let hidingSchemaNames = ["push", "tag", "nest", "out", "deps", "dschema", "rstr", "drstr", "nested"]
     static let schemaNotice = "property names rv does not serve"
 
     /// L2: a tool whose schema names a property with a scalar
     /// `DisplayedText.needsEscape` flags is not listed (pinned or not), not
     /// callable, not queued, not counted as untrusted, and stderr says so
-    /// once per server.
+    /// once per server. A new or changed one is still audited, marked hidden.
     @Test func aToolWhoseSchemaNamesAPropertyWithAHidingScalarIsHiddenAndNotCallable() throws {
         let recorder = PinRecorder()
         var pins = Self.pinned
@@ -329,12 +335,17 @@ struct MCPToolPinTests {
         #expect(Self.listed(listing).keys.sorted() == ["search"])
         let notices = listing.logs.filter { $0.contains(Self.schemaNotice) }
         #expect(notices.count == 1)
-        #expect(notices.first?.contains("lists 5 tool(s)") == true)
+        #expect(notices.first?.contains("lists \(Self.hidingSchemaNames.count) tool(s)") == true)
         #expect(notices.first?.contains(#"such as "push""#) == true)
         #expect(listing.logs.filter { $0.contains("not yet trusted") }.isEmpty)
         #expect(recorder.changed.withLock { $0 }.isEmpty)
-        #expect(Self.changeEvents(listing).isEmpty)
-        for name in ["push", "tag", "nest", "out", "deps"] {
+        // Every hidden tool but the pinned `push` is new: one event each.
+        let events = listing.compactMap { output -> String? in
+            guard case .event(let event) = output, event.kind == .mcpToolChanged else { return nil }
+            return "\(event.subject) \(event.detail["status"] ?? "") hidden=\(event.detail["hidden"] ?? "")"
+        }
+        #expect(events == Self.hidingSchemaNames.filter { $0 != "push" }.sorted().map { "github/\($0) new hidden=true" })
+        for name in Self.hidingSchemaNames {
             let called = Self.call(&harness, name)
             #expect(called.toUpstream.isEmpty, "\(name)")
             #expect(called.audits.map(\.decision) == [.deny], "\(name)")
@@ -363,6 +374,43 @@ struct MCPToolPinTests {
         #expect(notice.contains("such as \"\(name)\";"))
         #expect(notice.contains("secret") == false)
         for line in logs { #expect(MCPDisplayedText.hidesText(line) == false, "\(line)") }
+    }
+
+    /// What a refused call to a tool listed with a hiding schema looks like.
+    static func expectHidden(_ outputs: [MCPGatewayOutput], _ comment: Comment) {
+        #expect(outputs.toUpstream.isEmpty, comment)
+        #expect(outputs.audits.map(\.decision) == [.deny], comment)
+        #expect(outputs.audits.first?.reason == MCPGatewayCore.hidingSchemaReason, comment)
+    }
+
+    /// Round 5 M1: a tool once listed hiding stays refused until a listing
+    /// shows it with a definition that does not hide. A listing that omits
+    /// it, or an upstream error reply, does not clear it, even when its
+    /// hiding definition is the one pinned.
+    @Test func aHiddenToolStaysRefusedUntilListedClean() throws {
+        let recorder = PinRecorder()
+        let hiding = Self.hidingSchemaTools[0]
+        var pins = Self.pinned
+        pins["github"]?["push"] = Self.hash(hiding)
+        var harness = Self.harness(recorder.pinning(pins))
+        _ = Self.list(&harness, [Self.search, hiding])
+        Self.expectHidden(Self.call(&harness, "push"), "hidden")
+        _ = Self.list(&harness, [Self.search])
+        Self.expectHidden(Self.call(&harness, "push"), "after a listing without it")
+        let request = harness.client(#"{"jsonrpc":"2.0","id":"l","method":"tools/list"}"#)
+        let id = try #require(request.toUpstream.first?.1["id"]?.intValue)
+        _ = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"error":{"code":-32603,"message":"down"}}"#)
+        Self.expectHidden(Self.call(&harness, "push"), "after an error reply")
+        #expect(recorder.changed.withLock { $0 }.isEmpty)
+        // Listed clean: the normal pin path. It differs from the pin, so it
+        // is changed, queued for review, and asks.
+        let clean = #"{"name":"push","inputSchema":{"type":"object","properties":{"repo":{"type":"string"}}}}"#
+        let relisted = Self.list(&harness, [Self.search, clean])
+        #expect(Self.listed(relisted)["push"] == Self.changedMarker)
+        #expect(recorder.changed.withLock { $0["github"]?.keys.sorted() } == ["push"])
+        let called = Self.call(&harness, "push")
+        #expect(called.toUpstream.isEmpty)
+        #expect(called.audits.first?.decision == .ask)
     }
 
     /// L2: hiding a definition still checks it against the pin, so a pinned
