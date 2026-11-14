@@ -60,7 +60,8 @@ private final class Shared<Value: Sendable>: Sendable {
 
 /// Signal guards that install nothing: the test process keeps its own
 /// dispositions, so children other suites spawn meanwhile inherit none of
-/// rv's ignored signals. Tests drive forwarding with `deliver`.
+/// rv's ignored signals. Tests drive forwarding with `deliver`; real guards
+/// and real signals run in `rv-run-probe` (`SecretRunProbeTests`).
 private let detachedSignals: @Sendable () -> SecretRunSignals = { SecretRunSignals(detached: []) }
 
 private func context(
@@ -602,76 +603,6 @@ struct SecretRunLaunchTests {
         finished.set(true)
         #expect(result == .success(4 << 8))
     }
-
-    /// The one test that installs real dispositions, kept to microseconds
-    /// (no child runs meanwhile): every guard shares one installation, which
-    /// the last one out restores, whichever order they leave in. A signal is
-    /// fanned out to every guard; SIGCHLD is default meanwhile so nothing
-    /// reaps behind rv; signals rv inherited ignored are reported, among
-    /// them ones rv never touches.
-    @Test func signalGuardsShareOneInstallationThatTheLastOutRestores() throws {
-        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD, SIGWINCH]
-        let noted: sig_t = { _ in }
-        let previousChild = signal(SIGCHLD, noted)
-        let previousHangup = signal(SIGHUP, SIG_IGN)  // as under nohup
-        let previousWinch = signal(SIGWINCH, SIG_IGN)  // its default action is to ignore it anyway
-        defer {
-            _ = signal(SIGWINCH, previousWinch)
-            _ = signal(SIGHUP, previousHangup)
-            _ = signal(SIGCHLD, previousChild)
-        }
-        let before = watched.map(disposition)
-        for lastOut in [0, 1] {
-            let guards = [SecretRunSignals(), SecretRunSignals()]
-            #expect(SecretRunSignals.installed)
-            #expect(disposition(SIGINT) == ignoredDisposition)
-            #expect(disposition(SIGCHLD) == 0)
-            let inherited = guards[0].inheritedIgnored
-            #expect(inherited.isSuperset(of: [SIGHUP, SIGWINCH]))
-            if lastOut == 0 {
-                // The launch's spawn wiring, read from the kernel while the
-                // child is suspended in `bind` (it is refused, so it never
-                // runs): it keeps what rv inherited ignored and defaults what
-                // rv ignores itself. A third guard, so the two above stay armed.
-                let inspecting = SecretRunSignals()
-                var ignored: UInt32?
-                let launched = SecretRunProcess.launch(
-                    executable: "/usr/bin/true", arguments: ["true"], environment: [], terminal: nil,
-                    signals: inspecting, notice: { _ in }
-                ) { group in
-                    ignored = ignoredSignals(of: group.pgid.rawValue)
-                    return .failure(.bindFailed("inspected only"))
-                }
-                inspecting.restore()
-                #expect(launched == .failure(.bindFailed("inspected only")))
-                let mask = try #require(ignored)
-                for number in [SIGHUP, SIGWINCH] { #expect(ignores(mask, number)) }
-                for number in [SIGINT, SIGQUIT, SIGTERM, SIGTTOU] {
-                    #expect(ignores(mask, number) == inherited.contains(number))
-                }
-                // The production factory opens an installing guard (joining
-                // the open installation changes no disposition).
-                let production = SecretRunContext(
-                    configDirectory: URL(fileURLWithPath: "/nonexistent-rv-config"), resolver: fakeResolver,
-                    environment: [:], directory: "/", manageTerminal: false, notice: { _ in }
-                ).signals()
-                #expect(production.installs)
-                production.restore()
-            }
-            let delivered = SecretRunSignals.deliveredCount
-            _ = kill(getpid(), SIGINT)
-            let deadline = Date().addingTimeInterval(5)
-            while SecretRunSignals.deliveredCount == delivered, Date() < deadline { usleep(1_000) }
-            #expect(guards.allSatisfy { $0.interrupted == SIGINT })
-            guards[1 - lastOut].restore()
-            guards[1 - lastOut].restore()  // idempotent: it does not leave on the other's behalf
-            #expect(SecretRunSignals.installed)
-            #expect(disposition(SIGTERM) == ignoredDisposition)
-            guards[lastOut].restore()
-            #expect(SecretRunSignals.installed == false)
-            #expect(watched.map(disposition) == before)
-        }
-    }
     #endif
 
     /// Every refusal comes before the command could run: a marker it would
@@ -987,29 +918,6 @@ private func onceStopped(
         guard pid > 1, isStopped(pid), finished.value == false else { return }
         action(pid)
     }
-}
-
-/// The handler installed for `number`, as a number: 0 is `SIG_DFL`.
-private func disposition(_ number: Int32) -> Int {
-    var action = sigaction()
-    _ = sigaction(number, nil, &action)
-    return unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self)
-}
-
-private let ignoredDisposition = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
-
-/// The signals `pid` ignores, from the kernel (`kp_proc.p_sigignore`).
-private func ignoredSignals(of pid: pid_t) -> UInt32? {
-    var info = kinfo_proc()
-    var size = MemoryLayout<kinfo_proc>.stride
-    var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-    let length = u_int(name.count)
-    guard sysctl(&name, length, &info, &size, nil, 0) == 0, size > 0 else { return nil }
-    return info.kp_proc.p_sigignore
-}
-
-private func ignores(_ mask: UInt32, _ number: Int32) -> Bool {
-    mask & (UInt32(1) << UInt32(number - 1)) != 0
 }
 
 /// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`).

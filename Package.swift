@@ -56,6 +56,7 @@ let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-cla
 let terminalProbeProducts: [Product] = [
     .executable(name: "rv-terminal-probe", targets: ["RVTerminalProbe"]),
     .executable(name: "rv-pty-claim", targets: ["rv-pty-claim"]),
+    .executable(name: "rv-run-probe", targets: ["rv-run-probe"]),
 ]
 let terminalProbeTargets: [Target] = [
     .executableTarget(
@@ -64,6 +65,8 @@ let terminalProbeTargets: [Target] = [
         path: "Sources/rv-terminal-probe"
     ),
     .executableTarget(name: "rv-pty-claim"),
+    // `rv run`'s real signal guard, out of the test process.
+    .executableTarget(name: "rv-run-probe", dependencies: ["RVIsolation"]),
 ]
 #else
 let terminalProbeProducts: [Product] = []

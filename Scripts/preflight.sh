@@ -376,7 +376,7 @@ check_no_main_in_library() {
   local matches
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
     | grep -v 'Sources/rv-mcp-custodian/' || true)
   local count
@@ -392,7 +392,7 @@ check_no_main_in_library() {
   local amatches
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' | grep -v 'Sources/rv-run-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
     | grep -v 'Sources/rv-mcp-custodian/' || true)
   local acount

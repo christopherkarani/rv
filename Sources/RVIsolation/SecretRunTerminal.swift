@@ -97,8 +97,9 @@ final class SecretRunTerminal: SecretRunTerminalControl {
 /// Dispositions are process-wide, so every guard shares one installation:
 /// the first in sets them, the last out restores what was there before.
 /// A detached guard (tests) installs nothing and forwards only what
-/// `deliver` hands it.
-final class SecretRunSignals: Sendable {
+/// `deliver` hands it. Package-visible for `rv-run-probe`, which checks
+/// the real installation outside the test process.
+package final class SecretRunSignals: Sendable {
     static let forwarded = [SIGINT, SIGQUIT, SIGTERM, SIGHUP]
     /// Signals rv resets for the command but never changes itself; with
     /// `forwarded` and `SIGTTOU`, every signal the command gets the default for.
@@ -108,7 +109,7 @@ final class SecretRunSignals: Sendable {
     /// nil while installed: the table knows what rv inherited ignored.
     private let detachedIgnored: Set<Int32>?
 
-    init() {
+    package init() {
         detachedIgnored = nil
         SecretRunSignalTable.shared.join(forwarding)
     }
@@ -120,33 +121,30 @@ final class SecretRunSignals: Sendable {
 
     deinit { restore() }
 
-    /// Whether this guard changed the process's dispositions.
-    var installs: Bool { detachedIgnored == nil }
-
     func target(_ group: pid_t) -> Int32? { forwarding.target(group) }
 
     /// A signal that arrived before any group was targeted.
-    var interrupted: Int32? { forwarding.interrupted }
+    package var interrupted: Int32? { forwarding.interrupted }
 
     /// Signals rv had ignored before any guard, among those rv resets for
     /// the command: the command keeps ignoring them (`nohup`, an
     /// asynchronous list in a script, a parent that ignores SIGPIPE).
-    var inheritedIgnored: Set<Int32> { detachedIgnored ?? SecretRunSignalTable.shared.inheritedIgnored }
+    package var inheritedIgnored: Set<Int32> { detachedIgnored ?? SecretRunSignalTable.shared.inheritedIgnored }
 
     /// As if rv had received `number`.
     func deliver(_ number: Int32) { forwarding.deliver(number) }
 
     /// Whether any guard is installed now.
-    static var installed: Bool { SecretRunSignalTable.shared.installed }
+    package static var installed: Bool { SecretRunSignalTable.shared.installed }
 
     /// How many received signals have been passed to every guard so far.
-    static var deliveredCount: Int { SecretRunSignalTable.shared.deliveredCount }
+    package static var deliveredCount: Int { SecretRunSignalTable.shared.deliveredCount }
 
     /// Before the leader is reaped.
     func release() { forwarding.release() }
 
     /// Leaves the shared installation; the last one out restores. Idempotent.
-    func restore() {
+    package func restore() {
         forwarding.release()
         if detachedIgnored == nil { SecretRunSignalTable.shared.leave(forwarding) }
     }
@@ -305,7 +303,6 @@ struct SecretRunLoopback {
 final class SecretRunSignals: Sendable {
     init() {}
     init(detached _: Set<Int32>) {}
-    var installs: Bool { false }
     func target(_: pid_t) -> Int32? { nil }
     var interrupted: Int32? { nil }
     var inheritedIgnored: Set<Int32> { [] }
