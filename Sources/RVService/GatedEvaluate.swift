@@ -1010,7 +1010,10 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// The shell: applies one evaluation's effects in order. Missing home
-    /// has no config directory, so nothing is written. The hook deadline
+    /// has no config directory, so nothing is written. Every door that
+    /// applies (and so can emit an override row) runs in rvd, which does
+    /// not start without a home (`RVDLaunch.requireHome`); the CLI's
+    /// in-process route only peeks. The hook deadline
     /// is applied by the decision (no `.denialRow` is emitted past it);
     /// the exemption audit and judge log are not deadline-gated.
     /// Returns false when a `command.override` row did not land; the shell

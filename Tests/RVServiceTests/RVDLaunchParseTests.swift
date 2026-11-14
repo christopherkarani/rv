@@ -43,6 +43,15 @@ struct RVDLaunchParseTests {
         }
     }
 
+    /// G3: rvd does not serve without a home, on Linux too, where the
+    /// socket path never needed one.
+    @Test func launchRequiresAHome() throws {
+        #expect(throws: RVDLaunchError.homeRequired) {
+            try RVDLaunch.requireHome(nil)
+        }
+        try RVDLaunch.requireHome("/home/owner")
+    }
+
 #if os(Linux)
     @Test func linuxSocketFlag_doesNotThrowAndCanCombineWithIdle() throws {
         let flagged = try RVDLaunch.parse(
