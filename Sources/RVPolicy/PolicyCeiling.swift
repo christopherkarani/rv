@@ -21,6 +21,8 @@ public enum PolicyCeilingError: Error, Sendable, Equatable {
     case indeterminate(String)
     /// An egress approval names a host the ceiling does not allow.
     case egressExceeds(PolicyCeilingEgressWitness)
+    /// `ceiling set` could not save. The reason says what is on disk.
+    case writeFailed(String)
 
     /// One line for refusal messages. Untrusted text is display-escaped.
     public var refusal: String {
@@ -33,6 +35,8 @@ public enum PolicyCeilingError: Error, Sendable, Equatable {
             return "containment in the policy ceiling is indeterminate: \(DisplayedText.field(reason))"
         case .egressExceeds(let witness):
             return "\(witness.command) exceeds the policy ceiling (egress.hosts does not allow \(DisplayedText.field(witness.host)))"
+        case .writeFailed(let reason):
+            return "could not save the policy ceiling: \(reason)"
         }
     }
 }
@@ -213,6 +217,37 @@ public enum PolicyCeilingTOML {
     }
 }
 
+/// What replacing one ceiling with another loosens, shown to the owner
+/// before they confirm. Rules match by predicate, like the layer merge.
+/// Loosening is the owner's call: this informs, it never refuses.
+public enum PolicyCeilingDiff {
+    public static func loosenings(from old: PolicyCeiling, to new: PolicyCeiling) -> [String] {
+        var lines: [String] = []
+        for rule in old.rules {
+            let predicate = DisplayedText.field(PolicyRevisionIdentity.canonicalPredicate(rule.predicate))
+            let id = DisplayedText.field(rule.id.rawValue)
+            guard let kept = new.rules.first(where: { $0.predicate == rule.predicate }) else {
+                lines.append("drops \(rule.verdict.rawValue) rule \(id) (\(predicate))")
+                continue
+            }
+            if PolicyDiffRisk.restrictionRank(kept.verdict) < PolicyDiffRisk.restrictionRank(rule.verdict) {
+                lines.append("downgrades rule \(id) (\(predicate)) from \(rule.verdict.rawValue) to \(kept.verdict.rawValue)")
+            }
+        }
+        switch (old.egressHosts, new.egressHosts) {
+        case (.some, nil):
+            lines.append("removes egress.hosts: egress approvals become unbounded")
+        case (let before?, let after?):
+            for host in after where before.contains(host) == false {
+                lines.append("adds egress host \(DisplayedText.field(host))")
+            }
+        case (nil, _):
+            break
+        }
+        return lines
+    }
+}
+
 /// Load and save of `ceiling.toml` in one config directory.
 public struct PolicyCeilingStore: Sendable {
     public var configDirectory: URL
@@ -234,7 +269,15 @@ public struct PolicyCeilingStore: Sendable {
     /// dangling or not, a FIFO, a directory, EACCES, an oversized or
     /// unparseable file) throws `invalidFile`: callers refuse, never skip.
     public func load() throws -> PolicyCeiling? {
-        let fd = open(fileURL.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard let text = try Self.readText(at: fileURL, followSymlinks: false) else { return nil }
+        return try PolicyCeilingTOML.parse(text)
+    }
+
+    /// A UTF-8 regular file of at most `PolicyCeiling.maximumBytes`, read
+    /// without blocking on a FIFO and without reading past the cap. Nil
+    /// only for ENOENT; anything else throws `invalidFile`.
+    public static func readText(at url: URL, followSymlinks: Bool) throws -> String? {
+        let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | (followSymlinks ? 0 : O_NOFOLLOW))
         guard fd >= 0 else {
             if errno == ENOENT { return nil }
             throw PolicyCeilingError.invalidFile
@@ -259,26 +302,44 @@ public struct PolicyCeilingStore: Sendable {
         guard let text = String(validating: bytes, as: UTF8.self) else {
             throw PolicyCeilingError.invalidFile
         }
-        return try PolicyCeilingTOML.parse(text)
+        return text
     }
 
-    /// Writes `ceiling.toml` (created 0600, then renamed over the old one)
-    /// and appends one line to `ceiling-revisions.jsonl`. Callers hold the
-    /// machine policy locks and have confirmed the owner:
-    /// `PolicyWorkspace.replaceCeiling` is the one caller.
+    /// Appends one line to `ceiling-revisions.jsonl`, then renames a fresh
+    /// 0600 `ceiling.toml` into place, so every ceiling that goes live has
+    /// a revision line. Callers hold the machine policy locks and have
+    /// confirmed the owner: `PolicyWorkspace.replaceCeiling` is the one
+    /// caller. Every failure throws `writeFailed`; a failed rename after
+    /// the append leaves one line for a ceiling that never took effect.
     func commitLocked(_ ceiling: PolicyCeiling, recordedAt: Date) throws {
-        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: configDirectory.path)
         let text = PolicyCeilingTOML.render(ceiling)
-        let line = try Self.revisionLine(text: text, recordedAt: recordedAt)
+        guard text.utf8.count <= PolicyCeiling.maximumBytes else {
+            throw PolicyCeilingError.writeFailed("ceiling.toml would be larger than 256 KiB; nothing was written")
+        }
+        let line: String
+        do {
+            try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: configDirectory.path)
+            line = try Self.revisionLine(text: text, recordedAt: recordedAt)
+        } catch {
+            throw PolicyCeilingError.writeFailed("cannot prepare the config directory; nothing was written")
+        }
         let temp = fileURL.appendingPathExtension("tmp")
         unlink(temp.path)
-        try Self.writeOwnerOnly(Array(text.utf8), to: temp, flags: O_CREAT | O_EXCL)
+        guard Self.writeOwnerOnly(Array(text.utf8), to: temp, flags: O_CREAT | O_EXCL) else {
+            unlink(temp.path)
+            throw PolicyCeilingError.writeFailed("cannot write ceiling.toml; nothing was written")
+        }
+        guard Self.writeOwnerOnly(Array(line.utf8), to: revisionsURL, flags: O_CREAT | O_APPEND) else {
+            unlink(temp.path)
+            throw PolicyCeilingError.writeFailed(
+                "cannot append to ceiling-revisions.jsonl; ceiling.toml is unchanged")
+        }
         guard rename(temp.path, fileURL.path) == 0 else {
             unlink(temp.path)
-            throw PolicyCeilingError.invalidFile
+            throw PolicyCeilingError.writeFailed(
+                "cannot replace ceiling.toml; ceiling-revisions.jsonl has a line for a ceiling that never took effect")
         }
-        try Self.writeOwnerOnly(Array(line.utf8), to: revisionsURL, flags: O_CREAT | O_APPEND)
     }
 
     /// `{"recorded_at_ms":…,"sha256":"…","toml":"…"}` plus a newline.
@@ -302,23 +363,23 @@ public struct PolicyCeilingStore: Sendable {
         return json + "\n"
     }
 
-    /// Opens with `O_NOFOLLOW` and mode 0600, so the file is never readable
-    /// by others, not even between create and chmod.
-    private static func writeOwnerOnly(_ bytes: [UInt8], to url: URL, flags: Int32) throws {
-        let fd = open(url.path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC | flags, 0o600)
-        guard fd >= 0 else { throw PolicyCeilingError.invalidFile }
+    /// Opens with `O_NOFOLLOW` and mode 0600 and requires a regular file,
+    /// so the file is never readable by others and never a link target.
+    private static func writeOwnerOnly(_ bytes: [UInt8], to url: URL, flags: Int32) -> Bool {
+        let fd = open(url.path, O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC | flags, 0o600)
+        guard fd >= 0 else { return false }
         defer { close(fd) }
         var info = stat()
         guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, fchmod(fd, 0o600) == 0 else {
-            throw PolicyCeilingError.invalidFile
+            return false
         }
         var offset = 0
         while offset < bytes.count {
             let written = bytes[offset...].withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
             if written < 0, errno == EINTR { continue }
-            guard written > 0 else { throw PolicyCeilingError.invalidFile }
+            guard written > 0 else { return false }
             offset += written
         }
-        guard fsync(fd) == 0 else { throw PolicyCeilingError.invalidFile }
+        return fsync(fd) == 0
     }
 }

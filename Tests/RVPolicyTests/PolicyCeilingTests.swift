@@ -287,6 +287,106 @@ struct PolicyCeilingTests {
         }
     }
 
+    @Test func replaceCeiling_appendFailure_leavesCeilingUnchanged() throws {
+        try withPolicyDirs { workspace in
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            let first = try PolicyCeilingTOML.parse(forcePushCeiling)
+            try workspace.session.replaceCeiling(first)
+            try FileManager.default.removeItem(at: store.revisionsURL)
+            // A directory, then a symlink, where the revision log goes.
+            try FileManager.default.createDirectory(at: store.revisionsURL, withIntermediateDirectories: false)
+            try expectWriteFailed(containing: "ceiling.toml is unchanged") {
+                try workspace.session.replaceCeiling(PolicyCeiling())
+            }
+            #expect(try store.load() == first)
+            try FileManager.default.removeItem(at: store.revisionsURL)
+            let elsewhere = workspace.config.appendingPathComponent("elsewhere.jsonl")
+            try FileManager.default.createSymbolicLink(at: store.revisionsURL, withDestinationURL: elsewhere)
+            try expectWriteFailed(containing: "ceiling.toml is unchanged") {
+                try workspace.session.replaceCeiling(PolicyCeiling())
+            }
+            #expect(try store.load() == first)
+            #expect(FileManager.default.fileExists(atPath: elsewhere.path) == false)
+            #expect(FileManager.default.fileExists(atPath: store.fileURL.appendingPathExtension("tmp").path) == false)
+        }
+    }
+
+    @Test func replaceCeiling_renameFailureAfterAppend_saysTheLogLineNeverTookEffect() throws {
+        try withPolicyDirs { workspace in
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            // A non-empty directory at ceiling.toml: the rename cannot replace it.
+            try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: false)
+            try "x".write(to: store.fileURL.appendingPathComponent("keep"), atomically: true, encoding: .utf8)
+            try expectWriteFailed(containing: "never took effect") {
+                try workspace.session.replaceCeiling(try PolicyCeilingTOML.parse(forcePushCeiling))
+            }
+            let lines = try String(contentsOf: store.revisionsURL, encoding: .utf8).split(separator: "\n")
+            #expect(lines.count == 1)
+            #expect(FileManager.default.fileExists(atPath: store.fileURL.appendingPathExtension("tmp").path) == false)
+        }
+    }
+
+    @Test func replaceCeiling_refusesAboveTheReadCap() throws {
+        try withPolicyDirs { workspace in
+            let huge = PolicyCeiling(rules: (0..<4000).map { index in
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "no-push-\(index)"),
+                    verdict: .deny,
+                    predicate: .gitPush(force: .any, branch: "branch-number-\(index)")
+                )
+            })
+            #expect(PolicyCeilingTOML.render(huge).utf8.count > PolicyCeiling.maximumBytes)
+            let store = PolicyCeilingStore(configDirectory: workspace.config)
+            // replaceCeiling would stop earlier (containment is indeterminate
+            // above 1024 rules); the size cap is the writer's own guard.
+            try expectWriteFailed(containing: "larger than 256 KiB") {
+                try store.commitLocked(huge, recordedAt: Date())
+            }
+            #expect(try store.load() == nil)
+            #expect(FileManager.default.fileExists(atPath: store.revisionsURL.path) == false)
+        }
+    }
+
+    // MARK: Loosening diff
+
+    @Test func diff_namesDroppedAndDowngradedRulesAndWidenedEgress() throws {
+        let old = try PolicyCeilingTOML.parse("""
+            schema_version = 1
+            egress.hosts = ["github.com"]
+
+            [[rule]]
+            id = "typed.git:no-force-push"
+            verdict = "deny"
+            predicate = "gitPush"
+            force = "force"
+
+            [[rule]]
+            id = "typed.git:no-hard-reset"
+            verdict = "deny"
+            predicate = "gitReset"
+            mode = "hard"
+            """)
+        let new = try PolicyCeilingTOML.parse("""
+            schema_version = 1
+            egress.hosts = ["github.com", "*.example.com"]
+
+            [[rule]]
+            id = "typed.git:ask-hard-reset"
+            verdict = "ask"
+            predicate = "gitReset"
+            mode = "hard"
+            """)
+        #expect(PolicyCeilingDiff.loosenings(from: old, to: new) == [
+            "drops deny rule typed.git:no-force-push (gitPush:force:-)",
+            "downgrades rule typed.git:no-hard-reset (gitReset:hard) from deny to ask",
+            "adds egress host *.example.com",
+        ])
+        #expect(PolicyCeilingDiff.loosenings(from: new, to: old) == [])
+        #expect(PolicyCeilingDiff.loosenings(from: old, to: PolicyCeiling(rules: old.rules)) == [
+            "removes egress.hosts: egress approvals become unbounded",
+        ])
+    }
+
     // MARK: Store load
 
     @Test func load_symlinkDirectoryFIFOAndOversize_areInvalid() throws {
@@ -359,6 +459,15 @@ struct PolicyCeilingTests {
         try FileManager.default.createDirectory(at: dirs.repo, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try body(dirs)
+    }
+
+    private func expectWriteFailed(containing text: String, _ body: () throws -> Void) throws {
+        do {
+            try body()
+            Issue.record("expected writeFailed")
+        } catch PolicyCeilingError.writeFailed(let reason) {
+            #expect(reason.contains(text), "\(reason)")
+        }
     }
 
     private func writeCeiling(_ text: String, _ dirs: Dirs) throws {
