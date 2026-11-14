@@ -498,15 +498,25 @@ struct SecretRunLaunchTests {
     /// (nothing is written between the spawn and the resume), and rv says
     /// why once it next can, after the command's stop.
     @Test(.timeLimit(.minutes(1)))
-    func aGroupSharedOnlyByTheLaunchIsToldAtTheNextHandOff() {
+    func aGroupSharedOnlyByTheLaunchIsToldAtTheNextHandOff() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ran = directory.appendingPathComponent("ran").path
         let terminal = RecordingTerminal()
         let notices = Notices()
         let bound = Shared<pid_t>(0)
+        // Whether the command had run and was stopped as each notice came.
+        let afterStop = Shared<[Bool]>([])
         let result = bounded(killing: bound) {
             SecretRunProcess.launch(
-                executable: "/bin/sh", arguments: ["sh", "-c", "kill -STOP $$; exit 5"],
+                executable: "/bin/sh",
+                arguments: ["sh", "-c", "touch \"$1/ran\"; kill -STOP $$; exit 5", "sh", directory.path],
                 environment: ["PATH=/usr/bin:/bin"], terminal: terminal, signals: SecretRunSignals(detached: []),
-                notice: notices.sink
+                notice: { line in
+                    let stopped = FileManager.default.fileExists(atPath: ran) && isStopped(bound.value)
+                    afterStop.set(afterStop.value + [stopped])
+                    notices.sink(line)
+                }
             ) { group in
                 bound.set(group.pgid.rawValue)
                 terminal.sharesGroup = true
@@ -516,6 +526,7 @@ struct SecretRunLaunchTests {
         #expect(result == .success(5 << 8))
         #expect(terminal.events == ["stopSelf"])
         #expect(notices.all == [SecretRunJobControl.heldBackNotice])
+        #expect(afterStop.value == [true])
     }
 
     /// rv started as an asynchronous list by a shell without job control
@@ -614,19 +625,44 @@ struct SecretRunLaunchTests {
     /// Without a terminal a stop is only waited through: a command another
     /// process stops and continues exits with its own code. Darwin's
     /// `waitid` reports the stop even when not asked for stops; it is never
-    /// taken for an exit (which killed the group).
+    /// taken for an exit (which killed the group). The stop is held for
+    /// 200 ms, so rv has seen it before the command is continued: that rv
+    /// has consumed a stop shows nowhere in the kernel's process info.
     @Test(.timeLimit(.minutes(1)))
     func aCommandStoppedWithoutATerminalIsWaitedThrough() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let finished = Shared(false)
-        onceStopped(markerIn: directory, unless: finished) { pid in _ = kill(pid, SIGCONT) }
+        onceStopped(markerIn: directory, unless: finished) { pid in continueStill(pid, after: 0.2) }
         let bound = Shared<pid_t>(0)
         let result = bounded(killing: bound) {
             launchShell(stopsAfterMarker + "exit 4", directory: directory.path, terminal: nil, bound: bound)
         }
         finished.set(true)
         #expect(result == .success(4 << 8))
+    }
+
+    /// rv blocks while a command without a terminal stays stopped, rather
+    /// than turning the same stop over and over: a second's stop costs
+    /// its supervising thread next to no CPU time.
+    @Test(.timeLimit(.minutes(1)))
+    func aLongStopWithoutATerminalCostsRvNoCPUTime() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let finished = Shared(false)
+        onceStopped(markerIn: directory, unless: finished) { pid in continueStill(pid, after: 1) }
+        let bound = Shared<pid_t>(0)
+        let spent = Shared<UInt64>(0)
+        let result = bounded(killing: bound) {
+            let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+            defer { spent.set(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start) }
+            return launchShell(stopsAfterMarker + "exit 4", directory: directory.path, terminal: nil, bound: bound)
+        }
+        finished.set(true)
+        #expect(result == .success(4 << 8))
+        // A loop on the stop spins for the whole second; the spawn and a
+        // few waits cost milliseconds.
+        #expect(spent.value < 250_000_000, "\(spent.value / 1_000_000) ms of CPU time")
     }
     #endif
 
@@ -951,6 +987,13 @@ private func onceStopped(
         guard pid > 1, isStopped(pid), finished.value == false else { return }
         action(pid)
     }
+}
+
+/// Continues `pid` once `seconds` have passed, if it is still stopped (rv
+/// killed its group otherwise, and the pid is no longer the command's).
+private func continueStill(_ pid: pid_t, after seconds: Double) {
+    usleep(useconds_t(seconds * 1_000_000))
+    if isStopped(pid) { _ = kill(pid, SIGCONT) }
 }
 
 /// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`).
