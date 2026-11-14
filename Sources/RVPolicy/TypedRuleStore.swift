@@ -546,15 +546,19 @@ public struct TypedRuleStore: Sendable {
     /// throws `logMissing`. Fresh state (no policy file, no logs) still
     /// lists empty without taking locks or minting anything.
     public func listMachineRevisions() throws -> [PolicyRevision] {
-        guard FileManager.default.fileExists(atPath: machineRevisionsURL.path)
+        guard machineHistoryMayExist else {
+            return []
+        }
+        return try lockedMachineSnapshot()
+    }
+
+    /// False only for a fresh config dir: no policy file and no log part.
+    private var machineHistoryMayExist: Bool {
+        FileManager.default.fileExists(atPath: machineRevisionsURL.path)
             || FileManager.default.fileExists(atPath: machineLogFileURL.path)
             || FileManager.default.fileExists(atPath: machineFileURL.path)
             || FileManager.default.fileExists(atPath: machineLogTipFileURL.path)
             || FileManager.default.fileExists(atPath: machineLogKeyFileURL.path)
-        else {
-            return []
-        }
-        return try lockedMachineSnapshot()
     }
 
     /// Revision log, oldest first. Missing log is empty and mints nothing.
@@ -667,20 +671,115 @@ public struct TypedRuleStore: Sendable {
         historyHead: PolicyDocument,
         incoming: PolicyDocument
     ) throws {
+        let reports = rollbackRiskReports(live: live, historyHead: historyHead, incoming: incoming)
+        for report in reports where report.hasBlockingFindings {
+            throw PolicyDiffRiskError.blockedByFindings(report)
+        }
+    }
+
+    /// One report per rollback baseline (live file when it parses, then
+    /// the history head). The gate refuses on the first blocking one;
+    /// the preview shows their union, so both judge the same reports.
+    private static func rollbackRiskReports(
+        live: PolicyDocument?,
+        historyHead: PolicyDocument,
+        incoming: PolicyDocument
+    ) -> [PolicyDiffRiskReport] {
         var baselines: [PolicyDocument] = []
         if let live {
             baselines.append(live)
         }
         baselines.append(historyHead)
-        for baseline in baselines {
-            let report = PolicyDiffRisk.evaluateReplacement(
+        return baselines.map { baseline in
+            PolicyDiffRisk.evaluateReplacement(
                 existing: baseline,
                 incoming: incoming,
                 secretExemptionSeverity: .blocking
             )
-            if report.hasBlockingFindings {
-                throw PolicyDiffRiskError.blockedByFindings(report)
+        }
+    }
+
+    private static func rollbackPreviewRisk(
+        live: PolicyDocument?,
+        historyHead: PolicyDocument,
+        incoming: PolicyDocument
+    ) -> PolicyDiffRiskReport {
+        PolicyDiffRiskReport(
+            findings: rollbackRiskReports(live: live, historyHead: historyHead, incoming: incoming)
+                .flatMap(\.findings)
+        )
+    }
+
+    /// Read-only twin of `rollbackMachine(to:)`: the same verified chain,
+    /// display cross-check, target lookup, live-file load, and risk
+    /// reports, under the same locks, with nothing written (an interrupted
+    /// save is not reconciled; the cross-check refuses it instead, as
+    /// `listMachineRevisions` does). Fresh state throws `unknownRevision`
+    /// without taking a lock. `logCorrupted` and `logMissing` fail closed.
+    public func previewMachineRollback(to revision: Int) throws -> PolicyRollbackPreview {
+        guard machineHistoryMayExist else {
+            throw TypedRuleStoreError.unknownRevision
+        }
+        return try withFileLock(at: machineLogLockURL) {
+            try withFileLock(at: machineLockURL) {
+                let chain = try loadVerifiedChain()
+                let display = try readRevisions(from: machineRevisionsURL)
+                try MachineRevisionLog.checkDisplay(chain, matches: display)
+                let match: MachineRevisionLog.Record
+                let sealedHead: MachineRevisionLog.Record
+                do {
+                    (match, sealedHead) = try MachineRevisionLog.rollbackTarget(
+                        generation: revision, in: chain
+                    )
+                } catch TypedRuleStoreError.revisionNotFound {
+                    throw TypedRuleStoreError.unknownRevision
+                }
+                guard let target = display.first(where: { $0.revision == revision }),
+                    let head = display.last
+                else {
+                    throw TypedRuleStoreError.logCorrupted
+                }
+                let live = try liveDocumentForRollbackGate { try loadMachineDocument() }
+                return PolicyRollbackPreview(
+                    target: target,
+                    head: head,
+                    live: live,
+                    risk: Self.rollbackPreviewRisk(
+                        live: live, historyHead: sealedHead.document, incoming: match.document)
+                )
             }
+        }
+    }
+
+    /// Read-only twin of `rollbackRepo(to:workspace:)` under the same
+    /// `.policy.lock`. No revision log throws `unknownRevision` without
+    /// creating `.rv/` in the workspace.
+    public func previewRepoRollback(to revision: Int, workspace: URL) throws -> PolicyRollbackPreview {
+        let revisionsURL = repoRevisionsURL(workspace: workspace)
+        guard FileManager.default.fileExists(atPath: revisionsURL.path) else {
+            throw TypedRuleStoreError.unknownRevision
+        }
+        let lock = Self.repoFileURL(workspace: workspace).deletingLastPathComponent()
+            .appendingPathComponent(".policy.lock", isDirectory: false)
+        return try withFileLock(at: lock) {
+            let entries = try readRevisions(from: revisionsURL)
+            guard
+                let target = entries.first(where: { $0.revision == revision }),
+                let head = entries.last
+            else {
+                throw TypedRuleStoreError.unknownRevision
+            }
+            let targetDocument = try revisionDocument(target)
+            let live = try liveDocumentForRollbackGate {
+                try loadRepoDocument(workspace: workspace)
+            }
+            return PolicyRollbackPreview(
+                target: target,
+                head: head,
+                live: live,
+                risk: Self.rollbackPreviewRisk(
+                    live: live, historyHead: head.document, incoming: targetDocument)
+            )
         }
     }
 
