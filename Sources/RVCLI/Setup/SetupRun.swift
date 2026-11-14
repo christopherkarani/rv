@@ -170,6 +170,8 @@ enum SetupRun {
             try ConfigChangeAudit.$authorization.withValue(ownerAuthenticated ? "owner (loosening check)" : nil) {
                 try hostModeStore(env).saveGlobalObserve()
             }
+        } catch let unrecorded as ConfigChangeUnrecorded {
+            throw .guardModeUnrecorded(unrecorded)
         } catch {
             throw .guardModeWriteFailed
         }

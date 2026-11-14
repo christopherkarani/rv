@@ -229,6 +229,13 @@ struct HostCommandTests {
         }
     }
 
+    @Test func setupObserve_whenTheChangeCannotBeRecorded_exits74() {
+        let output = setupFailureOutput(
+            .guardModeUnrecorded(ConfigChangeUnrecorded(subject: "guard.mode")), command: .setup)
+        #expect(output.exitCode == ConfigChangeRefusal.exitCode)
+        #expect(output.stderr.hasPrefix("rv setup failed: the audit log could not record the guard.mode change"))
+    }
+
     /// Leaving `off` stores the tighter mode before re-wiring: a re-wire
     /// that fails leaves the host unwired under `block` (which `rv setup`
     /// repairs), never wired under `off`.

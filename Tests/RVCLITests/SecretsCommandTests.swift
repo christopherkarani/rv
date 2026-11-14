@@ -457,9 +457,55 @@ struct SecretsCommandTests {
         let result = SecretsRun.set(
             name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
             description: nil, environment: fixture.environment())
-        #expect((try? result.get()) == nil)
+        guard case .failure(let failure) = result else {
+            Issue.record("an unrecordable new definition was stored")
+            return
+        }
+        #expect(failure.exitCode == ConfigChangeRefusal.exitCode)
         #expect(fixture.keychain.items.withLock { $0.isEmpty })
         #expect(FileManager.default.fileExists(atPath: fixture.secretsFile.path) == false)
+    }
+
+    /// An existing secret takes its value first: a store that fails leaves
+    /// the old value under its old expiry, never the old value under a
+    /// later one.
+    @Test func setOnAnExistingSecretWhoseValueCannotBeStoredKeepsTheExpiry() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let now = Date()
+        let soon = now.addingTimeInterval(86_400)
+        _ = try SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: fixture.environment(), expires: .some(soon), now: now
+        ).get()
+        let refusing = SecretsEnvironment(
+            configDirectory: fixture.directory, resolver: fixture.keychain.resolver(),
+            keychain: SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in true }))
+        let rotated = SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-87654321".utf8), definition: nil, agents: [], description: nil,
+            environment: refusing, expires: .some(now.addingTimeInterval(30 * 86_400)), now: now)
+        #expect((try? rotated.get()) == nil)
+        let kept = try #require(try SecretsRun.configuration(fixture.environment()).get().secret(named: "GH_TOKEN"))
+        #expect(kept.expires.map { Int($0.timeIntervalSince1970) } == Int(soon.timeIntervalSince1970))
+        #expect(fixture.keychain.items.withLock { $0["rv.secrets/GH_TOKEN"] } == Data("ghp-12345678".utf8))
+    }
+
+    /// Removing a definition only removes access, so it goes through (and
+    /// the value goes) while the audit log is unwritable.
+    @Test func removeWhenTheChangeCannotBeRecordedStillRemoves() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let environment = fixture.environment()
+        _ = try SecretsRun.set(
+            name: "GH_TOKEN", value: Data("ghp-12345678".utf8), definition: .environment, agents: [],
+            description: nil, environment: environment).get()
+        let log = fixture.directory.appendingPathComponent("audit.jsonl")
+        try FileManager.default.removeItem(at: log)
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+        let text = try SecretsRun.remove(name: "GH_TOKEN", environment: environment).get()
+        #expect(text.contains("Removed GH_TOKEN from secrets.json."))
+        #expect(fixture.keychain.items.withLock { $0.isEmpty })
+        #expect(try SecretsRun.configuration(environment).get().secrets.isEmpty)
     }
 
     @Test func removeDeletesTheDefinitionAndTheStoredValue() throws {

@@ -182,6 +182,12 @@ enum SecretsRun {
         SecretsConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
     }
 
+    /// A secrets.json write failure; one the audit log refused exits as
+    /// every refused gate change does.
+    static func failure(_ error: SecretsConfigurationError) -> CommandFailure {
+        CommandFailure(error.message, exitCode: error == .unrecorded ? ConfigChangeRefusal.exitCode : 1)
+    }
+
     static func profiles(_ environment: SecretsEnvironment) -> [RuntimeResourceProfile] {
         guard case .success(let policy) = RuntimeResourcePolicyStore.load(from: environment.configDirectory) else {
             return []
@@ -401,15 +407,30 @@ enum SecretsRun {
         {
             return .failure(CommandFailure("organization policy: \(reason)"))
         }
-        // The definition is written (and recorded) before the value moves: a
-        // change the audit log refuses leaves the keychain untouched. A
-        // definition whose value then fails to store resolves nothing, so
-        // launches that need it fail closed until a retry stores it.
-        if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-            return .failure(CommandFailure(error.message))
-        }
-        guard environment.keychain.store(SecretKeychain.service, name, value) else {
-            return .failure(CommandFailure("could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)"))
+        let storeFailure = CommandFailure(
+            "could not store \(DisplayedText.field(name)) \(SecretKeychainWriter.storeFailureSuffix)")
+        if current.secret(named: name) == nil {
+            // A new definition is written (and recorded) before its value: a
+            // definition the audit log refuses leaves the keychain untouched.
+            // If the value then fails to store, the definition resolves
+            // whatever the keychain already holds under that name (normally
+            // nothing, so launches fail closed) until a retry stores it.
+            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                return .failure(SecretsRun.failure(error))
+            }
+            guard environment.keychain.store(SecretKeychain.service, name, value) else { return .failure(storeFailure) }
+        } else {
+            // An existing secret takes its new value first: a store that
+            // fails leaves the old value under its old expiry and refresh,
+            // and a definition change the audit log then refuses leaves the
+            // new value under the old (never later) expiry.
+            guard environment.keychain.store(SecretKeychain.service, name, value) else { return .failure(storeFailure) }
+            if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                let failure = SecretsRun.failure(error)
+                return .failure(CommandFailure(
+                    "stored the new value of \(DisplayedText.field(name)), but secrets.json was not updated: "
+                        + failure.message, exitCode: failure.exitCode))
+            }
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
         var text = "Stored \(DisplayedText.field(name)) in \(SecretKeychain.storeName) (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
@@ -441,7 +462,7 @@ enum SecretsRun {
             var updated = current
             updated.secrets.removeAll { $0.name == name }
             if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-                return .failure(CommandFailure(error.message))
+                return .failure(SecretsRun.failure(error))
             }
         }
         if existing == nil || existing?.source == ownSource {
@@ -703,7 +724,7 @@ enum SecretsRun {
         var updated = pending.current
         updated.secrets += pending.fresh
         switch updated.write(configDirectory: environment.configDirectory) {
-        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .failure(let error): return .failure(SecretsRun.failure(error))
         case .success:
             let count = pending.fresh.count
             let lines = pending.lines + ["wrote secrets.json (\(count) \(count == 1 ? "secret" : "secrets"))"]
@@ -1016,7 +1037,7 @@ struct SecretsSet: AsyncParsableCommand {
             environment: environment, expires: try? SecretsRun.expiry(expires).get(),
             refresh: try? SecretsRun.refresh(refresh).get())
         {
-        case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(var text):
             if let inferredNote { text = inferredNote + text }
             if let profile {
@@ -1045,7 +1066,7 @@ struct SecretsRemove: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "secrets remove", json: false, robot: false, plain: true, noColor: true)
         switch SecretsRun.remove(name: name, environment: .live(home: try ctx.requireHome())) {
-        case .failure(let failure): try ctx.fail("rv secrets remove: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv secrets remove: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(let text): ctx.writeStdout(text)
         }
     }
@@ -1138,7 +1159,7 @@ struct SecretsImport: AsyncParsableCommand {
         let environment = SecretsEnvironment.live(home: try ctx.requireHome())
         let path = URL(fileURLWithPath: varlock).standardizedFileURL
         switch SecretsRun.importVarlock(path: path, dryRun: dryRun, profile: profile, environment: environment) {
-        case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
+        case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n", exitCode: failure.exitCode)
         case .success(let text): ctx.writeStdout(text)
         }
     }
@@ -1198,9 +1219,12 @@ struct SecretsHookRun: AsyncParsableCommand {
 
 struct CommandFailure: Error, Equatable, ExpressibleByStringInterpolation {
     let message: String
+    /// 1, or `ConfigChangeRefusal.exitCode` when the audit log refused the change.
+    var exitCode: Int32 = 1
 
-    init(_ message: String) {
+    init(_ message: String, exitCode: Int32 = 1) {
         self.message = message
+        self.exitCode = exitCode
     }
 
     init(stringLiteral value: String) {
