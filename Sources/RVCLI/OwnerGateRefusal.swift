@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVHistory
 import RVIPC
 import RVPolicy
 
@@ -26,6 +27,8 @@ enum OwnerGateRefusal: Sendable, Equatable {
     case ownerCheckUnconfirmed
     /// rvd has no record of issuing the code, so it shows no prompt for it.
     case notIssuedByService
+    /// The audit log could not record the change, so it was not made.
+    case unrecorded(ConfigChangeUnrecorded)
 
     enum Subject: Sendable, CaseIterable {
         /// `rv allow-once <code>`: redeeming a code into a grant.
@@ -50,6 +53,8 @@ enum OwnerGateRefusal: Sendable, Equatable {
         case .ttyRequired, .robotRefused, .changedDuringReview, .storeUnavailable,
             .notShowable, .notIssuedByService:
             Self.exitCode
+        case .unrecorded:
+            ConfigChangeRefusal.exitCode
         }
     }
 
@@ -87,6 +92,8 @@ enum OwnerGateRefusal: Sendable, Equatable {
                 .reviewChanged, .reviewTokenMissing:
                 return nil
             }
+        case let error as ConfigChangeUnrecorded:
+            self = .unrecorded(error)
         case let error as AllowlistStoreError:
             switch error {
             case .lockFailed: self = .storeUnavailable
@@ -109,6 +116,7 @@ enum OwnerGateRefusal: Sendable, Equatable {
         case .authRequired: return "device-owner authentication required"
         case .throttled: return "too many authentication prompts; wait and retry"
         case .storeUnavailable: return "store unavailable"
+        case .unrecorded(let error): return error.description
         case .notApproved(let reply):
             return subject == .newCode
                 ? AllowOnceCLI.mintNotApprovedMessage(reply)

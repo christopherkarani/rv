@@ -8,6 +8,8 @@ import Security
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
+import RVHistory
 import RVPolicy
 
 extension SecretSource {
@@ -229,13 +231,72 @@ extension SecretsConfiguration {
     }
 
     /// Validates, then atomically replaces secrets.json (0600, owner-only directory).
+    /// A change to the definitions is recorded write-ahead (`config.changed`,
+    /// `secrets`): names only, never values or sources. A change the audit
+    /// log cannot hold is not written (`unrecorded`) unless it only removes
+    /// definitions. The prior file is read under `secrets.json.lock`, so the
+    /// recorded diff is against the file this write replaces.
     public func write(configDirectory: URL) -> Result<Void, SecretsConfigurationError> {
         let data = encoded()
         if case .failure(let error) = Self.decode(data) { return .failure(error) }
-        guard OwnerOnlyFile.write(data, to: Self.fileURL(configDirectory: configDirectory)) else {
+        let url = Self.fileURL(configDirectory: configDirectory)
+        do {
+            try FileManager.default.createDirectory(
+                at: configDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            return try ExclusiveFileLock.withLock(at: url.appendingPathExtension("lock")) {
+                writeLocked(data, to: url, configDirectory: configDirectory)
+            }
+        } catch {
             return .failure(.unreadable)
         }
-        return .success(())
+    }
+
+    private func writeLocked(_ data: Data, to url: URL, configDirectory: URL) -> Result<Void, SecretsConfigurationError> {
+        // A file that exists but does not load leaves the prior unknown.
+        let prior: SecretsConfiguration?
+        if FileManager.default.fileExists(atPath: url.path) {
+            prior = try? Self.load(configDirectory: configDirectory).get()
+        } else {
+            prior = SecretsConfiguration(secrets: [])
+        }
+        guard let audit = Self.changeEvent(from: prior, to: self) else {
+            return OwnerOnlyFile.write(data, to: url) ? .success(()) : .failure(.unreadable)
+        }
+        do {
+            try ConfigChangeAudit.commit(audit, configDirectory: configDirectory) {
+                guard OwnerOnlyFile.write(data, to: url) else { throw SecretsConfigurationError.unreadable }
+            }
+            return .success(())
+        } catch let error as SecretsConfigurationError {
+            return .failure(error)
+        } catch {
+            return .failure(.unrecorded)
+        }
+    }
+
+    /// `config.changed` (`secrets`): the definition count before and after
+    /// and the names added, removed or redefined. Nil when nothing changed.
+    /// Only removing definitions tightens; an unknown prior (nil) is
+    /// recorded as `unknown` and does not.
+    static func changeEvent(from priorOrNil: SecretsConfiguration?, to new: SecretsConfiguration) -> AuditEvent? {
+        guard let prior = priorOrNil else {
+            return ConfigChangeAudit.setting(
+                "secrets", from: "unknown", to: "\(new.secrets.count) definitions", direction: .loosening,
+                detail: ["changed": ConfigChangeAudit.list(new.secrets.map(\.name))])
+        }
+        let before = Dictionary(prior.secrets.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let after = Dictionary(new.secrets.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let added = after.keys.filter { before[$0] == nil }
+        let removed = before.keys.filter { after[$0] == nil }
+        let changed = after.keys.filter { name in before[name].map { $0 != after[name] } ?? false }
+        guard added.isEmpty == false || removed.isEmpty == false || changed.isEmpty == false else { return nil }
+        var detail: [String: String] = [:]
+        if added.isEmpty == false { detail["added"] = ConfigChangeAudit.list(added) }
+        if removed.isEmpty == false { detail["removed"] = ConfigChangeAudit.list(removed) }
+        if changed.isEmpty == false { detail["changed"] = ConfigChangeAudit.list(changed) }
+        return ConfigChangeAudit.setting(
+            "secrets", from: "\(prior.secrets.count) definitions", to: "\(new.secrets.count) definitions",
+            direction: added.isEmpty && changed.isEmpty ? .tightening : .loosening, detail: detail)
     }
 }
 

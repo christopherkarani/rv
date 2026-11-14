@@ -15,6 +15,7 @@ Current boundary and policy:
 - [Runtime security boundary](security/runtime-boundary.md)
 - [Runtime resource profiles](security/runtime-resource-policy.md)
 - [Secret gateway policy](security/secrets-gateway-policy.md)
+- [Gate change audit](security/gate-change-audit.md)
 - [Python SDK service boundary](security/sdk-python-boundary.md)
 - [Agent identity spec v1](security/rv-agent-identity-spec-v1.md)
 - [Runtime adversarial test inventory](security/adversarial-inventory.md)

@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVPacks
 import RVPolicy
 
@@ -215,6 +216,8 @@ public enum PacksFacade {
 
         do {
             try PacksConfigStore.save(config, home: home)
+        } catch let unrecorded as ConfigChangeUnrecorded {
+            throw unrecorded
         } catch {
             throw PacksCommandError.configUnwritable
         }
