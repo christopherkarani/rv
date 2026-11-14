@@ -4377,7 +4377,9 @@ struct MCPCommandTests {
         let allow = lines.first { $0.hasPrefix("(allow file-write*") } ?? ""
         let targetPath = canonicalPath(target.path)
         #expect(deny.contains("(subpath \"\(targetPath)\")"))
-        #expect(deny.contains("(subpath \"\(home.path)\")"))
+        // The link and its target, not the home that holds the link: a
+        // deny of the home took the scratch under it with it.
+        #expect(deny.contains("(subpath \"\(home.path)\")") == false)
         #expect(allow.contains(targetPath) == false)
         #expect(deny.contains("(regex #\""))
         #expect(deny.contains("\\.ssh"))
@@ -4463,10 +4465,9 @@ struct MCPCommandTests {
         }
         let danglingDeny = danglingProfile.split(separator: "\n").first { $0.hasPrefix("(deny file-read*") } ?? ""
         #expect(danglingDeny.contains("future-keys"))
+        // The link's parent is not denied: only the link and its target are.
         let parent = home.path
-        #expect(danglingDeny.contains("(subpath \"\(parent)\")"))
-        let sibling = home.appendingPathComponent("real-keys/id_rsa").path
-        #expect(sibling.hasPrefix(parent + "/"))
+        #expect(danglingDeny.contains("(subpath \"\(parent)\")") == false)
         let allow = danglingProfile.split(separator: "\n").first { $0.hasPrefix("(allow file-write*") } ?? ""
         #expect(allow.contains("future-keys") == false)
         #expect(allow.contains("(subpath \"\(parent)\")") == false)
@@ -4496,10 +4497,11 @@ struct MCPCommandTests {
         let rule = lastFileReadRule(profile, matching: secret)
         #expect(rule?.hasPrefix("(deny") == true)
         #expect(rule?.contains("future-keys") == true)
-        let escaped = "/opt/secret/id_rsa"
-        let retarget = lastFileReadRule(profile, matching: escaped)
-        #expect(retarget != "(allow default)")
-        #expect(retarget?.hasPrefix("(deny") == true)
+        // A path the link does not point at stays readable: the profile names
+        // the targets as resolved at launch, and a retarget after it is a
+        // documented limit, not a reason to deny every read.
+        let elsewhere = "/opt/secret/id_rsa"
+        #expect(lastFileReadRule(profile, matching: elsewhere) == "(allow default)")
         let dataOpt = "/System/Volumes/Data/opt/future-keys/id_rsa"
         try FileManager.default.removeItem(at: ssh)
         #expect(symlink("/opt/future-keys", ssh.path) == 0)
@@ -4514,7 +4516,7 @@ struct MCPCommandTests {
         let optRule = lastFileReadRule(optProfile, matching: dataOpt)
         #expect(optRule?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
         let credential = lines.lastIndex { $0.hasPrefix("(deny file-read*") && $0.contains("future-keys") } ?? -1
         #expect(credential > writeAllow)
     }
@@ -4546,7 +4548,7 @@ struct MCPCommandTests {
         let same = lastFileReadRule(profile, matching: "/private/tmp/future-keys/id_rsa")
         #expect(same?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
         let credential = lines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, folded) }
         } ?? -1
@@ -4569,7 +4571,7 @@ struct MCPCommandTests {
         #expect(patterns.contains { Self.wholeMatch($0, nfd + "/id_rsa") })
         #expect(patterns.contains { Self.wholeMatch($0, nfc + "/id_rsa") })
         let nfdLines = composedProfile.split(separator: "\n").map(String.init)
-        let nfdAllow = nfdLines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let nfdAllow = nfdLines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
         let nfdDeny = nfdLines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, nfd + "/id_rsa") }
         } ?? -1
@@ -4603,7 +4605,7 @@ struct MCPCommandTests {
         let folded = lastFileReadRule(profile, matching: "/private/tmp/Future-Keys/id_rsa")
         #expect(folded?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
         let credential = lines.lastIndex { $0.hasPrefix("(deny file-read*") && $0.contains("future-keys") } ?? -1
         #expect(credential > writeAllow)
     }
@@ -4642,7 +4644,7 @@ struct MCPCommandTests {
             let rule = lastFileReadRule(profile, matching: secret)
             #expect(rule?.hasPrefix("(deny") == true)
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
             let credential = lines.lastIndex { line in
                 line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
             } ?? -1
@@ -4675,7 +4677,7 @@ struct MCPCommandTests {
         let rule = lastFileReadRule(profile, matching: secret)
         #expect(rule?.hasPrefix("(deny") == true)
         let lines = profile.split(separator: "\n").map(String.init)
-        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
         let credential = lines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
         } ?? -1
@@ -4694,7 +4696,7 @@ struct MCPCommandTests {
         let finalSigma = "/private/tmp/\u{03C2}-keys/id_rsa"
         #expect(lastFileReadRule(sigmaProfile, matching: finalSigma)?.hasPrefix("(deny") == true)
         let sigmaLines = sigmaProfile.split(separator: "\n").map(String.init)
-        let sigmaAllow = sigmaLines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let sigmaAllow = sigmaLines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
         let sigmaDeny = sigmaLines.lastIndex { line in
             line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, finalSigma) }
         } ?? -1
@@ -4724,7 +4726,7 @@ struct MCPCommandTests {
                 return
             }
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
             for secret in secrets {
                 #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
                 let credential = lines.lastIndex { line in
@@ -4779,7 +4781,7 @@ struct MCPCommandTests {
                 return
             }
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
             for secret in secrets {
                 #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
                 let credential = lines.lastIndex { line in
@@ -4832,7 +4834,7 @@ struct MCPCommandTests {
                 }
                 #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
                 let lines = profile.split(separator: "\n").map(String.init)
-                let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+                let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
                 let credential = lines.lastIndex { line in
                     line.hasPrefix("(deny file-read*") && (
                         line.contains("(subpath \"/private/tmp/future-keys\")")
@@ -4889,7 +4891,7 @@ struct MCPCommandTests {
             }
             #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
             let lines = profile.split(separator: "\n").map(String.init)
-            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-") && $0.contains("/private/tmp") } ?? -1
             let credential = lines.lastIndex { line in
                 line.hasPrefix("(deny file-read*") && (
                     line.contains("(subpath \"/private/tmp/future-keys\")")

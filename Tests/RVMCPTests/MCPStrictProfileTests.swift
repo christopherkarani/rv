@@ -180,14 +180,17 @@ struct MCPStrictProfileTests {
         #endif
     }
 
-    /// Hard links are denied, then allowed only among the write roots, then
-    /// denied again on every credential path, as clones are. Seatbelt takes
-    /// the last matching rule, so the allow follows its deny and no later
-    /// line re-opens either; that holds on the branch a symlinked credential
-    /// adds (`(deny file-read*)` and a second write allow) too. No line
-    /// allows a clone: it is left to the read and write rules.
+    /// The link and clone rules in Seatbelt's last-match order: links are
+    /// denied, then allowed among the write roots; a clone of a directory
+    /// outside the write roots is denied (the kernel copies the whole tree
+    /// and Seatbelt checks only its top); every ancestor of a credential
+    /// that lies inside a write root is denied a clone and a rename; the
+    /// credential deny comes last and covers links and clones. No line
+    /// allows a clone. A symlinked credential adds no read deny of its own:
+    /// the credential deny names the link and its target, nothing else, so
+    /// system libraries and the write roots stay readable.
     @Test(arguments: [false, true])
-    func linksAreAllowedOnlyAmongTheWriteRoots(_ symlinkedCredential: Bool) throws {
+    func linksAndClonesAreRefusedWhereTheyCouldReachACredential(_ symlinkedCredential: Bool) throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-link-profile-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
@@ -196,34 +199,71 @@ struct MCPStrictProfileTests {
         let home = root.appendingPathComponent("home")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         if symlinkedCredential {
-            let keys = root.appendingPathComponent("elsewhere-aws")
+            let keys = root.appendingPathComponent("elsewhere/aws")
             try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
             #expect(symlink(keys.path, home.appendingPathComponent(".aws").path) == 0)
         }
+        let resolvedRoot = try #require(MCPSandbox.resolveExisting(root.path))
         let text = try MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
             home: home.path, configDirectory: home.path + "/.config/rv",
             temporaryDirectory: root.appendingPathComponent("tmp").path).get()
         let lines = text.split(separator: "\n").map(String.init)
+        let writeAllow = try #require(lines.first { $0.hasPrefix("(allow file-write* ") })
+        let writeFilters = String(writeAllow.dropFirst("(allow file-write* ".count).dropLast())
         let allowDefault = try #require(lines.firstIndex(of: "(allow default)"))
         let deny = try #require(lines.firstIndex(of: "(deny file-link)"))
-        let allow = try #require(lines.firstIndex { $0.hasPrefix("(allow file-link ") })
+        let allow = try #require(lines.firstIndex(of: "(allow file-link " + writeFilters + ")"))
+        let directoryClone = try #require(lines.firstIndex(
+            of: "(deny file-clone (require-all (vnode-type DIRECTORY) (require-not (require-any " + writeFilters + "))))"))
+        // The fake home is under the temp directory, a write root, so its
+        // credentials' ancestors there are named one by one.
+        let ancestors = try #require(lines.firstIndex { $0.hasPrefix("(deny file-clone file-write-unlink ") })
         let credential = try #require(lines.lastIndex { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
-        #expect(allowDefault < deny && deny < allow && allow < credential)
-        // The link allow names exactly what the write allow names.
-        let writeAllow = try #require(lines.first { $0.hasPrefix("(allow file-write* ") })
-        #expect(lines[allow].dropFirst("(allow file-link ".count) == writeAllow.dropFirst("(allow file-write* ".count))
-        // Only one line allows a link, none names a clone but the credential
-        // denies, and every credential deny covers both.
+        #expect(allowDefault < deny && deny < allow && allow < directoryClone)
+        #expect(directoryClone < ancestors && ancestors < credential)
+        #expect(lines[ancestors].contains("(literal \"\(resolvedRoot)/home\")"))
+        #expect(lines[ancestors].contains("(literal \"\(resolvedRoot)\")"))
+        #expect(lines[ancestors].contains("(literal \"\(resolvedRoot)/elsewhere\")") == symlinkedCredential)
+        #expect(lines[ancestors].contains("scratch") == false)
+        // One line allows a link, no line allows a clone, and every
+        // credential deny covers both.
         #expect(lines.filter { $0.hasPrefix("(allow") && $0.contains("file-link") }.count == 1)
-        #expect(lines.filter { $0.contains("file-clone") }
-            .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
+        #expect(lines.filter { $0.contains("file-clone") }.allSatisfy { $0.hasPrefix("(deny ") })
         #expect(lines.filter { $0.hasPrefix("(deny file-read* file-write* ") }
             .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
-        #expect(lines.contains("(deny file-read*)") == symlinkedCredential)
+        // Reads are denied on the credentials and nowhere else: not every
+        // path, and not the home that holds a symlinked one.
+        #expect(lines.contains("(deny file-read*)") == false)
+        #expect(lines[credential].contains("(subpath \"\(home.path)\")") == false)
+        #expect(lines[credential].contains("(subpath \"\(resolvedRoot)/home\")") == false)
         #if os(macOS)
         #expect(MCPSandbox.profileCompileError(text) == nil)
         #endif
+    }
+
+    /// More credential ancestors inside the write roots than the profile
+    /// names one by one: the profile is refused, never written without them.
+    @Test func tooManyCredentialAncestorsInsideAWriteRootRefuseTheProfile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-deep-profile-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let deep = (0..<(MCPSandbox.maximumCredentialAncestors + 1)).reduce(root) { url, _ in
+            url.appendingPathComponent("d", isDirectory: true)
+        }
+        let home = deep.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home.path, configDirectory: home.path + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path)
+        guard case .failure(let error) = result else {
+            Issue.record("a profile with \(MCPSandbox.maximumCredentialAncestors + 1)+ ancestors was written")
+            return
+        }
+        #expect(error.message.contains("ancestor"), "\(error.message)")
     }
 
     @Test func hostsAndGatewayEachGetOneLoopbackRule() throws {
