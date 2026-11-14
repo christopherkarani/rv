@@ -362,8 +362,10 @@ the seatbelt profile is untouched.
 - Accepted residuals, on advertising (open-mode) instances only: the id
   disappears when the shared store is full (`storeFull`, 256 awaiting
   rows), so a cage that mints proposals can estimate how many approvals
-  are awaiting; an id also disappears once a sibling's approval for the
-  same `host:port` resolved it; and a fresh row (store write) answers
+  are awaiting; an id also disappears once a same-workspace sibling's
+  approval for the same `host:port` resolved it (ids are keyed by
+  workspace plus fingerprint, so another workspace's id is never
+  returned); and a fresh row (store write) answers
   more slowly than a deduped one (store read). Everywhere: an
   authenticated cage can still tell a binary-gate denial from a policy
   one by trying an allowed host (inherent to enforcement), and tunnels
