@@ -27,11 +27,18 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
 
 public enum MCPUpstreamConnection: Sendable, Equatable {
     case process(MCPUpstreamLaunch)
+    /// Started suspended in its own process group, its lease bound to that
+    /// group, then resumed; it holds placeholders, not those secrets' values.
+    case placeholderBound(MCPUpstreamLaunch, MCPPlaceholderBinding)
+    /// Not started; the reason is logged and the server reported exited.
+    case refused(server: String, MCPPlaceholderRefusal)
     case remote(MCPRemoteLaunch)
 
     public var server: String {
         switch self {
         case .process(let launch): launch.server
+        case .placeholderBound(let launch, _): launch.server
+        case .refused(let server, _): server
         case .remote(let launch): launch.server
         }
     }
