@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVDomain
 import RVFileStore
+import RVHistory
 
 public enum TypedRuleStoreError: Error, Sendable, Equatable {
     case lockFailed
@@ -281,11 +282,13 @@ public struct TypedRuleStore: Sendable {
             let chain = try reconcileInterruptedSave(verified: try loadVerifiedChain())
             let recordedAtMs = currentMs()
             let document = try withFileLock(at: machineLockURL) {
+                let replacing = try? loadMachineDocument()
                 let document = try next()
                 try saveUnlocked(
                     document,
                     to: machineFileURL,
                     revisionsURL: machineRevisionsURL,
+                    change: PolicyChange(layer: .machine, change: "save", replacing: replacing),
                     sealed: chain,
                     recordedAtMs: recordedAtMs
                 )
@@ -399,10 +402,20 @@ public struct TypedRuleStore: Sendable {
                     recordedAtMs: recordedAtMs
                 )
                 interlock?.beforeWrite?()
-                try writeFileBytes(data, to: machineFileURL)
+                let write: () throws -> Void = {
+                    try writeFileBytes(data, to: machineFileURL)
+                    if let pending {
+                        try appendRevisionLine(pending.line, to: machineRevisionsURL)
+                    }
+                }
                 if let pending {
-                    try appendRevisionLine(pending, to: machineRevisionsURL)
+                    let change = PolicyChange(layer: .machine, change: "rollback", replacing: live, target: target)
+                    try ConfigChangeAudit.commit(
+                        change.event(pending, to: match.document, configDirectory: baseDirectory),
+                        configDirectory: baseDirectory, write)
                     newHeadRevision = display.count + 1
+                } else {
+                    try write()
                 }
             }
             let head = try seal(
@@ -429,35 +442,43 @@ public struct TypedRuleStore: Sendable {
             let document = try loadMachineDocument()
             let toml = PolicyDocumentTOML.render(document)
             let recordedAtMs = currentMs()
-            try seal(toml: toml, at: recordedAtMs, after: .fresh)
-            // Reconcile the display log to the same single generation: the
-            // old lines are unverifiable against the fresh key, so keeping
-            // them would brick every cross-checked read. Operator recovery
-            // explicitly restarts history from disk state; unverified past
-            // lines are dropped, never laundered into the sealed chain.
-            let display = PolicyRevision(
-                revision: 1,
-                hash: PolicyRevisionIdentity.hash(document),
-                ruleCount: document.rules.count,
-                recordedAt: MachineRevisionLog.date(ms: recordedAtMs),
-                toml: toml,
-                document: document
-            )
-            let line: Data
-            do {
-                line = try JSONEncoder().encode(display)
-            } catch {
-                throw TypedRuleStoreError.invalidFile
-            }
-            guard var text = String(data: line, encoding: .utf8) else {
-                throw TypedRuleStoreError.invalidFile
-            }
-            text.append("\n")
-            guard let lineData = text.data(using: .utf8) else {
-                throw TypedRuleStoreError.invalidFile
-            }
-            try withFileLock(at: machineLockURL) {
-                try writeFileBytes(lineData, to: machineRevisionsURL)
+            // History restarts at r1: no prior revision is verifiable, so
+            // the change cannot be shown to tighten.
+            let event = ConfigChangeAudit.policy(
+                layer: PolicyChange.Layer.machine.rawValue, change: "reinitialize", revision: 1,
+                hash: PolicyRevisionIdentity.hash(document), ruleCount: document.rules.count, prior: nil,
+                direction: .loosening)
+            try ConfigChangeAudit.commit(event, configDirectory: baseDirectory) {
+                try seal(toml: toml, at: recordedAtMs, after: .fresh)
+                // Reconcile the display log to the same single generation: the
+                // old lines are unverifiable against the fresh key, so keeping
+                // them would brick every cross-checked read. Operator recovery
+                // explicitly restarts history from disk state; unverified past
+                // lines are dropped, never laundered into the sealed chain.
+                let display = PolicyRevision(
+                    revision: 1,
+                    hash: PolicyRevisionIdentity.hash(document),
+                    ruleCount: document.rules.count,
+                    recordedAt: MachineRevisionLog.date(ms: recordedAtMs),
+                    toml: toml,
+                    document: document
+                )
+                let line: Data
+                do {
+                    line = try JSONEncoder().encode(display)
+                } catch {
+                    throw TypedRuleStoreError.invalidFile
+                }
+                guard var text = String(data: line, encoding: .utf8) else {
+                    throw TypedRuleStoreError.invalidFile
+                }
+                text.append("\n")
+                guard let lineData = text.data(using: .utf8) else {
+                    throw TypedRuleStoreError.invalidFile
+                }
+                try withFileLock(at: machineLockURL) {
+                    try writeFileBytes(lineData, to: machineRevisionsURL)
+                }
             }
         }
     }
@@ -521,11 +542,13 @@ public struct TypedRuleStore: Sendable {
         let lock = file.deletingLastPathComponent()
             .appendingPathComponent(".policy.lock", isDirectory: false)
         return try withFileLock(at: lock) {
+            let replacing = try? loadRepoDocument(workspace: workspace)
             let document = try next()
             try saveUnlocked(
                 document,
                 to: file,
-                revisionsURL: repoRevisionsURL(workspace: workspace)
+                revisionsURL: repoRevisionsURL(workspace: workspace),
+                change: PolicyChange(layer: .repo, change: "save", replacing: replacing, workspace: workspace)
             )
             return document
         }
@@ -636,7 +659,9 @@ public struct TypedRuleStore: Sendable {
             try saveUnlocked(
                 targetDocument,
                 to: file,
-                revisionsURL: revisionsURL
+                revisionsURL: revisionsURL,
+                change: PolicyChange(
+                    layer: .repo, change: "rollback", replacing: live, workspace: workspace, target: revision)
             )
         }
         let newHead = try listRepoRevisions(workspace: workspace).last
@@ -818,10 +843,16 @@ public struct TypedRuleStore: Sendable {
     /// Caller holds the file lock for `url`. Repo rollback uses this so the
     /// live re-read, the gate, and the rename share one `.policy.lock`
     /// hold. `commitMachine` / `commitRepo` are the paths that acquire it.
+    ///
+    /// A new revision is recorded write-ahead (`policy.changed`): the audit
+    /// event lands before the file moves, so a revision the audit log
+    /// cannot hold is not saved. An identical re-save mints no revision and
+    /// records nothing.
     private func saveUnlocked(
         _ document: PolicyDocument,
         to url: URL,
         revisionsURL: URL,
+        change: PolicyChange,
         sealed: MachineRevisionLog.VerifiedChain? = nil,
         recordedAtMs: Int64? = nil
     ) throws {
@@ -846,10 +877,16 @@ public struct TypedRuleStore: Sendable {
             let display = try readRevisions(from: revisionsURL)
             try MachineRevisionLog.checkDisplay(sealed, matches: display)
         }
-        try writeFileBytes(data, to: url)
-        if let pending {
-            try appendRevisionLine(pending, to: revisionsURL)
+        let write: () throws -> Void = {
+            try writeFileBytes(data, to: url)
+            if let pending {
+                try appendRevisionLine(pending.line, to: revisionsURL)
+            }
         }
+        guard let revision = pending else { return try write() }
+        try ConfigChangeAudit.commit(
+            change.event(revision, to: document, configDirectory: baseDirectory),
+            configDirectory: baseDirectory, write)
     }
 
     private func revisionDocument(_ revision: PolicyRevision) throws -> PolicyDocument {
@@ -932,7 +969,7 @@ public struct TypedRuleStore: Sendable {
         text: String,
         revisionsURL: URL,
         recordedAtMs: Int64? = nil
-    ) throws -> Data? {
+    ) throws -> PendingRevision? {
         let entries = try readRevisions(from: revisionsURL)
         let hash = PolicyRevisionIdentity.hash(document)
         if entries.last?.hash == hash {
@@ -965,7 +1002,7 @@ public struct TypedRuleStore: Sendable {
         guard let lineData = line.data(using: .utf8) else {
             throw TypedRuleStoreError.invalidFile
         }
-        return lineData
+        return PendingRevision(line: lineData, entry: entry, previous: entries.last)
     }
 
     /// Appends one already-encoded revision line under the caller's lock.
@@ -1131,4 +1168,57 @@ private struct TypedRulesDocument: Codable, Sendable, Equatable {
 
     var schemaVersion: Int
     var rules: [TypedRule]
+}
+
+/// A revision line ready to append, with the head it follows.
+private struct PendingRevision {
+    let line: Data
+    let entry: PolicyRevision
+    let previous: PolicyRevision?
+}
+
+/// Which policy layer a save writes and why, for its `policy.changed` event.
+private struct PolicyChange {
+    enum Layer: String {
+        case machine
+        case repo
+    }
+
+    var layer: Layer
+    /// `save` or `rollback`.
+    var change: String
+    /// The live document this write replaces, read under the save lock;
+    /// nil when it could not be read, so the change cannot be classified.
+    var replacing: PolicyDocument?
+    var workspace: URL? = nil
+    /// The revision a rollback restored.
+    var target: Int? = nil
+
+    /// The event for writing `document` as `pending`. The workspace path
+    /// is shown with the home directory as `~`.
+    func event(_ pending: PendingRevision, to document: PolicyDocument, configDirectory: URL) -> AuditEvent {
+        var event = ConfigChangeAudit.policy(
+            layer: layer.rawValue, change: change, revision: pending.entry.revision, hash: pending.entry.hash,
+            ruleCount: pending.entry.ruleCount,
+            prior: pending.previous.map { ($0.revision, $0.hash, $0.ruleCount) },
+            direction: direction(to: document),
+            workspace: workspace.map { ConfigChangeAudit.redacted($0.path, configDirectory: configDirectory) })
+        if let target { event.detail["rollback_to"] = String(target) }
+        return event
+    }
+
+    /// Tightening only when `PolicyDiffRisk` finds nothing at all in the
+    /// replacement (no removed or relaxed deny or ask, no new allow, no
+    /// safety downgrade, no new exemption); an unreadable live file is
+    /// unclassified. A new or changed rule that is not a deny also loosens:
+    /// an `ask` over an action a pack denies can relax it, and
+    /// `PolicyDiffRisk` does not see packs.
+    func direction(to document: PolicyDocument) -> ConfigChangeAudit.Direction {
+        guard let replacing else { return .loosening }
+        let added = document.rules.filter { replacing.rules.contains($0) == false }
+        guard added.allSatisfy({ $0.verdict == .deny }) else { return .loosening }
+        let report = PolicyDiffRisk.evaluateReplacement(
+            existing: replacing, incoming: document, secretExemptionSeverity: .blocking)
+        return report.findings.isEmpty ? .tightening : .loosening
+    }
 }
