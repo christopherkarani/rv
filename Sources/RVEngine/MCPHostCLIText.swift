@@ -112,7 +112,13 @@ struct HostTextReads {
             literal = outerLiteral
         }
         let launched = launchedCommandHeads(text)
-        if launched.contains(where: \.truncated) { return true }
+        // Text the parser stopped following, or a segment the splitter could
+        // not scan (`watch '{claude,x} mcp add'`), may hide a host CLI. A
+        // literal read judges words as written, and an unscanned segment
+        // has none left (`grep -E '(mcp|claude) add'`).
+        if launched.contains(where: { $0.truncated || (literalReading == false && isUnscannedLaunch($0)) }) {
+            return true
+        }
         for command in launched {
             if isHostMCPMutation(command, reads: &self) { return true }
         }
@@ -121,6 +127,17 @@ struct HostTextReads {
         resplit = false
         return carriesHostMCPText(launched, reads: &self)
     }
+}
+
+/// The heads `launchedCommandHeads` reports for `unscannableSegment`, which
+/// the segment splitter puts in place of a segment it could not scan: a
+/// head still `{`/`(` that does not peel (`{claude,zzqx} mcp add`), or
+/// reserved-word stripping that never settled. That segment's words are gone.
+private let unscannedHeads: Set<String> = Set(launchedCommandHeads(unscannableSegment).map(\.head))
+
+/// Whether `command` stands for a segment the splitter could not scan.
+func isUnscannedLaunch(_ command: LaunchedCommand) -> Bool {
+    unscannedHeads.contains(command.head)
 }
 
 /// Whether some text the launched commands carry may, run by a shell,
@@ -150,9 +167,13 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextRead
         let isPrinter = printers.contains(name)
         // Text nothing runs: a plain operand of a non-executor on an inert line.
         let dataOnly = lineInert && isNonExecutor(command)
-        // A non-executor that prints none of its operands (`grep`, `git
-        // commit`): only their literal words count.
-        let literalOnly = isPrinter == false && isNonExecutor(command)
+        // A non-executor that is no printer (`grep`, `rg`, `git commit`):
+        // its operands are patterns, paths or messages to it, so only their
+        // literal words count. It may still print one (`rg -r TEXT`, `grep
+        // --label`); that output is still read literally only. So are the
+        // operands of a command that never runs one (`leavesOperandsAlone`:
+        // `ls mcp $DIR` re-read as `mcp $DIR`), as written.
+        let literalOnly = isPrinter == false && (isNonExecutor(command) || leavesOperandsAlone(command))
         for word in args + values {
             for variant in Set([word, word.ansiCDecodedIfMarked, decodedWord(word)])
             where variant.contains(where: \.isWhitespace) {
