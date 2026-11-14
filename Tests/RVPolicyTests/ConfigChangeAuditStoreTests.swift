@@ -26,10 +26,10 @@ struct ConfigChangeAuditStoreTests {
         #expect(report.isIntact)
     }
 
-    private func rule(_ pattern: String, branch: String = "main") -> PolicyDocumentRule {
+    private func rule(_ pattern: String, branch: String = "main", verdict: TypedRuleVerdict = .deny) -> PolicyDocumentRule {
         PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: pattern),
-            verdict: .deny,
+            verdict: verdict,
             predicate: .gitPush(force: .exactly(.force), branch: branch))
     }
 
@@ -68,19 +68,79 @@ struct ConfigChangeAuditStoreTests {
         #expect(events.allSatisfy { $0.detail["authorized_by"] == "none" })
     }
 
-    @Test func anUnrecordableSettingIsNotWritten() throws {
+    /// audit.jsonl as a directory: every append fails.
+    private func breakLog(_ directory: URL) throws {
+        try FileManager.default.createDirectory(
+            at: AuditLog.fileURL(configDirectory: directory), withIntermediateDirectories: true)
+    }
+
+    @Test func anUnrecordableLooseningSettingIsNotWritten() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let directory = RVPolicyPaths.configDirectory(home: home)
-        try FileManager.default.createDirectory(
-            at: AuditLog.fileURL(configDirectory: directory), withIntermediateDirectories: true)
         let store = SafetyStore(configDirectory: directory)
-        #expect(throws: ConfigChangeUnrecorded.self) { try store.saveMachine(.strict) }
-        #expect(store.loadMachine() == .normal)
+        try store.saveMachine(.strict)
+        try FileManager.default.removeItem(at: AuditLog.fileURL(configDirectory: directory))
+        try breakLog(directory)
+        #expect(throws: ConfigChangeUnrecorded.self) { try store.saveMachine(.normal) }
+        #expect(store.loadMachine() == .strict)
         #expect(throws: ConfigChangeUnrecorded.self) {
             try HostModeStore(configDirectory: directory).save(.off, for: .cursor)
         }
+        #expect(throws: ConfigChangeUnrecorded.self) {
+            try HostModeStore(configDirectory: directory).saveGlobalObserve()
+        }
         #expect(HostModeStore(configDirectory: directory).load().isEmpty)
+    }
+
+    @Test func anUnrecordableTighteningSettingIsStillWritten() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let directory = RVPolicyPaths.configDirectory(home: home)
+        try breakLog(directory)
+        let store = SafetyStore(configDirectory: directory)
+        try store.saveMachine(.strict)
+        #expect(store.loadMachine() == .strict)
+        let hosts = HostModeStore(configDirectory: directory)
+        try hosts.save(.block, for: .cursor)
+        #expect(hosts.load()[.cursor] == .block)
+    }
+
+    @Test func settingDirectionsFollowTheGate() {
+        #expect(HostModeStore.direction(from: "observe", to: .block) == .tightening)
+        #expect(HostModeStore.direction(from: "off", to: .observe) == .tightening)
+        #expect(HostModeStore.direction(from: "block", to: .observe) == .loosening)
+        #expect(HostModeStore.direction(from: "unset", to: .off) == .loosening)
+        #expect(HostModeStore.direction(from: "garbage", to: .observe) == .loosening)
+        let more = PacksConfigStore.changeEvent(
+            from: PacksConfig(enabled: ["a"], disabled: ["b"]), to: PacksConfig(enabled: ["a", "c"]))
+        #expect(more?.detail["direction"] == "tightening")
+        let mixed = PacksConfigStore.changeEvent(from: PacksConfig(enabled: ["a"]), to: PacksConfig(enabled: ["b"]))
+        #expect(mixed?.detail["direction"] == "loosening")
+        let disabling = PacksConfigStore.changeEvent(from: PacksConfig(), to: PacksConfig(disabled: ["a"]))
+        #expect(disabling?.detail["direction"] == "loosening")
+    }
+
+    @Test func anUnrecordableMixedChangeIsRefused() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let directory = RVPolicyPaths.configDirectory(home: home)
+        try PacksConfigStore.save(PacksConfig(enabled: ["cloud.aws"]), home: home)
+        let allowlist = AllowlistStore(baseDirectory: directory)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        try allowlist.add(AllowlistEntry(selector: .rule(ruleID), reason: "ok", addedAt: Date()), tty: tty)
+        try FileManager.default.removeItem(at: AuditLog.fileURL(configDirectory: directory))
+        try breakLog(directory)
+        #expect(throws: ConfigChangeUnrecorded.self) {
+            try PacksConfigStore.save(PacksConfig(enabled: ["cloud.gcp"]), home: home)
+        }
+        #expect(try PacksConfigStore.load(home: home).enabled == ["cloud.aws"])
+        let other = try #require(RuleID(rawValue: "core.git:clean-force"))
+        #expect(throws: ConfigChangeUnrecorded.self) {
+            try allowlist.add(AllowlistEntry(selector: .rule(other), reason: "ok", addedAt: Date()), tty: tty)
+        }
+        // Removing an exception only tightens, so it is made.
+        #expect(try allowlist.remove(matching: "core.git:reset-hard", tty: tty) == 1)
     }
 
     @Test func packsRecordTheListsAndWhatWasAdded() throws {
@@ -164,19 +224,36 @@ struct ConfigChangeAuditStoreTests {
         let event = try #require(changes(directory).first)
         #expect(event.subject == "repo")
         #expect(event.detail["layer"] == "repo")
-        #expect(event.workspace == workspace.path)
+        #expect(event.workspace == "~/repo")
     }
 
-    @Test func anUnrecordablePolicyRevisionIsNotSaved() throws {
+    @Test func anUnrecordableLooseningPolicyRevisionIsNotSaved() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let directory = RVPolicyPaths.configDirectory(home: home)
-        try FileManager.default.createDirectory(
-            at: AuditLog.fileURL(configDirectory: directory), withIntermediateDirectories: true)
+        try breakLog(directory)
         let store = TypedRuleStore(baseDirectory: directory)
         #expect(throws: ConfigChangeUnrecorded.self) {
-            try store.saveMachine(PolicyDocument(rules: [rule("force-push-main")]))
+            try store.saveMachine(PolicyDocument(rules: [rule("allow-push", verdict: .allow)]))
         }
         #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
+    }
+
+    @Test func anUnrecordableTighteningPolicyRevisionIsSaved() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let directory = RVPolicyPaths.configDirectory(home: home)
+        let store = TypedRuleStore(baseDirectory: directory)
+        try store.saveMachine(PolicyDocument(rules: [rule("force-push-main")]))
+        try FileManager.default.removeItem(at: AuditLog.fileURL(configDirectory: directory))
+        try breakLog(directory)
+        // Adding a deny tightens: saved without a record.
+        try store.saveMachine(PolicyDocument(rules: [rule("force-push-main"), rule("second", branch: "release")]))
+        #expect(try store.loadMachineDocument().rules.count == 2)
+        // Dropping a deny loosens: refused.
+        #expect(throws: ConfigChangeUnrecorded.self) {
+            try store.saveMachine(PolicyDocument(rules: [rule("second", branch: "release")]))
+        }
+        #expect(try store.loadMachineDocument().rules.count == 2)
     }
 }

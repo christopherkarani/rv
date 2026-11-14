@@ -282,12 +282,13 @@ public struct TypedRuleStore: Sendable {
             let chain = try reconcileInterruptedSave(verified: try loadVerifiedChain())
             let recordedAtMs = currentMs()
             let document = try withFileLock(at: machineLockURL) {
+                let replacing = try? loadMachineDocument()
                 let document = try next()
                 try saveUnlocked(
                     document,
                     to: machineFileURL,
                     revisionsURL: machineRevisionsURL,
-                    change: PolicyChange(layer: .machine, change: "save"),
+                    change: PolicyChange(layer: .machine, change: "save", replacing: replacing),
                     sealed: chain,
                     recordedAtMs: recordedAtMs
                 )
@@ -408,8 +409,10 @@ public struct TypedRuleStore: Sendable {
                     }
                 }
                 if let pending {
-                    let change = PolicyChange(layer: .machine, change: "rollback", target: target)
-                    try ConfigChangeAudit.commit(change.event(pending), configDirectory: baseDirectory, write)
+                    let change = PolicyChange(layer: .machine, change: "rollback", replacing: live, target: target)
+                    try ConfigChangeAudit.commit(
+                        change.event(pending, to: match.document, configDirectory: baseDirectory),
+                        configDirectory: baseDirectory, write)
                     newHeadRevision = display.count + 1
                 } else {
                     try write()
@@ -439,10 +442,12 @@ public struct TypedRuleStore: Sendable {
             let document = try loadMachineDocument()
             let toml = PolicyDocumentTOML.render(document)
             let recordedAtMs = currentMs()
-            // History restarts at r1: no prior revision is verifiable.
+            // History restarts at r1: no prior revision is verifiable, so
+            // the change cannot be shown to tighten.
             let event = ConfigChangeAudit.policy(
                 layer: PolicyChange.Layer.machine.rawValue, change: "reinitialize", revision: 1,
-                hash: PolicyRevisionIdentity.hash(document), ruleCount: document.rules.count, prior: nil)
+                hash: PolicyRevisionIdentity.hash(document), ruleCount: document.rules.count, prior: nil,
+                direction: .loosening)
             try ConfigChangeAudit.commit(event, configDirectory: baseDirectory) {
                 try seal(toml: toml, at: recordedAtMs, after: .fresh)
                 // Reconcile the display log to the same single generation: the
@@ -537,12 +542,13 @@ public struct TypedRuleStore: Sendable {
         let lock = file.deletingLastPathComponent()
             .appendingPathComponent(".policy.lock", isDirectory: false)
         return try withFileLock(at: lock) {
+            let replacing = try? loadRepoDocument(workspace: workspace)
             let document = try next()
             try saveUnlocked(
                 document,
                 to: file,
                 revisionsURL: repoRevisionsURL(workspace: workspace),
-                change: PolicyChange(layer: .repo, change: "save", workspace: workspace)
+                change: PolicyChange(layer: .repo, change: "save", replacing: replacing, workspace: workspace)
             )
             return document
         }
@@ -654,7 +660,8 @@ public struct TypedRuleStore: Sendable {
                 targetDocument,
                 to: file,
                 revisionsURL: revisionsURL,
-                change: PolicyChange(layer: .repo, change: "rollback", workspace: workspace, target: revision)
+                change: PolicyChange(
+                    layer: .repo, change: "rollback", replacing: live, workspace: workspace, target: revision)
             )
         }
         let newHead = try listRepoRevisions(workspace: workspace).last
@@ -877,7 +884,9 @@ public struct TypedRuleStore: Sendable {
             }
         }
         guard let revision = pending else { return try write() }
-        try ConfigChangeAudit.commit(change.event(revision), configDirectory: baseDirectory, write)
+        try ConfigChangeAudit.commit(
+            change.event(revision, to: document, configDirectory: baseDirectory),
+            configDirectory: baseDirectory, write)
     }
 
     private func revisionDocument(_ revision: PolicyRevision) throws -> PolicyDocument {
@@ -1178,17 +1187,34 @@ private struct PolicyChange {
     var layer: Layer
     /// `save` or `rollback`.
     var change: String
+    /// The live document this write replaces, read under the save lock;
+    /// nil when it could not be read, so the change cannot be classified.
+    var replacing: PolicyDocument?
     var workspace: URL? = nil
     /// The revision a rollback restored.
     var target: Int? = nil
 
-    func event(_ pending: PendingRevision) -> AuditEvent {
+    /// The event for writing `document` as `pending`. The workspace path
+    /// is shown with the home directory as `~`.
+    func event(_ pending: PendingRevision, to document: PolicyDocument, configDirectory: URL) -> AuditEvent {
         var event = ConfigChangeAudit.policy(
             layer: layer.rawValue, change: change, revision: pending.entry.revision, hash: pending.entry.hash,
             ruleCount: pending.entry.ruleCount,
             prior: pending.previous.map { ($0.revision, $0.hash, $0.ruleCount) },
-            workspace: workspace?.path)
+            direction: direction(to: document),
+            workspace: workspace.map { ConfigChangeAudit.redacted($0.path, configDirectory: configDirectory) })
         if let target { event.detail["rollback_to"] = String(target) }
         return event
+    }
+
+    /// Tightening only when `PolicyDiffRisk` finds nothing at all in the
+    /// replacement (no removed or relaxed deny or ask, no new allow, no
+    /// safety downgrade, no new exemption); an unreadable live file is
+    /// unclassified.
+    func direction(to document: PolicyDocument) -> ConfigChangeAudit.Direction {
+        guard let replacing else { return .loosening }
+        let report = PolicyDiffRisk.evaluateReplacement(
+            existing: replacing, incoming: document, secretExemptionSeverity: .blocking)
+        return report.findings.isEmpty ? .tightening : .loosening
     }
 }

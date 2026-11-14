@@ -66,9 +66,13 @@ public enum AuditOCSF {
         case 1007:
             object["process"] = ["name": event.detail["tool"] ?? "command"]
         case 5019:
-            // Device Config State Change: the gate itself changed.
-            object["state_id"] = event.decision == .failed ? 99 : 2
-            object["state"] = event.decision == .failed ? "Other" : "Enabled"
+            // Device Config State Change: the gate itself changed. A change
+            // is neither "Enabled" nor "Disabled" as a whole, so `state` is
+            // Other with rv's own label; `status_detail` keeps a failed write
+            // apart from a bundle that failed verification.
+            object["state_id"] = 99
+            object["state"] = event.detail["change"] ?? event.detail["new"] ?? "changed"
+            if let reason = event.reason { object["status_detail"] = reason }
         case 2004:
             object["is_alert"] = true
             object["finding_info"] = [

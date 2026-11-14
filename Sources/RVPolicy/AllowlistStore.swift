@@ -145,7 +145,8 @@ public struct AllowlistStore: Sendable {
     /// `config.changed` (`allowlist`): entry counts before and after and the
     /// selectors added or removed. Rule ids by name; an exact command only as
     /// `exact-command`, since its text can hold anything. Nil when no entry
-    /// changed.
+    /// changed. Only removing entries tightens; any added or edited entry
+    /// is an exception and loosens.
     static func changeEvent(from prior: [AllowlistEntry], to new: [AllowlistEntry]) -> AuditEvent? {
         guard prior != new else { return nil }
         func label(_ entry: AllowlistEntry) -> String {
@@ -160,7 +161,8 @@ public struct AllowlistStore: Sendable {
         if added.isEmpty == false { detail["added"] = ConfigChangeAudit.list(added) }
         if removed.isEmpty == false { detail["removed"] = ConfigChangeAudit.list(removed) }
         return ConfigChangeAudit.setting(
-            "allowlist", from: "\(prior.count) entries", to: "\(new.count) entries", detail: detail)
+            "allowlist", from: "\(prior.count) entries", to: "\(new.count) entries",
+            direction: added.isEmpty ? .tightening : .loosening, detail: detail)
     }
 
     private func writeAllUnlocked(_ entries: [AllowlistEntry]) throws {

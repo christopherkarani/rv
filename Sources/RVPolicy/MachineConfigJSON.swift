@@ -48,9 +48,13 @@ enum MachineConfigJSON {
     /// existing file (a missing one is `{}`) must decode as a JSON object,
     /// checked under the lock, or `notAnObject` is thrown and nothing is
     /// written. `mutate` may throw; nothing is written then either.
+    ///
+    /// `beforeWrite` runs after the audit event is recorded and before the
+    /// file moves, for a side effect that must not happen unrecorded.
     static func updateExistingObject(
         file: URL,
         audit: ChangeEvent? = nil,
+        beforeWrite: () throws -> Void = {},
         mutate: (inout [String: JSONValue]) throws -> Void
     ) throws {
         try prepareDirectory(of: file)
@@ -58,7 +62,7 @@ enum MachineConfigJSON {
             let before = try loadObject(from: file)
             var root = before
             try mutate(&root)
-            try write(root, to: file, audit: audit?(before, root))
+            try write(root, to: file, audit: audit?(before, root), beforeWrite: beforeWrite)
         }
     }
 
@@ -76,16 +80,20 @@ enum MachineConfigJSON {
     /// Writes `root`; with an `audit` event, write-ahead through
     /// `ConfigChangeAudit.commit`, so a change the log cannot hold is not
     /// written. The caller holds the lock, so prior and new are exact.
-    private static func write(_ root: [String: JSONValue], to file: URL, audit: AuditEvent?) throws {
+    private static func write(
+        _ root: [String: JSONValue], to file: URL, audit: AuditEvent?, beforeWrite: () throws -> Void = {}
+    ) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         guard let data = try? encoder.encode(JSONValue.object(root)) else {
             throw SafetyStoreError.invalidFile
         }
-        guard let audit else { return try replace(file, with: data) }
-        try ConfigChangeAudit.commit(audit, configDirectory: file.deletingLastPathComponent()) {
+        func apply() throws {
+            try beforeWrite()
             try replace(file, with: data)
         }
+        guard let audit else { return try apply() }
+        try ConfigChangeAudit.commit(audit, configDirectory: file.deletingLastPathComponent(), apply)
     }
 
     private static func replace(_ file: URL, with data: Data) throws {

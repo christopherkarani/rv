@@ -11,7 +11,9 @@ import Synchronization
 ///
 /// The first state a process loads is its baseline and records nothing, so
 /// short-lived CLI runs stay quiet and `rvd` records what changes while it
-/// runs. A transition the audit log cannot hold is retried on the next load.
+/// runs; a bundle removed or swapped while `rvd` is down is not recorded
+/// (a raised serial still is, by `ManagedSerialStore`). A transition the
+/// audit log cannot hold is retried on the next load.
 enum ManagedGateAudit {
     /// What a transition compares: kind, content hash, serial, reason.
     struct Seen: Equatable, Sendable {
@@ -47,7 +49,8 @@ enum ManagedGateAudit {
             return previous
         }
         guard let previous, previous != now, let event = event(from: previous, to: state) else { return }
-        guard AuditLog.append(event, configDirectory: configDirectory) else {
+        // Bounded: this runs on every evaluation door's managed-state load.
+        guard AuditLog.append(event, configDirectory: configDirectory, lockTimeout: ConfigChangeAudit.lockTimeout) else {
             // Not recorded: put the old state back so the next load retries.
             seen.withLock { map in
                 if map[key] == now { map[key] = previous }

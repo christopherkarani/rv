@@ -62,6 +62,26 @@ struct ConfigChangeAuditIsolationTests {
             atPath: SecretsConfiguration.fileURL(configDirectory: directory).path) == false)
     }
 
+    @Test func anUnrecordableSecretsRemovalIsStillWritten() throws {
+        let directory = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try SecretsConfiguration(secrets: [secret("DB", vault: "v"), secret("API", vault: "v")])
+            .write(configDirectory: directory).get()
+        let log = AuditLog.fileURL(configDirectory: directory)
+        try FileManager.default.removeItem(at: log)
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+        // Dropping a definition only removes access.
+        try SecretsConfiguration(secrets: [secret("DB", vault: "v")]).write(configDirectory: directory).get()
+        #expect(try SecretsConfiguration.load(configDirectory: directory).get().secrets.map(\.name) == ["DB"])
+        // Changing one is not known to tighten.
+        let changed = SecretsConfiguration(secrets: [secret("DB", vault: "other")]).write(configDirectory: directory)
+        guard case .failure(let error) = changed else {
+            Issue.record("an unrecordable secrets change was written")
+            return
+        }
+        #expect(error == .unrecorded)
+    }
+
     @Test func anAcceptedOrganizationSerialIsRecorded() throws {
         let fixture = try ManagedSerialStoreTests.Fixture()
         try fixture.install(serial: 3)
