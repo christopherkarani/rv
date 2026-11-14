@@ -50,16 +50,51 @@ private let capable: @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = { _ in 
 /// Whether the real spawn and kernel peer check work here.
 private let hostRunsSecretRun = SecretRunCapability.check(.runtime) == nil
 
+/// One value behind a lock, to share with a closure or a thread.
+private final class Shared<Value: Sendable>: Sendable {
+    private let state: Mutex<Value>
+    init(_ value: Value) { state = Mutex(value) }
+    var value: Value { state.withLock { $0 } }
+    func set(_ value: Value) { state.withLock { $0 = value } }
+}
+
+/// Signal guards that install nothing: the test process keeps its own
+/// dispositions, so children other suites spawn meanwhile inherit none of
+/// rv's ignored signals. Tests drive forwarding with `deliver`.
+private let detachedSignals: @Sendable () -> SecretRunSignals = { SecretRunSignals(detached: []) }
+
 private func context(
     _ fixture: SecretsFixture, directory: URL, peers: GatewayPeerCheck,
     capability: @escaping @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = capable,
     transport: SecretUpstreamTransport = RecordingUpstream().transport, notices: Notices = Notices(),
-    environment: [String: String] = ["PATH": "/usr/bin:/bin"]
+    environment: [String: String] = ["PATH": "/usr/bin:/bin"],
+    signals: @escaping @Sendable () -> SecretRunSignals = detachedSignals
 ) -> SecretRunContext {
     SecretRunContext(
         configDirectory: fixture.directory, resolver: fakeResolver, transport: transport, peers: peers,
         capability: capability, environment: environment, directory: directory.path,
-        manageTerminal: false, notice: notices.sink)
+        manageTerminal: false, notice: notices.sink, signals: signals)
+}
+
+/// Runs `body` on a thread of its own, so a regression that blocks in
+/// `waitid` fails the test instead of hanging it (`.timeLimit` cannot
+/// preempt a blocked thread). After `seconds` the group `group` holds, once
+/// known, is killed, which ends any wait in `supervise`.
+private func bounded(
+    _ seconds: Double = 30, killing group: Shared<pid_t>? = nil,
+    _ body: @escaping @Sendable () -> Result<Int32, SecretRunRefusal>
+) -> Result<Int32, SecretRunRefusal>? {
+    let outcome = Shared<Result<Int32, SecretRunRefusal>?>(nil)
+    let finished = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        outcome.set(body())
+        finished.signal()
+    }
+    guard finished.wait(timeout: .now() + seconds) == .timedOut else { return outcome.value }
+    Issue.record("the launch did not return within \(Int(seconds)) seconds")
+    if let pgid = group?.value, pgid > 1 { _ = kill(-pgid, SIGKILL) }
+    _ = finished.wait(timeout: .now() + 10)
+    return outcome.value
 }
 
 @Suite("SecretRun selection and environment")
@@ -222,16 +257,16 @@ struct SecretRunPlanTests {
     /// back only if it gave it: a backgrounded rv leaves it with the shell.
     @Test func terminalIsHandedFromTheForegroundAndReclaimedOnlyIfHanded() {
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
         #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true))  // Ctrl-Z
         #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == false)  // nothing left to take back
-        #expect(job.handsTerminal(rvInForeground: false, sharesGroup: false, to: 100) == false)  // `bg`
+        #expect(job.handsTerminal(rvInForeground: false, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == false)  // `bg`
         #expect(job.reclaimsTerminal(foreground: 7, foregroundAlive: true) == false)  // stops in the background
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))  // `fg`
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))  // `fg`
         #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: false))  // the command's group is gone
 
         var background = SecretRunJobControl()
-        #expect(background.handsTerminal(rvInForeground: false, sharesGroup: false, to: 100) == false)  // `rv run … &`
+        #expect(background.handsTerminal(rvInForeground: false, sharesGroup: false, rvIgnoresInterrupt: false, to: 100) == false)  // `rv run … &`
         #expect(background.reclaimsTerminal(foreground: 100, foregroundAlive: true) == false)
     }
 
@@ -240,14 +275,14 @@ struct SecretRunPlanTests {
     /// group nobody is in any more, and never when the foreground is unknown.
     @Test func terminalAnotherJobHoldsIsNotTakenBack() {
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
         #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: true) == false)
         #expect(job.handedTo == nil)
 
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
         #expect(job.reclaimsTerminal(foreground: 200, foregroundAlive: false))
 
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, to: 100))
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: false, to: 100))
         #expect(job.reclaimsTerminal(foreground: nil, foregroundAlive: false) == false)
     }
 
@@ -260,22 +295,76 @@ struct SecretRunPlanTests {
         #expect(SecretRunJobControl.sharesGroup(members: [rv, 400, 501], rv: rv, ancestors: [400]))
         #expect(SecretRunJobControl.sharesGroup(members: [], rv: rv, ancestors: []))  // unreadable: shared
         var job = SecretRunJobControl()
-        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: true, to: 100) == false)
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: true, rvIgnoresInterrupt: false, to: 100) == false)
         #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == false)
+    }
+
+    /// rv started in the background by a shell without job control (`rv
+    /// run … &` in a script) inherits SIGINT ignored, and the terminal
+    /// belongs to the script's foreground: rv hands nothing.
+    @Test func terminalIsNotHandedWhenRvInheritedInterruptIgnored() {
+        var job = SecretRunJobControl()
+        #expect(job.handsTerminal(rvInForeground: true, sharesGroup: false, rvIgnoresInterrupt: true, to: 100) == false)
+        #expect(job.handedTo == nil)
+        #expect(job.reclaimsTerminal(foreground: 100, foregroundAlive: true) == false)
+    }
+
+    /// When rv holds the hand-off back because it shares its group, it says
+    /// so once per run, and only when it holds the foreground at all.
+    @Test func aHandOffHeldBackForSharingIsToldOnce() {
+        var job = SecretRunJobControl()
+        #expect(job.tellsHeldBack(rvInForeground: false, sharesGroup: true) == false)
+        #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: false) == false)
+        #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: true))
+        #expect(job.tellsHeldBack(rvInForeground: true, sharesGroup: true) == false)
     }
 
     /// Once released (before the leader is reaped), no signal reaches the
     /// group id, which may by then be someone else's. Each forwarded signal
     /// is followed by `SIGCONT`, so a stopped group still gets it.
-    @Test func signalsStopReachingTheGroupOnceReleased() {
+    @Test func signalsReachTheTargetedGroupUntilReleased() {
         let sent = Notices()
         let forwarding = SecretRunSignalTarget(send: { group, number in sent.sink("\(group) \(number)") })
-        forwarding.deliver(SIGINT)
-        #expect(forwarding.target(4242) == SIGINT)  // arrived before: the launch is abandoned
+        #expect(forwarding.target(4242) == nil)
         forwarding.deliver(SIGTERM)
         forwarding.release()
         forwarding.deliver(SIGHUP)
         #expect(sent.all == ["4242 \(SIGTERM)", "4242 \(SIGCONT)"])
+    }
+
+    /// A signal before the resume abandons the launch; the group is never
+    /// armed, so a second one before the release sends nothing (no SIGCONT
+    /// can wake the suspended child).
+    @Test func aLaunchInterruptedBeforeItsResumeSignalsNothing() {
+        let sent = Notices()
+        let forwarding = SecretRunSignalTarget(send: { group, number in sent.sink("\(group) \(number)") })
+        forwarding.deliver(SIGINT)
+        #expect(forwarding.target(4242) == SIGINT)
+        forwarding.deliver(SIGHUP)
+        forwarding.release()
+        #expect(sent.all.isEmpty)
+        #expect(forwarding.interrupted == SIGINT)
+    }
+
+    /// `kill(-1, …)` would signal every process rv may signal: a group id of
+    /// 1 or less is never targeted.
+    @Test func aGroupIdOfOneOrLessIsNeverTargeted() {
+        let sent = Notices()
+        let forwarding = SecretRunSignalTarget(send: { group, number in sent.sink("\(group) \(number)") })
+        for group: pid_t in [1, 0, -7] { #expect(forwarding.target(group) == nil) }
+        forwarding.deliver(SIGTERM)
+        #expect(sent.all.isEmpty)
+    }
+
+    /// The command gets the default for every signal rv resets, except one
+    /// rv inherited ignored (`nohup`, a parent that ignores SIGPIPE).
+    @Test func theCommandKeepsEverySignalRvInheritedIgnored() {
+        #if os(macOS)
+        let reset = [SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU, SIGPIPE, SIGWINCH, SIGINFO]
+        #expect(SecretRunProcess.defaultedSignals(keepIgnored: []) == reset)
+        let kept: Set<Int32> = [SIGHUP, SIGPIPE, SIGTSTP]
+        #expect(SecretRunProcess.defaultedSignals(keepIgnored: kept) == reset.filter { kept.contains($0) == false })
+        #endif
     }
 
     @Test func rvForwardsQuitAsWellAsInterruptTerminateAndHangup() {
@@ -371,103 +460,165 @@ struct SecretRunLaunchTests {
     @Test(.timeLimit(.minutes(1)))
     func aStoppedCommandStopsRvAndGetsTheTerminalBackWhenContinued() {
         let terminal = RecordingTerminal()
-        let signals = SecretRunSignals()
-        defer { signals.restore() }
-        let result = SecretRunProcess.launch(
-            executable: "/bin/sh", arguments: ["sh", "-c", "kill -STOP $$; exit 3"],
-            environment: ["PATH=/usr/bin:/bin"], terminal: terminal, signals: signals
-        ) { _ in .success(()) }
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            launchShell("kill -STOP $$; exit 3", terminal: terminal, bound: bound)
+        }
         #expect(result == .success(3 << 8))
         #expect(terminal.events == ["hand", "reclaim", "stopSelf", "hand", "reclaim"])
     }
 
+    /// In a pipeline rv shares its group: the command never gets the
+    /// terminal, at launch or after a stop, and rv says so once.
+    @Test(.timeLimit(.minutes(1)))
+    func aCommandSharingRvsGroupNeverGetsTheTerminal() {
+        let terminal = RecordingTerminal(shares: true)
+        let notices = Notices()
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            launchShell("kill -STOP $$; exit 5", terminal: terminal, bound: bound, notice: notices.sink)
+        }
+        #expect(result == .success(5 << 8))
+        #expect(terminal.events == ["stopSelf"])
+        #expect(notices.all.count == 1)
+        #expect(notices.all.first?.contains("terminal") == true)
+    }
+
+    /// rv started as an asynchronous list by a shell without job control
+    /// inherits SIGINT ignored: the terminal stays with the script.
+    @Test(.timeLimit(.minutes(1)))
+    func aCommandFromABackgroundListNeverGetsTheTerminal() {
+        let terminal = RecordingTerminal()
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            launchShell(
+                "kill -STOP $$; exit 6", terminal: terminal, bound: bound,
+                signals: SecretRunSignals(detached: [SIGINT]))
+        }
+        #expect(result == .success(6 << 8))
+        #expect(terminal.events == ["stopSelf"])
+    }
+
+    /// The shell gave the terminal to another job while the command ran:
+    /// when the command exits, rv leaves it with that job.
+    @Test(.timeLimit(.minutes(1)))
+    func theTerminalAnotherJobTookIsLeftWithItWhenTheCommandExits() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Another job: a live group of its own that never runs.
+        let other = try SecretRunProcess.spawnSuspended(
+            executable: "/bin/sleep", arguments: ["sleep", "30"], environment: [], descriptors: [:]).get()
+        defer { SecretRunProcess.discard(other) }
+        let terminal = RecordingTerminal()
+        let go = directory.appendingPathComponent("go").path
+        Thread.detachNewThread {
+            let deadline = Date().addingTimeInterval(20)
+            while terminal.events.contains("hand") == false, Date() < deadline { usleep(5_000) }
+            terminal.foreground = other
+            let fd = open(go, O_CREAT | O_WRONLY, 0o600)
+            if fd >= 0 { _ = close(fd) }
+        }
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            launchShell(
+                "while [ ! -e \"$1/go\" ]; do sleep 0.05; done; exit 0", directory: directory.path,
+                terminal: terminal, bound: bound)
+        }
+        #expect(result == .success(0))
+        #expect(terminal.events == ["hand"])
+        #expect(terminal.foreground == other)
+    }
+
     /// A signal that lands after the spawn but before the resume abandons
-    /// the launch: the command never runs and its group is gone.
+    /// the launch: the command never runs, the terminal comes back, and its
+    /// group is gone.
     @Test(.timeLimit(.minutes(1)))
     func aSignalBeforeTheResumeAbandonsTheLaunch() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let terminal = RecordingTerminal()
-        let signals = SecretRunSignals()
-        defer { signals.restore() }
-        let bound = Mutex<pid_t>(0)
-        let result = SecretRunProcess.launch(
-            executable: "/bin/sh", arguments: ["sh", "-c", "touch \"$1/ran\"", "sh", directory.path],
-            environment: ["PATH=/usr/bin:/bin"], terminal: terminal, signals: signals
-        ) { group in
-            bound.withLock { $0 = group.pgid.rawValue }
-            _ = kill(getpid(), SIGINT)
-            let deadline = Date().addingTimeInterval(10)
-            while signals.interrupted == nil, Date() < deadline { usleep(1_000) }
-            return .success(())
+        let signals = SecretRunSignals(detached: [])
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            SecretRunProcess.launch(
+                executable: "/bin/sh", arguments: ["sh", "-c", "touch \"$1/ran\"", "sh", directory.path],
+                environment: ["PATH=/usr/bin:/bin"], terminal: terminal, signals: signals, notice: { _ in }
+            ) { group in
+                bound.set(group.pgid.rawValue)
+                signals.deliver(SIGINT)
+                return .success(())
+            }
         }
         #expect(result == .success(SIGINT))
-        #expect(terminal.events.isEmpty)
-        let pgid = bound.withLock { $0 }
+        #expect(terminal.events == ["hand", "reclaim"])
+        let pgid = bound.value
         #expect(pgid > 1)
         #expect(kill(-pgid, 0) == -1 && errno == ESRCH)
         #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ran").path) == false)
     }
 
     /// A signal rv receives reaches the command's whole group, even while
-    /// the group is stopped (rv continues it after the signal).
+    /// the group is stopped (rv continues it after the signal). Delivered to
+    /// a detached guard, so nothing here can signal the test runner.
     @Test(.timeLimit(.minutes(1)), arguments: [SIGTERM, SIGQUIT])
     func signalsToRvReachTheCommandsGroupEvenWhenStopped(number: Int32) throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let marker = directory.appendingPathComponent("pid").path
-        let signals = SecretRunSignals()
-        defer { signals.restore() }
+        let signals = SecretRunSignals(detached: [])
+        let finished = Shared(false)
         Thread.detachNewThread {
             let deadline = Date().addingTimeInterval(20)
             var pid: pid_t = 0
-            while pid == 0, Date() < deadline {
+            while pid == 0, finished.value == false, Date() < deadline {
                 let text = (try? String(contentsOfFile: marker, encoding: .utf8)) ?? ""
                 pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
                 usleep(10_000)
             }
-            while isStopped(pid) == false, Date() < deadline { usleep(10_000) }
-            _ = kill(getpid(), number)
+            while isStopped(pid) == false, finished.value == false, Date() < deadline { usleep(10_000) }
+            guard pid > 1, finished.value == false else { return }
+            signals.deliver(number)
         }
-        let script = "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; exit 0"
-        let result = SecretRunProcess.launch(
-            executable: "/bin/sh", arguments: ["sh", "-c", script, "sh", directory.path],
-            environment: ["PATH=/usr/bin:/bin"], terminal: nil, signals: signals
-        ) { _ in .success(()) }
-        let status = try result.get()
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            launchShell(
+                "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; exit 0",
+                directory: directory.path, terminal: nil, bound: bound, signals: signals)
+        }
+        finished.set(true)
+        let status = try #require(result).get()
         #expect(SecretRunExit.code(waitStatus: status) == 128 + number)
     }
 
-    /// Under `nohup` rv inherits SIGHUP ignored; the command keeps it
-    /// ignored instead of getting the default back.
-    @Test(.timeLimit(.minutes(1)))
-    func aSignalRvInheritedIgnoredStaysIgnoredForTheCommand() {
-        let previous = signal(SIGHUP, SIG_IGN)
-        defer { _ = signal(SIGHUP, previous) }
-        let signals = SecretRunSignals()
-        defer { signals.restore() }
-        #expect(signals.inheritedIgnored.contains(SIGHUP))
-        let result = SecretRunProcess.launch(
-            executable: "/bin/sh", arguments: ["sh", "-c", "kill -HUP $$; exit 4"],
-            environment: ["PATH=/usr/bin:/bin"], terminal: nil, signals: signals
-        ) { _ in .success(()) }
-        #expect(result == .success(4 << 8))
-    }
-
-    /// Dispositions are process-wide: every guard shares one installation,
-    /// which the last one out restores, whichever order they leave in.
-    /// While installed, SIGCHLD is default so nothing reaps behind rv.
+    /// The one test that installs real dispositions, kept to microseconds
+    /// (no child runs meanwhile): every guard shares one installation, which
+    /// the last one out restores, whichever order they leave in. A signal is
+    /// fanned out to every guard; SIGCHLD is default meanwhile so nothing
+    /// reaps behind rv; signals rv inherited ignored are reported, among
+    /// them ones rv never touches.
     @Test func signalGuardsShareOneInstallationThatTheLastOutRestores() {
-        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD]
+        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD, SIGWINCH]
         let noted: sig_t = { _ in }
         let previousChild = signal(SIGCHLD, noted)
-        defer { _ = signal(SIGCHLD, previousChild) }
+        let previousHangup = signal(SIGHUP, SIG_IGN)  // as under nohup
+        let previousWinch = signal(SIGWINCH, SIG_IGN)  // its default action is to ignore it anyway
+        defer {
+            _ = signal(SIGWINCH, previousWinch)
+            _ = signal(SIGHUP, previousHangup)
+            _ = signal(SIGCHLD, previousChild)
+        }
         let before = watched.map(disposition)
         for lastOut in [0, 1] {
             let guards = [SecretRunSignals(), SecretRunSignals()]
             #expect(SecretRunSignals.installed)
             #expect(disposition(SIGINT) == ignoredDisposition)
             #expect(disposition(SIGCHLD) == 0)
+            #expect(guards[0].inheritedIgnored.isSuperset(of: [SIGHUP, SIGWINCH]))
+            let delivered = SecretRunSignals.deliveredCount
+            _ = kill(getpid(), SIGINT)
+            let deadline = Date().addingTimeInterval(5)
+            while SecretRunSignals.deliveredCount == delivered, Date() < deadline { usleep(1_000) }
+            #expect(guards.allSatisfy { $0.interrupted == SIGINT })
             guards[1 - lastOut].restore()
             guards[1 - lastOut].restore()  // idempotent: it does not leave on the other's behalf
             #expect(SecretRunSignals.installed)
@@ -555,7 +706,8 @@ struct SecretRunLaunchTests {
         let bound = Mutex<pid_t>(0)
         let result = SecretRunProcess.launch(
             executable: "/bin/sh", arguments: ["sh", "-c", "touch \"$1/ran\"", "sh", directory.path],
-            environment: ["PATH=/usr/bin:/bin"], manageTerminal: false
+            environment: ["PATH=/usr/bin:/bin"], manageTerminal: false, signals: SecretRunSignals(detached: []),
+            notice: { _ in }
         ) { group in
             bound.withLock { $0 = group.pgid.rawValue }
             return .failure(.bindFailed("test"))
@@ -586,13 +738,14 @@ struct SecretRunLaunchTests {
             """
         let request = SecretRunRequest(
             secrets: ["OPENAI_API_KEY"], all: false, command: ["/bin/sh", "-c", script, "sh", directory.path])
-        let result = SecretRun.execute(request, context: context(
+        let run = context(
             fixture, directory: directory, peers: .runtime, capability: SecretRunCapability.check,
             transport: upstream.transport, notices: notices,
             environment: [
                 "PATH": "/usr/bin:/bin", "KEEP": "1", "OPENAI_API_KEY": realOpenAI, "FAKE_OPENAI": realOpenAI,
                 "DOTENV_COPY": realOpenAI,
-            ]))
+            ])
+        let result = bounded { SecretRun.execute(request, context: run) }
         #expect(result == .success(7))
 
         func read(_ name: String) -> String {
@@ -626,7 +779,8 @@ struct SecretRunLaunchTests {
         let request = SecretRunRequest(
             secrets: ["OPENAI_API_KEY"], all: false,
             command: ["/bin/sh", "-c", "sleep 30 & echo $! > \"$1/bg\"; kill -TERM $$", "sh", directory.path])
-        let result = SecretRun.execute(request, context: context(fixture, directory: directory, peers: .runtime))
+        let run = context(fixture, directory: directory, peers: .runtime)
+        let result = bounded { SecretRun.execute(request, context: run) }
         #expect(result == .success(128 + SIGTERM))
         let text = try String(contentsOf: directory.appendingPathComponent("bg"), encoding: .utf8)
         let leftover = try #require(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)))
@@ -647,12 +801,13 @@ struct SecretRunLaunchTests {
         let notices = Notices()
         let request = SecretRunRequest(
             secrets: [], all: true, command: ["/bin/sh", "-c", "env > \"$1/env\"", "sh", directory.path])
-        let result = SecretRun.execute(request, context: context(
+        let run = context(
             fixture, directory: directory, peers: .runtime, notices: notices,
             environment: [
                 "PATH": "/usr/bin:/bin", "KEEP": "1", "GH_TOKEN": "ghp_realtoken", "FAKE_GH": "ghp_realtoken",
                 "CODEX_ONLY": "sk-codex-real", "CODEX_BASE_URL": "https://real.example.com",
-            ]))
+            ])
+        let result = bounded { SecretRun.execute(request, context: run) }
         #expect(result == .success(0))
         let environment = try String(contentsOf: directory.appendingPathComponent("env"), encoding: .utf8)
         for name in ["GH_TOKEN=", "FAKE_GH=", "CODEX_ONLY=", "CODEX_BASE_URL="] {
@@ -668,23 +823,30 @@ struct SecretRunLaunchTests {
 
     /// A Ctrl-C while rv probes the host lands in rv's guard, not in the
     /// default action that would leave the suspended probe child behind:
-    /// rv reports it as the exit code and starts nothing.
+    /// rv reports it as the exit code and starts nothing. The guard is the
+    /// one `execute` opens for the probe, detached, and the signal is
+    /// delivered to it while the probe runs.
     @Test(.enabled(if: SecretRunProcess.isAvailable), .timeLimit(.minutes(1)))
     func anInterruptDuringTheCapabilityProbeEndsTheRunBeforeAnythingResolves() throws {
         let fixture = try SecretsFixture(runSecrets)
         defer { fixture.tearDown() }
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
+        let opened = Shared<SecretRunSignals?>(nil)
+        let opening: @Sendable () -> SecretRunSignals = {
+            let signals = SecretRunSignals(detached: [])
+            opened.set(signals)
+            return signals
+        }
         let probed = Notices()
         let interrupting: @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = { _ in
-            probed.sink("guarded=\(SecretRunSignals.installed)")
-            _ = kill(getpid(), SIGINT)
-            usleep(200_000)  // the guard's signal source runs on its own queue
+            probed.sink("guarded=\(opened.value != nil)")
+            opened.value?.deliver(SIGINT)
             return nil
         }
         let request = SecretRunRequest(secrets: ["OPENAI_API_KEY"], all: false, command: ["/bin/sh", "-c", "touch ran"])
         let result = SecretRun.execute(request, context: context(
-            fixture, directory: directory, peers: .runtime, capability: interrupting))
+            fixture, directory: directory, peers: .runtime, capability: interrupting, signals: opening))
         #expect(probed.all == ["guarded=true"])
         #expect(result == .success(128 + SIGINT))
         #expect(SecretRunSignals.installed == false)
@@ -696,26 +858,62 @@ struct SecretRunLaunchTests {
 #if os(macOS)
 /// Stands in for rv's terminal: models which group holds the foreground and
 /// records what `supervise` asks of it. rv never stops itself here.
-private final class RecordingTerminal: SecretRunTerminalControl {
-    private(set) var events: [String] = []
-    private var foreground = getpgrp()
+private final class RecordingTerminal: SecretRunTerminalControl, Sendable {
+    private struct State {
+        var events: [String] = []
+        var foreground = getpgrp()
+    }
+
+    private let state = Mutex(State())
+    /// Whether rv's group holds another job (a pipeline).
+    let sharesGroup: Bool
+
+    init(shares: Bool = false) {
+        sharesGroup = shares
+    }
+
+    var events: [String] { state.withLock { $0.events } }
+
+    /// The terminal's foreground group; a test sets it to play the shell.
+    var foreground: pid_t {
+        get { state.withLock { $0.foreground } }
+        set { state.withLock { $0.foreground = newValue } }
+    }
 
     var rvInForeground: Bool { foreground == getpgrp() }
     var foregroundGroup: pid_t? { foreground }
-    var sharesGroup: Bool { false }
 
     func hand(to group: pid_t) -> Bool {
-        events.append("hand")
-        foreground = group
+        state.withLock {
+            $0.events.append("hand")
+            $0.foreground = group
+        }
         return true
     }
 
     func reclaim() {
-        events.append("reclaim")
-        foreground = getpgrp()
+        state.withLock {
+            $0.events.append("reclaim")
+            $0.foreground = getpgrp()
+        }
     }
 
-    func stopSelf() { events.append("stopSelf") }
+    func stopSelf() { state.withLock { $0.events.append("stopSelf") } }
+}
+
+/// `sh -c script sh directory` launched with a detached guard by default,
+/// recording its group in `bound`.
+private func launchShell(
+    _ script: String, directory: String = "/", terminal: (any SecretRunTerminalControl)?, bound: Shared<pid_t>,
+    signals: SecretRunSignals = SecretRunSignals(detached: []), notice: (String) -> Void = { _ in }
+) -> Result<Int32, SecretRunRefusal> {
+    SecretRunProcess.launch(
+        executable: "/bin/sh", arguments: ["sh", "-c", script, "sh", directory],
+        environment: ["PATH=/usr/bin:/bin"], terminal: terminal, signals: signals, notice: notice
+    ) { group in
+        bound.set(group.pgid.rawValue)
+        return .success(())
+    }
 }
 
 /// The handler installed for `number`, as a number: 0 is `SIG_DFL`.

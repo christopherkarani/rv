@@ -8,21 +8,41 @@ import Foundation
 /// When `rv run` hands the terminal to the command and takes it back. Pure:
 /// it decides, `SecretRunProcess` acts.
 ///
-/// rv gives the terminal away only while it holds the foreground and no
+/// rv gives the terminal away only while it holds the foreground, no
 /// other job shares its process group (a pipeline: `rv run -- x | less`
-/// would leave `less` in the background). It takes the terminal back only
+/// would leave `less` in the background), and it did not inherit SIGINT
+/// ignored (an asynchronous list in a shell without job control, whose
+/// script keeps the terminal). It takes the terminal back only
 /// if it gave it away and nobody else has it now: while rv was stopped the
 /// shell may have given it to another job, which keeps it.
 struct SecretRunJobControl: Equatable {
     /// The group rv gave the terminal to, until rv takes it back.
     private(set) var handedTo: pid_t?
+    /// Whether rv has said why it holds the terminal back.
+    private(set) var toldHeldBack = false
+
+    /// What rv says, once, when it shares its group.
+    static let heldBackNotice =
+        "rv run: not giving the command the terminal: another process shares rv's process group "
+        + "(a pipeline), or the group could not be read. Ctrl-C reaches the command only through rv, "
+        + "and Ctrl-Z stops rv but not the command"
 
     /// Before the command resumes: at launch, and each time rv itself is
     /// continued (`fg` gives rv the foreground first; `bg` does not).
-    mutating func handsTerminal(rvInForeground: Bool, sharesGroup: Bool, to group: pid_t) -> Bool {
-        let hands = rvInForeground && sharesGroup == false
+    mutating func handsTerminal(
+        rvInForeground: Bool, sharesGroup: Bool, rvIgnoresInterrupt: Bool, to group: pid_t
+    ) -> Bool {
+        let hands = rvInForeground && sharesGroup == false && rvIgnoresInterrupt == false
         handedTo = hands ? group : nil
         return hands
+    }
+
+    /// Whether rv should say now that it holds the terminal back because it
+    /// shares its group: the first time in a run it holds the foreground.
+    mutating func tellsHeldBack(rvInForeground: Bool, sharesGroup: Bool) -> Bool {
+        guard rvInForeground, sharesGroup, toldHeldBack == false else { return false }
+        toldHeldBack = true
+        return true
     }
 
     /// When the command stops or exits. `foreground` is the terminal's
@@ -82,11 +102,15 @@ final class SecretRunSignalTarget: @unchecked Sendable {
         self.send = send
     }
 
-    /// From here on, signals go to `group`. Returns one that arrived before.
+    /// From here on, signals go to `group`. Returns one that arrived
+    /// before, in which case nothing is armed: the launch is abandoned, and
+    /// no later signal may continue its suspended child. A group id of 1 or
+    /// less is never armed (`kill(-1, …)` reaches every process rv may
+    /// signal).
     func target(_ group: pid_t) -> Int32? {
         lock.lock()
         defer { lock.unlock() }
-        if released == false { self.group = group }
+        if released == false, pending == nil, group > 1 { self.group = group }
         return pending
     }
 
