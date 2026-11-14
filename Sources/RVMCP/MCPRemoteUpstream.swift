@@ -210,14 +210,14 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
 
     // MARK: URLSessionDataDelegate (serial delegate queue)
 
-    func urlSession(
+    package func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(nil)
     }
 
-    func urlSession(
+    package func urlSession(
         _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
@@ -238,7 +238,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         completionHandler(.allow)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    package func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = dataTask.taskIdentifier
         guard var exchange = locked({ exchanges[id] }) else { return }
         var incoming: [JSONValue] = []
@@ -268,7 +268,7 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         incoming.forEach(deliver)
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    package func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let id = task.taskIdentifier
         guard let exchange = locked({ exchanges.removeValue(forKey: id) }), locked({ stopped }) == false else {
             return

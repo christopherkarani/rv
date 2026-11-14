@@ -7,7 +7,7 @@ extension MCPGatewayRuntime {
     /// closed stderr fails the write instead of raising. With SIGPIPE at its
     /// default disposition a closed stderr still ends the process, as any
     /// write does.
-    package static func writeStderrLine(_ text: String) {
+    public static func writeStderrLine(_ text: String) {
         writeStderr(Data(text.utf8))
     }
 }
