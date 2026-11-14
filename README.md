@@ -228,6 +228,15 @@ rv is one binary, 25 commands. The rest of the surface:
 - **MCP governance** — `rv mcp serve` puts every MCP server behind one
   gateway with per-tool allow/ask/deny, human approval for `ask`, and
   a full audit trail. `rv mcp check` fails if any server bypasses rv.
+  Tool definitions are pinned only by `rv mcp trust`, which shows every
+  field it pins: a tool that is new or changed since you trusted it
+  always asks and reaches the agent without the server's prose. Start
+  your MCP host once so `rv mcp serve` queues the tools, run
+  `rv mcp trust`, then restart the host (a running serve keeps the pins
+  it started with). Tool result text is forwarded byte for byte;
+  rendering it safely is the MCP host's job. Keys that differ only by
+  Unicode normalization (NFC/NFD) count as duplicates, so such a message
+  is dropped.
   *Platform support:* gateway trust and approvals need a key custodian
   the agent cannot read (macOS today). Without one, as on Linux in this
   release, rv's signing key is a file any process running as you can

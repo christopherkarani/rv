@@ -1092,19 +1092,42 @@ public struct MCPGatewayCore {
     }
 
     /// Keywords whose values are data, kept byte-exact.
-    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples"]
+    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples", "dependentRequired"]
     /// Keywords whose members are named subschemas; a member may be
     /// called `description` or `title`.
-    static let schemaMapKeywords: Set<String> = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]
+    static let schemaMapKeywords: Set<String> = [
+        "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies",
+    ]
 
-    /// Prose a withheld schema loses: the JSON Schema annotations that only
-    /// describe (`description`, `title`, `default`, `examples`) and `$comment`.
-    /// `enum` and `const` stay: they decide which arguments are valid.
-    static let schemaProseKeywords: Set<String> = ["description", "title", "default", "examples", "$comment"]
+    /// What a withheld schema keeps: every JSON Schema keyword that decides
+    /// whether arguments are valid or how a `$ref` resolves (the core,
+    /// applicator, validation, unevaluated, format and content vocabularies
+    /// of draft 4 to 2020-12, plus OpenAPI's `nullable`). Everything else is
+    /// dropped: the meta-data annotations (`title`, `description`,
+    /// `default`, `examples`, `deprecated`, `readOnly`, `writeOnly`),
+    /// `$comment`, and any vendor keyword (`markdownDescription`, `x-…`).
+    /// Validators ignore annotations and unknown keywords, so an argument
+    /// object valid under the upstream's schema is valid under the withheld
+    /// one: dropping `default` or `examples` cannot make a tool uncallable.
+    static let schemaShapeKeywords: Set<String> = [
+        "type", "enum", "const",
+        "properties", "patternProperties", "additionalProperties", "propertyNames", "required",
+        "minProperties", "maxProperties", "dependentRequired", "dependentSchemas", "dependencies",
+        "unevaluatedProperties",
+        "items", "prefixItems", "additionalItems", "contains", "minContains", "maxContains", "minItems", "maxItems",
+        "uniqueItems", "unevaluatedItems",
+        "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+        "minLength", "maxLength", "pattern", "format", "contentEncoding", "contentMediaType", "contentSchema",
+        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+        "$schema", "$id", "$ref", "$defs", "definitions", "$anchor", "$dynamicRef", "$dynamicAnchor",
+        "$recursiveRef", "$recursiveAnchor",
+        "nullable",
+    ]
 
-    /// A JSON Schema with every `description`/`title` string either shown
-    /// (hiding scalars neutralised) or, when `withheld`, every prose keyword
-    /// removed. `pattern` and the value keywords are left byte-exact.
+    /// A JSON Schema with every `description`/`title` string shown (hiding
+    /// scalars neutralised) or, when `withheld`, only the keywords in
+    /// `schemaShapeKeywords`. `pattern` and the value keywords are left
+    /// byte-exact.
     static func schemaProse(_ schema: JSONValue, withheld: Bool) -> JSONValue {
         switch schema {
         case .array(let items):
@@ -1112,12 +1135,12 @@ public struct MCPGatewayCore {
         case .object(let object):
             var copy = JSONObject()
             for (key, value) in object.entries {
-                if withheld, schemaProseKeywords.contains(key) {
+                if withheld, schemaShapeKeywords.contains(key) == false {
                     continue
                 } else if schemaValueKeywords.contains(key) {
                     copy[key] = value
                 } else if key == "description" || key == "title", let text = value.stringValue {
-                    if withheld == false { copy[key] = .string(MCPDisplayedText.description(text)) }
+                    copy[key] = .string(MCPDisplayedText.description(text))
                 } else if schemaMapKeywords.contains(key), let members = value.objectValue {
                     var mapped = JSONObject()
                     for (member, subschema) in members.entries { mapped[member] = schemaProse(subschema, withheld: withheld) }

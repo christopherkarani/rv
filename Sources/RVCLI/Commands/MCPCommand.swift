@@ -643,7 +643,7 @@ enum MCPRun {
             }
         }
         if configTrusted, tools.isEmpty {
-            return .success("mcp.json already matches rv's signature; nothing to trust\n")
+            return .success("mcp.json already matches rv's signature; nothing to trust\n" + tools.waitingHint)
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
         var review = ""
@@ -709,23 +709,44 @@ enum MCPRun {
             done.append("pinned \(tools.names.count) MCP tool definitions; rv serves them unchanged as trusted")
             done.append(Self.restartNotice)
         }
-        return .success(done.joined(separator: "\n") + "\n")
+        return .success(done.joined(separator: "\n") + "\n" + (tools.isEmpty ? tools.waitingHint : ""))
     }
+
+    /// Pins are read once, when `rv mcp serve` starts.
+    static let restartNotice =
+        "a running `rv mcp serve` keeps the pins it started with; restart your MCP host so it uses these"
 
     /// Tool definitions `rv mcp serve` saw that are not pinned, for the owner
     /// to review and pin exactly as shown.
     struct ToolTrustReview {
         var reviewed: [String: [String: RVMCP.JSONValue]] = [:]
+        /// The verified pins the review was built on (nil: they did not
+        /// verify). Trust pins nothing if the store no longer holds them.
+        var expectedPins: [String: [String: String]]? = [:]
         /// The pins on disk do not verify; trusting starts them over.
         var resetsPins = false
+        /// Configured servers with no pins and nothing queued for review.
+        var serversWithoutPins: [String] = []
         var names: [String] = []
         var text = ""
         var summary = ""
         var digest = ""
 
         var isEmpty: Bool { reviewed.isEmpty && resetsPins == false }
+
+        /// rv never pins on its own: a server's tools are queued for review
+        /// only once `rv mcp serve` has listed them.
+        var waitingHint: String {
+            guard serversWithoutPins.isEmpty == false else { return "" }
+            return "no tools of \(MCPRun.capped(serversWithoutPins.map(MCPRun.visible))) are trusted or waiting for review; "
+                + "start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n"
+        }
     }
 
+    /// Every queued definition of a configured server, field by field. The
+    /// pin covers the whole tool object, so the review shows every field,
+    /// each as display-escaped JSON (a literal `\n` and a line break read
+    /// differently); `name` is in the header line.
     static func toolTrustReview(
         _ store: MCPToolPinStore, servers: [String]
     ) -> Result<ToolTrustReview, MCPToolPinStore.LoadFailure> {
@@ -735,6 +756,7 @@ enum MCPRun {
         case .success(let loaded): contents = loaded
         }
         var review = ToolTrustReview()
+        review.expectedPins = contents.pins
         review.resetsPins = contents.pins == nil
         var lines: [String] = []
         var summary: [String] = []
@@ -745,16 +767,15 @@ enum MCPRun {
             summary.append(reset)
         }
         for server in servers.sorted() {
-            for (tool, definition) in (contents.changed[server] ?? [:]).sorted(by: { $0.key < $1.key }) {
+            let queued = contents.changed[server] ?? [:]
+            if queued.isEmpty, contents.pins?[server]?.isEmpty ?? true { review.serversWithoutPins.append(server) }
+            for (tool, definition) in queued.sorted(by: { $0.key < $1.key }) {
                 let hash = MCPToolPinStore.hash(definition)
                 let state = contents.pins?[server]?[tool] == nil ? "new" : "changed"
                 let name = "\(visible(server))/\(visible(tool))"
                 lines.append("MCP tool \(name) (\(state)) sha256 \(hash)")
-                if let description = definition["description"] {
-                    lines.append("    description: \(visible(description.stringValue ?? description.canonicalText))")
-                }
-                if let schema = definition["inputSchema"] {
-                    lines.append("    inputSchema: \(visible(schema.canonicalText))")
+                for (key, value) in definition.objectValue?.entries ?? [] where key != "name" {
+                    lines.append("    \(visible(key)): \(visible(value.canonicalText))")
                 }
                 summary.append("\(name) sha256 \(hash)")
                 review.reviewed[server, default: [:]][tool] = definition
@@ -941,6 +962,22 @@ enum MCPRun {
     /// when the audit log cannot hold it: the gateway then refuses the call.
     static func recordForward(_ record: MCPCallRecord, configDirectory: URL) -> Bool {
         AuditLog.append(record.auditEvent(), configDirectory: configDirectory)
+    }
+
+    /// The gateway `rv mcp serve` runs: approvals from the approval store,
+    /// and each call's forward record written to this environment's audit
+    /// log before the call goes upstream.
+    static func serveCore(
+        configuration: MCPConfiguration, upstreams: [MCPGatewayCore.Upstream], environment: MCPEnvironment,
+        pinning: MCPToolPinning
+    ) -> MCPGatewayCore {
+        let configDirectory = environment.configDirectory
+        return MCPGatewayCore(
+            configuration: configuration,
+            upstreams: upstreams,
+            approvals: .store(environment.approvals),
+            pinning: pinning,
+            recordForward: { recordForward($0, configDirectory: configDirectory) })
     }
 
     static func reviewField(_ text: String) -> String {
@@ -1560,12 +1597,8 @@ struct MCPServe: AsyncParsableCommand {
                     reason: pinFailure.reason, source: "mcp-gateway", detail: ["status": "unverified"]),
                 configDirectory: configDirectory)
         }
-        let core = MCPGatewayCore(
-            configuration: configuration,
-            upstreams: planned.map { $0.0 },
-            approvals: .store(environment.approvals),
-            pinning: pinning,
-            recordForward: { MCPRun.recordForward($0, configDirectory: configDirectory) })
+        let core = MCPRun.serveCore(
+            configuration: configuration, upstreams: planned.map { $0.0 }, environment: environment, pinning: pinning)
         let runtime = MCPGatewayRuntime(
             core: core,
             connections: planned.map { $0.1 },
