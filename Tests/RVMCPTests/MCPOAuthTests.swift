@@ -263,7 +263,8 @@ struct MCPOAuthFixtureTests {
         let runtime = MCPGatewayRuntime(
             core: MCPGatewayCore(
                 configuration: configuration, upstreams: planned.map { $0.0 },
-                approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil })),
+                approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }),
+                pinning: .unenforced, recordForward: { _ in true }),
             connections: planned.map { $0.1 }, oauthStore: store,
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
