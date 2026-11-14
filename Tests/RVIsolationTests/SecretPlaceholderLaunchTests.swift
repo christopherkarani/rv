@@ -10,17 +10,30 @@ import Testing
 
 private let placeholderSecrets = """
     {"version":1,"secrets":[
-      {"name":"OPENAI_API_KEY","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+      {"name":"OPENAI_API_KEY","source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
        "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"OPENAI_BASE_URL",
                               "placeholderPrefix":"sk-"}}},
-      {"name":"APPROVED","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+      {"name":"APPROVED","source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
        "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"APPROVED_BASE_URL",
                               "approve":[{"methods":["DELETE"],"path":"/v1/**"}]}}},
-      {"name":"CODEX_ONLY","agents":["codex"],"source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+      {"name":"CODEX_ONLY","agents":["codex"],
+       "source":{"keychain":{"service":"rv.secrets","account":"OPENAI_API_KEY"}},
        "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"CODEX_BASE_URL"}}},
-      {"name":"GH_TOKEN","source":{"hostEnvironment":{"variable":"FAKE_GH"}},"delivery":{"environment":{}}}
+      {"name":"HOST_SOURCED","source":{"hostEnvironment":{"variable":"FAKE_OPENAI"}},
+       "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"HOST_BASE_URL"}}},
+      {"name":"GH_TOKEN","source":{"keychain":{"service":"rv.secrets","account":"GH_TOKEN"}},
+       "delivery":{"environment":{}}}
     ]}
     """
+
+/// Keychain items by account; anything else as `fakeResolver` answers it.
+private let placeholderResolver = SecretResolver { source in
+    switch source {
+    case .keychain(_, "OPENAI_API_KEY"): return .success(SecretValue("sk-live-REAL-0123456789")!)
+    case .keychain(_, "GH_TOKEN"): return .success(SecretValue("ghp_realtoken")!)
+    default: return fakeResolver.resolve(source)
+    }
+}
 
 private let realOpenAI = "sk-live-REAL-0123456789"
 
@@ -75,13 +88,35 @@ struct SecretPlaceholderLaunchTests {
             == .approvalRules("APPROVED"))
         #expect(SecretPlaceholderBroker.hasApprovalRules(approved))
         #expect(SecretPlaceholderBroker.hasApprovalRules(openAI) == false)
+        let hostSourced = try #require(configuration.secret(named: "HOST_SOURCED"))
+        #expect(SecretPlaceholderBroker.refusal(staged: [hostSourced], placeholders: 1, requested: ["HOST_SOURCED"])
+            == .hostEnvironmentSource("HOST_SOURCED"))
+    }
+
+    /// The same rule `rv run` drops inherited copies by: a real value as is
+    /// or trimmed, or contained when it is at least 12 bytes long.
+    @Test func aLaunchHoldsARealValueWhenAnyVariableOrArgumentIsOrContainsOne() throws {
+        let real = [try #require(SecretValue("sk-live-REAL-0123456789")), try #require(SecretValue("pin-42"))]
+        func holds(_ environment: [String: String], _ arguments: [String] = []) -> Bool {
+            SecretPlaceholderLease.holdsRealValue(environment: environment, arguments: arguments, realValues: real)
+        }
+        #expect(holds(["OPENAI_API_KEY": "sk-rvph_abc", "PATH": "/usr/bin:/bin"], ["--port", "3000"]) == false)
+        #expect(holds(["ALIAS": "sk-live-REAL-0123456789"]))
+        #expect(holds(["ALIAS": " sk-live-REAL-0123456789\n"]))
+        #expect(holds(["AUTH": "Bearer sk-live-REAL-0123456789"]))
+        #expect(holds(["SHORT": "pin-42"]))
+        #expect(holds(["SHORT": "id pin-42 here"]) == false)
+        #expect(holds([:], ["--token", "sk-live-REAL-0123456789"]))
+        #expect(holds([:], ["--token=sk-live-REAL-0123456789"]))
+        #expect(holds([:], ["pin-42"]))
+        #expect(SecretPlaceholderLease.holdsRealValue(environment: ["A": "x"], arguments: ["y"], realValues: []) == false)
     }
 
     @Test func secretsThatCannotBePlaceholdersStageNothing() throws {
         let fixture = try SecretsFixture(placeholderSecrets)
         defer { fixture.tearDown() }
         let broker = SecretPlaceholderBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, transport: RecordingUpstream().transport,
+            configDirectory: fixture.directory, resolver: placeholderResolver, transport: RecordingUpstream().transport,
             peers: .alwaysMember)
         defer { broker.stop() }
         guard case .failure(.refused) = broker.lease(["GH_TOKEN"], server: "fixture") else {
@@ -93,7 +128,8 @@ struct SecretPlaceholderLaunchTests {
             return
         }
         #expect(broker.lease(["APPROVED"], server: "fixture").leaseFailure == .approvalRules("APPROVED"))
-        #expect(broker.lease([], server: "fixture").leaseFailure == .nothingStaged)
+        #expect(broker.lease(["HOST_SOURCED"], server: "fixture").leaseFailure == .hostEnvironmentSource("HOST_SOURCED"))
+        #expect(broker.lease([], server: "fixture").leaseFailure == .noSecretsListed)
         #expect(broker.broker.liveCount == 0)
     }
 
@@ -101,7 +137,7 @@ struct SecretPlaceholderLaunchTests {
         let fixture = try SecretsFixture(placeholderSecrets)
         defer { fixture.tearDown() }
         let broker = SecretPlaceholderBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, transport: RecordingUpstream().transport,
+            configDirectory: fixture.directory, resolver: placeholderResolver, transport: RecordingUpstream().transport,
             peers: .alwaysMember)
         defer { broker.stop() }
         let lease = try broker.lease(["OPENAI_API_KEY"], server: "fixture").get()
@@ -128,7 +164,7 @@ struct SecretPlaceholderLaunchTests {
         let directory = try scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
         let broker = SecretPlaceholderBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, transport: RecordingUpstream().transport,
+            configDirectory: fixture.directory, resolver: placeholderResolver, transport: RecordingUpstream().transport,
             peers: .alwaysMember)
         defer { broker.stop() }
         let lease = try broker.lease(["OPENAI_API_KEY"], server: "fixture").get()
@@ -161,7 +197,7 @@ struct SecretPlaceholderLaunchTests {
         let fixture = try SecretsFixture(placeholderSecrets)
         defer { fixture.tearDown() }
         let broker = SecretPlaceholderBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, transport: RecordingUpstream().transport,
+            configDirectory: fixture.directory, resolver: placeholderResolver, transport: RecordingUpstream().transport,
             peers: .alwaysMember)
         defer { broker.stop() }
         let lease = try broker.lease(["OPENAI_API_KEY"], server: "fixture").get()
@@ -192,7 +228,7 @@ struct SecretPlaceholderLaunchTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let upstream = RecordingUpstream(status: 200)
         let broker = SecretPlaceholderBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, transport: upstream.transport, peers: .runtime)
+            configDirectory: fixture.directory, resolver: placeholderResolver, transport: upstream.transport, peers: .runtime)
         defer { broker.stop() }
         let lease = try broker.lease(["OPENAI_API_KEY"], server: "fixture").get()
         var environment = Dictionary(uniqueKeysWithValues: lease.environment.map { ($0.name, $0.value) })
