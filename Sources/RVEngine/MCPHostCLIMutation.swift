@@ -35,6 +35,13 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -
     let firstRunner = words.firstIndex { hostRunners.contains(commandName($0)) }
     let firstPythonRunner = words.firstIndex { pythonRunners.contains(commandName($0)) }
     let runs = { (index: Int) in index == 0 || firstRunner.map { $0 < index } == true }
+    // A dynamic word rv cannot read, used as the program at the head or after
+    // a runner the parser does not strip (`stdbuf -o0 $c mcp add`), with a
+    // group word (literal or a brace/glob spelling) after it: treated like a
+    // dynamic head, which `headIsDynamic` only catches at index 0.
+    for (index, word) in words.enumerated() where runs(index) && wordIsDynamic(word) {
+        if words[(index + 1)...].contains(where: namesDynamicGroupWord) { return true }
+    }
     // argv holds the head's basename; the head as written is judged too, as
     // a path to a host binary its basename does not name
     // (`~/.local/share/claude/versions/2.0.14`, `…/@openai/codex/bin/codex.js`).
@@ -111,7 +118,8 @@ func isNonExecutor(_ command: LaunchedCommand) -> Bool {
     case "grep", "egrep", "fgrep", "echo", "printf":
         return true
     case "rg":
-        return words.contains(where: { $0.hasPrefix("--pre") }) == false
+        // `--pre` and `--hostname-bin` both name a program rg runs.
+        return words.contains(where: { $0.hasPrefix("--pre") || $0.hasPrefix("--hostname-bin") }) == false
     case "git":
         return words.first.map { ["commit", "tag"].contains($0) } == true
     case "gh":
@@ -127,21 +135,26 @@ private func hostWordMutates(_ host: String, rest: [String], place: HostWordPlac
         if rest.contains(where: { $0 == "--add-mcp" || $0.hasPrefix("--add-mcp=") }) { return true }
         if host != "cursor" { return false }
     }
-    // `--` ends options and leaves the subcommand (`mcp -- install s`).
+    // `--` ends options and leaves the subcommand (`mcp -- install s`). A
+    // brace or glob spelling that can produce `install` counts (`mcp
+    // {a,install}`, `mcp instal?`).
     let subcommand = rest.first { $0 != "--" }
-    if host == "fastmcp" { return subcommand == "install" }
+    let installs = subcommand.map { wordMayBe($0, "install") } == true
+    if host == "fastmcp" { return installs }
     if host == "mcp" {
         // `mcp` is a common directory and package name (`make -C mcp
         // install`): a word that may run, the program under a Python
         // runner, or given a Python server file.
-        guard subcommand == "install" else { return false }
+        guard installs else { return false }
         return place.mayRun || place.pythonRun || rest.contains(where: namesPythonServer)
     }
     guard let groups = hostGroups[host] else { return false }
     if agentHosts.contains(host), place.runs, place.feedsWords || rest.contains(where: mayStandForWords) {
         return true
     }
-    guard rest.contains(where: groups.contains) else { return false }
+    // A later word that is, or that a brace/glob spelling can produce, one of
+    // the host's group words (`claude m{c,}p add`, `gemini ext*s install`).
+    guard rest.contains(where: { producesGroupWord($0, groups) }) else { return false }
     return isReadOnlyHostForm(host: host, rest) == false
 }
 
@@ -158,6 +171,12 @@ private func hostCLIs(_ word: String) -> [String] {
     for package in packageNames(word) {
         if let host = hostPackageNames[package] { hosts.append(host) }
         if pythonInstallers.contains(package) { hosts.append(package) }
+    }
+    // A brace or glob spelling of a plain host program name (`m{c,}p`,
+    // `clau?e`, `cod[e]x`): the filesystem is not consulted, so a wildcard
+    // or class is assumed satisfiable.
+    if hasExpansionMetacharacters(word) {
+        for (spelling, host) in spelledHostNames where wordMayBe(name, spelling) { hosts.append(host) }
     }
     var seen: Set<String> = []
     return hosts.filter { seen.insert($0).inserted }
@@ -403,4 +422,139 @@ private func isReadOnlyHostForm(host: String, _ rest: [String]) -> Bool {
                 expected == "NAME" ? word.hasPrefix("-") == false : expected == word
             }
     }
+}
+
+// MARK: - Brace, glob and dynamic spellings
+
+/// Whether `word` holds unquoted brace (`{a,b}`, `{1..3}`) or glob (`*`, `?`,
+/// `[…]`) metacharacters the shell may expand to another word. The words
+/// judged here are `foldedWord` output, so quoting is already gone (a
+/// surviving metacharacter was unquoted in the source).
+func hasExpansionMetacharacters(_ word: String) -> Bool {
+    if word.contains("*") || word.contains("?") || word.contains("[") { return true }
+    return word.contains("{") && (word.contains(",") || word.contains(".."))
+}
+
+/// Whether `word`, as the shell expands it, can equal `literal` (both
+/// `foldedWord` output). A brace or glob spelling that can produce it counts
+/// (`m{c,}p`, `m?p`, `m[c]p` each produce `mcp`); an expansion past the brace
+/// bound can produce anything. The filesystem is not consulted: a wildcard or
+/// class is assumed satisfiable.
+func wordMayBe(_ word: String, _ literal: String) -> Bool {
+    if word == literal { return true }
+    guard hasExpansionMetacharacters(word) else { return false }
+    // A numeric or alpha range (`{a..z}`) is not enumerated by
+    // `braceExpanded`; assume it can produce the literal (fail closed).
+    if word.contains("{"), word.contains("..") { return true }
+    guard let expansions = braceExpanded(word) else { return true }
+    return expansions.contains { globCanMatch($0, literal) }
+}
+
+/// Whether `word` holds a value rv cannot resolve to a fixed string: a
+/// parameter (`$x`, `${x:-y}`), a command substitution (`$(…)`, backticks) or
+/// a process substitution. ANSI-C quoting (`$'…'`), which rv decodes, is not
+/// dynamic.
+func wordIsDynamic(_ word: String) -> Bool {
+    collapsingSubstitutions(word.ansiCDecodedIfMarked).contains("$")
+}
+
+/// Whether `word` is, or a brace/glob spelling can produce, a group word a
+/// dynamic program may be given (`mcp`, `plugin`, `config`, `--add-mcp`).
+private func namesDynamicGroupWord(_ word: String) -> Bool {
+    if dynamicGroupWords.contains(word) { return true }
+    guard hasExpansionMetacharacters(word) else { return false }
+    return dynamicGroupWords.contains { wordMayBe(word, $0) }
+}
+
+/// Whether `word` is, or a brace/glob spelling can produce, one of `groups`.
+private func producesGroupWord(_ word: String, _ groups: Set<String>) -> Bool {
+    if groups.contains(word) { return true }
+    guard hasExpansionMetacharacters(word) else { return false }
+    return groups.contains { wordMayBe(word, $0) }
+}
+
+/// Plain host program names (not package specs) a brace or glob spelling may
+/// stand for, each mapped to the host it runs.
+private let spelledHostNames: [(String, String)] = {
+    var pairs: [(String, String)] = []
+    for name in hostGroups.keys { pairs.append((name, name)) }
+    for name in editorHosts { pairs.append((name, name)) }
+    for name in pythonInstallers { pairs.append((name, name)) }
+    pairs.append(("claude-code", "claude"))
+    return pairs
+}()
+
+/// Whether the shell glob `pattern` can match `text` (only `*`, `?` and `[…]`
+/// are special; both are `foldedWord` output). No filesystem: a wildcard or
+/// class is assumed satisfiable. Memoised, so bounded by `pattern.count *
+/// text.count`.
+func globCanMatch(_ pattern: String, _ text: String) -> Bool {
+    let p = Array(pattern)
+    let t = Array(text)
+    let width = t.count + 1
+    var failed: Set<Int> = []
+    func classEnd(_ open: Int) -> Int? {
+        var k = open + 1
+        if k < p.count, p[k] == "!" || p[k] == "^" { k += 1 }
+        if k < p.count, p[k] == "]" { k += 1 }
+        while k < p.count, p[k] != "]" { k += 1 }
+        return k < p.count ? k : nil
+    }
+    func classMatches(_ body: ArraySlice<Character>, _ ch: Character) -> Bool {
+        var items = Array(body)
+        var negate = false
+        if let first = items.first, first == "!" || first == "^" {
+            negate = true
+            items.removeFirst()
+        }
+        var matched = false
+        var i = 0
+        while i < items.count {
+            if i + 2 < items.count, items[i + 1] == "-" {
+                if items[i] <= ch, ch <= items[i + 2] { matched = true }
+                i += 3
+            } else {
+                if items[i] == ch { matched = true }
+                i += 1
+            }
+        }
+        return matched != negate
+    }
+    func match(_ startP: Int, _ startT: Int) -> Bool {
+        var pi = startP
+        var ti = startT
+        while pi < p.count {
+            let key = pi * width + ti
+            if failed.contains(key) { return false }
+            switch p[pi] {
+            case "*":
+                var np = pi
+                while np < p.count, p[np] == "*" { np += 1 }
+                if np == p.count { return true }
+                var k = ti
+                while k <= t.count {
+                    if match(np, k) { return true }
+                    k += 1
+                }
+                failed.insert(key)
+                return false
+            case "?":
+                if ti >= t.count { failed.insert(key); return false }
+                pi += 1
+                ti += 1
+            case "[" where classEnd(pi) != nil:
+                let close = classEnd(pi)!
+                if ti < t.count, classMatches(p[(pi + 1)..<close], t[ti]) {
+                    pi = close + 1
+                    ti += 1
+                } else { failed.insert(key); return false }
+            default:
+                if ti >= t.count || p[pi] != t[ti] { failed.insert(key); return false }
+                pi += 1
+                ti += 1
+            }
+        }
+        return ti == t.count
+    }
+    return match(0, 0)
 }
