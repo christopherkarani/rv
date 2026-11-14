@@ -124,7 +124,12 @@ package final class SecretRunSignals: Sendable {
     static let forwarded = [SIGINT, SIGQUIT, SIGTERM, SIGHUP]
     /// Signals rv resets for the command but never changes itself; with
     /// `forwarded` and `SIGTTOU`, every signal the command gets the default for.
+    #if os(macOS)
     static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH, SIGINFO]
+    #else
+    /// Linux has no `SIGINFO`.
+    static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH]
+    #endif
 
     private let forwarding = SecretRunSignalTarget()
     /// nil while installed: the table knows what rv inherited ignored.
