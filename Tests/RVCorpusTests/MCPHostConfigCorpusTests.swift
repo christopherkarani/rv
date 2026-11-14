@@ -142,6 +142,22 @@ struct MCPHostConfigCorpusTests {
         #expect(launchedCommands("GIT_PAGER=cat git log -p") == [["git", "log", "-p"]])
     }
 
+    /// Text read as command lines shares one budget: deep nesting and many
+    /// distinct quoted words finish quickly and ask instead of being read
+    /// without end.
+    @Test func carriedTextReadsAreBounded() throws {
+        let harness = try StressHarness.dayOne()
+        var nested = "watch xmcp end"
+        for _ in 0..<12 { nested = "watch xmcp$(" + nested + ")" }
+        let many = "echo " + (0..<600).map { "'xmcp a\($0)'" }.joined(separator: " ") + " | sh"
+        for command in [nested, many] {
+            let start = ContinuousClock.now
+            let result = door(harness, command, guarded: true)
+            #expect(result.decision != .allow, "\(command.prefix(80))")
+            #expect(ContinuousClock.now - start < .seconds(20), "\(command.prefix(80))")
+        }
+    }
+
     /// With the gateway in use, commands that name no guarded file and run
     /// no host MCP CLI judge exactly as with it off: no ask pattern keys on
     /// a bare word like `mcp`, `install` or a host name used as data.
