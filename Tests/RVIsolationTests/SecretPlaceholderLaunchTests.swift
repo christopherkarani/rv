@@ -93,22 +93,52 @@ struct SecretPlaceholderLaunchTests {
             == .hostEnvironmentSource("HOST_SOURCED"))
     }
 
-    /// The same rule `rv run` drops inherited copies by: a real value as is
-    /// or trimmed, or contained when it is at least 12 bytes long.
+    /// A real value as is or trimmed; contained, from 8 bytes on, as is or
+    /// base64 (standard or URL-safe, padded or not, at any byte offset),
+    /// hex (either case) or percent-encoded. Shorter values: exact only.
     @Test func aLaunchHoldsARealValueWhenAnyVariableOrArgumentIsOrContainsOne() throws {
-        let real = [try #require(SecretValue("sk-live-REAL-0123456789")), try #require(SecretValue("pin-42"))]
+        let long = "sk-live-REAL-0123456789"
+        let real = [try #require(SecretValue(long)), try #require(SecretValue("hunter22")), try #require(SecretValue("pin-42"))]
         func holds(_ environment: [String: String], _ arguments: [String] = []) -> Bool {
             SecretPlaceholderLease.holdsRealValue(environment: environment, arguments: arguments, realValues: real)
         }
         #expect(holds(["OPENAI_API_KEY": "sk-rvph_abc", "PATH": "/usr/bin:/bin"], ["--port", "3000"]) == false)
-        #expect(holds(["ALIAS": "sk-live-REAL-0123456789"]))
-        #expect(holds(["ALIAS": " sk-live-REAL-0123456789\n"]))
-        #expect(holds(["AUTH": "Bearer sk-live-REAL-0123456789"]))
+        #expect(holds(["ALIAS": long]))
+        #expect(holds(["ALIAS": " \(long)\n"]))
+        #expect(holds(["AUTH": "Bearer \(long)"]))
+        #expect(holds([:], ["--token", long]))
+        #expect(holds([:], ["--token=\(long)"]))
+
+        // Contained from the 8-byte floor on.
+        #expect(holds(["URL": "postgres://u:hunter22@db"]))
+        #expect(holds([:], ["--password=hunter22"]))
+        #expect(holds(["NEAR": "hunter2 hunter-22"]) == false)
+
+        // Shorter than the floor: an exact copy only.
         #expect(holds(["SHORT": "pin-42"]))
-        #expect(holds(["SHORT": "id pin-42 here"]) == false)
-        #expect(holds([:], ["--token", "sk-live-REAL-0123456789"]))
-        #expect(holds([:], ["--token=sk-live-REAL-0123456789"]))
         #expect(holds([:], ["pin-42"]))
+        #expect(holds(["SHORT": "id pin-42 here"]) == false)
+
+        // Encoded copies, at every byte offset inside the encoded text.
+        for prefix in ["", "u", "us", "user:"] {
+            for value in [long, "hunter22"] {
+                let standard = Data((prefix + value).utf8).base64EncodedString()
+                let bare = standard.replacingOccurrences(of: "=", with: "")
+                let safe = bare.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+                #expect(holds(["AUTH": "Basic \(standard)"]), "base64 of \(prefix.count) + value")
+                #expect(holds(["AUTH": bare]), "unpadded base64 of \(prefix.count) + value")
+                #expect(holds([:], ["--auth=\(safe)"]), "URL-safe base64 of \(prefix.count) + value")
+            }
+        }
+        let hex = Data(long.utf8).map { String(format: "%02x", $0) }.joined()
+        #expect(holds(["HEX": "0x\(hex)"]))
+        #expect(holds(["HEX": hex.uppercased()]))
+        let percent = try #require(long.addingPercentEncoding(withAllowedCharacters: .alphanumerics))
+        #expect(percent != long)
+        #expect(holds(["URL": "https://example.com/?key=\(percent)"]))
+        #expect(holds([:], ["--url=https://u:hunter%32%32@db"]))
+        #expect(holds(["AUTH": "Basic " + Data("x".utf8).base64EncodedString()]) == false)
+
         #expect(SecretPlaceholderLease.holdsRealValue(environment: ["A": "x"], arguments: ["y"], realValues: []) == false)
     }
 
