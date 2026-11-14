@@ -240,7 +240,7 @@ struct MCPPlaceholderPlannerTests {
         #expect(launch.environment["OPENAI_BASE_URL"] == "http://127.0.0.1:\(binding.lease.gatewayPort)/s/OPENAI_API_KEY")
         // `secrets` keeps its meaning: that one real value, scrubbed from replies.
         #expect(launch.environment["REAL"] == placeholderRealValue)
-        #expect(planned.first?.0.secretValues.map(\.name) == ["GH_TOKEN"])
+        #expect(planned.first?.0.secretValues.map { $0.name } == ["GH_TOKEN"])
         #expect(launch.environment.filter { $0.key != "REAL" }.values.contains { $0.contains(placeholderRealValue) } == false)
         #expect(fixture.auditText.contains("\"runtime\":\"mcp:bound\""))
         binding.lease.revoke()
