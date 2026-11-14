@@ -285,7 +285,7 @@ struct MCPHostSpellingTests {
         "find $ROOT -type f -name '*.json'", "find . -maxdepth \"$DEPTH\" -name config",
         "find . -maxdepth \"$DEPTH\" -name mcp -delete", "find . -newer \"$REF\" -name plugin -print",
         "find . -maxdepth \"$DEPTH\" -name config -exec cat {} \\;", "xargs -P \"$N\" grep -l config",
-        "xargs -n \"$BATCH\" grep -l mcp", "xargs -I {} -P \"$N\" grep -l config {}",
+        "xargs -n \"$BATCH\" grep -l extensions", "xargs -I {} -P \"$N\" grep -l config {}",
         "watch -n \"$SECS\" cat config", "timeout \"$SECS\" npm run config",
     ])
     func runnerOwnOperandAllows(_ command: String) {
@@ -305,7 +305,8 @@ struct MCPHostSpellingTests {
             #expect(isHostMCPMutation(find, reads: &plain) == false, "\(command)")
             var joined = HostTextReads()
             let tail = find.argv.dropFirst().joined(separator: " ")
-            #expect(joined.runsHostMCPMutation(tail, nested: false, resplit: true), "\(tail)")
+            let joinedAsks = joined.runsHostMCPMutation(tail, nested: false, resplit: true)
+            #expect(joinedAsks, "\(tail)")
             #expect(judgeSpelling(command), "\(command)")
         }
     }
