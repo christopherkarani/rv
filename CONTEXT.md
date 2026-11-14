@@ -52,3 +52,5 @@ Seatbelt, the macOS guest and the Linux guest (through read-only mounts) all sto
 **Admission** — a runtime asking rv to run one command or one HTTPS GET on its behalf, over pipes only that runtime holds. `RuntimeAdmissionSession`.
 
 **Egress proxy** — the per-runtime loopback proxy every outbound request goes through; it decides allow or deny with `EgressAdmission` against `EgressHostPolicy`. `EgressProxy`, `EgressWire`.
+
+**Egress audit mode** — an owner-signed MCP `sandbox.enforcement: audit`: the egress proxy lets a host outside `sandbox.hosts` through once its would-be block is an `egress.observed` audit event, and denies if that event cannot be written. Only the host list relaxes; every other refusal and the dial filter still deny. Off under an organization policy or an untrusted mcp.json. Not observe mode, which is per hook host. `EgressAuditMode`.

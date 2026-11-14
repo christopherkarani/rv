@@ -690,6 +690,10 @@ enum HelpCatalog {
                     description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
+                    name: "enforcement",
+                    description: "sandbox \"enforcement\": \"audit\" lets other hosts through, each one logged as egress.observed"
+                ),
+                HelpRow(
                     name: "defaults",
                     description: "Unlisted tools deny; written allow defaults are ignored. Local servers need a sandbox"
                 ),

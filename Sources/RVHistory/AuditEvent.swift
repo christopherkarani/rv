@@ -17,6 +17,9 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     /// recovery, contained delete).
     public static let commandOverride = AuditEventKind(rawValue: "command.override")
     public static let egressDenied = AuditEventKind(rawValue: "egress.denied")
+    /// An audit-mode would-be deny: the egress allowlist would have refused,
+    /// the proxy let it through (`sandbox.enforcement: audit`).
+    public static let egressObserved = AuditEventKind(rawValue: "egress.observed")
     public static let admission = AuditEventKind(rawValue: "admission")
     public static let runtimeSession = AuditEventKind(rawValue: "runtime.session")
     public static let runtimeStarted = AuditEventKind(rawValue: "runtime.started")

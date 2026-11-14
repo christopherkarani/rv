@@ -206,6 +206,8 @@ public final class EgressProxy: @unchecked Sendable {
     /// id is awaited at most `proposalWait` and named in the refusal body;
     /// past that the deny goes out without one.
     private let review: EgressReviewHook?
+    /// Owner-set audit mode for this instance's allowlist; nil enforces.
+    private let audit: EgressAuditMode?
     /// Bound on waiting for `review`. A stuck queue costs each policy deny
     /// this much latency, never a hang and never an allow. Injectable for
     /// tests on starved CI hosts.
@@ -300,6 +302,7 @@ public final class EgressProxy: @unchecked Sendable {
         pins: EgressBinaryPinCache = EgressBinaryPinCache(),
         record: (@Sendable (EgressProxyDenial) -> Void)?,
         review: EgressReviewHook? = nil,
+        audit: EgressAuditMode? = nil,
         proposalWait: TimeInterval = EgressProxy.defaultProposalWait,
         maximumProposalWaiters: Int = EgressProxy.defaultMaximumProposalWaiters,
         resolverBudget: EgressResolverBudget = EgressResolverBudget(
@@ -314,6 +317,7 @@ public final class EgressProxy: @unchecked Sendable {
         self.grants = grants
         self.record = record ?? EgressProxy.productionDenialLog()
         self.review = review
+        self.audit = audit
         self.proposalWait = proposalWait
         self.maximumProposalWaiters = maximumProposalWaiters
         self.resolverBudget = resolverBudget
@@ -325,26 +329,32 @@ public final class EgressProxy: @unchecked Sendable {
     /// one principal, judged against `policy`. A nil credential is open
     /// mode. Clients present the token as the proxy URL's userinfo
     /// (`http://<token>@127.0.0.1:<port>`), the same convention the grants
-    /// mode parses.
+    /// mode parses. `audit` puts the allowlist in audit mode.
     public convenience init(
         policy: EgressHostPolicy = .publicHTTPS,
         record: (@Sendable (EgressProxyDenial) -> Void)? = nil,
-        clientCredential: String?
+        clientCredential: String?,
+        audit: EgressAuditMode? = nil
     ) {
         guard let clientCredential else {
-            self.init(policy: policy, record: record)
+            self.init(policy: policy, grants: nil, record: record, audit: audit)
             return
         }
         self.init(
+            policy: .publicHTTPS,
             grants: [
                 EgressProxyCredential(rawValue: clientCredential): EgressGrant(
                     principal: EgressPrincipal(rawValue: "rv:single-credential"),
                     policy: policy
                 )
             ],
-            record: record
+            record: record,
+            audit: audit
         )
     }
+
+    /// Whether this instance audits its allowlist instead of enforcing it.
+    public var auditsAllowlist: Bool { audit != nil }
 
     /// Bound port after `start` succeeds.
     public var port: Int {
@@ -576,8 +586,15 @@ public final class EgressProxy: @unchecked Sendable {
             shape: shape,
             credential: credential,
             binaryGateDenial: binaryGateDenial,
-            supplementAllows: supplementAdmits(host: target.host, port: target.port)
+            supplementAllows: supplementAdmits(host: target.host, port: target.port),
+            auditsAllowlist: audit != nil
         )
+        execute(verdict, client: client, header: header, target: target, leftover: leftover)
+    }
+
+    private func execute(
+        _ verdict: EgressAdmissionVerdict, client: Int32, header: String, target: EgressTarget, leftover: [UInt8]
+    ) {
         switch verdict {
         case .deny(.deniedCredential, _):
             denyProxyAuthRequired(client: client, host: target.host, port: target.port)
@@ -587,6 +604,15 @@ public final class EgressProxy: @unchecked Sendable {
             tunnel(client: client, target: target, leftover: leftover, external: external, requireSNI: requireSNI)
         case .forward(let external):
             forward(client: client, header: header, target: target, leftover: leftover, external: external)
+        case .audited(let admitted):
+            // An audit pass goes out only once its would-be block is durable.
+            let wouldBe = EgressProxyDenial(
+                host: target.host, port: target.port, reason: .deniedPolicy, recordedAt: Date())
+            guard let audit, audit.record(wouldBe) else {
+                deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
+                return
+            }
+            execute(admitted, client: client, header: header, target: target, leftover: leftover)
         }
     }
 

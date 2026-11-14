@@ -90,6 +90,14 @@ public struct EgressHostPolicy: Sendable, Equatable {
         }
     }
 
+    /// What audit mode may let through: the allowlist without its host
+    /// membership test. The port and DNS-name shape still hold, so no IP
+    /// literal, single label, or `localhost`; `.publicHTTPS` audits nothing.
+    public func auditAdmits(host: String, port: Int) -> Bool {
+        guard mode == .allowlist, port == allowedPort else { return false }
+        return canonicalEgressDNSName(host) != nil
+    }
+
     /// Loopback CONNECT targets on any port. Workspace cages can already
     /// dial loopback, so relaying it grants them nothing. A cage that
     /// cannot (`relaysLoopback == false`) is refused here instead.

@@ -71,6 +71,11 @@ enum MCPRun {
         var integrityProblem: String?
         var rows: [Row]
         var problems: [Problem]
+        /// Servers whose `sandbox.hosts` serve in audit mode.
+        var sandboxAudit: [String] = []
+        /// Servers that ask for audit mode but enforce (organization policy
+        /// or an untrusted mcp.json).
+        var sandboxAuditIgnored: [String] = []
 
         var failing: [Row] {
             rows.filter { MCPEntryStatus(rawValue: $0.status)?.isAcceptable == false }
@@ -193,6 +198,7 @@ enum MCPRun {
         let integrity = environment.integrity
         var problems = inventory.problems.map { Problem(path: $0.path, message: $0.message) }
         problems += sandboxProblems(configuration, configDirectory: environment.configDirectory)
+        let auditing = configuration.servers.filter { $0.sandbox?.enforcement == .audit }
         return Report(
             servers: configuration.servers.count,
             direct: configuration.direct.count,
@@ -200,7 +206,22 @@ enum MCPRun {
             integrity: integrity.label,
             integrityProblem: integrity.problem,
             rows: rows,
-            problems: problems)
+            problems: problems,
+            sandboxAudit: auditing.filter { configuration.sandboxEnforcement(for: $0) == .audit }.map(\.name),
+            sandboxAuditIgnored: auditing.filter { configuration.sandboxEnforcement(for: $0) == .enforce }.map(\.name))
+    }
+
+    /// Audit mode is the owner's choice, so it warns instead of failing check.
+    static func sandboxAuditLines(_ report: Report) -> [String] {
+        let active = report.sandboxAudit.map {
+            "warning: \(reviewField($0)) sandbox.hosts is in audit mode: other hosts are allowed and logged"
+                + " (`rv audit tail --kind egress.observed`)"
+        }
+        let ignored = report.sandboxAuditIgnored.map {
+            "note: \(reviewField($0)) asks for sandbox audit mode, but organization policy or an untrusted mcp.json"
+                + " keeps it off; sandbox.hosts is enforced"
+        }
+        return active + ignored
     }
 
     static func listText(_ report: Report, home: URL) -> String {
@@ -236,6 +257,7 @@ enum MCPRun {
         lines.append(summary(report))
         lines += problemLines(report, home: home)
         if let problem = report.integrityProblem { lines.append("warning: " + reviewField(problem)) }
+        lines += sandboxAuditLines(report)
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -264,6 +286,7 @@ enum MCPRun {
                 "warning: \(leaks.count) host entr\(leaks.count == 1 ? "y holds" : "ies hold") plaintext credentials ("
                     + leaks.map { reviewField($0.name) }.joined(separator: ", ") + "); `rv mcp import` moves them into rv secrets")
         }
+        lines += sandboxAuditLines(report)
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -675,6 +698,10 @@ enum MCPRun {
                 if sandbox.hosts.isEmpty == false {
                     rules.append("network only to " + sandbox.hosts.map(visible).joined(separator: ", "))
                     for host in sandbox.hosts { lines.append("    host \(visible(host))") }
+                    if sandbox.enforcement == .audit {
+                        rules.append("audit: other hosts are allowed and logged")
+                        lines.append("    sandbox enforcement audit")
+                    }
                 } else if sandbox.network == false {
                     rules.append("no network")
                 }
@@ -1216,6 +1243,9 @@ enum MCPRun {
         for host in server.sandbox?.hosts ?? [] where lines.contains("    host \(visible(host))") == false {
             return false
         }
+        if server.sandbox?.enforcement == .audit, lines.contains("    sandbox enforcement audit") == false {
+            return false
+        }
         return true
     }
 
@@ -1381,7 +1411,9 @@ struct MCPServe: AsyncParsableCommand {
             resolver: .live(home: home.rawValue),
             sandbox: MCPSandbox.apply(
                 configDirectory: environment.configDirectory, home: environment.home,
-                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)))
+                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory),
+                enforcement: { configuration.sandboxEnforcement(for: $0) },
+                audited: DenialAudit.observed(configDirectory: environment.configDirectory)))
         {
         case .failure(let failure): try fail(failure.message)
         case .success(let result): planned = result
@@ -1622,6 +1654,25 @@ enum DenialAudit {
                     time: denial.recordedAt, kind: .egressDenied, decision: .denied,
                     subject: "\(denial.host):\(denial.port)",
                     reason: denial.reason.rawValue, source: "rv mcp serve", detail: detail),
+                configDirectory: configDirectory)
+        }
+    }
+
+    /// Audit-mode passes (`sandbox.enforcement: audit`). Never coalesced:
+    /// each one let a request out, so each is its own fsync'd
+    /// `egress.observed` event, and a failed append returns false so the
+    /// proxy denies. Only the caged server holding the proxy credential
+    /// reaches this path.
+    static func observed(configDirectory: URL) -> @Sendable (String, EgressProxyDenial) -> Bool {
+        { server, wouldBe in
+            AuditLog.append(
+                AuditEvent(
+                    time: wouldBe.recordedAt, kind: .egressObserved, decision: .info,
+                    subject: "\(wouldBe.host):\(wouldBe.port)", reason: wouldBe.reason.rawValue, source: "rv mcp serve",
+                    detail: [
+                        "server": server, "rule": "sandbox.hosts", "enforcement": "audit", "would_be": "deny",
+                        "because": "\(wouldBe.host) is not in \(server) sandbox.hosts",
+                    ]),
                 configDirectory: configDirectory)
         }
     }

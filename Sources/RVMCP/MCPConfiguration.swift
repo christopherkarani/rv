@@ -66,6 +66,14 @@ extension MCPToolDecision {
     }
 }
 
+/// What the `sandbox.hosts` proxy does with any other host: refuse it
+/// (`enforce`, the default) or let it through and log a would-be block
+/// (`audit`), for trialling a tighter list.
+public enum MCPSandboxEnforcement: String, Sendable, Equatable {
+    case enforce
+    case audit
+}
+
 public struct MCPSandboxPolicy: Sendable, Equatable {
     public static let maximumHosts = 32
 
@@ -74,11 +82,16 @@ public struct MCPSandboxPolicy: Sendable, Equatable {
     /// Exact DNS names reached through a per-server allowlist proxy; the
     /// cage itself can dial only that proxy.
     public var hosts: [String]
+    /// As written; `MCPConfiguration.sandboxEnforcement(for:)` is what applies.
+    public var enforcement: MCPSandboxEnforcement
 
-    public init(network: Bool = true, writable: [String] = [], hosts: [String] = []) {
+    public init(
+        network: Bool = true, writable: [String] = [], hosts: [String] = [], enforcement: MCPSandboxEnforcement = .enforce
+    ) {
         self.network = network
         self.writable = writable
         self.hosts = hosts
+        self.enforcement = enforcement
     }
 }
 
@@ -269,6 +282,16 @@ public struct MCPConfiguration: Sendable, Equatable {
         server.tools.hasArgumentRules(for: tool) || managed?.mcpHasArgumentRules(server: server.name, tool: tool) == true
     }
 
+    /// The enforcement `rv mcp serve` gives a server's `sandbox.hosts`. Audit
+    /// loosens the owner's own list, so it holds only in a file rv trusts
+    /// with no organization policy installed; anything else enforces.
+    public func sandboxEnforcement(for server: MCPServerDefinition) -> MCPSandboxEnforcement {
+        guard let sandbox = server.sandbox, sandbox.hosts.isEmpty == false, sandbox.enforcement == .audit,
+            untrusted == false, managed == nil
+        else { return .enforce }
+        return .audit
+    }
+
     public func isBlocked(_ server: String) -> Bool {
         blocked.contains(server) || managed?.isServerBlocked(server) == true
     }
@@ -364,6 +387,7 @@ public struct MCPConfiguration: Sendable, Equatable {
             value["network"] = .bool(sandbox.network)
             if sandbox.writable.isEmpty == false { value["writable"] = .array(sandbox.writable.map(JSONValue.string)) }
             if sandbox.hosts.isEmpty == false { value["hosts"] = .array(sandbox.hosts.map(JSONValue.string)) }
+            if sandbox.enforcement == .audit { value["enforcement"] = .string(sandbox.enforcement.rawValue) }
             object["sandbox"] = .object(value)
         }
         return .object(object)
@@ -561,7 +585,7 @@ enum MCPConfigurationDecoding {
 
     private static func sandbox(_ value: JSONValue, _ context: String) throws -> MCPSandboxPolicy {
         let object = try objectValue(value, "\(context) sandbox")
-        try allowOnly(object, ["network", "writable", "hosts"], "\(context) sandbox")
+        try allowOnly(object, ["network", "writable", "hosts", "enforcement"], "\(context) sandbox")
         var policy = MCPSandboxPolicy()
         if let raw = object["network"] {
             guard let flag = raw.boolValue else { throw MCPConfigurationError.invalid("\(context) sandbox.network must be true or false") }
@@ -594,6 +618,15 @@ enum MCPConfigurationDecoding {
             }
             var seen = Set<String>()
             policy.hosts = hosts.map { $0.lowercased() }.filter { seen.insert($0).inserted }
+        }
+        if let raw = object["enforcement"] {
+            guard let text = raw.stringValue, let enforcement = MCPSandboxEnforcement(rawValue: text) else {
+                throw MCPConfigurationError.invalid(#"\#(context) sandbox.enforcement must be "enforce" or "audit""#)
+            }
+            guard enforcement == .enforce || policy.hosts.isEmpty == false else {
+                throw MCPConfigurationError.invalid("\(context) sandbox.enforcement audit needs sandbox.hosts to audit")
+            }
+            policy.enforcement = enforcement
         }
         return policy
     }
