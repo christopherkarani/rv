@@ -84,7 +84,7 @@ public struct MCPPlaceholderLeasing: Sendable {
     public static let unavailable = MCPPlaceholderLeasing(
         platformSupported: supportedPlatform,
         capability: { "no secrets gateway was started for this launch" },
-        lease: { _, _ in .failure(.nothingStaged) })
+        lease: { _, _ in .failure(.gatewayUnavailable) })
 
     package static func broker(_ broker: SecretPlaceholderBroker) -> MCPPlaceholderLeasing {
         MCPPlaceholderLeasing(

@@ -40,10 +40,11 @@ package final class SecretPlaceholderBroker: Sendable {
 
     /// Placeholders for `names`, staged for `server`. Only `gateway` and
     /// `awsSigV4` secrets with no agent filter stage (as for `rv run`);
-    /// anything else, an incomplete lease, or a secret with `approve` rules
-    /// (no approver can answer for this process) stages nothing.
+    /// anything else, an incomplete lease, a secret with `approve` rules
+    /// (no approver can answer for this process) or one read from rv's own
+    /// environment stages nothing.
     package func lease(_ names: [String], server: String) -> Result<SecretPlaceholderLease, SecretPlaceholderLeaseError> {
-        guard names.isEmpty == false else { return .failure(.nothingStaged) }
+        guard names.isEmpty == false else { return .failure(.noSecretsListed) }
         let leased: SecretLease
         switch broker.lease(names: names, agent: nil, placeholdersOnly: true, runtime: Self.runtime(server: server)) {
         case .failure(let error): return .failure(.refused(error.message))
@@ -51,7 +52,7 @@ package final class SecretPlaceholderBroker: Sendable {
         }
         guard let port = broker.gatewayPort else {
             broker.revoke(leased)
-            return .failure(.nothingStaged)
+            return .failure(.gatewayUnavailable)
         }
         if let refusal = Self.refusal(staged: leased.definitions, placeholders: leased.placeholders.count, requested: names) {
             broker.revoke(leased)
@@ -62,17 +63,31 @@ package final class SecretPlaceholderBroker: Sendable {
 
     /// Why a lease that was staged cannot be used, judged on the definitions
     /// the lease itself loaded: it must hold exactly the requested secrets,
-    /// one placeholder each, and none may have `approve` rules.
+    /// one placeholder each; none may have `approve` rules or come from
+    /// rv's own environment.
     static func refusal(
         staged: [SecretDefinition], placeholders: Int, requested: [String]
     ) -> SecretPlaceholderLeaseError? {
         guard Set(staged.map(\.name)) == Set(requested), placeholders == staged.count, staged.isEmpty == false else {
             return .incomplete
         }
-        for definition in staged where hasApprovalRules(definition) {
-            return .approvalRules(definition.name)
+        for definition in staged {
+            if hasApprovalRules(definition) { return .approvalRules(definition.name) }
+            if isHostEnvironmentSourced(definition) { return .hostEnvironmentSource(definition.name) }
         }
         return nil
+    }
+
+    /// Read from the environment rv itself was started with. `rv mcp serve`
+    /// is started by an MCP client that also starts the servers, so the
+    /// value is in the environment of a process outside rv's control.
+    package static func isHostEnvironmentSourced(_ definition: SecretDefinition) -> Bool {
+        switch definition.source {
+        case .hostEnvironment: true
+        case .keychain, .onePassword, .vault, .awsSecretsManager, .infisical, .bitwarden, .gcp, .azure, .awsProfile,
+            .oauth:
+            false
+        }
     }
 
     package static func hasApprovalRules(_ definition: SecretDefinition) -> Bool {
@@ -90,20 +105,26 @@ package final class SecretPlaceholderBroker: Sendable {
 }
 
 package enum SecretPlaceholderLeaseError: Error, Sendable, Equatable {
-    case nothingStaged
+    case noSecretsListed
+    case gatewayUnavailable
     /// The broker refused; its reason never quotes a value.
     case refused(String)
     case incomplete
     case approvalRules(String)
+    case hostEnvironmentSource(String)
 
     package var message: String {
         switch self {
-        case .nothingStaged: "no placeholder was staged"
+        case .noSecretsListed: "no placeholder was listed"
+        case .gatewayUnavailable: "the secrets gateway is not running"
         case .refused(let reason): reason
         case .incomplete: "the lease did not stage every listed secret as a placeholder"
         case .approvalRules(let name):
             "secret \(name) has approve rules, and no approver can answer for this process; "
                 + "remove them or use the secret from a workspace"
+        case .hostEnvironmentSource(let name):
+            "secret \(name) is read from rv's own environment, which the MCP client that started rv also "
+                + "holds; store it in a secret store (keychain, 1Password, ...) instead"
         }
     }
 }
@@ -144,6 +165,22 @@ package final class SecretPlaceholderLease: Sendable {
     /// The gateway refuses these placeholders from now on. Revoking twice is harmless.
     package func revoke() {
         broker.revoke(lease)
+    }
+
+    /// Whether a launch with `environment` and `arguments` would hand the
+    /// process a real value of this lease after all, by any variable name
+    /// or in an argument.
+    package func holdsRealValue(environment: [String: String], arguments: [String]) -> Bool {
+        Self.holdsRealValue(environment: environment, arguments: arguments, realValues: lease.realValues)
+    }
+
+    /// The rule `rv run` drops inherited copies by
+    /// (`SecretRunEnvironment.copies`), over the variables and the arguments.
+    /// Compared in memory; nothing is printed.
+    static func holdsRealValue(environment: [String: String], arguments: [String], realValues: [SecretValue]) -> Bool {
+        let indexed = Dictionary(uniqueKeysWithValues: arguments.enumerated().map { (String($0.offset), $0.element) })
+        return SecretRunEnvironment.copies(parent: environment, realValues: realValues).isEmpty == false
+            || SecretRunEnvironment.copies(parent: indexed, realValues: realValues).isEmpty == false
     }
 
     /// Spawns `executable` stopped as the leader of a new process group,

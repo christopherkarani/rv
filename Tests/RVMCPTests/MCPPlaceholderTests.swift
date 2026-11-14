@@ -74,7 +74,7 @@ func cagingHook(_ definition: MCPServerDefinition, _ launch: MCPUpstreamLaunch) 
 private func leasing(
     platformSupported: Bool = true, capability: @escaping @Sendable () -> String? = { nil },
     lease: @escaping @Sendable (String, [String]) -> Result<SecretPlaceholderLease, SecretPlaceholderLeaseError> = { _, _ in
-        .failure(.nothingStaged)
+        .failure(.gatewayUnavailable)
     }
 ) -> MCPPlaceholderLeasing {
     MCPPlaceholderLeasing(platformSupported: platformSupported, capability: capability, lease: lease)
