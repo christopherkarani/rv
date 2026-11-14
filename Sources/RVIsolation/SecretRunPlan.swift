@@ -127,8 +127,9 @@ package enum SecretRunEnvironment {
 
     /// The parent's environment without any variable a selected secret
     /// stages (its real value may be exported there) or is read from (a
-    /// `hostEnvironment` source's variable holds the real value), and
-    /// without any variable holding one of `realValues`, then the lease's
+    /// `hostEnvironment` source's variable holds the real value), without
+    /// the login of the store a selected secret comes from, and without any
+    /// variable holding one of `realValues`, then the lease's
     /// placeholders and base URLs on top.
     static func build(
         parent: [String: String], selected: [SecretDefinition], lease: [(name: String, value: String)],
@@ -138,6 +139,7 @@ package enum SecretRunEnvironment {
         for definition in selected {
             for variable in definition.stagedVariables { environment[variable] = nil }
             if case .hostEnvironment(let variable) = definition.source { environment[variable] = nil }
+            for variable in storeLoginVariables(definition.source) { environment[variable] = nil }
             if case .awsSigV4 = definition.delivery {
                 for variable in awsCredentialVariables { environment[variable] = nil }
             }
@@ -145,6 +147,20 @@ package enum SecretRunEnvironment {
         for name in copies(parent: parent, realValues: realValues) { environment[name] = nil }
         for entry in lease { environment[entry.name] = entry.value }
         return environment
+    }
+
+    /// The variables rv's own provider for `source` authenticates to its
+    /// store with (`SecretResolver.live`): a command holding one could fetch
+    /// the real value itself. Only names rv reads are listed; a provider CLI
+    /// reads its own login from the environment rv passes it, and those
+    /// names are not rv's to know.
+    static func storeLoginVariables(_ source: SecretSource) -> [String] {
+        switch source {
+        case .vault: ["VAULT_TOKEN"]
+        case .keychain, .hostEnvironment, .onePassword, .awsSecretsManager, .infisical, .bitwarden, .gcp, .azure,
+            .awsProfile, .oauth:
+            []
+        }
     }
 
     /// The parent's variables, by name, whose value is one of `realValues`.

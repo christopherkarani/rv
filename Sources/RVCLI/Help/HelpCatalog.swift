@@ -135,8 +135,9 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "command", description: "A bare name is searched in PATH's absolute directories; a name with a slash is a path"),
                 HelpRow(name: "terminal", description: "The command gets the terminal; Ctrl-C and Ctrl-Z reach it, and SIGINT, SIGTERM, SIGHUP sent to rv are forwarded to its process group"),
+                HelpRow(name: "store login", description: "When a selected secret comes from Vault, VAULT_TOKEN is removed as well. Provider CLIs (op, aws, infisical, bws, gcloud, az) keep their own logins and files, which the command can use as you can"),
                 HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
-                HelpRow(name: "platform", description: "Before reading any secret, rv run checks by doing it that it can start the command suspended and that the gateway can tell which process sent a request; otherwise it refuses rather than run an unbound gateway. Linux has no suspended start in rv run yet, so it refuses there"),
+                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. Linux has no suspended start yet, so it refuses there"),
             ]),
         ],
         examples: [

@@ -194,7 +194,10 @@ How it starts the command:
   value (trimmed of surrounding whitespace or not) is a selected secret's
   real value or one part of an AWS credential set, plus the lease:
   placeholders, base URLs, and the AWS endpoint, key id and a throwaway
-  signing key. Values are compared in memory; the names removed by value
+  signing key. When a selected secret comes from Vault, `VAULT_TOKEN`
+  (the login rv's Vault provider reads) is removed too; provider CLIs
+  (`op`, `aws`, `infisical`, `bws`, `gcloud`, `az`) read their own logins,
+  which rv does not name, so those pass through. Values are compared in memory; the names removed by value
   are listed on stderr. A variable that only contains a value (a
   connection URL with a password in it) is not recognised.
 - On macOS, `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and
