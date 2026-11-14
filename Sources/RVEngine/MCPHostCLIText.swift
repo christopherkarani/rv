@@ -26,6 +26,8 @@ final class HostTextReads {
     private(set) var exceeded = false
     /// The cap reached was the nesting depth.
     private(set) var depthExceeded = false
+    /// The read in progress is text nothing runs (`dataOnly`).
+    private(set) var inert = false
 
     /// Spends `count` pieces of one text; false (and `exceeded`) past a cap.
     func examine(pieces count: Int) -> Bool {
@@ -41,10 +43,11 @@ final class HostTextReads {
     /// `nested` read is a word's own quoting level: its words and joined
     /// tails are read in turn (`carriesHostMCPText`). A flat read is a
     /// re-split of words already read one by one (a joined tail): only its
-    /// commands are judged.
-    /// `headRuns` false: see `isHostMCPMutation`.
-    func runsHostMCPMutation(_ text: String, nested: Bool = true, headRuns: Bool = true) -> Bool {
-        let key = (nested ? "n" : headRuns ? "f" : "g") + text
+    /// commands are judged. A `dataOnly` read is text nothing runs
+    /// (`isInertLine`, `isNonExecutor`); reads inside it are data too.
+    func runsHostMCPMutation(_ text: String, nested: Bool = true, dataOnly: Bool = false) -> Bool {
+        let reading = inert || dataOnly
+        let key = (nested ? "n" : "f") + (reading ? "d" : "r") + text
         guard mayNameHostMCP(text), seen.insert(key).inserted else { return false }
         guard remaining > 0, depth < Self.maxDepth else {
             exceeded = true
@@ -53,16 +56,18 @@ final class HostTextReads {
         }
         remaining -= 1
         readsDone += 1
+        let outer = inert
+        inert = reading
         if nested { depth += 1 }
-        defer { if nested { depth -= 1 } }
+        defer {
+            if nested { depth -= 1 }
+            inert = outer
+        }
         let launched = launchedCommandHeads(text)
         if launched.contains(where: \.truncated) { return true }
-        if launched.contains(where: { isHostMCPMutation($0, reads: self, headRuns: headRuns) }) { return true }
+        if launched.contains(where: { isHostMCPMutation($0, reads: self) }) { return true }
         return nested && carriesHostMCPText(launched, reads: self)
     }
-
-    /// Inside a word's own quoting level: its commands are text, not run.
-    var readingText: Bool { depth > 0 }
 }
 
 /// Whether some text the launched commands carry may, run by a shell,
@@ -76,46 +81,63 @@ final class HostTextReads {
 /// decoded (`$'\x63laude' mcp add`); and the joined output of every
 /// `echo`/`printf`/`print` (`{ printf 'claude '; printf 'mcp add x'; }`).
 /// Speculative suffixes of a dynamic program repeat words already read.
-func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads) -> Bool {
+/// Given the top-level `line`, text nothing runs is read as data: the
+/// words, joined operands and output of a command that never runs its
+/// operands (`isNonExecutor`), alone on a line with no pipe, list,
+/// redirect, here-string or substitution (`isInertLine`).
+func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads, line: String? = nil) -> Bool {
+    let lineInert = line.map { isInertLine($0, launched) } ?? false
     var printed: [String] = []
     for command in launched where command.speculative == false && command.truncated == false {
         let args = Array(command.argv.dropFirst())
         let values = command.assignments.compactMap { word in
             word.firstIndex(of: "=").map { String(word[word.index(after: $0)...]) }
         }
+        let name = commandName(command.head)
+        let isPrinter = printers.contains(name)
+        // Text nothing runs: a plain operand of a non-executor on an inert line.
+        let dataOnly = lineInert && isNonExecutor(command)
         for word in args + values {
             for variant in Set([word, word.ansiCDecodedIfMarked, decodedWord(word)])
-            where variant.contains(where: \.isWhitespace) && reads.runsHostMCPMutation(variant) {
+            where variant.contains(where: \.isWhitespace) && reads.runsHostMCPMutation(variant, dataOnly: dataOnly)
+            {
                 return true
             }
         }
         var tails = [args]
-        let name = commandName(command.head)
-        let isPrinter = printers.contains(name)
         if isPrinter {
             let operands = Array(args.drop(while: { $0.hasPrefix("-") }))
             tails.append(operands)
             if name == "printf" { tails.append(Array(operands.dropFirst())) }
             printed.append(contentsOf: operands)
         }
-        // A command that is itself text (`'add mcp install docs'`) launches
-        // nothing: its operands are a line only an unknown launcher would
-        // run, two guesses deep, so a bare `mcp install` there needs more.
-        let headRuns = isPrinter || reads.readingText == false
-        for tail in tails where tail.isEmpty == false && joinedReadsRun(tail, reads, headRuns: headRuns) {
+        for tail in tails where tail.isEmpty == false && joinedReadsRun(tail, reads, dataOnly: dataOnly) {
             return true
         }
         let argv = [command.head] + args
         let decoded = argv.map(\.ansiCDecodedIfMarked)
         if decoded != argv, reads.runsHostMCPMutation(decoded.joined(separator: " "), nested: false) { return true }
     }
-    return printed.isEmpty == false && joinedReadsRun(printed, reads)
+    return printed.isEmpty == false
+        && joinedReadsRun(printed, reads, dataOnly: lineInert && launched.allSatisfy(isNonExecutor))
+}
+
+/// A line whose text nothing runs: one command, plainly named (no dynamic
+/// head, launcher guess or truncation), with no assignment or redirect, and
+/// no pipe, list, background, substitution, redirect or here-string
+/// character anywhere in it (a quoted one counts too: fail closed).
+private func isInertLine(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
+    guard launched.count == 1, let command = launched.first,
+          command.speculative == false, command.truncated == false, command.headIsDynamic == false,
+          command.redirects.isEmpty, command.assignments.isEmpty
+    else { return false }
+    return raw.contains(where: { "|&;<>`\n".contains($0) }) == false && raw.contains("$(") == false
 }
 
 /// `words` joined into one command line, as written and decoded, read flat.
-private func joinedReadsRun(_ words: [String], _ reads: HostTextReads, headRuns: Bool = true) -> Bool {
+private func joinedReadsRun(_ words: [String], _ reads: HostTextReads, dataOnly: Bool = false) -> Bool {
     Set([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]).contains {
-        reads.runsHostMCPMutation($0, nested: false, headRuns: headRuns)
+        reads.runsHostMCPMutation($0, nested: false, dataOnly: dataOnly)
     }
 }
 

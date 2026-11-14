@@ -16,14 +16,16 @@ import RVDomain
 /// (`$C mcp add`), and a runner given the whole command line as one word
 /// (`watch 'claude mcp add x'`, read through `reads`). Editors count with
 /// `--add-mcp` anywhere after them. Installers that write host configs
-/// themselves count: `fastmcp install`; `mcp install` as the program, under
-/// a Python or plain runner (`uv run mcp install`) or given a `.py` server;
-/// the `@smithery/cli`, `install-mcp` and `add-mcp` package specs and
-/// programs anywhere, and any spec of them a runner runs. With `headRuns`
-/// false (a line rv only guesses some program runs: the operands of a
-/// command that is itself text, `carriesHostMCPText`), a bare `mcp install`
-/// at its head also needs a Python runner or server file.
-func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads, headRuns: Bool = true) -> Bool {
+/// themselves count: `fastmcp install`; `mcp install` as two adjacent
+/// words anywhere (`op run -- mcp install s`, `chronic -q mcp install s`),
+/// whatever the server, unless `mcp` is the value of a build tool's
+/// directory option (`make -C mcp install`) or the command does not run its
+/// operands (`isNonExecutor`); `mcp install` under a Python or plain runner
+/// (`uv run mcp install`) or given a `.py` server; the `@smithery/cli`,
+/// `install-mcp` and `add-mcp` package specs and programs anywhere, and any
+/// spec of them a runner runs. Inside text nothing runs (`reads.inert`),
+/// `mcp install` needs a Python runner or a `.py` server.
+func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool {
     let words = command.guardArgv.map(foldedWord)
     if command.headIsDynamic, words.dropFirst().contains(where: dynamicGroupWords.contains) { return true }
     let head = commandName(command.head)
@@ -39,6 +41,10 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads, headRun
     var judged = Array(words.enumerated())
     let written = foldedWord(command.head)
     if let first = words.first, written != first { judged.append((offset: 0, element: written)) }
+    let operandsRun = reads.inert == false && isNonExecutor(command) == false
+    // A build tool's directory option, or one heading a re-split of
+    // operands already judged in their own command (`-C mcp install`).
+    let takesDirectories = directoryTools.contains(head) || command.head.hasPrefix("-")
     for (index, word) in judged {
         if isConfigInstallerPackage(word) || configInstallerPrograms.contains(commandName(word)) { return true }
         if runs(index), packageNames(word).contains(where: configInstallerNames.contains) { return true }
@@ -46,9 +52,11 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads, headRun
         // add x'`, `su -c '…'`, `parallel '…' ::: x`, Linux `script -c`).
         if index > 0, runs(index), carriesHostMCPMutation(word, reads: reads) { return true }
         let rest = Array(words[(index + 1)...])
+        let before = index == 0 ? nil : index == 1 ? command.head : command.guardArgv[index - 1]
         let place = HostWordPlace(
             runs: runs(index), feedsWords: feedsWords,
-            pythonRun: (index == 0 && headRuns) || firstPythonRunner.map { $0 < index } == true)
+            pythonRun: (index == 0 && reads.inert == false) || firstPythonRunner.map { $0 < index } == true,
+            mayRun: operandsRun && (takesDirectories && before.map(directoryOptions.contains) == true) == false)
         if hostCLIs(word).contains(where: { hostWordMutates($0, rest: rest, place: place) }) { return true }
     }
     return false
@@ -60,6 +68,46 @@ private struct HostWordPlace {
     let feedsWords: Bool
     /// Index 0, or after a Python or plain runner.
     let pythonRun: Bool
+    /// The word may be run as a program: its command may run its operands,
+    /// the line is not text nothing runs, and it is no directory option's
+    /// value.
+    let mayRun: Bool
+}
+
+/// Options whose value names a directory or workspace (`make -C mcp
+/// install`, `pnpm --filter mcp install`, `npm --prefix mcp install x`),
+/// as written: `-c` is a shell's command string, not one of them. Only
+/// `directoryTools` are known to take them so: under any other program
+/// (`nsenter -w mcp install s`) the word after one may run.
+private let directoryOptions: Set<String> = [
+    "-C", "--directory", "--dir", "--cwd", "--prefix", "--filter", "-F", "--workspace", "-w",
+]
+
+private let directoryTools: Set<String> = ["make", "gmake", "pnpm", "npm", "yarn", "bun"]
+
+/// A command rv knows never runs its operands' text, run by its plain
+/// name: `grep`/`egrep`/`fgrep`, `rg` without `--pre`, `echo`/`printf`,
+/// `git commit`/`git tag` with no global option, and `gh pr|issue
+/// create|comment|edit`. Any other program may be an executor.
+func isNonExecutor(_ command: LaunchedCommand) -> Bool {
+    let head = foldedWord(command.head)
+    guard command.headIsDynamic == false, head.contains("/") == false, commandName(command.head) == head else {
+        return false
+    }
+    let words = command.guardArgv.dropFirst().map(foldedWord)
+    switch head {
+    case "grep", "egrep", "fgrep", "echo", "printf":
+        return true
+    case "rg":
+        return words.contains(where: { $0.hasPrefix("--pre") }) == false
+    case "git":
+        return words.first.map { ["commit", "tag"].contains($0) } == true
+    case "gh":
+        return words.count >= 2 && ["pr", "issue"].contains(words[0])
+            && ["create", "comment", "edit"].contains(words[1])
+    default:
+        return false
+    }
 }
 
 private func hostWordMutates(_ host: String, rest: [String], place: HostWordPlace) -> Bool {
@@ -70,8 +118,10 @@ private func hostWordMutates(_ host: String, rest: [String], place: HostWordPlac
     if host == "fastmcp" { return rest.first == "install" }
     if host == "mcp" {
         // `mcp` is a common directory and package name (`make -C mcp
-        // install`): the program run, or given a Python server file.
-        return (place.pythonRun || rest.contains(where: namesPythonServer)) && rest.first == "install"
+        // install`): a word that may run, the program under a Python
+        // runner, or given a Python server file.
+        guard rest.first == "install" else { return false }
+        return place.mayRun || place.pythonRun || rest.contains(where: namesPythonServer)
     }
     guard let groups = hostGroups[host] else { return false }
     if agentHosts.contains(host), place.runs, place.feedsWords || rest.contains(where: mayStandForWords) {
