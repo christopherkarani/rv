@@ -8,28 +8,36 @@ import RVDomain
 /// unless the words after it are exactly a read-only form
 /// (`isReadOnlyHostForm`). So does an agent CLI run as the program, or by a
 /// runner (`npx`, `node`, `stdbuf`, ...), whose words rv cannot see: one
-/// given an expansion (`claude "$@"` in a function, `claude $SUB add`) or
-/// fed more words by `xargs`/`parallel`; and a dynamic program given a
-/// group word (`$C mcp add`). Editors count with `--add-mcp` anywhere after
-/// them. Installers that write host configs themselves (`mcp install`,
-/// `fastmcp install`, `@smithery/cli install`, `install-mcp`) count too.
+/// given an expansion that may stand for its subcommand (`claude "$@"` in a
+/// function, `claude $SUB add`) or fed more words by `xargs`/`parallel`; and
+/// a dynamic program given an agent CLI's group word (`$C mcp add`). Editors
+/// count with `--add-mcp` anywhere after them. Installers that write host
+/// configs themselves count when run: `mcp install` and `fastmcp install`
+/// as the program or under a Python or plain runner (`uv run mcp install`),
+/// and the `@smithery/cli`, `install-mcp` and `add-mcp` packages as the
+/// program or under a runner.
 func isHostMCPMutation(_ command: LaunchedCommand) -> Bool {
     let words = command.guardArgv.map(foldedWord)
-    if command.headIsDynamic, words.dropFirst().contains(where: allGroupWords.contains) { return true }
+    if command.headIsDynamic, words.dropFirst().contains(where: dynamicGroupWords.contains) { return true }
     let head = commandName(command.head)
     let feedsWords = argvFeeders.contains(head)
+    let runs = { (index: Int) in index == 0 || hostRunners.contains(head) }
     for (index, word) in words.enumerated() {
-        if configInstallers.contains(where: { word.contains($0) }) { return true }
+        if runs(index), isConfigInstaller(word) { return true }
         guard let host = hostCLI(word) else { continue }
         let rest = Array(words[(index + 1)...])
         if editorHosts.contains(host) {
             if rest.contains(where: { $0 == "--add-mcp" || $0.hasPrefix("--add-mcp=") }) { return true }
             if host != "cursor" { continue }
         }
+        if pythonInstallers.contains(host) {
+            // `mcp` is a common directory and package name (`make -C mcp
+            // install`): only the program itself, run, counts.
+            if index == 0 || pythonRunners.contains(head), rest.first == "install" { return true }
+            continue
+        }
         guard let groups = hostGroups[host] else { continue }
-        if agentHosts.contains(host), index == 0 || hostRunners.contains(head),
-           feedsWords || rest.contains(where: isOpaqueWord)
-        {
+        if agentHosts.contains(host), runs(index), feedsWords || rest.contains(where: mayStandForWords) {
             return true
         }
         guard rest.contains(where: groups.contains) else { continue }
@@ -43,15 +51,29 @@ func isHostMCPMutation(_ command: LaunchedCommand) -> Bool {
 /// or Claude Code's native build (`~/.local/share/claude/versions/2.0.14`).
 private func hostCLI(_ word: String) -> String? {
     let name = commandName(word)
-    if hostGroups[name] != nil || editorHosts.contains(name) { return name }
+    if hostGroups[name] != nil || editorHosts.contains(name) || pythonInstallers.contains(name) { return name }
     for (package, host) in hostPackages where word.contains(package) { return host }
     if name == "claude-code" || word.contains("/claude/versions/") { return "claude" }
     return nil
 }
 
-/// A word whose value rv cannot read: an expansion or a substitution.
-private func isOpaqueWord(_ word: String) -> Bool {
-    word.contains("$") || word.contains("`")
+/// An expansion rv cannot read that may become the subcommand or several
+/// words (`$SUB`, `"$@"`, `$(printf 'mcp add')`, `--$X`). A quoted word
+/// with a literal space outside its substitutions (`"fix $FILE"`) stays one
+/// word that is no group name, unless it carries `@` (`"x $@"` splits).
+private func mayStandForWords(_ word: String) -> Bool {
+    guard word.contains("$") || word.contains("`") else { return false }
+    let literal = collapsingSubstitutions(word)
+    return literal.contains(where: \.isWhitespace) == false || word.contains("@")
+}
+
+/// `@smithery/cli`, `install-mcp@1.2`, `…/node_modules/install-mcp/…`, or
+/// the program `install-mcp` / `add-mcp` / `smithery`.
+private func isConfigInstaller(_ word: String) -> Bool {
+    if configInstallerPrograms.contains(commandName(word)) { return true }
+    return configInstallerPackages.contains { package in
+        word == package || word.hasPrefix(package + "@") || word.contains("node_modules/" + package + "/")
+    }
 }
 
 private let editorHosts: Set<String> = ["code", "code-insiders", "cursor", "windsurf"]
@@ -68,6 +90,17 @@ private let hostRunners: Set<String> = argvFeeders.union([
     "script", "unbuffer", "find", "watch", "chrt", "ionice", "taskset", "setsid", "flock", "su", "runuser",
 ])
 
+/// The Python MCP SDK's and FastMCP's CLIs write Claude Desktop and other
+/// host configs: `mcp install server.py`, `fastmcp install cursor`.
+private let pythonInstallers: Set<String> = ["mcp", "fastmcp"]
+
+/// Runners that start a Python program by name, plus the plain launchers
+/// (not the JavaScript package managers: `pnpm --filter mcp install`).
+private let pythonRunners: Set<String> = argvFeeders.union([
+    "uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "python", "python3", "stdbuf", "caffeinate", "arch",
+    "script", "unbuffer", "watch", "chrt", "ionice", "taskset", "setsid", "flock", "su", "runuser",
+])
+
 private let hostGroups: [String: Set<String>] = [
     "claude": ["mcp", "plugin", "plugins"],
     "codex": ["mcp", "mcp-server"],
@@ -75,13 +108,10 @@ private let hostGroups: [String: Set<String>] = [
     "opencode": ["mcp"],
     "cursor": ["mcp"],
     "cursor-agent": ["mcp"],
-    // The Python MCP SDK's and FastMCP's CLIs write Claude Desktop and
-    // other host configs: `mcp install server.py`, `fastmcp install cursor`.
-    "mcp": ["install"],
-    "fastmcp": ["install"],
 ]
 
-private let allGroupWords: Set<String> = hostGroups.values.reduce(into: ["--add-mcp"]) { $0.formUnion($1) }
+/// Group words a dynamic program (`$C`) may be given.
+private let dynamicGroupWords: Set<String> = hostGroups.values.reduce(into: ["--add-mcp"]) { $0.formUnion($1) }
 
 private let hostPackages: [(String, String)] = [
     ("@anthropic-ai/claude-code", "claude"),
@@ -90,8 +120,9 @@ private let hostPackages: [(String, String)] = [
     ("opencode-ai", "opencode"),
 ]
 
-/// Packages whose only job is writing a server into host configs.
-private let configInstallers: [String] = ["@smithery/cli", "install-mcp", "add-mcp"]
+/// Packages and programs whose job is writing a server into host configs.
+private let configInstallerPackages: [String] = ["@smithery/cli", "install-mcp", "add-mcp"]
+private let configInstallerPrograms: Set<String> = ["smithery", "install-mcp", "add-mcp"]
 
 /// The exact argv tails (after the host word) that only print. `NAME`
 /// stands for one non-option word. `claude mcp serve` and `codex
@@ -113,8 +144,6 @@ private func isReadOnlyHostForm(host: String, _ rest: [String]) -> Bool {
         forms = [["mcp"], ["mcp", "list"], ["extensions"], ["extensions", "list"]]
     case "opencode":
         forms = [["mcp"], ["mcp", "list"], ["mcp", "ls"]]
-    case "mcp", "fastmcp":
-        return false
     default:
         forms = [["mcp"], ["mcp", "list"]]
     }

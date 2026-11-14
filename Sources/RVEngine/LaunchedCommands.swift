@@ -387,7 +387,7 @@ func isDynamicHead(_ word: String) -> Bool {
 
 /// Replaces each `$(...)`, `${...}` and backtick span with a lone `$`, so a
 /// `/` inside a substitution cannot masquerade as a path separator.
-private func collapsingSubstitutions(_ word: String) -> String {
+func collapsingSubstitutions(_ word: String) -> String {
     let chars = Array(word)
     var out = ""
     var i = 0
