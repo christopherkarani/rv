@@ -1,3 +1,4 @@
+import RVDomain
 import Testing
 @testable import RVEngine
 
@@ -53,5 +54,63 @@ struct MCPHostCLITextTests {
             counted = true
         }
         #expect(counted)
+        #expect(reads.exceeded)
+        #expect(reads.readsDone == HostTextReads.maxReads)
+    }
+
+    /// Program text is scanned once per piece: the work is linear.
+    @Test func programTextScanIsLinear() {
+        let reads = HostTextReads()
+        let text = (0..<1_000).map { "w\($0)" }.joined(separator: " ")
+        #expect(textNamesHostMCPMutation(text, reads: reads) == false)
+        #expect(reads.piecesExamined == 1_000)
+        #expect(reads.exceeded == false)
+    }
+
+    /// One text over the per-text cap, or texts over the total cap, count.
+    @Test func programTextPastItsCapsCounts() {
+        let one = HostTextReads()
+        let huge = (0...HostTextReads.maxTokenPieces).map { "w\($0)" }.joined(separator: " ")
+        #expect(textNamesHostMCPMutation(huge, reads: one))
+        #expect(one.exceeded)
+        #expect(one.piecesExamined == 0)
+
+        let all = HostTextReads()
+        let size = HostTextReads.maxTokenPieces
+        var counted = false
+        for round in 0...(HostTextReads.maxPieces / size) {
+            let text = (0..<size).map { "r\(round)w\($0)" }.joined(separator: " ")
+            if textNamesHostMCPMutation(text, reads: all) {
+                counted = true
+                break
+            }
+        }
+        #expect(counted)
+        #expect(all.exceeded)
+        #expect(all.piecesExamined <= HostTextReads.maxPieces)
+    }
+
+    /// The raw-word scan spends each distinct word once across its views.
+    @Test func rawWordScanSpendsEachWordOnce() {
+        let reads = HostTextReads()
+        #expect(hostMCPTextNamesMutation("echo 'a b c'", reads: reads) == false)
+        #expect(reads.piecesExamined == 3)
+    }
+
+    /// Through the guard: many distinct carried command lines exhaust the
+    /// read budget, and one huge quoted argument the piece budget; both ask.
+    @Test func guardAsksWhenItsBudgetRunsOut() {
+        let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
+        let many = "echo " + (0..<600).map { "'xmcp a\($0)'" }.joined(separator: " ") + " | sh"
+        let reads = HostTextReads()
+        #expect(mcpHostConfigUnmodeledWrite(many, guard: MCPHostConfigGuard(), context: context, reads: reads))
+        #expect(reads.exceeded)
+        #expect(reads.readsDone == HostTextReads.maxReads)
+
+        let blob = "grep '" + (0..<100_000).map { "w\($0)" }.joined(separator: " ") + "' notes.txt"
+        let pieces = HostTextReads()
+        #expect(mcpHostConfigUnmodeledWrite(blob, guard: MCPHostConfigGuard(), context: context, reads: pieces))
+        #expect(pieces.exceeded)
+        #expect(pieces.piecesExamined <= HostTextReads.maxPieces)
     }
 }

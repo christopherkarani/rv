@@ -103,25 +103,57 @@ func carriesHostMCPMutation(_ word: String, reads: HostTextReads) -> Bool {
 /// unless the pieces after it are exactly a read-only form; an installer's
 /// package or program; `fastmcp install`; `mcp install` given a `.py`
 /// server; an editor given `--add-mcp`. Over-reports on prose that names a
-/// host mutation, as a commit message or a grep pattern may.
-func textNamesHostMCPMutation(_ text: String) -> Bool {
+/// host mutation, as a commit message or a grep pattern may. Linear in the
+/// pieces, which count against `reads` (past its cap: a mutation).
+func textNamesHostMCPMutation(_ text: String, reads: HostTextReads) -> Bool {
     let pieces = textPieces(text)
     guard pieces.count > 1 else { return false }
+    guard reads.examine(pieces: pieces.count) else { return true }
+    let later = LaterPieces(pieces)
     for (index, piece) in pieces.enumerated() {
         if isConfigInstallerPackage(piece) || configInstallerPrograms.contains(commandName(piece)) { return true }
         if packageNames(piece).contains(where: configInstallerNames.contains) { return true }
-        let rest = Array(pieces[(index + 1)...])
+        let first = index + 1 < pieces.count ? pieces[index + 1] : nil
         for host in hostCLIs(piece) {
-            if editorHosts.contains(host), rest.contains(where: { $0.hasPrefix("--add-mcp") }) { return true }
-            if host == "fastmcp", rest.first == "install" { return true }
-            if host == "mcp", rest.first == "install", rest.contains(where: namesPythonServer) { return true }
-            guard let groups = hostGroups[host], let next = rest.first(where: { $0.hasPrefix("-") == false }),
-                  groups.contains(next)
+            if editorHosts.contains(host), later.addMCP[index] { return true }
+            if host == "fastmcp", first == "install" { return true }
+            if host == "mcp", first == "install", later.pythonServer[index] { return true }
+            guard let groups = hostGroups[host], let next = later.nextOperand[index], groups.contains(pieces[next])
             else { continue }
-            if isReadOnlyHostForm(host: host, rest) == false { return true }
+            // Every read-only form holds at most three words.
+            let restCount = pieces.count - index - 1
+            if restCount > 3 || isReadOnlyHostForm(host: host, Array(pieces[(index + 1)...])) == false { return true }
         }
     }
     return false
+}
+
+/// For each piece, facts about the pieces after it, built in one pass.
+private struct LaterPieces {
+    /// Some later piece is `--add-mcp…`.
+    var addMCP: [Bool]
+    /// Some later piece names a Python server.
+    var pythonServer: [Bool]
+    /// The index of the first later piece that is not an option.
+    var nextOperand: [Int?]
+
+    init(_ pieces: [String]) {
+        addMCP = Array(repeating: false, count: pieces.count)
+        pythonServer = Array(repeating: false, count: pieces.count)
+        nextOperand = Array(repeating: nil, count: pieces.count)
+        var seenAddMCP = false
+        var seenPythonServer = false
+        var operand: Int?
+        for index in pieces.indices.reversed() {
+            addMCP[index] = seenAddMCP
+            pythonServer[index] = seenPythonServer
+            nextOperand[index] = operand
+            let piece = pieces[index]
+            if piece.hasPrefix("--add-mcp") { seenAddMCP = true }
+            if namesPythonServer(piece) { seenPythonServer = true }
+            if piece.hasPrefix("-") == false { operand = index }
+        }
+    }
 }
 
 /// Case-folded runs of characters a program, package spec or option can
