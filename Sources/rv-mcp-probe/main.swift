@@ -10,6 +10,7 @@
 // `rv-mcp-probe procargs <pid|self>` reads `pid`'s arguments and environment
 // through `sysctl` `KERN_PROCARGS2`, as a caged server could, and prints what
 // it got back: never the values, only counts and whether `HOME=` was there.
+// `rv-mcp-probe procargs-bytes <hex>` runs the same parse over a given buffer.
 import Darwin
 import Foundation
 import RVMCP
@@ -83,7 +84,11 @@ private func procargs(_ pid: pid_t) -> String {
     var buffer = [UInt8](repeating: 0, count: 1 << 20)
     var size = buffer.count
     guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return "failed errno=\(errno)" }
-    let data = Array(buffer.prefix(size))
+    return parseProcargs(Array(buffer.prefix(size)))
+}
+
+/// The parse alone, over bytes in `KERN_PROCARGS2` layout.
+private func parseProcargs(_ data: [UInt8]) -> String {
     guard data.count >= 4 else { return "failed short" }
     let argc = Int(data.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
     guard argc >= 0 else { return "failed argc=\(argc)" }
@@ -134,7 +139,19 @@ case "procargs":
     }
     say(procargs(pid))
     exit(0)
+case "procargs-bytes":
+    // A hand-built buffer, hex encoded, for layouts no real process makes.
+    let hex = arguments.count == 2 ? Array(arguments[1].utf8) : []
+    let bytes = stride(from: 0, to: hex.count - 1, by: 2).compactMap {
+        UInt8(String(decoding: hex[$0...($0 + 1)], as: UTF8.self), radix: 16)
+    }
+    guard arguments.count == 2, hex.count % 2 == 0, bytes.count * 2 == hex.count else {
+        say("usage: rv-mcp-probe procargs-bytes <hex>")
+        exit(2)
+    }
+    say(parseProcargs(bytes))
+    exit(0)
 default:
-    say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...]")
+    say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...] | procargs-bytes <hex>")
     exit(2)
 }
