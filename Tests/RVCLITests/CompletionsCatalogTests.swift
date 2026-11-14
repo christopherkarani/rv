@@ -37,4 +37,6 @@ import Testing
     for name in names {
         #expect(fish.contains("__fish_seen_subcommand_from ceiling\" -a \"\(name)\""))
     }
+    // After `ceiling`, fish offers only its subcommands, not policy's.
+    #expect(fish.contains("-n \"__fish_seen_subcommand_from policy\" -a") == false)
 }
