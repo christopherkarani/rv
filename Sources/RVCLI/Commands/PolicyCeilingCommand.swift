@@ -95,7 +95,10 @@ struct PolicyCeilingCommand: AsyncParsableCommand {
             let home = try CommandContext.requireHome(command: "policy ceiling set")
             let workspace = URL(fileURLWithPath: CLIProcess.workspacePath(), isDirectory: true)
             let outcome = try await PolicyCeilingRun.set(
-                home: home, workspace: workspace, file: URL(fileURLWithPath: path))
+                home: home, workspace: workspace, file: URL(fileURLWithPath: path)
+            ) { preview in
+                for line in preview { CommandContext.writeStdout(line + "\n") }
+            }
             for line in outcome.lines { CommandContext.writeStdout(line + "\n") }
             if outcome.saved == false {
                 throw ExitCode(2)
@@ -153,8 +156,11 @@ struct PolicyCeilingLayerResult: Equatable, Sendable, Codable {
         }
     }
 
+    /// Advisory notes only for a layer that is otherwise within: one
+    /// witness per layer is enough, and it skips a second enumeration.
     init(layer: String, ceiling: PolicyCeiling, document: PolicyDocument) {
-        self.init(layer: layer, result: ceiling.check(document), advisory: ceiling.advisory(document))
+        let result = ceiling.check(document)
+        self.init(layer: layer, result: result, advisory: result.isContained ? ceiling.advisory(document) : .contained)
     }
 
     /// A layer whose policy file could not be read; nothing was checked.
@@ -240,15 +246,25 @@ enum PolicyCeilingRun {
         var saved: Bool
     }
 
-    /// Parse, refuse a ceiling the machine layer already exceeds, confirm
-    /// the owner, then `replaceCeiling`, which re-checks the machine layer
+    /// Parse, refuse a ceiling the machine layer already exceeds, show the
+    /// owner what it loosens (`preview`, before the prompt), confirm the
+    /// owner, then `replaceCeiling`, which re-checks the machine layer
     /// under the machine policy locks before it writes. The current repo
     /// layer is reported, never refused: an invalid repo file does not
     /// block the owner, and evaluation overlays the ceiling on every repo.
-    static func set(home: HomeDirectory, workspace: URL, file: URL) async throws -> SetOutcome {
+    /// Loosening is reported, never refused: it is the owner's call.
+    static func set(
+        home: HomeDirectory,
+        workspace: URL,
+        file: URL,
+        preview: ([String]) -> Void = { _ in }
+    ) async throws -> SetOutcome {
         let ceiling: PolicyCeiling
         do {
-            ceiling = try PolicyCeilingTOML.parse(String(contentsOf: file, encoding: .utf8))
+            guard let text = try PolicyCeilingStore.readText(at: file, followSymlinks: true) else {
+                return SetOutcome(lines: ["rv policy ceiling set: invalid ceiling file"], saved: false)
+            }
+            ceiling = try PolicyCeilingTOML.parse(text)
         } catch {
             return SetOutcome(lines: ["rv policy ceiling set: invalid ceiling file"], saved: false)
         }
@@ -266,20 +282,44 @@ enum PolicyCeilingRun {
         } else {
             repoResult = .unchecked(layer: "repo")
         }
-        let lines = machineResult.pretty + repoResult.pretty
+        var lines = machineResult.pretty + repoResult.pretty
         let refused = "rv policy ceiling set: refused: the machine layer exceeds this ceiling"
         guard machineResult.status == "within" else {
             return SetOutcome(lines: lines + [refused], saved: false)
         }
+        lines += loosenings(session: session, to: ceiling)
+        preview(lines)
         try await OwnerConfirmation.require("replace the policy ceiling from \(file.path)")
         do {
             try session.replaceCeiling(ceiling)
         } catch let error as PolicyCeilingError {
-            // The machine layer changed between the check and the lock.
-            return SetOutcome(lines: lines + [refused, "  \(error.refusal)"], saved: false)
+            switch error {
+            case .writeFailed:
+                return SetOutcome(lines: ["rv policy ceiling set: write failed: \(error.refusal)"], saved: false)
+            case .exceeds, .indeterminate:
+                // The machine layer changed between the prompt and the lock.
+                return SetOutcome(lines: [refused, "  \(error.refusal)"], saved: false)
+            case .invalidFile, .egressExceeds:
+                return SetOutcome(lines: ["rv policy ceiling set: \(error.refusal)"], saved: false)
+            }
         } catch {
-            return SetOutcome(lines: lines + ["rv policy ceiling set: write failed"], saved: false)
+            return SetOutcome(lines: ["rv policy ceiling set: invalid machine policy file"], saved: false)
         }
-        return SetOutcome(lines: lines + ["saved ceiling.toml"], saved: true)
+        return SetOutcome(lines: ["saved ceiling.toml"], saved: true)
+    }
+
+    /// What the new ceiling loosens relative to the current one. An
+    /// unreadable current ceiling is named, so the owner knows it is being
+    /// replaced rather than compared.
+    private static func loosenings(session: PolicyWorkspace, to ceiling: PolicyCeiling) -> [String] {
+        let current: PolicyCeiling?
+        do {
+            current = try session.loadCeiling()
+        } catch {
+            return ["current ceiling.toml is invalid; it will be replaced"]
+        }
+        let changes = PolicyCeilingDiff.loosenings(from: current ?? PolicyCeiling(), to: ceiling)
+        guard changes.isEmpty == false else { return [] }
+        return ["this ceiling loosens the current one:"] + changes.map { "  \($0)" }
     }
 }

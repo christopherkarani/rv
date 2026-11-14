@@ -4,6 +4,7 @@ import Testing
 import RVDomain
 import RVIPC
 import RVPolicy
+import Synchronization
 @testable import RVCLI
 
 @Suite("PolicyCeilingCommand")
@@ -136,9 +137,44 @@ struct PolicyCeilingCommandTests {
             try writeRepo("schema_version = 1\nnot toml at all\n", workspace: workspace)
             let file = workspace.appendingPathComponent("ceiling.toml")
             try ceilingText.write(to: file, atomically: true, encoding: .utf8)
-            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            let preview = Mutex<[String]>([])
+            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file) { lines in
+                preview.withLock { $0 = lines }
+            }
             #expect(outcome.saved)
-            #expect(outcome.lines.contains("repo: invalid policy file (not checked)"), "\(outcome.lines)")
+            let shown = preview.withLock { $0 }
+            #expect(shown.contains("repo: invalid policy file (not checked)"), "\(shown)")
+        }
+    }
+
+    @Test func set_showsWhatTheNewCeilingLoosens_beforeThePrompt_andStillSaves() async throws {
+        try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
+            try writeCeiling(ceilingText, home: home)
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try "schema_version = 1\negress.hosts = [\"github.com\"]\n".write(to: file, atomically: true, encoding: .utf8)
+            let preview = Mutex<[String]>([])
+            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file) { lines in
+                preview.withLock { $0 = lines }
+            }
+            #expect(outcome.saved)
+            #expect(outcome.lines == ["saved ceiling.toml"])
+            let shown = preview.withLock { $0 }
+            #expect(shown.contains("this ceiling loosens the current one:"), "\(shown)")
+            #expect(shown.contains("  drops deny rule typed.git:no-force-push (gitPush:force:-)"), "\(shown)")
+        }
+    }
+
+    @Test func set_oversizedOrSpecialSourceFile_isRefusedBeforeThePrompt() async throws {
+        try await withAsyncCeilingContext(owner: nil) { home, workspace in
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try ("schema_version = 1\n" + String(repeating: "#", count: PolicyCeiling.maximumBytes))
+                .write(to: file, atomically: true, encoding: .utf8)
+            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            #expect(outcome == .init(lines: ["rv policy ceiling set: invalid ceiling file"], saved: false))
+            let directory = workspace.appendingPathComponent("dir.toml", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            let fromDirectory = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: directory)
+            #expect(fromDirectory.saved == false)
         }
     }
 
