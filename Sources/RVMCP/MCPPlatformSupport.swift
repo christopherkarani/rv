@@ -1,6 +1,6 @@
 /// What rv's MCP gateway does not provide when its approvals key sits
 /// where other processes running as the user can read it, or when this
-/// host cannot cage a local server. Both follow from capability values
+/// host cannot cage a local server (`MCPSandbox.unavailability` says why). Both follow from capability values
 /// (`MCPApprovalSigning.custodyIsSameUser`, `MCPSandbox.enforced`), not
 /// from the OS name. Check, trust, approve and serve share this wording.
 public enum MCPPlatformSupport {
@@ -19,20 +19,20 @@ public enum MCPPlatformSupport {
 
     /// A server that asks for a sandbox where rv cannot build one.
     public static func sandboxUnenforced(server: String) -> String {
-        "\(server) asks for a sandbox, but the MCP server sandbox is unavailable on this host (macOS today); "
-            + "`rv mcp serve` will not run it uncaged"
+        "\(server) asks for a sandbox, but the MCP server sandbox is unavailable on this host "
+            + "(\(MCPSandbox.unavailability)); `rv mcp serve` will not run it uncaged"
     }
 
     /// Any local server, when organization policy sets `requireSandbox`
     /// and rv cannot build a sandbox.
     public static func organizationSandboxUnenforced(server: String) -> String {
         "organization policy requires a sandbox for \(server), but the MCP server sandbox is unavailable on this "
-            + "host (macOS today); `rv mcp serve` will not run it uncaged"
+            + "host (\(MCPSandbox.unavailability)); `rv mcp serve` will not run it uncaged"
     }
 
     /// A server with no sandbox entry where rv cannot build one.
     public static func runsUncaged(server: String) -> String {
         "\(server) has no sandbox, so `rv mcp serve` runs it uncaged: the MCP server sandbox is unavailable on "
-            + "this host (macOS today)"
+            + "this host (\(MCPSandbox.unavailability))"
     }
 }

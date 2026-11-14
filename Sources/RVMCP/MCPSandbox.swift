@@ -15,15 +15,26 @@ import Synchronization
 public enum MCPSandbox {
     public static let sandboxExec = "/usr/bin/sandbox-exec"
 
-    /// Whether serve cages local servers on this platform. The seatbelt
-    /// cage is macOS-only: elsewhere bare servers run uncaged, and
-    /// sandboxed ones, or every local one under an organization's
-    /// `requireSandbox`, are refused until the Linux cage lands.
+    /// Whether serve cages local servers on this host: Seatbelt on macOS,
+    /// Landlock on a Linux kernel that has its network rules (6.7 or
+    /// later) with `rv-isolation-exec` installed. Elsewhere bare servers
+    /// run uncaged, and sandboxed ones, or every local one under an
+    /// organization's `requireSandbox`, are refused.
     #if os(macOS)
     public static let enforced = true
+    #elseif os(Linux)
+    public static let enforced = linuxSupport.abi != nil
     #else
     public static let enforced = false
     #endif
+
+    /// Why this host has no cage, for the messages that refuse without one.
+    public static var unavailability: String {
+        #if os(Linux)
+        if case .unavailable(let unavailable) = linuxSupport { return unavailable.reason }
+        #endif
+        return "it needs macOS, or Linux 6.7 or later"
+    }
 
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]
     /// Paths `profile` allows even when `policy.writable` is empty.
@@ -40,8 +51,12 @@ public enum MCPSandbox {
             guard let home, path.hasPrefix("~/") else { return path }
             return home + String(path.dropFirst(1))
         }
+        #if os(Linux)
+        return [show("~/.cache/rv-mcp/\(name)")] + landlockWriteRoots + linuxDefaultWritable.map(show) + policy.writable
+        #else
         let scratch = show("~/Library/Caches/rv-mcp/\(name)")
         return [scratch] + seatbeltWriteRoots + defaultWritable.map(show) + policy.writable
+        #endif
     }
 
     static let deniedReads = [
@@ -77,8 +92,11 @@ public enum MCPSandbox {
     /// `denied` hears each CONNECT a `sandbox.hosts` proxy refuses.
     /// `enforced` is whether this platform can build the cage; without it
     /// a server that asks for one is refused, never run bare.
+    /// `notice` hears what rv says about a cage it built (on Linux, what
+    /// the kernel's Landlock leaves open); it goes to stderr by default.
     public static func apply(
         configDirectory: URL, home: URL, enforced: Bool = MCPSandbox.enforced,
+        notice: @escaping @Sendable (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) },
         denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
     ) -> (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch in
@@ -135,6 +153,10 @@ public enum MCPSandbox {
                 caged.workingDirectory = scratch.path
                 return .success(caged)
             }
+            #elseif os(Linux)
+            return applyLinux(
+                definition: definition, launch: launch, policy: policy, configDirectory: configDirectory, home: home,
+                notice: notice, denied: denied)
             #else
             return .failure(.sandbox(MCPPlatformSupport.sandboxUnenforced(server: definition.name)))
             #endif

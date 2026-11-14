@@ -89,20 +89,18 @@ struct ManagedCommandTests {
     @Test func restrictionsAlwaysNameTheSandboxRequirement() throws {
         let legacy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
         let plain = try ManagedPolicy.decode(Data(#"{"version":1}"#.utf8)).get()
-        #if os(macOS)
-        // The hard flip requires sandboxes here, flag or not.
+        // Where the cage runs, the hard flip requires sandboxes, flag or not.
         let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
-        #expect(ManagedRun.restrictions(legacy) == [sandbox])
-        #expect(ManagedRun.restrictions(plain) == [sandbox])
-        #else
+        #expect(ManagedRun.restrictions(legacy, sandboxEnforced: true) == [sandbox])
+        #expect(ManagedRun.restrictions(plain, sandboxEnforced: true) == [sandbox])
         // No cage: the flag refuses every local server.
-        #expect(ManagedRun.restrictions(legacy) == [
+        #expect(ManagedRun.restrictions(legacy, sandboxEnforced: false) == [
             "mcp: no MCP server sandbox on this host, so every local server is refused here (remote servers are exempt)"
         ])
-        #expect(ManagedRun.restrictions(plain) == [
-            "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
+        #expect(ManagedRun.restrictions(plain, sandboxEnforced: false) == [
+            "mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)"
         ])
-        #endif
+        #expect(ManagedRun.restrictions(plain) == ManagedRun.restrictions(plain, sandboxEnforced: MCPSandbox.enforced))
     }
 
     @Test func allowedSecretSourcesKeepTheirFileOrderInRestrictions() throws {
@@ -148,11 +146,9 @@ struct ManagedCommandTests {
             environment.approvals.request(server: "github", tool: "merge_pr", argumentsHash: "h", argumentKeys: []))
         #expect(failure(await MCPRun.approve(id: merge.id, always: true, environment: environment))?
             .contains("has argument rules") == true)
-        #if os(macOS)
-        let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
-        #else
-        let sandbox = "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
-        #endif
+        let sandbox = MCPSandbox.enforced
+            ? "mcp: every local server must be sandboxed (remote servers are exempt)"
+            : "mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)"
         #expect(ManagedRun.restrictions(try #require(environment.managed.policy))
             == [sandbox, #"mcp deny: github/merge_* when /branch == "main""#])
 

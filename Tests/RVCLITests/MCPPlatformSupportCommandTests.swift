@@ -113,7 +113,7 @@ struct MCPPlatformSupportCommandTests {
             "mcp: no MCP server sandbox on this host, so every local server is refused here (remote servers are exempt)"
         ])
         #expect(ManagedRun.restrictions(plain, sandboxEnforced: false) == [
-            "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
+            "mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)"
         ])
     }
 }
