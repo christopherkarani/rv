@@ -71,7 +71,7 @@ public struct MCPRemoteAuthorizer: Sendable {
 /// from the server go to `deliver`; a request that gets no answer (network
 /// error, HTTP error, closed stream) is answered with a JSON-RPC error, so the
 /// gateway core needs no transport knowledge. Redirects are never followed.
-final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private struct Exchange {
         enum Kind {
             case post(JSONValue, retried: Bool)
@@ -102,7 +102,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
     private var held: [JSONValue] = []
     private var stopped = false
 
-    init(
+    package init(
         launch: MCPRemoteLaunch,
         authorizer: MCPRemoteAuthorizer? = nil,
         deliver: @escaping @Sendable (JSONValue) -> Void,
@@ -125,7 +125,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         return body()
     }
 
-    func start() {
+    package func start() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
@@ -156,7 +156,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         task?.resume()
     }
 
-    func send(_ message: JSONValue) {
+    package func send(_ message: JSONValue) {
         let target: URL? = locked {
             if MCPHTTPExchange.isRequest(message), message["method"]?.stringValue == "initialize" { initializeID = message["id"] }
             guard launch.transport == .sse else { return launch.url }
@@ -169,7 +169,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         if let target { post(message, to: target, retried: false) }
     }
 
-    func stop() {
+    package func stop() {
         let (session, closing): (URLSession?, String?) = locked {
             stopped = true
             return (self.session, launch.transport == .http ? sessionID : nil)
