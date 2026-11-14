@@ -165,6 +165,8 @@ struct MCPStrictProfileTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-gateway-profile-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        // profile() runs after apply() created the scratch; a missing one is refused.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home").path
         let text = try MCPSandbox.profile(
@@ -182,9 +184,10 @@ struct MCPStrictProfileTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-gateway-profile-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home").path
-        let ports = MCPSandbox.cageNetwork([:], proxy: (4321, "abc"), reach: .secretsGateway(port: 5151)).loopbackPorts
+        let ports =MCPSandbox.cageNetwork([:], proxy: (4321, "abc"), reach: .secretsGateway(port: 5151)).loopbackPorts
         #expect(ports == [4321, 5151])
         let text = try MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false, hosts: ["api.example.com"]),
