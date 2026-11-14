@@ -271,6 +271,24 @@ struct UnixSocketListenerTests {
         #expect(process.terminationStatus == 1)
     }
 
+    /// The stderr twin: no HOME, so rvd writes its refusal to a stderr pipe
+    /// nobody reads. It must still exit 1 by code, not die of SIGPIPE.
+    @Test func rvdRefusalToAClosedStderrPipeExitsOne() throws {
+        let rvd = try #require(findDarwinRVDExecutable(), "rvd binary must be built")
+        let process = Process()
+        process.executableURL = rvd
+        process.arguments = []
+        process.environment = [:]
+        let stderr = Pipe()
+        try stderr.fileHandleForReading.close()
+        process.standardError = stderr
+        process.standardOutput = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationReason == .exit, "rvd must not die of SIGPIPE")
+        #expect(process.terminationStatus == 1)
+    }
+
     /// On macOS XPC is the production transport: a socket base the daemon
     /// refuses (group-writable `~/.config`) must not take XPC down with it.
     @Test func rvdProcessContinuesWithXPCWhenTheSocketBaseIsRefused() throws {
