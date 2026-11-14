@@ -19,8 +19,11 @@ import RVDomain
 /// themselves count: `fastmcp install`; `mcp install` as the program, under
 /// a Python or plain runner (`uv run mcp install`) or given a `.py` server;
 /// the `@smithery/cli`, `install-mcp` and `add-mcp` package specs and
-/// programs anywhere, and any spec of them a runner runs.
-func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool {
+/// programs anywhere, and any spec of them a runner runs. With `headRuns`
+/// false (a line rv only guesses some program runs: the operands of a
+/// command that is itself text, `carriesHostMCPText`), a bare `mcp install`
+/// at its head also needs a Python runner or server file.
+func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads, headRuns: Bool = true) -> Bool {
     let words = command.guardArgv.map(foldedWord)
     if command.headIsDynamic, words.dropFirst().contains(where: dynamicGroupWords.contains) { return true }
     let head = commandName(command.head)
@@ -30,7 +33,13 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool
     let firstRunner = words.firstIndex { hostRunners.contains(commandName($0)) }
     let firstPythonRunner = words.firstIndex { pythonRunners.contains(commandName($0)) }
     let runs = { (index: Int) in index == 0 || firstRunner.map { $0 < index } == true }
-    for (index, word) in words.enumerated() {
+    // argv holds the head's basename; the head as written is judged too, as
+    // a path to a host binary its basename does not name
+    // (`~/.local/share/claude/versions/2.0.14`, `…/@openai/codex/bin/codex.js`).
+    var judged = Array(words.enumerated())
+    let written = foldedWord(command.head)
+    if let first = words.first, written != first { judged.append((offset: 0, element: written)) }
+    for (index, word) in judged {
         if isConfigInstallerPackage(word) || configInstallerPrograms.contains(commandName(word)) { return true }
         if runs(index), packageNames(word).contains(where: configInstallerNames.contains) { return true }
         // A runner given a command line as one word (`watch 'claude mcp
@@ -39,7 +48,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool
         let rest = Array(words[(index + 1)...])
         let place = HostWordPlace(
             runs: runs(index), feedsWords: feedsWords,
-            pythonRun: index == 0 || firstPythonRunner.map { $0 < index } == true)
+            pythonRun: (index == 0 && headRuns) || firstPythonRunner.map { $0 < index } == true)
         if hostCLIs(word).contains(where: { hostWordMutates($0, rest: rest, place: place) }) { return true }
     }
     return false
@@ -104,10 +113,22 @@ func carriesHostMCPMutation(_ word: String, reads: HostTextReads) -> Bool {
 /// package or program; `fastmcp install`; `mcp install` given a `.py`
 /// server; an editor given `--add-mcp`. Over-reports on prose that names a
 /// host mutation, as a commit message or a grep pattern may. Linear in the
-/// pieces, which count against `reads` (past its cap: a mutation).
+/// pieces, which count against `reads` (past its cap: a mutation) unless
+/// no piece holds a stem.
 func textNamesHostMCPMutation(_ text: String, reads: HostTextReads) -> Bool {
     let pieces = textPieces(text)
     guard pieces.count > 1 else { return false }
+    // Sound early exit: every check below that can return true tests a
+    // table word (each holds a stem, `hostMCPTableWords`) by equality,
+    // prefix or containment against one of: a piece, its `commandName`, a
+    // `packageNames` name of it, or a later piece (a group word or
+    // `--add-mcp`); `install` and `.py` are only tested once a host
+    // matched. A `packageNames` name of a piece with no `%` is a substring
+    // of it, or two joined by `/`, which no stem holds; with a `%` the names
+    // are tested themselves. Decoding (`$'…'`, backslashes) happens before
+    // this text is formed, so the stems are tested on exactly the strings
+    // the checks see. So text no piece of which passes cannot match here.
+    guard pieces.contains(where: pieceMayNameHostMCP) else { return false }
     guard reads.examine(pieces: pieces.count) else { return true }
     let later = LaterPieces(pieces)
     for (index, piece) in pieces.enumerated() {
@@ -167,6 +188,14 @@ private func textPieces(_ text: String) -> [String] {
 }
 
 private let pieceCharacters: Set<Character> = ["_", "@", "/", ".", "-", "%", ":", "#", "~"]
+
+/// Whether a piece, its program name, or (with a `%`) a package name it
+/// decodes to holds a `hostMCPStems` stem.
+private func pieceMayNameHostMCP(_ piece: String) -> Bool {
+    let holdsStem = { (word: String) in hostMCPStems.contains { word.contains($0) } }
+    if holdsStem(piece) || holdsStem(commandName(piece)) { return true }
+    return piece.contains("%") && packageNames(piece).contains(where: holdsStem)
+}
 
 /// Every word the tables in this file match on, for the `hostMCPStems` check.
 func hostMCPTableWords() -> [String] {

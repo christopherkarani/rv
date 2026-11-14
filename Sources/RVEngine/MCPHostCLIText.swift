@@ -6,8 +6,9 @@ import Foundation
 /// and a read past either counts as a mutation (fail closed). Text no
 /// decoding of which names a host CLI, a group or an installer
 /// (`mayNameHostMCP`) is never read, so ordinary commands spend nothing.
-/// Text scanned as program text (`textNamesHostMCPMutation`) spends pieces:
-/// at most `maxTokenPieces` in one text and `maxPieces` in all.
+/// Text scanned as program text (`textNamesHostMCPMutation`) that holds a
+/// stem spends pieces: at most `maxTokenPieces` in one text and `maxPieces`
+/// in all.
 final class HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
@@ -23,6 +24,8 @@ final class HostTextReads {
     private(set) var piecesExamined = 0
     /// A cap was reached, so a read or scan counted as a mutation.
     private(set) var exceeded = false
+    /// The cap reached was the nesting depth.
+    private(set) var depthExceeded = false
 
     /// Spends `count` pieces of one text; false (and `exceeded`) past a cap.
     func examine(pieces count: Int) -> Bool {
@@ -39,10 +42,13 @@ final class HostTextReads {
     /// tails are read in turn (`carriesHostMCPText`). A flat read is a
     /// re-split of words already read one by one (a joined tail): only its
     /// commands are judged.
-    func runsHostMCPMutation(_ text: String, nested: Bool = true) -> Bool {
-        guard mayNameHostMCP(text), seen.insert((nested ? "n" : "f") + text).inserted else { return false }
+    /// `headRuns` false: see `isHostMCPMutation`.
+    func runsHostMCPMutation(_ text: String, nested: Bool = true, headRuns: Bool = true) -> Bool {
+        let key = (nested ? "n" : headRuns ? "f" : "g") + text
+        guard mayNameHostMCP(text), seen.insert(key).inserted else { return false }
         guard remaining > 0, depth < Self.maxDepth else {
             exceeded = true
+            if depth >= Self.maxDepth { depthExceeded = true }
             return true
         }
         remaining -= 1
@@ -51,9 +57,12 @@ final class HostTextReads {
         defer { if nested { depth -= 1 } }
         let launched = launchedCommandHeads(text)
         if launched.contains(where: \.truncated) { return true }
-        if launched.contains(where: { isHostMCPMutation($0, reads: self) }) { return true }
+        if launched.contains(where: { isHostMCPMutation($0, reads: self, headRuns: headRuns) }) { return true }
         return nested && carriesHostMCPText(launched, reads: self)
     }
+
+    /// Inside a word's own quoting level: its commands are text, not run.
+    var readingText: Bool { depth > 0 }
 }
 
 /// Whether some text the launched commands carry may, run by a shell,
@@ -82,13 +91,20 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads) -> 
         }
         var tails = [args]
         let name = commandName(command.head)
-        if printers.contains(name) {
+        let isPrinter = printers.contains(name)
+        if isPrinter {
             let operands = Array(args.drop(while: { $0.hasPrefix("-") }))
             tails.append(operands)
             if name == "printf" { tails.append(Array(operands.dropFirst())) }
             printed.append(contentsOf: operands)
         }
-        for tail in tails where tail.isEmpty == false && joinedReadsRun(tail, reads) { return true }
+        // A command that is itself text (`'add mcp install docs'`) launches
+        // nothing: its operands are a line only an unknown launcher would
+        // run, two guesses deep, so a bare `mcp install` there needs more.
+        let headRuns = isPrinter || reads.readingText == false
+        for tail in tails where tail.isEmpty == false && joinedReadsRun(tail, reads, headRuns: headRuns) {
+            return true
+        }
         let argv = [command.head] + args
         let decoded = argv.map(\.ansiCDecodedIfMarked)
         if decoded != argv, reads.runsHostMCPMutation(decoded.joined(separator: " "), nested: false) { return true }
@@ -97,9 +113,9 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads) -> 
 }
 
 /// `words` joined into one command line, as written and decoded, read flat.
-private func joinedReadsRun(_ words: [String], _ reads: HostTextReads) -> Bool {
+private func joinedReadsRun(_ words: [String], _ reads: HostTextReads, headRuns: Bool = true) -> Bool {
     Set([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]).contains {
-        reads.runsHostMCPMutation($0, nested: false)
+        reads.runsHostMCPMutation($0, nested: false, headRuns: headRuns)
     }
 }
 

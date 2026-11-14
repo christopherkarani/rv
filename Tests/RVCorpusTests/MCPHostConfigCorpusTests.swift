@@ -26,6 +26,24 @@ struct MCPHostConfigCorpusTests {
         }
     }
 
+    /// Rows an earlier stage judges indeterminate before the guard runs
+    /// (each row's `note` says which): so with the guard on or off.
+    @Test func indeterminateRowsStayIndeterminateWithOrWithoutTheGuard() throws {
+        let harness = try StressHarness.dayOne()
+        let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "indeterminate" }
+        #expect(rows.isEmpty == false)
+        for row in rows {
+            guard let command = row.command else { continue }
+            for guarded in [true, false] {
+                let result = door(harness, command, guarded: guarded)
+                guard case .indeterminate = result.decision else {
+                    Issue.record("\(row.id) must be indeterminate, got \(describeDecision(result)): \(command)")
+                    continue
+                }
+            }
+        }
+    }
+
     @Test func allowRowsStayAllowedWhileTheGatewayIsInUse() throws {
         let harness = try StressHarness.dayOne()
         let rows = try loadStressCorpus("mcp-host-config.json").filter { $0.expected == "allow" }
@@ -41,7 +59,10 @@ struct MCPHostConfigCorpusTests {
 
     /// In-repository writes that only the MCP guard denies: the guard owns
     /// the verdict, an owner can approve it (not pinned), and with no gateway
-    /// configured the same commands allow.
+    /// configured the same commands allow. (`echo .mcp.json | python3
+    /// edit.py` is not here: the unwrap stage pins a deny on it,
+    /// `builtin.action:unwrap-limited`, guard or not; its corpus row still
+    /// checks the deny.)
     @Test("in-repository config writes are core.mcp and unlockable", arguments: [
         "echo '{\"mcpServers\":{}}' > .mcp.json",
         "printf '{}' | tee .cursor/mcp.json",
@@ -58,7 +79,6 @@ struct MCPHostConfigCorpusTests {
         "cp -r evil .cursor",
         "claude plugin marketplace add evil/market",
         "cp evil.json mcp.json -v",
-        "echo .mcp.json | python3 edit.py",
     ])
     func guardOwnsInRepositoryWrites(command: String) throws {
         let harness = try StressHarness.dayOne()
@@ -143,8 +163,9 @@ struct MCPHostConfigCorpusTests {
     }
 
     /// Through the product door, commands that spend the guard's text budget
-    /// ask (`MCPHostCLITextTests.guardAsksWhenItsBudgetRunsOut` asserts the
-    /// budget itself). The time bound only catches a hang.
+    /// ask (`MCPHostCLITextTests.guardAsksWhenItsBudgetRunsOut` and
+    /// `guardAsksPastTheDepthCap` assert the read and depth caps by counter).
+    /// The time bound only catches a hang.
     @Test func carriedTextReadsAreBounded() throws {
         let harness = try StressHarness.dayOne()
         var nested = "watch xmcp end"
@@ -154,8 +175,20 @@ struct MCPHostConfigCorpusTests {
             let start = ContinuousClock.now
             let result = door(harness, command, guarded: true)
             #expect(result.decision != .allow, "\(command.prefix(80))")
-            #expect(ContinuousClock.now - start < .seconds(600), "\(command.prefix(80))")
+            #expect(ContinuousClock.now - start < .seconds(20), "\(command.prefix(80))")
         }
+    }
+
+    /// A long quoted argument is judged by what it names, not its size: one
+    /// past the guard's per-text cap with no host word judges as with the
+    /// guard off; the same text naming a host mutation does not allow.
+    @Test func longTextIsJudgedByWhatItNames() throws {
+        let harness = try StressHarness.dayOne()
+        let words = (0..<5_000).map { "w\($0)" }
+        let plain = "grep '" + words.joined(separator: " ") + "' notes.txt"
+        #expect(door(harness, plain, guarded: true).decision == door(harness, plain, guarded: false).decision)
+        let named = "grep '" + (words + ["claude mcp add x -- y"]).joined(separator: " ") + "' notes.txt"
+        #expect(door(harness, named, guarded: true).decision != .allow)
     }
 
     /// With the gateway in use, commands that name no guarded file and run
