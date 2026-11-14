@@ -212,19 +212,31 @@ public enum MCPSandbox {
         let unreadable = deniedReads.map(expand) + [configDirectory]
         let writeAllow = paths(writable, denyTargets: false)
         let linkDenies = symlinkDenies(unreadable)
+        let credentialDeny = "(deny file-read* file-write* file-link file-clone "
+            + paths(unreadable, denyTargets: true) + linkDenies + ")"
+        // `file-write*` does not cover `file-link` or `file-clone`, which
+        // `(allow default)` would otherwise allow everywhere. A hard link
+        // needs both of its ends allowed (checked live on macOS 27), and a
+        // clone its source, so both are allowed only among the write roots:
+        // package managers link and clone inside their caches. Linking a
+        // file the cage cannot write was already refused by `file-write*`
+        // (the kernel checks write-data on the link source); this does not
+        // depend on that. A hard link an uncaged process planted under a
+        // write root before launch is not seen by any path rule.
         var lines = [
             "(version 1)",
             "(allow default)",
             "(deny file-write*)",
+            "(deny file-link file-clone)",
             "(allow file-write* " + writeAllow + ")",
-            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")",
+            "(allow file-link file-clone " + writeAllow + ")",
+            credentialDeny,
         ]
         // A credential symlink can be retargeted at a path the profile did not
         // name. File reads no longer fall through to (allow default). Reviewed
         // write paths are allowed again, then the credential deny is repeated
         // so a target under /private/tmp or a cache is not re-opened.
         if linkDenies.isEmpty == false {
-            let credentialDeny = "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")"
             lines.append("(deny file-read*)")
             lines.append("(allow file-read* file-write* " + writeAllow + ")")
             lines.append(credentialDeny)
