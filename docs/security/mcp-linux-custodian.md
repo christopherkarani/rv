@@ -193,10 +193,12 @@ What the table does not weigh, and the next steps it suggests:
 `sudo rv mcp custodian install`, in order, each step printed and written
 to the system log (`authpriv`):
 
-1. creates the system account `rv-mcp-custodian` (no home, no shell);
-2. copies `rv-mcp-custodian` from beside rv, and the shared libraries it
-   loads from beside itself or from its own search path (the Swift
-   runtime), to `/usr/local/libexec/rv/`, owned by root. Each copy's
+1. creates the system account `rv-mcp-custodian` (no home, no shell) and
+   its state directory, so that the presence helper's unit can be kept
+   out of it from its first start;
+2. copies `rv-mcp-custodian` from beside rv, and the shared libraries its
+   loader finds on its own search path (the Swift runtime), to
+   `/usr/local/libexec/rv/`, owned by root. Each copy's
    library search path is rewritten to its own directory (`$ORIGIN`): a
    build's binary searches its toolchain's directory first, which is
    often under a home, and root must not load code from there;
@@ -208,15 +210,32 @@ to the system log (`authpriv`):
 It refuses, changing nothing, when:
 
 - it is not root, or systemd is not the init system;
-- the binary is missing or is not a file it can read;
-- the binary, a library, or any directory above them can be changed by an
-  account other than root. **This is the case for a normal install**
-  (`~/.local/bin`): what root's services run would be whatever the
-  owner's account, and so the agent, left there. Check `rv`,
-  `rv-mcp-custodian` and the libraries against the release's
-  `SHA256SUMS`, copy them into a directory only root can write, and run
-  `rv mcp custodian install` from that copy. The check is rv's own, so it
-  only helps while the `rv` you run with sudo is the one you checked;
+- `rv-mcp-custodian` is not beside rv;
+- a program root runs for this (the `rv` you ran with sudo, `rv-cli`
+  where a release's `rv` starts it, `rv-mcp-custodian`), a library one of
+  them finds on its search path, a directory one of their loaders
+  searches, or any directory above those, can be changed by an account
+  other than root. Links are followed, and both the link and where it
+  leads are checked. A directory that does not exist counts where
+  someone other than root could create it, and a sticky directory such
+  as `/tmp` counts when it would hold the file or be searched, since
+  anyone can add a name to it. **This is the case for a normal install**
+  (`~/.local/bin`): what root runs would be whatever the owner's account,
+  and so the agent, left there. Copy the directory that holds rv (`rv`,
+  `rv-cli`, `rv-mcp-custodian` and the `lib*.so` files) into one only
+  root can write, for example `sudo cp -R ~/.local/bin /opt/rv`, and run
+  `sudo /opt/rv/rv mcp custodian install`. **A build from source** is
+  refused there too: its binaries search the toolchain's directory before
+  their own. Rewrite the search path of the copies first
+  (`sudo patchelf --set-rpath '$ORIGIN' /opt/rv/rv /opt/rv/rv-mcp-custodian
+  /opt/rv/lib*.so`), which is what `Scripts/linux-custodian-e2e.sh` does.
+  The check is rv's own, so it only helps while the `rv` you run with
+  sudo is one the agent could not have replaced: it tells an honest
+  install that it is unsafe, it cannot stop a replaced one;
+- a program among those is not one whose loader rv can follow: not a
+  64-bit ELF file, one that names a library by path or through an audit,
+  filter or auxiliary entry, or one whose search path has an entry that
+  is relative, empty, or uses a token other than `$ORIGIN`;
 - the host has neither PAM stack;
 - one of the files it writes exists and was not written by rv.
 
@@ -245,8 +264,13 @@ daemon per account and 120 in all, with 8 more kept for the helper; one
 presence conversation per account and 8 in all, each at most 150 seconds
 and dropped after 5 seconds if it has not said what it wants proved. A
 uid with no account on the host (a sub-uid of a user namespace) is turned
-away by both before it takes a place. Each presence result is written to
-the system log by the helper.
+away by both before it takes a place. The result of each presence
+conversation that reached PAM, or was refused for its challenge, is
+written to the system log (`authpriv`) by the helper; a connection turned
+away before that (`busy`, no account) is not. Any account can write
+lines to that log through `/dev/log`; the journal's trusted fields
+(`_UID=0`, `_SYSTEMD_UNIT=rv-mcp-presence.service`) are what tell the
+helper's lines from an imitation.
 
 ## Known limits
 
@@ -290,7 +314,22 @@ the system log by the helper.
 - **A lost ledger means starting over.** A key whose ledger is gone is
   refused, not restarted at zero; root must remove the account's
   directory under `/var/lib/rv-mcp-custodian`, and the owner trusts
-  `mcp.json` again. There is no key rotation, backup or export.
+  `mcp.json` again. There is no key rotation, backup or export. The
+  ledger is written before the key, so a first use cut short (a full
+  disk) does not leave an account in this state.
+- **A reply lost after the ledger was saved** (the key daemon killed, or
+  stalled for 30 seconds, at that moment) is retried once on a new
+  connection. A grant being used is then already spent: the call is not
+  run and the audit log records the grant as forged. A signature being
+  made is made twice, and the owner is asked again.
+- **Accounts from a directory rv's key daemon cannot ask.** The key
+  daemon has no network (`PrivateNetwork=yes`, `AF_UNIX` only). An
+  account that exists only through a name-service module that goes to
+  the network itself (`nss_ldap`, NIS) is "no account" to it and is
+  refused; one served over a local socket (SSSD, `systemd-userdb`) is
+  found. Not tested.
+- **The 17th connection of one account** is closed without a reason, and
+  rv then reports the custodian as not answering.
 - **A crash while a key is first written** can leave a short key file,
   which is then refused until root removes it.
 - **Ctrl-C at the password prompt** cancels once Enter is pressed. A
@@ -319,9 +358,15 @@ the system log by the helper.
   password asked for on a pseudo-terminal with echo already off, a key
   without its ledger.
 - `MCPCustodianSetupTests`: the install and uninstall plans, every
-  refusal (a source another account can change among them), the units'
-  confinement lines, and on a real binary: the search path rewritten to
-  `$ORIGIN`, the libraries it loads found with their own.
+  refusal, the units' confinement lines; who can change a path (owners,
+  modes, sticky directories, missing directories, links) over a table
+  standing in for a file system; what a program loads, in its loader's
+  order, over hand-built ELF files (a copy of rv only root can write
+  whose loader searches a home is named); files the reader refuses
+  (other library entries, a library name sharing the search path's
+  bytes, offsets at the far end of their range); and on a real binary:
+  the search path rewritten to `$ORIGIN`, the libraries it loads found
+  with their own.
 - `Scripts/linux-custodian-e2e.sh` (root): the real daemons, real PAM and
   a throwaway account with a password. As that account, on a pty and
   without one: trust refused without a terminal and with a wrong password,
@@ -329,10 +374,14 @@ the system log by the helper.
   terminal; a tool that asks, approved with code and password, run once,
   not run again, not run from a replayed grant; a rolled-back `mcp.json`
   untrusted; a raw client refused a grant, an `mcp.json` signature and its
-  own attestation; the audit chain. Where systemd is the init system it
-  installs through `rv mcp custodian install`, checks the units are
-  active and that root's copies search only their own directory, and
-  uninstalls. The pull request says which Actions run, if any, has passed
+  own attestation; the audit chain. The fixture server runs in the MCP
+  sandbox. Everywhere, `install` run from a copy of rv whose loader
+  searches a directory another account owns is refused and leaves
+  nothing. Where systemd is the init system it installs through
+  `rv mcp custodian install`, checks the units are active and that
+  root's copies search only their own directory, and uninstalls. The
+  units' hardening and the install itself run nowhere but under real
+  systemd; the pull request says which Actions run, if any, has passed
   that path.
 - Not covered by a test: the helper's refusal of a PAM stack that asks
   nothing, of an invalid account (`pam_acct_mgmt`) and of root; the

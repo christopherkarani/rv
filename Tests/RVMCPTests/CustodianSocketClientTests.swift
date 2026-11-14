@@ -388,6 +388,12 @@ struct CustodianSocketClientTests {
         #expect(storage.loadLedger(1002) == .failure(.init()))
         #expect(try storage.createKey(1002).get().mac("p", []).isEmpty == false)
         #expect(storage.loadLedger(1002) == .failure(.init()))
+        // The ledger is written first, so a creation cut short (a full
+        // disk) leaves a ledger and no key: still a new account.
+        #expect(storage.saveLedger(1003, MCPCustodianLedger()))
+        #expect(try storage.loadKey(1003).get() == nil)
+        #expect(try storage.createKey(1003).get().mac("p", []).isEmpty == false)
+        #expect(try storage.loadLedger(1003).get() == MCPCustodianLedger())
     }
 }
 

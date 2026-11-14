@@ -30,10 +30,12 @@ die() { log "$*"; exit 1; }
 for binary in rv rv-mcp-custodian; do
   [[ -x "$BUILD/$binary" ]] || die "$BUILD/$binary is not built (swift build)"
 done
+command -v patchelf >/dev/null || die "needs patchelf (apt-get install patchelf)"
 # Nothing of a custodian may be here already, running or not: the cleanup
 # below removes what this run installs, keys included.
 [[ ! -S /run/rv-mcp-custodian/custodian.sock ]] || die "a custodian is already running on this host; not touching it"
-for existing in /var/lib/rv-mcp-custodian /usr/local/libexec/rv /etc/pam.d/rv-mcp-custodian \
+for existing in /var/lib/rv-mcp-custodian /run/rv-mcp-custodian /run/rv-mcp-presence /usr/local/libexec/rv \
+  /etc/pam.d/rv-mcp-custodian \
   /etc/systemd/system/rv-mcp-custodian.service /etc/systemd/system/rv-mcp-presence.service; do
   [[ ! -e "$existing" ]] || die "$existing exists: a custodian is installed on this host; not touching it"
 done
@@ -75,11 +77,32 @@ ldd "$BUILD/rv-mcp-custodian" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | wh
     *) install -m 0755 "$(readlink -f "$library")" "$STAGE/$(basename "$library")" ;;
   esac
 done
+# A build searches its toolchain's directory for libraries before its own,
+# and install refuses a program that would have root load code from a
+# directory another account can write. What a source builder is told to
+# do (docs/security/mcp-linux-custodian.md): search beside the file only.
+for staged in "$STAGE"/rv "$STAGE"/rv-mcp-custodian "$STAGE"/lib*.so*; do
+  [[ -e "$staged" ]] && patchelf --set-rpath '$ORIGIN' "$staged"
+done
 # The driver too: a checkout is often under a home the throwaway account
 # cannot enter.
 install -m 0644 "$ROOT/Scripts/linux-custodian-e2e.py" "$STAGE/"
 chmod 0755 "$STAGE"
 
+# A copy only root can write whose loader still looks somewhere another
+# account can: refused, naming the place, and nothing is installed.
+install -d -m 0755 "$STAGE/unconfined"
+install -d -m 0755 -o nobody "$STAGE/elsewhere"
+cp -p "$STAGE"/rv "$STAGE"/rv-mcp-custodian "$STAGE"/lib*.so* "$STAGE/unconfined/"
+patchelf --set-rpath "$STAGE/elsewhere:\$ORIGIN" "$STAGE/unconfined/rv"
+if refusal="$("$STAGE/unconfined/rv" mcp custodian install 2>&1)"; then
+  die "install ran from a copy of rv that loads libraries from $STAGE/elsewhere"
+fi
+[[ "$refusal" == *"$STAGE/elsewhere can be changed by an account other than root"* ]] \
+  || die "install refused for another reason: $refusal"
+[[ ! -e /usr/local/libexec/rv && ! -e /etc/systemd/system/rv-mcp-custodian.service ]] \
+  || die "a refused install left something behind"
+log "PASS install refuses a copy of rv whose loader searches a directory another account can write"
 if [[ "$SYSTEMD" == "1" ]]; then
   log "installing with rv mcp custodian install (systemd)"
   "$STAGE/rv" mcp custodian install

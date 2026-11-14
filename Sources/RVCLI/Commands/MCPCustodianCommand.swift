@@ -174,13 +174,16 @@ enum MCPCustodianSetup {
         var hasSystemd: Bool
         /// The custodian binary beside this rv, or nil.
         var source: String?
-        /// The shared libraries it loads from beside itself or from its
-        /// own search path (the Swift runtime); root's copy loads them
-        /// from its own directory.
+        /// The shared libraries it loads from its own search path (the
+        /// Swift runtime); root's copy loads them from its own directory.
         var libraries: [String] = []
-        /// Among those files and the directories above them, the ones an
-        /// account other than root can change.
+        /// What an account other than root can change among the programs
+        /// root runs for this (the running rv, the custodian), their
+        /// libraries, the directories their loaders search, and the
+        /// directories above all of those.
         var untrusted: [String] = []
+        /// A program among those whose loader this cannot follow.
+        var unreadable: String?
         var pam: (auth: String, account: String)?
         var accountExists: Bool
         var nologin: String
@@ -196,18 +199,23 @@ enum MCPCustodianSetup {
         guard host.isRoot else {
             return .failure(Refusal(message: "this changes the system: run it as root (sudo rv mcp custodian install)"))
         }
-        guard host.hasSystemd else {
-            return .failure(Refusal(message: "this host does not run systemd, which starts and confines the custodian; "
-                + "nothing was installed"))
-        }
         guard let source = host.source else {
             return .failure(Refusal(message: "rv-mcp-custodian is not installed beside rv; reinstall rv"))
         }
+        if let path = host.unreadable {
+            return .failure(Refusal(message: "\(path) is not a program rv can make safe for root to run: where it "
+                + "loads its libraries from could not be read; nothing was installed"))
+        }
         if let path = host.untrusted.sorted().first {
-            return .failure(Refusal(message: "\(path) can be changed by an account other than root, and root's "
-                + "services would run what is installed from it. Check rv, rv-mcp-custodian and their libraries "
-                + "against the release's SHA256SUMS, copy them into a directory only root can write, and run "
-                + "`rv mcp custodian install` from there; nothing was installed"))
+            return .failure(Refusal(message: "\(path) can be changed by an account other than root, and rv run as "
+                + "root, or the services this installs, would load code from there. Copy the directory that holds rv "
+                + "(rv, rv-cli, rv-mcp-custodian and the lib*.so files) into one only root can write, for example "
+                + "with `sudo cp -R`, and run `rv mcp custodian install` from the copy. A build from source also "
+                + "searches its toolchain's directory: see docs/security/mcp-linux-custodian.md. Nothing was installed"))
+        }
+        guard host.hasSystemd else {
+            return .failure(Refusal(message: "this host does not run systemd, which starts and confines the custodian; "
+                + "nothing was installed"))
         }
         guard let pam = host.pam else {
             return .failure(Refusal(message: "this host has no PAM stack to include (/etc/pam.d/common-auth or "
@@ -223,6 +231,9 @@ enum MCPCustodianSetup {
                 host.nologin, account,
             ]))
         }
+        // Before the units start: the presence helper is kept out of this
+        // directory, which it can only be if the directory is there.
+        steps.append(.run(["install", "-d", "-o", account, "-g", account, "-m", "0700", state]))
         steps += host.libraries.sorted().map {
             .installFile(from: $0, to: directory + "/" + ($0 as NSString).lastPathComponent, mode: 0o755)
         }
@@ -264,17 +275,27 @@ enum MCPCustodianSetup {
 
     static func liveHost() -> Host {
         let files = FileManager.default
-        let home = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent().path
+        let running = Bundle.main.executableURL?.resolvingSymlinksInPath().path
+        let home = running.map { ($0 as NSString).deletingLastPathComponent }
         let beside = home.map { $0 + "/rv-mcp-custodian" }
         let source = beside.flatMap { files.isExecutableFile(atPath: $0) ? $0 : nil }
-        // Unreadable, or not a file this can confine: no source at all.
-        let libraries = source.flatMap { loadedLibraries(of: $0) }
+        // rv itself where this is rv-cli, which a release's rv starts.
+        let launcher = home.map { $0 + "/rv" }.flatMap { files.isExecutableFile(atPath: $0) ? $0 : nil }
+        let trust = sourceTrust(
+            programs: [running, launcher, source].compactMap { $0 }, copied: source,
+            read: { files.contents(atPath: $0) },
+            isFile: { path in
+                var isDirectory: ObjCBool = false
+                return files.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue == false
+            },
+            inspect: RootTrust.live)
         return Host(
             isRoot: geteuid() == 0,
             hasSystemd: files.fileExists(atPath: "/run/systemd/system"),
-            source: libraries == nil ? nil : source,
-            libraries: libraries ?? [],
-            untrusted: ((source.map { [$0] } ?? []) + (libraries ?? [])).flatMap(changeableByOthers),
+            source: source,
+            libraries: trust.libraries,
+            untrusted: trust.untrusted,
+            unreadable: trust.unreadable,
             pam: pamInclude { files.fileExists(atPath: $0) },
             accountExists: getpwnam(account) != nil,
             nologin: files.isExecutableFile(atPath: "/usr/sbin/nologin") ? "/usr/sbin/nologin" : "/sbin/nologin",
@@ -286,53 +307,31 @@ enum MCPCustodianSetup {
             })
     }
 
-    /// The libraries `binary` and they in turn ask for that sit beside it or
-    /// on its own search path, which is where its loader looks before the
-    /// system's directories. Beside it first: that is where a release puts
-    /// them. Nil when one of the files cannot be read as ELF.
-    static func loadedLibraries(of binary: String) -> [String]? {
-        let files = FileManager.default
-        let directory = (binary as NSString).deletingLastPathComponent
-        guard let main = files.contents(atPath: binary).flatMap(ELFDynamic.init) else { return nil }
-        let search = [directory] + main.searchPath.map { $0.replacingOccurrences(of: "$ORIGIN", with: directory) }
-            .filter { $0.hasPrefix("/") }
-        var found: [String] = []
-        var seen: Set<String> = []
-        var queue = [main]
-        while let file = queue.popLast() {
-            for name in file.needed where name.contains("/") == false && seen.insert(name).inserted {
-                var isDirectory: ObjCBool = false
-                guard let path = search.lazy.map({ $0 + "/" + name }).first(where: {
-                    files.fileExists(atPath: $0, isDirectory: &isDirectory) && isDirectory.boolValue == false
-                }) else { continue }
-                guard let library = files.contents(atPath: path).flatMap(ELFDynamic.init) else { return nil }
-                found.append(path)
-                queue.append(library)
+    /// What root would run code from if it ran `programs`: each program,
+    /// the libraries each finds on its own search path, and every
+    /// directory searched, with what among them another account can
+    /// change. `libraries` are those of `copied`, the program install
+    /// copies. `unreadable` is the first program whose loader this cannot
+    /// follow; nothing about it is then trusted.
+    static func sourceTrust(
+        programs: [String], copied: String?, read: (String) -> Data?, isFile: (String) -> Bool,
+        inspect: (String) -> RootTrust.Entry?
+    ) -> (libraries: [String], untrusted: [String], unreadable: String?) {
+        var libraries: [String] = []
+        var untrusted: [String] = []
+        for program in programs {
+            guard let loaded = LoadedCode(program: program, read: read, isFile: isFile) else {
+                return ([], [], program)
+            }
+            if program == copied { libraries = loaded.libraries }
+            for file in [program] + loaded.libraries {
+                untrusted += RootTrust.changeable(file, as: .file, inspect: inspect)
+            }
+            for directory in loaded.searched {
+                untrusted += RootTrust.changeable(directory, as: .searched, inspect: inspect)
             }
         }
-        return found
-    }
-
-    /// `path` and each directory above it that an account other than root
-    /// can change: not owned by root, or writable by group or others
-    /// (a sticky directory such as /var/tmp excepted: only the owner of an
-    /// entry there can rename or remove it).
-    static func changeableByOthers(_ path: String) -> [String] {
-        var changeable: [String] = []
-        var current = path
-        while true {
-            var info = stat()
-            if lstat(current, &info) != 0 {
-                changeable.append(current)
-            } else {
-                let sticky = info.st_mode & S_IFMT == S_IFDIR && info.st_mode & S_ISVTX != 0
-                if info.st_uid != 0 || (info.st_mode & 0o022 != 0 && sticky == false) { changeable.append(current) }
-            }
-            guard current != "/" else { break }
-            current = (current as NSString).deletingLastPathComponent
-            if current.isEmpty { current = "/" }
-        }
-        return changeable
+        return (libraries, Array(Set(untrusted)), nil)
     }
 
     /// Carries out `steps`, writing each to `log` (and the system log)

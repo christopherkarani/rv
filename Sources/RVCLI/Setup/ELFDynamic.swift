@@ -7,28 +7,38 @@ import Foundation
 /// someone else can write is someone else's code in root's process.
 ///
 /// 64-bit little-endian files only (every platform rv ships for); anything
-/// else, or a file that does not parse, is nil.
+/// else, a file that does not parse, or one that has its loader bring in
+/// code some other way (an audit, filter or auxiliary library) is nil.
 struct ELFDynamic: Equatable {
     /// `DT_NEEDED` names, in order.
     var needed: [String]
-    /// `DT_RUNPATH` and `DT_RPATH` entries, split at `:`.
+    /// `DT_RUNPATH` and `DT_RPATH` entries, split at `:`. An empty entry
+    /// (the current directory, to a loader) is kept.
     var searchPath: [String]
 
     private static let loadSegment: UInt32 = 1
     private static let dynamicSegment: UInt32 = 2
     private static let neededTag: UInt64 = 1
     private static let stringTableTag: UInt64 = 5
+    private static let sonameTag: UInt64 = 14
     private static let rpathTag: UInt64 = 15
     private static let runpathTag: UInt64 = 29
+    /// DT_DEPAUDIT, DT_AUDIT, DT_AUXILIARY, DT_FILTER: libraries named
+    /// outside DT_NEEDED.
+    private static let otherLibraryTags: Set<UInt64> = [0x6FFF_FEFB, 0x6FFF_FEFC, 0x7FFF_FFFD, 0x7FFF_FFFF]
 
     private struct Layout {
         /// File offsets of each `DT_NEEDED`, `DT_RPATH` and `DT_RUNPATH` string.
         var needed: [Int] = []
         var paths: [Int] = []
+        /// The file's own name (`DT_SONAME`), if it has one.
+        var names: [Int] = []
     }
 
     private static func integer<T: FixedWidthInteger>(_ type: T.Type, _ bytes: [UInt8], at offset: Int) -> T? {
-        guard offset >= 0, offset + MemoryLayout<T>.size <= bytes.count else { return nil }
+        guard offset >= 0, MemoryLayout<T>.size <= bytes.count, offset <= bytes.count - MemoryLayout<T>.size else {
+            return nil
+        }
         var value: T = 0
         for index in (0..<MemoryLayout<T>.size).reversed() { value = value << 8 | T(bytes[offset + index]) }
         return value
@@ -50,13 +60,15 @@ struct ELFDynamic: Equatable {
         var loads: [(address: UInt64, offset: UInt64, length: UInt64)] = []
         var dynamic: (offset: Int, length: Int)?
         for index in 0..<Int(count) {
-            let start = table + index * Int(size)
-            guard let type = integer(UInt32.self, bytes, at: start), let offset = integer(UInt64.self, bytes, at: start + 8),
+            let (start, overflow) = table.addingReportingOverflow(index * Int(size))
+            guard overflow == false, start <= bytes.count, let type = integer(UInt32.self, bytes, at: start),
+                let offset = integer(UInt64.self, bytes, at: start + 8),
                 let address = integer(UInt64.self, bytes, at: start + 16),
                 let length = integer(UInt64.self, bytes, at: start + 32)
             else { return nil }
             if type == loadSegment { loads.append((address, offset, length)) }
-            if type == dynamicSegment, let at = Int(exactly: offset), let extent = Int(exactly: length) {
+            if type == dynamicSegment {
+                guard let at = Int(exactly: offset), let extent = Int(exactly: length) else { return nil }
                 dynamic = (at, extent)
             }
         }
@@ -70,17 +82,20 @@ struct ELFDynamic: Equatable {
             if tag == 0 { break }
             entries.append((tag, value))
         }
+        guard entries.contains(where: { otherLibraryTags.contains($0.tag) }) == false else { return nil }
+        let stringTags = [neededTag, rpathTag, runpathTag, sonameTag]
         guard let address = entries.first(where: { $0.tag == stringTableTag })?.value,
             let segment = loads.first(where: { address >= $0.address && address - $0.address < $0.length }),
-            let strings = Int(exactly: segment.offset + (address - segment.address))
-        else { return entries.contains { [neededTag, rpathTag, runpathTag].contains($0.tag) } ? nil : Layout() }
+            case let (sum, overflow) = segment.offset.addingReportingOverflow(address - segment.address),
+            overflow == false, let strings = Int(exactly: sum), strings <= bytes.count
+        else { return entries.contains { stringTags.contains($0.tag) } ? nil : Layout() }
         var layout = Layout()
-        for entry in entries where [neededTag, rpathTag, runpathTag].contains(entry.tag) {
+        for entry in entries where stringTags.contains(entry.tag) {
             guard let value = Int(exactly: entry.value), value <= bytes.count - strings else { return nil }
-            if entry.tag == neededTag {
-                layout.needed.append(strings + value)
-            } else {
-                layout.paths.append(strings + value)
+            switch entry.tag {
+            case neededTag: layout.needed.append(strings + value)
+            case sonameTag: layout.names.append(strings + value)
+            default: layout.paths.append(strings + value)
             }
         }
         return layout
@@ -97,7 +112,9 @@ struct ELFDynamic: Equatable {
         var search: [String] = []
         for offset in layout.paths {
             guard let path = Self.string(bytes, at: offset) else { return nil }
-            search += path.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+            if path.isEmpty == false {
+                search += path.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+            }
         }
         self.needed = needed
         searchPath = search
@@ -106,13 +123,19 @@ struct ELFDynamic: Equatable {
     /// The file with every search path replaced by `$ORIGIN` (its own
     /// directory), or by nothing where `$ORIGIN` does not fit in the space
     /// the old one had. Written in place over the old string, so nothing
-    /// else in the file moves. Nil when the file is not one this reads.
+    /// else in the file moves. Nil when the file is not one this reads, or
+    /// when a library name shares the search path's bytes (a linker may
+    /// store one string as the tail of another), which rewriting would
+    /// change too.
     static func confined(_ data: Data) -> Data? {
         var bytes = [UInt8](data)
         guard let layout = layout(bytes) else { return nil }
         let origin = Array("$ORIGIN".utf8)
         for offset in layout.paths {
             guard let end = bytes[offset...].firstIndex(of: 0) else { return nil }
+            guard (layout.needed + layout.names).contains(where: { (offset...end).contains($0) }) == false else {
+                return nil
+            }
             let replacement = end - offset >= origin.count ? origin : []
             for index in offset..<end {
                 bytes[index] = index - offset < replacement.count ? replacement[index - offset] : 0

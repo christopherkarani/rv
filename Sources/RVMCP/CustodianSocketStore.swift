@@ -46,17 +46,19 @@ public struct MCPCustodianStore: Sendable {
                 return .success(signer)
             },
             createKey: { uid in
-                // The ledger is made with the key: from then on a key
-                // without one is a lost ledger, not a fresh account.
+                // The ledger is made with the key, and before it: from
+                // then on a key without one is a lost ledger, not a fresh
+                // account, and a full disk between the two leaves a ledger
+                // without a key, which is still a fresh account.
                 var info = stat()
                 let isNew = lstat(keyURL(uid).path, &info) != 0 && errno == ENOENT
-                guard let signer = MCPApprovalSigning.createKeyFile(keyURL(uid), directory: account(uid)) else {
-                    return .failure(.init())
-                }
                 if isNew, lstat(ledgerURL(uid).path, &info) != 0 {
-                    guard let empty = try? JSONEncoder().encode(MCPCustodianLedger()),
+                    guard errno == ENOENT, let empty = try? JSONEncoder().encode(MCPCustodianLedger()),
                         OwnerOnlyFile.write(empty, to: ledgerURL(uid))
                     else { return .failure(.init()) }
+                }
+                guard let signer = MCPApprovalSigning.createKeyFile(keyURL(uid), directory: account(uid)) else {
+                    return .failure(.init())
                 }
                 return .success(signer)
             },

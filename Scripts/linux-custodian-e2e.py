@@ -94,6 +94,8 @@ for line in sys.stdin:
 def write_config(extra_allow=()):
     cfg = {"version": 1, "servers": [{
         "name": "fx", "command": "/usr/bin/python3", "args": [FIXTURE],
+        # Where the host has a sandbox every local server runs in one.
+        "sandbox": {"network": False},
         "tools": {"allow": ["echo", *extra_allow], "ask": ["write_note"]}}]}
     with open(f"{CONFIG}/mcp.json", "w") as f:
         json.dump(cfg, f, indent=2)

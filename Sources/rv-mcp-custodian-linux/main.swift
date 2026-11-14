@@ -267,8 +267,8 @@ func presenceSession(custodian: String) -> Never {
     let fd: Int32 = 3
     alarm(sessionSeconds)
     func finish(_ result: MCPPresenceResult) -> Never {
-        // The system's own record of who proved presence, and who failed
-        // to: the owner's account cannot write it.
+        // A record of who proved presence, and who failed to, that comes
+        // from root's unit (the journal says which lines do).
         let uid = peer(of: fd).map { String($0.uid) } ?? "unknown"
         withVaList(["rv-mcp-custodian: presence for uid \(uid): \(result.rawValue)" as NSString]) {
             vsyslog(LOG_AUTHPRIV | (result == .proved ? LOG_INFO : LOG_NOTICE), "%s", $0)
