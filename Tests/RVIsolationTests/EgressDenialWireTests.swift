@@ -6,6 +6,7 @@ import Glibc
 import Dispatch
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -328,4 +329,73 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
         #expect(denyWireExchange(port: matchedPort, request: request) == baseline)
         #expect(denyWireExchange(port: mismatchedPort, request: request) == baseline)
     }
+}
+
+private func denyWireAwait(_ calls: DenyWireCalls, count: Int) {
+    for _ in 0..<100 where calls.all.count < count {
+        usleep(50_000)
+    }
+}
+
+// Oracle: on a binary-scoped instance a binary-gate denial never mints a
+// proposal, so a passing binary's policy denials must not carry one either
+// (intake still runs, without the wait).
+@Test func binaryScopedInstanceWithholdsProposalIDs() throws {
+    let request = "CONNECT other.example:443 HTTP/1.1\r\n\r\n"
+    let plain = EgressProxy(policy: denyWirePolicy, grants: nil, record: { _ in })
+    let plainPort = try plain.start().get()
+    defer { plain.stop() }
+    let baseline = denyWireExchange(port: plainPort, request: request)
+
+    let fingerprint = EgressBinaryFingerprint(
+        size: 128, mtimeSeconds: 1_700_000_000, mtimeNanoseconds: 0,
+        ctimeSeconds: 1_700_000_000, ctimeNanoseconds: 0, device: 1, inode: 7)
+    let calls = DenyWireCalls()
+    let scoped = EgressProxy(
+        policy: denyWirePolicy, grants: nil,
+        binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
+        attribution: EgressRuntimeAttribution(binaryPath: "/opt/rv/bin/agent"),
+        pins: EgressBinaryPinCache(fingerprint: { _ in fingerprint }, hashFile: { _ in "golden" }),
+        record: { _ in },
+        review: { denial in
+            calls.note(denial)
+            return denyWireProposal
+        })
+    let scopedPort = try scoped.start().get()
+    defer { scoped.stop() }
+    let bytes = denyWireExchange(port: scopedPort, request: request)
+    #expect(baseline.isEmpty == false)
+    #expect(bytes == baseline)
+    denyWireAwait(calls, count: 1)
+    #expect(calls.all.map(\.reason) == [.deniedPolicy])
+}
+
+// A flood of denials against a stuck queue: past the waiter cap the deny
+// goes out at once, and every denial still reaches intake.
+@Test func reviewWaitersAreCappedAndIntakeStillRuns() throws {
+    let calls = DenyWireCalls()
+    let proxy = EgressProxy(
+        policy: denyWirePolicy, grants: nil, record: { _ in },
+        review: { denial in
+            calls.note(denial)
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            return denyWireProposal
+        })
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let flood = 3 * EgressProxy.maximumProposalWaiters
+    let replies = Mutex<[[UInt8]]>([])
+    let started = Date()
+    DispatchQueue.concurrentPerform(iterations: flood) { index in
+        let reply = denyWireExchange(port: port, request: "CONNECT host\(index).example:443 HTTP/1.1\r\n\r\n")
+        replies.withLock { $0.append(reply) }
+    }
+    let elapsed = Date().timeIntervalSince(started)
+    let all = replies.withLock { $0 }
+    #expect(all.count == flood)
+    #expect(all.allSatisfy { DenyWireResponse($0)?.statusLine == "HTTP/1.1 403 Forbidden" })
+    #expect(all.allSatisfy { DenyWireResponse($0)?.json?["proposal_id"] == nil })
+    #expect(elapsed < 10, "flood took \(elapsed)s")
+    denyWireAwait(calls, count: flood)
+    #expect(calls.all.count == flood)
 }

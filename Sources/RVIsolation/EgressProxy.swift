@@ -193,6 +193,11 @@ public final class EgressProxy: @unchecked Sendable {
     /// Bound on waiting for `review`. A stuck queue costs each policy deny
     /// this much latency, never a hang and never an allow.
     static let proposalWait: TimeInterval = 0.25
+    /// At most this many serve threads wait on `review` at once; a flood of
+    /// fresh denied hosts past it still files proposals but denies at once,
+    /// so it cannot park the relay queue's threads.
+    static let maximumProposalWaiters = 4
+    private let proposalWaiters = Mutex(0)
     /// Resolves one admitted target to the candidate set `dial` checks and
     /// connects. Production is `boundedResolver(budget: resolverBudget)`;
     /// tests inject answers.
@@ -713,8 +718,24 @@ public final class EgressProxy: @unchecked Sendable {
     /// does not answer within `proposalWait`. The intake keeps running past
     /// the deadline (it is the review queue's own fire-and-forget work);
     /// only the id is abandoned.
+    ///
+    /// Intake without waiting (nil id) when the instance is binary-scoped:
+    /// there a binary-gate denial never mints a proposal, so a proposal id
+    /// (or the wait for one) on policy denials would tell the cage its
+    /// binary passed. Also when `maximumProposalWaiters` are already waiting.
     private func awaitProposal(for denial: EgressProxyDenial) -> String? {
         guard let review else { return nil }
+        let admitted = binaryPolicy.isBinaryScoped == false
+            && proposalWaiters.withLock { count in
+                guard count < Self.maximumProposalWaiters else { return false }
+                count += 1
+                return true
+            }
+        guard admitted else {
+            Task { _ = await review(denial) }
+            return nil
+        }
+        defer { proposalWaiters.withLock { $0 -= 1 } }
         return Self.boundedProposal(for: denial, review: review, wait: Self.proposalWait)
     }
 

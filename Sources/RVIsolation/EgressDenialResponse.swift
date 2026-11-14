@@ -87,7 +87,7 @@ struct EgressDenialResponse: Sendable, Equatable {
     var message: String {
         switch reason {
         case .deniedPolicy where proposalID != nil:
-            return "rv blocked this connection because the destination is not on the egress allowlist; the user can approve it."
+            return "rv blocked this connection under the egress policy and filed a review proposal the user can approve."
         case .deniedPolicy:
             return "rv blocked this connection under the egress policy for this runtime."
         case .dialFailed:

@@ -336,11 +336,14 @@ the seatbelt profile is untouched.
   407 is one constant shape for missing, malformed, and unknown tokens,
   decided before the binary gate. No binary path, pin, credential, or
   filesystem path is written. `egress-denials.jsonl` keeps the precise
-  reason. Residual: an authenticated cage can still tell a binary-gate
-  denial from a policy one by trying an allowed host (inherent to
-  enforcement) or by the absence of a `proposal_id`; tunnels that already
-  sent `200` (SNI mismatch, dial failure after SNI check) still just
-  close.
+  reason. A binary-scoped instance never attaches a `proposal_id` (and
+  never waits for one), since its binary-gate denials cannot mint one; at
+  most `EgressProxy.maximumProposalWaiters` (4) serve threads wait at
+  once, and denials past that cap still reach intake but deny at once.
+  Residual: an authenticated cage can still tell a binary-gate denial from
+  a policy one by trying an allowed host (inherent to enforcement); tunnels
+  that already sent `200` (SNI mismatch, dial failure after SNI check)
+  still just close.
 - Proposal: one `PendingApprovalStore` row per blocked `host:port`, reused
   from the existing approval system (no parallel queue). Fingerprint
   `egress:<canonical-host>:<port>`; reason `.mandatoryHuman`;
