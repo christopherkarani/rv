@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVPolicy
 
 /// JSON as data. Objects keep key order (host configs are rewritten in
@@ -165,6 +166,10 @@ extension JSONValue {
     }
 
     /// JSON string contents (no surrounding quotes), matching `compactText`.
+    /// Every scalar a display must not get raw (`DisplayedText.needsEscape`:
+    /// controls, DEL, C1 such as NEL, separators, bidi and other format
+    /// scalars) is a `\u` escape, so a payload forwarded byte-faithfully
+    /// still cannot split a line or reorder text in a line-reading client.
     static func escapedContent(_ text: String) -> String {
         var output = ""
         for scalar in text.unicodeScalars {
@@ -190,6 +195,8 @@ extension JSONValue {
             default:
                 if scalar.value < 0x20 {
                     output += String(format: "\\u%04x", scalar.value)
+                } else if scalar.value >= 0x7F, DisplayedText.needsEscape(scalar) {
+                    for unit in String(scalar).utf16 { output += String(format: "\\u%04x", unit) }
                 } else {
                     output.unicodeScalars.append(scalar)
                 }

@@ -321,10 +321,10 @@ struct MCPGatewayCoreTests {
             "jsonrpc": .string("2.0"), "id": .int(upstreamID),
             "error": .object(["code": .int(-32000), "message": .string(raw)]),
         ])))
-        let errorMessage = errorReply.toClient.first?["error"]?["message"]?.stringValue ?? ""
-        #expect(errorMessage.unicodeScalars.contains { $0.value == 0x1B } == false)
-        #expect(errorMessage.contains("\\u001b[2J"))
-        #expect(errorMessage.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+        // Upstream errors and tool results are payloads: forwarded as sent,
+        // escaped only by JSON on the wire.
+        #expect(errorReply.toClient.first?["error"]?["message"]?.stringValue == raw)
+        #expect(errorReply.toClient.first?.compactText.unicodeScalars.contains { $0.value == 0x1B } == false)
 
         let again = harness.client(#"{"jsonrpc":"2.0","id":"c2","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
         let secondID = again.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -335,10 +335,8 @@ struct MCPGatewayCoreTests {
                 "content": .array([.object(["type": .string("text"), "text": .string(raw)])]),
             ]),
         ])))
-        let toolText = toolError.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
-        #expect(toolText.unicodeScalars.contains { $0.value == 0x1B } == false)
-        #expect(toolText.contains("\\u001b[2J"))
-        #expect(toolText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+        #expect(toolError.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue == raw)
+        #expect(toolError.toClient.first?.compactText.unicodeScalars.contains { $0.value == 0x1B } == false)
 
         let list = harness.client(#"{"jsonrpc":"2.0","id":8,"method":"tools/list"}"#)
         let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -374,6 +372,10 @@ struct MCPGatewayCoreTests {
         #expect(echoed.contains(sentence))
     }
 
+    /// Display text (descriptions, titles, progress, rv's own messages) is
+    /// escaped once; payloads (results, errors, schemas) keep their exact
+    /// value and are escaped only by JSON on the wire, which never carries
+    /// a raw control, separator, or bidi scalar.
     @Test func everyClientStringIsEscapedOnce() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence
@@ -394,6 +396,12 @@ struct MCPGatewayCoreTests {
             let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
             #expect(lines.contains(sentence) == false)
         }
+        func faithful(_ value: JSONValue?, _ original: String, in message: JSONValue?) {
+            #expect(value?.stringValue == original)
+            let wire = message?.compactText ?? ""
+            #expect(wire.unicodeScalars.contains { [0x1B, 0x2028, 0x202E].contains($0.value) } == false)
+            #expect(wire.contains("\n") == false)
+        }
 
         let successCall = harness.client(#"{"jsonrpc":"2.0","id":"ok","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
         let successID = successCall.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -406,9 +414,9 @@ struct MCPGatewayCoreTests {
             ]),
         ])))
         let result = success.toClient.first?["result"]
-        escaped(shown(result?["content"]?.arrayValue?.first?["text"]))
-        escaped(shown(result?["structuredContent"]?["text"]))
-        escaped(shown(result?["_meta"]?["note"]))
+        faithful(result?["content"]?.arrayValue?.first?["text"], raw, in: success.toClient.first)
+        faithful(result?["structuredContent"]?["text"], lineBreak, in: success.toClient.first)
+        faithful(result?["_meta"]?["note"], bidi, in: success.toClient.first)
 
         let dataCall = harness.client(#"{"jsonrpc":"2.0","id":"data","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
         let dataID = dataCall.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -417,7 +425,7 @@ struct MCPGatewayCoreTests {
             "error": .object(["code": .int(-32000), "message": .string("failed"), "data": .string(raw)]),
         ])))
         #expect(shown(withData.toClient.first?["error"]?["message"]) == "failed")
-        escaped(shown(withData.toClient.first?["error"]?["data"]))
+        faithful(withData.toClient.first?["error"]?["data"], raw, in: withData.toClient.first)
 
         let nestedCall = harness.client(#"{"jsonrpc":"2.0","id":"nest","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
         let nestedID = nestedCall.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -425,7 +433,7 @@ struct MCPGatewayCoreTests {
             "jsonrpc": .string("2.0"), "id": .int(nestedID),
             "error": .object(["code": .int(-32000), "message": .object(["text": .string(raw)])]),
         ])))
-        escaped(shown(nested.toClient.first?["error"]?["message"]?["text"]))
+        faithful(nested.toClient.first?["error"]?["message"]?["text"], raw, in: nested.toClient.first)
 
         let resourceCall = harness.client(#"{"jsonrpc":"2.0","id":"res","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
         let resourceID = resourceCall.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -447,9 +455,9 @@ struct MCPGatewayCoreTests {
             ]),
         ])))
         let blocks = resource.toClient.first?["result"]?["content"]?.arrayValue ?? []
-        escaped(shown(blocks.first?["resource"]?["text"]))
-        escaped(shown(blocks.dropFirst().first?["name"]))
-        escaped(shown(blocks.dropFirst().first?["description"]))
+        faithful(blocks.first?["resource"]?["text"], raw, in: resource.toClient.first)
+        faithful(blocks.dropFirst().first?["name"], lineBreak, in: resource.toClient.first)
+        faithful(blocks.dropFirst().first?["description"], bidi, in: resource.toClient.first)
 
         let plainCall = harness.client(#"{"jsonrpc":"2.0","id":"plain","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
         let plainID = plainCall.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -457,7 +465,7 @@ struct MCPGatewayCoreTests {
             "jsonrpc": .string("2.0"), "id": .int(plainID),
             "result": .object(["content": .string(raw)]),
         ])))
-        escaped(shown(plain.toClient.first?["result"]?["content"]))
+        faithful(plain.toClient.first?["result"]?["content"], raw, in: plain.toClient.first)
 
         let list = harness.client(#"{"jsonrpc":"2.0","id":11,"method":"tools/list"}"#)
         let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
@@ -479,8 +487,8 @@ struct MCPGatewayCoreTests {
         #expect(shown(tool?["description"]) == "plain")
         escaped(shown(tool?["title"]))
         escaped(shown(tool?["annotations"]?["title"]))
-        escaped(shown(tool?["inputSchema"]?["description"]))
-        escaped(shown(tool?["outputSchema"]?["description"]))
+        faithful(tool?["inputSchema"]?["description"], raw, in: listed.toClient.first)
+        faithful(tool?["outputSchema"]?["description"], bidi, in: listed.toClient.first)
 
         let tokenOnly = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),

@@ -829,8 +829,11 @@ public struct MCPGatewayCore {
 
     /// Denied tools are hidden; `ask` tools say so in their description, and
     /// so do tools whose arguments can change the decision.
-    /// Routing uses the raw name. Every other string the client can read,
-    /// including title and schemas, is escaped once.
+    /// Routing uses the raw name; the listed name is escaped once. The
+    /// prose fields (`description`, `title`, `annotations.title`) keep line
+    /// breaks and backslashes and lose only hiding scalars
+    /// (`MCPDisplayedText.description`). Everything else, schemas included,
+    /// is forwarded as the upstream sent it, after secret scrubbing.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
         let scrubbed = scrub(tool, for: upstream.definition.name)
         guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue else {
@@ -851,12 +854,19 @@ public struct MCPGatewayCore {
             guard route(exposedName)?.server == upstream.definition.name else { return nil }
             listedName = exposedName
         }
-        guard var walked = displayedContent(.object(object)).objectValue else { return nil }
+        var walked = object
+        let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
+        if rawDescription != nil { walked["description"] = .string(shownDescription) }
+        if let title = object["title"]?.stringValue { walked["title"] = .string(MCPDisplayedText.description(title)) }
+        if var annotations = object["annotations"]?.objectValue, let title = annotations["title"]?.stringValue {
+            annotations["title"] = .string(MCPDisplayedText.description(title))
+            walked["annotations"] = .object(annotations)
+        }
         if configuration.decision(server: upstream.definition, tool: name) == .ask {
-            walked["description"] = .string("[rv: needs the user's approval] " + MCPDisplayedText.field(rawDescription ?? ""))
+            walked["description"] = .string("[rv: needs the user's approval] " + shownDescription)
         } else if configuration.hasArgumentRules(server: upstream.definition, tool: name) {
             walked["description"] = .string(
-                "[rv: some arguments need the user's approval or are refused] " + MCPDisplayedText.field(rawDescription ?? ""))
+                "[rv: some arguments need the user's approval or are refused] " + shownDescription)
         }
         walked["name"] = .string(MCPDisplayedText.field(listedName))
         return .object(walked)
@@ -867,10 +877,12 @@ public struct MCPGatewayCore {
         displayedContent(message)
     }
 
-    /// Every string in a scrubbed tool result, including a successful call,
-    /// nested resource text, and error data.
+    /// A tool result or upstream error, scrubbed of secrets and otherwise
+    /// exactly as the upstream sent it: file contents, code, and regexes
+    /// keep their newlines and backslashes. JSON escapes every control,
+    /// separator, and format scalar on the wire (`JSONValue.escapedContent`).
     func clientVisibleReply(_ message: JSONValue, server: String) -> JSONValue {
-        displayedContent(scrub(message, for: server))
+        scrub(message, for: server)
     }
 
     /// Escape every string the client would display. Object keys are escaped
