@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVFileStore
+import RVHistory
 
 public enum AllowlistStoreError: Error, Sendable, Equatable {
     case lockFailed
@@ -130,9 +131,38 @@ public struct AllowlistStore: Sendable {
             case .ok(let existing):
                 entries = existing
             }
+            let prior = entries
             try body(&entries)
-            try writeAllUnlocked(entries)
+            guard let audit = Self.changeEvent(from: prior, to: entries) else {
+                return try writeAllUnlocked(entries)
+            }
+            try ConfigChangeAudit.commit(audit, configDirectory: baseDirectory) {
+                try writeAllUnlocked(entries)
+            }
         }
+    }
+
+    /// `config.changed` (`allowlist`): entry counts before and after and the
+    /// selectors added or removed. Rule ids by name; an exact command only as
+    /// `exact-command`, since its text can hold anything. Nil when no entry
+    /// changed. Only removing entries tightens; any added or edited entry
+    /// is an exception and loosens.
+    static func changeEvent(from prior: [AllowlistEntry], to new: [AllowlistEntry]) -> AuditEvent? {
+        guard prior != new else { return nil }
+        func label(_ entry: AllowlistEntry) -> String {
+            switch entry.selector {
+            case .rule(let rule): rule.rawValue
+            case .exactCommand: "exact-command"
+            }
+        }
+        let added = new.filter { entry in prior.contains(entry) == false }.map(label)
+        let removed = prior.filter { entry in new.contains(entry) == false }.map(label)
+        var detail: [String: String] = [:]
+        if added.isEmpty == false { detail["added"] = ConfigChangeAudit.list(added) }
+        if removed.isEmpty == false { detail["removed"] = ConfigChangeAudit.list(removed) }
+        return ConfigChangeAudit.setting(
+            "allowlist", from: "\(prior.count) entries", to: "\(new.count) entries",
+            direction: added.isEmpty ? .tightening : .loosening, detail: detail)
     }
 
     private func writeAllUnlocked(_ entries: [AllowlistEntry]) throws {

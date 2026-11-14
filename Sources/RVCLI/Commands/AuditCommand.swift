@@ -41,10 +41,40 @@ enum AuditRun {
                 event.kind.rawValue,
                 DisplayedText.field(event.subject),
             ]
+            parts.append(contentsOf: changeSummary(event))
             if let agent = event.agent { parts.append("agent=\(DisplayedText.field(agent))") }
             if let reason = event.reason { parts.append("reason=\(DisplayedText.field(reason))") }
             return parts.joined(separator: "  ")
         }.joined(separator: "\n") + "\n"
+    }
+
+    /// What a gate change changed and who authorized it, for `policy.changed`,
+    /// `policy.managed` and `config.changed`; empty for other kinds.
+    static func changeSummary(_ event: AuditEvent) -> [String] {
+        guard event.kind == .policyChanged || event.kind == .policyManaged || event.kind == .configChanged else {
+            return []
+        }
+        let detail = event.detail
+        var pieces: [String] = []
+        if event.kind == .policyChanged {
+            let prior = detail["prior_revision"].map { "r\($0)" } ?? "none"
+            let revision = detail["revision"] ?? "?"
+            let hash = String((detail["hash"] ?? "").prefix(12))
+            pieces.append("\(detail["change"] ?? "save") \(prior) -> r\(revision)")
+            pieces.append("hash=\(hash)")
+            if let target = detail["rollback_to"] { pieces.append("restored=r\(target)") }
+        } else if let prior = detail["prior"], let new = detail["new"] {
+            pieces.append("\(prior) -> \(new)")
+        } else if let change = detail["change"] {
+            pieces.append(change)
+            if let serial = detail["serial"] { pieces.append("serial=\(serial)") }
+        }
+        if let host = detail["host"], let port = detail["port"] { pieces.append("\(host):\(port)") }
+        for key in ["added", "removed", "changed"] {
+            if let value = detail[key] { pieces.append("\(key)=\(value)") }
+        }
+        if let by = detail["authorized_by"] { pieces.append("by=\(by)") }
+        return pieces.map { DisplayedText.field($0) }
     }
 
     static func jsonArray(_ events: [AuditEvent]) throws -> String {

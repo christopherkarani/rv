@@ -248,6 +248,8 @@ public enum SecretsConfigurationError: Error, Sendable, Equatable {
     case unsafeFile(String)
     case oversized
     case invalid(String)
+    /// The audit log could not record the change, so secrets.json was not written.
+    case unrecorded
 
     public var message: String {
         switch self {
@@ -255,6 +257,7 @@ public enum SecretsConfigurationError: Error, Sendable, Equatable {
         case .unsafeFile(let why): "secrets.json is not safe to use: \(why)"
         case .oversized: "secrets.json is larger than 256 KiB"
         case .invalid(let why): "secrets.json is invalid: \(why)"
+        case .unrecorded: "the audit log could not record the change, so secrets.json was not written"
         }
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVHooks
 import RVService
 
@@ -91,6 +92,9 @@ enum SetupError: Error, Equatable, Sendable {
     /// `config.json` (or its `guard` value) is not an object, or could not
     /// be written, so `guard.mode: observe` was not stored.
     case guardModeWriteFailed
+    /// The audit log could not record `guard.mode: observe`, so it was not
+    /// stored.
+    case guardModeUnrecorded(ConfigChangeUnrecorded)
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
@@ -242,6 +246,10 @@ private func setupFailureParts(
         phrase = "unable to write guard.mode to config.json"
         exitCode = EX_CANTCREAT
         detail.append("no hooks were wired; config.json must be a JSON object whose \"guard\" value is an object")
+    case .guardModeUnrecorded(let unrecorded):
+        phrase = unrecorded.description
+        exitCode = ConfigChangeRefusal.exitCode
+        detail.append("no hooks were wired")
     }
     return (phrase, exitCode, detail)
 }

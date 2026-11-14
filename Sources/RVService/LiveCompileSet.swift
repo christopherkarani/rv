@@ -151,12 +151,16 @@ package final class LiveCompileSet: Sendable {
     /// facade failures throw `PacksCommandError`.
     package func setPackEnabled(_ id: PackID, enabled: Bool) throws {
         guard let home else { throw LiveCompileSetError.missingHome }
+        // The audited config write (serialized by the packs config lock) can
+        // wait up to `ConfigChangeAudit.lockTimeout` on audit.jsonl, so it
+        // runs outside the state lock that evaluation takes; until the
+        // rebuild below, evaluation keeps the set it had before the call.
+        if enabled {
+            _ = try PacksFacade.enable(home: home, ids: [id.rawValue])
+        } else {
+            _ = try PacksFacade.disable(home: home, ids: [id.rawValue])
+        }
         try state.withLock { state in
-            if enabled {
-                _ = try PacksFacade.enable(home: home, ids: [id.rawValue])
-            } else {
-                _ = try PacksFacade.disable(home: home, ids: [id.rawValue])
-            }
             state.catalog = try PacksFacade.makeCatalog(home: home)
             rebuild(state: &state)
             state.lastUncoveredWanted = []
