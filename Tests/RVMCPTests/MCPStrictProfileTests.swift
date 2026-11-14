@@ -180,13 +180,14 @@ struct MCPStrictProfileTests {
         #endif
     }
 
-    /// Hard links and clones are denied, then allowed only among the write
-    /// roots, then denied again on every credential path. Seatbelt takes the
-    /// last matching rule, so each allow follows its deny and no later line
-    /// re-opens them; that holds on the branch a symlinked credential adds
-    /// (`(deny file-read*)` and a second write allow) too.
+    /// Hard links are denied, then allowed only among the write roots, then
+    /// denied again on every credential path, as clones are. Seatbelt takes
+    /// the last matching rule, so the allow follows its deny and no later
+    /// line re-opens either; that holds on the branch a symlinked credential
+    /// adds (`(deny file-read*)` and a second write allow) too. No line
+    /// allows a clone: it is left to the read and write rules.
     @Test(arguments: [false, true])
-    func linksAndClonesAreAllowedOnlyAmongTheWriteRoots(_ symlinkedCredential: Bool) throws {
+    func linksAreAllowedOnlyAmongTheWriteRoots(_ symlinkedCredential: Bool) throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-link-profile-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
@@ -205,16 +206,18 @@ struct MCPStrictProfileTests {
             temporaryDirectory: root.appendingPathComponent("tmp").path).get()
         let lines = text.split(separator: "\n").map(String.init)
         let allowDefault = try #require(lines.firstIndex(of: "(allow default)"))
-        let deny = try #require(lines.firstIndex(of: "(deny file-link file-clone)"))
-        let allow = try #require(lines.firstIndex { $0.hasPrefix("(allow file-link file-clone ") })
+        let deny = try #require(lines.firstIndex(of: "(deny file-link)"))
+        let allow = try #require(lines.firstIndex { $0.hasPrefix("(allow file-link ") })
         let credential = try #require(lines.lastIndex { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
         #expect(allowDefault < deny && deny < allow && allow < credential)
         // The link allow names exactly what the write allow names.
         let writeAllow = try #require(lines.first { $0.hasPrefix("(allow file-write* ") })
-        #expect(lines[allow].dropFirst("(allow file-link file-clone ".count) == writeAllow.dropFirst("(allow file-write* ".count))
-        // Only one line allows a link or a clone, and every credential deny covers both.
+        #expect(lines[allow].dropFirst("(allow file-link ".count) == writeAllow.dropFirst("(allow file-write* ".count))
+        // Only one line allows a link, none names a clone but the credential
+        // denies, and every credential deny covers both.
         #expect(lines.filter { $0.hasPrefix("(allow") && $0.contains("file-link") }.count == 1)
-        #expect(lines.filter { $0.hasPrefix("(allow") && $0.contains("file-clone") }.count == 1)
+        #expect(lines.filter { $0.contains("file-clone") }
+            .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
         #expect(lines.filter { $0.hasPrefix("(deny file-read* file-write* ") }
             .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
         #expect(lines.contains("(deny file-read*)") == symlinkedCredential)
@@ -358,17 +361,20 @@ struct MCPSandboxHostsLiveTests {
         #expect(output.contains("DNS_OK") == false, "\(output)")
     }
 
-    /// Inside the cage, a file outside every write root can be neither hard
-    /// linked nor cloned into the scratch, and writing the would-be link's
-    /// name leaves it unchanged; a plain copy still works, and links and
-    /// clones between files in the scratch still work (package managers
-    /// link and clone inside their caches). The fake home is under the
-    /// resolved temp directory. The outside file cannot be: every path under
+    /// Inside the cage, a file outside every write root cannot be hard
+    /// linked into the scratch, and writing the would-be link's name leaves
+    /// it unchanged. It can be cloned, as it can be copied: a clone is its
+    /// own copy-on-write file, so writing the clone leaves it unchanged too
+    /// (Rust's `std::fs::copy` clones first and fails outright on `EPERM`).
+    /// A clone out of the scratch into that directory is refused. Links and
+    /// clones between files in the scratch work (package managers link and
+    /// clone inside their caches). The fake home is under the resolved temp
+    /// directory. The outside file cannot be: every path under
     /// `/private/var/folders` is a write root, so it is under the real home
     /// in a fresh directory, as `cagedServerReachesItsProxyButNothingElse`
     /// does, and removed afterwards.
     @Test(.timeLimit(.minutes(1)))
-    func cagedServerCannotLinkOrCloneAFileFromOutsideItsWriteRoots() throws {
+    func cagedServerCannotLinkOrWriteAFileFromOutsideItsWriteRoots() throws {
         let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
         let root = URL(fileURLWithPath: temporary, isDirectory: true)
             .appendingPathComponent("rv-cage-link-\(UUID().uuidString)", isDirectory: true)
@@ -393,12 +399,14 @@ struct MCPSandboxHostsLiveTests {
             policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
             configDirectory: config.path, temporaryDirectory: tmp.path).get()
         let script = """
-            outside="$1"; s="$2"
+            outside="$1"; s="$2"; project="$3"
             /bin/ln "$outside" "$s/linked" 2> "$s/ln.err" && echo LINK_OUT_OK
             grep -q "Operation not permitted" "$s/ln.err" && echo LINK_OUT_EPERM
             printf changed > "$s/linked"
-            /bin/cp -c "$outside" "$s/cloned" 2> "$s/cp.err" && echo CLONE_OUT_OK
-            grep -q "Operation not permitted" "$s/cp.err" && echo CLONE_OUT_EPERM
+            /bin/cp -c "$outside" "$s/cloned" && echo CLONE_OUT_OK
+            printf changed > "$s/cloned"
+            /bin/cp -c "$outside" "$project/escaped" 2> "$s/cp.err" && echo CLONE_ESCAPE_OK
+            grep -q "Operation not permitted" "$s/cp.err" && echo CLONE_ESCAPE_EPERM
             /bin/cp "$outside" "$s/copied" && echo COPY_OK
             printf inner > "$s/a"
             /bin/ln "$s/a" "$s/b" && echo LINK_IN_OK
@@ -407,7 +415,7 @@ struct MCPSandboxHostsLiveTests {
             """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
-        process.arguments = ["-p", text, "/bin/sh", "-c", script, "sh", outside.path, scratch.path]
+        process.arguments = ["-p", text, "/bin/sh", "-c", script, "sh", outside.path, scratch.path, project.path]
         process.environment = ["PATH": "/usr/bin:/bin"]
         process.currentDirectoryURL = scratch
         let pipe = Pipe()
@@ -426,8 +434,10 @@ struct MCPSandboxHostsLiveTests {
         #expect(output.contains("DONE"), "\(output)")
         #expect(output.contains("LINK_OUT_OK") == false, "\(output)")
         #expect(output.contains("LINK_OUT_EPERM"), "\(output)")
-        #expect(output.contains("CLONE_OUT_OK") == false, "\(output)")
-        #expect(output.contains("CLONE_OUT_EPERM"), "\(output)")
+        #expect(output.contains("CLONE_OUT_OK"), "\(output)")
+        #expect(output.contains("CLONE_ESCAPE_OK") == false, "\(output)")
+        #expect(output.contains("CLONE_ESCAPE_EPERM"), "\(output)")
+        #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("escaped").path) == false)
         #expect(output.contains("COPY_OK"), "\(output)")
         #expect(output.contains("LINK_IN_OK"), "\(output)")
         #expect(output.contains("CLONE_IN_OK"), "\(output)")
@@ -439,6 +449,9 @@ struct MCPSandboxHostsLiveTests {
         var written = stat()
         #expect(lstat(scratch.appendingPathComponent("linked").path, &written) == 0)
         #expect(written.st_ino != before.st_ino)
+        var clone = stat()
+        #expect(lstat(scratch.appendingPathComponent("cloned").path, &clone) == 0)
+        #expect(clone.st_ino != before.st_ino)
     }
 }
 #endif
