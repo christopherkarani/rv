@@ -36,7 +36,12 @@ package enum SecretRunRefusal: Error, Sendable, Equatable {
             "the secrets gateway's peer check could not tell which process held a test connection here, "
                 + "so placeholders cannot be bound to the command; refusing to launch"
         case .spawnUnavailable:
+            #if os(Linux)
+            "rv-isolation-exec is not installed beside rv, so the command cannot be started suspended until its "
+                + "placeholders are bound; reinstall rv"
+            #else
             "this platform cannot start the command suspended until its placeholders are bound; refusing to launch"
+            #endif
         case .homeUnavailable: "HOME is not an absolute path, so rv's configuration cannot be found"
         case .lease(let reason): reason
         case .emptyCommand: "no command given: rv run [--secret NAME]... [--all] -- COMMAND [ARGS...]"

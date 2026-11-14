@@ -155,7 +155,7 @@ func mcpHostConfigUnmodeledWrite(
 }
 
 private func mentionCount(_ text: String) -> Int {
-    let folded = foldedPathComponent(text)
+    let folded = MCPHostConfigPaths.foldedMention(text)
     // Longest tokens first, each hit consumed, so `.mcp.json` counts once.
     var remaining = folded
     var count = 0

@@ -15,6 +15,14 @@ struct ProcessIdentity: Equatable, Sendable {
     var group: UInt32
     var startSeconds: UInt64
     var startMicroseconds: UInt64
+
+    /// Whether `other` is this process, still with the same parent: the
+    /// same pid, start time and parent. The group is not compared: a
+    /// process may move itself (`setpgid`) and is the same process after.
+    func isSameProcess(as other: ProcessIdentity) -> Bool {
+        pid == other.pid && parent == other.parent && startSeconds == other.startSeconds
+            && startMicroseconds == other.startMicroseconds
+    }
 }
 
 /// One lookup. `absent` is a process that is gone (skip it); `unavailable`

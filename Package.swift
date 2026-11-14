@@ -46,10 +46,15 @@ let isolationExecTargets: [Target] = [
     ),
 ]
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec"]
+// The products these suites run: the cage's helper, the custodian binary.
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP", "rv-isolation-exec"]
+let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService", "rv-mcp-custodian"]
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
+let mcpTestDependencies: [Target.Dependency] = ["RVMCP"]
+let cliTestDependencies: [Target.Dependency] = ["RVCLI", "RVService"]
 #endif
 
 #if os(macOS)
@@ -89,6 +94,9 @@ let coreLibraryTargets: [Target] = [
         // only into Linux `rv-isolation-exec`.
         exclude: [
             "landlock_apply.c",
+            "landlock_confine.c",
+            "socket_filter.c",
+            "proxy_connector.c",
             "include",
             "README.md",
         ]
@@ -322,7 +330,7 @@ let cliProducts: [Product] = [
 let cliTestTargets: [Target] = [
     .testTarget(
         name: "RVCLITests",
-        dependencies: ["RVCLI", "RVService"],
+        dependencies: cliTestDependencies,
         linkerSettings: scanLinkerSettings
     ),
 ]
@@ -347,14 +355,38 @@ let fuzzTargets: [Target] = Context.environment["RV_FUZZ"] == "1" ? [
     .executableTarget(
         name: "rv-fuzz-secret-rewrite", dependencies: ["RVIsolation"], path: "Fuzz/SecretRewrite",
         exclude: ["rewrite.dict", "seeds"], swiftSettings: fuzzHarness),
+    .executableTarget(
+        name: "rv-fuzz-procfs", dependencies: ["RVIsolation"], path: "Fuzz/ProcFS",
+        exclude: ["procfs.dict", "seeds"], swiftSettings: fuzzHarness),
 ] : []
+
+// The approvals custodian on Linux: a key daemon under its own system
+// account and a root helper that checks the owner's password with PAM
+// (docs/security/mcp-linux-custodian.md). Its decisions live in RVMCP.
+#if os(Linux)
+let linuxCustodianTargets: [Target] = [
+    .target(name: "CRVPAM"),
+    .executableTarget(
+        name: "rv-mcp-custodian",
+        dependencies: ["RVMCP", "CRVPAM"],
+        path: "Sources/rv-mcp-custodian-linux"
+    ),
+]
+let linuxCustodianProducts: [Product] = [
+    .executable(name: "rv-mcp-custodian", targets: ["rv-mcp-custodian"])
+]
+#else
+let linuxCustodianTargets: [Target] = []
+let linuxCustodianProducts: [Product] = []
+#endif
 
 let package = Package(
     name: "rv",
     platforms: [
         .macOS(.v15),
     ],
-    products: coreProducts + isolationExecProducts + terminalProbeProducts + serviceProducts + cliProducts,
+    products: coreProducts + isolationExecProducts + terminalProbeProducts + serviceProducts + cliProducts
+        + linuxCustodianProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
         // Fork of 0.14.0 with RV's small public bracketed-paste hook (View.onPaste).
@@ -365,6 +397,6 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-collections.git", exact: "1.6.0"),
     ] + extraPackageDependencies,
     targets: coreLibraryTargets + isolationExecTargets + terminalProbeTargets + serviceLibraryAndDaemon + cliTargets
-        + coreTestTargets + serviceTestTargets + cliTestTargets + fuzzTargets,
+        + linuxCustodianTargets + coreTestTargets + serviceTestTargets + cliTestTargets + fuzzTargets,
     swiftLanguageModes: [.v6]
 )

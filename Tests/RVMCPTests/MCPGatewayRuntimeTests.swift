@@ -277,7 +277,7 @@ struct MCPGatewayRuntimeTests {
         }
         #expect(plan("bare", requireSandbox: true)?.message.contains("needs a sandbox") == true)
         #expect(plan("open", requireSandbox: true)?.message.contains("stays off the network") == true)
-        // No cage off macOS yet: bare servers serve, and serve (not the
+        // A host without a cage: bare servers serve, and serve (not the
         // planner) still refuses sandboxed ones there.
         #expect(plan("bare", requireSandbox: false) == nil)
         #expect(plan("open", requireSandbox: false) == nil)

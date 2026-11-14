@@ -347,13 +347,16 @@ struct MCPGatewayCoreTests {
         #expect(toolError.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue == raw)
         #expect(toolError.toClient.first?.compactText.unicodeScalars.contains { $0.value == 0x1B } == false)
 
+        // The listed description shows `sentence` (escaped), so the name
+        // that must not be listed ends in text only it has.
+        let nameOnly = " as a tool name"
         let list = harness.client(#"{"jsonrpc":"2.0","id":8,"method":"tools/list"}"#)
         let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
         let listed = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "id": .int(listID),
             "result": .object(["tools": .array([
                 .object(["name": .string("list_issues"), "description": .string(raw)]),
-                .object(["name": .string(raw), "description": .string("plain")]),
+                .object(["name": .string(raw + nameOnly), "description": .string("plain")]),
             ])]),
         ])))
         let tools = listed.toClient.first?["result"]?["tools"]?.arrayValue ?? []
@@ -368,6 +371,7 @@ struct MCPGatewayCoreTests {
         let wire = listed.toClient.first?.compactText ?? ""
         #expect(wire.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(wire.components(separatedBy: sentence).count == 2, "\(wire)")
+        #expect(wire.contains(nameOnly) == false, "\(wire)")
     }
 
     /// N6: progress reaches the client only for a call this upstream is
@@ -616,8 +620,8 @@ struct MCPGatewayCoreTests {
                     "description": .string("plain"),
                     "title": .string(raw),
                     "annotations": .object(["title": .string(lineBreak)]),
-                    "inputSchema": .object(["description": .string(raw)]),
-                    "outputSchema": .object(["description": .string(bidi)]),
+                    "inputSchema": .object(["description": .string(raw), "default": .string(raw)]),
+                    "outputSchema": .object(["description": .string(bidi), "const": .string(bidi)]),
                 ]),
             ])]),
         ])))
@@ -626,9 +630,12 @@ struct MCPGatewayCoreTests {
         #expect(shown(tool?["description"]) == "plain")
         escaped(shown(tool?["title"]))
         escaped(shown(tool?["annotations"]?["title"]))
-        // Schema descriptions are prose a host shows too (`schemaProse`).
+        // Schema descriptions are prose a host shows too (`schemaProse`);
+        // a schema's values are payload.
         escaped(shown(tool?["inputSchema"]?["description"]))
         escaped(shown(tool?["outputSchema"]?["description"]))
+        faithful(tool?["inputSchema"]?["default"], raw, in: listed.toClient.first)
+        faithful(tool?["outputSchema"]?["const"], bidi, in: listed.toClient.first)
 
         // Progress is display text: only for a pending call's own token,
         // which is echoed as the client sent it; the message is escaped.
