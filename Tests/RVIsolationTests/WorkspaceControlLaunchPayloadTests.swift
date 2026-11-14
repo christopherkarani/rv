@@ -103,6 +103,20 @@ struct LaunchParityWireTests {
             #expect(WorkspaceControlCodec.decodeRequest(Data(raw.utf8)) == .invalid, "timeout \(seconds)")
         }
     }
+
+    @Test func aTimeoutOnAnyOtherOpIsRefused() {
+        // Only launchRuntime honours a timeout; elsewhere it would be
+        // silently dropped, so the codec refuses the frame instead.
+        let frames = [
+            "{\"v\":1,\"op\":\"launchAgentRuntime\",\"agentDefinitionID\":\"agent\",\"timeout\":30}",
+            "{\"v\":1,\"op\":\"launchCustomRuntime\",\"executable\":\"/bin/sleep\",\"timeout\":30}",
+            "{\"v\":1,\"op\":\"ensureTerminalRuntime\",\"executable\":\"/bin/sh\",\"io\":\"terminal\",\"rows\":24,\"cols\":80,\"timeout\":30}",
+            "{\"v\":1,\"op\":\"ping\",\"timeout\":30}",
+        ]
+        for raw in frames {
+            #expect(WorkspaceControlCodec.decodeRequest(Data(raw.utf8)) == .invalid, "\(raw)")
+        }
+    }
 }
 
 @Suite("Launch payload parse")

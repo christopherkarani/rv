@@ -333,6 +333,7 @@ enum WorkspaceControlCodec {
             fits(envelope.project, WorkspaceControlLimits.maxProjectBytes),
             featuresFit(envelope.features),
             timeoutFits(envelope.timeoutSeconds),
+            timeoutBelongs(envelope.timeoutSeconds, op: envelope.op),
             argumentsFit(envelope.arguments),
             attachedFits(envelope.attached),
             ioFits(envelope.io),
@@ -363,6 +364,12 @@ enum WorkspaceControlCodec {
     /// A launch deadline lies in the policy's own range.
     static func timeoutFits(_ seconds: UInt64?) -> Bool {
         seconds.map(RuntimeProcessLimits.timeoutSecondsRange.contains) ?? true
+    }
+
+    /// Only `launchRuntime` carries a deadline. Elsewhere it is refused, not
+    /// dropped: a requested deadline must never silently not apply.
+    private static func timeoutBelongs(_ seconds: UInt64?, op: String?) -> Bool {
+        seconds == nil || op == WorkspaceControlOp.launchRuntime.rawValue
     }
 
     static func agentDefinitionIDFits(_ id: String?) -> Bool {
