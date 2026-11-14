@@ -9,73 +9,89 @@ import RVIsolation
 
 /// Where a listed tool stands against the definition the owner trusted.
 public enum MCPToolPinStatus: String, Sendable, Equatable {
-    /// Listed this session exactly as pinned.
+    /// Listed this session only exactly as pinned.
     case pinned
-    /// The server is pinned but this tool was not part of it.
+    /// No pin: the owner has not reviewed this tool with `rv mcp trust`.
     case new
-    /// Pinned under this name with a different description or schema.
+    /// Pinned under this name, but listed this session with a different
+    /// definition at least once.
     case changed
-    /// No verified pin to compare with: the store is unreadable or
-    /// unverifiable, the server could not be pinned, or the tool was not
-    /// listed this session.
+    /// No verified pin to compare with: the pin store is unreadable or
+    /// unverifiable, or the tool was not listed this session.
     case unverified
 }
 
+/// What became of definitions offered to the review queue.
+public enum MCPToolReviewOutcome: Sendable, Equatable {
+    case recorded
+    /// The queue is full; this many definitions were not kept.
+    case dropped(Int)
+    case failed
+}
+
 /// What `MCPGatewayCore` needs from the pin store. Pins are read and
-/// verified once, when `rv mcp serve` starts; the closures write.
+/// verified once, when `rv mcp serve` starts. The gateway never pins: only
+/// `rv mcp trust`, with the owner present, writes pins.
 public struct MCPToolPinning: Sendable {
     /// server → tool → definition hash. Nil when the store could not be
-    /// read or verified: every tool is then unpinned.
+    /// read or verified: every tool is then unverified.
     public var pins: [String: [String: String]]?
-    /// Pins a server listed for the first time. Returns the server's pins
-    /// now in the store (another gateway may have pinned it first), or nil
-    /// when nothing verified could be recorded.
-    public var pinFirstSeen: @Sendable (_ server: String, _ hashes: [String: String]) -> [String: String]?
-    /// Keeps definitions that are not pinned for `rv mcp trust` to review.
-    public var recordChanged: @Sendable (_ server: String, _ definitions: [String: JSONValue]) -> Bool
+    /// Keeps definitions that are not pinned for `rv mcp trust` to show.
+    public var recordChanged: @Sendable (_ server: String, _ definitions: [String: JSONValue]) -> MCPToolReviewOutcome
     /// False only in tests that are not about pins.
     var enforced = true
 
     public init(
         pins: [String: [String: String]]?,
-        pinFirstSeen: @escaping @Sendable (String, [String: String]) -> [String: String]?,
-        recordChanged: @escaping @Sendable (String, [String: JSONValue]) -> Bool
+        recordChanged: @escaping @Sendable (String, [String: JSONValue]) -> MCPToolReviewOutcome
     ) {
         self.pins = pins
-        self.pinFirstSeen = pinFirstSeen
         self.recordChanged = recordChanged
     }
 
     /// Every tool counts as pinned. Internal: production code cannot pick it.
     static let unenforced: MCPToolPinning = {
-        var pinning = MCPToolPinning(pins: [:], pinFirstSeen: { _, hashes in hashes }, recordChanged: { _, _ in true })
+        var pinning = MCPToolPinning(pins: [:], recordChanged: { _, _ in .recorded })
         pinning.enforced = false
         return pinning
     }()
 }
 
-/// `~/.config/rv/mcp-tool-pins.json` (0600): trust-on-first-use pins of each
-/// upstream tool's name, description, and input schema.
+/// `~/.config/rv/mcp-tool-pins.json` (0600): the upstream tool definitions
+/// the owner reviewed and trusted with `rv mcp trust`, each pinned as the
+/// hash of the whole tool object the upstream listed (after secret
+/// scrubbing). Everything rv forwards about a tool is derived from that
+/// object, so a pinned tool is served exactly as reviewed.
 ///
 /// `pins` is MAC'd with the approvals key, the same key and purpose that
 /// sign mcp.json (`MCPIntegrity`), with a `tool-pins` field first so the
 /// two MACs can never stand for each other. A same-user process can edit or
-/// delete the file; it cannot make edited pins verify. A present file whose
-/// pins do not verify pins nothing, and so does a platform whose approvals
-/// key a same-user process can read (Linux). `changed` is unsigned: definitions the
-/// gateway saw that do not match a pin, kept only so `rv mcp trust` can show
-/// the owner what they would pin. Editing it can only change what is shown,
-/// and what is shown is exactly what gets pinned.
+/// delete the file; it cannot make edited pins verify. A missing file pins
+/// nothing; a present file whose pins do not verify pins nothing either, and
+/// so does a platform whose approvals key a same-user process can read
+/// (Linux).
+///
+/// `mcp-tool-review.json` (0600) is the unsigned review queue: definitions
+/// the gateway saw that match no pin, kept so `rv mcp trust` can show the
+/// owner what they would pin. It has a hard size budget; a full queue keeps
+/// what it has and drops new entries. Editing it can only change what is
+/// shown, and what is shown is exactly what gets pinned.
 public struct MCPToolPinStore: Sendable {
     public static let fileName = "mcp-tool-pins.json"
+    public static let reviewFileName = "mcp-tool-review.json"
     static let domain = "tool-pins"
     static let maximumBytes = 4 * 1024 * 1024
+    /// The review queue's whole file never exceeds this.
+    static let reviewBudget = 1024 * 1024
     /// Longest definition kept for review; a longer one stays unpinned.
     static let maximumDefinitionBytes = 64 * 1024
     static let maximumChanged = 512
 
     public var configDirectory: URL
     public var signing: MCPApprovalSigning
+    /// How long a writer waits for another writer before giving up. A
+    /// writer that gives up writes nothing, so every tool keeps asking.
+    public var lockTimeout: TimeInterval = 5
 
     public init(configDirectory: URL, signing: MCPApprovalSigning) {
         self.configDirectory = configDirectory
@@ -83,24 +99,22 @@ public struct MCPToolPinStore: Sendable {
     }
 
     var fileURL: URL { configDirectory.appendingPathComponent(Self.fileName, isDirectory: false) }
+    var reviewURL: URL { configDirectory.appendingPathComponent(Self.reviewFileName, isDirectory: false) }
 
-    /// The name, description, and input schema a pin covers; nil without a name.
+    /// What a pin covers: the whole tool object; nil without a string name.
     public static func definition(of tool: JSONValue) -> JSONValue? {
-        guard let name = tool["name"]?.stringValue else { return nil }
-        var object = JSONObject()
-        object["name"] = .string(name)
-        if let description = tool["description"] { object["description"] = description }
-        if let schema = tool["inputSchema"] { object["inputSchema"] = schema }
-        return .object(object)
+        guard tool.objectValue != nil, tool["name"]?.stringValue != nil else { return nil }
+        return tool
     }
 
     public static func hash(_ definition: JSONValue) -> String {
         definition.canonicalHash
     }
 
-    /// The store as one parsed file. `pins` is nil when the file has none
-    /// or they do not verify.
-    public struct Contents: Sendable {
+    /// Both files for `rv mcp trust`. `pins` is nil when the pins file
+    /// does not verify. The review queue is empty when it is missing,
+    /// unreadable, oversized, or not valid.
+    public struct Contents: Sendable, Equatable {
         public var pins: [String: [String: String]]?
         public var changed: [String: [String: JSONValue]]
     }
@@ -122,7 +136,14 @@ public struct MCPToolPinStore: Sendable {
         }
     }
 
-    /// Verified pins. A missing file is an empty store: nothing pinned yet.
+    public enum TrustOutcome: Sendable, Equatable {
+        case trusted
+        /// The pins on disk are not the ones the review was built on.
+        case changedDuringReview
+        case failed
+    }
+
+    /// Verified pins. A missing file pins nothing.
     public func load() -> Result<[String: [String: String]], LoadFailure> {
         switch OwnerOnlyFile.read(fileURL, maximumBytes: Self.maximumBytes) {
         case .failure: return .failure(.unreadable)
@@ -131,108 +152,100 @@ public struct MCPToolPinStore: Sendable {
         }
     }
 
-    /// Reads and verifies now, and binds the writes to this store. Where
-    /// the approvals key cannot be protected from same-user processes (the
-    /// platforms where rv does not honor approval grants either), nothing
-    /// is pinned.
+    /// Reads and verifies now, and binds the review queue to this store.
+    /// Where the approvals key cannot be protected from same-user processes
+    /// (the platforms where rv does not honor approval grants either),
+    /// nothing is pinned.
     public func pinning() -> (pinning: MCPToolPinning, failure: LoadFailure?) {
         let loaded: Result<[String: [String: String]], LoadFailure> = signing.honorsGrants ? load() : .failure(.unprotected)
         let pins: [String: [String: String]]? = if case .success(let pins) = loaded { pins } else { nil }
         let failure: LoadFailure? = if case .failure(let failure) = loaded { failure } else { nil }
-        return (
-            MCPToolPinning(
-                pins: pins,
-                pinFirstSeen: { pinFirstSeen(server: $0, hashes: $1) },
-                recordChanged: { recordChanged(server: $0, definitions: $1) }),
-            failure
-        )
+        return (MCPToolPinning(pins: pins, recordChanged: { recordChanged(server: $0, definitions: $1) }), failure)
     }
 
-    public func pinFirstSeen(server: String, hashes: [String: String]) -> [String: String]? {
-        withLock { () -> [String: String]? in
-            var pins: [String: [String: String]]
-            var changed: [String: [String: JSONValue]] = [:]
-            switch OwnerOnlyFile.read(fileURL, maximumBytes: Self.maximumBytes) {
-            case .failure: return nil
-            case .success(nil): pins = [:]
-            case .success(let data?):
-                guard case .success(let verified) = verified(data) else { return nil }
-                pins = verified
-                changed = Self.parse(data)?.changed ?? [:]
+    /// Adds definitions to the review queue within its budget. A queue that
+    /// is oversized or not valid starts over; an unsafe one is left alone.
+    public func recordChanged(server: String, definitions: [String: JSONValue]) -> MCPToolReviewOutcome {
+        withLock { () -> MCPToolReviewOutcome in
+            var changed: [String: [String: JSONValue]]
+            switch readReview() {
+            case .unsafe: return .failed
+            case .unusable: changed = [:]
+            case .read(let queued): changed = queued
             }
-            if let existing = pins[server] { return existing }
-            pins[server] = hashes
-            guard write(pins: pins, changed: changed) else { return nil }
-            return hashes
-        } ?? nil
-    }
-
-    public func recordChanged(server: String, definitions: [String: JSONValue]) -> Bool {
-        withLock { () -> Bool in
-            var root: JSONObject
-            switch OwnerOnlyFile.read(fileURL, maximumBytes: Self.maximumBytes) {
-            case .failure: return false
-            case .success(nil): root = JSONObject()
-            // An unparseable file stays unverifiable: no pins, no MAC.
-            case .success(let data?): root = (try? JSONValue.parse(data))?.objectValue ?? JSONObject()
-            }
-            var changed = root["changed"].flatMap(Self.changedEntries) ?? [:]
             var count = changed.values.reduce(0) { $0 + $1.count }
+            var bytes = Self.reviewBytes(changed)
+            var dropped = 0
             for (tool, definition) in definitions.sorted(by: { $0.key < $1.key }) {
-                guard definition.canonicalText.utf8.count <= Self.maximumDefinitionBytes else { continue }
-                if changed[server]?[tool] == nil {
-                    guard count < Self.maximumChanged else { continue }
-                    count += 1
+                let size = Self.entryBytes(server: server, tool: tool, definition)
+                guard definition.canonicalText.utf8.count <= Self.maximumDefinitionBytes else {
+                    dropped += 1
+                    continue
                 }
+                let previous = changed[server]?[tool].map { Self.entryBytes(server: server, tool: tool, $0) }
+                guard previous != nil || count < Self.maximumChanged,
+                    bytes - (previous ?? 0) + size <= Self.reviewBudget
+                else {
+                    dropped += 1
+                    continue
+                }
+                if previous == nil { count += 1 }
+                bytes += size - (previous ?? 0)
                 changed[server, default: [:]][tool] = definition
             }
-            root["version"] = .int(1)
-            root["changed"] = Self.encodeChanged(changed)
-            return OwnerOnlyFile.write(Data(JSONValue.object(root).prettyText.utf8), to: fileURL)
-        } ?? false
+            let body = Data(Self.encodeReview(changed).compactText.utf8)
+            guard body.count <= Self.reviewBudget, OwnerOnlyFile.write(body, to: reviewURL) else { return .failed }
+            return dropped == 0 ? .recorded : .dropped(dropped)
+        } ?? .failed
     }
 
-    /// The owner reviewed `reviewed` (server → tool → definition): pin
-    /// exactly those, drop them from `changed`, and re-sign. When the pins
-    /// on disk do not verify, they are replaced, and every server in
-    /// `servers` starts pinned to nothing, so its other tools stay unpinned
-    /// instead of being pinned on first use without review.
-    public func trust(reviewed: [String: [String: JSONValue]], servers: [String]) -> Bool {
-        withLock { () -> Bool in
-            var pins: [String: [String: String]] = [:]
-            var changed: [String: [String: JSONValue]] = [:]
+    /// The owner reviewed `reviewed` (server → tool → definition), shown
+    /// over `expectedPins` (nil: the pins did not verify). Pins exactly the
+    /// reviewed definitions and re-signs, unless the pins on disk changed
+    /// since the review was built. Pins that did not verify are replaced:
+    /// tools not reviewed this time stay unpinned.
+    public func trust(
+        reviewed: [String: [String: JSONValue]], expectedPins: [String: [String: String]]?
+    ) -> TrustOutcome {
+        withLock { () -> TrustOutcome in
+            let current: [String: [String: String]]?
             switch OwnerOnlyFile.read(fileURL, maximumBytes: Self.maximumBytes) {
-            case .failure: return false
-            case .success(nil): break
-            case .success(let data?):
-                changed = Self.parse(data)?.changed ?? [:]
-                if case .success(let verified) = verified(data) {
-                    pins = verified
-                } else {
-                    for server in servers { pins[server] = [:] }
-                }
+            case .failure: return .failed
+            case .success(nil): current = [:]
+            case .success(let data?): current = try? verified(data).get()
             }
+            guard current == expectedPins else { return .changedDuringReview }
+            var pins = current ?? [:]
             for (server, tools) in reviewed {
-                for (tool, definition) in tools {
-                    pins[server, default: [:]][tool] = Self.hash(definition)
-                    changed[server]?[tool] = nil
-                }
-                if changed[server]?.isEmpty == true { changed[server] = nil }
+                for (tool, definition) in tools { pins[server, default: [:]][tool] = Self.hash(definition) }
             }
-            return write(pins: pins, changed: changed)
-        } ?? false
+            guard write(pins: pins) else { return .failed }
+            // Drop what was pinned from the queue; a definition the
+            // gateway recorded during the review stays for next time.
+            if case .read(var changed) = readReview() {
+                for (server, tools) in reviewed {
+                    for (tool, definition) in tools where changed[server]?[tool].map(Self.hash) == Self.hash(definition) {
+                        changed[server]?[tool] = nil
+                    }
+                    if changed[server]?.isEmpty == true { changed[server] = nil }
+                }
+                _ = OwnerOnlyFile.write(Data(Self.encodeReview(changed).compactText.utf8), to: reviewURL)
+            }
+            return .trusted
+        } ?? .failed
     }
 
-    /// The whole file for `rv mcp trust`: pins when they verify, and the
-    /// definitions waiting for review.
+    /// Both files for `rv mcp trust`. Fails only when the pins file is
+    /// unreadable or unsafe; the review queue never blocks a review.
     public func contents() -> Result<Contents, LoadFailure> {
+        let pins: [String: [String: String]]?
         switch OwnerOnlyFile.read(fileURL, maximumBytes: Self.maximumBytes) {
         case .failure: return .failure(.unreadable)
-        case .success(nil): return .success(Contents(pins: [:], changed: [:]))
-        case .success(let data?):
-            let pins: [String: [String: String]]? = if case .success(let pins) = verified(data) { pins } else { nil }
-            return .success(Contents(pins: pins, changed: Self.parse(data)?.changed ?? [:]))
+        case .success(nil): pins = [:]
+        case .success(let data?): pins = try? verified(data).get()
         }
+        let changed: [String: [String: JSONValue]] = if case .read(let queued) = readReview() { queued } else { [:] }
+        return .success(Contents(pins: pins, changed: changed))
     }
 
     // MARK: File format
@@ -251,13 +264,12 @@ public struct MCPToolPinStore: Sendable {
         }
     }
 
-    func write(pins: [String: [String: String]], changed: [String: [String: JSONValue]]) -> Bool {
+    func write(pins: [String: [String: String]]) -> Bool {
         guard let mac = signing.mac(.mcpJSON, Self.macFields(pins), false) else { return false }
         let body = JSONValue.object([
-            "version": .int(1),
+            "version": .int(2),
             "pins": Self.encodePins(pins),
             "mac": .string(mac),
-            "changed": Self.encodeChanged(changed),
         ])
         return OwnerOnlyFile.write(Data(body.prettyText.utf8), to: fileURL)
     }
@@ -265,11 +277,9 @@ public struct MCPToolPinStore: Sendable {
     struct Parsed {
         var pins: [String: [String: String]]?
         var mac: String?
-        var changed: [String: [String: JSONValue]]
     }
 
-    /// Strict for `pins` (an object of objects of strings, or absent);
-    /// lenient for `changed`, which is only ever shown.
+    /// Strict: `pins` is an object of objects of strings, or absent.
     static func parse(_ data: Data) -> Parsed? {
         guard let root = (try? JSONValue.parse(data))?.objectValue else { return nil }
         var pins: [String: [String: String]]?
@@ -287,9 +297,26 @@ public struct MCPToolPinStore: Sendable {
             }
             pins = decoded
         }
-        return Parsed(
-            pins: pins, mac: root["mac"]?.stringValue,
-            changed: root["changed"].flatMap(changedEntries) ?? [:])
+        return Parsed(pins: pins, mac: root["mac"]?.stringValue)
+    }
+
+    enum ReviewRead {
+        case read([String: [String: JSONValue]])
+        /// Missing, oversized, or not valid: treated as empty.
+        case unusable
+        /// A symlink, another owner's file, or a writable-by-others file.
+        case unsafe
+    }
+
+    func readReview() -> ReviewRead {
+        switch OwnerOnlyFile.read(reviewURL, maximumBytes: Self.reviewBudget) {
+        case .success(nil), .failure(.oversized): return .unusable
+        case .failure: return .unsafe
+        case .success(let data?):
+            guard let root = try? JSONValue.parse(data), let changed = root["changed"].flatMap(Self.changedEntries)
+            else { return .unusable }
+            return .read(changed)
+        }
     }
 
     /// Entries whose definition is an object named like its key; anything
@@ -299,8 +326,7 @@ public struct MCPToolPinStore: Sendable {
         var changed: [String: [String: JSONValue]] = [:]
         for (server, tools) in servers.entries {
             for (tool, entry) in tools.objectValue?.entries ?? [] {
-                guard entry.objectValue != nil, let kept = definition(of: entry), kept["name"]?.stringValue == tool
-                else { continue }
+                guard let kept = definition(of: entry), kept["name"]?.stringValue == tool else { continue }
                 changed[server, default: [:]][tool] = kept
             }
         }
@@ -317,17 +343,30 @@ public struct MCPToolPinStore: Sendable {
         return .object(servers)
     }
 
-    static func encodeChanged(_ changed: [String: [String: JSONValue]]) -> JSONValue {
+    static func encodeReview(_ changed: [String: [String: JSONValue]]) -> JSONValue {
         var servers = JSONObject()
         for server in changed.keys.sorted() {
             var tools = JSONObject()
             for (tool, definition) in (changed[server] ?? [:]).sorted(by: { $0.key < $1.key }) { tools[tool] = definition }
             servers[server] = .object(tools)
         }
-        return .object(servers)
+        return .object(["version": .int(1), "changed": .object(servers)])
     }
 
-    /// One writer at a time across every `rv mcp serve` and `rv mcp trust`.
+    /// An upper bound on what one entry adds to the compact file.
+    static func entryBytes(server: String, tool: String, _ definition: JSONValue) -> Int {
+        JSONValue.string(server).compactText.utf8.count + JSONValue.string(tool).compactText.utf8.count
+            + definition.compactText.utf8.count + 8
+    }
+
+    static func reviewBytes(_ changed: [String: [String: JSONValue]]) -> Int {
+        changed.reduce(64) { total, server in
+            server.value.reduce(total) { $0 + entryBytes(server: server.key, tool: $1.key, $1.value) }
+        }
+    }
+
+    /// One writer at a time across every `rv mcp serve` and `rv mcp trust`,
+    /// waiting at most `lockTimeout`. Nil when the lock was not taken.
     private func withLock<T>(_ body: () -> T) -> T? {
         do {
             try FileManager.default.createDirectory(
@@ -339,7 +378,11 @@ public struct MCPToolPinStore: Sendable {
         let lock = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard lock >= 0 else { return nil }
         defer { close(lock) }
-        guard flock(lock, LOCK_EX) == 0 else { return nil }
+        let deadline = Date().addingTimeInterval(lockTimeout)
+        while flock(lock, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK || errno == EINTR, Date() < deadline else { return nil }
+            usleep(10_000)
+        }
         defer { _ = flock(lock, LOCK_UN) }
         return body()
     }

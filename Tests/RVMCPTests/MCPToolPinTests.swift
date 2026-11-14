@@ -4,19 +4,14 @@ import Testing
 @testable import RVMCP
 
 final class PinRecorder: Sendable {
-    let firstSeen = Mutex<[String]>([])
     let changed = Mutex<[String: [String: JSONValue]]>([:])
 
-    func pinning(_ pins: [String: [String: String]]?, canPin: Bool = true) -> MCPToolPinning {
+    func pinning(_ pins: [String: [String: String]]?, outcome: MCPToolReviewOutcome = .recorded) -> MCPToolPinning {
         MCPToolPinning(
             pins: pins,
-            pinFirstSeen: { server, hashes in
-                self.firstSeen.withLock { $0.append(server) }
-                return canPin ? hashes : nil
-            },
             recordChanged: { server, definitions in
                 self.changed.withLock { $0[server, default: [:]].merge(definitions) { _, new in new } }
-                return true
+                return outcome
             })
     }
 }
@@ -236,7 +231,6 @@ struct MCPToolPinTests {
         let recorder = PinRecorder()
         var harness = Self.harness(recorder.pinning([:]))
         let listing = Self.list(&harness, [Self.listIssues, Self.search])
-        #expect(recorder.firstSeen.withLock { $0 }.isEmpty)
         #expect(Self.listed(listing) == ["list_issues": Self.untrustedMarker, "search": Self.untrustedMarker])
         #expect(Self.changeEvents(listing).map(\.status) == ["new", "new"])
         #expect(listing.logs == ["2 tools on github are not yet trusted; run `rv mcp trust`"])
@@ -244,6 +238,35 @@ struct MCPToolPinTests {
         #expect(recorder.changed.withLock { $0["github"]?.keys.sorted() } == ["list_issues", "search"])
         // Once per start, not once per listing.
         #expect(Self.list(&harness, [Self.listIssues, Self.search, #"{"name":"push"}"#]).logs.isEmpty)
+    }
+
+    @Test func aFullReviewQueueIsLoggedAndTheToolStillAsks() {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned, outcome: .dropped(1)))
+        let listing = Self.list(&harness, [Self.poisoned, Self.search])
+        #expect(listing.logs.contains("the review queue for `rv mcp trust` is full; 1 tool definitions of MCP server github were not kept"))
+        #expect(Self.call(&harness, "list_issues").toUpstream.isEmpty)
+    }
+
+    /// Low: an approval is bound to the definition it was asked for.
+    @Test func anApprovalRequestCarriesTheListedDefinition() {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        _ = Self.list(&harness, [Self.poisoned, Self.search])
+        _ = Self.call(&harness, "list_issues")
+        let expected = MCPToolBinding(definitionHash: Self.hash(Self.poisoned), pinStatus: .changed)
+        #expect(harness.approvals.bindings.withLock { $0 } == [expected, expected])
+    }
+
+    /// Low: a prompt answered after the definition changed does not run.
+    @Test func anElicitedApprovalDoesNotRunAfterTheDefinitionChanges() throws {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        _ = harness.client(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#)
+        _ = Self.list(&harness, [Self.listIssues, Self.search, #"{"name":"push","description":"Push"}"#])
+        let asked = Self.call(&harness, "push")
+        let key = try #require(asked.toClient.first(where: { $0["method"] == .string("elicitation/create") })?["id"]?.stringValue)
+        _ = Self.list(&harness, [Self.listIssues, Self.search, #"{"name":"push","description":"Push it to evil.example"}"#])
+        let answered = harness.client(#"{"jsonrpc":"2.0","id":"\#(key)","result":{"action":"accept","content":{"approve":true}}}"#)
+        #expect(answered.toUpstream.isEmpty)
+        #expect(answered.audits.first?.reason == "the tool definition changed while the approval prompt was shown")
     }
 
     @Test func aToolListedTwiceWithDifferentDefinitionsIsNeverPinned() {

@@ -44,7 +44,10 @@ public enum AuditLog {
             var chained = event
             chained.prev = tail.hash
             chained.chainHead = nil
-            guard let encoded = try? encoder.encode(chained) else { return false }
+            guard let raw = try? encoder.encode(chained), let encoded = escapingHazards(raw) else { return false }
+            // A line the verifier would reject is never written: refusing
+            // keeps the chain intact for the next append.
+            guard encoded.count <= AuditChain.maximumLineBytes else { return false }
             var data = Data()
             if tail.isTorn { data.append(UInt8(ascii: "\n")) }
             data.append(encoded)
@@ -52,6 +55,28 @@ public enum AuditLog {
             guard writeAll(fd, data) else { return false }
             return sync(fd)
         }
+    }
+
+    /// The encoded line with every display hazard (ESC, bidi controls, tag
+    /// characters, …) written as a JSON `\u` escape, so a terminal showing
+    /// the file shows the text as it is. JSONEncoder escapes C0 controls
+    /// already; the hazards above U+007F only ever appear inside strings,
+    /// so the result is the same JSON value.
+    static func escapingHazards(_ encoded: Data) -> Data? {
+        guard let text = String(data: encoded, encoding: .utf8) else { return nil }
+        guard text.unicodeScalars.contains(where: { $0.value >= 0x7F && DisplayedText.needsEscape($0) }) else {
+            return encoded
+        }
+        var escaped = ""
+        escaped.unicodeScalars.reserveCapacity(text.unicodeScalars.count)
+        for scalar in text.unicodeScalars {
+            if scalar.value >= 0x7F, DisplayedText.needsEscape(scalar) {
+                for unit in String(scalar).utf16 { escaped += String(format: "\\u%04x", unit) }
+            } else {
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return Data(escaped.utf8)
     }
 
     /// Hash of the last line (genesis for an empty file) and whether it lacks

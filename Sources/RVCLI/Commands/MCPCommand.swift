@@ -447,11 +447,18 @@ enum MCPRun {
         guard let request = store.pending().first(where: { $0.id == id }) else {
             return .failure("no pending MCP approval has id \(reviewField(id)) (see `rv mcp pending`)")
         }
+        // A tool that asks because its definition is not trusted keeps
+        // asking whatever mcp.json says; `rv mcp trust` is what pins it.
+        let pinAsks = request.binding.pinStatus != .pinned
         var allowed: MCPConfiguration?
+        var policyAllows = false
         if always {
-            switch allowListed(request, environment: environment) {
-            case .failure(let failure): return .failure(failure)
-            case .success(let result): allowed = result
+            policyAllows = pinAsks && policyAllowsAlready(request, environment: environment)
+            if policyAllows == false {
+                switch allowListed(request, environment: environment) {
+                case .failure(let failure): return .failure(failure)
+                case .success(let result): allowed = result
+                }
             }
         }
         guard store.argumentKeysAreBound(request) else {
@@ -461,8 +468,9 @@ enum MCPRun {
             ? "no arguments"
             : displayedArgumentKeys(request.argumentKeys)
         let reason = "rv: approve \(reviewField(request.server)) tool \(reviewField(request.tool)) "
+            + pinWarning(request.binding)
             + "arguments \(request.argumentsHash) keys \(shownKeys) "
-            + (always ? "always" : "once")
+            + (always && policyAllows == false ? "always" : "once")
         let codeChecked = Mutex(false)
         let outcome = await environment.presence.confirm(reason, .printedCode { typed in
             let ok = store.verifyCode(id: id, typed: typed)
@@ -482,7 +490,7 @@ enum MCPRun {
         }
         guard store.grant(
             id: id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
-            argumentKeys: request.argumentKeys
+            argumentKeys: request.argumentKeys, binding: request.binding
         ) != nil else {
             audit(request, decision: .denied, reason: "approval changed before it was signed", method: method,
                   always: always, configDirectory: environment.configDirectory)
@@ -498,11 +506,45 @@ enum MCPRun {
                 return .failure("mcp.json changed while it was being signed")
             }
         }
-        audit(request, decision: .allowed, reason: nil, method: method, always: always,
+        audit(request, decision: .allowed, reason: nil, method: method, always: always && policyAllows == false,
               configDirectory: environment.configDirectory)
+        let shown = "\(reviewField(request.server)) \(reviewField(request.tool))"
+        let untrusted = "its tool definition is not trusted (\(pinStatusText(request.binding.pinStatus)))"
+        if always, pinAsks {
+            return .success(policyAllows
+                ? "approved \(shown) once; mcp.json already allows it: it asks because \(untrusted). Run `rv mcp trust` to review and pin it\n"
+                : "approved \(shown) once and added it to its allow list in mcp.json; it still asks because \(untrusted). Run `rv mcp trust` to review and pin it\n")
+        }
         return .success(always
-            ? "approved \(reviewField(request.server)) \(reviewField(request.tool)) always (added to its allow list in mcp.json)\n"
-            : "approved \(reviewField(request.server)) \(reviewField(request.tool)) once; the agent can retry the same call\n")
+            ? "approved \(shown) always (added to its allow list in mcp.json)\n"
+            : "approved \(shown) once; the agent can retry the same call\n")
+    }
+
+    /// The approval prompt's note for a tool that asks because of pinning.
+    static func pinWarning(_ binding: MCPToolBinding) -> String {
+        switch binding.pinStatus {
+        case .pinned: ""
+        case .changed, .new:
+            "(\(pinStatusText(binding.pinStatus)); definition sha256 \(binding.definitionHash.isEmpty ? "unknown" : binding.definitionHash)) "
+        case .unverified: "(\(pinStatusText(binding.pinStatus))) "
+        }
+    }
+
+    static func pinStatusText(_ status: MCPToolPinStatus) -> String {
+        switch status {
+        case .pinned: "trusted"
+        case .changed: "CHANGED since you trusted it"
+        case .new: "not yet trusted"
+        case .unverified: "not checked against your trusted tools"
+        }
+    }
+
+    /// Whether mcp.json already allows the request's tool, so only pinning asks.
+    static func policyAllowsAlready(_ request: MCPApprovalRequest, environment: MCPEnvironment) -> Bool {
+        guard case .success(let bound) = boundConfiguration(environment), bound.integrity.problem == nil,
+            let server = bound.configuration.servers.first(where: { $0.name == request.server })
+        else { return false }
+        return bound.configuration.decision(server: server, tool: request.tool) == .allow
     }
 
     /// mcp.json with the request's tool moved to the allow list.
