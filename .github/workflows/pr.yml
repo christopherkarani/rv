@@ -235,6 +235,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             apparmor-utils binutils gcc git gnupg2 libc6-dev libcurl4-openssl-dev libedit2 \
+            python3-venv \
             libgcc-13-dev libncurses-dev libpython3-dev libsqlite3-0 libsqlite3-dev \
             libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata zip unzip zlib1g-dev
 
@@ -257,14 +258,35 @@ jobs:
             echo "- /proc mount: \`$(grep ' /proc ' /proc/self/mountinfo | tail -n 1)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Real MCP servers in the Landlock cage, as the runner's own user: a
+      # Node server fetched by npx through the allowlist proxy and a Python
+      # server off the network (docs/security/mcp-linux-sandbox.md).
+      - name: MCP sandbox with real Node and Python servers
+        env:
+          RV_MCP_REAL_SERVERS: "1"
+        run: |
+          Scripts/require-tests-ran.sh --no-skips 2 timeout 900 swift test --skip-build \
+            --filter 'aNodeServerStartedWithNpxRunsInTheCage|aPythonServerRunsInTheCage'
+
       # Root runs the built bundle from the runner's checkout; HOME=/root
-      # keeps it away from the runner's configuration.
+      # keeps it away from the runner's configuration. SwiftPM's lock files
+      # in /tmp belong to the runner, and the kernel does not let root
+      # reopen another user's file in a sticky directory.
       - name: Secrets gateway peer binding as root (strict)
         run: |
           sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo find /tmp -maxdepth 1 -name '*.build*.lock' -delete
           sudo env "PATH=$PATH" HOME=/root RV_LINUX_PEER_STRICT=1 \
             Scripts/require-tests-ran.sh --suites 6 100 timeout 900 swift test --skip-build \
             --filter 'ProcFS|GatewayPeerBindingTests|SecretGatewayLinuxPeerTests|SecretGatewayLinuxAttackTests'
+
+      # The setuid test needs root; the rest repeats what `swift test` ran
+      # as the runner, now with every capability.
+      - name: MCP sandbox and rv run as root
+        run: |
+          sudo env "PATH=$PATH" HOME=/root \
+            Scripts/require-tests-ran.sh --suites 3 60 timeout 900 swift test --skip-build \
+            --filter 'MCPLinuxSandboxTests|MCPLinuxCageTests|SecretRunLaunchTests'
 
       # Last: ptrace_scope=3 cannot be undone on a running kernel.
       - name: Secrets gateway peer binding under hidepid, pid namespaces, no CAP_SYS_PTRACE, AppArmor, Docker, Yama
