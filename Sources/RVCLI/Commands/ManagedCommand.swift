@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVIsolation
+import RVMCP
 import RVPolicy
 import RVService
 
@@ -107,18 +108,21 @@ enum ManagedRun {
         }
     }
 
-    static func restrictions(_ policy: ManagedPolicy) -> [String] {
+    static func restrictions(_ policy: ManagedPolicy, sandboxEnforced: Bool = MCPSandbox.enforced) -> [String] {
         var lines: [String] = []
         let mcp = policy.mcp
         if mcp.blocked.isEmpty == false { lines.append("mcp blocked servers: " + mcp.blocked.joined(separator: ", ")) }
         if mcp.allowDirect == false { lines.append("mcp: servers may not run outside rv (direct ignored)") }
-        // The hard flip requires sandboxes unconditionally; the policy's
-        // `requireSandbox` is legacy and no longer gates this line.
-        #if os(macOS)
-        lines.append("mcp: every local server must be sandboxed (remote servers are exempt)")
-        #else
-        lines.append("mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)")
-        #endif
+        // The hard flip requires sandboxes where the cage runs, so there
+        // `requireSandbox` changes nothing. Without a cage it refuses every
+        // local server.
+        if sandboxEnforced {
+            lines.append("mcp: every local server must be sandboxed (remote servers are exempt)")
+        } else if mcp.requireSandbox {
+            lines.append("mcp: no MCP server sandbox on this host, so every local server is refused here (remote servers are exempt)")
+        } else {
+            lines.append("mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)")
+        }
         if mcp.deny.isEmpty == false { lines.append("mcp deny: " + mcp.deny.joined(separator: ", ")) }
         if mcp.ask.isEmpty == false { lines.append("mcp ask: " + mcp.ask.joined(separator: ", ")) }
         if mcp.allow.isEmpty == false { lines.append("mcp allow: " + mcp.allow.joined(separator: ", ")) }

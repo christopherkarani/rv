@@ -107,8 +107,8 @@ struct MCPCommandTests {
         #expect(after.passes == false)
         #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
         #else
-        // No cage off macOS yet: bare servers serve, so check reports no sandbox problem.
-        #expect(after.problems.contains { $0.message.contains("sandbox") } == false)
+        // No cage off macOS yet: check names the bare server as uncaged.
+        #expect(after.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
         #endif
         #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         let relative = try report(fixture, rvExecutable: "")
@@ -158,9 +158,9 @@ struct MCPCommandTests {
         #expect(enforced.contains { $0.message == "open has sandbox network on; list the hosts it needs in sandbox.hosts" })
         #expect(enforced.contains { $0.message.contains("closed") } == false)
         let uncaged = MCPRun.sandboxProblems(configuration, configDirectory: directory, requireSandbox: false)
-        #expect(uncaged.contains { $0.message.contains("bare") } == false)
-        #expect(uncaged.count == 2)
-        #expect(uncaged.allSatisfy { $0.message.contains("only on macOS") })
+        #expect(uncaged.contains { $0.message.contains("bare") && $0.message.contains("runs it uncaged") })
+        #expect(uncaged.count == 3)
+        #expect(uncaged.allSatisfy { $0.message.contains("sandbox is unavailable on this host") })
         let platformDefault = MCPRun.sandboxProblems(configuration, configDirectory: directory)
         #if os(macOS)
         #expect(platformDefault == enforced)
@@ -5666,7 +5666,7 @@ struct MCPCommandTests {
         // No cage off macOS yet: the sandboxed fixture server cannot serve,
         // so check reports it instead of passing.
         #expect(initial.passes == false)
-        #expect(initial.problems.contains { $0.message.contains("only on macOS") })
+        #expect(initial.problems.contains { $0.message.contains("sandbox is unavailable on this host") })
         #endif
         let path = ".config/rv/mcp.json"
         try fixture.write(path, fixture.text(path).replacingOccurrences(of: "write_*", with: "zz_*"))

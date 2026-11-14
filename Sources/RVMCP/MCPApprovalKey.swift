@@ -94,7 +94,8 @@ public struct MCPApprovalSigning: Sendable {
     /// Only a key whose every use requires the person present (the macOS
     /// data-protection keychain, held by its custodian) qualifies. A
     /// same-user-readable key file proves nothing: any process running as
-    /// the user can mint grants. The key still seals integrity state either way.
+    /// the user can mint grants, and sign an edited mcp.json just as well,
+    /// so `MCPIntegrity` never reports such a file trusted either.
     public var honorsGrants: Bool
     /// True when using the key itself prompts for user presence at
     /// signing time (the custodian's data-protection keychain item), so
@@ -128,6 +129,14 @@ public struct MCPApprovalSigning: Sendable {
     public static let unavailable = MCPApprovalSigning(
         honorsGrants: false, status: { .unavailable }, mac: { _, _, _ in nil }, verify: { _, _, _ in .noKey })
 
+    /// True when the key is held where any process running as the user
+    /// can use it (Linux's 0600 file): nothing signed with it proves rv or
+    /// a person made it. `.unavailable` also refuses grants, but because
+    /// its holder could not be reached, not because of the platform.
+    public var custodyIsSameUser: Bool {
+        honorsGrants == false && status() != .unavailable
+    }
+
     /// Custodian-side adapter over a signer held by this process. Every
     /// operation loads the signer fresh, so what is judged is the key as
     /// read for that operation, never a cached copy.
@@ -157,8 +166,8 @@ public struct MCPApprovalSigning: Sendable {
     /// the custodian over XPC and fails closed when the custodian is
     /// unreachable or unverifiable. Linux has no OS secret store, so the
     /// key is a 0600 file in the rv config directory, which a process
-    /// running as the same user can read; approvals there fail closed
-    /// instead of trusting MACs anyone could mint.
+    /// running as the same user can read; approvals and mcp.json integrity
+    /// there fail closed instead of trusting MACs anyone could mint.
     public static func live(configDirectory: URL, home: String) -> MCPApprovalSigning {
         #if os(macOS)
         _ = configDirectory

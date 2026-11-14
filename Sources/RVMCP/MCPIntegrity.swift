@@ -9,10 +9,16 @@ public enum MCPIntegrityStatus: Sendable, Equatable {
     case trusted
     /// Changed outside rv, never signed, or no key to check it with.
     case untrusted(String)
+    /// The key is one any same-user process can read (a key file, as on
+    /// Linux without a custodian), so no
+    /// signature proves rv wrote the file. `rv mcp trust` cannot fix this.
+    case unsupportedPlatform
 
     public var isTrusted: Bool {
-        if case .untrusted = self { return false }
-        return true
+        switch self {
+        case .noConfiguration, .trusted: true
+        case .untrusted, .unsupportedPlatform: false
+        }
     }
 
     public var label: String {
@@ -20,19 +26,24 @@ public enum MCPIntegrityStatus: Sendable, Equatable {
         case .noConfiguration: "none"
         case .trusted: "trusted"
         case .untrusted: "untrusted"
+        case .unsupportedPlatform: "unsupported"
         }
     }
 
     public var problem: String? {
-        guard case .untrusted(let reason) = self else { return nil }
-        return "mcp.json was edited outside rv (\(reason)); review it, then run `rv mcp trust`"
+        switch self {
+        case .noConfiguration, .trusted: nil
+        case .untrusted(let reason): "mcp.json was edited outside rv (\(reason)); review it, then run `rv mcp trust`"
+        case .unsupportedPlatform: MCPPlatformSupport.trustUnavailable
+        }
     }
 }
 
 /// `~/.config/rv/mcp-integrity.json`: an HMAC of mcp.json's exact bytes,
 /// written by every rv write of mcp.json and by `rv mcp trust`. A process
 /// running as the user can still change mcp.json; it cannot make it look
-/// like rv wrote it.
+/// like rv wrote it. Where it can read the key too (`custodyIsSameUser`),
+/// the file is never trusted: `.unsupportedPlatform`.
 public enum MCPIntegrity {
     public static let fileName = "mcp-integrity.json"
     static let purpose = MCPMACPurpose.mcpJSON
@@ -57,6 +68,8 @@ public enum MCPIntegrity {
     /// two reads would verify one file and run another).
     public static func status(of data: Data?, configDirectory: URL, signing: MCPApprovalSigning) -> MCPIntegrityStatus {
         guard let data else { return .noConfiguration }
+        // Any same-user process could sign an edited file with this key.
+        guard signing.custodyIsSameUser == false else { return .unsupportedPlatform }
         guard signing.status() == .enrolled else { return .untrusted("rv has no approvals key to check it with") }
         guard case .success(let stored?) = OwnerOnlyFile.read(url(configDirectory), maximumBytes: 4096),
             let mac = (try? JSONValue.parse(stored))?["mcpJSON"]?.stringValue

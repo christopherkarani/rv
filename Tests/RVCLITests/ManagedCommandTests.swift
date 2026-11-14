@@ -90,13 +90,19 @@ struct ManagedCommandTests {
         let legacy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
         let plain = try ManagedPolicy.decode(Data(#"{"version":1}"#.utf8)).get()
         #if os(macOS)
+        // The hard flip requires sandboxes here, flag or not.
         let sandbox = "mcp: every local server must be sandboxed (remote servers are exempt)"
-        #else
-        let sandbox = "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
-        #endif
-        // The policy flag is legacy: the hard flip requires sandboxes either way.
         #expect(ManagedRun.restrictions(legacy) == [sandbox])
         #expect(ManagedRun.restrictions(plain) == [sandbox])
+        #else
+        // No cage: the flag refuses every local server.
+        #expect(ManagedRun.restrictions(legacy) == [
+            "mcp: no MCP server sandbox on this host, so every local server is refused here (remote servers are exempt)"
+        ])
+        #expect(ManagedRun.restrictions(plain) == [
+            "mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)"
+        ])
+        #endif
     }
 
     @Test func allowedSecretSourcesKeepTheirFileOrderInRestrictions() throws {
