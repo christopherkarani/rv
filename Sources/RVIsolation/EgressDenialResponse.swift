@@ -86,11 +86,13 @@ struct EgressDenialResponse: Sendable, Equatable {
     /// One sentence for the agent to relay. Constant per wire reason.
     var message: String {
         switch reason {
-        case .deniedPolicy where proposalID != nil:
-            return "rv blocked this connection under the egress policy and filed a review proposal the user can approve."
-        case .deniedPolicy:
-            return "rv blocked this connection under the egress policy for this runtime."
-        case .dialFailed:
+        case .deniedPolicy, .binaryMismatch, .unattributedPeer, .sniMismatch:
+            // Only denied-policy reaches here (see wireReason); the others
+            // share its text so no recorded case can be told apart.
+            return proposalID == nil
+                ? "rv blocked this connection under the egress policy for this runtime."
+                : "rv blocked this connection under the egress policy and filed a review proposal the user can approve."
+        case .dnsFailed, .addressFiltered, .dialFailed:
             return "rv's egress proxy could not reach the destination."
         case .headerTooLarge:
             return "rv's egress proxy refused the request because its headers exceed 64 KiB."
@@ -98,8 +100,6 @@ struct EgressDenialResponse: Sendable, Equatable {
             return "rv's egress proxy accepts only CONNECT host:port or an absolute http:// request."
         case .deniedCredential:
             return "rv's egress proxy requires this runtime's proxy credential; use the proxy URL rv provided unchanged."
-        default:
-            return "rv blocked this connection under the egress policy for this runtime."
         }
     }
 
@@ -109,9 +109,10 @@ struct EgressDenialResponse: Sendable, Equatable {
             return "rv egress approve \(proposalID)"
         }
         switch reason {
-        case .deniedPolicy, .dialFailed, .deniedCredential:
+        case .deniedPolicy, .binaryMismatch, .unattributedPeer, .sniMismatch,
+            .dnsFailed, .addressFiltered, .dialFailed, .deniedCredential:
             return "rv egress denials"
-        default:
+        case .headerTooLarge, .malformed:
             return nil
         }
     }
@@ -119,9 +120,12 @@ struct EgressDenialResponse: Sendable, Equatable {
     /// RFC 9209 error type for the wire reason.
     var proxyStatusError: String {
         switch reason {
-        case .dialFailed: return "destination_unavailable"
-        case .headerTooLarge, .malformed: return "http_request_error"
-        default: return "http_request_denied"
+        case .dnsFailed, .addressFiltered, .dialFailed:
+            return "destination_unavailable"
+        case .headerTooLarge, .malformed:
+            return "http_request_error"
+        case .deniedPolicy, .binaryMismatch, .unattributedPeer, .sniMismatch, .deniedCredential:
+            return "http_request_denied"
         }
     }
 

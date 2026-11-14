@@ -6,6 +6,7 @@ import Glibc
 import Dispatch
 import Foundation
 import RVDomain
+import RVPolicy
 import Synchronization
 import Testing
 @testable import RVIsolation
@@ -183,10 +184,8 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     let calls = DenyWireCalls()
     let proxy = EgressProxy(
         policy: denyWirePolicy, grants: nil, record: { _ in },
-        review: { denial in
-            calls.note(denial)
-            return denyWireProposal
-        })
+        review: denyWireHook(calls),
+        proposalWait: 30)
     let port = try proxy.start().get()
     defer { proxy.stop() }
     let raw = denyWireExchange(port: port, request: "CONNECT other.example:443 HTTP/1.1\r\n\r\n")
@@ -203,10 +202,7 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     let calls = DenyWireCalls()
     let proxy = EgressProxy(
         policy: .publicHTTPS, grants: nil, record: { _ in },
-        review: { denial in
-            calls.note(denial)
-            return denyWireProposal
-        },
+        review: denyWireHook(calls),
         resolve: { _, _ in [] })
     let port = try proxy.start().get()
     defer { proxy.stop() }
@@ -223,10 +219,7 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     let records = DenyWireCalls()
     let proxy = EgressProxy(
         policy: denyWirePolicy, grants: nil, record: { records.note($0) },
-        review: { _ in
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
-            return denyWireProposal
-        })
+        review: denyWireHook(DenyWireCalls(), answerAfter: nil))
     let port = try proxy.start().get()
     defer { proxy.stop() }
     let started = Date()
@@ -257,10 +250,7 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
         binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
         attribution: EgressRuntimeAttribution(binaryPath: "/opt/rv/bin/other"),
         record: { _ in },
-        review: { denial in
-            calls.note(denial)
-            return denyWireProposal
-        })
+        review: denyWireHook(calls))
     let mismatchPort = try mismatch.start().get()
     defer { mismatch.stop() }
     let unattributed = EgressProxy(
@@ -331,16 +321,36 @@ private func denyWireCandidate(_ text: String, port: Int) -> EgressDialCandidate
     }
 }
 
-private func denyWireAwait(_ calls: DenyWireCalls, count: Int) {
-    for _ in 0..<100 where calls.all.count < count {
-        usleep(50_000)
+
+/// Test review hook: records each call on the hook's own dispatch thread and
+/// answers `denyWireProposal` at once (`0`), after `answerAfter` seconds, or
+/// never (`nil`). No Swift concurrency, so a starved cooperative pool on a CI
+/// host cannot delay it.
+private func denyWireHook(_ calls: DenyWireCalls, answerAfter delay: TimeInterval? = 0) -> EgressReviewHook {
+    { denial, answer in
+        calls.note(denial)
+        guard let delay else { return }
+        if delay == 0 {
+            answer(denyWireProposal)
+        } else {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { answer(denyWireProposal) }
+        }
+    }
+}
+
+/// Waits for the condition, not a fixed budget: intake runs off the serve
+/// thread and a loaded host may take seconds to schedule it.
+private func denyWireAwait(_ calls: DenyWireCalls, count: Int, seconds: TimeInterval = 30) {
+    let deadline = Date().addingTimeInterval(seconds)
+    while calls.all.count < count, Date() < deadline {
+        usleep(20_000)
     }
 }
 
 // Oracle: on a binary-scoped instance a binary-gate denial never mints a
-// proposal, so a passing binary's policy denials must not carry one either
-// (intake still runs, without the wait).
-@Test func binaryScopedInstanceWithholdsProposalIDs() throws {
+// proposal, so a passing binary's policy denials must not carry one either,
+// nor wait for one (the wait itself would be the tell). Intake still runs.
+@Test func binaryScopedInstanceWithholdsProposalIDsWithoutWaiting() throws {
     let request = "CONNECT other.example:443 HTTP/1.1\r\n\r\n"
     let plain = EgressProxy(policy: denyWirePolicy, grants: nil, record: { _ in })
     let plainPort = try plain.start().get()
@@ -351,21 +361,24 @@ private func denyWireAwait(_ calls: DenyWireCalls, count: Int) {
         size: 128, mtimeSeconds: 1_700_000_000, mtimeNanoseconds: 0,
         ctimeSeconds: 1_700_000_000, ctimeNanoseconds: 0, device: 1, inode: 7)
     let calls = DenyWireCalls()
+    // A hook that never answers plus a long wait: any wait would show.
     let scoped = EgressProxy(
         policy: denyWirePolicy, grants: nil,
         binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
         attribution: EgressRuntimeAttribution(binaryPath: "/opt/rv/bin/agent"),
         pins: EgressBinaryPinCache(fingerprint: { _ in fingerprint }, hashFile: { _ in "golden" }),
         record: { _ in },
-        review: { denial in
-            calls.note(denial)
-            return denyWireProposal
-        })
+        review: denyWireHook(calls, answerAfter: nil),
+        proposalWait: 10)
+    #expect(scoped.advertisesProposals == false)
     let scopedPort = try scoped.start().get()
     defer { scoped.stop() }
+    let started = Date()
     let bytes = denyWireExchange(port: scopedPort, request: request)
+    let elapsed = Date().timeIntervalSince(started)
     #expect(baseline.isEmpty == false)
     #expect(bytes == baseline)
+    #expect(elapsed < 5, "binary-scoped deny waited \(elapsed)s")
     denyWireAwait(calls, count: 1)
     #expect(calls.all.map(\.reason) == [.deniedPolicy])
 }
@@ -376,11 +389,7 @@ private func denyWireAwait(_ calls: DenyWireCalls, count: Int) {
     let calls = DenyWireCalls()
     let proxy = EgressProxy(
         policy: denyWirePolicy, grants: nil, record: { _ in },
-        review: { denial in
-            calls.note(denial)
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
-            return denyWireProposal
-        })
+        review: denyWireHook(calls, answerAfter: nil))
     let port = try proxy.start().get()
     defer { proxy.stop() }
     let flood = 3 * EgressProxy.maximumProposalWaiters
@@ -398,4 +407,106 @@ private func denyWireAwait(_ calls: DenyWireCalls, count: Int) {
     #expect(elapsed < 10, "flood took \(elapsed)s")
     denyWireAwait(calls, count: flood)
     #expect(calls.all.count == flood)
+}
+
+// MARK: - Approve, then retry: the body promises only what approval does.
+
+private func denyWireExchangeOffPool(port: Int, request: String) async -> [UInt8] {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            continuation.resume(returning: denyWireExchange(port: port, request: request))
+        }
+    }
+}
+
+private struct DenyWireReview {
+    let store: PendingApprovalStore
+    let queue: NetworkReviewQueue
+    let hook: EgressReviewHook
+
+    init(named name: String) throws {
+        let config = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-deny-wire-\(name)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let directory = try #require(WorkingDirectory(validating: "/tmp/rv-review-ws"))
+        let workspace = WorkspaceSessionID()
+        let queue = NetworkReviewQueue(configDirectory: config)
+        self.store = PendingApprovalStore(baseDirectory: config)
+        self.queue = queue
+        self.hook = { denial, answer in
+            Task {
+                let id = await queue.noteDenial(
+                    denial, workspace: workspace, workspaceDirectory: directory, now: Date())
+                answer(id?.rawValue)
+            }
+        }
+    }
+
+    /// Owner-side approval of one row, then the supervisor's sweep step.
+    func approve(_ id: String, into proxy: EgressProxy) async throws {
+        let now = Date()
+        let row = try #require(try await store.load(id: ApprovalID(rawValue: id), now: now))
+        _ = try await store.resolve(
+            id: row.id, decision: .allowOnce, fingerprint: row.fingerprint, identity: row.identity, now: now)
+        let update = try #require(await queue.applyResolved(now: now))
+        _ = proxy.updateSupplement(update.rules, generation: update.generation)
+    }
+
+    func awaitingIDs() async throws -> [String] {
+        let deadline = Date().addingTimeInterval(30)
+        while true {
+            let rows = try await store.list(now: Date()).map(\.id.rawValue)
+            if rows.isEmpty == false || Date() > deadline { return rows }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+}
+
+// Open instance (enforces live rules): the body names the proposal, and
+// approving exactly that id admits the retry without a restart.
+@Test func advertisedApprovalTakesEffectOnRetry() async throws {
+    let review = try DenyWireReview(named: "open")
+    let proxy = EgressProxy(
+        policy: denyWirePolicy, grants: nil, record: { _ in },
+        review: review.hook, proposalWait: 30, resolve: { _, _ in [] })
+    #expect(proxy.advertisesProposals)
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let request = "CONNECT other.example:443 HTTP/1.1\r\n\r\n"
+    let first = try #require(DenyWireResponse(await denyWireExchangeOffPool(port: port, request: request)))
+    let body = try #require(first.json)
+    let id = try #require(body["proposal_id"] as? String)
+    #expect(body["next_step"] as? String == "rv egress approve \(id)")
+    try await review.approve(id, into: proxy)
+    // Policy now admits; the injected resolver answers nothing, so the
+    // retry fails at dial, not at policy.
+    let retry = try #require(DenyWireResponse(await denyWireExchangeOffPool(port: port, request: request)))
+    #expect(retry.json?["reason"] as? String == "dial-failed")
+}
+
+// Credentialed instance (production per-runtime proxies ignore live rules):
+// the proposal is still filed, but the body never names it, because
+// approving it does not change this instance's verdict.
+@Test func credentialedInstanceNeverAdvertisesAnApprovalThatCannotApply() async throws {
+    let review = try DenyWireReview(named: "credentialed")
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        policy: .publicHTTPS,
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: denyWirePolicy)],
+        record: { _ in },
+        review: review.hook, proposalWait: 30, resolve: { _, _ in [] })
+    #expect(proxy.advertisesProposals == false)
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let request = "CONNECT other.example:443 HTTP/1.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\n\r\n"
+    let first = try #require(DenyWireResponse(await denyWireExchangeOffPool(port: port, request: request)))
+    #expect(first.json?["reason"] as? String == "denied-policy")
+    #expect(first.json?["proposal_id"] == nil)
+    #expect(first.json?["next_step"] as? String == "rv egress denials")
+    let filed = try await review.awaitingIDs()
+    let id = try #require(filed.first)
+    try await review.approve(id, into: proxy)
+    let retry = try #require(DenyWireResponse(await denyWireExchangeOffPool(port: port, request: request)))
+    #expect(retry.json?["reason"] as? String == "denied-policy")
+    #expect(retry.json?["proposal_id"] == nil)
 }

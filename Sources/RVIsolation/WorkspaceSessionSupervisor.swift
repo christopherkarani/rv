@@ -1479,19 +1479,24 @@ final class WorkspaceSessionSupervisor: Sendable {
 
     /// Review-queue intake for one per-runtime proxy, beside the denial log
     /// (production or the injected test recorder), which it never replaces.
-    /// The proxy calls it for `denied-policy` refusals only and names the
-    /// returned proposal id in the refusal body. Nil without a queue.
-    private func makeEgressReview() -> (@Sendable (EgressProxyDenial) async -> String?)? {
+    /// The proxy calls it for `denied-policy` refusals only. These proxies
+    /// are credentialed, so they file the proposal but never name its id in
+    /// the refusal body: approvals do not reach them live (see
+    /// `EgressProxy.advertisesProposals`). Nil without a queue.
+    private func makeEgressReview() -> EgressReviewHook? {
         guard let queue = reviewQueue else { return nil }
         let workspaceID = id
         let workspaceDirectory = original
-        return { denial in
-            await queue.noteDenial(
-                denial,
-                workspace: workspaceID,
-                workspaceDirectory: workspaceDirectory,
-                now: Date()
-            )?.rawValue
+        return { denial, answer in
+            Task {
+                let id = await queue.noteDenial(
+                    denial,
+                    workspace: workspaceID,
+                    workspaceDirectory: workspaceDirectory,
+                    now: Date()
+                )
+                answer(id?.rawValue)
+            }
         }
     }
 

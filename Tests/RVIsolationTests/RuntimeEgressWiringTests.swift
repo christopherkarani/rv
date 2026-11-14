@@ -24,7 +24,7 @@ import Testing
 ///
 /// Hermetic: denials land in an injected in-memory collector (never the real
 /// `~/.config`) and every workspace opens with a nil review queue, except
-/// `policyRefusalNamesTheQueuedProposal`, whose queue writes into its own
+/// `policyRefusalFilesProposalButNamesNoApproval`, whose queue writes into its own
 /// test tree. Serialized: the tests spawn real runtimes.
 @Suite("Per-runtime egress wiring", .serialized)
 struct RuntimeEgressWiringTests {
@@ -117,10 +117,12 @@ struct RuntimeEgressWiringTests {
         #expect(reasons.filter({ $0 == .deniedPolicy }).count == 1)
     }
 
-    /// The supervisor's review hook reaches the refusal body: a policy deny
-    /// names the proposal the queue holds, as the exact approve command.
-    /// The queue writes into the test tree, never the real config.
-    @Test func policyRefusalNamesTheQueuedProposal() async throws {
+    /// Production per-runtime proxies are credentialed and ignore live
+    /// rules, so a policy refusal must not name an approval that would not
+    /// take effect: the body points at `rv egress denials`, while the
+    /// supervisor's review hook still files the proposal. The queue writes
+    /// into the test tree, never the real config.
+    @Test func policyRefusalFilesProposalButNamesNoApproval() async throws {
         let collector = WiringDenialCollector()
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -140,27 +142,24 @@ struct RuntimeEgressWiringTests {
         )
         let proxy = try #require(supervisor.egressProxy(for: runtime.session.id))
         let credential = try #require(supervisor.egressCredential(for: runtime.session.id))
-        // The first intake may outlive the bounded wait on a loaded host;
-        // the retry storm dedupes onto the same row, so retry until named.
-        var proposalID: String?
-        for _ in 0..<10 where proposalID == nil {
-            let reply = wiringStatus(port: proxy.port, credential: credential, host: "denied.example", port: 22)
-            #expect(reply.hasPrefix("HTTP/1.1 403 Forbidden"))
-            guard let start = reply.range(of: "\r\n\r\n")?.upperBound,
-                let body = try? JSONSerialization.jsonObject(with: Data(reply[start...].utf8)) as? [String: Any]
-            else {
-                Issue.record("refusal carried no JSON body: \(reply)")
-                return
-            }
-            #expect(body["reason"] as? String == "denied-policy")
-            proposalID = body["proposal_id"] as? String
-            if let proposalID {
-                #expect(body["next_step"] as? String == "rv egress approve \(proposalID)")
-            }
+        #expect(proxy.advertisesProposals == false)
+        let reply = wiringStatus(port: proxy.port, credential: credential, host: "denied.example", port: 22)
+        #expect(reply.hasPrefix("HTTP/1.1 403 Forbidden"))
+        let start = try #require(reply.range(of: "\r\n\r\n")?.upperBound)
+        let body = try #require(
+            try? JSONSerialization.jsonObject(with: Data(reply[start...].utf8)) as? [String: Any])
+        #expect(body["reason"] as? String == "denied-policy")
+        #expect(body["proposal_id"] == nil)
+        #expect(body["next_step"] as? String == "rv egress denials")
+        // Intake runs off the serve thread; wait for the row, not a budget.
+        let store = PendingApprovalStore(baseDirectory: reviewDirectory)
+        let deadline = Date().addingTimeInterval(30)
+        var rows = try await store.list(now: Date())
+        while rows.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            rows = try await store.list(now: Date())
         }
-        let id = try #require(proposalID)
-        let rows = try await PendingApprovalStore(baseDirectory: reviewDirectory).list(now: Date())
-        #expect(rows.map(\.id.rawValue) == [id])
+        #expect(rows.map(\.fingerprint.rawValue) == ["egress:denied.example:22"])
     }
 
     @Test func unauthenticatedLoopbackGetsNothing() throws {
