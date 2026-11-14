@@ -185,6 +185,22 @@ struct MCPHostConfigCorpusTests {
         }
     }
 
+    /// Through the product door, a host mutation hidden by quoting the shell
+    /// tokenizer misreads (an escaped quote or blank, zsh `=(…)` or `=cmd`)
+    /// does not allow while the gateway is in use.
+    @Test("misread quoting does not hide a host mutation", arguments: [
+        "watch \"sh -c \\\"claude mcp add evil -- x\\\"\"",
+        "watch 'sh -c '\\''claude mcp add evil -- x'\\'''",
+        "watch claude\\ mcp\\ add\\ evil -- x",
+        "cat =(claude mcp add evil -- x)",
+        "=claude mcp add evil -- x",
+    ])
+    func misreadQuotingDoesNotHideAHostMutation(command: String) throws {
+        let harness = try StressHarness.dayOne()
+        let result = door(harness, command, guarded: true)
+        #expect(result.decision != .allow, "\(command): \(describeDecision(result))")
+    }
+
     /// A long quoted argument is judged by what it names, not its size: one
     /// past the guard's per-text cap with no host word judges as with the
     /// guard off; the same text naming a host mutation does not allow.
@@ -213,6 +229,8 @@ struct MCPHostConfigCorpusTests {
         "git tag -a v1 -m 'mcp install notes'", "grep -n 'mcp install' README.md",
         "echo 'remember to mcp install later'", "grep mcp install notes.txt",
         "gh pr create --title 'mcp install docs' --body 'run mcp install srv'",
+        "make --directory mcp install", "npm -w mcp install lodash", "bun --cwd mcp install",
+        "git commit -m \"fix \\\"mcp install\\\" docs\"",
     ])
     func guardDoesNotTouchUnrelatedCommands(command: String) throws {
         let harness = try StressHarness.dayOne()

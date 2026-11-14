@@ -114,6 +114,20 @@ struct MCPHostCLITextTests {
         "nsenter -t 1 -w mcp install srv",
         "chronic -C mcp install srv",
         "echo 'chronic --dir mcp install srv' | sh",
+        // Only the tool's own value-taking options: a flag (`pnpm -w`, `make
+        // -w`), another tool's option, or a tool not listed leaves `mcp` a
+        // command that may run.
+        "pnpm -w mcp install srv",
+        "pnpm -F mcp install srv",
+        "make -w mcp install srv",
+        "bun -C mcp install srv",
+        "yarn --cwd mcp install srv",
+        // A top-level program named like an option is not a re-split.
+        "-x -C mcp install srv",
+        // `--` before the subcommand.
+        "mcp -- install srv",
+        "chronic mcp -- install srv",
+        "echo 'mcp -- install srv' | sh",
     ])
     func runnableMCPInstallAsks(command: String) {
         #expect(judge(command), "\(command)")
@@ -134,6 +148,18 @@ struct MCPHostCLITextTests {
         "make -C mcp install",
         "pnpm --filter mcp install",
         "npm --prefix mcp install lodash",
+        "make --directory mcp install",
+        "npm -w mcp install lodash",
+        "npm -C mcp install lodash",
+        "pnpm -C mcp install",
+        "pnpm --dir mcp install",
+        "bun --cwd mcp install",
+        "bun -F mcp install",
+        "git commit -m 'run mcp -- install srv'",
+        // Escapes the tokenizer misreads, on a line nothing runs: its program
+        // and subcommand are read exactly and never run their operands.
+        "git commit -m \"fix \\\"mcp install\\\" docs\"",
+        "grep -n \"\\\"mcp install\\\"\" notes.txt",
     ])
     func inertMCPInstallIsLeftAlone(command: String) {
         #expect(judge(command) == false, "\(command)")
@@ -152,12 +178,50 @@ struct MCPHostCLITextTests {
         #expect(judge(command), "\(command)")
     }
 
+    /// Text the tokenizer splits or quotes unlike a shell (a backslash before
+    /// a quote or a blank, `\'` in `$'…'`, zsh `=(…)`) that may name a host
+    /// asks, unless the line is inert. A backslash in an inert line's program
+    /// or subcommand, or any parenthesis, makes it not inert.
+    @Test("text the tokenizer cannot follow asks", arguments: [
+        "watch \"sh -c \\\"claude mcp add evil -- x\\\"\"",
+        "watch 'sh -c '\\''claude mcp add evil -- x'\\'''",
+        "watch claude\\ mcp\\ add\\ evil",
+        "echo $'claude mcp add \\'x\\'' | sh",
+        "cat =(claude mcp add x)",
+        "grep -n x =(mcp install srv)",
+        "=claude mcp add evil -- x",
+        "git commit -m \"fix \\\"mcp install\\\" docs\" && true",
+        "git c\\ommit -m 'mcp install srv'",
+    ])
+    func unfollowableTextAsks(command: String) {
+        #expect(judge(command), "\(command)")
+    }
+
+    /// The `'\''` nesting the tokenizer cannot follow asks as unfollowable
+    /// text, whatever its depth: the tokenizer keeps the backslash, so each
+    /// level would split into words and never reach the depth cap.
+    @Test func misquotedNestingAsksAsUnfollowable() {
+        var command = "watch xmcp end"
+        for _ in 0..<(HostTextReads.maxDepth + 2) {
+            command = "watch '" + command.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        var reads = HostTextReads()
+        #expect(judge(command, &reads))
+        #expect(reads.unfollowable)
+        #expect(hasUnfollowableShellText("watch 'a '\\''b'\\'''"))
+        #expect(hasUnfollowableShellText("echo \"a \\\"b\\\"\""))
+        #expect(hasUnfollowableShellText("a\\ b"))
+        #expect(hasUnfollowableShellText("echo $'a \\'b'"))
+        #expect(hasUnfollowableShellText("cat =(true)"))
+        #expect(hasUnfollowableShellText("echo 'a\\ b' \"a\\$b\" $'a\\x27b' a\\\nb") == false)
+    }
+
     /// Past the read budget or the nesting depth, a read counts (fail closed).
     @Test func exhaustedBudgetCounts() {
-        let reads = HostTextReads()
+        var reads = HostTextReads()
         var counted = false
-        for index in 0...HostTextReads.maxReads where reads.runsHostMCPMutation("xmcp a\(index)") {
-            counted = true
+        for index in 0...HostTextReads.maxReads {
+            if reads.runsHostMCPMutation("xmcp a\(index)") { counted = true }
         }
         #expect(counted)
         #expect(reads.exceeded)
@@ -167,9 +231,9 @@ struct MCPHostCLITextTests {
     /// Program text that holds a stem spends one piece per piece. (This
     /// counts pieces charged, not the work done per piece.)
     @Test func programTextSpendsOnePiecePerPiece() {
-        let reads = HostTextReads()
+        var reads = HostTextReads()
         let text = ((0..<999).map { "w\($0)" } + ["config"]).joined(separator: " ")
-        #expect(textNamesHostMCPMutation(text, reads: reads) == false)
+        #expect(textNamesHostMCPMutation(text, reads: &reads) == false)
         #expect(reads.piecesExamined == 1_000)
         #expect(reads.exceeded == false)
     }
@@ -177,29 +241,29 @@ struct MCPHostCLITextTests {
     /// Text no piece of which holds a stem cannot name a host mutation: it
     /// spends nothing and is never refused for its size.
     @Test func stemFreeTextSpendsNothing() {
-        let reads = HostTextReads()
+        var reads = HostTextReads()
         let text = (0..<5_000).map { "w\($0)" }.joined(separator: " ")
-        #expect(textNamesHostMCPMutation(text, reads: reads) == false)
+        #expect(textNamesHostMCPMutation(text, reads: &reads) == false)
         #expect(reads.piecesExamined == 0)
         #expect(reads.exceeded == false)
         // A stem reached only by decoding a package spec still counts.
-        #expect(textNamesHostMCPMutation(text + " install-%6dcp", reads: reads))
+        #expect(textNamesHostMCPMutation(text + " install-%6dcp", reads: &reads))
     }
 
     /// One text over the per-text cap, or texts over the total cap, count.
     @Test func programTextPastItsCapsCounts() {
-        let one = HostTextReads()
+        var one = HostTextReads()
         let huge = ((0..<HostTextReads.maxTokenPieces).map { "w\($0)" } + ["config"]).joined(separator: " ")
-        #expect(textNamesHostMCPMutation(huge, reads: one))
+        #expect(textNamesHostMCPMutation(huge, reads: &one))
         #expect(one.exceeded)
         #expect(one.piecesExamined == 0)
 
-        let all = HostTextReads()
+        var all = HostTextReads()
         let size = HostTextReads.maxTokenPieces
         var counted = false
         for round in 0...(HostTextReads.maxPieces / size) {
             let text = ((0..<(size - 1)).map { "r\(round)w\($0)" } + ["config"]).joined(separator: " ")
-            if textNamesHostMCPMutation(text, reads: all) {
+            if textNamesHostMCPMutation(text, reads: &all) {
                 counted = true
                 break
             }
@@ -211,8 +275,8 @@ struct MCPHostCLITextTests {
 
     /// The raw-word scan spends each distinct word once across its views.
     @Test func rawWordScanSpendsEachWordOnce() {
-        let reads = HostTextReads()
-        #expect(hostMCPTextNamesMutation("echo 'a b config'", reads: reads) == false)
+        var reads = HostTextReads()
+        #expect(hostMCPTextNamesMutation("echo 'a b config'", reads: &reads) == false)
         #expect(reads.piecesExamined == 3)
     }
 
@@ -220,22 +284,31 @@ struct MCPHostCLITextTests {
     /// read budget and ask.
     @Test func guardAsksWhenItsBudgetRunsOut() {
         let many = "echo " + (0..<600).map { "'xmcp a\($0)'" }.joined(separator: " ") + " | sh"
-        let reads = HostTextReads()
-        #expect(judge(many, reads))
+        var reads = HostTextReads()
+        #expect(judge(many, &reads))
         #expect(reads.exceeded)
         #expect(reads.readsDone == HostTextReads.maxReads)
     }
 
-    /// Through the guard: quoting nested past `maxDepth` asks.
-    @Test func guardAsksPastTheDepthCap() {
-        var command = "watch xmcp end"
+    /// Through the guard: quoting nested past `maxDepth` asks, whatever
+    /// sits at the bottom, a real host mutation included. Each level is an
+    /// ANSI-C string the tokenizer follows exactly (`\x5c`, `\x27` and
+    /// `\x20` for the backslash, quote and blank of the level inside).
+    @Test("quoting nested past the depth cap asks", arguments: ["watch xmcp end", "claude mcp add x -- y"])
+    func guardAsksPastTheDepthCap(bottom: String) {
+        var command = bottom
         for _ in 0..<(HostTextReads.maxDepth + 2) {
-            command = "watch '" + command.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            let escaped = command
+                .replacingOccurrences(of: "\\", with: "\\x5c")
+                .replacingOccurrences(of: "'", with: "\\x27")
+                .replacingOccurrences(of: " ", with: "\\x20")
+            command = "watch $'" + escaped + "'"
         }
-        let reads = HostTextReads()
-        #expect(judge(command, reads))
-        #expect(reads.depthExceeded)
-        #expect(reads.readsDone < HostTextReads.maxReads)
+        var reads = HostTextReads()
+        #expect(judge(command, &reads), "\(command)")
+        #expect(reads.depthExceeded, "\(command)")
+        #expect(reads.unfollowable == false, "\(command)")
+        #expect(reads.readsDone < HostTextReads.maxReads, "\(command)")
     }
 
     /// Through the guard, long text is judged by what it names, not its
@@ -244,8 +317,8 @@ struct MCPHostCLITextTests {
     @Test func guardJudgesLongTextByWhatItNames() {
         let words = (0..<5_000).map { "w\($0)" }
         let line = "claude mcp add x -- y"
-        let plain = HostTextReads()
-        #expect(judge("grep '" + words.joined(separator: " ") + "' notes.txt", plain) == false)
+        var plain = HostTextReads()
+        #expect(judge("grep '" + words.joined(separator: " ") + "' notes.txt", &plain) == false)
         #expect(plain.piecesExamined == 0)
         let middle = Array(words[..<2_500]) + [line] + Array(words[2_500...])
         #expect(judge("grep '" + middle.joined(separator: " ") + "' notes.txt"))
@@ -255,19 +328,25 @@ struct MCPHostCLITextTests {
 
         // 20 words of 3,500 pieces each: 70,000 in all, past `maxPieces`.
         let wide = (0..<20).map { word in (0..<3_500).map { "r\(word)w\($0)" } }
-        let stemFree = HostTextReads()
+        var stemFree = HostTextReads()
         let unnamed = wide.map { $0.joined(separator: ",") }
-        #expect(judge("grep " + unnamed.joined(separator: " ") + " notes.txt", stemFree) == false)
+        #expect(judge("grep " + unnamed.joined(separator: " ") + " notes.txt", &stemFree) == false)
         #expect(stemFree.piecesExamined == 0)
-        let stemmed = HostTextReads()
+        var stemmed = HostTextReads()
         let named = wide.map { (Array($0.dropLast()) + ["config"]).joined(separator: ",") }
-        #expect(judge("grep " + named.joined(separator: " ") + " notes.txt", stemmed))
+        #expect(judge("grep " + named.joined(separator: " ") + " notes.txt", &stemmed))
         #expect(stemmed.exceeded)
     }
 }
 
 /// The guard's verdict on `command`: true asks.
-private func judge(_ command: String, _ reads: HostTextReads = HostTextReads()) -> Bool {
+private func judge(_ command: String) -> Bool {
+    var reads = HostTextReads()
+    return judge(command, &reads)
+}
+
+/// The guard's verdict on `command`, spending `reads`: true asks.
+private func judge(_ command: String, _ reads: inout HostTextReads) -> Bool {
     let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
-    return mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context, reads: reads)
+    return mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context, reads: &reads)
 }

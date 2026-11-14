@@ -1,15 +1,16 @@
 import Foundation
 
 /// The one work budget for reading text as command lines while judging one
-/// command for the MCP host config guard. Each distinct text is read once;
-/// at most `maxReads` texts are read and `maxDepth` quoting levels nested,
-/// and a read past either counts as a mutation (fail closed). Text no
-/// decoding of which names a host CLI, a group or an installer
-/// (`mayNameHostMCP`) is never read, so ordinary commands spend nothing.
-/// Text scanned as program text (`textNamesHostMCPMutation`) that holds a
-/// stem spends pieces: at most `maxTokenPieces` in one text and `maxPieces`
-/// in all.
-final class HostTextReads {
+/// command for the MCP host config guard, passed `inout` down every read.
+/// Each distinct text is read once; at most `maxReads` texts are read and
+/// `maxDepth` quoting levels nested, and a read past either counts as a
+/// mutation (fail closed). Text no decoding of which names a host CLI, a
+/// group or an installer (`mayNameHostMCP`) is never read, so ordinary
+/// commands spend nothing. Text the shell tokenizer cannot follow
+/// (`hasUnfollowableShellText`) that may name one counts too. Text scanned
+/// as program text (`textNamesHostMCPMutation`) that holds a stem spends
+/// pieces: at most `maxTokenPieces` in one text and `maxPieces` in all.
+struct HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
     static let maxTokenPieces = 4_096
@@ -26,11 +27,18 @@ final class HostTextReads {
     private(set) var exceeded = false
     /// The cap reached was the nesting depth.
     private(set) var depthExceeded = false
+    /// Some text counted because the tokenizer cannot follow it.
+    private(set) var unfollowable = false
     /// The read in progress is text nothing runs (`dataOnly`).
     private(set) var inert = false
+    /// The read in progress re-splits operands already judged in their own
+    /// command (`joinedReadsRun`).
+    private(set) var resplit = false
+
+    init() {}
 
     /// Spends `count` pieces of one text; false (and `exceeded`) past a cap.
-    func examine(pieces count: Int) -> Bool {
+    mutating func examine(pieces count: Int) -> Bool {
         guard count <= Self.maxTokenPieces, piecesExamined + count <= Self.maxPieces else {
             exceeded = true
             return false
@@ -39,34 +47,54 @@ final class HostTextReads {
         return true
     }
 
+    /// Records text that counted because the tokenizer cannot follow it.
+    mutating func noteUnfollowable() {
+        unfollowable = true
+    }
+
     /// Whether `text`, read as a command line, runs a host MCP mutation. A
     /// `nested` read is a word's own quoting level: its words and joined
     /// tails are read in turn (`carriesHostMCPText`). A flat read is a
     /// re-split of words already read one by one (a joined tail): only its
     /// commands are judged. A `dataOnly` read is text nothing runs
-    /// (`isInertLine`, `isNonExecutor`); reads inside it are data too.
-    func runsHostMCPMutation(_ text: String, nested: Bool = true, dataOnly: Bool = false) -> Bool {
+    /// (`isInertLine`, `isNonExecutor`); reads inside it are data too. Text
+    /// that runs and that the tokenizer cannot follow counts.
+    mutating func runsHostMCPMutation(
+        _ text: String, nested: Bool = true, dataOnly: Bool = false, resplit splitting: Bool = false
+    ) -> Bool {
         let reading = inert || dataOnly
-        let key = (nested ? "n" : "f") + (reading ? "d" : "r") + text
+        let key = (nested ? "n" : "f") + (reading ? "d" : "r") + (splitting ? "s" : "w") + text
         guard mayNameHostMCP(text), seen.insert(key).inserted else { return false }
         guard remaining > 0, depth < Self.maxDepth else {
             exceeded = true
             if depth >= Self.maxDepth { depthExceeded = true }
             return true
         }
+        if reading == false, hasUnfollowableShellText(text) {
+            unfollowable = true
+            return true
+        }
         remaining -= 1
         readsDone += 1
-        let outer = inert
+        let outerInert = inert
+        let outerResplit = resplit
         inert = reading
+        resplit = splitting
         if nested { depth += 1 }
         defer {
             if nested { depth -= 1 }
-            inert = outer
+            inert = outerInert
+            resplit = outerResplit
         }
         let launched = launchedCommandHeads(text)
         if launched.contains(where: \.truncated) { return true }
-        if launched.contains(where: { isHostMCPMutation($0, reads: self) }) { return true }
-        return nested && carriesHostMCPText(launched, reads: self)
+        for command in launched {
+            if isHostMCPMutation(command, reads: &self) { return true }
+        }
+        guard nested else { return false }
+        // Words carried inside this text are not re-splits.
+        resplit = false
+        return carriesHostMCPText(launched, reads: &self)
     }
 }
 
@@ -84,8 +112,8 @@ final class HostTextReads {
 /// Given the top-level `line`, text nothing runs is read as data: the
 /// words, joined operands and output of a command that never runs its
 /// operands (`isNonExecutor`), alone on a line with no pipe, list,
-/// redirect, here-string or substitution (`isInertLine`).
-func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads, line: String? = nil) -> Bool {
+/// redirect, here-string, substitution or parenthesis (`isInertLine`).
+func carriesHostMCPText(_ launched: [LaunchedCommand], reads: inout HostTextReads, line: String? = nil) -> Bool {
     let lineInert = line.map { isInertLine($0, launched) } ?? false
     var printed: [String] = []
     for command in launched where command.speculative == false && command.truncated == false {
@@ -99,9 +127,8 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads, lin
         let dataOnly = lineInert && isNonExecutor(command)
         for word in args + values {
             for variant in Set([word, word.ansiCDecodedIfMarked, decodedWord(word)])
-            where variant.contains(where: \.isWhitespace) && reads.runsHostMCPMutation(variant, dataOnly: dataOnly)
-            {
-                return true
+            where variant.contains(where: \.isWhitespace) {
+                if reads.runsHostMCPMutation(variant, dataOnly: dataOnly) { return true }
             }
         }
         var tails = [args]
@@ -111,34 +138,88 @@ func carriesHostMCPText(_ launched: [LaunchedCommand], reads: HostTextReads, lin
             if name == "printf" { tails.append(Array(operands.dropFirst())) }
             printed.append(contentsOf: operands)
         }
-        for tail in tails where tail.isEmpty == false && joinedReadsRun(tail, reads, dataOnly: dataOnly) {
-            return true
+        for tail in tails where tail.isEmpty == false {
+            if joinedReadsRun(tail, &reads, dataOnly: dataOnly) { return true }
         }
         let argv = [command.head] + args
         let decoded = argv.map(\.ansiCDecodedIfMarked)
         if decoded != argv, reads.runsHostMCPMutation(decoded.joined(separator: " "), nested: false) { return true }
     }
-    return printed.isEmpty == false
-        && joinedReadsRun(printed, reads, dataOnly: lineInert && launched.allSatisfy(isNonExecutor))
+    guard printed.isEmpty == false else { return false }
+    return joinedReadsRun(printed, &reads, dataOnly: lineInert && launched.allSatisfy(isNonExecutor))
+}
+
+/// Whether `raw` counts because the tokenizer cannot follow it
+/// (`hasUnfollowableShellText`) and it may name a host CLI. An inert line
+/// does not: nothing on it runs, and its program and the words
+/// `isNonExecutor` reads are read exactly (`isInertLine`).
+func hostMCPTextIsUnfollowable(_ raw: String, _ launched: [LaunchedCommand], reads: inout HostTextReads) -> Bool {
+    guard hasUnfollowableShellText(raw), mayNameHostMCP(raw) else { return false }
+    if isInertLine(raw, launched), launched.allSatisfy(isNonExecutor) { return false }
+    reads.noteUnfollowable()
+    return true
 }
 
 /// A line whose text nothing runs: one command, plainly named (no dynamic
-/// head, launcher guess or truncation), with no assignment or redirect, and
-/// no pipe, list, background, substitution, redirect or here-string
-/// character anywhere in it (a quoted one counts too: fail closed).
+/// head, launcher, launcher guess or truncation), with no assignment or
+/// redirect, and no pipe, list, background, substitution, redirect,
+/// here-string, newline or parenthesis character anywhere in it (a quoted
+/// one counts too: fail closed; `(` covers zsh `=(…)`, process
+/// substitution and glob qualifiers). Its program and the subcommand words
+/// `isNonExecutor` reads must be its first words, with no backslash: the
+/// tokenizer reads every word before the first backslash exactly.
 private func isInertLine(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
     guard launched.count == 1, let command = launched.first,
           command.speculative == false, command.truncated == false, command.headIsDynamic == false,
           command.redirects.isEmpty, command.assignments.isEmpty
     else { return false }
-    return raw.contains(where: { "|&;<>`\n".contains($0) }) == false && raw.contains("$(") == false
+    guard raw.contains(where: { "|&;<>`\n()".contains($0) }) == false else { return false }
+    let subcommandWords = ["git": 1, "gh": 2][commandName(command.head)] ?? 0
+    let leading = ShellPipeline.tokenize(raw).prefix(1 + subcommandWords)
+    return leading.first?.lexeme == command.head && leading.allSatisfy { $0.lexeme.contains("\\") == false }
 }
 
-/// `words` joined into one command line, as written and decoded, read flat.
-private func joinedReadsRun(_ words: [String], _ reads: HostTextReads, dataOnly: Bool = false) -> Bool {
-    Set([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]).contains {
-        reads.runsHostMCPMutation($0, nested: false, dataOnly: dataOnly)
+/// Whether `ShellPipeline.tokenize` may split or quote `text` differently
+/// from a shell, so its words cannot be trusted: a backslash escape it
+/// keeps as text where the shell does not (outside single quotes, a
+/// backslash before a quote or a blank, as in `'\''`, `"a \"b\""` or
+/// `a\ b`; `\'` inside `$'…'`), or a zsh `=(…)` process substitution,
+/// which runs its text with none of the characters the splitter knows.
+func hasUnfollowableShellText(_ text: String) -> Bool {
+    if text.contains("=(") { return true }
+    enum Quote { case bare, single, double, ansi }
+    var quote = Quote.bare
+    var previous: Character?
+    var iterator = text.makeIterator()
+    while let char = iterator.next() {
+        defer { previous = char }
+        if char == "\\", quote != .single {
+            guard let next = iterator.next() else { return false }
+            switch quote {
+            case .bare where next == "'" || next == "\"": return true
+            case .bare where next.isWhitespace && next != "\n" && next != "\r\n": return true
+            case .double where next == "\"": return true
+            case .ansi where next == "'": return true
+            default: continue
+            }
+        }
+        switch (quote, char) {
+        case (.bare, "'"): quote = previous == "$" ? .ansi : .single
+        case (.bare, "\""): quote = .double
+        case (.single, "'"), (.ansi, "'"), (.double, "\""): quote = .bare
+        default: break
+        }
     }
+    return false
+}
+
+/// `words` joined into one command line, as written and decoded, read flat
+/// as a re-split of operands already judged in their own command.
+private func joinedReadsRun(_ words: [String], _ reads: inout HostTextReads, dataOnly: Bool = false) -> Bool {
+    for line in Set([words.joined(separator: " "), words.map(decodedWord).joined(separator: " ")]) {
+        if reads.runsHostMCPMutation(line, nested: false, dataOnly: dataOnly, resplit: true) { return true }
+    }
+    return false
 }
 
 /// A word as the shell (`$'…'`) and then `printf`/`echo -e` decode it.
@@ -152,13 +233,13 @@ private let printers: Set<String> = ["echo", "printf", "print"]
 /// (`textNamesHostMCPMutation`): inline interpreter code, quoted strings
 /// and assignments that never become a command of their own. Each distinct
 /// text is scanned once, under the pieces budget of `reads`.
-func hostMCPTextNamesMutation(_ raw: String, reads: HostTextReads) -> Bool {
+func hostMCPTextNamesMutation(_ raw: String, reads: inout HostTextReads) -> Bool {
     var scanned: Set<String> = []
     for view in Set([raw, raw.replacingOccurrences(of: "\\\n", with: "")]) {
         for token in ShellPipeline.tokenize(view) {
             for variant in Set([unescapeBackslashPairs(token.lexeme), decodingAnsiCEscapes(token.lexeme)])
-            where scanned.insert(variant).inserted && textNamesHostMCPMutation(variant, reads: reads) {
-                return true
+            where scanned.insert(variant).inserted {
+                if textNamesHostMCPMutation(variant, reads: &reads) { return true }
             }
         }
     }

@@ -25,7 +25,7 @@ import RVDomain
 /// `install-mcp` and `add-mcp` package specs and programs anywhere, and any
 /// spec of them a runner runs. Inside text nothing runs (`reads.inert`),
 /// `mcp install` needs a Python runner or a `.py` server.
-func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool {
+func isHostMCPMutation(_ command: LaunchedCommand, reads: inout HostTextReads) -> Bool {
     let words = command.guardArgv.map(foldedWord)
     if command.headIsDynamic, words.dropFirst().contains(where: dynamicGroupWords.contains) { return true }
     let head = commandName(command.head)
@@ -38,25 +38,29 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool
     // argv holds the head's basename; the head as written is judged too, as
     // a path to a host binary its basename does not name
     // (`~/.local/share/claude/versions/2.0.14`, `…/@openai/codex/bin/codex.js`).
+    // zsh runs `=claude` as the `claude` on PATH.
     var judged = Array(words.enumerated())
     let written = foldedWord(command.head)
     if let first = words.first, written != first { judged.append((offset: 0, element: written)) }
+    if written.hasPrefix("=") { judged.append((offset: 0, element: String(written.dropFirst()))) }
     let operandsRun = reads.inert == false && isNonExecutor(command) == false
-    // A build tool's directory option, or one heading a re-split of
-    // operands already judged in their own command (`-C mcp install`).
-    let takesDirectories = directoryTools.contains(head) || command.head.hasPrefix("-")
+    // A build tool's own directory options, or any of them heading a
+    // re-split of operands already judged in their own command (`-C mcp
+    // install`, `joinedReadsRun`).
+    let options = directoryOptions[head]
+        ?? (reads.resplit && command.head.hasPrefix("-") ? anyDirectoryOption : [])
     for (index, word) in judged {
         if isConfigInstallerPackage(word) || configInstallerPrograms.contains(commandName(word)) { return true }
         if runs(index), packageNames(word).contains(where: configInstallerNames.contains) { return true }
         // A runner given a command line as one word (`watch 'claude mcp
         // add x'`, `su -c '…'`, `parallel '…' ::: x`, Linux `script -c`).
-        if index > 0, runs(index), carriesHostMCPMutation(word, reads: reads) { return true }
+        if index > 0, runs(index), carriesHostMCPMutation(word, reads: &reads) { return true }
         let rest = Array(words[(index + 1)...])
         let before = index == 0 ? nil : index == 1 ? command.head : command.guardArgv[index - 1]
         let place = HostWordPlace(
             runs: runs(index), feedsWords: feedsWords,
             pythonRun: (index == 0 && reads.inert == false) || firstPythonRunner.map { $0 < index } == true,
-            mayRun: operandsRun && (takesDirectories && before.map(directoryOptions.contains) == true) == false)
+            mayRun: operandsRun && before.map(options.contains) != true)
         if hostCLIs(word).contains(where: { hostWordMutates($0, rest: rest, place: place) }) { return true }
     }
     return false
@@ -74,16 +78,24 @@ private struct HostWordPlace {
     let mayRun: Bool
 }
 
-/// Options whose value names a directory or workspace (`make -C mcp
-/// install`, `pnpm --filter mcp install`, `npm --prefix mcp install x`),
-/// as written: `-c` is a shell's command string, not one of them. Only
-/// `directoryTools` are known to take them so: under any other program
-/// (`nsenter -w mcp install s`) the word after one may run.
-private let directoryOptions: Set<String> = [
-    "-C", "--directory", "--dir", "--cwd", "--prefix", "--filter", "-F", "--workspace", "-w",
+/// Per build tool, the options whose next word is a directory, workspace
+/// or package filter (`make -C mcp install`, `pnpm --filter mcp install`,
+/// `npm --prefix mcp install x`), as written and confirmed in each tool's
+/// own help or option table: GNU make `-C`/`--directory` (`-w` is
+/// `--print-directory`, a flag); npm `-C` (`--prefix`), `--prefix`, `-w`
+/// and `--workspace`; pnpm `-C`/`--dir` and `--filter` (`-w` is
+/// `--workspace-root`, a flag); bun `--cwd` and `-F`/`--filter`. Under any
+/// other program (`nsenter -w mcp install s`, `yarn --cwd …`) the word
+/// after one may run.
+private let directoryOptions: [String: Set<String>] = [
+    "make": ["-C", "--directory"],
+    "gmake": ["-C", "--directory"],
+    "npm": ["-C", "--prefix", "-w", "--workspace"],
+    "pnpm": ["-C", "--dir", "--filter"],
+    "bun": ["--cwd", "-F", "--filter"],
 ]
 
-private let directoryTools: Set<String> = ["make", "gmake", "pnpm", "npm", "yarn", "bun"]
+private let anyDirectoryOption: Set<String> = directoryOptions.values.reduce(into: []) { $0.formUnion($1) }
 
 /// A command rv knows never runs its operands' text, run by its plain
 /// name: `grep`/`egrep`/`fgrep`, `rg` without `--pre`, `echo`/`printf`,
@@ -115,12 +127,14 @@ private func hostWordMutates(_ host: String, rest: [String], place: HostWordPlac
         if rest.contains(where: { $0 == "--add-mcp" || $0.hasPrefix("--add-mcp=") }) { return true }
         if host != "cursor" { return false }
     }
-    if host == "fastmcp" { return rest.first == "install" }
+    // `--` ends options and leaves the subcommand (`mcp -- install s`).
+    let subcommand = rest.first { $0 != "--" }
+    if host == "fastmcp" { return subcommand == "install" }
     if host == "mcp" {
         // `mcp` is a common directory and package name (`make -C mcp
         // install`): a word that may run, the program under a Python
         // runner, or given a Python server file.
-        guard rest.first == "install" else { return false }
+        guard subcommand == "install" else { return false }
         return place.mayRun || place.pythonRun || rest.contains(where: namesPythonServer)
     }
     guard let groups = hostGroups[host] else { return false }
@@ -151,8 +165,9 @@ private func hostCLIs(_ word: String) -> [String] {
 
 /// A word holding a whole command line that runs a host MCP CLI (`'claude
 /// mcp add x'` given to a runner, echoed into a shell, or a here-string).
-func carriesHostMCPMutation(_ word: String, reads: HostTextReads) -> Bool {
-    word.contains(where: \.isWhitespace) && reads.runsHostMCPMutation(word)
+func carriesHostMCPMutation(_ word: String, reads: inout HostTextReads) -> Bool {
+    guard word.contains(where: \.isWhitespace) else { return false }
+    return reads.runsHostMCPMutation(word)
 }
 
 /// Text no shell parse splits into words, such as inline program code or
@@ -165,7 +180,7 @@ func carriesHostMCPMutation(_ word: String, reads: HostTextReads) -> Bool {
 /// host mutation, as a commit message or a grep pattern may. Linear in the
 /// pieces, which count against `reads` (past its cap: a mutation) unless
 /// no piece holds a stem.
-func textNamesHostMCPMutation(_ text: String, reads: HostTextReads) -> Bool {
+func textNamesHostMCPMutation(_ text: String, reads: inout HostTextReads) -> Bool {
     let pieces = textPieces(text)
     guard pieces.count > 1 else { return false }
     // Sound early exit: every check below that can return true tests a
@@ -184,7 +199,7 @@ func textNamesHostMCPMutation(_ text: String, reads: HostTextReads) -> Bool {
     for (index, piece) in pieces.enumerated() {
         if isConfigInstallerPackage(piece) || configInstallerPrograms.contains(commandName(piece)) { return true }
         if packageNames(piece).contains(where: configInstallerNames.contains) { return true }
-        let first = index + 1 < pieces.count ? pieces[index + 1] : nil
+        let first = later.subcommand[index].map { pieces[$0] }
         for host in hostCLIs(piece) {
             if editorHosts.contains(host), later.addMCP[index] { return true }
             if host == "fastmcp", first == "install" { return true }
@@ -207,22 +222,28 @@ private struct LaterPieces {
     var pythonServer: [Bool]
     /// The index of the first later piece that is not an option.
     var nextOperand: [Int?]
+    /// The index of the first later piece that is not `--`.
+    var subcommand: [Int?]
 
     init(_ pieces: [String]) {
         addMCP = Array(repeating: false, count: pieces.count)
         pythonServer = Array(repeating: false, count: pieces.count)
         nextOperand = Array(repeating: nil, count: pieces.count)
+        subcommand = Array(repeating: nil, count: pieces.count)
         var seenAddMCP = false
         var seenPythonServer = false
         var operand: Int?
+        var word: Int?
         for index in pieces.indices.reversed() {
             addMCP[index] = seenAddMCP
             pythonServer[index] = seenPythonServer
             nextOperand[index] = operand
+            subcommand[index] = word
             let piece = pieces[index]
             if piece.hasPrefix("--add-mcp") { seenAddMCP = true }
             if namesPythonServer(piece) { seenPythonServer = true }
             if piece.hasPrefix("-") == false { operand = index }
+            if piece != "--" { word = index }
         }
     }
 }
