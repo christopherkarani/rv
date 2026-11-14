@@ -135,6 +135,29 @@ struct PolicyContainmentTests {
         #expect(witness.command.contains("'it'\"'\"'s"))
     }
 
+    @Test func witnessCommand_quotesWordsThatReadAsOptionsOrExpand() {
+        for spec in ["-rf", "=ls", "~/notes"] {
+            let candidate = [rule("allow", .allow, .gitDiscardWorktree(pathspec: spec))]
+            let ceiling = [rule("deny", .deny, .gitDiscardWorktree(pathspec: nil))]
+            guard case .exceeds(let witness) = PolicyContainment.check(candidate: candidate, ceiling: ceiling) else {
+                Issue.record("expected exceeds for \(spec)")
+                continue
+            }
+            #expect(witness.command.hasSuffix(" '\(spec)'"), "\(witness.command)")
+            #expect(witness.command.hasPrefix("git checkout -- "), "option words the witness emits stay bare")
+        }
+    }
+
+    @Test func witnessCheckCommand_isReadOnlyExplain() {
+        let candidate = [rule("repo-allow", .allow, .gitPush(force: .any, branch: "main"))]
+        let ceiling = [rule("no-force", .deny, .gitPush(force: .exactly(.force), branch: nil))]
+        guard case .exceeds(let witness) = PolicyContainment.check(candidate: candidate, ceiling: ceiling) else {
+            Issue.record("expected exceeds")
+            return
+        }
+        #expect(witness.checkCommand == "rv explain 'git push --force origin main'")
+    }
+
     // MARK: Properties, one per rule kind
 
     @Test(arguments: Kind.allCases)

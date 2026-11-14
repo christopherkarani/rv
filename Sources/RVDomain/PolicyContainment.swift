@@ -29,6 +29,12 @@ public struct PolicyContainmentWitness: Sendable, Equatable {
     public var command: String {
         DisplayedText.field(argv.map(PolicyContainment.shellWord).joined(separator: " "))
     }
+
+    /// The witness as something to check, not run: the read-only
+    /// `rv explain` of `command`.
+    public var checkCommand: String {
+        "rv explain " + PolicyContainment.shellWord(command)
+    }
 }
 
 public enum PolicyContainmentResult: Sendable, Equatable {
@@ -320,11 +326,19 @@ public enum PolicyContainment {
         }
     }
 
+    /// Option words `argv` emits itself. Every other word that starts with
+    /// `-`, `=`, or `~` (a pathspec or refspec from a rule) is quoted, so it
+    /// cannot read as an option, a zsh `=cmd`, or a home directory.
+    static let optionWords: Set<String> = Set(
+        ["--", "--force", "--force-with-lease", "-f", "-d", "-r"] + resetModes.map { "--\($0.rawValue)" }
+    )
+
     /// POSIX shell word: bare when it is plain, single-quoted otherwise. A
     /// quote is spelled `'"'"'`, without a backslash, so display escaping
     /// (which doubles backslashes) leaves the word unchanged.
     static func shellWord(_ word: String) -> String {
-        let plain = word.isEmpty == false && word.unicodeScalars.allSatisfy { scalar in
+        let leadingIsSafe = word.first.map { "-=~".contains($0) == false } ?? false
+        let plain = (leadingIsSafe || optionWords.contains(word)) && word.unicodeScalars.allSatisfy { scalar in
             switch scalar {
             case "a"..."z", "A"..."Z", "0"..."9": true
             case "-", "_", ".", "/", ":", "+", "=", "@", "%", ",": true
