@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVPolicy
 
 public enum RVDLogFileError: Error, Sendable, Equatable {
@@ -53,19 +54,22 @@ public enum RVDLogFile {
         return path
     }
 
-    /// One timestamped log line: control characters become spaces, so a
-    /// message can never forge another line or paint a terminal, and the
-    /// whole line is capped at `maxLineBytes`.
+    /// One timestamped log line. Every scalar `DisplayedText.needsEscape`
+    /// flags (C0, DEL and C1 controls, line and paragraph separators, bidi
+    /// and other format characters) becomes a space, so a message can never
+    /// forge another line, reorder one, or paint a terminal. The whole line
+    /// is capped at `maxLineBytes`, cut between scalars.
     public static func line(_ message: String, now: Date = Date()) -> String {
-        let stamp = now.formatted(.iso8601)
-        let flat = String(String.UnicodeScalarView(message.unicodeScalars.map {
-            $0.value < 0x20 || $0.value == 0x7f ? " " : $0
-        }))
-        var text = "\(stamp) \(flat)"
-        if text.utf8.count > maxLineBytes {
-            text = String(decoding: text.utf8.prefix(maxLineBytes), as: UTF8.self)
+        var text = String.UnicodeScalarView()
+        var bytes = 0
+        for scalar in "\(now.formatted(.iso8601)) \(message)".unicodeScalars {
+            let shown: Unicode.Scalar = DisplayedText.needsEscape(scalar) ? " " : scalar
+            let width = UTF8.width(shown)
+            guard bytes + width <= maxLineBytes else { break }
+            text.append(shown)
+            bytes += width
         }
-        return text + "\n"
+        return String(text) + "\n"
     }
 
     /// The error's own description (enum case names for rvd's launch

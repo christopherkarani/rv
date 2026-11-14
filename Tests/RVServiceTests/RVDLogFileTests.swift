@@ -124,6 +124,20 @@ struct RVDLogFileTests {
         #expect(hostile.utf8.count <= RVDLogFile.maxLineBytes + 1)
     }
 
+    /// G5: C1 controls, bidi overrides, tag characters and separators are
+    /// flattened too, and a cut never splits a scalar.
+    @Test func lineFlattensC1AndFormatScalarsAndCutsBetweenScalars() {
+        let at = Date(timeIntervalSince1970: 0)
+        let hostile = RVDLogFile.line("a\u{9b}2Kb\u{202e}c\u{e0041}d\u{2028}e\u{85}f", now: at)
+        #expect(hostile == "1970-01-01T00:00:00Z a 2Kb c d e f\n")
+        // Joiners stay: they are ordinary text and reorder nothing.
+        #expect(RVDLogFile.line("x\u{200d}y", now: at) == "1970-01-01T00:00:00Z x\u{200d}y\n")
+        let wide = RVDLogFile.line(String(repeating: "\u{20ac}", count: 400), now: at)
+        #expect(wide.utf8.count <= RVDLogFile.maxLineBytes + 1)
+        #expect(wide.unicodeScalars.contains("\u{fffd}") == false)
+        #expect(wide.hasSuffix("\u{20ac}\n"))
+    }
+
     @Test func describeNamesTheErrorCase() {
         #expect(RVDLogFile.describe(RVDLaunchError.invalidIdleExit) == "invalidIdleExit")
     }
