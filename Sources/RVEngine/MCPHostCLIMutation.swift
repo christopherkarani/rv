@@ -19,8 +19,11 @@ import RVDomain
 /// themselves count: `fastmcp install`; `mcp install` as the program, under
 /// a Python or plain runner (`uv run mcp install`) or given a `.py` server;
 /// the `@smithery/cli`, `install-mcp` and `add-mcp` package specs and
-/// programs anywhere, and any spec of them a runner runs.
-func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool {
+/// programs anywhere, and any spec of them a runner runs. With `headRuns`
+/// false (a line rv only guesses some program runs: the operands of a
+/// command that is itself text, `carriesHostMCPText`), a bare `mcp install`
+/// at its head also needs a Python runner or server file.
+func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads, headRuns: Bool = true) -> Bool {
     let words = command.guardArgv.map(foldedWord)
     if command.headIsDynamic, words.dropFirst().contains(where: dynamicGroupWords.contains) { return true }
     let head = commandName(command.head)
@@ -45,7 +48,7 @@ func isHostMCPMutation(_ command: LaunchedCommand, reads: HostTextReads) -> Bool
         let rest = Array(words[(index + 1)...])
         let place = HostWordPlace(
             runs: runs(index), feedsWords: feedsWords,
-            pythonRun: index == 0 || firstPythonRunner.map { $0 < index } == true)
+            pythonRun: (index == 0 && headRuns) || firstPythonRunner.map { $0 < index } == true)
         if hostCLIs(word).contains(where: { hostWordMutates($0, rest: rest, place: place) }) { return true }
     }
     return false

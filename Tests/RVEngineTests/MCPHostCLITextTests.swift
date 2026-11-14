@@ -64,6 +64,19 @@ struct MCPHostCLITextTests {
         #expect(mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context) == false)
     }
 
+    /// `mcp install` in prose that names no host is left alone; run, or
+    /// carried as a command line of its own, it still counts.
+    @Test func mcpInstallInProseIsNotRun() {
+        let context = FilesystemAnalysisContext(homeDirectory: nil, mcpHostConfigGuard: MCPHostConfigGuard())
+        let judge = { (command: String) in
+            mcpHostConfigUnmodeledWrite(command, guard: MCPHostConfigGuard(), context: context)
+        }
+        #expect(judge("git commit -m 'add mcp install docs'") == false)
+        #expect(judge("chronic mcp install docs"))
+        #expect(judge("echo 'mcp install docs' | sh"))
+        #expect(judge("echo 'chronic mcp install server.py' | sh"))
+    }
+
     /// Past the read budget or the nesting depth, a read counts (fail closed).
     @Test func exhaustedBudgetCounts() {
         let reads = HostTextReads()
