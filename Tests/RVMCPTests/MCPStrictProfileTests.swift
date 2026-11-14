@@ -180,6 +180,52 @@ struct MCPStrictProfileTests {
         #endif
     }
 
+    /// Hard links are denied, then allowed only among the write roots, then
+    /// denied again on every credential path, as clones are. Seatbelt takes
+    /// the last matching rule, so the allow follows its deny and no later
+    /// line re-opens either; that holds on the branch a symlinked credential
+    /// adds (`(deny file-read*)` and a second write allow) too. No line
+    /// allows a clone: it is left to the read and write rules.
+    @Test(arguments: [false, true])
+    func linksAreAllowedOnlyAmongTheWriteRoots(_ symlinkedCredential: Bool) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-link-profile-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("scratch"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        if symlinkedCredential {
+            let keys = root.appendingPathComponent("elsewhere-aws")
+            try FileManager.default.createDirectory(at: keys, withIntermediateDirectories: true)
+            #expect(symlink(keys.path, home.appendingPathComponent(".aws").path) == 0)
+        }
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
+            home: home.path, configDirectory: home.path + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path).get()
+        let lines = text.split(separator: "\n").map(String.init)
+        let allowDefault = try #require(lines.firstIndex(of: "(allow default)"))
+        let deny = try #require(lines.firstIndex(of: "(deny file-link)"))
+        let allow = try #require(lines.firstIndex { $0.hasPrefix("(allow file-link ") })
+        let credential = try #require(lines.lastIndex { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
+        #expect(allowDefault < deny && deny < allow && allow < credential)
+        // The link allow names exactly what the write allow names.
+        let writeAllow = try #require(lines.first { $0.hasPrefix("(allow file-write* ") })
+        #expect(lines[allow].dropFirst("(allow file-link ".count) == writeAllow.dropFirst("(allow file-write* ".count))
+        // Only one line allows a link, none names a clone but the credential
+        // denies, and every credential deny covers both.
+        #expect(lines.filter { $0.hasPrefix("(allow") && $0.contains("file-link") }.count == 1)
+        #expect(lines.filter { $0.contains("file-clone") }
+            .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
+        #expect(lines.filter { $0.hasPrefix("(deny file-read* file-write* ") }
+            .allSatisfy { $0.hasPrefix("(deny file-read* file-write* file-link file-clone ") })
+        #expect(lines.contains("(deny file-read*)") == symlinkedCredential)
+        #if os(macOS)
+        #expect(MCPSandbox.profileCompileError(text) == nil)
+        #endif
+    }
+
     @Test func hostsAndGatewayEachGetOneLoopbackRule() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-gateway-profile-\(UUID().uuidString)", isDirectory: true)
@@ -313,6 +359,104 @@ struct MCPSandboxHostsLiveTests {
         #expect(output.contains("PROXY_OK"), "\(output)")
         #expect(output.contains("DIRECT_OK") == false, "\(output)")
         #expect(output.contains("DNS_OK") == false, "\(output)")
+    }
+
+    /// Inside the cage, a file outside every write root cannot be hard
+    /// linked into the scratch, and writing the would-be link's name leaves
+    /// it unchanged. It can be cloned, as it can be copied: a clone is its
+    /// own copy-on-write file, so writing the clone leaves it unchanged too
+    /// (Rust's `std::fs::copy` clones first and fails outright on `EPERM`).
+    /// A clone out of the scratch into that directory is refused. Links and
+    /// clones between files in the scratch work (package managers link and
+    /// clone inside their caches). The fake home is under the resolved temp
+    /// directory. The outside file cannot be: `seatbeltWriteRoots` makes all
+    /// of `/private/var/folders` and `/private/tmp` writable, a fake home's
+    /// spare corners included. It is in a fresh 0700 directory under
+    /// `/Users/Shared`, which no profile line names, never the real home;
+    /// skipped where `/Users/Shared` is not writable.
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
+    func cagedServerCannotLinkOrWriteAFileFromOutsideItsWriteRoots() throws {
+        let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("rv-cage-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let config = home.appendingPathComponent(".config/rv")
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let project = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(project.path, 0o700) == 0, "could not create \(project.path): errno \(errno)")
+        defer { try? FileManager.default.removeItem(at: project) }
+        let outside = project.appendingPathComponent("App.swift")
+        try Data("original".utf8).write(to: outside)
+        var before = stat()
+        try #require(lstat(outside.path, &before) == 0)
+
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/linker", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let text = try MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
+            configDirectory: config.path, temporaryDirectory: tmp.path).get()
+        // No profile line names `/Users/Shared`: it is not a write root.
+        #expect(text.contains("/Users/Shared") == false, "\(text)")
+        let script = """
+            outside="$1"; s="$2"; project="$3"
+            /bin/ln "$outside" "$s/linked" 2> "$s/ln.err" && echo LINK_OUT_OK
+            grep -q "Operation not permitted" "$s/ln.err" && echo LINK_OUT_EPERM
+            printf changed > "$s/linked"
+            /bin/cp -c "$outside" "$s/cloned" && echo CLONE_OUT_OK
+            printf changed > "$s/cloned"
+            /bin/cp -c "$outside" "$project/escaped" 2> "$s/cp.err" && echo CLONE_ESCAPE_OK
+            grep -q "Operation not permitted" "$s/cp.err" && echo CLONE_ESCAPE_EPERM
+            /bin/cp "$outside" "$s/copied" && echo COPY_OK
+            printf inner > "$s/a"
+            /bin/ln "$s/a" "$s/b" && echo LINK_IN_OK
+            /bin/cp -c "$s/a" "$s/c" && echo CLONE_IN_OK
+            echo DONE
+            """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: MCPSandbox.sandboxExec)
+        process.arguments = ["-p", text, "/bin/sh", "-c", script, "sh", outside.path, scratch.path, project.path]
+        process.environment = ["PATH": "/usr/bin:/bin"]
+        process.currentDirectoryURL = scratch
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        // Hard bound: polls, never blocks in `waitid`; killed after 20 s.
+        let deadline = Date().addingTimeInterval(20)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            Issue.record("the caged link probe did not finish")
+            return
+        }
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+
+        #expect(output.contains("DONE"), "\(output)")
+        #expect(output.contains("LINK_OUT_OK") == false, "\(output)")
+        #expect(output.contains("LINK_OUT_EPERM"), "\(output)")
+        #expect(output.contains("CLONE_OUT_OK"), "\(output)")
+        #expect(output.contains("CLONE_ESCAPE_OK") == false, "\(output)")
+        #expect(output.contains("CLONE_ESCAPE_EPERM"), "\(output)")
+        #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("escaped").path) == false)
+        #expect(output.contains("COPY_OK"), "\(output)")
+        #expect(output.contains("LINK_IN_OK"), "\(output)")
+        #expect(output.contains("CLONE_IN_OK"), "\(output)")
+        #expect(String(decoding: try Data(contentsOf: outside), as: UTF8.self) == "original")
+        var after = stat()
+        #expect(lstat(outside.path, &after) == 0)
+        #expect(after.st_nlink == 1 && after.st_ino == before.st_ino)
+        // What the write created in the scratch is its own file, not the outside inode.
+        var written = stat()
+        #expect(lstat(scratch.appendingPathComponent("linked").path, &written) == 0)
+        #expect(written.st_ino != before.st_ino)
+        var clone = stat()
+        #expect(lstat(scratch.appendingPathComponent("cloned").path, &clone) == 0)
+        #expect(clone.st_ino != before.st_ino)
     }
 }
 #endif

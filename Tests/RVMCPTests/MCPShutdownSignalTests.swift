@@ -134,16 +134,22 @@ struct MCPShutdownSignalTests {
     }
 
     /// A second request (a second Ctrl-C) cuts the grace short: a server
-    /// that ignores SIGTERM is killed at once instead of after about 3 s.
+    /// that ignores SIGTERM is killed at once instead of being sent SIGTERM
+    /// after about 2 s and SIGKILL a second later. The server notes every
+    /// SIGTERM it gets, so the test checks which path ran, not how fast.
     @Test(.timeLimit(.minutes(1)))
     func aSecondShutdownRequestKillsWithoutTheGrace() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-hurry-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let pidFile = directory.appendingPathComponent("pid").path
+        let termFile = pidFile + ".term"
         let launch = MCPUpstreamLaunch(
             server: "stubborn", executable: "/bin/sh",
-            arguments: ["-c", "trap '' TERM; echo $$ > \"$0\"; exec /bin/sleep 30", pidFile], environment: [:])
+            arguments: [
+                "-c", "trap 'echo TERM >> \"$0.term\"' TERM; echo $$ > \"$0\"; while :; do /bin/sleep 0.1; done",
+                pidFile,
+            ], environment: [:])
         let client = LineClient()
         let runtime = Self.runtime(client, connections: [.process(launch)])
         let done = DispatchSemaphore(value: 0)
@@ -154,11 +160,12 @@ struct MCPShutdownSignalTests {
         // Started once it wrote its pid. Never killed from here: if the hurry
         // fails, run's own schedule still kills it after about 3 s.
         #expect(eventually { FileManager.default.fileExists(atPath: pidFile) })
-        let asked = Date()
         runtime.requestShutdown()
         runtime.requestShutdown()
-        #expect(done.wait(timeout: .now() + 10) == .success)
-        #expect(Date().timeIntervalSince(asked) < 2.5)
+        #expect(done.wait(timeout: .now() + 20) == .success)
+        // The graceful path's SIGTERM would have been noted within 0.1 s of
+        // arriving, and SIGKILL follows it by a second.
+        #expect(FileManager.default.fileExists(atPath: termFile) == false)
         try? client.toGateway.fileHandleForWriting.close()
     }
 

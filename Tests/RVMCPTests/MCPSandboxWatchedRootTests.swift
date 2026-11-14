@@ -37,7 +37,10 @@ struct MCPSandboxWatchedRootTests {
     static let roots = ["Library/Caches", ".npm", ".cache"]
 
     /// Browsers, npm and crash reporters write under these roots all the
-    /// time; none of that refuses the scratch or the profile.
+    /// time; none of that refuses the scratch or the profile. The churn runs
+    /// between creation's two reads of the roots, which the recursive stamp
+    /// this replaced refused; nothing under a root is read, so its size does
+    /// not matter either.
     @Test(arguments: roots)
     func unrelatedChurnUnderAWatchedRootStillCreatesTheScratch(_ rootName: String) throws {
         let fixture = try fixtureHome("churn")
@@ -187,28 +190,6 @@ struct MCPSandboxWatchedRootTests {
             Issue.record("profile refused: \(profile(fixture))")
             return
         }
-    }
-
-    /// Creation reads each root's own entry, never what is under it: a
-    /// root holding thousands of directories costs what an empty one does.
-    /// Wall time, since no stat-count seam exists; generous for a loaded host.
-    @Test func creationUnderALargeCacheDoesNotWalkIt() throws {
-        let fixture = try fixtureHome("large")
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let caches = fixture.home.appendingPathComponent("Library/Caches")
-        for outer in 0..<60 {
-            for inner in 0..<50 {
-                try FileManager.default.createDirectory(
-                    at: caches.appendingPathComponent("app\(outer)/d\(inner)"), withIntermediateDirectories: true)
-            }
-        }
-        let started = Date()
-        #expect(MCPSandbox.createCheckedDirectory(fixture.scratch))
-        guard case .success = profile(fixture) else {
-            Issue.record("profile refused: \(profile(fixture))")
-            return
-        }
-        #expect(Date().timeIntervalSince(started) < 2)
     }
 }
 #endif

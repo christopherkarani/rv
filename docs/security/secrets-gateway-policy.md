@@ -457,8 +457,9 @@ How it starts the server:
   the defaults are back before any server starts; a signal heard while
   planning stops serve before it starts any, but only once planning has
   finished: planning (resolving secret values, the capability check) is
-  not cut short, and a second signal during it does not end rv either;
-  only `SIGKILL` stops a planning step that hangs. Once servers run, a
+  not cut short, and a second signal during it does not end rv either.
+  A signal serve does not catch (`SIGKILL`, `SIGQUIT`, `SIGUSR1` and the
+  like) still ends rv at once, planning or not. Once servers run, a
   second signal skips the rest of the grace and kills every server still running at once. After a
   signal serve exits 128 plus its number, as a serve the signal had ended
   would report. `SIGKILL` to rv still ends it at once: its gateway goes
@@ -480,9 +481,17 @@ once the leader exits the lease is revoked and nobody can.
 What it does not:
 
 - The cage is `(allow default)` minus file writes outside the server's
-  scratch and temporary directories, reads and writes of credential
+  scratch, temporary and package-cache directories (`~/Library/Caches`,
+  `~/.npm`, `~/.cache`, and any `sandbox.writable`), hard links
+  except among those, reads, writes, links and clones of credential
   directories and rv's config directory, and the network but for the
-  gateway (and proxy) port. It does not deny Mach or XPC lookups, so it
+  gateway (and proxy) port. Seatbelt checks paths, not inodes: a hard
+  link that another process, running as you outside the cage, made
+  under one of those directories before or during the launch still lets
+  the server write the file it points at. rv does not scan for such
+  links (the workspace cage does, and mounts the workspace on its own
+  volume; caches cannot be moved to one), because whatever can plant one
+  can already write that file itself. It does not deny Mach or XPC lookups, so it
   does not stop a server asking the keychain (`securityd`, for example
   `security find-generic-password`), a password manager's local agent, or
   a provider CLI that reaches one, for the real value. rv's keychain items

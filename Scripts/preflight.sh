@@ -114,15 +114,18 @@ check_value_types() {
   #            idle watchdog), mirroring RVService; and
   #            RVMCP/CustodianXPCClient.swift — its libxpc client handle,
   #            mirroring XPCEvaluateClient. The key logic stays value-only.
-  #   RVMCP/MCPShutdownSignals.swift and rv-mcp-probe Count — each holds a
-  #            Mutex shared by escaping signal-source handlers and the code
-  #            that reads it; a struct holding a Mutex is noncopyable and
-  #            cannot be captured by an escaping closure and still read
-  #            elsewhere, so the shared state is a reference.
+  #   RVMCP/MCPShutdownSignals.swift Heard and rv-mcp-probe Count — each
+  #            holds a Mutex shared by escaping signal-source handlers and
+  #            the code that reads it; a struct holding a Mutex is
+  #            noncopyable and cannot be captured by an escaping closure and
+  #            still read elsewhere, so the shared state is a reference.
+  #            MCPShutdownSignals itself holds the signal sources and the
+  #            dispositions it replaced, has one owner (serve, or the
+  #            probe) and is cancelled once by it.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
-  # modifier (public/internal/…/final) must not hide a declaration, so we match
-  # the keyword on a line that may start with any run of those tokens.
-  local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |internal |private |fileprivate |open |final )*(class|actor) '
+  # modifier (public/package/internal/…/final) must not hide a declaration, so
+  # we match the keyword on a line that may start with any run of those tokens.
+  local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |package |internal |private |fileprivate |open |final )*(class|actor) '
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVXPC/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
@@ -131,7 +134,7 @@ check_value_types() {
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
-    | grep -v 'Sources/RVMCP/MCPShutdownSignals.swift:' \
+    | grep -vE 'Sources/RVMCP/MCPShutdownSignals.swift:[0-9]+:\s*(package |private )final class (MCPShutdownSignals|Heard)[: ]' \
     | grep -v 'Sources/rv-mcp-probe/main.swift:.*final class Count' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
