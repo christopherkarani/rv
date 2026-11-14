@@ -347,13 +347,16 @@ struct MCPGatewayCoreTests {
         #expect(toolError.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue == raw)
         #expect(toolError.toClient.first?.compactText.unicodeScalars.contains { $0.value == 0x1B } == false)
 
+        // The listed description shows `sentence` (escaped), so the name
+        // that must not be listed ends in text only it has.
+        let nameOnly = " as a tool name"
         let list = harness.client(#"{"jsonrpc":"2.0","id":8,"method":"tools/list"}"#)
         let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
         let listed = harness.core.handle(.upstream(server: "github", message: .object([
             "jsonrpc": .string("2.0"), "id": .int(listID),
             "result": .object(["tools": .array([
                 .object(["name": .string("list_issues"), "description": .string(raw)]),
-                .object(["name": .string(raw), "description": .string("plain")]),
+                .object(["name": .string(raw + nameOnly), "description": .string("plain")]),
             ])]),
         ])))
         let tools = listed.toClient.first?["result"]?["tools"]?.arrayValue ?? []
@@ -363,7 +366,7 @@ struct MCPGatewayCoreTests {
         #expect(description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
         // N2: a tool named with controls or prose is not listed at all.
         #expect(tools.map { $0["name"] } == [.string("list_issues")])
-        #expect(listed.toClient.first?.compactText.contains(sentence) == false)
+        #expect(listed.toClient.first?.compactText.contains(nameOnly) == false)
     }
 
     /// N6: progress reaches the client only for a call this upstream is
