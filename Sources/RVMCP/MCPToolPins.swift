@@ -24,8 +24,9 @@ public enum MCPToolPinStatus: String, Sendable, Equatable {
 /// What became of definitions offered to the review queue.
 public enum MCPToolReviewOutcome: Sendable, Equatable {
     case recorded
-    /// The queue is full; this many definitions were not kept.
-    case dropped(Int)
+    /// The queue, or this server's share of it, is full; these tools'
+    /// definitions were not kept.
+    case dropped([String])
     case failed
 }
 
@@ -66,16 +67,20 @@ public struct MCPToolPinning: Sendable {
 /// `pins` is MAC'd with the approvals key, the same key and purpose that
 /// sign mcp.json (`MCPIntegrity`), with a `tool-pins` field first so the
 /// two MACs can never stand for each other. A same-user process can edit or
-/// delete the file; it cannot make edited pins verify. A missing file pins
+/// delete the file; it cannot make edited pins verify, and deleting it can
+/// only make tools ask. It can restore an older signed file, which restores
+/// what the owner trusted then (a known limit until the approvals custodian
+/// keeps a counter). A missing file pins
 /// nothing; a present file whose pins do not verify pins nothing either, and
 /// so does a platform whose approvals key a same-user process can read
 /// (Linux).
 ///
 /// `mcp-tool-review.json` (0600) is the unsigned review queue: definitions
 /// the gateway saw that match no pin, kept so `rv mcp trust` can show the
-/// owner what they would pin. It has a hard size budget; a full queue keeps
-/// what it has and drops new entries. Editing it can only change what is
-/// shown, and what is shown is exactly what gets pinned.
+/// owner what they would pin. It has a hard size budget, and each server a
+/// share of it, so one noisy server cannot keep another's tools out; a full
+/// queue or share keeps what it has and drops new entries. Editing it can
+/// only change what is shown, and what is shown is exactly what gets pinned.
 public struct MCPToolPinStore: Sendable {
     public static let fileName = "mcp-tool-pins.json"
     public static let reviewFileName = "mcp-tool-review.json"
@@ -86,6 +91,9 @@ public struct MCPToolPinStore: Sendable {
     /// Longest definition kept for review; a longer one stays unpinned.
     static let maximumDefinitionBytes = 64 * 1024
     static let maximumChanged = 512
+    /// One server's share of the review queue.
+    static let serverReviewBudget = 256 * 1024
+    static let maximumChangedPerServer = 128
 
     public var configDirectory: URL
     public var signing: MCPApprovalSigning
@@ -175,27 +183,35 @@ public struct MCPToolPinStore: Sendable {
             }
             var count = changed.values.reduce(0) { $0 + $1.count }
             var bytes = Self.reviewBytes(changed)
-            var dropped = 0
+            var serverCount = changed[server]?.count ?? 0
+            var serverBytes = (changed[server] ?? [:]).reduce(0) { $0 + Self.entryBytes(server: server, tool: $1.key, $1.value) }
+            var dropped: [String] = []
             for (tool, definition) in definitions.sorted(by: { $0.key < $1.key }) {
                 let size = Self.entryBytes(server: server, tool: tool, definition)
                 guard definition.canonicalText.utf8.count <= Self.maximumDefinitionBytes else {
-                    dropped += 1
+                    dropped.append(tool)
                     continue
                 }
-                let previous = changed[server]?[tool].map { Self.entryBytes(server: server, tool: tool, $0) }
-                guard previous != nil || count < Self.maximumChanged,
-                    bytes - (previous ?? 0) + size <= Self.reviewBudget
+                let previous = changed[server]?[tool].map { Self.entryBytes(server: server, tool: tool, $0) } ?? 0
+                let isNew = changed[server]?[tool] == nil
+                guard isNew == false || (count < Self.maximumChanged && serverCount < Self.maximumChangedPerServer),
+                    bytes - previous + size <= Self.reviewBudget,
+                    serverBytes - previous + size <= Self.serverReviewBudget
                 else {
-                    dropped += 1
+                    dropped.append(tool)
                     continue
                 }
-                if previous == nil { count += 1 }
-                bytes += size - (previous ?? 0)
+                if isNew {
+                    count += 1
+                    serverCount += 1
+                }
+                bytes += size - previous
+                serverBytes += size - previous
                 changed[server, default: [:]][tool] = definition
             }
             let body = Data(Self.encodeReview(changed).compactText.utf8)
             guard body.count <= Self.reviewBudget, OwnerOnlyFile.write(body, to: reviewURL) else { return .failed }
-            return dropped == 0 ? .recorded : .dropped(dropped)
+            return dropped.isEmpty ? .recorded : .dropped(dropped)
         } ?? .failed
     }
 
@@ -203,9 +219,11 @@ public struct MCPToolPinStore: Sendable {
     /// over `expectedPins` (nil: the pins did not verify). Pins exactly the
     /// reviewed definitions and re-signs, unless the pins on disk changed
     /// since the review was built. Pins that did not verify are replaced:
-    /// tools not reviewed this time stay unpinned.
+    /// tools not reviewed this time stay unpinned. With `configured` (the
+    /// servers in mcp.json), queued tools of any other server are dropped.
     public func trust(
-        reviewed: [String: [String: JSONValue]], expectedPins: [String: [String: String]]?
+        reviewed: [String: [String: JSONValue]], expectedPins: [String: [String: String]]?,
+        configured: Set<String>? = nil
     ) -> TrustOutcome {
         withLock { () -> TrustOutcome in
             let current: [String: [String: String]]?
@@ -229,6 +247,7 @@ public struct MCPToolPinStore: Sendable {
                     }
                     if changed[server]?.isEmpty == true { changed[server] = nil }
                 }
+                if let configured { changed = changed.filter { configured.contains($0.key) } }
                 _ = OwnerOnlyFile.write(Data(Self.encodeReview(changed).compactText.utf8), to: reviewURL)
             }
             return .trusted
