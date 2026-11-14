@@ -129,7 +129,8 @@ struct MCPToolTrustTests {
         let (fixture, store) = try Self.signedFixture()
         let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(result == "mcp.json already matches rv's signature; nothing to trust\n"
-            + "no tools of github are trusted or waiting for review; start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again\n")
+            + "no tools of github are trusted or waiting for review; start your MCP host once so `rv mcp serve` lists them, then run `rv mcp trust` again "
+            + "(a tool named with more than 64 bytes or anything but A-Z a-z 0-9 _ . - is hidden and never queued)\n")
         #expect(try store.load().get() == [:])
     }
 
@@ -182,5 +183,17 @@ struct MCPToolTrustTests {
         _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
         _ = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(try store.contents().get().changed.isEmpty)
+    }
+
+    /// Q1: a queue holding only tools of removed servers is pruned too,
+    /// though there is nothing to trust; nothing is pinned.
+    @Test func aStaleOnlyQueueIsPrunedWhenThereIsNothingToTrust() async throws {
+        let (fixture, store) = try Self.signedFixture()
+        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        #expect(try store.contents().get().changed.keys.sorted() == ["removed"])
+        let result = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
+        #expect(result.hasPrefix("mcp.json already matches rv's signature; nothing to trust\n"), "\(result)")
+        #expect(try store.contents().get().changed.isEmpty)
+        #expect(try store.load().get() == [:])
     }
 }

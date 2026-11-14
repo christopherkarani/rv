@@ -95,6 +95,38 @@ struct GateAuditTests {
         #expect(line.contains("SECRET-MARKER") == false)
     }
 
+    @Test func anOverrideThatCannotBeAuditedStaysADeny() async throws {
+        let (home, url) = try home()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let denied = await decide(.peek, home: home)
+        guard case .deny(let deny) = denied.result.decision else {
+            Issue.record("expected a deny to override")
+            return
+        }
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(selector: .rule(deny.ruleID), reason: "test", addedAt: Self.now.addingTimeInterval(-60)),
+        ])
+        // A directory where audit.jsonl belongs: every append fails.
+        let log = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+        let result = await GatedEvaluate().gated(
+            .apply, EvaluationRequest(command: Self.resetHard, enabledPacks: dayOnePackIDs),
+            cwd: wd("/tmp/ws"), home: home, grants: EphemeralAllowOnceTable(), now: Self.now,
+            allowlist: { allowlist }, host: .hook(.claude), tool: .bash,
+            inputs: EvaluationInputs(
+                guardMode: .enforce,
+                judge: JudgeSelection(engine: .ft, bundle: nil),
+                store: .gather(home: nil, cwd: nil)
+            )
+        )
+        guard case .deny(let kept) = result.decision else {
+            Issue.record("an unrecorded override must stay a deny, got \(result.decision)")
+            return
+        }
+        #expect(kept.ruleID == deny.ruleID)
+        #expect(kept.reason == GatedEvaluate.unrecordedOverrideReason)
+    }
+
     @Test func ledgerCopiesOfChainedDeniesAreNotExportedTwice() throws {
         let t = Self.now
         let chained = AuditEvent(time: t, kind: .commandDenied, decision: .denied, subject: "core.git:reset-hard",

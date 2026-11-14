@@ -211,8 +211,19 @@ public struct MCPGatewayCore {
     /// event says the rest are suppressed. Those tools still ask and are
     /// still queued for `rv mcp trust`, within the queue's budget.
     static let maximumChangeEvents = 64
+    /// Tools per server whose definitions a session tracks against the
+    /// pins, across all of its listings. A tool past this is never pinned:
+    /// it asks. One listing already lists at most this many.
+    static let maximumTrackedTools = maximumListedTools
+    /// Definitions per server a session offers to the review queue. Past
+    /// this a new definition is not queued (its tool still asks).
+    static let maximumTrackedChanges = 1024
     /// Longest progress `message` passed to the client, in UTF-8 bytes.
     static let maximumProgressMessageBytes = 512
+    /// Longest spelling of a forwarded progress `progress` or `total`.
+    static let maximumProgressNumberBytes = 32
+    /// Most bytes of an upstream's `initialize` error text that reach stderr.
+    static let maximumInitializeErrorBytes = 512
 
     /// Upstream tool names rv lists and routes. Any other name (prose,
     /// controls, separators, over 64 bytes) is neither listed nor called.
@@ -244,14 +255,26 @@ public struct MCPGatewayCore {
     /// server → tool → definition hash the user trusted; nil when the pin
     /// store could not be read or verified. The gateway never adds pins.
     let pins: [String: [String: String]]?
-    /// server → tool → hash of the definition this session last listed.
+    /// server → tool → hash of the definition this session last listed. At
+    /// most `maximumTrackedTools` tools per server; a tool past that is
+    /// never observed, so it is unverified and asks.
     var observed: [String: [String: String]] = [:]
     /// `server\0tool` listed this session with a definition that differs
     /// from its pin or from another listing. Sticky: such a tool is never
-    /// pinned again this session, whatever it lists next.
+    /// pinned again this session, whatever it lists next. Only observed
+    /// tools are tainted, so this is bounded with `observed`.
     var tainted: Set<String> = []
-    /// `server\0tool\0hash` already audited as not pinned.
-    var reportedChanges: Set<String> = []
+    /// server → `tool\0hash` offered to the review queue and not dropped by
+    /// it; at most `maximumTrackedChanges` per server.
+    var reportedChanges: [String: Set<String>] = [:]
+    /// server → `tool\0hash` already audited as not pinned; bounded by
+    /// `maximumChangeEvents` per server.
+    var eventedChanges: [String: Set<String>] = [:]
+    /// Servers already told on stderr that the review queue did not keep
+    /// some of their tools.
+    var queueNoticed: Set<String> = []
+    /// Servers already told on stderr that they list more tools than rv tracks.
+    var untrackedNoticed: Set<String> = []
     /// Servers already reported on stderr as having untrusted tools.
     var untrustedNoticed: Set<String> = []
     /// Servers already reported on stderr as listing names rv does not serve.
@@ -744,8 +767,8 @@ public struct MCPGatewayCore {
     }
 
     /// The whole listed description of a tool that is not pinned. Such a
-    /// tool is listed with only its name, this marker, an empty object
-    /// schema and the four boolean hints (`exposedTool`).
+    /// tool is listed with only its name, this marker and an empty object
+    /// schema (`exposedTool`).
     static func pinMarker(_ status: MCPToolPinStatus) -> String? {
         let hidden = "its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval]"
         return switch status {
@@ -863,7 +886,8 @@ public struct MCPGatewayCore {
                     + releaseWaiting()
             }
             let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
-            let reason = MCPDisplayedText.field(scrubText(raw, for: server))
+            let reason = MCPCallRecord.bounded(
+                MCPDisplayedText.field(scrubText(raw, for: server)), Self.maximumInitializeErrorBytes)
             // The upstream's text goes to stderr only: a server's error is
             // not a channel to the client or the model.
             phases[server] = .failed("it failed to initialize")
@@ -968,10 +992,22 @@ public struct MCPGatewayCore {
         if pinning.enforced {
             var seen: [String: String] = [:]
             var definitions: [String: JSONValue] = [:]
+            let known = observed[server] ?? [:]
+            var tracked = known.count
+            var untracked = 0
             for tool in listed {
                 guard let definition = MCPToolPinStore.definition(of: scrub(tool, for: server)),
                     let name = definition["name"]?.stringValue, Self.servesToolName(name)
                 else { continue }
+                // Past the per-server cap a new name is never observed, so
+                // it stays unverified and asks; it is not queued either.
+                if known[name] == nil, seen[name] == nil {
+                    guard tracked < Self.maximumTrackedTools else {
+                        untracked += 1
+                        continue
+                    }
+                    tracked += 1
+                }
                 let hash = MCPToolPinStore.hash(definition)
                 if let earlier = seen[name] ?? observed[server]?[name], earlier != hash {
                     tainted.insert(server + "\0" + name)
@@ -981,6 +1017,11 @@ public struct MCPGatewayCore {
                 definitions[name] = definition
             }
             observed[server, default: [:]].merge(seen) { _, new in new }
+            if untracked > 0, untrackedNoticed.insert(server).inserted {
+                outputs.append(.log(
+                    "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools; "
+                        + "rv cannot check the rest against your trusted tools, so they always ask"))
+            }
             var unpinned: [String: JSONValue] = [:]
             var untrusted = 0
             for name in seen.keys.sorted() where configuration.decision(server: upstream.definition, tool: name) != .deny {
@@ -988,10 +1029,21 @@ public struct MCPGatewayCore {
                 guard status != .pinned else { continue }
                 untrusted += 1
                 let hash = seen[name] ?? ""
-                guard reportedChanges.insert(server + "\0" + name + "\0" + hash).inserted else { continue }
-                // The pinned definition itself, listed again after another
-                // one, asks for this session but has nothing to review.
-                if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                let change = name + "\0" + hash
+                // Offered to the review queue once per definition, again
+                // only after the queue did not keep it; at most
+                // `maximumTrackedChanges` per server, and the tool asks either way.
+                if reportedChanges[server]?.contains(change) != true,
+                    (reportedChanges[server]?.count ?? 0) < Self.maximumTrackedChanges
+                {
+                    reportedChanges[server, default: []].insert(change)
+                    // The pinned definition itself, listed again after another
+                    // one, asks for this session but has nothing to review.
+                    if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                }
+                // Audited once per definition, even when the queue keeps
+                // offering it; a later, different definition is audited anew.
+                guard eventedChanges[server]?.contains(change) != true else { continue }
                 let written = changeEvents[server, default: 0]
                 guard written <= Self.maximumChangeEvents else { continue }
                 changeEvents[server] = written + 1
@@ -1003,6 +1055,7 @@ public struct MCPGatewayCore {
                         source: "mcp-gateway", detail: ["server": server, "suppressed": "true"])))
                     continue
                 }
+                eventedChanges[server, default: []].insert(change)
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpToolChanged, decision: .pending, subject: "\(server)/\(name)",
                     reason: "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
@@ -1019,14 +1072,19 @@ public struct MCPGatewayCore {
                 case .recorded:
                     break
                 case .dropped(let names):
-                    // Not kept, so not reported: a later listing offers them again.
-                    for name in names { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
-                    outputs.append(.log(
-                        "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                    // Not kept: a later listing offers them again, without a
+                    // second audit event or stderr line.
+                    for name in names { reportedChanges[server]?.remove(name + "\0" + (seen[name] ?? "")) }
+                    if queueNoticed.insert(server).inserted {
+                        outputs.append(.log(
+                            "the review queue for `rv mcp trust` is full; \(names.count) tool definitions of MCP server \(shownServer) were not kept"))
+                    }
                 case .failed:
-                    for name in unpinned.keys { reportedChanges.remove(server + "\0" + name + "\0" + (seen[name] ?? "")) }
-                    outputs.append(.log(
-                        "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                    for name in unpinned.keys { reportedChanges[server]?.remove(name + "\0" + (seen[name] ?? "")) }
+                    if queueNoticed.insert(server).inserted {
+                        outputs.append(.log(
+                            "could not keep the untrusted tools of MCP server \(shownServer) for `rv mcp trust`"))
+                    }
                 }
             }
         }
@@ -1095,8 +1153,7 @@ public struct MCPGatewayCore {
     /// is not pinned (changed, new, or unverifiable) always asks and is
     /// listed with no upstream string but its name: its description is rv's
     /// marker, its input schema `{"type":"object"}`, it has no output
-    /// schema, and its annotations are only `withheldHints` with boolean
-    /// values. For a pinned tool the prose fields (`description`, `title`,
+    /// schema and no annotations. For a pinned tool the prose fields (`description`, `title`,
     /// `annotations.title`, and every `description`/`title` string in its
     /// schemas) keep line breaks and backslashes and lose only hiding
     /// scalars (`MCPDisplayedText.description`). Everything else is
@@ -1123,20 +1180,14 @@ public struct MCPGatewayCore {
         }
         var walked = object
         if let marker = Self.pinMarker(pinStatus(server: upstream.definition.name, tool: name)) {
-            // No upstream string but the (conforming) name: an empty object
+            // No upstream field but the (conforming) name: an empty object
             // schema, so the arguments an approved call forwards are the
-            // client's own, and only the four boolean hints.
+            // client's own, and no annotations (an unreviewed
+            // `readOnlyHint: true` could let a host skip its own prompt).
             var withheld = JSONObject()
             withheld["name"] = .string(listedName)
             withheld["description"] = .string(marker)
             withheld["inputSchema"] = .object(["type": .string("object")])
-            if let annotations = object["annotations"]?.objectValue {
-                var flags = JSONObject()
-                for key in Self.withheldHints {
-                    if let value = annotations[key], value.boolValue != nil { flags[key] = value }
-                }
-                if flags.isEmpty == false { withheld["annotations"] = .object(flags) }
-            }
             return .object(withheld)
         }
         let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
@@ -1158,10 +1209,6 @@ public struct MCPGatewayCore {
         walked["name"] = .string(MCPDisplayedText.field(listedName))
         return .object(walked)
     }
-
-    /// The only annotations a tool that is not pinned keeps, and only with
-    /// boolean values: the keys are rv's, not the upstream's.
-    static let withheldHints = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]
 
     /// Keywords whose values are data, kept byte-exact.
     static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples"]
@@ -1200,20 +1247,32 @@ public struct MCPGatewayCore {
     /// A progress notification for a call this upstream is running, rebuilt
     /// from the fields the protocol defines: the client's own token, the
     /// numbers, and a bounded, scrubbed, display-escaped `message`. Nil
-    /// (dropped) when no pending call from `server` carries the token.
+    /// (dropped) when no pending call from `server` carries the token, or
+    /// when `progress` (or a `total` that is present) is not a finite number
+    /// spelled in at most `maximumProgressNumberBytes`. The token sent on is
+    /// the one the client gave, never the upstream's copy of it.
     func progress(from server: String, _ params: JSONValue?) -> JSONValue? {
         func runs(_ id: Int) -> Bool {
             guard case .call(_, let owner, _, _, _, _)? = pending[id] else { return false }
             return owner == server
         }
-        guard let token = params?["progressToken"],
-            progressTokens.contains(where: { $0.value == token && runs($0.key) }),
-            let done = params?["progress"], case .number = done
+        func finite(_ value: JSONValue?) -> Bool {
+            guard case .number(let spelling)? = value,
+                spelling.utf8.count <= Self.maximumProgressNumberBytes,
+                let number = Double(spelling)
+            else { return false }
+            return number.isFinite
+        }
+        guard let sent = params?["progressToken"],
+            let token = progressTokens.first(where: { $0.value == sent && runs($0.key) })?.value,
+            let done = params?["progress"], finite(done)
         else { return nil }
+        let total = params?["total"]
+        guard total == nil || finite(total) else { return nil }
         var rebuilt = JSONObject()
         rebuilt["progressToken"] = token
         rebuilt["progress"] = done
-        if let total = params?["total"], case .number = total { rebuilt["total"] = total }
+        if let total { rebuilt["total"] = total }
         if let text = params?["message"]?.stringValue {
             rebuilt["message"] = .string(MCPCallRecord.bounded(
                 MCPDisplayedText.field(scrubText(text, for: server)), Self.maximumProgressMessageBytes))

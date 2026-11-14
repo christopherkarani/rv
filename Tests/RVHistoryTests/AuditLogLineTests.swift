@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVHistory
 
@@ -107,5 +108,84 @@ struct AuditLogLineTests {
         _ = flock(holder, LOCK_UN)
         #expect(AuditLog.append(event("after"), configDirectory: dir, lockTimeout: 0.2))
         #expect(try AuditChain.verify(fileURL: file).get().lines == 1)
+    }
+
+    /// Pauses taken on a fake clock: each one is 10 ms of fake time.
+    private final class Ticks: Sendable {
+        let count = Mutex(0)
+        var value: Int { count.withLock { $0 } }
+        func increment() -> Int { count.withLock { $0 += 1; return $0 } }
+    }
+
+    /// A1: one deadline, fixed when the append starts, covers the
+    /// in-process lock and the file lock. Another thread holds the
+    /// in-process lock until the whole 0.1 s budget (10 fake pauses) is
+    /// spent; the file lock is held throughout. The append then gives up at
+    /// once instead of starting a fresh 0.1 s wait for the file lock (which
+    /// would take 20 pauses). No wall-clock timing is asserted.
+    @Test func oneDeadlineCoversTheInProcessLockAndTheFileLock() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = AuditLog.fileURL(configDirectory: dir)
+        let holder = open(file.path, O_CREAT | O_RDWR, 0o600)
+        #expect(holder >= 0)
+        defer { close(holder) }
+        #expect(flock(holder, LOCK_EX) == 0)
+        defer { _ = flock(holder, LOCK_UN) }
+
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let released = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            AuditLog.AppendLock.mutex.withLock { _ in
+                held.signal()
+                _ = release.wait(timeout: .now() + 10)
+            }
+            released.signal()
+        }
+        #expect(held.wait(timeout: .now() + 10) == .success)
+        defer { release.signal() }
+
+        let ticks = Ticks()
+        let base = ContinuousClock.now
+        let wait = AuditLog.LockWait(
+            timeout: 0.1,
+            now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
+            pause: {
+                guard ticks.increment() == 10 else { return }
+                release.signal()
+                _ = released.wait(timeout: .now() + 10)
+            }
+        )
+        #expect(AuditLog.append(event("late"), configDirectory: dir, wait: wait) == false)
+        #expect(ticks.value == 10, "the file lock must not get a fresh budget")
+        #expect(try Data(contentsOf: file).isEmpty)
+    }
+
+    /// A1: a thread queued behind a stuck in-process lock gives up on its
+    /// own deadline, without the holder ever letting go.
+    @Test func aHeldInProcessLockTimesOutWithoutBeingReleased() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            AuditLog.AppendLock.mutex.withLock { _ in
+                held.signal()
+                _ = release.wait(timeout: .now() + 10)
+            }
+        }
+        #expect(held.wait(timeout: .now() + 10) == .success)
+        defer { release.signal() }
+        let ticks = Ticks()
+        let base = ContinuousClock.now
+        let wait = AuditLog.LockWait(
+            timeout: 0.05,
+            now: { base.advanced(by: .milliseconds(10 * ticks.value)) },
+            pause: { _ = ticks.increment() }
+        )
+        #expect(AuditLog.append(event("queued"), configDirectory: dir, wait: wait) == false)
+        #expect(ticks.value == 5)
+        #expect(FileManager.default.fileExists(atPath: AuditLog.fileURL(configDirectory: dir).path) == false)
     }
 }
