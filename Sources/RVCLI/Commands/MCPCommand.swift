@@ -1614,6 +1614,10 @@ struct MCPServe: AsyncParsableCommand {
                     reason: pinFailure.reason, source: "mcp-gateway", detail: ["status": "unverified"]),
                 configDirectory: configDirectory)
         }
+        // Warns only, on stderr and in one event; waits at most
+        // `hostCheckTimeout` and never stops serving.
+        MCPRun.checkHostsBeforeServing(
+            environment, configuration: configuration, project: MCPRun.projectURL(nil), log: log)
         let core = MCPRun.serveCore(
             configuration: configuration, upstreams: planned.map { $0.0 }, environment: environment, pinning: pinning)
         let runtime = MCPGatewayRuntime(
