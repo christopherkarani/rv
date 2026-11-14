@@ -143,13 +143,49 @@ struct MCPToolPinStoreTests {
             })
             outcomes.append(directory.store.recordChanged(server: "s\(server)", definitions: definitions))
         }
-        #expect(outcomes.contains(.dropped(2)))
+        #expect(outcomes.contains(.dropped(["tool0", "tool1"])))
         let size = try #require(try FileManager.default.attributesOfItem(atPath: directory.review.path)[.size] as? Int)
         #expect(size <= MCPToolPinStore.reviewBudget)
         // What is queued stays readable for `rv mcp trust`.
         #expect(try directory.store.contents().get().changed.isEmpty == false)
         let tooLong = JSONValue.object(["name": .string("big"), "description": .string(String(repeating: "y", count: 70 * 1024))])
-        #expect(directory.store.recordChanged(server: "s0", definitions: ["big": tooLong]) == .dropped(1))
+        #expect(directory.store.recordChanged(server: "s0", definitions: ["big": tooLong]) == .dropped(["big"]))
+    }
+
+    /// N5: one server's share of the queue is bounded, so a noisy server
+    /// cannot keep another server's tools out of `rv mcp trust`.
+    @Test func aNoisyServerCannotStarveAnother() throws {
+        let directory = Directory()
+        let many = Dictionary(uniqueKeysWithValues: (0..<600).map { index in
+            let name = String(format: "t%03d", index)
+            return (name, JSONValue.object(["name": .string(name)]))
+        })
+        guard case .dropped(let dropped) = directory.store.recordChanged(server: "noisy", definitions: many) else {
+            Issue.record("a server past its share must drop the rest")
+            return
+        }
+        #expect(dropped.count == 600 - MCPToolPinStore.maximumChangedPerServer)
+        let filler = String(repeating: "x", count: 60 * 1024)
+        let large = Dictionary(uniqueKeysWithValues: (0..<10).map { index in
+            let name = "big\(index)"
+            return (name, JSONValue.object(["name": .string(name), "description": .string(filler)]))
+        })
+        #expect(directory.store.recordChanged(server: "loud", definitions: large) != .recorded)
+        #expect(directory.store.recordChanged(server: "quiet", definitions: ["search": Self.search]) == .recorded)
+        let changed = try directory.store.contents().get().changed
+        #expect(changed["noisy"]?.count == MCPToolPinStore.maximumChangedPerServer)
+        #expect(changed["quiet"] == ["search": Self.search])
+        let loudBytes = (changed["loud"] ?? [:]).reduce(0) { $0 + MCPToolPinStore.entryBytes(server: "loud", tool: $1.key, $1.value) }
+        #expect(loudBytes <= MCPToolPinStore.serverReviewBudget)
+    }
+
+    /// N5: `trust` drops queued tools of servers no longer in mcp.json.
+    @Test func trustPrunesTheQueueOfServersNoLongerConfigured() throws {
+        let directory = Directory()
+        #expect(directory.store.recordChanged(server: "github", definitions: ["search": Self.search]) == .recorded)
+        #expect(directory.store.recordChanged(server: "gone", definitions: ["search": Self.search]) == .recorded)
+        #expect(directory.store.trust(reviewed: [:], expectedPins: [:], configured: ["github"]) == .trusted)
+        #expect(try directory.store.contents().get().changed == ["github": ["search": Self.search]])
     }
 
     /// M1: a missing, oversized or unparseable queue is empty to `trust`.

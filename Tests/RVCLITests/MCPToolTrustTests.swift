@@ -152,4 +152,35 @@ struct MCPToolTrustTests {
             #expect(fixture.environment().integrity == .trusted)
         }
     }
+
+    /// N12: an unreadable pins file skips pinning, says why, and still
+    /// lets the owner sign a changed mcp.json. The pins are left alone.
+    @Test func anUnreadablePinStoreStillLetsMcpJSONBeTrusted() async throws {
+        let (fixture, store) = try Self.pinnedFixture()
+        let config = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        var bytes = try Data(contentsOf: config)
+        bytes.append(UInt8(ascii: "\n"))
+        try bytes.write(to: config)
+        chmod(config.path, 0o600)
+        let pins = fixture.config.appendingPathComponent(MCPToolPinStore.fileName)
+        chmod(pins.path, 0o666)
+        let shown = Mutex("")
+        let result = try await MCPRun.trust(
+            environment: fixture.environment(presence: MCPCommandTests.present), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        let skipped = "MCP tool pinning skipped: \(MCPToolPinStore.fileName) is unreadable or unsafe"
+        #expect(result == "trusted mcp.json; rv signs it again on every change it makes\n\(skipped)\n", "\(result)")
+        #expect(shown.withLock { $0 }.contains(skipped))
+        #expect(fixture.environment().integrity == .trusted)
+        chmod(pins.path, 0o600)
+        #expect(try store.load().get() == ["github": ["search": MCPToolPinStore.hash(Self.original)]])
+    }
+
+    /// N5: trusting drops queued tools of servers no longer in mcp.json.
+    @Test func trustPrunesQueuedToolsOfRemovedServers() async throws {
+        let (fixture, store) = try Self.pinnedFixture()
+        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        _ = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
+        #expect(try store.contents().get().changed.isEmpty)
+    }
 }

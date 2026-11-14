@@ -636,9 +636,13 @@ enum MCPRun {
         let pinStore = MCPToolPinStore(configDirectory: environment.configDirectory, signing: environment.approvalSigning)
         // Where `rv mcp serve` cannot rely on pins (see `MCPToolPinStore.pinning`), there is nothing to pin.
         var tools = ToolTrustReview()
+        // Pins that cannot be read are left alone; mcp.json can still be
+        // signed, and the owner is told pinning was skipped.
+        var pinningSkipped: String?
         if environment.approvalSigning.honorsGrants {
             switch toolTrustReview(pinStore, servers: configuration.servers.map(\.name)) {
-            case .failure(let failure): return .failure(CommandFailure("\(failure.reason); nothing trusted"))
+            case .failure(let failure) where configTrusted: return .failure(CommandFailure("\(failure.reason); nothing trusted"))
+            case .failure(let failure): pinningSkipped = "MCP tool pinning skipped: \(failure.reason)"
             case .success(let review): tools = review
             }
         }
@@ -659,6 +663,7 @@ enum MCPRun {
             review += (review.isEmpty ? "" : "\n") + tools.text
             prompt += (prompt.isEmpty ? "" : "\n") + "rv: trust MCP tool definitions sha256 \(tools.digest)\n\(tools.summary)"
         }
+        if let pinningSkipped { review += "\n" + pinningSkipped }
         show(review + "\n")
         // The reason-bearing confirmation is the authentication: the
         // custodian's key prompt carries no context about what is trusted.
@@ -688,7 +693,9 @@ enum MCPRun {
             done.append("trusted mcp.json; rv signs it again on every change it makes")
         }
         if tools.isEmpty == false {
-            switch pinStore.trust(reviewed: tools.reviewed, expectedPins: tools.expectedPins) {
+            switch pinStore.trust(
+                reviewed: tools.reviewed, expectedPins: tools.expectedPins, configured: Set(configuration.servers.map(\.name))
+            ) {
             case .trusted:
                 break
             case .changedDuringReview:
@@ -709,6 +716,7 @@ enum MCPRun {
             done.append("pinned \(tools.names.count) MCP tool definitions; rv serves them unchanged as trusted")
             done.append(Self.restartNotice)
         }
+        if let pinningSkipped { done.append(pinningSkipped) }
         return .success(done.joined(separator: "\n") + "\n" + (tools.isEmpty ? tools.waitingHint : ""))
     }
 
