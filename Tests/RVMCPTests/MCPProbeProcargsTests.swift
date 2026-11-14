@@ -57,7 +57,8 @@ struct MCPProbeProcargsTests {
         try #require(posix_spawnattr_init(&attributes) == 0)
         defer { posix_spawnattr_destroy(&attributes) }
         try #require(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0)
-        var argv: [UnsafeMutablePointer<CChar>?] = ["", "procargs", "self"].map { strdup($0) } + [nil]
+        let arguments: [String] = ["", "procargs", "self"]
+        var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
         var envp: [UnsafeMutablePointer<CChar>?] = [strdup("HOME=/rv-procargs-sentinel"), nil]
         defer { (argv + envp).forEach { free($0) } }
         var pid: pid_t = 0
