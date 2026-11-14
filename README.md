@@ -257,13 +257,16 @@ rv is one binary, 25 commands. The rest of the surface:
   `claude --plugin-dir …`, `codex -c mcp_servers…`), and a program that
   writes a config without its name on the command line (a script or a
   scheduled job written to disk earlier, by the shell or the file tool;
-  a shell fed an expansion; text decoded by a program such as `base64
-  -d`, `rev` or `tr`; a tarball, directory or URL whose name the agent
+  a shell fed an expansion; text decoded or rendered by a program such
+  as `base64 -d`, `rev`, `tr` or a `printf` format (`'cla%sude …' u`);
+  output joined across commands other than `echo`/`printf`/`print`, such
+  as two `cat <<<…`; a tarball, directory or URL whose name the agent
   chooses; or a git hook — which `git commit -m` still runs — diff/pager
   tool or `.ackrc`/lesskey file set up earlier). Text that names a host
   mutation asks even as data (`git commit -m 'run claude mcp add x'`,
   `grep 'claude mcp add' docs/`, `grep claude "$f"`), as do dynamic
-  programs given `config` (`"$GIT" config user.name`).
+  programs given `config` (`"$GIT" config user.name`) and a command
+  whose carried text runs past the guard's read budget.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review
