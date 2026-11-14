@@ -381,3 +381,50 @@ struct NetworkReviewQueueTests {
         #expect(mode & 0o777 == 0o600, "the loaded snapshot is owner-only")
     }
 }
+
+/// The owner's policy ceiling bounds what an approved proposal may load.
+struct NetworkReviewQueueCeilingTests {
+    private func approvedQueue(named: String, ceiling: String?) async throws -> NetworkReviewQueue {
+        let config = try reviewTempConfig(named: named)
+        if let ceiling {
+            try ceiling.write(to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+        }
+        let queue = NetworkReviewQueue(configDirectory: config)
+        let (workspace, directory) = try reviewWorkspace()
+        let now = Date()
+        await queue.noteDenial(
+            EgressProxyDenial(host: "blocked.invalid", port: 443, reason: .deniedPolicy, recordedAt: now),
+            workspace: workspace,
+            workspaceDirectory: directory,
+            now: now
+        )
+        let store = PendingApprovalStore(baseDirectory: config)
+        let created = try #require(try await store.list(now: now).first)
+        _ = try await store.resolve(
+            id: created.id,
+            decision: .allowOnce,
+            fingerprint: created.fingerprint,
+            identity: created.identity,
+            now: now
+        )
+        return queue
+    }
+
+    @Test func hostOutsideCeilingIsNeverLoaded() async throws {
+        let queue = try await approvedQueue(named: "ceiling-out", ceiling: "schema_version = 1\negress.hosts = [\"github.com\"]\n")
+        #expect(await queue.applyResolved(now: Date()) == nil)
+        #expect(await queue.liveChannel.snapshot().rules.isEmpty)
+    }
+
+    @Test func hostInsideCeilingLoads() async throws {
+        let queue = try await approvedQueue(named: "ceiling-in", ceiling: "schema_version = 1\negress.hosts = [\"github.com\", \"blocked.invalid\"]\n")
+        let update = try #require(await queue.applyResolved(now: Date()))
+        #expect(update.rules == [LiveNetworkRule(host: "blocked.invalid", port: 443)!])
+    }
+
+    @Test func unreadableCeilingLoadsNothing() async throws {
+        let queue = try await approvedQueue(named: "ceiling-bad", ceiling: "schema_version = 1\negress.hosts = github.com\n")
+        #expect(await queue.applyResolved(now: Date()) == nil)
+        #expect(await queue.liveChannel.snapshot().rules.isEmpty)
+    }
+}

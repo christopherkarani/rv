@@ -133,6 +133,15 @@ public actor NetworkReviewQueue {
     /// the same: the ceremony plant binds the grant cwd, and an unbound
     /// plant is refused.
     public func applyResolved(now: Date) async -> AppliedUpdate? {
+        // The owner's ceiling bounds every load, not only the approve door:
+        // a row resolved some other way still cannot load a host it
+        // forbids, and an unreadable ceiling loads nothing.
+        let ceiling: PolicyCeiling?
+        do {
+            ceiling = try PolicyCeilingStore(configDirectory: store.baseDirectory).load()
+        } catch {
+            return nil
+        }
         var newlyApplied: [String] = []
         for (fingerprint, idValue) in knownIDs {
             if appliedIDs.contains(idValue) { continue }
@@ -150,6 +159,7 @@ public actor NetworkReviewQueue {
                 let rule = EgressProposal.rule(for: record),
                 let cwd = record.action.scope.workingDirectory
             else { continue }
+            if ceiling?.egressWitness(host: rule.host, port: rule.port) != nil { continue }
             let plant = await ceremonies.plant(
                 fingerprint: GrantFingerprint(rawValue: fingerprint),
                 cwd: cwd,
