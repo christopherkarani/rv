@@ -688,8 +688,17 @@ enum MCPRun {
             done.append("trusted mcp.json; rv signs it again on every change it makes")
         }
         if tools.isEmpty == false {
-            guard pinStore.trust(reviewed: tools.reviewed, servers: configuration.servers.map(\.name)) else {
-                return .failure(CommandFailure("could not pin the reviewed MCP tool definitions in \(MCPToolPinStore.fileName)"))
+            switch pinStore.trust(reviewed: tools.reviewed, expectedPins: tools.expectedPins) {
+            case .trusted:
+                break
+            case .changedDuringReview:
+                return .failure(CommandFailure(
+                    (done.isEmpty ? "" : done.joined(separator: "\n") + "\n")
+                        + "\(MCPToolPinStore.fileName) changed during review; nothing pinned. Run `rv mcp trust` again"))
+            case .failed:
+                return .failure(CommandFailure(
+                    (done.isEmpty ? "" : done.joined(separator: "\n") + "\n")
+                        + "could not pin the reviewed MCP tool definitions in \(MCPToolPinStore.fileName)"))
             }
             auditOrLog(
                 AuditEvent(
@@ -698,6 +707,7 @@ enum MCPRun {
                     detail: ["method": method, "sha256": tools.digest, "tools": tools.names.joined(separator: ",")]),
                 configDirectory: environment.configDirectory)
             done.append("pinned \(tools.names.count) MCP tool definitions; rv serves them unchanged as trusted")
+            done.append(Self.restartNotice)
         }
         return .success(done.joined(separator: "\n") + "\n")
     }

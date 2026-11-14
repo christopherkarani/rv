@@ -934,7 +934,9 @@ public struct MCPGatewayCore {
                 untrusted += 1
                 let hash = seen[name] ?? ""
                 guard reportedChanges.insert(server + "\0" + name + "\0" + hash).inserted else { continue }
-                unpinned[name] = definitions[name]
+                // The pinned definition itself, listed again after another
+                // one, asks for this session but has nothing to review.
+                if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpToolChanged, decision: .pending, subject: "\(server)/\(name)",
                     reason: "MCP tool definition is not the one the user trusted; calls need approval until `rv mcp trust`",
@@ -1053,17 +1055,21 @@ public struct MCPGatewayCore {
         }
         var walked = object
         if let marker = Self.pinMarker(pinStatus(server: upstream.definition.name, tool: name)) {
-            walked["description"] = .string(marker)
-            walked["title"] = nil
-            if var annotations = object["annotations"]?.objectValue {
-                annotations["title"] = nil
-                walked["annotations"] = .object(annotations)
-            }
+            // Only what a client needs to call the tool after approval:
+            // the schemas' shape and the annotations' flags. `title`,
+            // `_meta`, `icons` and any other upstream field are dropped.
+            var withheld = JSONObject()
+            withheld["name"] = .string(MCPDisplayedText.field(listedName))
+            withheld["description"] = .string(marker)
             for key in ["inputSchema", "outputSchema"] {
-                if let schema = object[key] { walked[key] = Self.schemaProse(schema, withheld: true) }
+                if let schema = object[key] { withheld[key] = Self.schemaProse(schema, withheld: true) }
             }
-            walked["name"] = .string(MCPDisplayedText.field(listedName))
-            return .object(walked)
+            if let annotations = object["annotations"]?.objectValue {
+                var flags = JSONObject()
+                for (key, value) in annotations.entries where value.boolValue != nil { flags[key] = value }
+                if flags.isEmpty == false { withheld["annotations"] = .object(flags) }
+            }
+            return .object(withheld)
         }
         let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
         if rawDescription != nil { walked["description"] = .string(shownDescription) }
@@ -1091,9 +1097,14 @@ public struct MCPGatewayCore {
     /// called `description` or `title`.
     static let schemaMapKeywords: Set<String> = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]
 
+    /// Prose a withheld schema loses: the JSON Schema annotations that only
+    /// describe (`description`, `title`, `default`, `examples`) and `$comment`.
+    /// `enum` and `const` stay: they decide which arguments are valid.
+    static let schemaProseKeywords: Set<String> = ["description", "title", "default", "examples", "$comment"]
+
     /// A JSON Schema with every `description`/`title` string either shown
-    /// (hiding scalars neutralised) or, when `withheld`, removed. `pattern`
-    /// and the value keywords are left byte-exact.
+    /// (hiding scalars neutralised) or, when `withheld`, every prose keyword
+    /// removed. `pattern` and the value keywords are left byte-exact.
     static func schemaProse(_ schema: JSONValue, withheld: Bool) -> JSONValue {
         switch schema {
         case .array(let items):
@@ -1101,7 +1112,9 @@ public struct MCPGatewayCore {
         case .object(let object):
             var copy = JSONObject()
             for (key, value) in object.entries {
-                if schemaValueKeywords.contains(key) {
+                if withheld, schemaProseKeywords.contains(key) {
+                    continue
+                } else if schemaValueKeywords.contains(key) {
                     copy[key] = value
                 } else if key == "description" || key == "title", let text = value.stringValue {
                     if withheld == false { copy[key] = .string(MCPDisplayedText.description(text)) }

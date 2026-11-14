@@ -45,9 +45,11 @@ public enum AuditLog {
             chained.prev = tail.hash
             chained.chainHead = nil
             guard let raw = try? encoder.encode(chained), let encoded = escapingHazards(raw) else { return false }
-            // A line the verifier would reject is never written: refusing
-            // keeps the chain intact for the next append.
-            guard encoded.count <= AuditChain.maximumLineBytes else { return false }
+            // A line the verifier or the next append's tail scan would
+            // reject is never written: refusing keeps the chain usable. The
+            // scan reads at most `maximumLineBytes` back from the end, which
+            // must include the newline before the last line.
+            guard encoded.count < AuditChain.maximumLineBytes else { return false }
             var data = Data()
             if tail.isTorn { data.append(UInt8(ascii: "\n")) }
             data.append(encoded)

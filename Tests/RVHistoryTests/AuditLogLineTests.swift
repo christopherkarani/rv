@@ -47,7 +47,7 @@ struct AuditLogLineTests {
         let bytes = try Data(contentsOf: AuditLog.fileURL(configDirectory: dir))
         let line = try #require(String(data: bytes, encoding: .utf8))
         #expect(line.unicodeScalars.contains { $0.value == 0x1B || $0.value == 0x202E || $0.value == 0xE0041 } == false)
-        #expect(line.contains(#"‮"#) || line.contains(#"‮"#))
+        #expect(line.contains(#"\u202e"#) || line.contains(#"\u202E"#))
         let decoded = try #require(AuditLedger.event(fromLine: Substring(line.trimmingCharacters(in: .newlines)), source: .audit))
         #expect(decoded.subject == "github/\(hostile)")
         #expect(decoded.reason == hostile)
