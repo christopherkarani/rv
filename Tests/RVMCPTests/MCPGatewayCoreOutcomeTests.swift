@@ -11,7 +11,7 @@ struct MCPGatewayCoreOutcomeTests {
 
     @Test func unrecordableApprovalRequestIsDenied() {
         let approvals = MCPApprovalGate(
-            consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil })
+            consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil })
         let configuration = MCPConfiguration(servers: [MCPGatewayCoreTests.github])
         var core = MCPGatewayCore(
             configuration: configuration,

@@ -63,4 +63,27 @@ struct MCPGatewayForwardAuditTests {
         #expect(answered.toClient.first?["id"] == .int(3))
         #expect(answered.toClient.first?["error"]?["code"] == .int(-32603))
     }
+
+    /// M4: the client picks argument names and the tool name, so the
+    /// audit event bounds both instead of growing one line without limit.
+    @Test func theAuditEventCapsArgumentKeysAndTheSubject() {
+        let keys = (0..<200).map { String(format: "%03d", $0) + String(repeating: "k", count: 1000) }
+        let record = MCPCallRecord(
+            server: "github", tool: String(repeating: "t", count: 5000), decision: .allow, argumentKeys: keys,
+            isError: false, outcome: .forwarding(grant: nil))
+        let event = record.auditEvent()
+        let shown = (event.detail["argumentKeys"] ?? "").split(separator: ",", omittingEmptySubsequences: false)
+        #expect(shown.count == MCPCallRecord.maximumAuditedKeys)
+        #expect(shown.allSatisfy { $0.utf8.count <= MCPCallRecord.maximumAuditedKeyBytes })
+        #expect(shown.first == Substring(String(keys[0].utf8.prefix(MCPCallRecord.maximumAuditedKeyBytes))!))
+        #expect(event.detail["argumentKeysTruncated"] == "true")
+        #expect(event.subject.utf8.count <= MCPCallRecord.maximumAuditedSubjectBytes)
+        #expect((event.detail["tool"] ?? "").utf8.count <= MCPCallRecord.maximumAuditedSubjectBytes)
+        let small = MCPCallRecord(
+            server: "github", tool: "search", decision: .allow, argumentKeys: ["q"], isError: false,
+            outcome: .forwarding(grant: nil)).auditEvent()
+        #expect(small.detail["argumentKeys"] == "q")
+        #expect(small.detail["argumentKeysTruncated"] == nil)
+        #expect(small.subject == "github/search")
+    }
 }

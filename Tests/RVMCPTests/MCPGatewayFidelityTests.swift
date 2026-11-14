@@ -86,6 +86,64 @@ struct MCPGatewayFidelityTests {
         #expect(MCPDisplayedText.description("plain\\text\nnext") == "plain\\text\nnext")
     }
 
+    /// M2: every `description`/`title` string anywhere in a schema loses
+    /// hiding scalars; `pattern`, `const`, `enum`, `default` and `examples`
+    /// stay byte-exact, and so does a property that is named `description`.
+    @Test func schemaProseLosesHidingScalarsButSchemaValuesStayExact() throws {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.files]))
+        _ = harness.ready()
+        let hidden = #"x‮y󠁁\u001b[2Jz\nnext"#
+        let schema = #"{"type":"object","title":"T\#(hidden)","description":"D\#(hidden)","properties":{"path":{"type":"string","description":"P\#(hidden)","pattern":"^\\d+‮$","const":"c‮","enum":["e‮"],"default":{"description":"d‮"},"examples":["x‮"]},"description":{"type":"string","title":"N\#(hidden)"}},"$defs":{"item":{"description":"I\#(hidden)"}},"anyOf":[{"description":"A\#(hidden)"}]}"#
+        let output = #"{"type":"object","properties":{"ok":{"type":"boolean","description":"O\#(hidden)"}}}"#
+        let tools = Self.listed(
+            &harness, tools: #"[{"name":"read","description":"Read","inputSchema":\#(schema),"outputSchema":\#(output)}]"#)
+        let tool = try #require(tools.first)
+        let raw = try JSONValue.parse(#""\#(hidden)""#).stringValue ?? ""
+        let shown = MCPDisplayedText.description(raw)
+        #expect(shown.contains("\n"))
+        #expect(shown.unicodeScalars.contains { $0.value == 0x202E || $0.value == 0xE0041 || $0.value == 0x1B } == false)
+        let input = try #require(tool["inputSchema"])
+        #expect(input["title"]?.stringValue == "T" + shown)
+        #expect(input["description"]?.stringValue == "D" + shown)
+        #expect(input["properties"]?["path"]?["description"]?.stringValue == "P" + shown)
+        #expect(input["properties"]?["description"]?["title"]?.stringValue == "N" + shown)
+        #expect(input["$defs"]?["item"]?["description"]?.stringValue == "I" + shown)
+        #expect(input["anyOf"]?.arrayValue?.first?["description"]?.stringValue == "A" + shown)
+        #expect(tool["outputSchema"]?["properties"]?["ok"]?["description"]?.stringValue == "O" + shown)
+        let original = try JSONValue.parse(schema)
+        for key in ["pattern", "const", "enum", "default", "examples"] {
+            #expect(input["properties"]?["path"]?[key] == original["properties"]?["path"]?[key])
+        }
+        #expect(input["properties"]?["path"]?["pattern"]?.stringValue == "^\\d+\u{202E}$")
+    }
+
+    /// The client's reply is rebuilt from the upstream's `result` or
+    /// `error`; nothing else the upstream put in its message is forwarded.
+    @Test func aCallReplyCarriesOnlyTheResultOrTheError() throws {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.files]))
+        _ = harness.ready()
+        func call(_ reply: String) throws -> JSONValue {
+            let request = harness.client(#"{"jsonrpc":"2.0","id":"r","method":"tools/call","params":{"name":"read","arguments":{}}}"#)
+            let id = try #require(request.toUpstream.first?.1["id"]?.intValue)
+            return try #require(harness.upstream("files", reply.replacingOccurrences(of: "ID", with: "\(id)")).toClient.first)
+        }
+        let result = try call(#"{"jsonrpc":"2.0","id":ID,"result":{"content":[]},"params":{"x":1},"_meta":{"note":"unshown"},"extra":"y"}"#)
+        #expect(result == (try JSONValue.parse(#"{"jsonrpc":"2.0","id":"r","result":{"content":[]}}"#)))
+        let error = try call(#"{"jsonrpc":"1.0","id":ID,"error":{"code":-1,"message":"no"},"extra":"y"}"#)
+        #expect(error == (try JSONValue.parse(#"{"jsonrpc":"2.0","id":"r","error":{"code":-1,"message":"no"}}"#)))
+        let neither = try call(#"{"jsonrpc":"2.0","id":ID,"extra":"y"}"#)
+        #expect(neither["error"]?["code"]?.intValue == -32603)
+        #expect(neither["extra"] == nil)
+    }
+
+    /// M2 (a): the approval prompt shows argument text escaped.
+    @Test func theApprovalPromptEscapesHidingScalarsInArguments() throws {
+        let arguments = try JSONValue.parse(#"{"note":"a\u001b[2Jb‮c󠁁d"}"#)
+        let message = MCPGatewayCore.elicitationMessage(server: "files", tool: "wri\u{202E}te", arguments: arguments)
+        #expect(message.unicodeScalars.contains { $0.value == 0x1B || $0.value == 0x202E || $0.value == 0xE0041 } == false)
+        #expect(MCPGatewayCore.elicitationCovers(arguments, shown: message))
+    }
+
     @Test func secretsAreStillScrubbedFromSchemasAndResults() throws {
         var harness = GatewayHarness(
             MCPConfiguration(servers: [Self.files]), secrets: ["files": [("TOKEN", "tok\\en\nvalue")]])

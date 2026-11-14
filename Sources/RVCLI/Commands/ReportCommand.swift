@@ -190,12 +190,23 @@ enum ReportRun {
     static func auditSummary(_ inputs: Inputs) -> Report.AuditSummary {
         let since = inputs.now.addingTimeInterval(-86_400)
         let events = AuditLedger(configDirectory: inputs.configDirectory).events(AuditFilter(since: since))
-        var byKind: [String: [String: Int]] = [:]
-        for event in events { byKind[event.kind.rawValue, default: [:]][event.decision.rawValue, default: 0] += 1 }
+        let byKind = auditCounts(events)
         let chain = AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: inputs.configDirectory))
         return Report.AuditSummary(
             since: iso8601(since), total: events.count, byKind: byKind, lastEventAt: events.last.map { iso8601($0.time) },
             chainIntact: (try? chain.get())?.isIntact, chainHead: (try? chain.get())?.head)
+    }
+
+    /// kind → decision → events, counting an MCP call once: the gateway's
+    /// `stage=forward` record (written before the call goes upstream) is
+    /// followed by the call's own record, so only the latter counts. A call
+    /// still running, or cut off by a crash, shows only in the total.
+    static func auditCounts(_ events: [AuditEvent]) -> [String: [String: Int]] {
+        var byKind: [String: [String: Int]] = [:]
+        for event in events where !(event.kind == .mcpCall && event.detail["stage"] == "forward") {
+            byKind[event.kind.rawValue, default: [:]][event.decision.rawValue, default: 0] += 1
+        }
+        return byKind
     }
 
     static func text(_ report: Report) -> String {

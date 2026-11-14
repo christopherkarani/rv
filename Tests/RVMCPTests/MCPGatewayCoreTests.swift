@@ -7,16 +7,19 @@ final class FakeApprovals: Sendable {
     let granted = Mutex<Set<String>>([])
     let forged = Mutex<Set<String>>([])
     let requested = Mutex<[String]>([])
+    let bindings = Mutex<[MCPToolBinding]>([])
 
     var gate: MCPApprovalGate {
         MCPApprovalGate(
-            consumeGrant: { server, tool, hash, _ in
+            consumeGrant: { server, tool, hash, _, binding in
+                self.bindings.withLock { $0.append(binding) }
                 let key = "\(server)/\(tool)/\(hash)"
                 if self.granted.withLock({ $0.remove(key) }) != nil { return .granted(id: "grant1") }
                 if self.forged.withLock({ $0.remove(key) }) != nil { return .forged(id: "forged1") }
                 return .none
             },
-            request: { server, tool, _, _ in
+            request: { server, tool, _, _, binding in
+                self.bindings.withLock { $0.append(binding) }
                 self.requested.withLock { $0.append("\(server)/\(tool)") }
                 return MCPApprovalTicket(id: "req1", code: "ABCDE-FGHJK")
             })
