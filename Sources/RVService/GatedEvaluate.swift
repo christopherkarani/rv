@@ -468,9 +468,14 @@ public struct GatedEvaluate: Sendable {
         if denialInTime, let row = Self.denialRow(for: finished, path: nil, host: host, tool: tool, now: now) {
             effects.append(row)
         }
+        // An allow-once grant spent in time keeps its reply even when the
+        // deadline passes after (`HookDoor` sends no timeout deny then), so
+        // the deny that reply becomes, if the override row fails, keeps its
+        // rows too.
         if verb.recordsDenial,
            let row = Self.overrideAudit(candidate: candidate, finished: finished, override: override,
-                                        host: host, tool: tool, cwd: cwd, now: now, withDenial: denialInTime) {
+                                        host: host, tool: tool, cwd: cwd, now: now,
+                                        withDenial: denialInTime || override == .allowOnce) {
             effects.append(row)
         }
         return (finished, effects)
@@ -928,8 +933,9 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// The audit row for a deny the Policy gate overrode; nil otherwise.
-    /// `withDenial` is false past the hook deadline: the row then carries no
-    /// deny rows, as no deny row is written then.
+    /// `withDenial` is false when `HookDoor` will answer with the timeout
+    /// deny instead (past the hook deadline, no grant spent): the row then
+    /// carries no deny rows, as no deny row is written then.
     private static func overrideAudit(
         candidate: EvaluationResult,
         finished: EvaluationResult,
