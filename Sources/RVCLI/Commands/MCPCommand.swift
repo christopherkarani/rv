@@ -1032,10 +1032,11 @@ enum MCPRun {
     }
 
     /// Appends, or says so on stderr: silently losing audit on a full disk
-    /// would let calls proceed unrecorded.
+    /// would let calls proceed unrecorded. Through the gateway's stderr
+    /// writer, which fails on a closed stderr where `FileHandle` raised.
     static func auditOrLog(_ event: AuditEvent, configDirectory: URL) {
         if AuditLog.append(event, configDirectory: configDirectory) == false {
-            FileHandle.standardError.write(Data("rv mcp: could not append the audit log\n".utf8))
+            MCPGatewayRuntime.writeStderrLine("rv mcp: could not append the audit log\n")
         }
     }
 
@@ -1687,12 +1688,15 @@ struct MCPServe: AsyncParsableCommand {
         case .success(let result): planned = result
         }
         let configDirectory = environment.configDirectory
-        // As `MCPGatewayRuntime.run` does, but before the first stderr line
-        // below: a host that closed its stderr reader must not kill serve
-        // with SIGPIPE. Upstreams are spawned later, by `run`, as before.
+        // As `MCPGatewayRuntime.run` does, but before the pin-store and
+        // host-check lines below: a host that closed its stderr reader must
+        // not kill serve with SIGPIPE from here on. Not before planning,
+        // whose children (the capability probe, lease helpers) keep the
+        // default, so a Linux cage notice written there still can. Upstreams
+        // are spawned later, by `run`, as before.
         signal(SIGPIPE, SIG_IGN)
         let log: @Sendable (String) -> Void = { message in
-            MCPRun.writeServeStderr("rv mcp: \(message)\n")
+            MCPGatewayRuntime.writeStderrLine("rv mcp: \(message)\n")
         }
         let bindsPlaceholders = planned.contains { entry in
             guard case .placeholderBound = entry.1 else { return false }

@@ -1,8 +1,3 @@
-#if canImport(Glibc)
-import Glibc
-#elseif canImport(Darwin)
-import Darwin
-#endif
 import Dispatch
 import Foundation
 import RVDomain
@@ -136,22 +131,5 @@ extension MCPRun {
             source: "mcp-gateway",
             detail: ["bypass": String(counts.bypass), "blocked": String(counts.blocked), "unreviewed": String(counts.unreviewed)])
         return HostCheckNotice(line: line, event: event)
-    }
-
-    /// One `rv mcp serve` stderr line through write(2), which fails with
-    /// EPIPE once SIGPIPE is ignored; `FileHandle.write` raises instead.
-    /// A short or failed write is dropped: stderr is not worth stopping for.
-    static func writeServeStderr(_ text: String) {
-        let bytes = Array(text.utf8)
-        var written = 0
-        while written < bytes.count {
-            let n = bytes.withUnsafeBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return write(STDERR_FILENO, base + written, raw.count - written)
-            }
-            if n < 0, errno == EINTR { continue }
-            guard n > 0 else { return }
-            written += n
-        }
     }
 }
