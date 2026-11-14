@@ -174,13 +174,10 @@ package final class SecretPlaceholderLease: Sendable {
         Self.holdsRealValue(environment: environment, arguments: arguments, realValues: lease.realValues)
     }
 
-    /// The rule `rv run` drops inherited copies by
-    /// (`SecretRunEnvironment.copies`), over the variables and the arguments.
-    /// Compared in memory; nothing is printed.
+    /// `SecretValueCopy` over each variable's value and each argument.
     static func holdsRealValue(environment: [String: String], arguments: [String], realValues: [SecretValue]) -> Bool {
-        let indexed = Dictionary(uniqueKeysWithValues: arguments.enumerated().map { (String($0.offset), $0.element) })
-        return SecretRunEnvironment.copies(parent: environment, realValues: realValues).isEmpty == false
-            || SecretRunEnvironment.copies(parent: indexed, realValues: realValues).isEmpty == false
+        guard realValues.isEmpty == false else { return false }
+        return (Array(environment.values) + arguments).contains { SecretValueCopy.found(in: $0, realValues: realValues) }
     }
 
     /// Spawns `executable` stopped as the leader of a new process group,
