@@ -443,9 +443,18 @@ struct SecretRunLaunchTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let marker = directory.appendingPathComponent("pid").path
         let signals = SecretRunSignals()
-        defer { signals.restore() }
+        // Whether the guard is still up: the signal is sent to this whole
+        // process, and after `restore` it would end the test run.
+        let guarded = Mutex(true)
+        defer {
+            guarded.withLock { $0 = false }
+            signals.restore()
+        }
         Thread.detachNewThread {
-            let deadline = Date().addingTimeInterval(20)
+            // As long as the test may take: on a loaded machine the command
+            // can take tens of seconds to start. A signal sent before it has
+            // stopped would abandon the launch, which is another test.
+            let deadline = Date().addingTimeInterval(55)
             var pid: pid_t = 0
             while pid == 0, Date() < deadline {
                 let text = (try? String(contentsOfFile: marker, encoding: .utf8)) ?? ""
@@ -453,7 +462,7 @@ struct SecretRunLaunchTests {
                 usleep(10_000)
             }
             while isStopped(pid) == false, Date() < deadline { usleep(10_000) }
-            _ = kill(getpid(), number)
+            guarded.withLock { if $0 { _ = kill(getpid(), number) } }
         }
         let script = "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; exit 0"
         let result = SecretRunProcess.launch(

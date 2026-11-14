@@ -31,7 +31,7 @@ Landlock's network rules cover two calls on a TCP socket, `bind` and
 reaches the network without either. Which route is open depends on the
 kernel build, by patch level as well as version:
 
-| Route | 6.8.0 (ABI 4) | 6.12.0 (ABI 6) | 6.18.44 (ABI 7) | 7.3.0 (ABI 11) |
+| Route | 6.8.0 (ABI 4) | 6.12.0 (ABI 6) | 6.18.44-fc (ABI 7) | 7.3.0 (ABI 11) |
 | --- | --- | --- | --- | --- |
 | `connect` on an MPTCP socket (`IPPROTO_MPTCP`), which reaches any TCP server | denied | denied | open | open |
 | `sendto` with `MSG_FASTOPEN` on a TCP socket, which connects without `connect` | open | open | open | denied |
@@ -39,18 +39,20 @@ kernel build, by patch level as well as version:
 | `listen` on a socket never bound, which picks a port and accepts | open | open | open | open |
 | UDP to any address | open | open | open | denied |
 
-These are exact builds: 6.18.44 is the host `MCPLinuxSandboxTests` ran
-on; the others are the mainline `.0` guests of
+These are exact builds: 6.18.44-fc (a vendor build) is the host
+`MCPLinuxSandboxTests` ran on; the others are the mainline `.0` guests of
 `Scripts/linux-kernel-e2e.sh`, which print each TCP route's result and
 fail unless `listen` without `bind` and one of the three others get
 through. Do not read a column as "the 6.8 series": the same harness, run
 during review on Ubuntu 24.04's 6.8.0-151 and on stable 6.12.30, found
 MPTCP `connect` open on both and TCP fast open denied on the first.
 Every build measured leaves `listen` without `bind` open, and, where
-MPTCP is enabled (the default), at least one way out by TCP. With MPTCP
-switched off, a build that denies fast open leaves `listen`, the sockets
-that are neither TCP nor UDP (ICMP echo was measured open on all four
-builds; SCTP was not measured) and, before ABI 10, UDP.
+MPTCP and TCP fast open are both enabled (the defaults), at least one way
+out by TCP. With either switched off, a build that denies the other
+leaves `listen`, the sockets that are neither TCP nor UDP (ICMP echo was
+measured open on all four builds, with `net.ipv4.ping_group_range` opened
+as most distributions ship it; SCTP was not measured) and, before ABI 10,
+UDP.
 
 So `network: false` and `sandbox.hosts` cannot be enforced against a
 server that means to get out, and a server with `sandbox.hosts` can go
@@ -122,9 +124,14 @@ The environment is the same on both: `PATH`, `HOME`, `TMPDIR`, `LANG`,
 - A terminal or other device the server opens itself cannot be controlled
   with `ioctl` from ABI 5, so it cannot allocate a pseudo-terminal.
 - A file or directory beside a protected one and named after it is not
-  readable either: `.netrc.tmp`, `.git-credentialsXXXXXX`, `gh.bak`, and
-  also unrelated things such as `~/.config/gh-dash`, `~/.docker-desktop`,
-  `~/.ssh-agent` or `~/.config/google-chrome-beta`.
+  readable either. "Named after" means its name contains the protected
+  name, for a name with a dot or other punctuation or of five characters
+  or more; a short plain one (`gh`) only as a whole word. So `.netrc.tmp`,
+  `.git-credentialsXXXXXX` and `gh.bak` are unreadable, and so are
+  unrelated things in the home directory such as `~/.dockerignore`,
+  `~/.cursorrules`, `~/.cursor-server`, `~/.ssh-agent`,
+  `~/.config/gh-dash` or `~/.config/google-chrome-beta`. The same names
+  inside a project are not affected.
 - The session's runtime directory (`/run/user/<uid>`) is not readable,
   `/run` cannot be listed, and what appears in `/run` after the server
   started is not readable. Where `/run/user` itself cannot be listed (a
@@ -166,8 +173,9 @@ what that kernel does not block.
   refusal; credential stores and rv's configuration unreadable directly,
   through a link, and at a link's target; writes confined; TCP `connect`
   and `bind` denied where the same script succeeds uncaged; `listen`
-  without `bind`, and at least one of MPTCP and TCP fast open, open in the
-  cage (and no route open in the cage that is not open outside it); only the
+  without `bind` open in the cage, at least one of MPTCP and TCP fast open
+  too where the host has both, and no route open in the cage that is not
+  open outside it; only the
   proxy's port with an allowlist; `NO_NEW_PRIVS` and a setuid binary; other
   processes unreadable; Unix sockets, signals, UDP and device `ioctl` open
   or closed as the table says for the kernel's ABI; `chmod` of a protected

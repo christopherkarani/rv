@@ -477,8 +477,9 @@ static int unix_listener(const char *path) {
     return fd >= 0 && bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(fd, 8) == 0;
 }
 
-/* Loopback up, two TCP listeners, three pathname Unix listeners (outside
- * every root, in the --temp root, in the --write root) and one abstract
+/* Loopback up, two TCP listeners, four pathname Unix listeners (outside
+ * every root, in the --temp root, in the --write root, in the --write
+ * root nested in the --temp root) and one abstract
  * one, all held by this process, outside any cage. */
 static int confine_setup(char *port_a, char *port_b, size_t size) {
     struct ifreq interface;

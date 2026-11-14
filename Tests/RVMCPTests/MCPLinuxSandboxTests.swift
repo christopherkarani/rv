@@ -227,7 +227,8 @@ struct MCPLinuxSandboxTests {
     /// (MPTCP `connect` and TCP fast open are each denied on some), so
     /// each is tried outside the cage first: the cage may deny a route,
     /// never open one. `listen` without `bind` is open in every cage, and
-    /// where the host has MPTCP at least one way out is too. If a kernel
+    /// where the host has MPTCP and fast open, at least one way out is
+    /// too. If a kernel
     /// closes these, this fails and the limits in
     /// docs/security/mcp-linux-sandbox.md change.
     @Test(.timeLimit(.minutes(2)))
@@ -270,9 +271,9 @@ struct MCPLinuxSandboxTests {
             #expect(control[route] == "ok", "\(route) is open in the cage and not outside it")
         }
         #expect(inside["listen-unbound"] == "ok", "\(inside)")
-        // With MPTCP switched off, a kernel that denies fast open leaves no
-        // way out by TCP; with it, every build measured leaves one.
-        if control["mptcp"] == "ok" {
+        // MPTCP fast open is the one route open on every build measured;
+        // it needs MPTCP and fast open both enabled on the host.
+        if control["mptcp-fast-open"] == "ok" {
             #expect(["mptcp", "fast-open", "mptcp-fast-open"].contains { inside[$0] == "ok" }, "\(inside)")
         }
     }

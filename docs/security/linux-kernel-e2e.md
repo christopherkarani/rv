@@ -74,8 +74,8 @@ from ABI 9; one in the inner's own write root stays reachable), and a UDP
 datagram (`EACCES` from ABI 10). So 6.8 shows all five open, 6.12 two, and
 7.3 none. A socket the inner makes itself in a shared directory, and one
 another program made in a write root nested inside a shared directory
-(where the scratch directory is), stay reachable on every lane. Two more
-checks hold on every lane from ABI 4, and are why a network limit is
+(where the scratch directory is), stay reachable on every lane from ABI
+4. Two more checks hold on those lanes, and are why a network limit is
 refused ([mcp-linux-sandbox.md](mcp-linux-sandbox.md)): `listen` on a
 socket never bound succeeds, and at least one of an MPTCP `connect`, TCP
 fast open and MPTCP fast open reaches a listener with no port rule. The
