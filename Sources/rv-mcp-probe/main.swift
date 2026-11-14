@@ -1,6 +1,7 @@
 // Test probe for RVMCPTests, run as a child. Not shipped.
 //
-// `rv-mcp-probe signals` installs `MCPShutdownSignals`, which changes real
+// `rv-mcp-probe signals [INT] [TERM] [HUP]` sets the named signals to the
+// default, then installs `MCPShutdownSignals`, which changes real
 // signal dispositions (never done in the shared test process). It prints the
 // dispositions it inherited and installed, spawns `report` through
 // Foundation `Process` as serve spawns a plain server, sends itself SIGTERM,
@@ -100,6 +101,18 @@ case "report":
     say(dispositions())
     exit(0)
 case "signals":
+    // Signals named after `signals` are set to the default first, in this
+    // child only, so the test does not depend on what its runner ignores.
+    let names: [String: Int32] = ["INT": SIGINT, "TERM": SIGTERM, "HUP": SIGHUP]
+    for name in arguments.dropFirst() {
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = SIG_DFL
+        sigemptyset(&action.sa_mask)
+        guard let number = names[name], sigaction(number, &action, nil) == 0 else {
+            say("usage: rv-mcp-probe signals [INT] [TERM] [HUP]")
+            exit(2)
+        }
+    }
     exit(catchSignals())
 case "procargs":
     // Arguments after the pid are ignored: they exist so a test can read
@@ -111,6 +124,6 @@ case "procargs":
     say(procargs(pid))
     exit(0)
 default:
-    say("usage: rv-mcp-probe signals | report | procargs <pid|self> [ignored...]")
+    say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...]")
     exit(2)
 }
