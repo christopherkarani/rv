@@ -170,7 +170,7 @@ struct MCPStrictProfileTests {
         let text = try MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: root.appendingPathComponent("scratch").path,
             home: home, configDirectory: home + "/.config/rv", temporaryDirectory: root.appendingPathComponent("tmp").path,
-            loopbackPorts: MCPSandbox.loopbackPorts(proxy: nil, gateway: 5151)).get()
+            loopbackPorts: MCPSandbox.cageNetwork([:], proxy: nil, reach: .secretsGateway(port: 5151)).loopbackPorts).get()
         #expect(text.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:5151\"))"))
         #expect(text.components(separatedBy: "localhost:").count == 2)
         #if os(macOS)
@@ -184,7 +184,7 @@ struct MCPStrictProfileTests {
         try FileManager.default.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home").path
-        let ports = MCPSandbox.loopbackPorts(proxy: 4321, gateway: 5151)
+        let ports = MCPSandbox.cageNetwork([:], proxy: (4321, "abc"), reach: .secretsGateway(port: 5151)).loopbackPorts
         #expect(ports == [4321, 5151])
         let text = try MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false, hosts: ["api.example.com"]),
@@ -199,11 +199,25 @@ struct MCPStrictProfileTests {
         #endif
     }
 
-    @Test func gatewayBypassNamesOnlyTheLoopbackAddress() {
-        let proxied = MCPSandbox.proxyEnvironment(["PATH": "/bin"], port: 4321, credential: "abc")
-        let environment = MCPSandbox.bypassingProxyForGateway(proxied)
-        #expect(environment["NO_PROXY"] == "127.0.0.1" && environment["no_proxy"] == "127.0.0.1")
-        #expect(environment["HTTPS_PROXY"] == "http://abc@127.0.0.1:4321")
+    /// What `apply` puts in the cage: the gateway port only for a
+    /// placeholder server, and a proxy bypass that names only the gateway's
+    /// address only when a `sandbox.hosts` proxy is also set.
+    @Test func onlyAPlaceholderCageDialsTheGatewayAndItsRequestsSkipTheProxy() {
+        let base = ["PATH": "/bin"]
+        let both = MCPSandbox.cageNetwork(base, proxy: (4321, "abc"), reach: .secretsGateway(port: 5151))
+        #expect(both.loopbackPorts == [4321, 5151])
+        #expect(both.environment["NO_PROXY"] == "127.0.0.1" && both.environment["no_proxy"] == "127.0.0.1")
+        #expect(both.environment["HTTPS_PROXY"] == "http://abc@127.0.0.1:4321")
+        let gatewayOnly = MCPSandbox.cageNetwork(base, proxy: nil, reach: .secretsGateway(port: 5151))
+        #expect(gatewayOnly.loopbackPorts == [5151])
+        #expect(gatewayOnly.environment == base)
+        let proxyOnly = MCPSandbox.cageNetwork(base, proxy: (4321, "abc"), reach: .standard)
+        #expect(proxyOnly.loopbackPorts == [4321])
+        #expect(proxyOnly.environment == MCPSandbox.proxyEnvironment(base, port: 4321, credential: "abc"))
+        #expect(proxyOnly.environment["NO_PROXY"] == nil && proxyOnly.environment["no_proxy"] == nil)
+        let neither = MCPSandbox.cageNetwork(base, proxy: nil, reach: .standard)
+        #expect(neither.loopbackPorts.isEmpty)
+        #expect(neither.environment == base)
     }
 }
 
