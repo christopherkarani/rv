@@ -940,7 +940,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "ceiling",
-                    description: "ceiling.toml: deny/ask rules no layer may state a weaker verdict on, plus optional egress.hosts for approvals. A layer above it fails closed; check prints a witness command."
+                    description: "ceiling.toml: deny/ask rules every evaluation applies on top of the layers, plus optional egress.hosts for approvals. Saves that ask where it denies are refused; check prints a witness to rv explain."
                 ),
             ]),
         ],

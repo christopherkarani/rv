@@ -19,7 +19,11 @@ _rv() {
       COMPREPLY=( $(compgen -W "enable disable info" -- "$cur") )
       ;;
     policy)
-      COMPREPLY=( $(compgen -W "show list draft validate export apply check ceiling" -- "$cur") )
+      if [[ $COMP_CWORD -eq 3 && "${COMP_WORDS[2]}" == ceiling ]]; then
+        COMPREPLY=( $(compgen -W "show set" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "show list draft validate export apply check ceiling" -- "$cur") )
+      fi
       ;;
     scan)
       COMPREPLY=( $(compgen -W "sessions" -- "$cur") )
