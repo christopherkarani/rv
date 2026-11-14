@@ -48,6 +48,13 @@ private func eventually(_ seconds: TimeInterval = 10, _ condition: () -> Bool) -
     return true
 }
 
+/// `path` with every symlink resolved (`/var` is `/private/var`), or `path`.
+private func physical(_ path: String) -> String {
+    guard let resolved = realpath(path, nil) else { return path }
+    defer { free(resolved) }
+    return String(cString: resolved)
+}
+
 private func contents(_ directory: URL, _ name: String) -> String {
     let text = (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)) ?? ""
     return text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -218,8 +225,7 @@ struct SecretPlaceholderLaunchTests {
 
         #expect(contents(directory, "pgid") == contents(directory, "pid"))
         #expect(contents(directory, "pid") == String(group.leader))
-        #expect(contents(directory, "cwd") == directory.resolvingSymlinksInPath().path
-            || contents(directory, "cwd") == directory.path)
+        #expect(physical(contents(directory, "cwd")) == physical(directory.path))
         let seen = contents(directory, "env")
         #expect(seen.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(seen.contains("REAL") == false)

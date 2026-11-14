@@ -653,7 +653,8 @@ enum MCPRun {
         var review = ""
         var prompt = ""
         if configTrusted == false {
-            review = trustReview(configuration, secrets: .load(configDirectory: environment.configDirectory)) + "\nsha256 \(digest)"
+            review = trustReview(configuration, secrets: SecretsConfiguration.load(configDirectory: environment.configDirectory))
+                + "\nsha256 \(digest)"
             guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
                 return .failure("trust review omitted a literal value; nothing signed")
             }
