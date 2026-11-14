@@ -395,7 +395,9 @@ struct MCPToolPinTests {
 
     /// Round 7 L1: a prompt held for a tool rv does not track is refused on
     /// accept once its server listed a hiding tool past the cap; the
-    /// prompt was shown before rv knew.
+    /// prompt was shown before rv knew. Round 8 L3: the record closes the
+    /// prompt's `ask` row as declined under its approval id, as a binding
+    /// that changed under the prompt does.
     @Test func aHeldPromptForAnUntrackedToolIsRefusedOnceItsServerHidOnePastTheCap() throws {
         let cap = MCPGatewayCore.maximumTrackedTools
         var harness = Self.harness(PinRecorder().pinning(Self.pinned))
@@ -406,8 +408,31 @@ struct MCPToolPinTests {
         _ = Self.list(&harness, [Self.hidingSchemaTools[1]])
         #expect(harness.core.hidingUntracked.contains("github"))
         let answered = harness.client(#"{"jsonrpc":"2.0","id":"\#(key)","result":{"action":"accept","content":{"approve":true}}}"#)
-        Self.expectRefusedUntracked(answered, "accepted after the server hid a tool past the cap")
+        #expect(answered.toUpstream.isEmpty)
+        #expect(answered.audits.map(\.decision) == [.ask])
+        #expect(answered.audits.first?.outcome == .declined(approvalID: key))
+        #expect(answered.audits.first?.reason == MCPGatewayCore.untrackedHidingReason)
+        #expect(answered.audits.first?.isError == true)
         #expect(answered.toClient.count == 1)
+        #expect(answered.toClient.first?["error"]?["message"]?.stringValue == "Unknown tool: tag")
+    }
+
+    /// Round 8 L4: a prompt held for a tool rv tracks still runs on accept
+    /// after its server hid another one past the cap.
+    @Test func aHeldPromptForATrackedToolStillRunsAfterItsServerHidOnePastTheCap() throws {
+        let cap = MCPGatewayCore.maximumTrackedTools
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        _ = harness.client(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#)
+        _ = Self.list(&harness, (0..<cap).map { #"{"name":"f\#($0)"}"# })
+        let asked = Self.call(&harness, "f0")
+        #expect(asked.toUpstream.isEmpty)
+        let key = try #require(asked.toClient.first(where: { $0["method"] == .string("elicitation/create") })?["id"]?.stringValue)
+        _ = Self.list(&harness, [Self.hidingSchemaTools[1]])
+        #expect(harness.core.hidingUntracked.contains("github"))
+        let answered = harness.client(#"{"jsonrpc":"2.0","id":"\#(key)","result":{"action":"accept","content":{"approve":true}}}"#)
+        #expect(answered.toUpstream.count == 1)
+        #expect(answered.toUpstream.first?.1["params"]?["name"]?.stringValue == "f0")
+        #expect(answered.audits.first?.reason != MCPGatewayCore.untrackedHidingReason)
     }
 
     /// Round 5 M1: a tool once listed hiding stays refused until a listing
