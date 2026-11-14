@@ -13,6 +13,12 @@ struct SecretCommandProviderTests {
         return ["PATH": directory.path, "HOME": directory.path]
     }
 
+    /// Runs `body` with the fake's directory as the only trusted directory.
+    /// A user-owned PATH entry is never searched, so PATH alone cannot reach it.
+    private func resolving<T>(_ environment: [String: String], _ body: () throws -> T) rethrows -> T {
+        try SecretCommandProviders.$trustedDirectories.withValue([environment["HOME"] ?? "/nonexistent"]) { try body() }
+    }
+
     /// The ambient Vault token belongs to VAULT_ADDR's server. A definition's
     /// own address (a Varlock schema can supply one) never receives it.
     @Test func vaultTokenStaysWithVaultAddr() {
@@ -49,8 +55,10 @@ struct SecretCommandProviderTests {
             printf '%s\\n' "$*" > "$HOME/args"
             printf '%s' '\(secret)'
             """)
-        let read = SecretCommandProviders.infisical(
-            name: "DATABASE_URL", project: "proj", environmentName: "dev", path: "/", environment: infisical)
+        let read = resolving(infisical) {
+            SecretCommandProviders.infisical(
+                name: "DATABASE_URL", project: "proj", environmentName: "dev", path: "/", environment: infisical)
+        }
         guard case .success(let value) = read else {
             Issue.record("infisical did not resolve")
             return
@@ -65,8 +73,9 @@ struct SecretCommandProviderTests {
             #!/bin/sh
             printf '%s' '{"id":"abc","value":"\(secret)","key":"DB"}'
             """)
-        guard case .success(let bw) = SecretCommandProviders.bitwarden(
-            id: "12345678-1234-1234-1234-123456789abc", environment: bws)
+        guard case .success(let bw) = resolving(bws, {
+            SecretCommandProviders.bitwarden(id: "12345678-1234-1234-1234-123456789abc", environment: bws)
+        })
         else {
             Issue.record("bws did not resolve")
             return
@@ -74,22 +83,28 @@ struct SecretCommandProviderTests {
         #expect(bw.revealed() == Array(secret.utf8))
 
         let gcloud = try fake("gcloud", body: "#!/bin/sh\nprintf '%s' '\(secret)'\n")
-        guard case .success = SecretCommandProviders.gcp(secret: "api-key", project: "my-project", version: "5", environment: gcloud)
+        guard case .success = resolving(gcloud, {
+            SecretCommandProviders.gcp(secret: "api-key", project: "my-project", version: "5", environment: gcloud)
+        })
         else {
             Issue.record("gcloud did not resolve")
             return
         }
 
         let az = try fake("az", body: "#!/bin/sh\nprintf '%s' '\(secret)'\n")
-        guard case .success = SecretCommandProviders.azure(vault: "my-vault", name: "db", version: nil, environment: az) else {
+        guard case .success = resolving(az, {
+            SecretCommandProviders.azure(vault: "my-vault", name: "db", version: nil, environment: az)
+        }) else {
             Issue.record("az did not resolve")
             return
         }
     }
 
     @Test func failuresAreTypedAndNeverIncludeTheOutput() throws {
-        let missing = SecretCommandProviders.infisical(
-            name: "X", project: nil, environmentName: nil, path: nil, environment: ["PATH": "/nope", "HOME": "/tmp"])
+        let missing = resolving(["HOME": "/nonexistent-rv-cli"]) {
+            SecretCommandProviders.infisical(
+                name: "X", project: nil, environmentName: nil, path: nil, environment: ["PATH": "/nope", "HOME": "/tmp"])
+        }
         guard case .failure(let unavailable) = missing else {
             Issue.record("missing CLI was accepted")
             return
@@ -97,7 +112,9 @@ struct SecretCommandProviderTests {
         #expect(unavailable.message.contains("not installed"))
 
         let broken = try fake("bws", body: "#!/bin/sh\nprintf '%s' 'super-secret-blob'\nexit 2\n")
-        guard case .failure(let failed) = SecretCommandProviders.bitwarden(id: "12345678-1234-1234-1234-123456789abc", environment: broken)
+        guard case .failure(let failed) = resolving(broken, {
+            SecretCommandProviders.bitwarden(id: "12345678-1234-1234-1234-123456789abc", environment: broken)
+        })
         else {
             Issue.record("failing bws was accepted")
             return
@@ -106,7 +123,9 @@ struct SecretCommandProviderTests {
         #expect(failed.message.contains("super-secret-blob") == false)
 
         let shaped = try fake("bws", body: "#!/bin/sh\nprintf '%s' 'super-secret-blob'\n")
-        guard case .failure(let shape) = SecretCommandProviders.bitwarden(id: "12345678-1234-1234-1234-123456789abc", environment: shaped)
+        guard case .failure(let shape) = resolving(shaped, {
+            SecretCommandProviders.bitwarden(id: "12345678-1234-1234-1234-123456789abc", environment: shaped)
+        })
         else {
             Issue.record("plain bws output was accepted")
             return
@@ -118,8 +137,9 @@ struct SecretCommandProviderTests {
     @Test func commandOutputStopsAtOneMebibyteAndTheDeadlineIsHonored() throws {
         var huge = try fake("bws", body: "#!/bin/sh\npython3 -c 'print(\"a\" * 1100000, end=\"\")'\n")
         huge["PATH"] = "\(huge["PATH"]!):/usr/bin:/bin"
-        guard case .failure(let oversized) = SecretCommandProviders.bitwarden(
-            id: "12345678-1234-1234-1234-123456789abc", environment: huge)
+        guard case .failure(let oversized) = resolving(huge, {
+            SecretCommandProviders.bitwarden(id: "12345678-1234-1234-1234-123456789abc", environment: huge)
+        })
         else {
             Issue.record("oversized output was accepted")
             return

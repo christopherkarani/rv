@@ -453,9 +453,14 @@ struct VarlockSchemaTests {
 
     // @proxy/@placeholder/@type semantics follow Varlock (MIT):
     // decorators.ts:1063-1085, placeholder.ts:25-127, config-item.ts:700-717.
-    private static func gateway(_ upstream: String, _ baseURLEnv: String, _ prefix: String = "") -> SecretDelivery {
-        .gateway(SecretGatewayBinding(upstream: URL(string: upstream)!, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
+    private static func gateway(
+        _ upstream: String, _ baseURLEnv: String, _ prefix: String = "", allow: [GatewayAllowance] = []
+    ) -> SecretDelivery {
+        .gateway(SecretGatewayBinding(
+            upstream: URL(string: upstream)!, baseURLEnv: baseURLEnv, placeholderPrefix: prefix, allow: allow))
     }
+
+    private static let modelAPI: [GatewayAllowance] = [.rule(GatewayAccessRule(methods: ["GET", "POST"], path: "/v1/**")!)]
 
     @Test func proxyDomainBecomesGatewayDelivery() throws {
         let plan = try VarlockSchema.plan("""
@@ -472,9 +477,13 @@ struct VarlockSchemaTests {
             """).get()
         let delivery = Dictionary(uniqueKeysWithValues: plan.secrets.map { ($0.name, $0.delivery) })
         #expect(delivery["ACME_KEY"] == Self.gateway("https://api.example.com", "ACME_KEY_BASE_URL", "ak_"))
-        #expect(delivery["ANTHROPIC_API_KEY"] == Self.gateway("https://api.anthropic.com", "ANTHROPIC_BASE_URL", "sk-ant-"))
-        // A known name keeps its curated path when the domain matches; startsWith wins over the curated prefix.
-        #expect(delivery["OPENAI_API_KEY"] == Self.gateway("https://api.openai.com/v1", "OPENAI_BASE_URL", "sk-proj-"))
+        #expect(delivery["ANTHROPIC_API_KEY"] == Self.gateway(
+            "https://api.anthropic.com", "ANTHROPIC_BASE_URL", "sk-ant-", allow: Self.modelAPI))
+        // A known name keeps its curated path and allow rules when the domain matches; startsWith wins over the
+        // curated prefix.
+        #expect(delivery["OPENAI_API_KEY"] == Self.gateway(
+            "https://api.openai.com/v1", "OPENAI_BASE_URL", "sk-proj-", allow: Self.modelAPI))
+        // Another domain is not the curated upstream, so the curated rules do not apply.
         #expect(delivery["GITHUB_TOKEN"] == Self.gateway("https://openai.internal.example.com", "GITHUB_API_URL"))
         #expect(delivery["PLAIN"] == .environment)
         #expect(plan.notes.contains("note ACME_KEY: point the client at $ACME_KEY_BASE_URL; rv sends the value only to api.example.com"))

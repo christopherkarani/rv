@@ -149,7 +149,7 @@ enum SecretCommandProviders {
         environment: [String: String]
     ) -> Result<SecretValue, SecretResolutionError> {
         guard let op = executable("op", environment: environment) else {
-            return .failure(.providerUnavailable("1Password CLI `op` is not installed"))
+            return .failure(unavailable("1Password CLI `op`"))
         }
         guard let run = BoundedProcess.run(op, ["read", "--no-newline", reference], environment: environment) else {
             return .failure(.timedOut("1Password read of \(reference)"))
@@ -205,7 +205,7 @@ enum SecretCommandProviders {
         environment: [String: String]
     ) -> Result<SecretValue, SecretResolutionError> {
         guard let aws = executable("aws", environment: environment) else {
-            return .failure(.providerUnavailable("AWS CLI `aws` is not installed"))
+            return .failure(unavailable("AWS CLI `aws`"))
         }
         var arguments = [
             "secretsmanager", "get-secret-value", "--secret-id", secretID,
@@ -229,7 +229,7 @@ enum SecretCommandProviders {
     /// CLI prints. `AWSCredentialSet` checks its shape before anything signs.
     static func awsProfile(_ profile: String, environment: [String: String]) -> Result<SecretValue, SecretResolutionError> {
         guard let aws = executable("aws", environment: environment) else {
-            return .failure(.providerUnavailable("AWS CLI `aws` is not installed"))
+            return .failure(unavailable("AWS CLI `aws`"))
         }
         return command(
             aws, ["configure", "export-credentials", "--profile", profile, "--format", "process"],
@@ -241,7 +241,7 @@ enum SecretCommandProviders {
         name: String, project: String?, environmentName: String?, path: String?, environment: [String: String]
     ) -> Result<SecretValue, SecretResolutionError> {
         guard let binary = executable("infisical", environment: environment) else {
-            return .failure(.providerUnavailable("Infisical CLI `infisical` is not installed"))
+            return .failure(unavailable("Infisical CLI `infisical`"))
         }
         var arguments = ["secrets", "get", name, "--plain", "--silent"]
         if let project { arguments += ["--projectId", project] }
@@ -252,7 +252,7 @@ enum SecretCommandProviders {
 
     static func bitwarden(id: String, environment: [String: String]) -> Result<SecretValue, SecretResolutionError> {
         guard let binary = executable("bws", environment: environment) else {
-            return .failure(.providerUnavailable("Bitwarden Secrets Manager CLI `bws` is not installed"))
+            return .failure(unavailable("Bitwarden Secrets Manager CLI `bws`"))
         }
         return command(binary, ["secret", "get", id], environment: environment, label: "bws \(id)") { stdout in
             guard let object = try? JSONSerialization.jsonObject(with: Data(stdout)) as? [String: Any],
@@ -266,7 +266,7 @@ enum SecretCommandProviders {
         secret: String, project: String?, version: String, environment: [String: String]
     ) -> Result<SecretValue, SecretResolutionError> {
         guard let binary = executable("gcloud", environment: environment) else {
-            return .failure(.providerUnavailable("Google Cloud CLI `gcloud` is not installed"))
+            return .failure(unavailable("Google Cloud CLI `gcloud`"))
         }
         var arguments = ["secrets", "versions", "access", version, "--secret", secret]
         if let project { arguments += ["--project", project] }
@@ -277,7 +277,7 @@ enum SecretCommandProviders {
         vault: String, name: String, version: String?, environment: [String: String]
     ) -> Result<SecretValue, SecretResolutionError> {
         guard let binary = executable("az", environment: environment) else {
-            return .failure(.providerUnavailable("Azure CLI `az` is not installed"))
+            return .failure(unavailable("Azure CLI `az`"))
         }
         var arguments = [
             "keyvault", "secret", "show", "--vault-name", vault, "--name", name, "--query", "value", "-o", "tsv",
@@ -307,14 +307,58 @@ enum SecretCommandProviders {
         return SecretResolver.value(bytes, from: label)
     }
 
+    /// Searched first, in order. Fixed, so the caller's environment (which
+    /// an agent can shape) cannot choose the binary that receives a secret.
+    /// Tests bind other directories.
+    @TaskLocal static var trustedDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+
+    /// The absolute path to run for `name`: the first match in
+    /// `trustedDirectories`, else in a PATH directory that only root can
+    /// change. PATH comes from whoever started this process, so relative,
+    /// user-owned, and group- or world-writable entries are skipped, and so
+    /// is a binary that resolves outside such directories.
     static func executable(_ name: String, environment: [String: String]) -> String? {
-        let searched = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-        for directory in searched where directory.hasPrefix("/") {
+        for directory in trustedDirectories {
             let candidate = (directory as NSString).appendingPathComponent(name)
             if access(candidate, X_OK) == 0 { return candidate }
         }
+        for entry in (environment["PATH"] ?? "").split(separator: ":").map(String.init) where entry.hasPrefix("/") {
+            guard let directory = realPath(entry), rootLocked(directory, leaf: S_IFDIR) else { continue }
+            let candidate = (directory as NSString).appendingPathComponent(name)
+            guard access(candidate, X_OK) == 0, let target = realPath(candidate), rootLocked(target, leaf: S_IFREG)
+            else { continue }
+            return candidate
+        }
         return nil
+    }
+
+    /// Why the CLI `label` names could not be run, and where rv looked.
+    static func unavailable(_ label: String) -> SecretResolutionError {
+        .providerUnavailable(
+            "\(label) is not installed in \(trustedDirectories.joined(separator: ", ")) "
+                + "or a root-owned directory on PATH that only root can write")
+    }
+
+    private static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// `path` (already resolved) has file type `leaf`, and it and every
+    /// ancestor are owned by root and not writable by group or others.
+    private static func rootLocked(_ path: String, leaf: mode_t) -> Bool {
+        var info = stat()
+        guard stat(path, &info) == 0, (info.st_mode & S_IFMT) == leaf else { return false }
+        var current = path
+        while true {
+            guard stat(current, &info) == 0, info.st_uid == 0, (info.st_mode & 0o022) == 0 else {
+                return false
+            }
+            if current == "/" { return true }
+            current = (current as NSString).deletingLastPathComponent
+            if current.isEmpty { return false }
+        }
     }
 }
 

@@ -58,20 +58,30 @@ struct OnboardingFastPathTests {
         #expect(weaker.note == nil)
     }
 
-    @Test func definitionForSetInfersOnlyForNewKnownSecrets() {
+    @Test func definitionForSetInfersOnlyForNewKnownSecrets() throws {
         let inferred = SecretsRun.definitionForSet(
             name: "OPENAI_API_KEY", isNew: true, gateway: nil, baseURLEnv: nil,
             placeholderPrefix: "", environment: false)
+        let modelAPI = try #require(GatewayAllowance("GET,POST /v1/**"))
         #expect(inferred.definition == .gateway(
             upstream: "https://api.openai.com/v1", baseURLEnv: "OPENAI_BASE_URL",
-            placeholderPrefix: "sk-"))
+            placeholderPrefix: "sk-", allow: [modelAPI]))
         #expect(inferred.note?.contains("known defaults") == true)
+        #expect(inferred.note?.contains("Allowed: GET,POST /v1/**.") == true)
         let prefixed = SecretsRun.definitionForSet(
             name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil,
             placeholderPrefix: "ghp-", environment: false)
         #expect(prefixed.definition == .gateway(
             upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL",
-            placeholderPrefix: "ghp-"))
+            placeholderPrefix: "ghp-", allow: [.preset(.githubRead)]))
+        // An explicit --allow replaces the curated rules, so a user can widen them.
+        let widened = SecretsRun.definitionForSet(
+            name: "GITHUB_TOKEN", isNew: true, gateway: nil, baseURLEnv: nil,
+            placeholderPrefix: "", environment: false, allow: [.preset(.githubRead), modelAPI])
+        #expect(widened.definition == .gateway(
+            upstream: "https://api.github.com", baseURLEnv: "GITHUB_API_URL",
+            placeholderPrefix: "", allow: [.preset(.githubRead), modelAPI]))
+        #expect(widened.note?.contains("Allowed:") == false)
         let existing = SecretsRun.definitionForSet(
             name: "OPENAI_API_KEY", isNew: false, gateway: nil, baseURLEnv: nil,
             placeholderPrefix: "", environment: false)

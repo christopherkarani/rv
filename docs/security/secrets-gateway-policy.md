@@ -84,8 +84,39 @@ match method and path only.
 From the CLI: `rv secrets set GITHUB_TOKEN --allow github-read` or
 `--allow "GET,HEAD /repos/**"` (repeatable). The flag applies only when the
 secret is first defined. Defining a gateway secret without rules prints a
-note. The curated defaults (`GITHUB_TOKEN`, `OPENAI_API_KEY`, and so on)
-still allow everything, so existing `gh` and API workflows keep working.
+note.
+
+The curated defaults for well-known names are least privilege. A new
+secret with one of these names (from `rv secrets set NAME` without
+`--gateway`, from `rv login connect`, or from a Varlock `@proxy` whose
+domain is the curated upstream's host) gets these rules:
+
+| name                                | upstream                    | default `allow`  |
+|-------------------------------------|-----------------------------|------------------|
+| `OPENAI_API_KEY`                    | `https://api.openai.com/v1` | `GET,POST /v1/**` |
+| `ANTHROPIC_API_KEY`                 | `https://api.anthropic.com` | `GET,POST /v1/**` |
+| `GITHUB_TOKEN`, `GH_TOKEN`          | `https://api.github.com`    | `github-read`    |
+| `STRIPE_SECRET_KEY`                 | `https://api.stripe.com`    | `read-only`      |
+| `VERCEL_TOKEN`                      | `https://api.vercel.com`    | `read-only`      |
+
+Where a narrow scope could not be fixed with confidence, the narrower one
+was chosen:
+
+- The model-provider keys reach only the `/v1` API with `GET` and `POST`
+  (model calls, token counts, listings). `DELETE` (files, batches, stored
+  responses) and paths outside `/v1` are refused.
+- `github-read` refuses GraphQL, which needs `POST /graphql`, so most `gh`
+  subcommands fail with `403` until widened. GraphQL can also mutate.
+- `STRIPE_SECRET_KEY` and `VERCEL_TOKEN` are read-only: a Stripe secret
+  key can move money, and a Vercel token can deploy and delete.
+
+To widen, pass `--allow` when the secret is first defined; it replaces the
+curated rules instead of adding to them. For example
+`rv secrets set GITHUB_TOKEN --allow github-read --allow "POST /graphql"`
+for `gh`, or `--allow "* /**"` for the full authority of the credential.
+For a secret already defined, edit `delivery.gateway.allow` in
+`secrets.json`. Secrets defined before this change keep the rules on file
+(none, for a curated default), so they still allow everything until edited.
 
 Enforcement:
 
