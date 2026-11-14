@@ -61,6 +61,7 @@ struct MCPHostConfigCorpusTests {
         "claude plugin marketplace add evil/market",
         "cp evil.json mcp.json -v",
         "echo .cursor/mcp.json | perl -ne 'print'",
+        "python3 edit.py .MCP.JSON",
     ])
     func guardOwnsInRepositoryWrites(command: String) throws {
         let harness = try StressHarness.dayOne()
