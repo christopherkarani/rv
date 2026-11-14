@@ -675,6 +675,12 @@ enum MCPRun {
                 if sandbox.hosts.isEmpty == false {
                     rules.append("network only to " + sandbox.hosts.map(visible).joined(separator: ", "))
                     for host in sandbox.hosts { lines.append("    host \(visible(host))") }
+                    lines += allowedIPLines(sandbox)
+                    if sandbox.allowedIPs.isEmpty == false {
+                        rules.append(
+                            "private networks for " + sandbox.allowedIPs.keys.sorted().map(visible).joined(separator: ", ")
+                                + " (loosens public-only)")
+                    }
                 } else if sandbox.network == false {
                     rules.append("no network")
                 }
@@ -1179,7 +1185,16 @@ enum MCPRun {
         for host in server.sandbox?.hosts ?? [] {
             lines.append("    host \(visible(host))")
         }
+        if let sandbox = server.sandbox { lines += allowedIPLines(sandbox) }
         return lines
+    }
+
+    /// One line per owner-set private network, so a trust review shows
+    /// every range the file opens beyond public unicast.
+    static func allowedIPLines(_ sandbox: MCPSandboxPolicy) -> [String] {
+        sandbox.allowedIPs.keys.sorted().flatMap { host in
+            (sandbox.allowedIPs[host]?.entries ?? []).map { "    allowed_ips \(visible(host)) \($0)" }
+        }
     }
 
     private static func reviewLists(
@@ -1215,6 +1230,9 @@ enum MCPRun {
         }
         for host in server.sandbox?.hosts ?? [] where lines.contains("    host \(visible(host))") == false {
             return false
+        }
+        if let sandbox = server.sandbox {
+            for line in allowedIPLines(sandbox) where lines.contains(line) == false { return false }
         }
         return true
     }

@@ -682,6 +682,10 @@ enum HelpCatalog {
                     description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
+                    name: "allowed_ips",
+                    description: "\"allowed_ips\": {\"<host>\": [\"10.0.5.0/24\"]} lets a listed host reach those private networks"
+                ),
+                HelpRow(
                     name: "defaults",
                     description: "Unlisted tools deny; written allow defaults are ignored. Local servers need a sandbox"
                 ),
