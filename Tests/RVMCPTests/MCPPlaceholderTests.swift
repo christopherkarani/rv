@@ -405,6 +405,53 @@ struct MCPPlaceholderPlannerTests {
         #expect(broker.broker.liveCount == 0)
     }
 
+    /// A bound server whose spawn fails never ran: it is not reported bound,
+    /// serve logs why, and its lease ends. The runtime spawns at the start of
+    /// `run`, before it reads the client, so closing the input at once still
+    /// tries the spawn.
+    @Test(.timeLimit(.minutes(1)))
+    func aBoundServerThatFailsToSpawnIsNotReportedBound() throws {
+        let fixture = try PlaceholderSecretsFixture()
+        defer { fixture.tearDown() }
+        let broker = SecretPlaceholderBroker(configDirectory: fixture.directory, resolver: CountingResolver().resolver)
+        defer { broker.stop() }
+        let server = bound()
+        let planned = try plan(
+            [server], secrets: PlaceholderSecretsFixture.definitions(), resolver: CountingResolver().resolver,
+            placeholders: leasing(broker)).get()
+        guard let upstream = planned.first?.0, case .placeholderBound(var launch, let binding) = planned.first?.1 else {
+            Issue.record("not bound: \(String(describing: planned.first?.1))")
+            return
+        }
+        #expect(broker.broker.liveCount == 1)
+        launch.executable = "/nonexistent/rv-no-such-server-\(UUID().uuidString)"
+        let client = LineClient()
+        let core = MCPGatewayCore(
+            configuration: MCPConfiguration(servers: [server]), upstreams: [upstream],
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _, _ in .none }, request: { _, _, _, _, _ in nil }),
+            pinning: .unenforced, recordForward: { _ in true })
+        let reported = Mutex<[String]>([])
+        let logged = Mutex<[String]>([])
+        let runtime = MCPGatewayRuntime(
+            core: core, connections: [.placeholderBound(launch, binding)],
+            input: client.toGateway.fileHandleForReading.fileDescriptor,
+            output: client.fromGateway.fileHandleForWriting.fileDescriptor,
+            audit: { _ in }, log: { line in logged.withLock { $0.append(line) } },
+            placeholdersBound: { name, _ in reported.withLock { $0.append(name) } })
+        let done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            runtime.run()
+            done.signal()
+        }
+        try client.toGateway.fileHandleForWriting.close()
+        let finished = done.wait(timeout: .now() + 20) == .success
+        #expect(finished)
+        guard finished else { return }
+        #expect(reported.withLock { $0 }.isEmpty)
+        #expect(logged.withLock { $0 }.contains { $0.hasPrefix("could not start MCP server \(server.name)") })
+        #expect(broker.broker.liveCount == 0)
+    }
+
     @Test func aPlaceholderNeverReplacesAValueNorAValueAPlaceholder() {
         guard case .failure(.variableCollision("A")) = MCPPlaceholderPlanning.merge(
             ["A": "1"], lease: [(name: "A", value: "ph")])
