@@ -144,28 +144,35 @@ final class ProcFSProcessTable: ProcessTable {
     }
 
     func lookup(_ pid: pid_t) -> ProcessLookup {
+        state(pid).lookup
+    }
+
+    /// `lookup`, and whether the process's main thread has exited while
+    /// other threads run: Linux then shows the process as a zombie in
+    /// `stat`, and its main thread has no descriptor table any more.
+    private func state(_ pid: pid_t) -> (lookup: ProcessLookup, mainThreadExited: Bool) {
         // Pids under a `/proc` of another pid namespace name other processes.
-        guard pid > 0, let hz, own else { return .unavailable }
+        guard pid > 0, let hz, own else { return (.unavailable, false) }
         switch readStat(pid) {
-        case .absent: return .absent
-        case .unavailable: return .unavailable
+        case .absent: return (.absent, false)
+        case .unavailable: return (.unavailable, false)
         case .value(let stat):
-            if ProcFSParse.exited(stat) {
-                // Linux shows a process whose main thread exited as a zombie
-                // while its other threads run: alive while `task` lists more
-                // than the main thread.
+            let exited = ProcFSParse.exited(stat)
+            if exited {
+                // Alive while `task` lists more than the main thread.
                 switch directory("\(root)/\(pid)/task") {
-                case .absent: return .absent
-                case .unavailable: return .unavailable
-                case .value(let threads): if threads.count <= 1 { return .absent }
+                case .absent: return (.absent, false)
+                case .unavailable: return (.unavailable, false)
+                case .value(let threads): if threads.count <= 1 { return (.absent, false) }
                 }
             }
             guard stat.pid == UInt32(pid), let start = ProcFSParse.start(ticks: stat.startTicks, hz: hz) else {
-                return .unavailable
+                return (.unavailable, false)
             }
-            return .found(ProcessIdentity(
-                pid: stat.pid, parent: stat.parent, group: stat.group,
-                startSeconds: start.seconds, startMicroseconds: start.microseconds))
+            return (
+                .found(ProcessIdentity(
+                    pid: stat.pid, parent: stat.parent, group: stat.group,
+                    startSeconds: start.seconds, startMicroseconds: start.microseconds)), exited)
         }
     }
 
@@ -204,11 +211,18 @@ final class ProcFSProcessTable: ProcessTable {
     }
 
     func holdsSocket(_ pid: pid_t, _ peer: GatewayPeer) -> Bool? {
-        guard let inode = socketInode(peer), case .found(let before) = lookup(pid) else { return nil }
+        guard let inode = socketInode(peer) else { return nil }
+        let (lookup, mainThreadExited) = state(pid)
+        guard case .found(let before) = lookup else { return nil }
         // The process's table, then each thread's: a thread that unshared its
-        // table (`unshare(CLONE_FILES)`) holds what only it has, and a process
-        // whose main thread exited keeps its descriptors in the others.
-        guard var holds = holds(inode, in: "\(root)/\(pid)") else { return nil }
+        // table (`unshare(CLONE_FILES)`) holds what only it has. A main
+        // thread that exited has no table (the kernel gives its `fd` to
+        // root): the process's descriptors are in the threads that run.
+        var holds = false
+        if mainThreadExited == false {
+            guard let held = self.holds(inode, in: "\(root)/\(pid)") else { return nil }
+            holds = held
+        }
         if holds == false {
             guard case .value(let threads) = directory("\(root)/\(pid)/task") else { return nil }
             for thread in threads where thread != String(pid) {
@@ -221,7 +235,7 @@ final class ProcFSProcessTable: ProcessTable {
         }
         // The same process before and after: a pid reused in between, or one
         // that exited mid-scan (perhaps the holder), is not an answer.
-        guard case .found(let after) = lookup(pid), after == before else { return nil }
+        guard case .found(let after) = self.lookup(pid), after == before else { return nil }
         return holds
     }
 

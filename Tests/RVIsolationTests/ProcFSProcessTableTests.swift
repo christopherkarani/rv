@@ -531,6 +531,25 @@ struct ProcFSProcessTableTests {
         #expect(proc.verdict(try proc.group(200)) == .member)
     }
 
+    /// The kernel gives an exited main thread's `fd` directory to root, so a
+    /// gateway running as the user cannot open it. That thread has no
+    /// descriptors any more: the ones that run are read instead.
+    @Test func anExitedMainThreadsUnreadableTableIsNotRead() throws {
+        let proc = try ProcFixture()
+        try proc.process(200, parent: 1, group: 200)
+        try proc.process(201, parent: 200, group: 200, state: "Z")
+        try proc.thread(201, 206, sockets: [ProcFixture.clientInode])
+        proc.lock("201/fd")
+        #expect(proc.verdict(try proc.group(200)) == .member)
+        // A running main thread's unreadable table is still "cannot tell".
+        let running = try ProcFixture()
+        try running.process(200, parent: 1, group: 200)
+        try running.process(201, parent: 200, group: 200)
+        try running.thread(201, 206, sockets: [])
+        running.lock("201/fd")
+        #expect(running.verdict(try running.group(200)) == (unprivileged ? .unverifiable : .outsider))
+    }
+
     // MARK: holders and binaries
 
     @Test func everyRuntimeHolderOfASharedSocketIsListed() throws {
