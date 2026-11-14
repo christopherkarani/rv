@@ -653,7 +653,7 @@ enum MCPRun {
         var review = ""
         var prompt = ""
         if configTrusted == false {
-            review = trustReview(configuration) + "\nsha256 \(digest)"
+            review = trustReview(configuration, secrets: .load(configDirectory: environment.configDirectory)) + "\nsha256 \(digest)"
             guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
                 return .failure("trust review omitted a literal value; nothing signed")
             }
@@ -797,7 +797,12 @@ enum MCPRun {
         return .success(review)
     }
 
-    static func trustReview(_ configuration: MCPConfiguration) -> String {
+    /// `secrets` is secrets.json as it reads now: it only says which
+    /// variables a placeholder sets and where its real value goes.
+    static func trustReview(
+        _ configuration: MCPConfiguration,
+        secrets: Result<SecretsConfiguration, SecretsConfigurationError> = .success(.empty)
+    ) -> String {
         var lines = [
             "mcp.json: default deny for tools without a rule",
             "  unlisted tools deny; local servers need a sandbox; network only through sandbox.hosts",
@@ -836,6 +841,7 @@ enum MCPRun {
             for variable in server.secrets.keys.sorted() {
                 lines.append("    \(variable) → secret \(visible(server.secrets[variable] ?? ""))")
             }
+            lines += placeholderLines(server, secrets: secrets)
             lines += bindingLines(server, indent: "    ")
             let tools = server.tools
             if tools.allow.isEmpty == false { rules.append("allow " + tools.allow.map(visible).joined(separator: ", ")) }
@@ -869,6 +875,31 @@ enum MCPRun {
             lines.append("  blocked: " + quotedReviewFields(configuration.blocked))
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Each placeholder a server gets, then what it sets and where the real
+    /// value goes: the server holds only the placeholder.
+    static func placeholderLines(
+        _ server: MCPServerDefinition, secrets: Result<SecretsConfiguration, SecretsConfigurationError>
+    ) -> [String] {
+        server.placeholders.flatMap { name -> [String] in
+            ["    placeholder \(visible(name))", "      " + placeholderDetail(name, secrets: secrets)]
+        }
+    }
+
+    private static func placeholderDetail(
+        _ name: String, secrets: Result<SecretsConfiguration, SecretsConfigurationError>
+    ) -> String {
+        guard case .success(let loaded) = secrets else { return "secrets.json unreadable: variables and upstream unknown" }
+        guard let secret = loaded.secret(named: name) else { return "not defined in secrets.json: serve refuses this server" }
+        let upstream: URL
+        switch secret.delivery {
+        case .environment: return "environment delivery: serve refuses this server"
+        case .gateway(let binding): upstream = binding.upstream
+        case .awsSigV4(let binding): upstream = binding.upstream
+        }
+        let variables = secret.stagedVariables.map(visible).joined(separator: ", ")
+        return "sets \(variables) · real value only to \(visible(upstream.host ?? upstream.absoluteString))"
     }
 
     static func connect(
@@ -1081,7 +1112,8 @@ enum MCPRun {
         resolver: SecretResolver,
         sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { _, launch in
             .success(launch)
-        }
+        },
+        placeholders: MCPPlaceholderLeasing = .unavailable
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], CommandFailure> {
         let verified: MCPConfiguration
         switch boundConfiguration(environment) {
@@ -1108,7 +1140,8 @@ enum MCPRun {
         }
         switch MCPLaunchPlanner.plan(
             servers: names, configuration: verified, secrets: secrets, resolver: resolver,
-            baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load, sandbox: sandbox)
+            baseEnvironment: environment.processEnvironment, oauthTokens: environment.oauthTokens.load, sandbox: sandbox,
+            placeholders: placeholders)
         {
         case .failure(let error):
             if case .secretUnavailable(let server, let secret, _) = error {
@@ -1379,6 +1412,9 @@ enum MCPRun {
         for host in server.sandbox?.hosts ?? [] {
             lines.append("    host \(visible(host))")
         }
+        for name in server.placeholders {
+            lines.append("    placeholder \(visible(name))")
+        }
         return lines
     }
 
@@ -1414,6 +1450,9 @@ enum MCPRun {
             return false
         }
         for host in server.sandbox?.hosts ?? [] where lines.contains("    host \(visible(host))") == false {
+            return false
+        }
+        for name in server.placeholders where lines.contains("    placeholder \(visible(name))") == false {
             return false
         }
         return true
@@ -1575,13 +1614,19 @@ struct MCPServe: AsyncParsableCommand {
         case .failure(let error): try fail(error.message)
         case .success(let loaded): secrets = loaded
         }
+        // Its gateway serves only the servers that list `placeholders`, each
+        // lease bound to that server's process group; it stops with serve.
+        let placeholderBroker = SecretPlaceholderBroker(
+            configDirectory: environment.configDirectory, resolver: .live(home: home.rawValue))
+        defer { placeholderBroker.stop() }
         let planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
         switch MCPRun.upstreamLaunches(
             names: names, configuration: configuration, environment: environment, secrets: secrets,
             resolver: .live(home: home.rawValue),
             sandbox: MCPSandbox.apply(
                 configDirectory: environment.configDirectory, home: environment.home,
-                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)))
+                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)),
+            placeholders: .broker(placeholderBroker))
         {
         case .failure(let failure): try fail(failure.message)
         case .success(let result): planned = result
