@@ -20,7 +20,7 @@ struct AgentSkillInstallerTests {
     @Test("a fresh install writes the sealed skill")
     func freshInstallWrites() throws {
         try withSkillHome { path, files in
-            #expect(try AgentSkill.install(at: path, files: files) == .wrote)
+            #expect(AgentSkill.install(at: path, files: files) == .wrote)
             let data = try #require(files.readData(path))
             #expect(data == AgentSkill.rendered)
             #expect(String(decoding: data, as: UTF8.self).hasPrefix("---\nname: rv\n"))
@@ -31,8 +31,8 @@ struct AgentSkillInstallerTests {
     @Test("a second install of the same skill writes nothing")
     func reinstallIsQuiet() throws {
         try withSkillHome { path, files in
-            _ = try AgentSkill.install(at: path, files: files)
-            #expect(try AgentSkill.install(at: path, files: files) == .unchanged)
+            _ = AgentSkill.install(at: path, files: files)
+            #expect(AgentSkill.install(at: path, files: files) == .unchanged)
         }
     }
 
@@ -43,7 +43,7 @@ struct AgentSkillInstallerTests {
             #expect(AgentSkill.ownership(of: older) == .ownedStale)
             try files.createDirectory(atPath: (path as NSString).deletingLastPathComponent)
             try older.write(to: URL(fileURLWithPath: path))
-            #expect(try AgentSkill.install(at: path, files: files) == .wrote)
+            #expect(AgentSkill.install(at: path, files: files) == .wrote)
             #expect(files.readData(path) == AgentSkill.rendered)
         }
     }
@@ -51,12 +51,12 @@ struct AgentSkillInstallerTests {
     @Test("a skill edited outside rv is kept, byte for byte")
     func modifiedIsKept() throws {
         try withSkillHome { path, files in
-            _ = try AgentSkill.install(at: path, files: files)
+            _ = AgentSkill.install(at: path, files: files)
             var edited = AgentSkill.rendered
             edited.append(contentsOf: Array("my own note\n".utf8))
             try edited.write(to: URL(fileURLWithPath: path))
             #expect(AgentSkill.ownership(of: edited) == .foreign)
-            #expect(try AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
             #expect(files.readData(path) == edited)
         }
     }
@@ -65,7 +65,7 @@ struct AgentSkillInstallerTests {
     func unsealedIsKept() throws {
         try withSkillHome { path, files in
             try files.write("---\nname: rv\n---\nmine\n", to: path)
-            #expect(try AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
             #expect(files.readData(path) == Data("---\nname: rv\n---\nmine\n".utf8))
         }
     }
@@ -79,15 +79,90 @@ struct AgentSkillInstallerTests {
             try files.createDirectory(atPath: elsewhere)
             try files.createDirectory(atPath: skills)
             try FileManager.default.createSymbolicLink(atPath: directory, withDestinationPath: elsewhere)
-            #expect(try AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
             #expect(files.fileExists(elsewhere + "/SKILL.md") == false)
 
             try FileManager.default.removeItem(atPath: directory)
             try files.createDirectory(atPath: directory)
             try FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: elsewhere + "/target.md")
-            #expect(try AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
             #expect(files.isSymbolicLink(path))
             #expect(files.fileExists(elsewhere + "/target.md") == false)
+        }
+    }
+
+    @Test("a symlinked skills folder or host root is never written through")
+    func symlinkedParentsAreKept() throws {
+        try withSkillHome { path, files in
+            let rvDirectory = (path as NSString).deletingLastPathComponent
+            let skills = (rvDirectory as NSString).deletingLastPathComponent
+            let root = (skills as NSString).deletingLastPathComponent
+            let dotfiles = (root as NSString).deletingLastPathComponent + "/dotfiles/skills"
+            try files.createDirectory(atPath: dotfiles)
+            try files.createDirectory(atPath: root)
+            try FileManager.default.createSymbolicLink(atPath: skills, withDestinationPath: dotfiles)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(files.fileExists(dotfiles + "/rv") == false)
+
+            // Even a sealed rv skill behind the link is not rv's to remove.
+            try files.createDirectory(atPath: dotfiles + "/rv")
+            try AgentSkill.rendered.write(to: URL(fileURLWithPath: dotfiles + "/rv/SKILL.md"))
+            #expect(AgentSkill.isOwned(at: path, files: files) == false)
+            #expect(AgentSkill.emptyDirectories(after: path) == [rvDirectory])
+
+            try FileManager.default.removeItem(atPath: skills)
+            let realRoot = (root as NSString).deletingLastPathComponent + "/real-root"
+            try files.createDirectory(atPath: realRoot)
+            try FileManager.default.removeItem(atPath: root)
+            try FileManager.default.createSymbolicLink(atPath: root, withDestinationPath: realRoot)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(files.fileExists(realRoot + "/skills") == false)
+        }
+    }
+
+    @Test("a FIFO in the skill's place is kept without blocking")
+    func fifoIsKept() throws {
+        try withSkillHome { path, files in
+            try files.createDirectory(atPath: (path as NSString).deletingLastPathComponent)
+            #expect(mkfifo(path, 0o600) == 0)
+            #expect(AgentSkill.ownership(at: path, files: files) == .foreign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(AgentSkill.isOwned(at: path, files: files) == false)
+        }
+    }
+
+    @Test("a file over the size cap is kept, even with a valid seal")
+    func oversizedIsKept() throws {
+        try withSkillHome { path, files in
+            let padding = String(repeating: "x", count: AgentSkill.maximumBytes)
+            try files.createDirectory(atPath: (path as NSString).deletingLastPathComponent)
+            try AgentSkill.sealed(AgentSkill.text + padding).write(to: URL(fileURLWithPath: path))
+            #expect(AgentSkill.ownership(at: path, files: files) == .foreign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
+        }
+    }
+
+    @Test("a path not shaped <root>/skills/rv/SKILL.md is never owned")
+    func unexpectedShapeIsForeign() throws {
+        try withSkillHome { path, files in
+            #expect(AgentSkill.componentChain("/Users/me/notes/SKILL.md") == nil)
+            #expect(AgentSkill.ownership(at: "/Users/me/notes/SKILL.md", files: files) == .foreign)
+            #expect(AgentSkill.componentChain(path)?.count == 4)
+        }
+    }
+
+    @Test("a regular file where a skill folder goes fails the write, not the caller")
+    func blockedParentFailsWrite() throws {
+        try withSkillHome { path, files in
+            let skills = ((path as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+            try files.write("not a folder\n", to: skills)
+            guard case .writeFailed(let reason) = AgentSkill.install(at: path, files: files) else {
+                Issue.record("expected writeFailed")
+                return
+            }
+            #expect(reason.isEmpty == false)
+            #expect(files.readData(skills) == Data("not a folder\n".utf8))
+            #expect(AgentSkill.isOwned(at: path, files: files) == false)
         }
     }
 
@@ -100,14 +175,14 @@ struct AgentSkillInstallerTests {
             try files.write("---\nname: rv\n---\nmine\n", to: path)
             try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: path)
             defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path) }
-            #expect(try AgentSkill.install(at: path, files: files) == .keptForeign)
+            #expect(AgentSkill.install(at: path, files: files) == .keptForeign)
         }
     }
 
     @Test("removal deletes only an rv-sealed skill")
     func removalChecksOwnership() throws {
         try withSkillHome { path, files in
-            _ = try AgentSkill.install(at: path, files: files)
+            _ = AgentSkill.install(at: path, files: files)
             #expect(AgentSkill.isOwned(at: path, files: files))
 
             try files.write("---\nname: rv\n---\nmine\n", to: path)
@@ -166,17 +241,22 @@ struct AgentSkillHostRowTests {
     func keptWarning() {
         var report = SetupReport(grok: .skipped, pi: .skipped, openCode: .skipped, wrote: [])
         #expect(SetupRun.agentSkillWarning(report) == "")
-        report.agentSkillsKept = ["/Users/me/.claude/skills/rv/SKILL.md"]
+        report.agentSkillNotes = [
+            .kept(path: "/Users/me/.claude/skills/rv/SKILL.md"),
+            .writeFailed(path: "/Users/me/.agents/skills/rv/SKILL.md", reason: "File exists"),
+        ]
         let warning = SetupRun.agentSkillWarning(report)
-        #expect(warning.contains("/Users/me/.claude/skills/rv/SKILL.md"))
+        #expect(warning.contains("kept /Users/me/.claude/skills/rv/SKILL.md"))
         #expect(warning.contains("changed outside rv"))
+        #expect(warning.contains("could not write /Users/me/.agents/skills/rv/SKILL.md: File exists"))
+        #expect(warning.components(separatedBy: "fix: the hook is wired either way").count == 3)
         #expect(warning.hasSuffix("\n"))
     }
 }
 
 @Suite("Agent skill wiring through the host lifecycle")
 struct AgentSkillLifecycleTests {
-    @Test("wiring Claude installs the skill; detaching removes it and its empty directories")
+    @Test("wiring Claude installs the skill; detaching removes it and its empty rv folder")
     func claudeAttachDetach() throws {
         try withTempHome { home, layout, launchctl in
             try FileManager.default.createDirectory(atPath: layout.claudeDirectory, withIntermediateDirectories: true)
@@ -185,18 +265,47 @@ struct AgentSkillLifecycleTests {
             let write = HostArtifacts.attach(host: .claude, layout: layout, existingData: nil, forceClear: false)
             let outcome = try HostLifecycle.perform(write, env: environment, layout: layout, files: files)
             let skill = try #require(layout.agentSkill(for: .claude))
-            #expect(outcome == .wired(wrote: true, keptAgentSkill: nil))
+            #expect(outcome == .wired(wrote: true, agentSkillNote: nil))
             #expect(files.readData(skill) == AgentSkill.rendered)
 
             let again = try HostLifecycle.perform(write, env: environment, layout: layout, files: files)
-            #expect(again == .wired(wrote: false, keptAgentSkill: nil))
+            #expect(again == .wired(wrote: false, agentSkillNote: nil))
 
             let installations = try SetupRun.inspectInstallations(layout: layout, env: environment)
             let detached = try HostLifecycle.detach(
                 installations: installations, env: environment, layout: layout, files: files, only: [.claude])
             #expect(detached.removedPaths.contains(skill))
             #expect(files.fileExists(skill) == false)
-            #expect(files.fileExists(layout.claudeDirectory + "/skills") == false)
+            #expect(files.fileExists(layout.claudeDirectory + "/skills/rv") == false)
+            // skills/ may be the user's: it stays, even empty.
+            #expect(files.isDirectory(layout.claudeDirectory + "/skills"))
+        }
+    }
+
+    @Test("a skill write failure on OpenCode does not stop Claude from being wired")
+    func skillFailureDoesNotAbortLaterHosts() throws {
+        try withTempHome { home, layout, launchctl in
+            let files = FileOps(fileManager: .default)
+            let openCodeSkill = try #require(layout.agentSkill(for: .opencode))
+            let claudeSkill = try #require(layout.agentSkill(for: .claude))
+            try files.write("not a folder\n", to: layout.openCodeDirectory + "/skills")
+            try files.createDirectory(atPath: layout.claudeDirectory)
+            let plan = SetupWorkPlan(steps: [
+                .write(HostArtifacts.attach(host: .opencode, layout: layout, existingData: nil, forceClear: false)),
+                .write(HostArtifacts.attach(host: .claude, layout: layout, existingData: nil, forceClear: false)),
+            ])
+            let report = try HostLifecycle.attach(
+                plan, env: env(home: home, launchctl: launchctl, touchLaunchd: false), layout: layout, files: files)
+            #expect(report.slots.openCode == .wired)
+            #expect(report.slots.claude == .wired)
+            #expect(files.readData(claudeSkill) == AgentSkill.rendered)
+            #expect(report.agentSkillNotes.count == 1)
+            guard case .writeFailed(let path, _) = report.agentSkillNotes.first else {
+                Issue.record("expected a writeFailed note, got \(report.agentSkillNotes)")
+                return
+            }
+            #expect(path == openCodeSkill)
+            #expect(SetupRun.agentSkillWarning(report).contains("could not write \(openCodeSkill)"))
         }
     }
 
@@ -209,7 +318,7 @@ struct AgentSkillLifecycleTests {
             let environment = env(home: home, launchctl: launchctl, touchLaunchd: false)
             let write = HostArtifacts.attach(host: .claude, layout: layout, existingData: nil, forceClear: false)
             let outcome = try HostLifecycle.perform(write, env: environment, layout: layout, files: files)
-            #expect(outcome == .wired(wrote: true, keptAgentSkill: skill))
+            #expect(outcome == .wired(wrote: true, agentSkillNote: .kept(path: skill)))
 
             let installations = try SetupRun.inspectInstallations(layout: layout, env: environment)
             let detached = try HostLifecycle.detach(

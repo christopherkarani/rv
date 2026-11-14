@@ -5,9 +5,9 @@ import RVService
 
 enum HostAttachOutcome: Equatable, Sendable {
     case occupied
-    /// `keptAgentSkill` names a skill file rv left alone because it did not
-    /// write it (`AgentSkillInstall.keptForeign`).
-    case wired(wrote: Bool, keptAgentSkill: String? = nil)
+    /// `agentSkillNote` names a skill rv kept or could not write; the hook
+    /// is wired either way.
+    case wired(wrote: Bool, agentSkillNote: AgentSkillNote? = nil)
 }
 
 struct UninstallHostResult: Equatable, Sendable {
@@ -41,7 +41,7 @@ enum HostLifecycle {
         var serviceSkippedMissingRvd: String?
         var serviceStartedDirectly = false
         var runtimeMissing: [String: [HookHost]] = [:]
-        var keptAgentSkills: [String] = []
+        var agentSkillNotes: [AgentSkillNote] = []
 
         for step in plan.steps {
             switch step {
@@ -76,9 +76,9 @@ enum HostLifecycle {
                 switch try perform(write, env: env, layout: layout, files: files) {
                 case .occupied:
                     slots.assign(.occupied, to: write.host)
-                case .wired(let wrote, let keptAgentSkill):
-                    if let keptAgentSkill {
-                        keptAgentSkills.append(keptAgentSkill)
+                case .wired(let wrote, let agentSkillNote):
+                    if let agentSkillNote {
+                        agentSkillNotes.append(agentSkillNote)
                     }
                     if wrote {
                         slots.wrote.insert(write.host)
@@ -104,7 +104,7 @@ enum HostLifecycle {
         report.serviceSkippedMissingRvd = serviceSkippedMissingRvd
         report.serviceStartedDirectly = serviceStartedDirectly
         report.unwiredForMissingInterpreter = runtimeMissing
-        report.agentSkillsKept = keptAgentSkills
+        report.agentSkillNotes = agentSkillNotes
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
     }
@@ -186,19 +186,17 @@ enum HostLifecycle {
         )
         guard let skill = write.agentSkill else { return .wired(wrote: wrote) }
         // After the hook: the skill only describes a gate that is in place.
-        let installed: AgentSkillInstall
-        do {
-            installed = try AgentSkill.install(at: skill, files: files)
-        } catch {
-            throw SetupError.hostHookWriteFailed(write.host)
-        }
-        switch installed {
+        // Nothing here throws: a skill problem must not stop later hosts
+        // from being wired.
+        switch AgentSkill.install(at: skill, files: files) {
         case .wrote:
             return .wired(wrote: true)
         case .unchanged:
             return .wired(wrote: wrote)
         case .keptForeign:
-            return .wired(wrote: wrote, keptAgentSkill: skill)
+            return .wired(wrote: wrote, agentSkillNote: .kept(path: skill))
+        case .writeFailed(let reason):
+            return .wired(wrote: wrote, agentSkillNote: .writeFailed(path: skill, reason: reason))
         }
     }
 

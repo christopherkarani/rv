@@ -122,15 +122,24 @@ enum SetupRun {
         )
     }
 
-    /// Names each agent skill file setup did not replace. The hook works
-    /// without it; the agent just does not get rv's instructions.
+    /// Names each agent skill setup kept or could not write. The hook
+    /// works without it; the agent just does not get rv's instructions.
     static func agentSkillWarning(_ report: SetupReport) -> String {
-        report.agentSkillsKept.map { path in
-            """
-            rv setup: kept \(path): it was changed outside rv, so rv did not replace it
-            fix: move it aside, then run rv setup again to install rv's agent skill
+        report.agentSkillNotes.map { note in
+            switch note {
+            case .kept(let path):
+                return """
+                    rv setup: kept \(path): it is not rv's copy (changed outside rv, a link, or not a plain file)
+                    fix: the hook is wired either way; to install rv's agent skill, move that file or link aside, then run rv setup again
 
-            """
+                    """
+            case .writeFailed(let path, let reason):
+                return """
+                    rv setup: could not write \(path): \(reason)
+                    fix: the hook is wired either way; to install rv's agent skill, make every folder on that path a folder you own, then run rv setup again
+
+                    """
+            }
         }.joined()
     }
 

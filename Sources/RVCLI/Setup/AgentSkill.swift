@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 
@@ -7,6 +12,15 @@ enum AgentSkillInstall: Equatable, Sendable {
     case unchanged
     /// A file rv did not write (or one changed since) is there: left as is.
     case keptForeign
+    /// The write itself failed (a non-folder in the way, permissions).
+    /// Never fatal: the hook is already wired, the skill is guidance.
+    case writeFailed(reason: String)
+}
+
+/// A skill setup did not install, named on stderr with a fix.
+enum AgentSkillNote: Equatable, Sendable {
+    case kept(path: String)
+    case writeFailed(path: String, reason: String)
 }
 
 /// The rv agent skill: a SKILL.md teaching the agent to read an rv denial,
@@ -17,13 +31,19 @@ enum AgentSkillInstall: Equatable, Sendable {
 /// Ownership: the installed bytes end with a seal line naming the SHA-256
 /// of everything before it. A file whose seal checks out is rv's (this or
 /// an older version) and may be replaced or removed. Anything else (no
-/// seal, edited text, a symlink, a directory, an unreadable file) is kept:
-/// rv never overwrites or deletes a skill someone else wrote.
+/// seal, edited text, a symlink anywhere from the host root down, a
+/// non-regular or oversized file, an unreadable file) is kept: rv never
+/// writes through a link, and never overwrites or deletes a skill someone
+/// else wrote.
 enum AgentSkill {
     static let directoryName = "rv"
     static let fileName = "SKILL.md"
     private static let sealPrefix = "<!-- rv-owned-skill sha256="
     private static let sealSuffix = " -->\n"
+    /// Every skill path is `<host root>/skills/rv/SKILL.md`.
+    static let hostRootSuffix = "/skills/rv/SKILL.md"
+    /// Larger than any skill rv ships; a bigger file is not rv's.
+    static let maximumBytes = 64 * 1024
 
     enum Ownership: Equatable, Sendable {
         case absent
@@ -64,16 +84,56 @@ enum AgentSkill {
         return line == sealPrefix + RVDigest.sha256Hex(Array(bytes[..<start])) + sealSuffix
     }
 
-    /// The ownership of what is at `path`, never following a link: a
-    /// symlinked file or skill directory, a directory in the file's place,
-    /// or a file that exists but cannot be read is foreign.
+    /// The ownership of what is at `path`, never following a link. A
+    /// symlink at the host root or any folder below it, a path not shaped
+    /// `<root>/skills/rv/SKILL.md`, or a file that is not a readable
+    /// regular file of at most `maximumBytes` is foreign.
     static func ownership(at path: String, files: FileOps) -> Ownership {
-        let directory = (path as NSString).deletingLastPathComponent
-        if files.isSymbolicLink(directory) || files.isSymbolicLink(path) { return .foreign }
-        guard files.fileExists(path) else { return .absent }
-        if files.isDirectory(path) { return .foreign }
-        guard let data = files.readData(path) else { return .foreign }
-        return ownership(of: data)
+        guard let chain = componentChain(path) else { return .foreign }
+        if chain.contains(where: files.isSymbolicLink) { return .foreign }
+        switch readRegularFile(path) {
+        case .absent: return .absent
+        case .foreign: return .foreign
+        case .bytes(let data): return ownership(of: data)
+        }
+    }
+
+    /// The host root, `skills`, `rv`, then the file: every entry setup
+    /// writes into or through. Nil for a path of any other shape.
+    static func componentChain(_ path: String) -> [String]? {
+        guard path.hasSuffix(hostRootSuffix), path.count > hostRootSuffix.count else { return nil }
+        let root = String(path.dropLast(hostRootSuffix.count))
+        return [root, root + "/skills", root + "/skills/rv", path]
+    }
+
+    private enum Read {
+        case absent
+        case bytes(Data)
+        case foreign
+    }
+
+    /// Opens without following a link and without blocking (a FIFO in the
+    /// file's place must not hang setup), then accepts only a regular file
+    /// of at most `maximumBytes`.
+    private static func readRegularFile(_ path: String) -> Read {
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        // ENOTDIR: a non-folder sits where `skills` or `rv` goes. Nothing
+        // there is a skill; setup's write fails on it and says so.
+        guard fd >= 0 else { return errno == ENOENT || errno == ENOTDIR ? .absent : .foreign }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size <= maximumBytes else {
+            return .foreign
+        }
+        var bytes: [UInt8] = []
+        var chunk = [UInt8](repeating: 0, count: 16 * 1024)
+        while bytes.count <= maximumBytes {
+            let count = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            if count < 0 { return .foreign }
+            if count == 0 { break }
+            bytes.append(contentsOf: chunk[..<count])
+        }
+        return bytes.count <= maximumBytes ? .bytes(Data(bytes)) : .foreign
     }
 
     /// Whether `path` holds a skill rv wrote (so detach may remove it).
@@ -85,23 +145,26 @@ enum AgentSkill {
     }
 
     /// Writes the skill atomically when absent or rv's own older version.
-    /// Throws only when the write itself fails.
-    static func install(at path: String, files: FileOps) throws -> AgentSkillInstall {
+    static func install(at path: String, files: FileOps) -> AgentSkillInstall {
         switch ownership(at: path, files: files) {
         case .current:
             return .unchanged
         case .foreign:
             return .keptForeign
         case .absent, .ownedStale:
-            try files.write(String(decoding: rendered, as: UTF8.self), to: path)
+            do {
+                try files.write(String(decoding: rendered, as: UTF8.self), to: path)
+            } catch {
+                return .writeFailed(reason: (error as NSError).localizedDescription)
+            }
             return .wrote
         }
     }
 
-    /// Directories detach removes when empty after the skill goes: the
-    /// skill's own folder, then the host's skills folder.
+    /// Directories detach removes when empty after the skill goes: only
+    /// rv's own `rv/` folder. `skills/` and the host root may be the
+    /// user's (or a dotfiles link), so they stay even when empty.
     static func emptyDirectories(after path: String) -> [String] {
-        let directory = (path as NSString).deletingLastPathComponent
-        return [directory, (directory as NSString).deletingLastPathComponent]
+        [(path as NSString).deletingLastPathComponent]
     }
 }
