@@ -19,8 +19,12 @@ public enum AuditLog {
 
     /// Each line's `prev` is the SHA-256 of the line before it (see `AuditChain`).
     /// A torn last line is closed with a newline first, so it stays one bad line.
+    ///
+    /// `lockTimeout` bounds the wait for the in-process and cross-process
+    /// locks (non-blocking retries): a stopped process holding the log must
+    /// not hang a caller that has to answer. Nil waits as long as it takes.
     @discardableResult
-    public static func append(_ event: AuditEvent, configDirectory: URL) -> Bool {
+    public static func append(_ event: AuditEvent, configDirectory: URL, lockTimeout: Duration? = nil) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -34,11 +38,12 @@ public enum AuditLog {
             return false
         }
         let url = fileURL(configDirectory: configDirectory)
-        return AppendLock.withLock {
+        let deadline = lockTimeout.map { ContinuousClock.now.advanced(by: $0) }
+        return AppendLock.withLock(until: deadline) {
             let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { return false }
             defer { close(fd) }
-            guard lock(fd) else { return false }
+            guard lock(fd, until: deadline) else { return false }
             defer { _ = flock(fd, LOCK_UN) }
             guard let tail = lastLine(fd) else { return false }
             var chained = event
@@ -110,13 +115,30 @@ public enum AuditLog {
     private enum AppendLock {
         private static let mutex = Mutex<Void>(())
 
-        static func withLock<T: Sendable>(_ body: () -> T) -> T {
-            mutex.withLock { _ in body() }
+        /// `false` when `deadline` passes before the lock is free.
+        static func withLock(until deadline: ContinuousClock.Instant?, _ body: () -> Bool) -> Bool {
+            guard let deadline else { return mutex.withLock { _ in body() } }
+            while true {
+                if let result = mutex.withLockIfAvailable({ _ in body() }) { return result }
+                guard ContinuousClock.now < deadline else { return false }
+                usleep(retryMicroseconds)
+            }
         }
     }
 
-    /// Excludes other processes. Callers already hold `AppendLock`.
-    private static func lock(_ fd: Int32) -> Bool {
+    private static let retryMicroseconds: useconds_t = 5_000
+
+    /// Excludes other processes. Callers already hold `AppendLock`. With a
+    /// deadline, non-blocking attempts until it passes.
+    private static func lock(_ fd: Int32, until deadline: ContinuousClock.Instant?) -> Bool {
+        if let deadline {
+            while true {
+                if flock(fd, LOCK_EX | LOCK_NB) == 0 { return true }
+                guard errno == EWOULDBLOCK || errno == EINTR else { return false }
+                guard ContinuousClock.now < deadline else { return false }
+                usleep(retryMicroseconds)
+            }
+        }
         for _ in 0..<16 {
             if flock(fd, LOCK_EX) == 0 {
                 return true
