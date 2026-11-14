@@ -123,7 +123,7 @@ struct SecretRunPlanTests {
             ("AWS_ACCESS_KEY_ID", "rvph_4567"), ("AWS_SECRET_ACCESS_KEY", "rv-unused-00"),
             ("AWS_REGION", "us-east-1"), ("AWS_ENDPOINT_URL_S3", "http://127.0.0.1:9/s/AWS_MAIN"),
         ]
-        let built = SecretRunEnvironment.build(parent: parent, selected: [openAI, aws], lease: lease)
+        let built = SecretRunEnvironment.build(parent: parent, selected: [openAI, aws], lease: lease, realValues: [])
         #expect(built == [
             "PATH": "/usr/bin:/bin", "KEEP": "1",
             "OPENAI_API_KEY": "sk-rvph_0123", "OPENAI_BASE_URL": "http://127.0.0.1:9/s/OPENAI_API_KEY",
@@ -141,8 +141,27 @@ struct SecretRunPlanTests {
         let openAI = try #require(try configuration().secret(named: "OPENAI_API_KEY"))
         let parent = ["PATH": "/usr/bin:/bin", "FAKE_OPENAI": realOpenAI, "FAKE_GH": "gh-unselected"]
         let built = SecretRunEnvironment.build(
-            parent: parent, selected: [openAI], lease: [("OPENAI_API_KEY", "sk-rvph_0123")])
+            parent: parent, selected: [openAI], lease: [("OPENAI_API_KEY", "sk-rvph_0123")], realValues: [])
         #expect(built == ["PATH": "/usr/bin:/bin", "FAKE_GH": "gh-unselected", "OPENAI_API_KEY": "sk-rvph_0123"])
+    }
+
+    /// The real value may sit under any name (a `.env` loader, a copy the
+    /// shell made): every variable holding a selected secret's value is
+    /// dropped, padded with whitespace or not, and nothing else is.
+    @Test func environmentDropsAnyVariableHoldingASelectedSecretsValue() throws {
+        let openAI = try #require(try configuration().secret(named: "OPENAI_API_KEY"))
+        let parent = [
+            "PATH": "/usr/bin:/bin", "DOTENV_OPENAI": realOpenAI, "PADDED": " \(realOpenAI)\n",
+            "AWS_KEY_COPY": "AKIAREALREALREAL", "PREFIXED": "x\(realOpenAI)", "OTHER": "sk-live-other",
+        ]
+        let real = [try #require(SecretValue(realOpenAI)), try #require(SecretValue("AKIAREALREALREAL"))]
+        let built = SecretRunEnvironment.build(
+            parent: parent, selected: [openAI], lease: [("OPENAI_API_KEY", "sk-rvph_0123")], realValues: real)
+        #expect(built == [
+            "PATH": "/usr/bin:/bin", "PREFIXED": "x\(realOpenAI)", "OTHER": "sk-live-other",
+            "OPENAI_API_KEY": "sk-rvph_0123",
+        ])
+        #expect(SecretRunEnvironment.copies(parent: parent, realValues: real) == ["AWS_KEY_COPY", "DOTENV_OPENAI", "PADDED"])
     }
 
     /// rv gives the terminal away only from the foreground and takes it
@@ -160,6 +179,21 @@ struct SecretRunPlanTests {
         var background = SecretRunJobControl()
         #expect(background.handsTerminal(rvInForeground: false) == false)  // `rv run … &`
         #expect(background.reclaimsTerminal() == false)
+    }
+
+    /// Once released (before the leader is reaped), no signal reaches the
+    /// group id, which may by then be someone else's.
+    @Test func signalsStopReachingTheGroupOnceReleased() {
+        let sent = Mutex<[Int32]>([])
+        let forwarding = SecretRunSignalTarget(send: { group, number in
+            sent.withLock { $0.append(group == 4242 ? number : -1) }
+        })
+        forwarding.deliver(SIGINT)
+        #expect(forwarding.target(4242) == SIGINT)  // arrived before: the launch is abandoned
+        forwarding.deliver(SIGTERM)
+        forwarding.release()
+        forwarding.deliver(SIGHUP)
+        #expect(sent.withLock { $0 } == [SIGTERM])
     }
 
     @Test func waitStatusesMapToShellExitCodes() {
@@ -209,6 +243,37 @@ struct SecretRunLaunchTests {
         else { Issue.record("agent-scoped secret was not refused"); return }
         #expect(broker.liveCount == 0)
     }
+
+    @Test func leaseCarriesTheRealValuesOnlyForScrubbing() throws {
+        let fixture = try SecretsFixture(runSecrets)
+        defer { fixture.tearDown() }
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: fakeResolver, transport: RecordingUpstream().transport,
+            workspace: nil)
+        defer { broker.stop() }
+        let lease = try broker.lease(names: ["OPENAI_API_KEY"], agent: nil, placeholdersOnly: true).get()
+        defer { broker.revoke(lease) }
+        #expect(lease.realValues == [try #require(SecretValue(realOpenAI))])
+        #expect(lease.environment.contains { $0.value == realOpenAI } == false)
+    }
+
+    #if os(macOS)
+    /// The stop a supervisor observed may be followed at once by the
+    /// leader's exit. Consuming the stop must not reap that exit: the zombie
+    /// is what keeps the group id from being reused before the group kill.
+    @Test func consumingAStopNeverReapsAnExitedLeader() throws {
+        let pid = try SecretRunProcess.spawnSuspended(
+            executable: "/usr/bin/true", arguments: ["true"], environment: [], descriptors: [:]).get()
+        #expect(kill(pid, SIGCONT) == 0)
+        var info = siginfo_t()
+        while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) != 0, errno == EINTR {}
+        #expect(info.si_code == CLD_EXITED)
+        #expect(SecretRunProcess.consumeStop(pid) == nil)
+        #expect(kill(pid, 0) == 0)  // still an unreaped zombie
+        var status: Int32 = 0
+        #expect(waitpid(pid, &status, 0) == pid)
+    }
+    #endif
 
     /// Every refusal comes before the command could run: a marker it would
     /// write is never written.
@@ -304,6 +369,7 @@ struct SecretRunLaunchTests {
             transport: upstream.transport, notices: notices,
             environment: [
                 "PATH": "/usr/bin:/bin", "KEEP": "1", "OPENAI_API_KEY": realOpenAI, "FAKE_OPENAI": realOpenAI,
+                "DOTENV_COPY": realOpenAI,
             ]))
         #expect(result == .success(7))
 
@@ -315,6 +381,8 @@ struct SecretRunLaunchTests {
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("REAL") == false)
         #expect(environment.contains("FAKE_OPENAI") == false)
+        #expect(environment.contains("DOTENV_COPY") == false)
+        #expect(notices.all.contains { $0.contains("DOTENV_COPY") && $0.contains(realOpenAI) == false })
         #expect(environment.contains("KEEP=1"))
         #expect(read("pid").isEmpty == false)
         #expect(read("pgid") == read("pid"))

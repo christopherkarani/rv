@@ -8,6 +8,16 @@ import RVPolicy
 struct SecretLease: Sendable {
     let placeholders: [SecretPlaceholder]
     let environment: [(name: String, value: String)]
+    /// The real values behind the placeholders (an AWS set and each of its
+    /// parts), so an uncontained launch can drop any inherited variable
+    /// that holds one. Never printed (`SecretValue` redacts itself).
+    let realValues: [SecretValue]
+
+    init(placeholders: [SecretPlaceholder], environment: [(name: String, value: String)], realValues: [SecretValue] = []) {
+        self.placeholders = placeholders
+        self.environment = environment
+        self.realValues = realValues
+    }
 
     static let empty = SecretLease(placeholders: [], environment: [])
 }
@@ -161,6 +171,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
         }
         var placeholders: [SecretPlaceholder] = []
         var environment: [(name: String, value: String)] = []
+        var realValues: [SecretValue] = []
         var staged: [AuditEvent] = []
         func fail(_ error: SecretLeaseError) -> Result<SecretLease, SecretLeaseError> {
             gateway.revoke(placeholders)
@@ -178,6 +189,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
             let value = secret.value
             let expires = secret.expires
             let fingerprint = fingerprint(value)
+            realValues.append(value)
+            if case .awsSigV4 = definition.delivery, let set = AWSCredentialSet(value) {
+                realValues.append(contentsOf: set.values)
+            }
             var pins: [GatewayBinaryPin] = []
             for path in definition.binaries ?? [] {
                 switch GatewayBinaryPin.pin(path) {
@@ -232,7 +247,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 ])))
         }
         for event in staged { _ = AuditLog.append(event, configDirectory: configDirectory) }
-        return .success(SecretLease(placeholders: placeholders, environment: environment))
+        return .success(SecretLease(placeholders: placeholders, environment: environment, realValues: realValues))
     }
 
     /// Organization rules for a resource profile's `keychain` entries, checked

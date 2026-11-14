@@ -89,7 +89,14 @@ package enum SecretRun {
 
         let selected = selection.names.compactMap { configuration.secret(named: $0) }
         let environment = SecretRunEnvironment.build(
-            parent: context.environment, selected: selected, lease: lease.environment)
+            parent: context.environment, selected: selected, lease: lease.environment, realValues: lease.realValues)
+        // Names the lease replaces with a placeholder go without saying.
+        let copies = SecretRunEnvironment.copies(parent: context.environment, realValues: lease.realValues)
+            .filter { name in lease.environment.contains { $0.name == name } == false }
+        if copies.isEmpty == false {
+            context.notice("rv run: removed \(copies.joined(separator: ", ")) from the command's environment: "
+                + "each held a selected secret's real value")
+        }
         context.notice(
             "rv run: \(selection.names.joined(separator: ", ")) staged as placeholders for this command only. "
                 + "Not a sandbox: see `rv help run`.")

@@ -127,21 +127,30 @@ package enum SecretRunEnvironment {
 
     /// The parent's environment without any variable a selected secret
     /// stages (its real value may be exported there) or is read from (a
-    /// `hostEnvironment` source's variable holds the real value), then the
-    /// lease's placeholders and base URLs on top.
+    /// `hostEnvironment` source's variable holds the real value), and
+    /// without any variable holding one of `realValues`, then the lease's
+    /// placeholders and base URLs on top.
     static func build(
-        parent: [String: String], selected: [SecretDefinition], lease: [(name: String, value: String)]
+        parent: [String: String], selected: [SecretDefinition], lease: [(name: String, value: String)],
+        realValues: [SecretValue]
     ) -> [String: String] {
         var environment = parent
         for definition in selected {
             for variable in definition.stagedVariables { environment[variable] = nil }
-            if case .hostEnvironment(let variable) = definition.source { environment[variable] = nil }
+            // RED: the source variable is not dropped yet.
             if case .awsSigV4 = definition.delivery {
                 for variable in awsCredentialVariables { environment[variable] = nil }
             }
         }
+        for name in copies(parent: parent, realValues: realValues) { environment[name] = nil }
         for entry in lease { environment[entry.name] = entry.value }
         return environment
+    }
+
+    /// The parent's variables, by name, whose value is one of `realValues`.
+    /// Compared in memory; the values are never printed.
+    static func copies(parent _: [String: String], realValues _: [SecretValue]) -> [String] {
+        []  // RED: not implemented yet.
     }
 
     /// `NAME=value` entries in a stable order, for `posix_spawn`.

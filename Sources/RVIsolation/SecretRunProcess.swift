@@ -15,7 +15,14 @@ package enum SecretRunCapability {
     /// resolved: a refused launch prompts and unlocks nothing.
     static func check(_ peers: GatewayPeerCheck) -> SecretRunRefusal? {
         guard SecretRunProcess.isAvailable else { return .spawnUnavailable }
-        return SecretRunProcess.bindsProcessGroups(peers) ? nil : .peerBindingUnavailable
+        return peerBindingVerifiable(peers) ? nil : .peerBindingUnavailable
+    }
+
+    /// The one place `rv run` asks whether the gateway can bind a request to
+    /// the command's process group here. Answered by a probe of `peers`, so
+    /// a platform whose peer check gains a backend passes without an edit.
+    static func peerBindingVerifiable(_ peers: GatewayPeerCheck) -> Bool {
+        SecretRunProcess.bindsProcessGroups(peers)
     }
 }
 
@@ -36,7 +43,46 @@ struct SecretRunJobControl: Equatable {
     /// When the command stops or exits.
     mutating func reclaimsTerminal() -> Bool {
         defer { handed = false }
-        return handed
+        return true  // RED: reclaims unconditionally, as before the fix.
+    }
+}
+
+/// Where `rv run` forwards the signals it receives: nowhere until the
+/// command's group is known (the first one is kept), then to that group,
+/// and nowhere again once `release` is called. `release` comes before the
+/// leader is reaped: after that its group id may belong to someone else.
+final class SecretRunSignalTarget: @unchecked Sendable {
+    private let lock = NSLock()
+    private let send: @Sendable (pid_t, Int32) -> Void
+    private var group: pid_t?
+    private var pending: Int32?
+    private var released = false
+
+    init(send: @escaping @Sendable (pid_t, Int32) -> Void = { group, number in _ = kill(-group, number) }) {
+        self.send = send
+    }
+
+    /// From here on, signals go to `group`. Returns one that arrived before.
+    func target(_ group: pid_t) -> Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        if released == false { self.group = group }
+        return pending
+    }
+
+    func deliver(_ number: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let group {
+            send(group, number)
+        } else if pending == nil, released == false {
+            pending = number
+        }
+    }
+
+    /// No signal is sent after this returns.
+    func release() {
+        // RED: not implemented yet.
     }
 }
 
@@ -71,6 +117,7 @@ enum SecretRunProcess {
         }
         func abandon(_ refusal: SecretRunRefusal) -> Result<Int32, SecretRunRefusal> {
             if job.reclaimsTerminal() { terminal?.reclaim() }
+            signals.release()
             discard(pid)
             return .failure(refusal)
         }
@@ -81,6 +128,7 @@ enum SecretRunProcess {
         if let pending = signals.target(pid) {
             // Interrupted before the command ran: it never will. The signal
             // number alone is the wait status of a process it killed.
+            signals.release()
             discard(pid)
             return .success(pending)
         }
@@ -88,7 +136,7 @@ enum SecretRunProcess {
             return abandon(.spawnFailed("could not give it the terminal"))
         }
         guard kill(pid, SIGCONT) == 0 else { return abandon(.spawnFailed("could not resume it")) }
-        return .success(supervise(pid, terminal: terminal, job: &job))
+        return .success(supervise(pid, terminal: terminal, job: &job, signals: signals))
     }
 
     /// `POSIX_SPAWN_SETPGROUP` makes the child its own group leader inside
@@ -157,9 +205,11 @@ enum SecretRunProcess {
     /// rv's own job control when there is a terminal. Before reaping, kills
     /// what is left of its group, as a contained runtime's teardown does:
     /// the unreaped leader keeps the group id from being reused, so the
-    /// signal cannot reach an unrelated group. Returns the leader's
-    /// `waitpid` status.
-    static func supervise(_ pid: pid_t, terminal: SecretRunTerminal?, job: inout SecretRunJobControl) -> Int32 {
+    /// signal cannot reach an unrelated group. Forwarding stops before the
+    /// reap, for the same reason. Returns the leader's `waitpid` status.
+    static func supervise(
+        _ pid: pid_t, terminal: SecretRunTerminal?, job: inout SecretRunJobControl, signals: SecretRunSignals
+    ) -> Int32 {
         let stops = terminal == nil ? 0 : WSTOPPED
         while true {
             var info = siginfo_t()
@@ -168,6 +218,7 @@ enum SecretRunProcess {
                 if errno == EINTR { continue }
                 // Not our unreaped child any more: its pgid may already be
                 // someone else's, so nothing is signalled.
+                signals.release()
                 if job.reclaimsTerminal() { terminal?.reclaim() }
                 return SIGKILL
             }
@@ -175,10 +226,7 @@ enum SecretRunProcess {
             // Consume the stop. Without WEXITED this never reaps, even if the
             // leader exited since. The spawn suspension reads as a stop with
             // no signal; only a signal stop is passed on.
-            var stop = siginfo_t()
-            guard waitid(P_PID, id_t(pid), &stop, WSTOPPED | WNOHANG) == 0, stop.si_pid == pid,
-                stop.si_code == CLD_STOPPED, stop.si_status != 0
-            else { continue }
+            guard consumeStop(pid) != nil else { continue }
             // Ctrl-Z (or a background read) stopped the command's group,
             // which the shell does not see; stop rv too so the shell regains
             // the terminal. `fg` gives rv the foreground before continuing
@@ -191,12 +239,26 @@ enum SecretRunProcess {
         }
         if job.reclaimsTerminal() { terminal?.reclaim() }
         _ = kill(-pid, SIGKILL)
+        signals.release()
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0 {
             // Unreapable: report it as killed rather than as success.
             guard errno == EINTR else { return SIGKILL }
         }
         return status
+    }
+
+    /// Consumes the leader's pending stop report and returns the signal that
+    /// stopped it, or nil (the spawn suspension reads as a stop with no
+    /// signal). Never reaps, even if the leader has exited since its stop
+    /// was observed: the zombie keeps its group id from being reused.
+    static func consumeStop(_ pid: pid_t) -> Int32? {
+        // RED: the old consume, which reaps an exit that raced the stop.
+        var status: Int32 = 0
+        guard waitpid(pid, &status, WUNTRACED | WNOHANG) == pid, SecretRunExit.isStopped(waitStatus: status) else {
+            return nil
+        }
+        return (status >> 8) & 0xff
     }
 
     /// The kernel peer check binds here when a suspended probe child holding
@@ -329,15 +391,15 @@ struct SecretRunTerminal {
 }
 
 /// While `rv run` supervises: `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv
-/// go to the command's group instead of ending rv, and `SIGTTOU` is ignored
-/// so rv can take the terminal back from the background. A signal that
-/// lands before the group is targeted is kept, and the launch abandoned.
+/// go to the command's group (through `SecretRunSignalTarget`) instead of
+/// ending rv, and `SIGTTOU` is ignored so rv can take the terminal back
+/// from the background. A signal that lands before the group is targeted
+/// is kept, and the launch abandoned.
 final class SecretRunSignals: @unchecked Sendable {
     static let forwarded = [SIGINT, SIGTERM, SIGHUP]
 
     private let lock = NSLock()
-    private var group: pid_t?
-    private var pending: Int32?
+    private let forwarding = SecretRunSignalTarget()
     private var sources: [any DispatchSourceSignal] = []
     private var previous: [(number: Int32, handler: sig_t?)] = []
 
@@ -348,42 +410,29 @@ final class SecretRunSignals: @unchecked Sendable {
         for number in Self.forwarded + [SIGTTOU] {
             previous.append((number, signal(number, SIG_IGN)))
         }
+        let forwarding = forwarding
         for number in Self.forwarded {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
-            source.setEventHandler { [weak self] in self?.deliver(number) }
+            source.setEventHandler { forwarding.deliver(number) }
             source.resume()
             sources.append(source)
         }
     }
 
-    /// From here on, forwarded signals go to `group`. Returns a signal that
-    /// arrived before, if one did.
-    func target(_ group: pid_t) -> Int32? {
-        lock.lock()
-        defer { lock.unlock() }
-        self.group = group
-        return pending
-    }
+    func target(_ group: pid_t) -> Int32? { forwarding.target(group) }
 
-    private func deliver(_ number: Int32) {
-        lock.lock()
-        defer { lock.unlock() }
-        if let group {
-            _ = kill(-group, number)
-        } else if pending == nil {
-            pending = number
-        }
-    }
+    /// Before the leader is reaped.
+    func release() { forwarding.release() }
 
     /// Restores the dispositions rv had before.
     func restore() {
+        forwarding.release()
         lock.lock()
         defer { lock.unlock() }
         for source in sources { source.cancel() }
         sources.removeAll()
         for entry in previous { _ = signal(entry.number, entry.handler) }
         previous.removeAll()
-        group = nil
     }
 }
 #endif
