@@ -53,19 +53,6 @@ struct GatewayPeerCheck: Sendable {
     /// holding the peer's socket runs, or descends from, a pinned binary.
     var binaries: @Sendable (GatewayPeer, ProcessGroupFact, [GatewayBinaryPin]) -> GatewayBinaryVerdict =
         { _, _, _ in .unverifiable }
-    /// Whether `verify` can ever answer `member` here. Launch paths that
-    /// would otherwise hand out placeholders no request could spend (or, on
-    /// an unbound gateway, any process could) refuse when this is false.
-    var bindsProcessGroups = false
-
-    /// Set where `runtime` has a kernel check behind it. Linux has none yet.
-    static var platformBindsProcessGroups: Bool {
-        #if os(macOS)
-        true
-        #else
-        false
-        #endif
-    }
 
     /// The peer is a member when a process of the runtime holds the client
     /// socket, found by its port pair. The cage denies the `setsid` and
@@ -102,8 +89,7 @@ struct GatewayPeerCheck: Sendable {
             #else
             .unverifiable
             #endif
-        },
-        bindsProcessGroups: platformBindsProcessGroups)
+        })
 }
 
 #if os(macOS)

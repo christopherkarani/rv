@@ -126,14 +126,16 @@ package enum SecretRunEnvironment {
     static let awsCredentialVariables = ["AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"]
 
     /// The parent's environment without any variable a selected secret
-    /// stages (its real value may be exported there), then the lease's
-    /// placeholders and base URLs on top.
+    /// stages (its real value may be exported there) or is read from (a
+    /// `hostEnvironment` source's variable holds the real value), then the
+    /// lease's placeholders and base URLs on top.
     static func build(
         parent: [String: String], selected: [SecretDefinition], lease: [(name: String, value: String)]
     ) -> [String: String] {
         var environment = parent
         for definition in selected {
             for variable in definition.stagedVariables { environment[variable] = nil }
+            if case .hostEnvironment(let variable) = definition.source { environment[variable] = nil }
             if case .awsSigV4 = definition.delivery {
                 for variable in awsCredentialVariables { environment[variable] = nil }
             }

@@ -39,18 +39,26 @@ private final class Notices: Sendable {
 }
 
 extension GatewayPeerCheck {
-    /// Answers `member` and claims a kernel binding, so `rv run` proceeds.
-    static let bindingMember = GatewayPeerCheck(verify: { _, _ in .member }, bindsProcessGroups: true)
+    /// Answers `member` for every peer: a check that binds nothing.
+    static let alwaysMember = GatewayPeerCheck(verify: { _, _ in .member })
+    static let neverAnswers = GatewayPeerCheck(verify: { _, _ in .unverifiable })
 }
 
+/// Lets a stub peer check through, so the logic after the capability probe runs.
+private let capable: @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = { _ in nil }
+
+/// Whether the real spawn and kernel peer check work here.
+private let hostRunsSecretRun = SecretRunCapability.check(.runtime) == nil
+
 private func context(
-    _ fixture: SecretsFixture, directory: URL, peers: GatewayPeerCheck, processAvailable: Bool = true,
+    _ fixture: SecretsFixture, directory: URL, peers: GatewayPeerCheck,
+    capability: @escaping @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = capable,
     transport: SecretUpstreamTransport = RecordingUpstream().transport, notices: Notices = Notices(),
     environment: [String: String] = ["PATH": "/usr/bin:/bin"]
 ) -> SecretRunContext {
     SecretRunContext(
         configDirectory: fixture.directory, resolver: fakeResolver, transport: transport, peers: peers,
-        processAvailable: processAvailable, environment: environment, directory: directory.path,
+        capability: capability, environment: environment, directory: directory.path,
         manageTerminal: false, notice: notices.sink)
 }
 
@@ -127,6 +135,33 @@ struct SecretRunPlanTests {
         #expect(entries.contains("real") == false)
     }
 
+    /// A secret read from the host environment has its real value in a
+    /// variable of its own: the child must not inherit that one either.
+    @Test func environmentDropsTheVariableAHostEnvironmentSourceReads() throws {
+        let openAI = try #require(try configuration().secret(named: "OPENAI_API_KEY"))
+        let parent = ["PATH": "/usr/bin:/bin", "FAKE_OPENAI": realOpenAI, "FAKE_GH": "gh-unselected"]
+        let built = SecretRunEnvironment.build(
+            parent: parent, selected: [openAI], lease: [("OPENAI_API_KEY", "sk-rvph_0123")])
+        #expect(built == ["PATH": "/usr/bin:/bin", "FAKE_GH": "gh-unselected", "OPENAI_API_KEY": "sk-rvph_0123"])
+    }
+
+    /// rv gives the terminal away only from the foreground and takes it
+    /// back only if it gave it: a backgrounded rv leaves it with the shell.
+    @Test func terminalIsHandedFromTheForegroundAndReclaimedOnlyIfHanded() {
+        var foreground = SecretRunJobControl()
+        #expect(foreground.handsTerminal(rvInForeground: true))
+        #expect(foreground.reclaimsTerminal())  // Ctrl-Z
+        #expect(foreground.reclaimsTerminal() == false)  // nothing left to take back
+        #expect(foreground.handsTerminal(rvInForeground: false) == false)  // `bg`
+        #expect(foreground.reclaimsTerminal() == false)  // stops or exits in the background
+        #expect(foreground.handsTerminal(rvInForeground: true))  // `fg`
+        #expect(foreground.reclaimsTerminal())
+
+        var background = SecretRunJobControl()
+        #expect(background.handsTerminal(rvInForeground: false) == false)  // `rv run … &`
+        #expect(background.reclaimsTerminal() == false)
+    }
+
     @Test func waitStatusesMapToShellExitCodes() {
         #expect(SecretRunExit.code(waitStatus: 0) == 0)
         #expect(SecretRunExit.code(waitStatus: 7 << 8) == 7)
@@ -192,35 +227,63 @@ struct SecretRunLaunchTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         var request = request
         if request.command == ["/bin/sh"] { request.command += ["-c", "touch ran"] }
-        let result = SecretRun.execute(request, context: context(fixture, directory: directory, peers: .bindingMember))
+        let result = SecretRun.execute(request, context: context(fixture, directory: directory, peers: .alwaysMember))
         #expect(result == .failure(refusal))
         #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ran").path) == false)
     }
 
-    @Test func unboundGatewayOrNoSuspendedSpawnRefusesBeforeAnythingResolves() throws {
+    /// The probe is the real spawn and the given peer check: a check that
+    /// calls everything a member, or answers nothing, binds nothing. Where
+    /// no no-window spawn exists the probe cannot even start.
+    @Test func capabilityProbeRefusesAPeerCheckThatBindsNothing() {
+        let unavailable: SecretRunRefusal? = SecretRunProcess.isAvailable ? .peerBindingUnavailable : .spawnUnavailable
+        #expect(SecretRunCapability.check(.alwaysMember) == unavailable)
+        #expect(SecretRunCapability.check(.neverAnswers) == unavailable)
+        #if os(macOS)
+        // The kernel check (libproc) binds here; elsewhere it is whatever that platform offers.
+        #expect(SecretRunCapability.check(.runtime) == nil)
+        #endif
+    }
+
+    @Test(arguments: [SecretRunRefusal.peerBindingUnavailable, .spawnUnavailable])
+    func anIncapableHostRefusesBeforeAnythingResolves(refusal: SecretRunRefusal) throws {
         let fixture = try SecretsFixture(runSecrets)
         defer { fixture.tearDown() }
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let request = SecretRunRequest(secrets: ["OPENAI_API_KEY"], all: false, command: ["/bin/sh", "-c", "touch ran"])
-        let unbound = GatewayPeerCheck(verify: { _, _ in .member })
-        #expect(SecretRun.execute(request, context: context(fixture, directory: directory, peers: unbound))
-            == .failure(.peerBindingUnavailable))
-        #expect(SecretRun.execute(
-            request, context: context(fixture, directory: directory, peers: .bindingMember, processAvailable: false))
-            == .failure(.spawnUnavailable))
-        if GatewayPeerCheck.platformBindsProcessGroups == false {
-            #expect(SecretRun.execute(request, context: context(fixture, directory: directory, peers: .runtime))
-                == .failure(.peerBindingUnavailable))
-        }
+        let result = SecretRun.execute(request, context: context(
+            fixture, directory: directory, peers: .runtime, capability: { _ in refusal }))
+        #expect(result == .failure(refusal))
         #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ran").path) == false)
         #expect(fixture.auditText.isEmpty)
+    }
+
+    /// If binding fails after the spawn, the suspended child is killed
+    /// before it runs, its group is gone, and the launch fails.
+    @Test(.enabled(if: SecretRunProcess.isAvailable))
+    func aFailedBindKillsTheSuspendedChildBeforeItRuns() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bound = Mutex<pid_t>(0)
+        let result = SecretRunProcess.launch(
+            executable: "/bin/sh", arguments: ["sh", "-c", "touch \"$1/ran\"", "sh", directory.path],
+            environment: ["PATH=/usr/bin:/bin"], manageTerminal: false
+        ) { group in
+            bound.withLock { $0 = group.pgid.rawValue }
+            return .failure(.bindFailed("test"))
+        }
+        #expect(result == .failure(.bindFailed("test")))
+        let pgid = bound.withLock { $0 }
+        #expect(pgid > 1)
+        #expect(kill(-pgid, 0) == -1 && errno == ESRCH)
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ran").path) == false)
     }
 
     /// The real spawn and kernel peer check: the child leads its own group,
     /// sees only a placeholder, spends it through the gateway, and the
     /// gateway is gone once it exits.
-    @Test(.enabled(if: GatewayPeerCheck.platformBindsProcessGroups && SecretRunProcess.isAvailable))
+    @Test(.enabled(if: hostRunsSecretRun))
     func commandSeesPlaceholdersLeadsItsGroupAndSpendsThroughTheGateway() throws {
         let fixture = try SecretsFixture(runSecrets)
         defer { fixture.tearDown() }
@@ -237,8 +300,11 @@ struct SecretRunLaunchTests {
         let request = SecretRunRequest(
             secrets: ["OPENAI_API_KEY"], all: false, command: ["/bin/sh", "-c", script, "sh", directory.path])
         let result = SecretRun.execute(request, context: context(
-            fixture, directory: directory, peers: .runtime, transport: upstream.transport, notices: notices,
-            environment: ["PATH": "/usr/bin:/bin", "KEEP": "1", "OPENAI_API_KEY": realOpenAI]))
+            fixture, directory: directory, peers: .runtime, capability: SecretRunCapability.check,
+            transport: upstream.transport, notices: notices,
+            environment: [
+                "PATH": "/usr/bin:/bin", "KEEP": "1", "OPENAI_API_KEY": realOpenAI, "FAKE_OPENAI": realOpenAI,
+            ]))
         #expect(result == .success(7))
 
         func read(_ name: String) -> String {
@@ -248,6 +314,7 @@ struct SecretRunLaunchTests {
         let environment = read("env")
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("REAL") == false)
+        #expect(environment.contains("FAKE_OPENAI") == false)
         #expect(environment.contains("KEEP=1"))
         #expect(read("pid").isEmpty == false)
         #expect(read("pgid") == read("pid"))
@@ -260,7 +327,7 @@ struct SecretRunLaunchTests {
         #expect(loopbackAccepts(port: port) == false)
     }
 
-    @Test(.enabled(if: GatewayPeerCheck.platformBindsProcessGroups && SecretRunProcess.isAvailable))
+    @Test(.enabled(if: hostRunsSecretRun))
     func signalExitsAreReportedAndLeftoverGroupMembersKilled() throws {
         let fixture = try SecretsFixture(runSecrets)
         defer { fixture.tearDown() }

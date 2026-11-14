@@ -22,7 +22,8 @@ package struct SecretRunContext: Sendable {
     var resolver: SecretResolver
     var transport: SecretUpstreamTransport = .urlSession
     var peers: GatewayPeerCheck = .runtime
-    var processAvailable: Bool = SecretRunProcess.isAvailable
+    /// Why this host cannot run `rv run` with `peers`, or nil.
+    var capability: @Sendable (GatewayPeerCheck) -> SecretRunRefusal? = SecretRunCapability.check
     var environment: [String: String]
     var directory: String
     var manageTerminal: Bool
@@ -55,8 +56,7 @@ package enum SecretRun {
     ) -> Result<Int32, SecretRunRefusal> {
         guard let name = request.command.first else { return .failure(.emptyCommand) }
         // Before anything is resolved: a launch that cannot be bound must not prompt or unlock.
-        guard context.peers.bindsProcessGroups else { return .failure(.peerBindingUnavailable) }
-        guard context.processAvailable else { return .failure(.spawnUnavailable) }
+        if let refusal = context.capability(context.peers) { return .failure(refusal) }
         guard let executable = SecretRunCommand.resolve(
             name, path: context.environment["PATH"], directory: context.directory,
             isExecutable: SecretRunCommand.isExecutableFile)

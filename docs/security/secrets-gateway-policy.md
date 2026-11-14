@@ -199,7 +199,9 @@ How it starts the command:
   then sends `SIGCONT`. If any step fails, the stopped child is killed.
   Only stdio is inherited.
 - `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv go to the command's group.
-  Ctrl-Z stops rv with the command, and `fg` resumes both. rv exits with
+  Ctrl-Z stops rv with the command, and `fg` resumes both; `bg` resumes
+  both and leaves the terminal with the shell. rv hands the terminal on
+  only while it holds the foreground. rv exits with
   the command's code, or 128 plus the signal that ended it; 125 means
   `rv run` refused and the command never ran (126: could not be started,
   127: not found).
@@ -228,11 +230,15 @@ What it does not:
   new group made with `setsid`) cannot spend the placeholders, but it is not
   killed when the command exits.
 
-Linux: refused (`rv run: the secrets gateway cannot tell which process sent
-a request on this platform ...`, exit 125) until the gateway's peer check
-binds process groups there and a no-window spawn exists. Both are
-capabilities `rv run` checks (`GatewayPeerCheck.bindsProcessGroups`,
-`SecretRunProcess.isAvailable`), not platform tests in the command.
+Before resolving any secret, `rv run` checks both things it relies on by
+doing them (`SecretRunCapability.check`): it spawns a suspended probe
+child holding one end of a loopback connection, and the gateway's peer
+check must call that connection the probe's and a second one not. A
+platform without a no-window spawn, or whose peer check cannot tell
+(`/proc` hidden, no libproc), is refused with exit 125 and the command
+never starts. Linux has no no-window spawn in `rv run` yet, so it is
+refused there (`rv run: this platform cannot start the command suspended
+...`) even once its peer check binds process groups.
 
 ## Binary binding
 
