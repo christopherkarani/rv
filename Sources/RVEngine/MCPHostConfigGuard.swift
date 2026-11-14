@@ -111,6 +111,7 @@ func mcpHostConfigUnmodeledWrite(
     reads: inout HostTextReads
 ) -> Bool {
     let launched = launchedCommandHeads(raw)
+    reads.commandsArePlain = commandsMayBeRedefined(raw, launched) == false
     for command in launched {
         if isHostMCPMutation(command, reads: &reads) { return true }
     }
@@ -219,6 +220,25 @@ private func mayShadowOrMoveCopy(_ command: LaunchedCommand) -> Bool {
 private func mayDefineCommands(_ raw: String) -> Bool {
     raw.contains("()") || raw.contains("PATH=") || raw.contains("PATH+=")
 }
+
+/// Whether a plain command name on `raw` may run something other than the
+/// program it names: a function definition (`ls() …`, `ls ( ) …`,
+/// `function ls …`), an alias or hash entry (`alias`, `BASH_ALIASES[ls]=`,
+/// zsh `aliases[ls]=`), a `PATH` change, or a command whose effect on the
+/// shell rv does not read (`source`, `.`, `eval`, `trap`, `autoload`, a
+/// dynamic program).
+private func commandsMayBeRedefined(_ raw: String, _ launched: [LaunchedCommand]) -> Bool {
+    if mayDefineCommands(raw) { return true }
+    let unblanked = raw.filter { $0.isWhitespace == false }
+    if unblanked.contains("()") || redefiningText.contains(where: { unblanked.contains($0) }) { return true }
+    return launched.contains { $0.headIsDynamic || redefiningCommands.contains(commandName($0.head)) }
+}
+
+private let redefiningText = ["aliases[", "functions[", "commands[", "BASH_ALIASES", "BASH_CMDS", "BASH_FUNC_"]
+
+private let redefiningCommands: Set<String> = [
+    "alias", "function", "hash", "enable", "source", ".", "eval", "trap", "autoload", "functions",
+]
 
 private enum MCPCommandClass {
     case reader
