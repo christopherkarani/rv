@@ -1040,9 +1040,10 @@ public enum MCPSandbox {
     /// measured a profile shape that compiled for over 20 minutes.
     static let profileCompileSeconds = 60
 
-    private final class CompileOutcome: Sendable {
-        let value = Mutex<String??>(nil)
-    }
+    /// Each compile's answer, by its key, until the caller takes it. A
+    /// compile that outlived its caller (and so refused its server) leaves
+    /// its one entry behind.
+    private static let compileOutcomes = Mutex<[UUID: String?]>([:])
 
     /// The compiler's first error line for `profile`, or nil when it
     /// compiles. Nothing is applied or launched. It runs on a thread of its
@@ -1055,17 +1056,17 @@ public enum MCPSandbox {
             return "the profile is \(size) bytes, more than the \(maximumProfileBytes) rv compiles"
         }
         guard let compiler = profileCompiler else { return nil }
-        let outcome = CompileOutcome()
+        let key = UUID()
         let done = DispatchSemaphore(value: 0)
         let thread = Thread {
             let error = compile(profile, with: compiler)
-            outcome.value.withLock { $0 = .some(error) }
+            compileOutcomes.withLock { _ = $0.updateValue(error, forKey: key) }
             done.signal()
         }
         thread.stackSize = profileCompileStackBytes
         thread.start()
         guard done.wait(timeout: .now() + .seconds(profileCompileSeconds)) == .success,
-            let error = outcome.value.withLock({ $0 })
+            let error = compileOutcomes.withLock({ $0.removeValue(forKey: key) })
         else { return "the profile did not compile within \(profileCompileSeconds) seconds" }
         return error
     }
