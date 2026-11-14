@@ -156,15 +156,16 @@ package enum MCPPlaceholderPlanning {
 
     /// `scheme://host[:port]`, as the trust review names an upstream.
     package static func origin(_ url: URL) -> String {
-        let host = url.host.map { $0.contains(":") ? "[\($0)]" : $0 } ?? ""
+        let host = url.host.map { $0.contains(":") && $0.hasPrefix("[") == false ? "[\($0)]" : $0 } ?? ""
         return "\(url.scheme ?? "")://\(host)" + (url.port.map { ":\($0)" } ?? "")
     }
 
     /// https, or plain http to this host only.
     static func protected(_ url: URL) -> Bool {
-        switch url.scheme?.lowercased() {
+        switch (url.scheme ?? "").lowercased() {
         case "https": true
-        case "http": ["127.0.0.1", "localhost", "::1"].contains(url.host?.lowercased() ?? "")
+        // Foundation gives an IPv6 host with or without its brackets, by version.
+        case "http": ["127.0.0.1", "localhost", "::1", "[::1]"].contains(url.host?.lowercased() ?? "")
         default: false
         }
     }

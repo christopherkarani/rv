@@ -96,7 +96,6 @@ public enum MCPLaunchPlanner {
         now: @escaping @Sendable () -> Date
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
-        // nil until asked; then the reason leases cannot be bound here, or nil.
         var capability = MCPPlaceholderCapability.unprobed
         for name in names {
             if configuration.untrusted { return .failure(.untrustedRemote(name)) }
