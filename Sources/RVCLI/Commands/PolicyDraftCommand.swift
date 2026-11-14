@@ -43,6 +43,8 @@ struct PolicyDraftCommand: AsyncParsableCommand {
                 workspace: workspace,
                 compiler: compiler
             )
+        } catch let error as PolicyCeilingError {
+            try ctx.fail("rv policy draft: refused: \(error.refusal)\n")
         } catch {
             try ctx.fail("rv policy draft: failed\n")
         }

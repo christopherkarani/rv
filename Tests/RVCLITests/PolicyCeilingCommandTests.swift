@@ -1,0 +1,172 @@
+import Foundation
+import Testing
+import RVDomain
+import RVIPC
+import RVPolicy
+@testable import RVCLI
+
+@Suite("PolicyCeilingCommand")
+struct PolicyCeilingCommandTests {
+    private let ceilingText = """
+        schema_version = 1
+
+        [[rule]]
+        id = "typed.git:no-force-push"
+        verdict = "deny"
+        predicate = "gitPush"
+        force = "force"
+        """
+
+    private let allowMain = """
+        schema_version = 1
+
+        [[rule]]
+        id = "typed.git:allow-main"
+        verdict = "allow"
+        predicate = "gitPush"
+        branch = "main"
+        """
+
+    @Test func subcommandsAreRegistered() {
+        let children = Policy.configuration.subcommands.map { $0.configuration.commandName }
+        #expect(children.contains("check"))
+        #expect(children.contains("ceiling"))
+        #expect(PolicyCeilingCommand.configuration.subcommands.map { $0.configuration.commandName } == ["show", "set"])
+    }
+
+    @Test func check_withoutCeiling_boundsNothing() throws {
+        try withCeilingContext { home, workspace in
+            let report = try PolicyCeilingRun.check(home: home, workspace: workspace, file: nil)
+            #expect(report.ceilingSet == false)
+            #expect(report.withinCeiling)
+            #expect(report.pretty == "ceiling: none (no ceiling.toml)")
+        }
+    }
+
+    @Test func check_printsWitnessForTheLayerAboveTheCeiling() throws {
+        try withCeilingContext { home, workspace in
+            try writeCeiling(ceilingText, home: home)
+            let repoFile = TypedRuleStore.repoFileURL(workspace: workspace)
+            try FileManager.default.createDirectory(
+                at: repoFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try allowMain.write(to: repoFile, atomically: true, encoding: .utf8)
+            let report = try PolicyCeilingRun.check(home: home, workspace: workspace, file: nil)
+            #expect(report.withinCeiling == false)
+            #expect(report.layers.map(\.status) == ["within", "exceeds"])
+            #expect(report.layers[1].witness?.command == "git push --force origin main")
+            #expect(report.pretty.contains("repo: exceeds the ceiling\n  witness: git push --force origin main"))
+            let robot = try RobotJSON.encode(report)
+            #expect(robot.contains("git push --force origin main"))
+        }
+    }
+
+    @Test func check_sharedFile() throws {
+        try withCeilingContext { home, workspace in
+            try writeCeiling(ceilingText, home: home)
+            let share = workspace.appendingPathComponent("share.toml")
+            try allowMain.write(to: share, atomically: true, encoding: .utf8)
+            let report = try PolicyCeilingRun.check(home: home, workspace: workspace, file: share)
+            #expect(report.layers.count == 1)
+            #expect(report.layers[0].status == "exceeds")
+        }
+    }
+
+    @Test func check_invalidCeiling_throws() throws {
+        try withCeilingContext { home, workspace in
+            try writeCeiling("schema_version = 1\nbogus = 1\n", home: home)
+            #expect(throws: PolicyCeilingError.invalidFile) {
+                _ = try PolicyCeilingRun.check(home: home, workspace: workspace, file: nil)
+            }
+        }
+    }
+
+    @Test func set_savesAfterOwnerConfirmation() async throws {
+        try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try ceilingText.write(to: file, atomically: true, encoding: .utf8)
+            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            #expect(outcome.saved)
+            let store = PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            #expect(try store.load()?.rules.count == 1)
+        }
+    }
+
+    @Test func set_refusesWhenMachineLayerAlreadyExceeds() async throws {
+        try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
+            try TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
+                .saveMachine(try PolicyDocumentTOML.parse(allowMain))
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try ceilingText.write(to: file, atomically: true, encoding: .utf8)
+            let outcome = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            #expect(outcome.saved == false)
+            #expect(outcome.lines.contains("  witness: git push --force origin main"))
+            let store = PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            #expect(try store.load() == nil)
+        }
+    }
+
+    @Test func set_withoutOwner_writesNothing() async throws {
+        try await withAsyncCeilingContext(owner: nil) { home, workspace in
+            let file = workspace.appendingPathComponent("ceiling.toml")
+            try ceilingText.write(to: file, atomically: true, encoding: .utf8)
+            await #expect(throws: (any Error).self) {
+                _ = try await PolicyCeilingRun.set(home: home, workspace: workspace, file: file)
+            }
+            let store = PolicyCeilingStore(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            #expect(try store.load() == nil)
+        }
+    }
+
+    @Test func applySave_aboveCeiling_isRefusedWithWitness() async throws {
+        try await withAsyncCeilingContext(owner: .authenticated) { home, workspace in
+            try writeCeiling(ceilingText, home: home)
+            let session = PolicyWorkspace(home: home, workspace: workspace)
+            do {
+                _ = try session.mergeIncoming(try PolicyDocumentTOML.parse(allowMain), layer: .repo, save: true)
+                Issue.record("expected a ceiling refusal")
+            } catch let error as PolicyCeilingError {
+                #expect(error.refusal.hasPrefix("git push --force origin main exceeds the policy ceiling"))
+            }
+        }
+    }
+
+    // MARK: Helpers
+
+    private func writeCeiling(_ text: String, home: HomeDirectory) throws {
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try text.write(to: RVPolicyPaths.policyCeilingFile(inConfigDir: config), atomically: true, encoding: .utf8)
+    }
+
+    private func withCeilingContext(_ body: (HomeDirectory, URL) throws -> Void) throws {
+        let (home, workspace) = try makeDirs()
+        defer { cleanup(home, workspace) }
+        try withCLIProcess(home: home, workspacePath: workspace.path) {
+            try body(home, workspace)
+        }
+    }
+
+    private func withAsyncCeilingContext(
+        owner: UIAuthenticationOutcome?,
+        _ body: (HomeDirectory, URL) async throws -> Void
+    ) async throws {
+        let (home, workspace) = try makeDirs()
+        defer { cleanup(home, workspace) }
+        try await withCLIProcess(home: home, workspacePath: workspace.path, ownerAuthOutcome: owner) {
+            try await body(home, workspace)
+        }
+    }
+
+    private func makeDirs() throws -> (HomeDirectory, URL) {
+        let home = try isolatedHome()
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ceiling-ws-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        return (home, workspace)
+    }
+
+    private func cleanup(_ home: HomeDirectory, _ workspace: URL) {
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: home.rawValue, isDirectory: true))
+        try? FileManager.default.removeItem(at: workspace)
+    }
+}

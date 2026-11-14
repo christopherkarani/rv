@@ -930,17 +930,24 @@ enum HelpCatalog {
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),
                 HelpRow(name: "rv policy apply"),
+                HelpRow(name: "rv policy check --ceiling [<policy.toml>]"),
+                HelpRow(name: "rv policy ceiling [show | set <ceiling.toml>]"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(
                     name: "draft",
                     description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
                 ),
+                HelpRow(
+                    name: "ceiling",
+                    description: "ceiling.toml: deny/ask rules no layer may state a weaker verdict on, plus optional egress.hosts for approvals. A layer above it fails closed; check prints a witness command."
+                ),
             ]),
         ],
         examples: [
             "rv policy show",
             "rv policy draft --english 'never allow force-push to main'",
+            "rv policy check --ceiling",
         ]
     )
 
