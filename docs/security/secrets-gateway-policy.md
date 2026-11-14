@@ -289,6 +289,10 @@ reader, Yama `ptrace_scope` 1 to 3, and a default Docker container.
 `rv run --secret NAME -- COMMAND` (or `--all`) starts a command with no
 cage and the gateway in front of it. It is for running `claude`, `codex`,
 or a script with placeholders instead of real values, without a workspace.
+On Linux the whole path is run for real by `Scripts/linux-rv-run-e2e.sh`:
+an unprivileged account, a TLS upstream on localhost, the command's and
+its child's requests carrying the real value, the same placeholder from
+outside the command's tree refused, and rv's exit status.
 
 How it starts the command:
 
