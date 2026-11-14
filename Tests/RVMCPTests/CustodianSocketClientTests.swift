@@ -21,6 +21,10 @@ struct CustodianSocketClientTests {
         /// What the helper answers a correct password with; `.proved` attests.
         let helperResult = Mutex<MCPPresenceResult>(.proved)
         let prompts = Mutex(0)
+        /// The key daemon hangs up after this many answers on a connection
+        /// (as it does when one has been idle); nil: never.
+        let answersPerConnection = Mutex<Int?>(nil)
+        let connections = Mutex(0)
         private let listeners = Mutex<[Int32]>([])
 
         init() throws {
@@ -70,10 +74,15 @@ struct CustodianSocketClientTests {
             let id = UInt64(fd) + 1
             service.withLock { $0.open(id, peer: peer) }
             defer { service.withLock { $0.close(id) } }
+            connections.withLock { $0 += 1 }
+            var answered = 0
             while let request = MCPCustodianFrame.read(MCPCustodianSocketRequest.self, from: fd) {
                 guard let response = service.withLock({ $0.handle(id, request, now: .now) }),
                     MCPCustodianFrame.write(response, to: fd)
                 else { return }
+                answered += 1
+                // The hello counts as one.
+                if let limit = answersPerConnection.withLock({ $0 }), answered > limit { return }
             }
         }
 
@@ -104,7 +113,8 @@ struct CustodianSocketClientTests {
 
         func client(custodianUID: uid_t? = getuid(), presenceUID: uid_t = getuid()) -> MCPCustodianSocketClient {
             MCPCustodianSocketClient(
-                path: path, presencePath: presencePath, custodianUID: { custodianUID }, presenceUID: presenceUID)
+                path: path, presencePath: presencePath, installedBinary: directory.path + "/not-installed",
+                custodianUID: { custodianUID }, presenceUID: presenceUID)
         }
     }
 
@@ -238,19 +248,102 @@ struct CustodianSocketClientTests {
         #expect(host.prompts.withLock { $0 } == 0)
     }
 
+    /// The daemon closes an idle connection, and a restarted daemon has
+    /// none: the next request goes out again on a new one instead of
+    /// failing, and what the old one had unlocked is gone with it.
+    @Test(.timeLimit(.minutes(1)))
+    func aConnectionTheDaemonClosedIsReplacedOnTheNextRequest() throws {
+        let host = try Host()
+        defer { host.stop() }
+        host.answersPerConnection.withLock { $0 = 1 }
+        let client = host.client()
+        let terminal = Terminal("right")
+        let signing = MCPApprovalSigning.custodian(transport: client.transport(scope: scope, terminal: { nil }))
+        // Each request finds its connection closed by the one before.
+        let code = try #require(signing.mac(.code, ["c"], true))
+        #expect(signing.status() == .enrolled)
+        #expect(signing.verify(code, .code, ["c"]) == .valid)
+        #expect(signing.mac(.code, ["d"], true) != nil)
+        #expect(host.connections.withLock { $0 } >= 4)
+        // A proof is for the connection that asked. That one is gone by
+        // the time the owner has answered, so nothing is unlocked: the
+        // new connection signs nothing without a proof of its own.
+        guard case .refused(let why) = client.provePresence(reason: "rv: x", terminal: terminal.value) else {
+            Issue.record("a proof for a closed connection was accepted")
+            return
+        }
+        #expect(why.contains("did not accept"), "\(why)")
+        #expect(signing.mac(.grant, ["call"], true) == nil)
+        #expect(host.prompts.withLock { $0 } == 1)
+    }
+
+    /// The password prompt appears only once echo is off: nothing typed
+    /// at a visible prompt is ever shown, and Ctrl-C cancels the prompt.
+    @Test(.timeLimit(.minutes(1)))
+    func aSecretIsAskedForWithEchoAlreadyOff() throws {
+        var controller: Int32 = -1
+        var terminalEnd: Int32 = -1
+        try #require(openpty(&controller, &terminalEnd, nil, nil, nil) == 0)
+        defer {
+            close(controller)
+            close(terminalEnd)
+        }
+        let path = String(cString: try #require(ttyname(terminalEnd)))
+        let terminal = try #require(MCPCustodianTerminal.terminal(at: path))
+        func ask(typing: [UInt8]) -> (answer: String?, echoWhenPrompted: Bool) {
+            let answer = Mutex<String??>(nil)
+            let done = DispatchSemaphore(value: 0)
+            Thread.detachNewThread {
+                let typed = terminal.ask("Password: ", true)
+                answer.withLock { $0 = typed }
+                done.signal()
+            }
+            // Read the prompt, then look at the terminal's modes as they are at that moment.
+            var seen: [UInt8] = []
+            var byte: UInt8 = 0
+            while String(decoding: seen, as: UTF8.self).contains("Password: ") == false, read(controller, &byte, 1) == 1 {
+                seen.append(byte)
+            }
+            var modes = termios()
+            _ = tcgetattr(terminalEnd, &modes)
+            let echo = modes.c_lflag & tcflag_t(ECHO) != 0
+            _ = typing.withUnsafeBytes { write(controller, $0.baseAddress, $0.count) }
+            _ = done.wait(timeout: .now() + 20)
+            return (answer.withLock { $0 } ?? nil, echo)
+        }
+        let typed = ask(typing: Array("hunter2\n".utf8))
+        #expect(typed.answer == "hunter2")
+        #expect(typed.echoWhenPrompted == false)
+        // Echo is back afterwards.
+        var modes = termios()
+        #expect(tcgetattr(terminalEnd, &modes) == 0 && modes.c_lflag & tcflag_t(ECHO) != 0)
+        #expect(modes.c_lflag & tcflag_t(ISIG) != 0)
+        // Ctrl-C then Enter: no answer, and the modes are restored again.
+        #expect(ask(typing: [0x03, 0x0A]).answer == nil)
+        #expect(tcgetattr(terminalEnd, &modes) == 0 && modes.c_lflag & tcflag_t(ECHO) != 0)
+        #expect(MCPCustodianTerminal.terminal(at: "/no/such/terminal") == nil)
+    }
+
     @Test func aCustodianIsInstalledOnlyWhereItsSocketIs() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-cust-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("c.sock").path
+        let binary = directory.appendingPathComponent("rv-mcp-custodian").path
         func client() -> MCPCustodianSocketClient {
-            MCPCustodianSocketClient(path: path, presencePath: path, custodianUID: { getuid() }, presenceUID: getuid())
+            MCPCustodianSocketClient(
+                path: path, presencePath: path, installedBinary: binary, custodianUID: { getuid() }, presenceUID: getuid())
         }
         #expect(client().isInstalled == false)
         try Data().write(to: URL(fileURLWithPath: path))
         // A file that is not a socket is not a custodian.
         #expect(client().isInstalled == false)
         #expect(MCPApprovalSigning.custodian(transport: client().transport(scope: scope, terminal: { nil })).status() == .unavailable)
+        // Root's copy is there and the socket is not: installed and not
+        // running, which is `unavailable`, not "no custodian here".
+        try Data().write(to: URL(fileURLWithPath: binary))
+        #expect(client().isInstalled)
+        #expect(MCPCustodianSocket.installedBinary == "/usr/local/libexec/rv/rv-mcp-custodian")
         #expect(MCPCustodianSocket.path.hasPrefix("/run/") && MCPCustodianSocket.presencePath.hasPrefix("/run/"))
     }
 
@@ -287,6 +380,14 @@ struct CustodianSocketClientTests {
         try Data("{".utf8).write(to: store.ledgerURL(1000))
         #expect(chmod(store.ledgerURL(1000).path, 0o600) == 0)
         #expect(storage.loadLedger(1000) == .failure(.init()))
+        // A key whose ledger is gone has lost its counter: not a new
+        // account, whose counter would start again at an old grant's.
+        _ = try storage.createKey(1002).get()
+        #expect(try storage.loadLedger(1002).get() == MCPCustodianLedger())
+        #expect(unlink(store.ledgerURL(1002).path) == 0)
+        #expect(storage.loadLedger(1002) == .failure(.init()))
+        #expect(try storage.createKey(1002).get().mac("p", []).isEmpty == false)
+        #expect(storage.loadLedger(1002) == .failure(.init()))
     }
 }
 

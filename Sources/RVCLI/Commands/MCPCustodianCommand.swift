@@ -13,9 +13,9 @@ import RVMCP
 /// step at a time, and stops at the first that fails.
 enum MCPCustodianSetup {
     static let account = MCPCustodianSocket.account
-    /// Root's own copy of the custodian and the libraries shipped beside it.
-    static let directory = "/usr/local/libexec/rv"
-    static let binary = directory + "/rv-mcp-custodian"
+    /// Root's own copy of the custodian and the libraries it loads.
+    static let binary = MCPCustodianSocket.installedBinary
+    static let directory = (MCPCustodianSocket.installedBinary as NSString).deletingLastPathComponent
     static let keyUnit = "/etc/systemd/system/rv-mcp-custodian.service"
     static let presenceUnit = "/etc/systemd/system/rv-mcp-presence.service"
     static let pamFile = "/etc/pam.d/\(MCPCustodianSocket.pamService)"
@@ -79,7 +79,9 @@ enum MCPCustodianSetup {
 
     /// The presence helper: root, because checking another account's
     /// password needs it, with only the capabilities PAM modules use, a
-    /// read-only system and no way to gain more.
+    /// read-only system, no view of any home or of the keys, and no way
+    /// to gain more. A PAM factor kept in a home directory (a U2F or TOTP
+    /// file) is one the owner's account could rewrite, so it is not seen.
     static let presenceUnitText = """
         \(marker)
         [Unit]
@@ -100,7 +102,8 @@ enum MCPCustodianSetup {
         PrivateDevices=yes
         PrivateTmp=yes
         ProtectSystem=full
-        ProtectHome=read-only
+        ProtectHome=yes
+        InaccessiblePaths=-/var/lib/rv-mcp-custodian
         ProtectKernelTunables=yes
         ProtectKernelModules=yes
         ProtectKernelLogs=yes
@@ -114,6 +117,8 @@ enum MCPCustodianSetup {
         LockPersonality=yes
         MemoryDenyWriteExecute=yes
         SystemCallArchitectures=native
+        SystemCallFilter=@system-service @setuid
+        SystemCallErrorNumber=EPERM
 
         [Install]
         WantedBy=multi-user.target
@@ -145,6 +150,8 @@ enum MCPCustodianSetup {
         case run([String])
         /// A command whose failure is not one (stopping a unit that is not loaded).
         case attempt([String])
+        /// Copies an ELF file with its library search path confined to its
+        /// own directory (`ELFDynamic.confined`).
         case installFile(from: String, to: String, mode: mode_t)
         case writeFile(String, contents: String, mode: mode_t)
         case removeFile(String)
@@ -167,9 +174,13 @@ enum MCPCustodianSetup {
         var hasSystemd: Bool
         /// The custodian binary beside this rv, or nil.
         var source: String?
-        /// Shared libraries shipped beside it (a release's Swift runtime),
-        /// which it loads from its own directory.
+        /// The shared libraries it loads from beside itself or from its
+        /// own search path (the Swift runtime); root's copy loads them
+        /// from its own directory.
         var libraries: [String] = []
+        /// Among those files and the directories above them, the ones an
+        /// account other than root can change.
+        var untrusted: [String] = []
         var pam: (auth: String, account: String)?
         var accountExists: Bool
         var nologin: String
@@ -191,6 +202,12 @@ enum MCPCustodianSetup {
         }
         guard let source = host.source else {
             return .failure(Refusal(message: "rv-mcp-custodian is not installed beside rv; reinstall rv"))
+        }
+        if let path = host.untrusted.sorted().first {
+            return .failure(Refusal(message: "\(path) can be changed by an account other than root, and root's "
+                + "services would run what is installed from it. Check rv, rv-mcp-custodian and their libraries "
+                + "against the release's SHA256SUMS, copy them into a directory only root can write, and run "
+                + "`rv mcp custodian install` from there; nothing was installed"))
         }
         guard let pam = host.pam else {
             return .failure(Refusal(message: "this host has no PAM stack to include (/etc/pam.d/common-auth or "
@@ -247,17 +264,17 @@ enum MCPCustodianSetup {
 
     static func liveHost() -> Host {
         let files = FileManager.default
-        let home = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
-        let beside = home?.appendingPathComponent("rv-mcp-custodian").path
-        let siblings = home.flatMap { try? files.contentsOfDirectory(atPath: $0.path) } ?? []
+        let home = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent().path
+        let beside = home.map { $0 + "/rv-mcp-custodian" }
+        let source = beside.flatMap { files.isExecutableFile(atPath: $0) ? $0 : nil }
+        // Unreadable, or not a file this can confine: no source at all.
+        let libraries = source.flatMap { loadedLibraries(of: $0) }
         return Host(
             isRoot: geteuid() == 0,
             hasSystemd: files.fileExists(atPath: "/run/systemd/system"),
-            source: beside.flatMap { files.isExecutableFile(atPath: $0) ? $0 : nil },
-            // `lib*.so`: the runtime a release stages, not a build's test bundles.
-            libraries: siblings.filter { $0.hasPrefix("lib") && ($0.hasSuffix(".so") || $0.contains(".so.")) }.compactMap { name in
-                home?.appendingPathComponent(name).path
-            },
+            source: libraries == nil ? nil : source,
+            libraries: libraries ?? [],
+            untrusted: ((source.map { [$0] } ?? []) + (libraries ?? [])).flatMap(changeableByOthers),
             pam: pamInclude { files.fileExists(atPath: $0) },
             accountExists: getpwnam(account) != nil,
             nologin: files.isExecutableFile(atPath: "/usr/sbin/nologin") ? "/usr/sbin/nologin" : "/sbin/nologin",
@@ -267,6 +284,55 @@ enum MCPCustodianSetup {
                 }
                 return text.hasPrefix(marker) == false
             })
+    }
+
+    /// The libraries `binary` and they in turn ask for that sit beside it or
+    /// on its own search path, which is where its loader looks before the
+    /// system's directories. Beside it first: that is where a release puts
+    /// them. Nil when one of the files cannot be read as ELF.
+    static func loadedLibraries(of binary: String) -> [String]? {
+        let files = FileManager.default
+        let directory = (binary as NSString).deletingLastPathComponent
+        guard let main = files.contents(atPath: binary).flatMap(ELFDynamic.init) else { return nil }
+        let search = [directory] + main.searchPath.map { $0.replacingOccurrences(of: "$ORIGIN", with: directory) }
+            .filter { $0.hasPrefix("/") }
+        var found: [String] = []
+        var seen: Set<String> = []
+        var queue = [main]
+        while let file = queue.popLast() {
+            for name in file.needed where name.contains("/") == false && seen.insert(name).inserted {
+                var isDirectory: ObjCBool = false
+                guard let path = search.lazy.map({ $0 + "/" + name }).first(where: {
+                    files.fileExists(atPath: $0, isDirectory: &isDirectory) && isDirectory.boolValue == false
+                }) else { continue }
+                guard let library = files.contents(atPath: path).flatMap(ELFDynamic.init) else { return nil }
+                found.append(path)
+                queue.append(library)
+            }
+        }
+        return found
+    }
+
+    /// `path` and each directory above it that an account other than root
+    /// can change: not owned by root, or writable by group or others
+    /// (a sticky directory such as /var/tmp excepted: only the owner of an
+    /// entry there can rename or remove it).
+    static func changeableByOthers(_ path: String) -> [String] {
+        var changeable: [String] = []
+        var current = path
+        while true {
+            var info = stat()
+            if lstat(current, &info) != 0 {
+                changeable.append(current)
+            } else {
+                let sticky = info.st_mode & S_IFMT == S_IFDIR && info.st_mode & S_ISVTX != 0
+                if info.st_uid != 0 || (info.st_mode & 0o022 != 0 && sticky == false) { changeable.append(current) }
+            }
+            guard current != "/" else { break }
+            current = (current as NSString).deletingLastPathComponent
+            if current.isEmpty { current = "/" }
+        }
+        return changeable
     }
 
     /// Carries out `steps`, writing each to `log` (and the system log)
@@ -304,7 +370,10 @@ enum MCPCustodianSetup {
             return process.terminationStatus == 0 ? nil : "exit \(process.terminationStatus)"
         case .installFile(let from, let to, let mode):
             guard let data = FileManager.default.contents(atPath: from) else { return "cannot read \(from)" }
-            return replaceFile(data, at: to, mode: mode)
+            // Root's copy looks for its libraries beside itself and in the
+            // system's directories, nowhere a build or a user chose.
+            guard let confined = ELFDynamic.confined(data) else { return "\(from) is not a file rv can install" }
+            return replaceFile(confined, at: to, mode: mode)
         case .writeFile(let path, let contents, let mode):
             return replaceFile(Data(contents.utf8), at: path, mode: mode)
         case .removeFile(let path):

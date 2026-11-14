@@ -258,10 +258,13 @@ jobs:
             echo "- /proc mount: \`$(grep ' /proc ' /proc/self/mountinfo | tail -n 1)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Each step below runs whether or not the one before it passed (a
+      # failed step still fails the job), so one failure does not hide the next.
       # Real MCP servers in the Landlock cage, as the runner's own user: a
       # Node server fetched by npx through the allowlist proxy and a Python
       # server off the network (docs/security/mcp-linux-sandbox.md).
       - name: MCP sandbox with real Node and Python servers
+        if: ${{ !cancelled() }}
         env:
           RV_MCP_REAL_SERVERS: "1"
         run: |
@@ -274,6 +277,7 @@ jobs:
       # in /tmp belong to the runner, and the kernel does not let root
       # reopen another user's file in a sticky directory.
       - name: Secrets gateway peer binding as root (strict)
+        if: ${{ !cancelled() }}
         run: |
           sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
           sudo find /tmp -maxdepth 1 -name '*.build*.lock' -delete
@@ -284,6 +288,7 @@ jobs:
       # The two tests that need root, by name and with no skip allowed;
       # then what `swift test` ran as the runner, now with every capability.
       - name: MCP sandbox and rv run as root
+        if: ${{ !cancelled() }}
         run: |
           sudo env "PATH=$PATH" HOME=/root \
             Scripts/require-tests-ran.sh --no-skips 2 timeout 900 swift test --skip-build \
@@ -295,6 +300,7 @@ jobs:
       # rv run with a real HTTPS request: a throwaway account, a TLS
       # upstream on localhost, a private mount namespace for its CA.
       - name: rv run, end to end with a real HTTPS request
+        if: ${{ !cancelled() }}
         run: sudo env "PATH=$PATH" Scripts/linux-rv-run-e2e.sh
 
       # The approvals custodian for real: installed with systemd through
@@ -302,12 +308,14 @@ jobs:
       # PAM, the gateway, an approval, a replayed grant, a rolled-back
       # mcp.json, then uninstalled (docs/security/mcp-linux-custodian.md).
       - name: MCP approvals custodian, installed and driven end to end
+        if: ${{ !cancelled() }}
         run: |
           test -d /run/systemd/system
           sudo env "PATH=$PATH" Scripts/linux-custodian-e2e.sh
 
       # Last: ptrace_scope=3 cannot be undone on a running kernel.
       - name: Secrets gateway peer binding under hidepid, pid namespaces, no CAP_SYS_PTRACE, AppArmor, Docker, Yama
+        if: ${{ !cancelled() }}
         run: |
           sudo env "PATH=$PATH" HOME=/root RV_LINUX_PEER_STRICT=1 RV_YAMA_IRREVERSIBLE=1 \
             Scripts/linux-peer-binding-e2e.sh

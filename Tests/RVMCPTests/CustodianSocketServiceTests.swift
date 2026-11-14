@@ -299,6 +299,40 @@ struct CustodianSocketServiceTests {
         #expect(memory.keys.withLock { $0.isEmpty })
     }
 
+    // MARK: - Admission
+
+    /// The admission counts by reference, as `Daemon` and `Ledger` above.
+    private final class Admission {
+        var value = MCPCustodianAdmission()
+        func admit(uid: UInt32, hasAccount: Bool) -> Bool { value.admit(uid: uid, hasAccount: hasAccount) }
+        func release(uid: UInt32) { value.release(uid: uid) }
+    }
+
+    @Test func oneAccountCannotUseTheDaemonUpAndTheHelperAlwaysGetsThrough() {
+        let admission = Admission()
+        // A uid with no account on the host is not one of its users.
+        #expect(admission.admit(uid: 100_003, hasAccount: false) == false)
+        for _ in 0..<MCPCustodianAdmission.perAccount { #expect(admission.admit(uid: owner, hasAccount: true)) }
+        #expect(admission.admit(uid: owner, hasAccount: true) == false)
+        admission.release(uid: owner)
+        #expect(admission.admit(uid: owner, hasAccount: true))
+        // Many accounts fill what is not kept for the helper, and no more.
+        var uid: UInt32 = 2000
+        var admitted = MCPCustodianAdmission.perAccount
+        while admission.admit(uid: uid, hasAccount: true) {
+            admitted += 1
+            if admitted.isMultiple(of: MCPCustodianAdmission.perAccount) { uid += 1 }
+        }
+        #expect(admitted == MCPCustodianAdmission.maximum - MCPCustodianAdmission.reservedForHelper)
+        for _ in 0..<MCPCustodianAdmission.reservedForHelper { #expect(admission.admit(uid: 0, hasAccount: true)) }
+        #expect(admission.admit(uid: 0, hasAccount: true) == false)
+        admission.release(uid: 0)
+        #expect(admission.admit(uid: 0, hasAccount: true))
+        // Releasing what was never held changes nothing.
+        admission.release(uid: 31_337)
+        #expect(admission.admit(uid: 31_337, hasAccount: true) == false)
+    }
+
     // MARK: - Presence
 
     @Test func whatTheGatewaySignsUnattendedNeedsNoPresenceAndWhatTheOwnerDecidesDoes() {

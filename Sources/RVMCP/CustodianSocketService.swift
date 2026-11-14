@@ -84,6 +84,43 @@ public struct MCPCustodianLedger: Equatable, Sendable, Codable {
     }
 }
 
+/// How many connections the key daemon holds at once, so that one account
+/// cannot use it up: a bound in all, a bound per account, and places kept
+/// for the presence helper, whose attestation must always get through. A
+/// uid with no account on the host (a sub-uid of someone's user
+/// namespace) is not admitted: it is how one user would be many.
+public struct MCPCustodianAdmission: Sendable {
+    public static let maximum = 128
+    public static let perAccount = 16
+    public static let reservedForHelper = 8
+
+    public let presenceUID: UInt32
+    private(set) var held: [UInt32: Int] = [:]
+
+    public init(presenceUID: UInt32 = 0) {
+        self.presenceUID = presenceUID
+    }
+
+    /// Whether a new connection from `uid` is taken; if so it is counted
+    /// until `release`.
+    public mutating func admit(uid: UInt32, hasAccount: Bool) -> Bool {
+        let own = held[uid, default: 0]
+        if uid == presenceUID {
+            guard own < Self.reservedForHelper else { return false }
+        } else {
+            let others = held.filter { $0.key != presenceUID }.values.reduce(0, +)
+            guard hasAccount, own < Self.perAccount, others < Self.maximum - Self.reservedForHelper else { return false }
+        }
+        held[uid] = own + 1
+        return true
+    }
+
+    public mutating func release(uid: UInt32) {
+        guard let own = held[uid] else { return }
+        held[uid] = own > 1 ? own - 1 : nil
+    }
+}
+
 /// A connected peer, as the kernel names it (`SO_PEERCRED`).
 public struct MCPCustodianPeer: Equatable, Sendable {
     public var uid: UInt32

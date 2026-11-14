@@ -26,6 +26,14 @@ password, cannot obtain
 and cannot make an old one count again. It can read and write every file
 the owner can, run any program, and talk to the custodian itself.
 
+Two things this does not say. An `ask` call can also be approved in the
+MCP host's own prompt (elicitation), which involves no grant and no
+custodian: a host that answers that prompt itself approves the call. That
+is the gateway's design on every platform; with an agent that controls
+its host, only `deny` and calls rv records for `rv mcp approve` are held
+by this property. And the property is about signatures, not about who
+drew what the owner read before typing the password (see Known limits).
+
 ## The parts
 
 ```
@@ -108,6 +116,8 @@ An unlocked connection may make up to 16 signatures in the next 30
 seconds: enough for `rv mcp trust` to sign `mcp.json` and the pins after
 one password. The unlock belongs to the connection, which belongs to the
 process that asked; another process of the same account is not unlocked.
+The key daemon closes a connection idle for three minutes, and rv then
+opens a new one, with nothing unlocked.
 
 rv asks for presence in the place each command already asks for it:
 `rv mcp approve` after the confirmation code, `rv mcp trust` and
@@ -163,39 +173,80 @@ issue `v1` signatures and keep the same ledger. A bare 64-hex signature
 | `unix_chkpwd` run by rvd, as rv's other owner checks do | rvd runs as the owner. Its verdict is one the agent's account produces, so it cannot gate a key the agent must not use. |
 | a prompt in the owner's session (a code, a click) with no secret | Anything the owner's account can show or press, the agent can. |
 
+What the table does not weigh, and the next steps it suggests:
+
+- **Who draws the prompt.** Here rv, as the owner's account, shows the
+  helper's prompt on the owner's terminal. polkit's agent would draw it
+  outside that account's reach on a desktop. That is the one thing polkit
+  improves, and it is where this design's main limit is.
+- **A touch factor.** A FIDO2 key behind the same helper (`pam_u2f` with
+  its file outside the home) survives a stolen password. The helper's
+  rule that the owner must be asked for something would need to count a
+  touch.
+- **Binding the proof to the operation.** One proof unlocks up to 16
+  signatures of any kind for 30 seconds. The helper could carry a digest
+  of what is to be signed, show it in the prompt, and the key daemon could
+  unlock only that request. This is not done.
+
 ## What `install` does
 
 `sudo rv mcp custodian install`, in order, each step printed and written
 to the system log (`authpriv`):
 
 1. creates the system account `rv-mcp-custodian` (no home, no shell);
-2. copies `rv-mcp-custodian` from beside rv (and the shared libraries a
-   release ships beside it) to `/usr/local/libexec/rv/`, owned by root, so
-   the services never run a file the owner's account can change;
+2. copies `rv-mcp-custodian` from beside rv, and the shared libraries it
+   loads from beside itself or from its own search path (the Swift
+   runtime), to `/usr/local/libexec/rv/`, owned by root. Each copy's
+   library search path is rewritten to its own directory (`$ORIGIN`): a
+   build's binary searches its toolchain's directory first, which is
+   often under a home, and root must not load code from there;
 3. writes `/etc/pam.d/rv-mcp-custodian`, which includes `common-auth` and
    `common-account`, or `system-auth`;
 4. writes `rv-mcp-custodian.service` and `rv-mcp-presence.service`, then
    enables and (re)starts them.
 
-It refuses, changing nothing, when it is not root, when systemd is not the
-init system, when the binary is missing, when the host has neither PAM
-stack, or when one of those files exists and was not written by rv.
+It refuses, changing nothing, when:
+
+- it is not root, or systemd is not the init system;
+- the binary is missing or is not a file it can read;
+- the binary, a library, or any directory above them can be changed by an
+  account other than root. **This is the case for a normal install**
+  (`~/.local/bin`): what root's services run would be whatever the
+  owner's account, and so the agent, left there. Check `rv`,
+  `rv-mcp-custodian` and the libraries against the release's
+  `SHA256SUMS`, copy them into a directory only root can write, and run
+  `rv mcp custodian install` from that copy. The check is rv's own, so it
+  only helps while the `rv` you run with sudo is the one you checked;
+- the host has neither PAM stack;
+- one of the files it writes exists and was not written by rv.
+
 Running it again replaces the binary and files and restarts the services.
 
 `sudo rv mcp custodian uninstall` stops and disables the units and removes
 the unit files, the PAM file and `/usr/local/libexec/rv`. The keys stay in
 `/var/lib/rv-mcp-custodian`; `--purge` deletes them and the account, which
 voids every grant and signature. Removing what is already gone succeeds.
+While root's copy of the custodian exists and its socket does not (it is
+stopped, or crashed), rv treats the custodian as installed and
+unavailable; it never goes back to a key file.
 
 The key daemon's unit: its own user, an empty capability set,
 `NoNewPrivileges`, `PrivateNetwork`, `PrivateDevices`, `ProtectSystem=strict`,
 `ProtectHome=yes` (it cannot see any home), only `AF_UNIX`, a system-call
 filter, and state it alone can enter. The helper's unit: root with a
 capability set bounded to what PAM modules use, `NoNewPrivileges`,
-`ProtectSystem=full`, read-only homes, no namespaces.
+`ProtectSystem=full`, `ProtectHome=yes`, no view of the key daemon's
+state, a system-call filter, no namespaces. Because the helper cannot see
+homes, a PAM factor kept in a home directory (a `pam_u2f` or TOTP file
+there) does not work with it; such a file is one the agent could rewrite.
 
-`sudo rv ...` runs the rv binary as root. If rv is installed where the
-owner's account can write (`~/.local/bin`), check it before you do.
+Both daemons bound what one account can hold: 16 connections to the key
+daemon per account and 120 in all, with 8 more kept for the helper; one
+presence conversation per account and 8 in all, each at most 150 seconds
+and dropped after 5 seconds if it has not said what it wants proved. A
+uid with no account on the host (a sub-uid of a user namespace) is turned
+away by both before it takes a place. Each presence result is written to
+the system log by the helper.
 
 ## Known limits
 
@@ -205,31 +256,53 @@ owner's account can write (`~/.local/bin`), check it before you do.
   at 0) trace the shell, and so learn the password and answer the next
   prompt itself. This is the limit `sudo` has. The agent cannot approve
   without the owner ever typing a password where it can see; it can after.
+- **A prompt the agent starts looks like one rv starts.** The helper
+  vouches for nothing in the prompt but the account. An agent that starts
+  a presence conversation on the owner's terminal, at a moment the owner
+  expects one, gets its own connection unlocked.
 - **An unlocked connection can be driven by a tracer.** With
   `ptrace_scope=0`, a process of the account can inject requests into the
-  owner's running `rv` during its 30-second window. Ubuntu and Debian
-  default to 1, which prevents it for processes that are not rv's
-  ancestors.
+  owner's running `rv` during its 30-second window. Ubuntu defaults to 1,
+  which prevents it for processes that are not rv's ancestors; check
+  `sysctl kernel.yama.ptrace_scope`, since other distributions default
+  to 0.
 - **What is signed is what rv asked for.** The custodian signs fields; it
   does not show them. The review the owner reads is drawn by rv, running
   as the owner. A replaced `rv` could show one thing and ask for a
-  signature over another.
+  signature over another. One proof covers up to 16 signatures.
+- **Approval in the host's prompt needs no custodian** (see The property).
 - **Pending requests can be fabricated** (see the table above).
-- **Fingerprint-only and passwordless accounts cannot approve.**
+- **Fingerprint-only and passwordless accounts cannot approve**, nor can
+  accounts whose PAM stack keeps a factor in the home directory, or a
+  password that is not valid UTF-8. Stacks that decide by terminal
+  (`pam_time`, `pam_access`) see none.
 - **Root is trusted.** Root can read the keys, attest presence, and put
-  back an old ledger. Whoever has passwordless sudo is root.
-- **Denial of service by the owner's account.** It can use up a grant by
-  verifying it, hold its eight connections, or start a presence
-  conversation so that the owner's is told `busy` (one at a time per
-  account, eight in all, each at most 150 seconds).
-- **One prompt, several signatures.** Within its window an unlocked
-  connection signs up to 16 requests of any kind for that account.
-- **No key rotation or backup.** A lost `/var/lib/rv-mcp-custodian` means
-  trusting `mcp.json` again; there is no export.
+  back an old ledger. Whoever has passwordless sudo is root, and so is
+  whoever can start a privileged container (the `docker` group).
+- **Installing from a directory the owner's account can write** is
+  refused by rv, but a replaced `rv` would not refuse (see `install`).
+- **Denial of service.** The owner's account can use up a grant by
+  verifying it, hold its 16 connections, or keep a presence conversation
+  open so that the owner's is told `busy`. Another account cannot take
+  the owner's places, only the shared ones.
+- **256 signed files per account.** Each configuration directory uses two
+  (`mcp.json` and the pins); they are never freed.
+- **A lost ledger means starting over.** A key whose ledger is gone is
+  refused, not restarted at zero; root must remove the account's
+  directory under `/var/lib/rv-mcp-custodian`, and the owner trusts
+  `mcp.json` again. There is no key rotation, backup or export.
+- **A crash while a key is first written** can leave a short key file,
+  which is then refused until root removes it.
+- **Ctrl-C at the password prompt** cancels once Enter is pressed. A
+  `kill` of rv at that moment leaves the terminal without echo (`stty
+  sane`). A password typed before the prompt appears is discarded.
+- **rv inside a container** (another pid or user namespace) cannot use
+  the host's custodian: the daemon does not see who is asking.
 - **systemd only.** Hosts with another init system are refused by
   `install`. No SELinux or AppArmor policy is shipped.
-- **Not verified here:** the units under a running systemd other than the
-  GitHub runner's; a PAM stack other than `pam_unix` (SSSD, LDAP, U2F).
+- **Not verified here:** a PAM stack other than `pam_unix` (SSSD, LDAP,
+  U2F), a distribution other than Ubuntu 24.04, and the release
+  packaging.
 
 ## Evidence
 
@@ -242,9 +315,13 @@ owner's account can write (`~/.local/bin`), check it before you do.
 - `CustodianSocketClientTests` (Linux): the client over real sockets
   against the real service and key store: no terminal, a wrong answer, no
   answer, every helper refusal, a daemon or helper that is the wrong
-  account, a socket that is not there.
+  account, a socket that is not there, a connection the daemon closed, a
+  password asked for on a pseudo-terminal with echo already off, a key
+  without its ledger.
 - `MCPCustodianSetupTests`: the install and uninstall plans, every
-  refusal, the units' confinement lines.
+  refusal (a source another account can change among them), the units'
+  confinement lines, and on a real binary: the search path rewritten to
+  `$ORIGIN`, the libraries it loads found with their own.
 - `Scripts/linux-custodian-e2e.sh` (root): the real daemons, real PAM and
   a throwaway account with a password. As that account, on a pty and
   without one: trust refused without a terminal and with a wrong password,
@@ -252,6 +329,11 @@ owner's account can write (`~/.local/bin`), check it before you do.
   terminal; a tool that asks, approved with code and password, run once,
   not run again, not run from a replayed grant; a rolled-back `mcp.json`
   untrusted; a raw client refused a grant, an `mcp.json` signature and its
-  own attestation; the audit chain. In CI it installs through
-  `rv mcp custodian install` under systemd, checks the units are active,
-  and uninstalls.
+  own attestation; the audit chain. Where systemd is the init system it
+  installs through `rv mcp custodian install`, checks the units are
+  active and that root's copies search only their own directory, and
+  uninstalls. The pull request says which Actions run, if any, has passed
+  that path.
+- Not covered by a test: the helper's refusal of a PAM stack that asks
+  nothing, of an invalid account (`pam_acct_mgmt`) and of root; the
+  daemons' limits over real sockets; `serve` refusing to run as root.

@@ -94,12 +94,8 @@ func acceptOne(_ listener: Int32) -> Int32 {
 
 // MARK: - The key daemon
 
-/// Connections one account, and all accounts, may hold open at once: a
-/// local account cannot use up the daemon.
-let maximumConnections = 64
-let maximumConnectionsPerAccount = 8
 /// A connection that says nothing for this long is closed. Longer than a
-/// proof of presence may take.
+/// proof of presence may take. A client reconnects when it needs to.
 let idleSeconds: time_t = 180
 
 func serve(socketPath: String, state: String) -> Never {
@@ -109,7 +105,7 @@ func serve(socketPath: String, state: String) -> Never {
     guard lstat(state, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid(), info.st_mode & 0o077 == 0
     else { fail("\(state) must be a directory only this account can enter") }
     let service = Mutex(MCPCustodianSocketService(storage: MCPCustodianStore(directory: URL(fileURLWithPath: state)).storage))
-    let held = Mutex<[UInt32: Int]>([:])
+    let admission = Mutex(MCPCustodianAdmission())
     let listener = listen(at: socketPath)
     note("serving \(socketPath) as uid \(geteuid())")
     var next: UInt64 = 0
@@ -123,14 +119,10 @@ func serve(socketPath: String, state: String) -> Never {
             close(fd)
             continue
         }
-        let admitted = held.withLock { counts -> Bool in
-            guard counts.values.reduce(0, +) < maximumConnections,
-                counts[peer.uid, default: 0] < maximumConnectionsPerAccount
-            else { return false }
-            counts[peer.uid, default: 0] += 1
-            return true
-        }
-        guard admitted else {
+        // An account on this host, looked up before the connection costs
+        // anything; the helper (root) has its own places.
+        let hasAccount = peer.uid == 0 || getpwuid(peer.uid) != nil
+        guard admission.withLock({ $0.admit(uid: peer.uid, hasAccount: hasAccount) }) else {
             close(fd)
             continue
         }
@@ -144,9 +136,7 @@ func serve(socketPath: String, state: String) -> Never {
                 else { break }
             }
             service.withLock { $0.close(id) }
-            held.withLock { counts in
-                counts[peer.uid] = counts[peer.uid].flatMap { $0 > 1 ? $0 - 1 : nil }
-            }
+            admission.withLock { $0.release(uid: peer.uid) }
             close(fd)
         }
     }
@@ -158,6 +148,9 @@ func serve(socketPath: String, state: String) -> Never {
 let maximumSessions = 8
 /// One conversation's whole life, password typing included.
 let sessionSeconds: UInt32 = 150
+/// How long a connection has to say what it wants proved. A client sends
+/// that at once; one that only holds the place is let go.
+let proveSeconds: time_t = 5
 
 func presence(socketPath: String, custodian: String) -> Never {
     guard geteuid() == 0 else { fail("the presence helper checks passwords with PAM and must run as root") }
@@ -175,7 +168,14 @@ func presence(socketPath: String, custodian: String) -> Never {
         // Sessions that ended since the last connection.
         var status: Int32 = 0
         while case let ended = waitpid(-1, &status, WNOHANG), ended > 0 { sessions[ended] = nil }
-        guard let peer = peer(of: fd), setTimeouts(fd, receive: time_t(sessionSeconds), send: 10) else {
+        guard let peer = peer(of: fd), setTimeouts(fd, receive: proveSeconds, send: 10) else {
+            close(fd)
+            continue
+        }
+        // Root and a uid with no account are answered here, before they
+        // take a place a real account's proof needs.
+        guard peer.uid != 0, getpwuid(peer.uid) != nil else {
+            _ = MCPCustodianFrame.write(MCPPresenceResponse.result(.noAccount), to: fd)
             close(fd)
             continue
         }
@@ -267,6 +267,12 @@ func presenceSession(custodian: String) -> Never {
     let fd: Int32 = 3
     alarm(sessionSeconds)
     func finish(_ result: MCPPresenceResult) -> Never {
+        // The system's own record of who proved presence, and who failed
+        // to: the owner's account cannot write it.
+        let uid = peer(of: fd).map { String($0.uid) } ?? "unknown"
+        withVaList(["rv-mcp-custodian: presence for uid \(uid): \(result.rawValue)" as NSString]) {
+            vsyslog(LOG_AUTHPRIV | (result == .proved ? LOG_INFO : LOG_NOTICE), "%s", $0)
+        }
         _ = MCPCustodianFrame.write(MCPPresenceResponse.result(result), to: fd)
         exit(result == .proved ? 0 : 1)
     }
@@ -276,6 +282,8 @@ func presenceSession(custodian: String) -> Never {
     guard case .prove(let version, let challenge)? = MCPCustodianFrame.read(MCPPresenceRequest.self, from: fd),
         version == MCPCustodianSocket.protocolVersion, MCPCustodianSocket.isValid(challenge: challenge)
     else { finish(.badRequest) }
+    // The conversation itself waits as long as typing a password may take.
+    guard setTimeouts(fd, receive: time_t(sessionSeconds), send: 10) else { finish(.unavailable) }
     guard peer.uid != 0, let entry = getpwuid(peer.uid), let name = entry.pointee.pw_name else { finish(.noAccount) }
     let user = String(cString: name)
     var conversation = Conversation(fd: fd)

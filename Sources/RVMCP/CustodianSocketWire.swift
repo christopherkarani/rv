@@ -19,6 +19,10 @@ public enum MCPCustodianSocket {
     public static let path = "/run/rv-mcp-custodian/custodian.sock"
     /// The presence helper's socket.
     public static let presencePath = "/run/rv-mcp-presence/presence.sock"
+    /// Root's own copy of the custodian, where `install` puts it. Its
+    /// presence means a custodian is installed even while its socket is
+    /// not there (stopped, or crashed).
+    public static let installedBinary = "/usr/local/libexec/rv/rv-mcp-custodian"
     /// The system account that holds the keys.
     public static let account = "rv-mcp-custodian"
     /// The PAM service the presence helper authenticates the owner with.
@@ -96,7 +100,7 @@ public enum MCPPresenceResult: String, Sendable, Equatable, Codable {
     /// Authentication succeeded without asking the owner for anything
     /// (an empty password, a permissive PAM stack): not proof of presence.
     case nothingAsked
-    /// The peer's account is unknown, or is root or a system account.
+    /// The peer is root, or its uid has no account on this host.
     case noAccount
     /// Another proof for this account is in progress.
     case busy

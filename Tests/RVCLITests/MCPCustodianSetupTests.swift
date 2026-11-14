@@ -11,10 +11,10 @@ struct MCPCustodianSetupTests {
     private func host(
         isRoot: Bool = true, hasSystemd: Bool = true, source: String? = "/opt/rv/rv-mcp-custodian",
         pam: (auth: String, account: String)? = ("common-auth", "common-account"), accountExists: Bool = false,
-        foreign: Set<String> = [], libraries: [String] = []
+        foreign: Set<String> = [], libraries: [String] = [], untrusted: [String] = []
     ) -> MCPCustodianSetup.Host {
         MCPCustodianSetup.Host(
-            isRoot: isRoot, hasSystemd: hasSystemd, source: source, libraries: libraries, pam: pam,
+            isRoot: isRoot, hasSystemd: hasSystemd, source: source, libraries: libraries, untrusted: untrusted, pam: pam,
             accountExists: accountExists,
             nologin: "/usr/sbin/nologin", isForeign: { foreign.contains($0) })
     }
@@ -49,6 +49,9 @@ struct MCPCustodianSetupTests {
         let cases: [(MCPCustodianSetup.Host, String)] = [
             (host(isRoot: false), "run it as root"), (host(hasSystemd: false), "does not run systemd"),
             (host(source: nil), "reinstall rv"), (host(pam: nil), "no PAM stack"),
+            // What root would install can be changed by the owner's account.
+            (host(untrusted: ["/home/me/.local/bin", "/home/me/.local/bin/rv-mcp-custodian"]),
+                "/home/me/.local/bin can be changed by an account other than root"),
             (host(foreign: [MCPCustodianSetup.pamFile]), "was not written by rv"),
             (host(foreign: [MCPCustodianSetup.keyUnit]), "was not written by rv"),
         ]
@@ -102,7 +105,8 @@ struct MCPCustodianSetupTests {
         let presence = MCPCustodianSetup.presenceUnitText
         for line in [
             "ExecStart=/usr/local/libexec/rv/rv-mcp-custodian presence", "NoNewPrivileges=yes", "ProtectSystem=full",
-            "ProtectHome=read-only", "RestrictSUIDSGID=yes", "CapabilityBoundingSet=CAP_DAC_READ_SEARCH",
+            "ProtectHome=yes", "InaccessiblePaths=-/var/lib/rv-mcp-custodian", "RestrictSUIDSGID=yes",
+            "CapabilityBoundingSet=CAP_DAC_READ_SEARCH", "SystemCallFilter=@system-service @setuid",
         ] {
             #expect(presence.contains(line), "\(line)")
         }
@@ -112,6 +116,97 @@ struct MCPCustodianSetupTests {
             #expect(text.hasPrefix(MCPCustodianSetup.marker))
         }
     }
+
+    // MARK: - What root runs
+
+    #if os(Linux)
+    /// The custodian this build made, beside the other products.
+    private var builtCustodian: String {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".build/debug/rv-mcp-custodian").path
+    }
+
+    /// A build's binary searches its toolchain's directory first, which
+    /// may be under someone's home; root's copy searches only its own.
+    @Test func rootsCopySearchesOnlyItsOwnDirectoryForLibraries() throws {
+        let data = try #require(FileManager.default.contents(atPath: builtCustodian), "build the products first")
+        let built = try #require(ELFDynamic(data))
+        #expect(built.needed.contains("libswiftCore.so") && built.needed.contains("libc.so.6"))
+        #expect(built.searchPath.contains("$ORIGIN") && built.searchPath.count > 1)
+        let confined = try #require(ELFDynamic.confined(data))
+        #expect(confined.count == data.count)
+        let installed = try #require(ELFDynamic(confined))
+        #expect(installed.searchPath == ["$ORIGIN"])
+        #expect(installed.needed == built.needed)
+        // Confining again changes nothing.
+        #expect(ELFDynamic.confined(confined) == confined)
+    }
+
+    @Test func theLibrariesItLoadsFromItsSearchPathAreFoundWithTheirOwn() throws {
+        let libraries = try #require(MCPCustodianSetup.loadedLibraries(of: builtCustodian))
+        let names = Set(libraries.map { ($0 as NSString).lastPathComponent })
+        // Asked for by the binary, and by a library it asks for.
+        #expect(names.contains("libswiftCore.so") && names.contains("libFoundation.so"))
+        #expect(names.contains("lib_FoundationICU.so"))
+        // The system's own are left to the system.
+        #expect(names.contains("libc.so.6") == false && names.contains("libm.so.6") == false)
+        #expect(libraries.allSatisfy { $0.hasPrefix("/") })
+        #expect(MCPCustodianSetup.loadedLibraries(of: "/etc/hostname") == nil)
+    }
+
+    @Test func aFileOthersCanChangeIsNamedWithTheDirectoryThatLetsThem() throws {
+        // The system's own: nothing above it is anyone else's.
+        #expect(MCPCustodianSetup.changeableByOthers("/usr/bin/env").isEmpty)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-setup-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("rv-mcp-custodian").path
+        try Data("x".utf8).write(to: URL(fileURLWithPath: file))
+        #expect(chmod(directory.path, 0o777) == 0)
+        // A world-writable directory: its entries can be replaced.
+        #expect(MCPCustodianSetup.changeableByOthers(file).contains(directory.path))
+        #expect(MCPCustodianSetup.changeableByOthers(directory.path + "/missing").contains(directory.path + "/missing"))
+        if getuid() != 0 {
+            // Not root's file at all.
+            #expect(MCPCustodianSetup.changeableByOthers(file).contains(file))
+        }
+    }
+    #endif
+
+    @Test func anELFFileThatIsNotOneIsNotRead() {
+        #expect(ELFDynamic(Data()) == nil)
+        #expect(ELFDynamic(Data("#!/bin/sh\n".utf8)) == nil)
+        #expect(ELFDynamic.confined(Data(repeating: 0, count: 4096)) == nil)
+        // A 32-bit or big-endian header.
+        var header = [UInt8](repeating: 0, count: 64)
+        header.replaceSubrange(0..<6, with: [0x7F, 0x45, 0x4C, 0x46, 1, 1])
+        #expect(ELFDynamic(Data(header)) == nil)
+        header[4] = 2
+        header[5] = 2
+        #expect(ELFDynamic(Data(header)) == nil)
+        // 64-bit little-endian with no program headers: nothing asked for.
+        header[5] = 1
+        let empty = ELFDynamic(Data(header))
+        #expect(empty?.needed == [] && empty?.searchPath == [])
+    }
+
+    #if os(Linux)
+    /// Any damage to a real file is read as something or refused, never a crash.
+    @Test func aDamagedELFFileNeverCrashesTheReader() throws {
+        let data = try #require(FileManager.default.contents(atPath: builtCustodian))
+        let head = [UInt8](data.prefix(8192))
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<400 {
+            var bytes = head
+            for _ in 0..<Int.random(in: 1...8, using: &generator) {
+                bytes[Int.random(in: 0..<bytes.count, using: &generator)] = UInt8.random(in: 0...255, using: &generator)
+            }
+            let cut = Int.random(in: 0...bytes.count, using: &generator)
+            _ = ELFDynamic(Data(bytes.prefix(cut)))
+            _ = ELFDynamic.confined(Data(bytes))
+        }
+    }
+    #endif
 
     @Test func thePAMServiceIncludesTheDistributionsOwnStacks() {
         #expect(MCPCustodianSetup.pamInclude { $0.hasSuffix("common-auth") || $0.hasSuffix("common-account") }?.auth == "common-auth")

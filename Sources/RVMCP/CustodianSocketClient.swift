@@ -23,39 +23,50 @@ public struct MCPCustodianTerminal: Sendable {
 
     /// The process's controlling terminal, or nil when it has none (an
     /// agent's pipe, a service): the owner cannot be asked there.
-    public static var controlling: MCPCustodianTerminal? {
-        let probe = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
+    public static var controlling: MCPCustodianTerminal? { terminal(at: "/dev/tty") }
+
+    /// The terminal at `path`, or nil when it cannot be opened.
+    static func terminal(at path: String) -> MCPCustodianTerminal? {
+        let probe = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC)
         guard probe >= 0 else { return nil }
         close(probe)
         return MCPCustodianTerminal(
             ask: { text, secret in
-                let fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
+                let fd = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC)
                 guard fd >= 0 else { return nil }
                 defer { close(fd) }
                 var original = termios()
                 guard tcgetattr(fd, &original) == 0 else { return nil }
-                _ = text.withCString { write(fd, $0, strlen($0)) }
+                // Echo goes off before the prompt appears, so nothing typed
+                // once the prompt is visible is ever shown; what was typed
+                // before it is discarded (TCSAFLUSH). The interrupt keys
+                // are read as input, so Ctrl-C cancels here instead of
+                // ending rv with the terminal left silent.
+                var quiet = original
+                quiet.c_lflag &= ~tcflag_t(ISIG)
                 if secret {
-                    var silent = original
-                    silent.c_lflag &= ~tcflag_t(ECHO)
-                    silent.c_lflag |= tcflag_t(ECHONL)
-                    guard tcsetattr(fd, TCSAFLUSH, &silent) == 0 else { return nil }
+                    quiet.c_lflag &= ~tcflag_t(ECHO)
+                    quiet.c_lflag |= tcflag_t(ECHONL)
                 }
-                defer { if secret { _ = tcsetattr(fd, TCSAFLUSH, &original) } }
+                guard tcsetattr(fd, TCSAFLUSH, &quiet) == 0 else { return nil }
+                defer { _ = tcsetattr(fd, TCSAFLUSH, &original) }
+                _ = text.withCString { write(fd, $0, strlen($0)) }
                 var bytes: [UInt8] = []
                 var byte: UInt8 = 0
                 while true {
                     let count = read(fd, &byte, 1)
                     if count < 0, errno == EINTR { continue }
-                    guard count == 1 else { return bytes.isEmpty ? nil : String(decoding: bytes, as: UTF8.self) }
+                    guard count == 1 else { return nil }
                     if byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") { break }
                     bytes.append(byte)
                     guard bytes.count <= MCPCustodianSocket.maximumAnswerBytes else { return nil }
                 }
+                // Ctrl-C, Ctrl-\, Ctrl-Z or Ctrl-D anywhere in the line: cancelled.
+                guard bytes.contains(where: { [0x03, 0x04, 0x1A, 0x1C].contains($0) }) == false else { return nil }
                 return String(decoding: bytes, as: UTF8.self)
             },
             show: { text in
-                let fd = open("/dev/tty", O_WRONLY | O_NOCTTY | O_CLOEXEC)
+                let fd = open(path, O_WRONLY | O_NOCTTY | O_CLOEXEC)
                 guard fd >= 0 else { return }
                 defer { close(fd) }
                 _ = (text + "\n").withCString { write(fd, $0, strlen($0)) }
@@ -80,13 +91,18 @@ public final class MCPCustodianSocketClient: Sendable {
 
     let path: String
     let presencePath: String
+    let installedBinary: String
     let custodianUID: @Sendable () -> uid_t?
     let presenceUID: uid_t
     private let connection = Mutex<Int32>(-1)
 
-    init(path: String, presencePath: String, custodianUID: @escaping @Sendable () -> uid_t?, presenceUID: uid_t) {
+    init(
+        path: String, presencePath: String, installedBinary: String = MCPCustodianSocket.installedBinary,
+        custodianUID: @escaping @Sendable () -> uid_t?, presenceUID: uid_t
+    ) {
         self.path = path
         self.presencePath = presencePath
+        self.installedBinary = installedBinary
         self.custodianUID = custodianUID
         self.presenceUID = presenceUID
     }
@@ -101,12 +117,14 @@ public final class MCPCustodianSocketClient: Sendable {
         return entry.pointee.pw_uid
     }
 
-    /// Whether a custodian is installed on this host: its socket is there.
-    /// A custodian that is installed and not answering is `unavailable`,
-    /// never a reason to fall back to a key file.
+    /// Whether a custodian is installed on this host: its socket is there,
+    /// or root's copy of it is (it is stopped, or crashed: its socket goes
+    /// with it). A custodian that is installed and not answering is
+    /// `unavailable`, never a reason to fall back to a key file.
     public var isInstalled: Bool {
         var info = stat()
-        return lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFSOCK
+        if lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFSOCK { return true }
+        return lstat(installedBinary, &info) == 0
     }
 
     /// A connected stream socket whose peer is `uid`, or -1.
@@ -134,32 +152,43 @@ public final class MCPCustodianSocketClient: Sendable {
         return fd
     }
 
+    /// A new, greeted connection to the key daemon, or -1.
+    private func open() -> Int32 {
+        guard let uid = custodianUID() else { return -1 }
+        let opened = Self.connect(path, peer: uid, timeout: Self.exchangeTimeout)
+        guard opened >= 0 else { return -1 }
+        let hello = MCPCustodianSocketRequest.hello(protocolVersion: MCPCustodianSocket.protocolVersion)
+        guard MCPCustodianFrame.write(hello, to: opened),
+            case .hello(ok: true, _)? = MCPCustodianFrame.read(MCPCustodianSocketResponse.self, from: opened)
+        else {
+            close(opened)
+            return -1
+        }
+        return opened
+    }
+
     /// One request on the process's connection, opened and greeted on
-    /// first use. Any failure closes it: the next request starts over,
-    /// with nothing unlocked.
+    /// first use. The daemon closes a connection that has been idle, and a
+    /// restarted daemon has none: a request that fails on a connection
+    /// used before is sent once more on a new one, which starts with
+    /// nothing unlocked. Any other failure closes the connection.
     func exchange(_ request: MCPCustodianSocketRequest) -> MCPCustodianSocketResponse? {
         connection.withLock { fd in
-            if fd < 0 {
-                guard let uid = custodianUID() else { return nil }
-                let opened = Self.connect(path, peer: uid, timeout: Self.exchangeTimeout)
-                guard opened >= 0 else { return nil }
-                let hello = MCPCustodianSocketRequest.hello(protocolVersion: MCPCustodianSocket.protocolVersion)
-                guard MCPCustodianFrame.write(hello, to: opened),
-                    case .hello(ok: true, _)? = MCPCustodianFrame.read(MCPCustodianSocketResponse.self, from: opened)
-                else {
-                    close(opened)
-                    return nil
-                }
-                fd = opened
+            func attempt() -> MCPCustodianSocketResponse? {
+                guard MCPCustodianFrame.write(request, to: fd) else { return nil }
+                return MCPCustodianFrame.read(MCPCustodianSocketResponse.self, from: fd)
             }
-            guard MCPCustodianFrame.write(request, to: fd),
-                let response = MCPCustodianFrame.read(MCPCustodianSocketResponse.self, from: fd)
-            else {
-                close(fd)
-                fd = -1
-                return nil
-            }
-            return response
+            let reused = fd >= 0
+            if reused == false { fd = open() }
+            guard fd >= 0 else { return nil }
+            if let response = attempt() { return response }
+            close(fd)
+            fd = reused ? open() : -1
+            guard fd >= 0 else { return nil }
+            if let response = attempt() { return response }
+            close(fd)
+            fd = -1
+            return nil
         }
     }
 

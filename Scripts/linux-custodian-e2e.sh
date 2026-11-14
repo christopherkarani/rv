@@ -30,7 +30,14 @@ die() { log "$*"; exit 1; }
 for binary in rv rv-mcp-custodian; do
   [[ -x "$BUILD/$binary" ]] || die "$BUILD/$binary is not built (swift build)"
 done
+# Nothing of a custodian may be here already, running or not: the cleanup
+# below removes what this run installs, keys included.
 [[ ! -S /run/rv-mcp-custodian/custodian.sock ]] || die "a custodian is already running on this host; not touching it"
+for existing in /var/lib/rv-mcp-custodian /usr/local/libexec/rv /etc/pam.d/rv-mcp-custodian \
+  /etc/systemd/system/rv-mcp-custodian.service /etc/systemd/system/rv-mcp-presence.service; do
+  [[ ! -e "$existing" ]] || die "$existing exists: a custodian is installed on this host; not touching it"
+done
+getent passwd "$ACCOUNT" >/dev/null && die "the account $ACCOUNT already exists; not touching it"
 getent passwd "$OWNER" >/dev/null && die "the account $OWNER already exists; not touching it"
 
 SYSTEMD=0
@@ -80,6 +87,13 @@ if [[ "$SYSTEMD" == "1" ]]; then
   "$STAGE/rv" mcp custodian install >/dev/null
   systemctl is-active --quiet rv-mcp-custodian.service rv-mcp-presence.service \
     || { systemctl status rv-mcp-custodian.service rv-mcp-presence.service >&2; die "the units are not active"; }
+  # Root's copy looks for its libraries beside itself and nowhere a build chose.
+  for installed in /usr/local/libexec/rv/*; do
+    paths="$(readelf -d "$installed" | sed -n 's/.*\(RUNPATH\|RPATH\).*\[\(.*\)\]/\2/p')"
+    [[ -z "$paths" || "$paths" == '$ORIGIN' ]] || die "$installed searches $paths for libraries"
+  done
+  [[ "$(stat -c '%U %a' /usr/local/libexec/rv/rv-mcp-custodian)" == "root 755" ]] \
+    || die "root's copy of the custodian is not root's alone"
   log "unit hardening: $(systemd-analyze security rv-mcp-custodian.service 2>/dev/null | tail -n 1)"
 else
   log "no systemd here: starting the daemons directly, under the same accounts and paths"

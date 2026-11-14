@@ -247,8 +247,8 @@ rv is one binary, 25 commands. The rest of the surface:
   is dropped.
   *Platform support:* gateway trust and approvals need a key custodian
   the agent cannot read. On macOS that is RVApprovals.app. On Linux it is
-  a system service you install once with `sudo rv mcp custodian install`
-  (systemd and PAM; see
+  a system service you install once with `sudo rv mcp custodian install`,
+  run from a copy of rv that only root can write (systemd and PAM; see
   [the custodian's threat model](docs/security/mcp-linux-custodian.md)):
   signing then asks for your login password at your terminal. Without a
   custodian rv's signing key is a file any process running as you can

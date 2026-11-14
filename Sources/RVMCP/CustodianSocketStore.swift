@@ -46,13 +46,31 @@ public struct MCPCustodianStore: Sendable {
                 return .success(signer)
             },
             createKey: { uid in
-                MCPApprovalSigning.createKeyFile(keyURL(uid), directory: account(uid)).map { .success($0) }
-                    ?? .failure(.init())
+                // The ledger is made with the key: from then on a key
+                // without one is a lost ledger, not a fresh account.
+                var info = stat()
+                let isNew = lstat(keyURL(uid).path, &info) != 0 && errno == ENOENT
+                guard let signer = MCPApprovalSigning.createKeyFile(keyURL(uid), directory: account(uid)) else {
+                    return .failure(.init())
+                }
+                if isNew, lstat(ledgerURL(uid).path, &info) != 0 {
+                    guard let empty = try? JSONEncoder().encode(MCPCustodianLedger()),
+                        OwnerOnlyFile.write(empty, to: ledgerURL(uid))
+                    else { return .failure(.init()) }
+                }
+                return .success(signer)
             },
             loadLedger: { uid in
                 switch OwnerOnlyFile.read(ledgerURL(uid), maximumBytes: Self.maximumLedgerBytes, confidential: true) {
                 case .failure: return .failure(.init())
-                case .success(nil): return .success(MCPCustodianLedger())
+                case .success(nil):
+                    // No ledger and no key: a new account. No ledger beside
+                    // a key: the counter and what it protects are lost, and
+                    // starting again from zero would let an old grant's
+                    // counter come round again.
+                    var info = stat()
+                    guard lstat(keyURL(uid).path, &info) != 0, errno == ENOENT else { return .failure(.init()) }
+                    return .success(MCPCustodianLedger())
                 case .success(let data?):
                     guard let ledger = try? JSONDecoder().decode(MCPCustodianLedger.self, from: data) else {
                         return .failure(.init())
