@@ -366,6 +366,38 @@ struct EgressReviewTests {
         #expect(plain.contains("\"loaded\"") == false)
     }
 
+    /// With an unwritable audit log an approve (it grants) is refused and
+    /// stays pending; a deny only tightens and goes through.
+    @Test func anUnrecordableApproveIsRefusedAndADenyIsMade() async throws {
+        let config = try egressCLITempConfig()
+        defer { try? FileManager.default.removeItem(at: config) }
+        let store = PendingApprovalStore(baseDirectory: config)
+        let approved = try await egressCLIProposal(store: store, host: "a.example.com")
+        let denied = try await egressCLIProposal(store: store, host: "b.example.com")
+        let log = AuditLog.fileURL(configDirectory: config)
+        try? FileManager.default.removeItem(at: log)
+        try FileManager.default.createDirectory(at: log, withIntermediateDirectories: true)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let now = Date()
+        try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            do {
+                _ = try await EgressReviewRun.approve(
+                    id: approved.id, tty: tty, robot: false, store: store, now: now, refreshedNow: { now })
+                Issue.record("an unrecordable approve resolved")
+            } catch {
+                #expect(error is ConfigChangeUnrecorded)
+            }
+            let view = try await EgressReviewRun.deny(
+                id: denied.id, reason: "no", tty: tty, robot: false, store: store, now: now, refreshedNow: { now })
+            #expect(view.state == "resolved-deny")
+        }
+        let loaded = try await store.load(id: approved.id, now: now)
+        guard case .awaitingHuman = loaded.state else {
+            Issue.record("expected awaitingHuman, got \(loaded.state)")
+            return
+        }
+    }
+
     @Test func reviewsAreRecordedWithoutTheDenyReason() async throws {
         let config = try egressCLITempConfig()
         defer { try? FileManager.default.removeItem(at: config) }
