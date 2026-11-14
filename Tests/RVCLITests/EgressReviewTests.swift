@@ -332,6 +332,47 @@ struct EgressReviewTests {
         }
     }
 
+    /// A grant lands while the owner reads the prompt: the resolve's
+    /// in-lock re-check refuses the approval, for both bases.
+    @Test(arguments: [false, true])
+    func approvalRefusedWhenGrantLandsDuringThePrompt(shownByPane: Bool) async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let workspace = WorkspaceSessionID()
+        let directory = try #require(WorkingDirectory(validating: "/tmp/rv-egress-cli"))
+        func propose(_ host: String) async throws -> PendingApproval {
+            let rule = try #require(LiveNetworkRule(host: host, port: 443))
+            let request = try #require(EgressProposal.request(
+                id: PendingApprovalStore.makeID(), rule: rule,
+                workspaceSession: workspace, workspaceDirectory: directory
+            ))
+            return try await store.create(request, now: Date())
+        }
+        let created = try await propose("api.example.com")
+        let sibling = try await propose("cdn.example.net")
+        let basis: EgressReviewBasis = shownByPane
+            ? .shown(try await EgressReviewRun.loadReview(id: created.id, store: store, now: Date()).token)
+            : .ownerPrompt
+        let now = Date()
+        await #expect(throws: EgressReviewError.reviewChanged) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                _ = try await EgressReviewRun.approve(
+                    id: created.id, basis: basis, tty: Self.reviewTTY, robot: false,
+                    store: store, now: now, refreshedNow: { now },
+                    whilePrompted: {
+                        _ = try? await store.resolve(
+                            id: sibling.id, decision: .allowOnce,
+                            fingerprint: sibling.fingerprint, identity: sibling.identity, now: now
+                        )
+                    }
+                )
+            }
+        }
+        guard case .awaitingHuman = try await store.load(id: created.id, now: Date()).state else {
+            Issue.record("a refused approval must leave the row awaiting")
+            return
+        }
+    }
+
     @Test func shownApprovalRefusesMissingOrForeignToken() async throws {
         let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
         let created = try await egressCLIProposal(store: store)

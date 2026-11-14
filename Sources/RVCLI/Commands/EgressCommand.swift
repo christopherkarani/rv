@@ -362,7 +362,8 @@ enum EgressReviewRun {
         robot: Bool,
         store: PendingApprovalStore,
         now: Date,
-        refreshedNow: @Sendable () -> Date = { Date() }
+        refreshedNow: @Sendable () -> Date = { Date() },
+        whilePrompted: @Sendable () async -> Void = {}
     ) async throws -> EgressProposalView {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -378,6 +379,8 @@ enum EgressReviewRun {
         try await CLIOwnerAuth.requireAuthenticated(
             reason: approveReason(host: rule.host, port: rule.port)
         )
+        // Test seam: what other writers do while the owner reads the prompt.
+        await whilePrompted()
         // Fresh stamp after the prompt: expiry/sweep on re-read and
         // resolve must judge the row as of now, not as of command start.
         let afterNow = refreshedNow()

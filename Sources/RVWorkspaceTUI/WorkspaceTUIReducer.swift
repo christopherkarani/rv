@@ -568,7 +568,7 @@ enum TUIRuntimeEffect: Equatable, Sendable {
     case loadReview(sequence: UInt64)
     /// Start the owner-authenticated approve ceremony for one proposal,
     /// bound to the review token of the row the owner was shown.
-    case approveEgress(id: String, reviewToken: String? = nil)
+    case approveEgress(id: String, reviewToken: String?)
     /// Start the owner-authenticated deny ceremony for one proposal.
     case denyEgress(id: String, reason: String)
 }

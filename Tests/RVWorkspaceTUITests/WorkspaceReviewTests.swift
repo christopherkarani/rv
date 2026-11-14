@@ -286,7 +286,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         let moved = press(polled, .character("k"), .character("j")).state
         #expect(moved.review.selected == .egress("p3"))
         #expect(moved.review.selectionConfirmed)
-        #expect(press(moved, .character("a")).effects == [.approveEgress(id: "p3")])
+        #expect(press(moved, .character("a")).effects == [.approveEgress(id: "p3", reviewToken: nil)])
         // Falling onto a block keeps the same position too.
         var blocks = openReview([egress("p1", "a.example.com", ageSeconds: 10), block("b1", ageSeconds: 30)])
         blocks = reduce(
@@ -343,7 +343,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
             sequence: 3, result: .loaded([egress("p1", "a.example.com", ageSeconds: 10)])
         ), .reviewPaneNoted(rows: 40, columns: 100)).state
         #expect(fresh.review.stale == false)
-        #expect(press(fresh, .character("a")).effects == [.approveEgress(id: "p1")])
+        #expect(press(fresh, .character("a")).effects == [.approveEgress(id: "p1", reviewToken: nil)])
     }
 
     @Test func staleReviewRefusesDenySubmit() {
@@ -364,7 +364,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         var effects: [TUIRuntimeEffect] = [.loadReview(sequence: 99)]
         var changed = false
         WorkspaceTUIReducer.applyReviewCommand(.reviewApprove, to: &next, effects: &effects, presentationChanged: &changed)
-        #expect(effects == [.loadReview(sequence: 99), .approveEgress(id: "p1")])
+        #expect(effects == [.loadReview(sequence: 99), .approveEgress(id: "p1", reviewToken: nil)])
         var denyState = state
         var denyEffects: [TUIRuntimeEffect] = [.loadReview(sequence: 99)]
         WorkspaceTUIReducer.applyReviewCommand(
@@ -415,7 +415,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
     @Test func approveStartsOneCeremonyAndNeverEditsRows() {
         let state = openReview([egress("p1", "api.example.com", ageSeconds: 10)])
         let approving = press(state, .character("a"))
-        #expect(approving.effects == [.approveEgress(id: "p1")])
+        #expect(approving.effects == [.approveEgress(id: "p1", reviewToken: nil)])
         #expect(approving.state.review.action == .approving("p1"))
         // No approve-all, no second ceremony while one runs.
         let again = press(approving.state, .character("a"))
@@ -565,7 +565,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
         #expect(WorkspaceReviewText.lines(state.review, mode: state.mode, now: reviewEpoch, columns: 80, rows: 40)
             .contains(WorkspaceReviewText.tooSmall) == false)
         let approving = press(state, .character("a"))
-        #expect(approving.effects == [.approveEgress(id: "p1")])
+        #expect(approving.effects == [.approveEgress(id: "p1", reviewToken: nil)])
         #expect(approving.state.review.action == .approving("p1"))
     }
 
@@ -608,7 +608,7 @@ private func isReviewEffect(_ effect: TUIRuntimeEffect) -> Bool {
                 // The review itself starts with its header; a refusal (even
                 // one cut to a single wrapped row) never does.
                 let refusedByRender = rendered.first != WorkspaceReviewText.header(state.review)
-                let approved = press(state, .character("a")).effects == [.approveEgress(id: "p1")]
+                let approved = press(state, .character("a")).effects == [.approveEgress(id: "p1", reviewToken: nil)]
                 #expect(approved == !refusedByRender, "rows \(rows) columns \(columns)")
             }
         }
