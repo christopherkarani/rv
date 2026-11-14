@@ -431,8 +431,11 @@ How it starts the server:
   reset across `exec`, so plain servers start with the defaults; one rv
   inherited ignored (`nohup`) stays ignored. If no server ends up bound,
   the defaults are back before any server starts; a signal heard while
-  planning stops serve before it starts any. A second signal skips the
-  rest of the grace and kills every server still running at once. After a
+  planning stops serve before it starts any, but only once planning has
+  finished: planning (resolving secret values, the capability check) is
+  not cut short, and a second signal during it does not end rv either;
+  only `SIGKILL` stops a planning step that hangs. Once servers run, a
+  second signal skips the rest of the grace and kills every server still running at once. After a
   signal serve exits 128 plus its number, as a serve the signal had ended
   would report. `SIGKILL` to rv still ends it at once: its gateway goes
   with it, so the placeholders are dead, but the server's group is left
