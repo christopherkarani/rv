@@ -241,7 +241,7 @@ private let pieceCharacters: Set<Character> = ["_", "@", "/", ".", "-", "%", ":"
 
 /// Whether a piece, its program name, or (with a `%`) a package name it
 /// decodes to holds a `hostMCPStems` stem.
-private func pieceMayNameHostMCP(_ piece: String) -> Bool {
+func pieceMayNameHostMCP(_ piece: String) -> Bool {
     let holdsStem = { (word: String) in hostMCPStems.contains { word.contains($0) } }
     if holdsStem(piece) || holdsStem(commandName(piece)) { return true }
     return piece.contains("%") && packageNames(piece).contains(where: holdsStem)
