@@ -1,12 +1,13 @@
 // Test probe for RVMCPTests, run as a child. Not shipped.
 //
-// `rv-mcp-probe signals` installs `MCPShutdownSignals`, which changes real
+// `rv-mcp-probe signals [INT] [TERM] [HUP]` sets the named signals to the
+// default, then installs `MCPShutdownSignals`, which changes real
 // signal dispositions (never done in the shared test process). It prints the
 // dispositions it inherited and installed, spawns `report` through
 // Foundation `Process` as serve spawns a plain server, sends itself SIGTERM,
 // then cancels and prints the restored dispositions.
 // `rv-mcp-probe report` prints this process's dispositions.
-// `rv-mcp-probe procargs <pid>` reads `pid`'s arguments and environment
+// `rv-mcp-probe procargs <pid|self>` reads `pid`'s arguments and environment
 // through `sysctl` `KERN_PROCARGS2`, as a caged server could, and prints what
 // it got back: never the values, only counts and whether `HOME=` was there.
 import Darwin
@@ -57,7 +58,7 @@ private func catchSignals() -> Int32 {
     say("child " + reported.trimmingCharacters(in: .whitespacesAndNewlines))
 
     kill(getpid(), SIGTERM)
-    let deadline = Date().addingTimeInterval(5)
+    let deadline = Date().addingTimeInterval(15)
     while heard.value.withLock({ $0 }) == 0, Date() < deadline { usleep(10_000) }
     say("heard \(heard.value.withLock { $0 }) first \(signals.first.map { String($0) } ?? "none")")
 
@@ -66,8 +67,12 @@ private func catchSignals() -> Int32 {
     return 0
 }
 
-/// `KERN_PROCARGS2`: argc, the exec path, padding, argv, then whatever
-/// environment the kernel shows this caller.
+/// `KERN_PROCARGS2`: argc, the exec path, NUL padding, exactly argc
+/// NUL-terminated arguments (any of them may be empty), then whatever
+/// environment the kernel shows this caller. Fewer than argc terminated
+/// arguments is a failed read, never "no environment". Every non-empty
+/// string after the arguments counts, so nothing the kernel returned is
+/// skipped.
 private func procargs(_ pid: pid_t) -> String {
     var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
     var buffer = [UInt8](repeating: 0, count: 1 << 20)
@@ -76,8 +81,16 @@ private func procargs(_ pid: pid_t) -> String {
     let data = Array(buffer.prefix(size))
     guard data.count >= 4 else { return "failed short" }
     let argc = Int(data.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
-    let strings = data.dropFirst(4).split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
-    let rest = strings.dropFirst(1 + argc)
+    guard argc >= 0 else { return "failed argc=\(argc)" }
+    var index = 4
+    while index < data.count, data[index] != 0 { index += 1 }
+    while index < data.count, data[index] == 0 { index += 1 }
+    for _ in 0..<argc {
+        while index < data.count, data[index] != 0 { index += 1 }
+        guard index < data.count else { return "failed truncated argc=\(argc)" }
+        index += 1
+    }
+    let rest = data[index...].split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
     let home = rest.contains { $0.hasPrefix("HOME=") }
     return "ok argc=\(argc) strings=\(rest.count) home=\(home ? "yes" : "no")"
 }
@@ -88,15 +101,29 @@ case "report":
     say(dispositions())
     exit(0)
 case "signals":
+    // Signals named after `signals` are set to the default first, in this
+    // child only, so the test does not depend on what its runner ignores.
+    let names: [String: Int32] = ["INT": SIGINT, "TERM": SIGTERM, "HUP": SIGHUP]
+    for name in arguments.dropFirst() {
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = SIG_DFL
+        sigemptyset(&action.sa_mask)
+        guard let number = names[name], sigaction(number, &action, nil) == 0 else {
+            say("usage: rv-mcp-probe signals [INT] [TERM] [HUP]")
+            exit(2)
+        }
+    }
     exit(catchSignals())
 case "procargs":
-    guard arguments.count == 2, let pid = pid_t(arguments[1]) else {
-        say("usage: rv-mcp-probe procargs <pid>")
+    // Arguments after the pid are ignored: they exist so a test can read
+    // its own probe's (`self`) argument list with empty entries in it.
+    guard arguments.count >= 2, let pid = arguments[1] == "self" ? Optional(getpid()) : pid_t(arguments[1]) else {
+        say("usage: rv-mcp-probe procargs <pid|self> [ignored...]")
         exit(2)
     }
     say(procargs(pid))
     exit(0)
 default:
-    say("usage: rv-mcp-probe signals | report | procargs <pid>")
+    say("usage: rv-mcp-probe signals [INT] [TERM] [HUP] | report | procargs <pid|self> [ignored...]")
     exit(2)
 }

@@ -89,16 +89,19 @@ package final class MCPShutdownSignals {
         for _ in 0..<pending { action() }
     }
 
-    /// Stops hearing signals and restores the dispositions. Idempotent.
+    /// Restores the dispositions, then stops hearing signals. Idempotent.
+    /// In that order a signal in between has its restored action (or is
+    /// still heard); the other order would leave the no-op handler with no
+    /// source, and the signal would vanish.
     package func cancel() {
         #if canImport(Darwin)
-        for source in sources { source.cancel() }
-        sources = []
         for entry in previous.reversed() {
             var action = entry.action
             _ = sigaction(entry.number, &action, nil)
         }
         previous = []
+        for source in sources { source.cancel() }
+        sources = []
         #endif
     }
 

@@ -424,7 +424,10 @@ itself allows, as tested on macOS 27: `/bin/ps eww -p $PPID` fails with
 "Operation not permitted" (`ps` is setuid), and `sysctl` `KERN_PROCARGS2`
 of its parent answers with the arguments but no environment (a same-user,
 non-root caller sees none, caged or not); the live test asserts the
-second. Other ways to read rv's memory (`task_for_pid` and the like) were
+second for one parent: the test process, which runs serve's runtime
+in-process and was started with `HOME` set, so `HOME=` would come back if
+any environment did. It does not run `rv mcp serve` as the parent, and
+the uncaged case was checked by hand, not by a test. Other ways to read rv's memory (`task_for_pid` and the like) were
 not tested; the refusal does not depend on them.
 
 How it starts the server:
@@ -452,8 +455,11 @@ How it starts the server:
   reset across `exec`, so plain servers start with the defaults; one rv
   inherited ignored (`nohup`) stays ignored. If no server ends up bound,
   the defaults are back before any server starts; a signal heard while
-  planning stops serve before it starts any. A second signal skips the
-  rest of the grace and kills every server still running at once. After a
+  planning stops serve before it starts any, but only once planning has
+  finished: planning (resolving secret values, the capability check) is
+  not cut short, and a second signal during it does not end rv either;
+  only `SIGKILL` stops a planning step that hangs. Once servers run, a
+  second signal skips the rest of the grace and kills every server still running at once. After a
   signal serve exits 128 plus its number, as a serve the signal had ended
   would report. `SIGKILL` to rv still ends it at once: its gateway goes
   with it, so the placeholders are dead, but the server's group is left

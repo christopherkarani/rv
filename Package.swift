@@ -57,6 +57,7 @@ let terminalProbeProducts: [Product] = [
     .executable(name: "rv-terminal-probe", targets: ["RVTerminalProbe"]),
     .executable(name: "rv-pty-claim", targets: ["rv-pty-claim"]),
     .executable(name: "rv-run-probe", targets: ["rv-run-probe"]),
+    .executable(name: "rv-mcp-probe", targets: ["rv-mcp-probe"]),
 ]
 let terminalProbeTargets: [Target] = [
     .executableTarget(

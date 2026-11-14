@@ -1659,6 +1659,8 @@ struct MCPServe: AsyncParsableCommand {
         // placeholders: from before planning, whose capability probe holds a
         // stopped child, until the last group is reaped. A second signal
         // kills what is left at once. Any other serve keeps the defaults.
+        // Planning itself is not interruptible: a signal during it, first
+        // or second, is held and acted on once planning returns.
         let signals = MCPShutdownSignals.wanted(by: names.compactMap { configuration.server(named: $0) })
             ? MCPShutdownSignals(MCPShutdownSignals.handled, catching: true) : nil
         defer { signals?.cancel() }

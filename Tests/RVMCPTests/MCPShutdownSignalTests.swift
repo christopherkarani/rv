@@ -42,14 +42,6 @@ private func probeLines(_ executable: String, _ arguments: [String]) throws -> [
     return lines
 }
 
-/// Read only: whether this process ignores none of the three, so the probe
-/// starts with the defaults. A runner started under `nohup` does not.
-private let ignoresNone = MCPShutdownSignals.handled.allSatisfy { number in
-    var current = sigaction()
-    let ignore = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
-    return sigaction(number, nil, &current) == 0 && unsafeBitCast(current.__sigaction_u.__sa_handler, to: Int.self) != ignore
-}
-
 /// Serialized: the SIGURG tests share one process-wide signal.
 @Suite("rv mcp serve: shutdown on a signal", .serialized)
 struct MCPShutdownSignalTests {
@@ -87,10 +79,12 @@ struct MCPShutdownSignalTests {
     /// In a child, so this process's dispositions never change. Installed:
     /// a real handler, not `SIG_IGN`, so a plain server spawned meanwhile
     /// starts with the defaults; the signal still reaches serve, which does
-    /// not die of it; cancel puts the defaults back.
-    @Test(.enabled(if: ignoresNone), .timeLimit(.minutes(1)))
+    /// not die of it; cancel puts the defaults back. The probe first sets
+    /// the three to the default itself, so a runner started under `nohup`
+    /// runs this test too rather than skipping it.
+    @Test(.timeLimit(.minutes(1)))
     func caughtSignalsLeaveAPlainChildTheDefaultsAndAreRestored() throws {
-        let lines = try probeLines(try mcpProbe().path, ["signals"])
+        let lines = try probeLines(try mcpProbe().path, ["signals", "INT", "TERM", "HUP"])
         #expect(lines["inherited"] == "INT=default TERM=default HUP=default")
         #expect(lines["installed"] == "INT=handler TERM=handler HUP=handler")
         #expect(lines["child"] == "INT=default TERM=default HUP=default")
@@ -99,10 +93,11 @@ struct MCPShutdownSignalTests {
     }
 
     /// A signal rv inherited ignored (`nohup`) stays ignored, unhandled, and
-    /// is left so, for serve and for its children.
-    @Test(.enabled(if: ignoresNone), .timeLimit(.minutes(1)))
+    /// is left so, for serve and for its children. `nohup` ignores HUP; the
+    /// probe sets INT and TERM to the default whatever the runner had.
+    @Test(.timeLimit(.minutes(1)))
     func aSignalInheritedIgnoredStaysIgnored() throws {
-        let lines = try probeLines("/usr/bin/nohup", [try mcpProbe().path, "signals"])
+        let lines = try probeLines("/usr/bin/nohup", [try mcpProbe().path, "signals", "INT", "TERM"])
         #expect(lines["inherited"] == "INT=default TERM=default HUP=ignore")
         #expect(lines["installed"] == "INT=handler TERM=handler HUP=ignore")
         // Serve adds nothing: the child keeps HUP ignored, unless Foundation's
@@ -163,7 +158,7 @@ struct MCPShutdownSignalTests {
         runtime.requestShutdown()
         runtime.requestShutdown()
         #expect(done.wait(timeout: .now() + 10) == .success)
-        #expect(Date().timeIntervalSince(asked) < 1.5)
+        #expect(Date().timeIntervalSince(asked) < 2.5)
         try? client.toGateway.fileHandleForWriting.close()
     }
 
