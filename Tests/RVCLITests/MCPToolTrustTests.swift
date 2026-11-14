@@ -180,7 +180,8 @@ struct MCPToolTrustTests {
     /// N5: trusting drops queued tools of servers no longer in mcp.json.
     @Test func trustPrunesQueuedToolsOfRemovedServers() async throws {
         let (fixture, store) = try Self.pinnedFixture()
-        _ = store.recordChanged(server: "removed", definitions: ["search": Self.added])
+        #expect(store.recordChanged(server: "removed", definitions: ["push": Self.added]) == .recorded)
+        #expect(try store.contents().get().changed.keys.sorted() == ["github", "removed"])
         _ = try await MCPRun.trust(environment: fixture.environment(presence: Self.confirming), show: { _ in }).get()
         #expect(try store.contents().get().changed.isEmpty)
     }

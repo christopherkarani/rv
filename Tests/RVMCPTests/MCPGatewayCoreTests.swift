@@ -529,7 +529,9 @@ struct MCPGatewayCoreTests {
             #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
             #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
             #expect(text.contains("\\u001b") || text.contains("\\u2028") || text.contains("\\u202e"))
-            #expect(text.contains("\\\\u001b") == false)
+            // Once: no escape of an escape, for every input (ESC, U+2028,
+            // U+202E); the sentence itself has no backslash.
+            #expect(text.contains("\\\\u") == false, "\(text)")
             let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
             #expect(lines.contains(sentence) == false)
         }

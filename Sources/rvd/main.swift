@@ -11,12 +11,20 @@ enum RVD {
         "rvd: HOME is required, as an absolute path (rvd keeps its policy and audit log in ~/.config/rv)\n"
 
     static func main() {
+        // A closed stdout or stderr pipe fails the write with EPIPE instead
+        // of killing rvd (systemd already starts services this way; launchd
+        // does not). Sockets and helper pipes already expect EPIPE.
+        signal(SIGPIPE, SIG_IGN)
         // launchd hands rvd /dev/null; keep failures visible in the log.
         RVDLogFile.captureDiscardedStderr()
         do {
             let configuration = try RVDLaunch.parse(arguments: ProcessInfo.processInfo.arguments)
             if configuration.printVersion {
-                try? FileHandle.standardOutput.write(contentsOf: Data((RVDLaunch.versionLine + "\n").utf8))
+                do {
+                    try FileHandle.standardOutput.write(contentsOf: Data((RVDLaunch.versionLine + "\n").utf8))
+                } catch {
+                    Foundation.exit(1)
+                }
                 return
             }
             try RVDProcess.run(configuration: configuration)

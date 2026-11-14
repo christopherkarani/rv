@@ -282,6 +282,11 @@ public struct MCPGatewayCore {
     var untrustedNoticed: Set<String> = []
     /// Servers already reported on stderr as listing names rv does not serve.
     var unservedNoticed: Set<String> = []
+    /// server → tools its latest listing named with a schema
+    /// `schemaNamesHideText` rejects; neither listed nor called.
+    var hidingSchemas: [String: Set<String>] = [:]
+    /// Servers already reported on stderr as listing such tools.
+    var hidingSchemaNoticed: Set<String> = []
     /// server → `mcp.tool.changed` events written this session.
     var changeEvents: [String: Int] = [:]
     /// pending call id → the `progressToken` the client sent with it.
@@ -633,6 +638,15 @@ public struct MCPGatewayCore {
                 .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
+        // Not listed either: its schema names a property a client may show raw.
+        guard hidingSchemas[server]?.contains(tool) != true else {
+            return [
+                .audit(MCPCallRecord(
+                    server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
+                    reason: Self.hidingSchemaReason, outcome: .notRun)),
+                .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
+            ]
+        }
         guard phases[server] == .ready else {
             return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys, approved: false)
         }
@@ -979,6 +993,9 @@ public struct MCPGatewayCore {
     /// most `maximumChangeEvents` per server) and kept in the review queue
     /// for `rv mcp trust`. A tool whose name `servesToolName` rejects is
     /// neither listed, observed nor queued; stderr says so once per server.
+    /// A tool whose schema `schemaNamesHideText` rejects is observed (so
+    /// its pin is still checked) but neither listed, called nor queued;
+    /// stderr says so once per server too.
     mutating func settleListing(
         _ listed: [JSONValue], upstream: Upstream
     ) -> (tools: [JSONValue], outputs: [MCPGatewayOutput]) {
@@ -991,6 +1008,15 @@ public struct MCPGatewayCore {
             outputs.append(.log(
                 "MCP server \(shownServer) lists \(unserved.count) tool(s) whose names rv does not serve "
                     + "(only A-Z a-z 0-9 _ . -, at most 64 bytes), such as \"\(shown)\"; they are hidden"))
+        }
+        let hiding = listed.map { scrub($0, for: server) }.filter(Self.schemaNamesHideText).compactMap { tool in
+            tool["name"]?.stringValue.flatMap { Self.servesToolName($0) ? $0 : nil }
+        }
+        hidingSchemas[server] = Set(hiding)
+        if let first = hiding.first, hidingSchemaNoticed.insert(server).inserted {
+            outputs.append(.log(
+                "MCP server \(shownServer) lists \(hiding.count) tool(s) with schema property names rv does not serve "
+                    + "(control, separator or format characters), such as \"\(first)\"; they are hidden"))
         }
         if pinning.enforced {
             var seen: [String: String] = [:]
@@ -1027,7 +1053,10 @@ public struct MCPGatewayCore {
             }
             var unpinned: [String: JSONValue] = [:]
             var untrusted = 0
-            for name in seen.keys.sorted() where configuration.decision(server: upstream.definition, tool: name) != .deny {
+            // A hidden tool is still checked against its pin above, but is
+            // never offered for review: it would not be served once trusted.
+            for name in seen.keys.sorted()
+            where configuration.decision(server: upstream.definition, tool: name) != .deny && hiding.contains(name) == false {
                 let status = pinStatus(server: server, tool: name)
                 guard status != .pinned else { continue }
                 untrusted += 1
@@ -1163,19 +1192,23 @@ public struct MCPGatewayCore {
     ]
 
     /// Denied tools are hidden, and so is every tool whose name
-    /// `servesToolName` rejects. `ask` tools say so in their description,
+    /// `servesToolName` rejects or whose schema `schemaNamesHideText`
+    /// rejects. `ask` tools say so in their description,
     /// and so do tools whose arguments can change the decision. A tool that
     /// is not pinned (changed, new, or unverifiable) always asks and is
     /// listed with no upstream string but its name: its description is rv's
     /// marker, its input schema `{"type":"object"}`, it has no output
     /// schema and no annotations. For a pinned tool the prose fields (`description`, `title`,
-    /// `annotations.title`, and every `description`/`title` string in its
+    /// `annotations.title`, and every `schemaProseKeywords` string in its
     /// schemas) keep line breaks and backslashes and lose only hiding
-    /// scalars (`MCPDisplayedText.description`). Everything else is
-    /// forwarded as the upstream sent it, after secret scrubbing.
+    /// scalars (`MCPDisplayedText.description`); one that is not a string
+    /// is dropped. Everything else is forwarded as the upstream sent it,
+    /// after secret scrubbing.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
         let scrubbed = scrub(tool, for: upstream.definition.name)
-        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue, Self.servesToolName(name) else {
+        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue, Self.servesToolName(name),
+            Self.schemaNamesHideText(scrubbed) == false
+        else {
             return nil
         }
         let rawDescription = object["description"]?.stringValue
@@ -1206,10 +1239,10 @@ public struct MCPGatewayCore {
             return .object(withheld)
         }
         let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
-        if rawDescription != nil { walked["description"] = .string(shownDescription) }
-        if let title = object["title"]?.stringValue { walked["title"] = .string(MCPDisplayedText.description(title)) }
-        if var annotations = object["annotations"]?.objectValue, let title = annotations["title"]?.stringValue {
-            annotations["title"] = .string(MCPDisplayedText.description(title))
+        walked["description"] = rawDescription.map { _ in JSONValue.string(shownDescription) }
+        walked["title"] = object["title"]?.stringValue.map { JSONValue.string(MCPDisplayedText.description($0)) }
+        if var annotations = object["annotations"]?.objectValue, annotations["title"] != nil {
+            annotations["title"] = annotations["title"]?.stringValue.map { JSONValue.string(MCPDisplayedText.description($0)) }
             walked["annotations"] = .object(annotations)
         }
         for key in ["inputSchema", "outputSchema"] {
@@ -1226,14 +1259,64 @@ public struct MCPGatewayCore {
     }
 
     /// Keywords whose values are data, kept byte-exact.
-    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples"]
-    /// Keywords whose members are named subschemas; a member may be
-    /// called `description` or `title`.
-    static let schemaMapKeywords: Set<String> = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]
+    static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples", "dependentRequired"]
+    /// Keywords whose members are named subschemas (or, for
+    /// `dependencies`, property-name lists); a member may be called
+    /// `description` or `title`.
+    static let schemaMapKeywords: Set<String> = [
+        "properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies",
+    ]
+    /// Schema keywords whose string value is display text.
+    static let schemaProseKeywords: Set<String> = ["description", "title", "$comment", "markdownDescription"]
+    /// Why a call to a tool `schemaNamesHideText` rejects is refused.
+    static let hidingSchemaReason = "rv does not serve tools whose schema property names hide text"
 
-    /// A pinned tool's JSON Schema with every `description`/`title` string
-    /// shown with hiding scalars neutralised. `pattern` and the value
-    /// keywords are left byte-exact.
+    /// True when a tool's `inputSchema` or `outputSchema` names a property
+    /// (a `properties` or `dependencies` member, a `required` entry, a
+    /// `dependentRequired` member or entry, a `dependencies` list entry)
+    /// with a scalar `MCPDisplayedText.hidesText` flags. Those names are
+    /// data rv forwards exactly and a client may show raw, so rv serves
+    /// no such tool, as for a name `servesToolName` rejects.
+    static func schemaNamesHideText(_ tool: JSONValue) -> Bool {
+        ["inputSchema", "outputSchema"].contains { key in tool[key].map(namesHideText) ?? false }
+    }
+
+    private static func namesHideText(_ schema: JSONValue) -> Bool {
+        func hides(_ text: String) -> Bool { MCPDisplayedText.hidesText(text) }
+        func listHides(_ value: JSONValue) -> Bool {
+            value.arrayValue?.contains { $0.stringValue.map(hides) ?? false } ?? false
+        }
+        switch schema {
+        case .array(let items):
+            return items.contains(where: namesHideText)
+        case .object(let object):
+            return object.entries.contains { entry in
+                let (key, value) = entry
+                switch key {
+                case "required":
+                    return listHides(value)
+                case "dependentRequired":
+                    return value.objectValue?.entries.contains { hides($0.key) || listHides($0.value) } ?? false
+                case "properties", "dependencies":
+                    guard let members = value.objectValue else { return namesHideText(value) }
+                    return members.entries.contains { hides($0.key) || listHides($0.value) || namesHideText($0.value) }
+                case _ where schemaValueKeywords.contains(key):
+                    return false
+                case _ where schemaMapKeywords.contains(key):
+                    return value.objectValue?.entries.contains { namesHideText($0.value) } ?? namesHideText(value)
+                default:
+                    return namesHideText(value)
+                }
+            }
+        default:
+            return false
+        }
+    }
+
+    /// A pinned tool's JSON Schema with every `schemaProseKeywords` string
+    /// shown with hiding scalars neutralised, and such a keyword whose
+    /// value is not a string dropped. `pattern` and the value keywords
+    /// are left byte-exact.
     static func schemaProse(_ schema: JSONValue) -> JSONValue {
         switch schema {
         case .array(let items):
@@ -1243,8 +1326,8 @@ public struct MCPGatewayCore {
             for (key, value) in object.entries {
                 if schemaValueKeywords.contains(key) {
                     copy[key] = value
-                } else if key == "description" || key == "title", let text = value.stringValue {
-                    copy[key] = .string(MCPDisplayedText.description(text))
+                } else if schemaProseKeywords.contains(key) {
+                    copy[key] = value.stringValue.map { JSONValue.string(MCPDisplayedText.description($0)) }
                 } else if schemaMapKeywords.contains(key), let members = value.objectValue {
                     var mapped = JSONObject()
                     for (member, subschema) in members.entries { mapped[member] = schemaProse(subschema) }

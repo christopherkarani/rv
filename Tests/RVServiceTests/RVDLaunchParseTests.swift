@@ -77,6 +77,26 @@ struct RVDLaunchParseTests {
         #expect(text.components(separatedBy: entry + check).count == 3, "each run must check HOME first")
     }
 
+    /// SIGPIPE is ignored before rvd's first write (the log line
+    /// `captureDiscardedStderr` writes), on every platform.
+    @Test func rvdIgnoresSIGPIPEBeforeItsFirstWrite() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/rvd/main.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let entry = "    static func main() {\n"
+        let ignore = "        signal(SIGPIPE, SIG_IGN)\n"
+        let body = try #require(text.components(separatedBy: entry).dropFirst().first, "rvd main")
+        let firstStatement = body.split(separator: "\n").first { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty == false && trimmed.hasPrefix("//") == false
+        }
+        #expect(firstStatement.map { String($0) + "\n" } == ignore)
+        #expect(text.components(separatedBy: ignore).count == 2, "ignored once, in main")
+    }
+
 #if os(Linux)
     @Test func linuxSocketFlag_doesNotThrowAndCanCombineWithIdle() throws {
         let flagged = try RVDLaunch.parse(

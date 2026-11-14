@@ -305,6 +305,98 @@ struct MCPToolPinTests {
         #expect(notice.contains(String(repeating: "x", count: 80)) == false)
     }
 
+    /// Property names a client may show raw, with ESC, bidi and separator
+    /// scalars, each in a different place a schema names properties.
+    static let hidingSchemaTools = [
+        #"{"name":"push","inputSchema":{"type":"object","properties":{"re\u001b[2Jpo":{"type":"string"}}}}"#,
+        #"{"name":"tag","inputSchema":{"type":"object","required":["a\u202eb"]}}"#,
+        #"{"name":"nest","inputSchema":{"type":"object","properties":{"o":{"type":"object","properties":{"x\u2028":{}}}}}}"#,
+        #"{"name":"out","outputSchema":{"type":"object","dependentRequired":{"a":["b\u001b"]}}}"#,
+        #"{"name":"deps","inputSchema":{"type":"object","dependencies":{"c\u202e":["d"]}}}"#,
+    ]
+    static let schemaNotice = "property names rv does not serve"
+
+    /// L2: a tool whose schema names a property with a scalar
+    /// `DisplayedText.needsEscape` flags is not listed (pinned or not), not
+    /// callable, not queued, not counted as untrusted, and stderr says so
+    /// once per server.
+    @Test func aToolWhoseSchemaNamesAPropertyWithAHidingScalarIsHiddenAndNotCallable() throws {
+        let recorder = PinRecorder()
+        var pins = Self.pinned
+        pins["github"]?["push"] = Self.hash(Self.hidingSchemaTools[0])
+        var harness = Self.harness(recorder.pinning(pins))
+        let listing = Self.list(&harness, [Self.search] + Self.hidingSchemaTools)
+        #expect(Self.listed(listing).keys.sorted() == ["search"])
+        let notices = listing.logs.filter { $0.contains(Self.schemaNotice) }
+        #expect(notices.count == 1)
+        #expect(notices.first?.contains("lists 5 tool(s)") == true)
+        #expect(notices.first?.contains(#"such as "push""#) == true)
+        #expect(listing.logs.filter { $0.contains("not yet trusted") }.isEmpty)
+        #expect(recorder.changed.withLock { $0 }.isEmpty)
+        #expect(Self.changeEvents(listing).isEmpty)
+        for name in ["push", "tag", "nest", "out", "deps"] {
+            let called = Self.call(&harness, name)
+            #expect(called.toUpstream.isEmpty, "\(name)")
+            #expect(called.audits.map(\.decision) == [.deny], "\(name)")
+            #expect(called.audits.first?.reason == MCPGatewayCore.hidingSchemaReason, "\(name)")
+            #expect(called.toClient.first?["error"]?["message"]?.stringValue == "Unknown tool: \(name)", "\(name)")
+        }
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
+        // Once per server per start.
+        #expect(Self.list(&harness, Self.hidingSchemaTools).logs.filter { $0.contains(Self.schemaNotice) }.isEmpty)
+    }
+
+    /// L2: hiding a definition still checks it against the pin, so a pinned
+    /// tool listed once with a hiding schema stays changed when its pinned
+    /// definition comes back; and a clean listing serves it again.
+    @Test func aHiddenSchemaListingStillTaintsThePin() {
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        let hiding = #"{"name":"list_issues","description":"List issues","inputSchema":{"type":"object","properties":{"repo\u001b":{"type":"string"}}}}"#
+        #expect(Self.listed(Self.list(&harness, [hiding, Self.search])).keys.sorted() == ["search"])
+        #expect(Self.call(&harness, "list_issues").audits.first?.reason == MCPGatewayCore.hidingSchemaReason)
+        let back = Self.list(&harness, [Self.listIssues, Self.search])
+        #expect(Self.listed(back)["list_issues"] == Self.changedMarker)
+        let called = Self.call(&harness, "list_issues")
+        #expect(called.toUpstream.isEmpty)
+        #expect(called.audits.first?.decision == .ask)
+    }
+
+    /// L2: with pinning off every tool is listed in full, so the rule
+    /// applies there too.
+    @Test func aHidingSchemaIsHiddenWithPinningOff() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let listing = Self.list(&harness, [Self.search, Self.hidingSchemaTools[0]])
+        #expect(Self.listed(listing).keys.sorted() == ["search"])
+        #expect(listing.logs.filter { $0.contains(Self.schemaNotice) }.count == 1)
+        #expect(Self.call(&harness, "push").toUpstream.isEmpty)
+        #expect(Self.call(&harness, "search").toUpstream.count == 1)
+    }
+
+    /// L2: a pinned tool's other display text. `$comment` and
+    /// `markdownDescription` strings are escaped like `description`; a
+    /// `title` or `description` (tool, annotation or schema) that is not a
+    /// string is dropped. `dependentRequired` names are data, kept exact.
+    @Test func aPinnedToolsOtherProseIsEscapedAndNonStringProseIsDropped() throws {
+        let tool = #"{"name":"push","description":["a\u001b"],"title":{"x":"\u001b"},"annotations":{"title":["\u001b"],"readOnlyHint":true},"inputSchema":{"type":"object","$comment":"c\u001b[2J","properties":{"r":{"type":"string","markdownDescription":"m\u202e","description":{"bad":"\u001b"},"title":7}},"dependentRequired":{"description":["title"]}}}"#
+        var pins = Self.pinned
+        pins["github"]?["push"] = Self.hash(tool)
+        var harness = Self.harness(PinRecorder().pinning(pins))
+        let shown = try #require(Self.listedTools(Self.list(&harness, [tool]))["push"])
+        #expect(shown["description"] == nil)
+        #expect(shown["title"] == nil)
+        #expect(shown["annotations"] == JSONValue.object(["readOnlyHint": .bool(true)]))
+        let schema = try #require(shown["inputSchema"])
+        #expect(schema["$comment"] == .string(MCPDisplayedText.description("c\u{1B}[2J")))
+        let property = try #require(schema["properties"]?["r"])
+        #expect(property["markdownDescription"] == .string(MCPDisplayedText.description("m\u{202E}")))
+        #expect(property["description"] == nil)
+        #expect(property["title"] == nil)
+        #expect(property["type"] == .string("string"))
+        #expect(schema["dependentRequired"] == JSONValue.object(["description": .array([.string("title")])]))
+        #expect(Self.call(&harness, "push").toUpstream.count == 1)
+    }
+
     /// N9: `mcp.tool.changed` events are capped per server per session,
     /// then one event says the rest are suppressed. Tools still ask.
     @Test func changeEventsAreCappedPerServer() {
