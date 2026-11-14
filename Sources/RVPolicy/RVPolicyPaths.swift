@@ -58,6 +58,11 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent(".policy.lock", isDirectory: false)
     }
 
+    /// Owner-set never-exceed bound for policy layers and egress approvals.
+    public static func policyCeilingFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("ceiling.toml", isDirectory: false)
+    }
+
     /// Append-only machine revision log. Every `policy.toml` save appends one
     /// JSON line; rollback appends a new head, never rewrites.
     public static func policyRevisionsFile(inConfigDir configDir: URL) -> URL {

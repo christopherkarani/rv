@@ -70,18 +70,30 @@ public struct PolicyWorkspace: Sendable {
         )
     }
 
+    /// Merged typed rules. With a policy ceiling set, a layer that states a
+    /// weaker verdict than the ceiling on any action is refused here
+    /// (`PolicyCeilingError`), so the door fails closed as for an invalid
+    /// file; an unreadable ceiling is refused the same way.
     public func loadEffectiveRules(builtin: [TypedRule] = []) throws -> [TypedRule] {
-        if let directory = machineDirectory {
-            return try TypedRuleStore(baseDirectory: directory)
-                .loadEffective(builtin: builtin, workspace: workspace)
+        let machine = try loadMachineDocument()
+        let repo = try loadRepoDocument()
+        if let ceiling = try loadCeiling() {
+            try ceiling.requireContained(machine)
+            try ceiling.requireContained(repo)
         }
-        let repo: [TypedRule]
-        if let workspace {
-            repo = try TypedRuleStore(baseDirectory: workspace).loadRepo(workspace: workspace)
-        } else {
-            repo = []
-        }
-        return TypedRuleStore.merge(builtin: builtin, machine: [], repo: repo)
+        return TypedRuleStore.merge(
+            builtin: builtin,
+            machine: machine.typedRules(origin: .machine),
+            repo: repo.typedRules(origin: .repo)
+        )
+    }
+
+    /// The owner's ceiling, or nil when none is set or there is no machine
+    /// directory to hold one. Throws `PolicyCeilingError.invalidFile` for a
+    /// ceiling file that exists but does not parse.
+    public func loadCeiling() throws -> PolicyCeiling? {
+        guard let directory = machineDirectory else { return nil }
+        return try PolicyCeilingStore(configDirectory: directory).load()
     }
 
     /// Machine + repo **document** fields only. Does not read `config.json`.
@@ -166,7 +178,13 @@ public struct PolicyWorkspace: Sendable {
         guard save else {
             return merge(try loadWritableDocument(layer))
         }
-        return try updateDocument(layer: layer, merge)
+        // A save that would leave the layer above the ceiling writes nothing.
+        let ceiling = try loadCeiling()
+        return try updateDocument(layer: layer) { existing in
+            let merged = merge(existing)
+            try ceiling?.requireContained(merged)
+            return merged
+        }
     }
 
     private var machineDirectory: URL? {
