@@ -68,6 +68,7 @@ enum MCPCustodianSetup {
         SystemCallArchitectures=native
         SystemCallFilter=@system-service
         SystemCallFilter=~@privileged @resources
+        SystemCallErrorNumber=EPERM
 
         [Install]
         WantedBy=multi-user.target
