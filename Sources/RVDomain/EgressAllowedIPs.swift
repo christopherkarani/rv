@@ -142,6 +142,9 @@ public struct EgressCIDR: Sendable, Hashable, Comparable, CustomStringConvertibl
             throw .malformed(text)
         }
         guard masked == bytes else {
+            // At /0 the only network is 0.0.0.0/0 or ::/0, itself
+            // forbidden, so suggesting it would mislead.
+            guard prefix > 0 else { throw .malformed(text) }
             throw .hostBitsSet(entry: text, network: "\(network)/\(prefix)")
         }
         self.network = network
@@ -235,23 +238,40 @@ public struct EgressAllowedIPs: Sendable, Hashable {
     /// block cannot be listed here (`EgressCIDR` folds it to 0.0.0.0/0), so
     /// `spansMappedBlock` refuses a wider IPv6 network that covers it,
     /// which would otherwise sit silently inert.
+    ///
+    /// Every IPv4 and IPv6 block `EgressWire.isPublicIPv4`/`isPublicIPv6`
+    /// refuses as never a LAN service is here too: 192.0.0.0/24 (IETF
+    /// protocol assignments, and Oracle's legacy metadata 192.0.0.192),
+    /// the 6to4 relay anycast, documentation and benchmarking. Only the
+    /// private and CGNAT blocks (and ULA, minus the metadata hosts) are
+    /// listable.
     static let forbiddenRanges: [ForbiddenRange] = ([
         ("0.0.0.0/8", "unspecified"),
         ("127.0.0.0/8", "loopback"),
         ("169.254.0.0/16", "link-local and cloud metadata"),
         ("100.100.100.200/32", "cloud metadata"),
         ("168.63.129.16/32", "cloud platform endpoint"),
+        ("192.0.0.0/24", "IETF protocol assignments and cloud metadata"),
+        ("192.88.99.0/24", "6to4 relay anycast"),
+        ("192.0.2.0/24", "documentation"),
+        ("198.51.100.0/24", "documentation"),
+        ("203.0.113.0/24", "documentation"),
+        ("198.18.0.0/15", "benchmarking"),
         ("224.0.0.0/4", "multicast"),
         ("240.0.0.0/4", "reserved and broadcast"),
         ("::/96", "unspecified, loopback and IPv4-compatible"),
         ("::ffff:0:0:0/96", "IPv4-translated"),
         ("64:ff9b::/32", "NAT64"),
         ("2001::/32", "Teredo"),
+        ("2001::/23", "IETF protocol assignments and benchmarking"),
+        ("2001:db8::/32", "documentation"),
+        ("3fff::/20", "documentation"),
         ("2002::/16", "6to4"),
         ("fe80::/10", "link-local"),
         ("fec0::/10", "site-local"),
         ("ff00::/8", "multicast"),
         ("fd00:ec2::254/128", "cloud metadata"),
+        ("fd20:ce::254/128", "cloud metadata"),
     ] as [(String, String)]).compactMap { text, reason in
         (try? EgressCIDR(parsing: text)).map { ForbiddenRange(network: $0, reason: reason) }
     }

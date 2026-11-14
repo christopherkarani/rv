@@ -50,6 +50,15 @@ import Testing
         #expect(error.message.contains("10.0.5.20/32"))
     }
 
+    /// Host bits at /0 name no usable network (the suggestion would be
+    /// 0.0.0.0/0 or ::/0, itself forbidden), so the entry is malformed;
+    /// a mapped /96 folds to IPv4 /0 and meets the same rule.
+    @Test func hostBitsAtPrefixZeroAreMalformed() {
+        for entry in ["::ffff:10.0.0.1/96", "10.0.0.1/0", "fd00::1/0"] {
+            #expect(throws: EgressAllowedIPError.malformed(entry)) { try EgressCIDR(parsing: entry) }
+        }
+    }
+
     /// Mapped IPv6 shorter than /96 reaches outside the mapped block, and
     /// a wider IPv6 network spanning it would never match a folded
     /// address; the owner writes the IPv4 network instead.
@@ -80,8 +89,10 @@ import Testing
 
     /// The forbidden table is built by parsing; a typo must not drop a row.
     @Test func everyForbiddenRangeParses() {
-        #expect(EgressAllowedIPs.forbiddenRanges.count == 16)
-        #expect(EgressAllowedIPs.forbiddenRanges.contains { $0.network.description == "fd00:ec2::254/128" })
+        #expect(EgressAllowedIPs.forbiddenRanges.count == 26)
+        for metadata in ["fd00:ec2::254/128", "fd20:ce::254/128", "192.0.0.0/24"] {
+            #expect(EgressAllowedIPs.forbiddenRanges.contains { $0.network.description == metadata }, "\(metadata)")
+        }
         #expect(EgressAllowedIPs.forbiddenRanges.allSatisfy { $0.network.prefixLength > 0 })
     }
 
@@ -95,7 +106,9 @@ import Testing
         "::1", "::", "::/0", "::/96", "fe80::1", "fe80::/10", "fec0::/10", "ff02::1", "fd00:ec2::254",
         "fd00::/8", "fd00:ec2::/32", "64:ff9b::a9fe:a9fe", "64:ff9b::/96", "2002:a9fe:a9fe::/48",
         "2001::/32", "::ffff:0:0:0/96", "::ffff:127.0.0.1", "::ffff:169.254.169.254", "::ffff:7f00:0/104",
-        "::a9fe:a9fe",
+        "::a9fe:a9fe", "fd20:ce::254", "fd20:ce::/32", "192.0.0.192", "192.0.0.0/24", "192.88.99.1",
+        "192.0.2.0/24", "198.51.100.7", "203.0.113.0/24", "198.18.0.0/15", "198.19.0.1", "2001:db8::/32",
+        "3fff::1", "2001:2::/48",
     ])
     func refusesForbiddenRangesAtParseTime(_ entry: String) throws {
         let error = try #require(throws: EgressAllowedIPError.self) { try EgressAllowedIPs(parsing: [entry]) }
@@ -112,7 +125,8 @@ import Testing
         "127.0.0.1", "127.255.255.254", "169.254.169.254", "169.254.0.1", "100.100.100.200", "168.63.129.16",
         "0.0.0.0", "224.0.0.251", "255.255.255.255", "::1", "::", "fe80::1", "ff02::fb", "fd00:ec2::254",
         "::ffff:127.0.0.1", "::ffff:169.254.169.254", "64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::1",
-        "2001:0:a9fe:a9fe::1", "::a9fe:a9fe", "::ffff:0:a9fe:a9fe",
+        "2001:0:a9fe:a9fe::1", "::a9fe:a9fe", "::ffff:0:a9fe:a9fe", "fd20:ce::254", "192.0.0.192",
+        "::ffff:192.0.0.192", "192.0.2.1", "198.18.0.1", "2001:db8::1",
     ])
     func runtimeCheckForbidsTheSameAddresses(_ text: String) throws {
         let address = try #require(EgressIPAddress(parsing: text))
