@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 
 /// Whether `command` may run a host CLI that adds, removes or installs MCP
