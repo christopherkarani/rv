@@ -428,7 +428,10 @@ struct SecretGatewayLinuxPeerTests {
         let child = try Forked(keeping: [connection.client]) {
             var thread = pthread_t()
             _ = pthread_create(&thread, nil, { _ in while true { pause() } }, nil)
-            pthread_exit(nil)
+            // Not `pthread_exit`: it unwinds this thread's stack, and here
+            // that is the test runner's, which traps when unwound.
+            _ = linuxPeerSyscall(linuxPeerExitThread, 0)
+            while true { pause() }
         }
         try #require(waitUntil {
             guard let state = procStat(child.pid), ProcFSParse.exited(state) else { return false }
@@ -576,4 +579,16 @@ private func linuxPeerFork() -> pid_t
 
 @_silgen_name("unshare")
 private func linuxPeerUnshare(_ flags: Int32) -> Int32
+
+/// `SYS_exit`, which ends only the calling thread (glibc's headers define
+/// it as a macro Swift does not import).
+#if arch(x86_64)
+private let linuxPeerExitThread = 60
+#elseif arch(arm64)
+private let linuxPeerExitThread = 93
+#endif
+
+/// `syscall(2)` with one argument.
+@_silgen_name("syscall")
+private func linuxPeerSyscall(_ number: Int, _ argument: Int) -> Int
 #endif
