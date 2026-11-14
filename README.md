@@ -270,15 +270,24 @@ rv is one binary, 25 commands. The rest of the surface:
   as do dynamic programs given `config` (`"$GIT" config user.name`) and
   carried text that may name a host CLI or installer and runs past the
   guard's read budget. `mcp install` asks wherever a program may run it,
-  whatever the server (`op run -- mcp install srv`, `watch '…'`, `ssh
-  host '…'`, `echo '…' | sh`), so the two words as any other program's
-  operands ask too (`ls mcp install`). It is left alone as the value of
-  a `make`, `npm`, `pnpm`, `yarn` or `bun` directory or workspace option
-  (`make -C mcp install`, `pnpm --filter mcp install`) and as text on a
-  line that runs nothing: one `grep`, `rg`,
-  `echo`, `printf`, `git commit|tag` or `gh pr|issue create|comment|edit`
-  with no pipe, list, redirect or substitution (`git commit -m 'add mcp
-  install docs'`; after `cd x &&` it asks).
+  whatever the server (`op run -- mcp install srv`, `mcp -- install srv`,
+  `watch '…'`, `ssh host '…'`, `echo '…' | sh`), so the two words as any
+  other program's operands ask too (`ls mcp install`). It is left alone
+  as the value of a tool's own directory, workspace or filter option
+  (`make -C|--directory`, `npm -C|--prefix|-w|--workspace`, `pnpm
+  -C|--dir|--filter`, `bun --cwd|-F|--filter`: `make -C mcp install`;
+  `pnpm -w mcp install` and `yarn --cwd mcp install` ask) and as text on a
+  line that runs nothing: one `grep`, `rg`, `echo`, `printf`, `git
+  commit|tag` or `gh pr|issue create|comment|edit`, written with no
+  backslash in its program or subcommand, and no pipe, list, redirect,
+  substitution or parenthesis anywhere (`git commit -m 'add mcp install
+  docs'`; after `cd x &&` it asks). Text that may name a host CLI and
+  that rv's shell tokenizer cannot follow asks on any other line: a
+  backslash before a quote or blank (`watch "sh -c \"claude mcp add
+  x\""`, `'\''`, `claude\ mcp`), `\'` inside `$'…'`, and zsh `=(…)`. This
+  also asks for some harmless commands, such as `cat ~/Library/Application\
+  Support/Claude/…`, `jq ".a[\"x\"]" config.json` or a commit message with
+  `\"` after `cd x &&`. zsh `=claude` counts as `claude`.
 - **Egress control** — contained runtimes reach the network only
   through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
   tunnels and binary pinning. Blocked hosts are queued for review
