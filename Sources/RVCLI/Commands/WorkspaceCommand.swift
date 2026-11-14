@@ -105,15 +105,29 @@ struct WorkspaceRun: AsyncParsableCommand {
     @Option(name: .long, help: "VM memory in MiB (with --microvm or --macvm).")
     var memoryMib: Int?
 
+    @Option(name: .long, help: "Kill the runtime's whole process group after this long (N, Ns, Nm or Nh). Never longer than limits.timeoutSeconds in runtime-resources.json.")
+    var timeout: String?
+
     @Argument(parsing: .captureForPassthrough, help: "Absolute executable and arguments.")
     var command: [String] = []
 
     func run() throws {
         let argv = command.first == "--" ? Array(command.dropFirst()) : command
+        let microVM = try WorkspaceMicroVM.options(image: microvm, macOSImage: macvm, cpus: cpus, memoryMiB: memoryMib)
+        let timeoutSeconds = try WorkspaceRunTimeout.resolve(
+            timeout, microVM: microVM != nil,
+            policy: {
+                #if os(macOS)
+                WorkspaceTUICommand.loadResourceProfiles().limits
+                #else
+                nil
+                #endif
+            }
+        )
         try WorkspaceCommandRun.run(
             path.workspace, rows: rows, columns: columns, command: argv,
             resourceProfileID: resourceProfile, hook: hook,
-            microVM: WorkspaceMicroVM.options(image: microvm, macOSImage: macvm, cpus: cpus, memoryMiB: memoryMib)
+            microVM: microVM, timeoutSeconds: timeoutSeconds
         )
     }
 }
@@ -471,7 +485,7 @@ enum WorkspaceCommandRun {
     static func run(
         _ raw: String?, rows: Int?, columns: Int?, command: [String],
         resourceProfileID: String? = nil, hook: String? = nil,
-        microVM: MicroVMLaunchOptions? = nil
+        microVM: MicroVMLaunchOptions? = nil, timeoutSeconds: UInt64? = nil
     ) throws {
         #if !os(macOS)
         throw ValidationError(ContainedRuntimeRefusal.message)
@@ -501,7 +515,8 @@ enum WorkspaceCommandRun {
             rows: rows,
             columns: columns,
             resourceProfileID: resourceProfileID,
-            microVM: microVM
+            microVM: microVM,
+            timeoutSeconds: timeoutSeconds
         )
         #endif
     }
@@ -570,13 +585,14 @@ enum WorkspaceCommandRun {
         rows: Int?,
         columns: Int?,
         resourceProfileID: String? = nil,
-        microVM: MicroVMLaunchOptions? = nil
+        microVM: MicroVMLaunchOptions? = nil,
+        timeoutSeconds: UInt64? = nil
     ) throws {
         try runInteractiveSelection(
             project: project,
             selection: .legacy(executable: executable, hook: hook),
             arguments: arguments, rows: rows, columns: columns, resourceProfileID: resourceProfileID,
-            microVM: microVM
+            microVM: microVM, timeoutSeconds: timeoutSeconds
         )
     }
 
@@ -587,7 +603,8 @@ enum WorkspaceCommandRun {
         rows: Int?,
         columns: Int?,
         resourceProfileID: String? = nil,
-        microVM: MicroVMLaunchOptions? = nil
+        microVM: MicroVMLaunchOptions? = nil,
+        timeoutSeconds: UInt64? = nil
     ) throws {
         // Identity launch requires a scoped operator permit, which the
         // ceremony cannot issue yet. Fail before spawning or contacting a
@@ -626,7 +643,8 @@ enum WorkspaceCommandRun {
                             executable: executable, arguments: arguments, hookHost: hook,
                             terminalRows: rows, terminalColumns: columns,
                             resourceProfileID: resourceProfileID,
-                            microVM: microVM
+                            microVM: microVM,
+                            timeoutSeconds: timeoutSeconds
                         )
                     case .named(let definitionID):
                         client.launchAgentRuntime(
