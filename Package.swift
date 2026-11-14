@@ -81,6 +81,7 @@ let coreLibraryTargets: [Target] = [
         exclude: [
             "landlock_apply.c",
             "landlock_confine.c",
+            "socket_filter.c",
             "include",
             "README.md",
         ]

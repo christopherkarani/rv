@@ -57,6 +57,7 @@
 #define OUTSIDE ROOT "/outside"
 #define SCRATCH ROOT "/scratch"
 #define UNIX_SOCKET OUTSIDE "/socket"
+#define DATAGRAM_SOCKET OUTSIDE "/datagram"
 #define TEMP ROOT "/temp"
 #define TEMP_SOCKET TEMP "/socket"
 #define SCRATCH_SOCKET SCRATCH "/socket"
@@ -184,6 +185,28 @@ static int probe(int argc, char **argv) {
         fd = socket(AF_INET, SOCK_STREAM, 0);
         return probe_exit(fd >= 0 && listen(fd, 1) == 0
             && getsockname(fd, (struct sockaddr *)&address, &length) == 0 && address.sin_port != 0);
+    }
+    if (strcmp(op, "socketpair") == 0) {
+        int pair[2];
+        return probe_exit(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+    }
+    /* A datagram pair is made without socket() and can address anyone. */
+    if (strcmp(op, "datagram-pair") == 0) {
+        struct sockaddr_un address;
+        int pair[2];
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        strncpy(address.sun_path, argv[3], sizeof(address.sun_path) - 1);
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) != 0) {
+            return errno;
+        }
+        return probe_exit(sendto(pair[0], "x", 1, 0, (struct sockaddr *)&address, sizeof(address)) == 1);
+    }
+    /* A socket made through io_uring would be one no system-call filter sees. */
+    if (strcmp(op, "uring") == 0) {
+        char parameters[128];
+        memset(parameters, 0, sizeof(parameters));
+        return probe_exit(syscall(SYS_io_uring_setup, 4, parameters) >= 0);
     }
     if (strcmp(op, "ioctl") == 0) {
         struct termios modes;
@@ -452,6 +475,12 @@ static int confined(const char *floor, const char *port, const char *op, const c
     return run(argv);
 }
 
+/* The probe with no cage at all: what the kernel does when nothing stops it. */
+static int uncaged(const char *op, const char *a) {
+    char *argv[] = { INNER, "probe", (char *)op, (char *)a, NULL };
+    return run(argv);
+}
+
 /* A TCP listener on loopback; returns its port, or 0. */
 static int tcp_listener(void) {
     struct sockaddr_in address;
@@ -467,20 +496,25 @@ static int tcp_listener(void) {
     return ntohs(address.sin_port);
 }
 
-/* A pathname Unix listener this process holds. */
-static int unix_listener(const char *path) {
+/* A pathname Unix socket this process holds: a listener, or a datagram one. */
+static int unix_socket(const char *path, int type) {
     struct sockaddr_un address;
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, type, 0);
     memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
     strcpy(address.sun_path, path);
-    return fd >= 0 && bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(fd, 8) == 0;
+    return fd >= 0 && bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0
+        && (type == SOCK_DGRAM || listen(fd, 8) == 0);
+}
+
+static int unix_listener(const char *path) {
+    return unix_socket(path, SOCK_STREAM);
 }
 
 /* Loopback up, two TCP listeners, four pathname Unix listeners (outside
  * every root, in the --temp root, in the --write root, in the --write
- * root nested in the --temp root) and one abstract
- * one, all held by this process, outside any cage. */
+ * root nested in the --temp root), a datagram socket outside every root
+ * and one abstract listener, all held by this process, outside any cage. */
 static int confine_setup(char *port_a, char *port_b, size_t size) {
     struct ifreq interface;
     struct sockaddr_un address;
@@ -509,11 +543,7 @@ static int confine_setup(char *port_a, char *port_b, size_t size) {
     snprintf(port_a, size, "%d", a);
     snprintf(port_b, size, "%d", b);
 
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    strcpy(address.sun_path, UNIX_SOCKET);
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(fd, 8) != 0) {
+    if (!unix_listener(UNIX_SOCKET) || !unix_socket(DATAGRAM_SOCKET, SOCK_DGRAM)) {
         return 0;
     }
     memset(&address, 0, sizeof(address));
@@ -571,43 +601,64 @@ static void confine_cases(long abi) {
     check(status == ESTABLISH_FAILED && !exists(SCRATCH "/low-floor-ran"), "confine-floor-below-4-refuses",
         "exit %d", status);
 
-    status = confined("4", NULL, "abstract", ABSTRACT_SOCKET);
-    check(status == (abi >= 6 ? EPERM : 0), "confine-abstract-unix-by-abi", "abi %ld exit %d", abi, status);
-    status = confined("4", NULL, "signal", "1");
-    check(status == (abi >= 6 ? EPERM : 0), "confine-signal-by-abi", "abi %ld exit %d", abi, status);
+    /* Another program's socket is never reached. Below ABI 9 the socket
+     * filter lets the inner make no Unix socket at all (EACCES from
+     * socket()); from ABI 9 Landlock confines the ones it makes: a
+     * pathname socket outside its own directories is EACCES at connect,
+     * an abstract one outside the cage EPERM. */
     status = confined("4", NULL, "unix", UNIX_SOCKET);
-    check(status == (abi >= 9 ? EACCES : 0), "confine-pathname-unix-by-abi", "abi %ld exit %d", abi, status);
-    /* A shared directory is writable, but a socket in it is not the
-     * server's to reach; one in its own directory is. */
+    check(status == EACCES, "confine-pathname-unix-denied", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "abstract", ABSTRACT_SOCKET);
+    check(status == (abi >= 9 ? EPERM : EACCES), "confine-abstract-unix-denied", "abi %ld exit %d", abi, status);
     status = confined("4", NULL, "write", TEMP "/made.txt");
     check(status == 0 && exists(TEMP "/made.txt"), "confine-temp-root-writable", "exit %d", status);
     status = confined("4", NULL, "unix", TEMP_SOCKET);
-    check(status == (abi >= 9 ? EACCES : 0), "confine-unix-in-temp-by-abi", "abi %ld exit %d", abi, status);
+    check(status == EACCES, "confine-unix-in-temp-denied", "abi %ld exit %d", abi, status);
+    /* Its own directories: reachable where Landlock can confine them. */
     status = confined("4", NULL, "unix", SCRATCH_SOCKET);
-    check(status == 0, "confine-unix-in-write-root-allowed", "abi %ld exit %d", abi, status);
+    check(status == (abi >= 9 ? 0 : EACCES), "confine-unix-in-write-root-by-abi", "abi %ld exit %d", abi, status);
     status = confined("4", NULL, "unix", NESTED_SOCKET);
-    check(status == 0, "confine-unix-in-write-root-inside-temp-allowed", "abi %ld exit %d", abi, status);
+    check(status == (abi >= 9 ? 0 : EACCES), "confine-unix-in-write-root-inside-temp-by-abi", "abi %ld exit %d", abi,
+        status);
     status = confined("4", NULL, "own-unix", TEMP "/made-here.sock");
-    check(status == 0, "confine-own-unix-in-temp-allowed", "abi %ld exit %d", abi, status);
-    /* ioctl on a device the server opens: granted nowhere, /dev included. */
+    check(status == (abi >= 9 ? 0 : EACCES), "confine-own-unix-by-abi", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "socketpair", "-");
+    check(status == 0, "confine-socketpair-allowed", "abi %ld exit %d", abi, status);
+    /* Refused at socketpair() below ABI 9, by Landlock at sendto() from it. */
+    status = uncaged("datagram-pair", DATAGRAM_SOCKET);
+    check(status == 0, "confine-datagram-pair-works-outside-the-cage", "abi %ld exit %d", abi, status);
+    status = confined("4", NULL, "datagram-pair", DATAGRAM_SOCKET);
+    check(status == EACCES, "confine-datagram-pair-denied", "abi %ld exit %d", abi, status);
+
+    /* What only Landlock mediates follows the ABI. */
+    status = confined("4", NULL, "signal", "1");
+    check(status == (abi >= 6 ? EPERM : 0), "confine-signal-by-abi", "abi %ld exit %d", abi, status);
     status = confined("4", NULL, "ioctl", "/dev/null");
     check(status == (abi >= 5 ? EACCES : 0), "confine-device-ioctl-by-abi", "abi %ld exit %d", abi, status);
-    /* What no ABI closes, and why a network limit cannot be held: a socket
-     * never bound still listens, and at least one of MPTCP and TCP fast
-     * open reaches a listener with no port rule. Which one varies by
-     * kernel; each is printed. */
-    status = confined("4", NULL, "listen", "-");
-    check(status == 0, "confine-listen-without-bind-open", "abi %ld exit %d", abi, status);
+
+    /* The ways onto the network that Landlock's TCP rules do not cover.
+     * Each works here outside the cage; the socket filter refuses each
+     * inside it, with no port rule and with one. */
     {
-        int mptcp = confined("4", NULL, "mptcp", port_a);
-        int tfo = confined("4", NULL, "tfo", port_a);
-        int both = confined("4", NULL, "mptcp-tfo", port_a);
-        printf("rv-kernel-e2e: INFO tcp-routes abi=%ld mptcp=%d tfo=%d mptcp-tfo=%d\n", abi, mptcp, tfo, both);
-        check(mptcp == 0 || tfo == 0 || both == 0, "confine-tcp-route-past-the-rules-open",
-            "abi %ld mptcp %d tfo %d mptcp-tfo %d", abi, mptcp, tfo, both);
+        static const char *const routes[] = { "mptcp", "tfo", "mptcp-tfo", "listen", "udp", "uring" };
+        char name[64];
+        size_t index;
+        for (index = 0; index < sizeof(routes) / sizeof(routes[0]); index++) {
+            const char *route = routes[index];
+            int refusal = strcmp(route, "uring") == 0 ? ENOSYS : EACCES;
+            int outside = uncaged(route, port_b);
+            int inside = confined("4", NULL, route, port_b);
+            int beside = confined("4", port_a, route, port_b);
+            printf("rv-kernel-e2e: INFO route %s abi=%ld outside=%d caged=%d caged-with-port=%d\n", route, abi, outside,
+                inside, beside);
+            snprintf(name, sizeof(name), "confine-%s-works-outside-the-cage", route);
+            check(outside == 0, name, "abi %ld exit %d", abi, outside);
+            snprintf(name, sizeof(name), "confine-%s-refused", route);
+            check(inside == refusal, name, "abi %ld exit %d", abi, inside);
+            snprintf(name, sizeof(name), "confine-%s-refused-beside-a-port-rule", route);
+            check(beside == refusal, name, "abi %ld exit %d", abi, beside);
+        }
     }
-    status = confined("4", NULL, "udp", "9");
-    check(status == (abi >= 10 ? EACCES : 0), "confine-udp-by-abi", "abi %ld exit %d", abi, status);
 }
 
 static void console_fallback(void) {

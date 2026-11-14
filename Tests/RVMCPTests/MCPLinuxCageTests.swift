@@ -17,54 +17,52 @@ struct MCPLinuxCageTests {
         #expect(LandlockABI(-1) == nil)
         #expect(LandlockABI(1)?.rawValue == 1)
         #expect(abi(4) == .tcp && abi(5) == .deviceIoctl && abi(6) == .scopes)
-        #expect(abi(9) == .pathnameUnixSockets && abi(10) == .udp)
-        #expect(abi(3) < .tcp && LandlockABI.tcp < .udp)
+        #expect(abi(9) == .pathnameUnixSockets)
+        #expect(abi(3) < .tcp && LandlockABI.tcp < .pathnameUnixSockets)
     }
 
-    /// Every ABI the cage can run under, and exactly what it leaves open.
+    /// The socket filter closes the network on every kernel; what is left
+    /// to the ABI is what only Landlock mediates.
     @Test(arguments: [
-        (4, [MCPLinuxCageGap.deviceIoctl, .abstractSocketsAndSignals, .pathnameUnixSockets, .udp]),
-        (5, [.abstractSocketsAndSignals, .pathnameUnixSockets, .udp]),
-        (6, [.pathnameUnixSockets, .udp]),
-        (8, [.pathnameUnixSockets, .udp]),
-        (9, [.udp]),
-        (10, []),
-        (12, []),
-        (99, []),
+        (4, [MCPLinuxCageGap.deviceIoctl, .signals]), (5, [.signals]), (6, []), (9, []), (12, []), (99, []),
     ])
-    func eachABIClosesItsGapsAndNoneClosesTheLastTwo(version: Int, closable: [MCPLinuxCageGap]) {
-        #expect(MCPLinuxCageGap.open(at: abi(version)) == closable + [.tcpOutsideTheRules, .otherSockets])
+    func eachABIClosesItsGaps(version: Int, open: [MCPLinuxCageGap]) {
+        #expect(MCPLinuxCageGap.open(at: abi(version)) == open)
     }
 
-    @Test func everyGapSaysWhichABIClosesItAndWhetherItReachesTheNetwork() {
+    @Test func everyGapSaysWhichABIClosesIt() {
         for gap in MCPLinuxCageGap.allCases {
             switch gap {
-            case .deviceIoctl:
-                #expect(gap.closedAt == .deviceIoctl && gap.reachesTheNetwork == false)
-            case .abstractSocketsAndSignals: #expect(gap.closedAt == .scopes && gap.reachesTheNetwork)
-            case .pathnameUnixSockets: #expect(gap.closedAt == .pathnameUnixSockets && gap.reachesTheNetwork)
-            case .udp: #expect(gap.closedAt == .udp && gap.reachesTheNetwork)
-            case .tcpOutsideTheRules, .otherSockets: #expect(gap.closedAt == nil && gap.reachesTheNetwork)
+            case .deviceIoctl: #expect(gap.closedAt == .deviceIoctl)
+            case .signals: #expect(gap.closedAt == .scopes)
             }
             #expect(gap.summary.isEmpty == false)
         }
     }
 
-    // MARK: Support and admission
+    // MARK: Support
 
-    @Test func aHostCagesOnlyWithTheHelperAndTCPRules() {
-        #expect(MCPLinuxCageSupport.resolve(helperInstalled: false, reportedABI: 7) == .unavailable(.helperMissing))
-        #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, reportedABI: nil) == .unavailable(.probeFailed))
-        #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, reportedABI: 0) == .unavailable(.noLandlock))
-        #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, reportedABI: -3) == .unavailable(.noLandlock))
+    @Test func aHostCagesOnlyWithTheHelperTheTCPRulesAndTheSocketFilter() {
+        #expect(MCPLinuxCageSupport.resolve(helperInstalled: false, report: "7") == .unavailable(.helperMissing))
+        #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, report: nil) == .unavailable(.probeFailed))
+        #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, report: "0") == .unavailable(.noLandlock))
         for version in 1...3 {
-            #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, reportedABI: version)
+            #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, report: String(version))
                 == .unavailable(.tooOld(abi(version))))
         }
         for version in 4...12 {
-            let support = MCPLinuxCageSupport.resolve(helperInstalled: true, reportedABI: version)
+            let support = MCPLinuxCageSupport.resolve(helperInstalled: true, report: String(version))
             #expect(support == .confines(abi(version)))
             #expect(support.abi == abi(version))
+            // Landlock without seccomp filters is half a cage: none.
+            #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, report: "\(version) no-socket-filter")
+                == .unavailable(.noSocketFilter))
+        }
+        // No Landlock is said before no socket filter: it is the first thing missing.
+        #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, report: "0 no-socket-filter") == .unavailable(.noLandlock))
+        // Anything the helper does not print is a probe that failed, never an ABI.
+        for report in ["", " ", "-3", "seven", "7 ", " 7", "7 x", "7 no-socket-filter x", "7\n8", "٧", "0x7", "+7"] {
+            #expect(MCPLinuxCageSupport.resolve(helperInstalled: true, report: report) == .unavailable(.probeFailed), "\(report)")
         }
         #expect(MCPLinuxCageSupport.unavailable(.noLandlock).abi == nil)
     }
@@ -76,45 +74,19 @@ struct MCPLinuxCageTests {
         #expect(MCPLinuxCageSupport.Unavailable.noLandlock.reason.contains("lsm=landlock"))
         let old = MCPLinuxCageSupport.Unavailable.tooOld(abi(3)).reason
         #expect(old.contains("ABI 3") && old.contains("ABI 4") && old.contains("Linux 6.7"))
+        #expect(MCPLinuxCageSupport.Unavailable.noSocketFilter.reason.contains("seccomp"))
     }
 
-    /// No ABI holds a network limit, so the release refuses on every one;
-    /// with the limits disclosed instead, every caging host admits.
-    @Test func admissionIsTheHostAndTheAnswerToTheNetworkLimit() {
-        #expect(MCPLinuxCage.networkLimit == .refuse)
-        for version in 4...12 {
-            let support = MCPLinuxCageSupport.confines(abi(version))
-            #expect(MCPLinuxCage.admit(support) == .failure(.networkNotConfined(abi(version))))
-            #expect(MCPLinuxCage.admit(support, network: .disclose) == .success(abi(version)))
-            #expect(MCPLinuxCage.isRequired(support) == false)
-            #expect(MCPLinuxCage.isRequired(support, network: .disclose))
-            #expect(MCPLinuxCage.unavailability(support)?.contains("cannot keep a server off the network") == true)
-            #expect(MCPLinuxCage.unavailability(support, network: .disclose) == nil)
-        }
-        for unavailable in [
-            MCPLinuxCageSupport.Unavailable.helperMissing, .probeFailed, .noLandlock, .tooOld(abi(3)),
-        ] {
-            let support = MCPLinuxCageSupport.unavailable(unavailable)
-            #expect(MCPLinuxCage.admit(support, network: .disclose) == .failure(.unavailable(unavailable)))
-            #expect(MCPLinuxCage.unavailability(support, network: .disclose) == unavailable.reason)
-            // While the release refuses, no reinstall or kernel changes the
-            // answer, so none is suggested.
-            #expect(MCPLinuxCage.admit(support) == .failure(.networkNotConfined(nil)))
-            let reason = MCPLinuxCage.unavailability(support) ?? ""
-            #expect(reason.contains("cannot keep a server off the network on any kernel"))
-            #expect(reason.contains("reinstall") == false && reason.contains("6.7") == false)
-            #expect(MCPLinuxCage.isRequired(support) == false)
-        }
-        // A host that should cage and cannot say so refuses local servers;
-        // one whose kernel has no cage runs them bare, as before.
-        #expect(MCPLinuxCage.isRequired(.unavailable(.helperMissing), network: .disclose))
-        #expect(MCPLinuxCage.isRequired(.unavailable(.probeFailed), network: .disclose))
-        #expect(MCPLinuxCage.isRequired(.unavailable(.noLandlock), network: .disclose) == false)
-        #expect(MCPLinuxCage.isRequired(.unavailable(.tooOld(abi(3))), network: .disclose) == false)
-        let reason = MCPLinuxCage.Refusal.networkNotConfined(abi(7)).reason
-        #expect(reason.contains("ABI 7") && reason.contains("UDP") && reason.contains("MPTCP")
-            && reason.contains("depends on the kernel") && reason.contains("ioctl") == false)
-        #expect(MCPLinuxCage.Refusal.networkNotConfined(abi(10)).reason.contains("UDP;") == false)
+    /// A host that can cage requires it of every local server. So does one
+    /// that should be able to and cannot say so; one whose kernel has no
+    /// cage runs servers bare, as before.
+    @Test func aCageIsRequiredWhereThereIsOneOrShouldBe() {
+        for version in 4...12 { #expect(MCPLinuxCage.isRequired(.confines(abi(version)))) }
+        #expect(MCPLinuxCage.isRequired(.unavailable(.helperMissing)))
+        #expect(MCPLinuxCage.isRequired(.unavailable(.probeFailed)))
+        #expect(MCPLinuxCage.isRequired(.unavailable(.noLandlock)) == false)
+        #expect(MCPLinuxCage.isRequired(.unavailable(.tooOld(abi(3)))) == false)
+        #expect(MCPLinuxCage.isRequired(.unavailable(.noSocketFilter)) == false)
     }
 
     @Test func loaderVariablesAreTheOnesTheDynamicLoaderActsOn() {
@@ -284,12 +256,13 @@ struct MCPLinuxCageTests {
         #expect(closed.arguments(executable: "/bin/true", argv: ["true"]) == ["--confine", "4", "--", "/bin/true", "true"])
     }
 
-    @Test func theNoticeNamesWhatTheKernelLeavesOpen() {
-        let old = MCPLinuxCage.notice(server: "fs", abi: .tcp)
-        #expect(old.contains("fs") && old.contains("ABI 4") && old.contains("UDP") && old.contains("Unix sockets"))
-        let new = MCPLinuxCage.notice(server: "fs", abi: abi(10))
-        #expect(new.hasSuffix("this kernel does not block " + MCPLinuxCageGap.tcpOutsideTheRules.summary + "; "
-            + MCPLinuxCageGap.otherSockets.summary))
-        #expect(new.contains("UDP;") == false)
+    @Test func theNoticeNamesWhatAnOlderKernelLeavesOpen() throws {
+        let old = try #require(MCPLinuxCage.notice(server: "fs", abi: .tcp))
+        #expect(old.contains("fs") && old.contains("ABI 4") && old.contains("ioctl") && old.contains("signals"))
+        let newer = try #require(MCPLinuxCage.notice(server: "fs", abi: abi(5)))
+        #expect(newer.contains("signals") && newer.contains("ioctl") == false)
+        // Nothing open, nothing to say.
+        #expect(MCPLinuxCage.notice(server: "fs", abi: .scopes) == nil)
+        #expect(MCPLinuxCage.notice(server: "fs", abi: abi(11)) == nil)
     }
 }

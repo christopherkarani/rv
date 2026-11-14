@@ -16,10 +16,10 @@ public enum MCPSandbox {
     public static let sandboxExec = "/usr/bin/sandbox-exec"
 
     /// Whether serve cages local servers on this host: Seatbelt on macOS;
-    /// on Linux, Landlock where `MCPLinuxCage.isRequired` says so (never,
-    /// while `MCPLinuxCage.networkLimit` refuses). Elsewhere bare servers
-    /// run uncaged, and sandboxed ones, or every local one under an
-    /// organization's `requireSandbox`, are refused.
+    /// on Linux, Landlock and a seccomp socket filter on a kernel that has
+    /// both (6.7 or later) with `rv-isolation-exec` installed. Elsewhere
+    /// bare servers run uncaged, and sandboxed ones, or every local one
+    /// under an organization's `requireSandbox`, are refused.
     #if os(macOS)
     public static let enforced = true
     #elseif os(Linux)
@@ -31,9 +31,9 @@ public enum MCPSandbox {
     /// Why this host has no cage, for the messages that refuse without one.
     public static var unavailability: String {
         #if os(Linux)
-        if let reason = MCPLinuxCage.unavailability(linuxSupport) { return reason }
+        if case .unavailable(let unavailable) = linuxSupport { return unavailable.reason }
         #endif
-        return "it needs macOS"
+        return "it needs macOS, or Linux 6.7 or later"
     }
 
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]

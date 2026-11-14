@@ -27,9 +27,11 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace);
 /*
  * MCP server confinement (landlock_confine.c). Applies the ruleset argv
  * describes to this process and returns the index of the executable to
- * exec, or -1 after printing why nothing was applied.
+ * exec, or -1 after printing why nothing was applied. On success it also
+ * reports the Landlock ABI applied and how many TCP ports the cage may
+ * connect to, which decide the socket filter that follows.
  */
-int rv_landlock_confine(int argc, char **argv);
+int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports);
 
 /* The running kernel's Landlock ABI; 0 when it has none. */
 int rv_landlock_abi(void);

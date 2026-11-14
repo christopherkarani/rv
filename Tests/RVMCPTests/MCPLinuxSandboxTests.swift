@@ -68,7 +68,7 @@ struct MCPLinuxSandboxTests {
     private func cage(
         _ home: Home, _ script: String, policy: MCPSandboxPolicy = MCPSandboxPolicy(network: false),
         environment: [String: String] = [:], support: MCPLinuxCageSupport? = nil,
-        network: MCPLinuxCage.NetworkLimit = .disclose, notices: ((String) -> Void)? = nil
+        notices: ((String) -> Void)? = nil
     ) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         let definition = MCPServerDefinition(name: "probe", command: "bash", sandbox: policy)
         var base = ["PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": home.path]
@@ -78,7 +78,7 @@ struct MCPLinuxSandboxTests {
         return MCPSandbox.applyLinux(
             definition: definition, launch: launch, policy: policy,
             configDirectory: URL(fileURLWithPath: home.configDirectory), home: URL(fileURLWithPath: home.path),
-            accountHome: home.path, support: support ?? self.support, network: network,
+            accountHome: home.path, support: support ?? self.support,
             notice: { notices?($0) }, denied: { _, _ in })
     }
 
@@ -222,60 +222,83 @@ struct MCPLinuxSandboxTests {
         #expect(results(control) == ["connect": "ok", "bind": "ok"])
     }
 
-    /// Why `MCPLinuxCage.networkLimit` refuses: TCP that passes neither of
-    /// those two calls. Which route a kernel build leaves open varies
-    /// (MPTCP `connect` and TCP fast open are each denied on some), so
-    /// each is tried outside the cage first: the cage may deny a route,
-    /// never open one. `listen` without `bind` is open in every cage, and
-    /// where the host has MPTCP and fast open, at least one way out is
-    /// too. If a kernel
-    /// closes these, this fails and the limits in
-    /// docs/security/mcp-linux-sandbox.md change.
+    /// The ways onto the network that Landlock's two TCP rules do not
+    /// cover, each of which works outside the cage on a kernel that has
+    /// it: an MPTCP socket, TCP fast open, a socket that listens without
+    /// being bound, UDP, ICMP, raw, netlink and packet sockets. The socket
+    /// filter refuses every one, on every kernel.
+    private let routes = """
+        import errno, socket, sys
+        port = int(sys.argv[1])
+        FASTOPEN = 0x20000000
+        def attempt(label, action):
+            try:
+                action(); print(label + "=ok")
+            except OSError as error:
+                print(label + "=denied")
+        def tcp():
+            s = socket.socket(); s.settimeout(5); s.connect(("127.0.0.1", port))
+        def mptcp():
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262); s.settimeout(5)
+            s.connect(("127.0.0.1", port)); s.send(b"x")
+        def fast_open(protocol):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, protocol)
+            if s.sendto(b"hello", FASTOPEN, ("127.0.0.1", port)) != 5: raise OSError("not sent")
+        def fast_open_message():
+            s = socket.socket()
+            if s.sendmsg([b"hello"], [], FASTOPEN, ("127.0.0.1", port)) != 5: raise OSError("not sent")
+        def listen_unbound():
+            s = socket.socket(); s.listen(1)
+            if s.getsockname()[1] == 0: raise OSError("not listening")
+        def udp(family):
+            socket.socket(family, socket.SOCK_DGRAM).sendto(b"x", ("::1" if family == socket.AF_INET6 else "127.0.0.1", 9))
+        def pair():
+            a, b = socket.socketpair(); a.send(b"x")
+            if b.recv(1) != b"x": raise OSError("not received")
+        attempt("tcp", tcp)
+        attempt("mptcp", mptcp)
+        attempt("fast-open", lambda: fast_open(0))
+        attempt("fast-open-sendmsg", fast_open_message)
+        attempt("mptcp-fast-open", lambda: fast_open(262))
+        attempt("listen-unbound", listen_unbound)
+        attempt("udp", lambda: udp(socket.AF_INET))
+        attempt("udp6", lambda: udp(socket.AF_INET6))
+        attempt("icmp", lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP))
+        attempt("raw", lambda: socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP))
+        attempt("netlink", lambda: socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 0))
+        attempt("packet", lambda: socket.socket(socket.AF_PACKET, socket.SOCK_RAW, 0))
+        attempt("tcp-with-flags", lambda: socket.socket(
+            socket.AF_INET, socket.SOCK_STREAM | socket.SOCK_NONBLOCK | socket.SOCK_CLOEXEC, socket.IPPROTO_TCP))
+        attempt("socketpair", pair)
+        """
+
+    private static let everyRoute = [
+        "tcp", "mptcp", "fast-open", "fast-open-sendmsg", "mptcp-fast-open", "listen-unbound", "udp", "udp6", "icmp", "raw",
+        "netlink", "packet", "tcp-with-flags",
+    ]
+
+    /// `network: false`: no socket that could reach the network exists in
+    /// the cage. The same script outside it shows the routes are real on
+    /// this host.
     @Test(.timeLimit(.minutes(2)))
-    func tcpThatPassesNeitherConnectNorBindIsNotAllDenied() throws {
+    func aServerWithNoNetworkHasNoWayOntoIt() throws {
         let home = try Home()
         let open = try listener()
         defer { close(open.fd) }
-        let python = """
-            import socket, sys
-            port = int(sys.argv[1])
-            FASTOPEN = 0x20000000
-            def attempt(label, action):
-                try:
-                    action(); print(label + "=ok")
-                except OSError:
-                    print(label + "=denied")
-            def mptcp():
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262)
-                s.connect(("127.0.0.1", port)); s.send(b"x")
-            def fast_open(protocol):
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, protocol)
-                if s.sendto(b"hello", FASTOPEN, ("127.0.0.1", port)) != 5: raise OSError("not sent")
-            def listen_unbound():
-                s = socket.socket(); s.listen(1)
-                if s.getsockname()[1] == 0: raise OSError("not listening")
-            attempt("mptcp", mptcp)
-            attempt("fast-open", lambda: fast_open(0))
-            attempt("mptcp-fast-open", lambda: fast_open(262))
-            attempt("listen-unbound", listen_unbound)
-            """
-        try home.write("project/routes.py", python)
+        try home.write("project/routes.py", routes)
         let control = results(try run(MCPUpstreamLaunch(
             server: "control", executable: "/usr/bin/env",
             arguments: ["python3", home.path + "/project/routes.py", String(open.port)],
             environment: ["PATH": "/usr/bin:/bin"])))
-        #expect(control["listen-unbound"] == "ok", "\(control)")
+        // What every host has; MPTCP, fast open and ICMP depend on its settings.
+        for route in ["tcp", "listen-unbound", "udp", "netlink", "tcp-with-flags", "socketpair"] {
+            #expect(control[route] == "ok", "\(route) does not work outside the cage: \(control)")
+        }
         let inside = results(try caged(home, "python3 ~/project/routes.py \(open.port)"))
-        #expect(Set(inside.keys) == Set(control.keys))
-        for (route, outcome) in inside where outcome == "ok" {
-            #expect(control[route] == "ok", "\(route) is open in the cage and not outside it")
-        }
-        #expect(inside["listen-unbound"] == "ok", "\(inside)")
-        // MPTCP fast open is the one route open on every build measured;
-        // it needs MPTCP and fast open both enabled on the host.
-        if control["mptcp-fast-open"] == "ok" {
-            #expect(["mptcp", "fast-open", "mptcp-fast-open"].contains { inside[$0] == "ok" }, "\(inside)")
-        }
+        for route in Self.everyRoute { #expect(inside[route] == "denied", "\(route): \(inside)") }
+        // Two connected sockets of its own are not a way out.
+        #expect(inside["socketpair"] == "ok")
+        #expect(inside.count == Self.everyRoute.count + 1)
     }
 
     /// `hosts`: the one port the cage may connect to is the allowlist
@@ -299,6 +322,28 @@ struct MCPLinuxSandboxTests {
         #expect(found["other"] == "denied")
         // Without the proxy credential or for an unlisted host: refused by the proxy.
         #expect(found["unlisted"]?.hasPrefix("4") == true, "\(outcome.output) \(outcome.errors)")
+    }
+
+    /// `hosts`: plain TCP sockets exist, for the proxy's port alone. Every
+    /// way round the port rule is refused: another kind of socket, fast
+    /// open (a connection with no `connect`), and listening.
+    @Test(.timeLimit(.minutes(2)))
+    func aServerWithAnAllowlistHasNoWayRoundTheProxysPort() throws {
+        let home = try Home()
+        defer { MCPSandbox.stopProxies() }
+        let other = try listener()
+        defer { close(other.fd) }
+        try home.write("project/routes.py", routes)
+        // The routes aimed at a listener that is not the proxy, then plain TCP at the proxy.
+        let script = "python3 ~/project/routes.py \(other.port)\n"
+            + probe("proxy", "exec 3<>/dev/tcp/127.0.0.1/${HTTPS_PROXY##*:}")
+        let found = results(try caged(home, script, policy: MCPSandboxPolicy(network: false, hosts: ["allowed.example"])))
+        for route in Self.everyRoute where route != "tcp-with-flags" {
+            #expect(found[route] == "denied", "\(route): \(found)")
+        }
+        // A TCP socket can be made, flags and all; where it may connect is the port rule's.
+        #expect(found["tcp-with-flags"] == "ok" && found["socketpair"] == "ok")
+        #expect(found["proxy"] == "ok", "\(found)")
     }
 
     // MARK: - Privileges and other processes
@@ -354,10 +399,12 @@ struct MCPLinuxSandboxTests {
 
     // MARK: - What the kernel leaves open, measured
 
-    /// The documented limits, as this kernel has them: each channel is open
-    /// below the ABI that closes it and closed from it on.
+    /// Another program's socket is never reached: below ABI 9 the server
+    /// can make no Unix socket at all (the filter), from ABI 9 Landlock
+    /// confines the ones it makes. What only Landlock mediates (signals,
+    /// device `ioctl`) follows this kernel's ABI.
     @Test(.timeLimit(.minutes(2)))
-    func eachChannelIsOpenOnlyBelowTheABIThatClosesIt() throws {
+    func otherProgramsSocketsAreNeverReachedAndTheRestFollowsTheABI() throws {
         let home = try Home()
         let abi = try self.abi
         // A Unix socket and an abstract socket held outside the cage, and a
@@ -372,6 +419,8 @@ struct MCPLinuxSandboxTests {
             import socket, sys, time
             a = socket.socket(socket.AF_UNIX); a.bind(sys.argv[1] + "/sock"); a.listen(4)
             b = socket.socket(socket.AF_UNIX); b.bind("\\0" + sys.argv[2]); b.listen(4)
+            c = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM); c.bind(sys.argv[1] + "/datagram")
+            d = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM); d.bind("\\0" + sys.argv[2] + "-datagram")
             print("ready", flush=True); time.sleep(120)
             """, directory, name]
         let ready = Pipe()
@@ -392,8 +441,18 @@ struct MCPLinuxSandboxTests {
                     print(label + "=denied")
             def unix(address):
                 s = socket.socket(socket.AF_UNIX); s.connect(address)
-            def udp():
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.sendto(b"x", ("127.0.0.1", 9))
+            def own():
+                path = os.path.join(os.getcwd(), "own.sock")
+                a = socket.socket(socket.AF_UNIX); a.bind(path); a.listen(1)
+                socket.socket(socket.AF_UNIX).connect(path)
+            def pair():
+                a, b = socket.socketpair(); a.send(b"x"); b.recv(1)
+            # A connected pair needs no socket(): a datagram one can still
+            # address anyone, and a stream one must not be connectable again.
+            def datagram(address):
+                a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM); a.sendto(b"x", address)
+            def again(address):
+                a, b = socket.socketpair(); b.close(); a.connect(address)
             def ioctl():
                 import fcntl, termios
                 with open("/dev/null", "r+b", buffering=0) as device:
@@ -404,8 +463,12 @@ struct MCPLinuxSandboxTests {
                         if error.errno != 25: raise
             attempt("pathname-unix", lambda: unix(sys.argv[1] + "/sock"))
             attempt("abstract-unix", lambda: unix("\\0" + sys.argv[2]))
+            attempt("own-unix", own)
+            attempt("socketpair", pair)
+            attempt("datagram-pair-to-pathname", lambda: datagram(sys.argv[1] + "/datagram"))
+            attempt("datagram-pair-to-abstract", lambda: datagram("\\0" + sys.argv[2] + "-datagram"))
+            attempt("stream-pair-connected-again", lambda: again(sys.argv[1] + "/sock"))
             attempt("signal", lambda: os.kill(int(sys.argv[3]), 0))
-            attempt("udp", udp)
             attempt("device-ioctl", ioctl)
             attempt("chmod-protected", lambda: os.chmod(os.path.expanduser("~/.ssh/id_ed25519"), 0o644))
             """
@@ -414,10 +477,13 @@ struct MCPLinuxSandboxTests {
             home, "python3 ~/project/gaps.py \(directory) \(name) \(holder.processIdentifier)")
         func expected(_ gap: MCPLinuxCageGap) -> String { MCPLinuxCageGap.open(at: abi).contains(gap) ? "ok" : "denied" }
         #expect(results(outcome) == [
-            // The socket is in /tmp, held by another program.
-            "pathname-unix": expected(.pathnameUnixSockets),
-            "abstract-unix": expected(.abstractSocketsAndSignals), "signal": expected(.abstractSocketsAndSignals),
-            "udp": expected(.udp), "device-ioctl": expected(.deviceIoctl),
+            // Held by another program, in /tmp and in the abstract namespace.
+            "pathname-unix": "denied", "abstract-unix": "denied",
+            // A socket of its own, in its own directory, where Landlock can confine it.
+            "own-unix": abi >= .pathnameUnixSockets ? "ok" : "denied", "socketpair": "ok",
+            "datagram-pair-to-pathname": "denied", "datagram-pair-to-abstract": "denied",
+            "stream-pair-connected-again": "denied",
+            "signal": expected(.signals), "device-ioctl": expected(.deviceIoctl),
             // Landlock does not mediate a change of mode, owner or times: a
             // documented limit. The key stays unreadable to the server.
             "chmod-protected": "ok",
@@ -510,7 +576,7 @@ struct MCPLinuxSandboxTests {
         let caged = try MCPSandbox.applyLinux(
             definition: definition, launch: launch, policy: policy,
             configDirectory: URL(fileURLWithPath: home.configDirectory), home: URL(fileURLWithPath: home.path),
-            accountHome: home.path, network: .disclose, notice: { _ in }, denied: { _, _ in }
+            accountHome: home.path, notice: { _ in }, denied: { _, _ in }
         ).get()
         let names = try tools(of: caged)
         #expect(names.contains("read_file") || names.contains("read_text_file"), "\(names)")
@@ -539,7 +605,7 @@ struct MCPLinuxSandboxTests {
         let caged = try MCPSandbox.applyLinux(
             definition: definition, launch: launch, policy: policy,
             configDirectory: URL(fileURLWithPath: home.configDirectory), home: URL(fileURLWithPath: home.path),
-            accountHome: home.path, network: .disclose, notice: { _ in }, denied: { _, _ in }
+            accountHome: home.path, notice: { _ in }, denied: { _, _ in }
         ).get()
         let names = try tools(of: caged)
         #expect(names.contains("get_current_time"), "\(names)")
@@ -554,6 +620,7 @@ struct MCPLinuxSandboxTests {
             (.unavailable(.noLandlock), "has no Landlock"),
             (.unavailable(.tooOld(try #require(LandlockABI(3)))), "ABI 3"),
             (.unavailable(.probeFailed), "could not report"),
+            (.unavailable(.noSocketFilter), "seccomp"),
         ] {
             guard case .failure(.sandbox(let reason)) = cage(home, "true", support: support) else {
                 Issue.record("\(support) built a launch")
@@ -564,32 +631,11 @@ struct MCPLinuxSandboxTests {
         #expect(FileManager.default.fileExists(atPath: home.path + "/.cache/rv-mcp") == false)
     }
 
-    /// The release's answer to a network limit Landlock cannot hold: no
-    /// server starts, and the host says it has no sandbox.
-    @Test func aPolicyThatLimitsTheNetworkIsRefusedByDefault() throws {
-        let home = try Home()
-        let abi = try self.abi
-        #expect(MCPLinuxCage.networkLimit == .refuse)
-        for policy in [MCPSandboxPolicy(network: false), MCPSandboxPolicy(network: false, hosts: ["example.com"])] {
-            guard case .failure(.sandbox(let reason)) = cage(home, "true", policy: policy, network: MCPLinuxCage.networkLimit)
-            else {
-                Issue.record("a server was planned under a network limit the kernel cannot hold")
-                continue
-            }
-            #expect(reason.contains("cannot keep a server off the network") && reason.contains("MPTCP")
-                && reason.contains("ABI \(abi)") && reason.contains("will not run it uncaged"), "\(reason)")
-        }
-        #expect(FileManager.default.fileExists(atPath: home.path + "/.cache/rv-mcp") == false)
-        #expect(MCPSandbox.enforced == false)
-        #expect(MCPSandbox.unavailability.contains("cannot keep a server off the network"))
-        // Not a missing helper or an old kernel: nothing here says to fix one.
-        for support in [MCPLinuxCageSupport.unavailable(.helperMissing), .unavailable(.noLandlock)] {
-            guard case .failure(.sandbox(let reason)) = cage(home, "true", support: support, network: .refuse) else {
-                Issue.record("\(support) built a launch")
-                continue
-            }
-            #expect(reason.contains("on any kernel") && reason.contains("reinstall") == false, "\(reason)")
-        }
+    /// This host has both halves of the cage, so serve requires it of
+    /// every local server.
+    @Test func thisHostCagesAndTheGatewayRequiresIt() throws {
+        _ = try abi
+        #expect(MCPSandbox.enforced)
     }
 
     /// A loader variable in the server's environment would act in the
@@ -673,7 +719,7 @@ struct MCPLinuxSandboxTests {
         let result = MCPSandbox.applyLinux(
             definition: definition, launch: launch, policy: MCPSandboxPolicy(network: false),
             configDirectory: URL(fileURLWithPath: home.configDirectory), home: URL(fileURLWithPath: home.path),
-            accountHome: "/root-of-someone-else", network: .disclose, notice: { _ in }, denied: { _, _ in })
+            accountHome: "/root-of-someone-else", notice: { _ in }, denied: { _, _ in })
         guard case .failure(.sandbox(let reason)) = result else {
             Issue.record("a home that is not the account's was accepted")
             return
@@ -681,13 +727,14 @@ struct MCPLinuxSandboxTests {
         #expect(reason.contains("was not the path reviewed"))
     }
 
-    @Test func startingACagedServerSaysWhatTheKernelLeavesOpen() throws {
+    @Test func startingACagedServerSaysWhatAnOlderKernelLeavesOpen() throws {
         let home = try Home()
         let abi = try self.abi
         var lines: [String] = []
         _ = try cage(home, "true", notices: { lines.append($0) }).get()
-        #expect(lines == [MCPLinuxCage.notice(server: "probe", abi: abi)])
-        #expect(lines.first?.contains("ABI \(abi)") == true && lines.first?.contains("MPTCP") == true)
+        // One line where this kernel's Landlock leaves something open; none where it does not.
+        #expect(lines == [MCPLinuxCage.notice(server: "probe", abi: abi)].compactMap { $0 })
+        #expect(lines.isEmpty == MCPLinuxCageGap.open(at: abi).isEmpty)
     }
 }
 #endif

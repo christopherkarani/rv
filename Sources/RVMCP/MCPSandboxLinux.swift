@@ -4,11 +4,12 @@ import Glibc
 import RVDomain
 import RVIsolation
 
-/// The Linux side of `MCPSandbox`: reads the host, builds the Landlock
-/// plan (`MCPLinuxCage`), and turns the launch into one through
-/// `rv-isolation-exec --confine`. The helper applies the ruleset in the
-/// server's process before `exec`; if it cannot, it exits without running
-/// the server, so a server that runs is a server that is caged.
+/// The Linux side of `MCPSandbox`: reads the host, builds the plan
+/// (`MCPLinuxCage`), and turns the launch into one through
+/// `rv-isolation-exec --confine`. The helper applies the Landlock ruleset
+/// and the socket filter in the server's process before `exec`; if it
+/// cannot, it exits without running the server, so a server that runs is
+/// a server that is caged.
 extension MCPSandbox {
     /// Where Linux keeps the stores `deniedReads` names under `~/Library`
     /// (keyrings, browser profiles as packaged by the distribution, Snap
@@ -35,12 +36,12 @@ extension MCPSandbox {
     public static let linuxSupport: MCPLinuxCageSupport = probeLinuxSupport(helper: linuxHelper)
 
     static func probeLinuxSupport(helper: String?) -> MCPLinuxCageSupport {
-        guard let helper else { return .resolve(helperInstalled: false, reportedABI: nil) }
+        guard let helper else { return .resolve(helperInstalled: false, report: nil) }
         guard let outcome = BoundedProcess.run(helper, ["--landlock-abi"], environment: [:], timeout: 10),
             outcome.status == 0
-        else { return .resolve(helperInstalled: true, reportedABI: nil) }
+        else { return .resolve(helperInstalled: true, report: nil) }
         let text = String(decoding: outcome.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return .resolve(helperInstalled: true, reportedABI: Int(text))
+        return .resolve(helperInstalled: true, report: text)
     }
 
     /// A directory's entries and what each is, without following links.
@@ -99,14 +100,14 @@ extension MCPSandbox {
     static func applyLinux(
         definition: MCPServerDefinition, launch: MCPUpstreamLaunch, policy: MCPSandboxPolicy, configDirectory: URL,
         home: URL, accountHome: String? = passwdHome(), support: MCPLinuxCageSupport = MCPSandbox.linuxSupport,
-        helper: String? = MCPSandbox.linuxHelper, network: MCPLinuxCage.NetworkLimit = MCPLinuxCage.networkLimit,
-        notice: (String) -> Void, denied: @escaping @Sendable (String, EgressProxyDenial) -> Void
+        helper: String? = MCPSandbox.linuxHelper, notice: (String) -> Void,
+        denied: @escaping @Sendable (String, EgressProxyDenial) -> Void
     ) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         let server = definition.name
         let abi: LandlockABI
-        switch MCPLinuxCage.admit(support, network: network) {
-        case .failure(let refusal): return .failure(linuxRefusal(server, refusal.reason))
-        case .success(let admitted): abi = admitted
+        switch support {
+        case .unavailable(let unavailable): return .failure(linuxRefusal(server, unavailable.reason))
+        case .confines(let admitted): abi = admitted
         }
         guard let helper else {
             return .failure(linuxRefusal(server, MCPLinuxCageSupport.Unavailable.helperMissing.reason))
@@ -190,7 +191,7 @@ extension MCPSandbox {
 
         let plan = MCPLinuxCage.Plan(
             readable: readable, writable: writable, shared: shared, tcpPorts: ports)
-        notice(MCPLinuxCage.notice(server: server, abi: abi))
+        if let line = MCPLinuxCage.notice(server: server, abi: abi) { notice(line) }
         var caged = launch
         caged.environment = environment
         caged.executable = helper

@@ -23,8 +23,8 @@
  *             carry it (ABI 9)
  *   UDP       no bind and no send (ABI 10)
  *
- * What Landlock does not mediate stays open at every ABI: see the limits
- * in the document above.
+ * The caller then installs the socket filter (socket_filter.c), which
+ * closes the ways onto the network that these rules do not cover.
  *
  * The ABI is asked of the kernel (LANDLOCK_CREATE_RULESET_VERSION), never
  * inferred from its version. FLOOR is the lowest ABI the caller accepts:
@@ -176,8 +176,9 @@ static int rv_confine_allow_path(int ruleset_fd, const char *path, uint64_t acce
 }
 
 /* Returns the index of EXECUTABLE in argv, or -1 after printing why not.
- * argv[1] is "--confine". */
-int rv_landlock_confine(int argc, char **argv) {
+ * argv[1] is "--confine". On success `*kernel_abi` is the Landlock ABI
+ * applied and `*tcp_ports` the number of --tcp rules. */
+int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) {
     struct rv_ruleset_attr attr;
     struct rv_net_port_attr port_attr;
     unsigned long floor;
@@ -187,6 +188,7 @@ int rv_landlock_confine(int argc, char **argv) {
     int restricted;
     int abi;
     int index;
+    int ports = 0;
 
     if (argc < 3 || rv_confine_number(argv[2], 1000, &floor) != 0 || floor < RV_CONFINE_MINIMUM_ABI) {
         rv_confine_fail("the confinement request is malformed", NULL);
@@ -263,6 +265,7 @@ int rv_landlock_confine(int argc, char **argv) {
                 rv_confine_fail("a port rule could not be added", strerror(errno));
                 return -1;
             }
+            ports++;
         } else {
             close(ruleset_fd);
             rv_confine_fail("the confinement request is malformed", argv[index]);
@@ -282,6 +285,8 @@ int rv_landlock_confine(int argc, char **argv) {
         rv_confine_fail("the Landlock ruleset could not be enforced", strerror(errno));
         return -1;
     }
+    *kernel_abi = abi;
+    *tcp_ports = ports;
     return index + 1;
 }
 
@@ -293,9 +298,11 @@ int rv_landlock_abi(void) {
 
 #else
 
-int rv_landlock_confine(int argc, char **argv) {
+int rv_landlock_confine(int argc, char **argv, int *kernel_abi, int *tcp_ports) {
     (void)argc;
     (void)argv;
+    (void)kernel_abi;
+    (void)tcp_ports;
     return -1;
 }
 

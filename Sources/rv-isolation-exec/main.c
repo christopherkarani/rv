@@ -25,11 +25,13 @@
  *                     [--temp PATH]... [--tcp PORT]...
  *                     -- EXECUTABLE ARGV0 [ARG...]
  * closes inherited descriptors, sets NO_NEW_PRIVS, applies the Landlock
- * ruleset the request describes and execs. Anything that fails exits 125
- * with a line on stderr and does not exec.
+ * ruleset the request describes, installs the socket filter
+ * (Sources/RVIsolation/socket_filter.c) and execs. Anything that fails
+ * exits 125 with a line on stderr and does not exec.
  *
  *   rv-isolation-exec --landlock-abi
- * prints the kernel's Landlock ABI (0 when it has none) and exits 0.
+ * prints the kernel's Landlock ABI (0 when it has none), followed by
+ * " no-socket-filter" on a kernel without seccomp filters, and exits 0.
  *
  * SwiftPM cannot compile C into the RVIsolation Swift target, so this
  * translation unit includes the shim from Sources/RVIsolation.
@@ -38,6 +40,7 @@
 
 #include "../RVIsolation/landlock_apply.c"
 #include "../RVIsolation/landlock_confine.c"
+#include "../RVIsolation/socket_filter.c"
 
 #include <errno.h>
 #include <limits.h>
@@ -125,13 +128,22 @@ static int rv_run_confined(int argc, char **argv) {
     sigset_t none;
     int executable;
     int failure;
+    int abi = 0;
+    int ports = 0;
 
     /* Landlock does not revoke descriptors opened before it. */
     if (syscall(SYS_close_range, 3u, UINT_MAX, 0u) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
-    executable = rv_landlock_confine(argc, argv);
+    executable = rv_landlock_confine(argc, argv, &abi, &ports);
     if (executable < 0) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    /* Plain TCP sockets only where there is a port to connect to; Unix
+     * sockets only where Landlock confines them (ABI 9). */
+    if (rv_socket_filter_install(ports > 0, abi >= 9) != 0) {
+        dprintf(STDERR_FILENO, "rv mcp: the server was not started: the socket filter could not be installed: %s\n",
+            strerror(errno));
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     /* The gateway starts servers from a thread that blocks most signals,
@@ -154,7 +166,8 @@ int main(int argc, char **argv) {
         return rv_run_confined(argc, argv);
     }
     if (argc == 2 && strcmp(argv[1], "--landlock-abi") == 0) {
-        printf("%d\n", rv_landlock_abi());
+        /* The cage needs both; a kernel without seccomp filters says so. */
+        printf(rv_socket_filter_available() ? "%d\n" : "%d no-socket-filter\n", rv_landlock_abi());
         return 0;
     }
     if (argc < 5) {
