@@ -40,9 +40,18 @@ public actor NetworkReviewQueue {
     private let store: PendingApprovalStore
     private let ceremonies: EphemeralAllowOnceTable
     private let channel: NetworkRuleLiveChannel
-    /// Live-rule fingerprint to the proposal id minted for it. Rebuilt
-    /// through ledger dedupe after a restart (see noteDenial).
-    private var knownIDs: [String: String] = [:]
+    /// Intake key: the ledger dedupes on workspace identity plus
+    /// fingerprint, so the in-memory map does too. Keyed by fingerprint
+    /// alone, a second workspace blocked on the same host would be handed
+    /// the first workspace's proposal id and file none of its own.
+    private struct IntakeKey: Hashable {
+        var workspace: WorkspaceSessionID
+        var fingerprint: String
+    }
+
+    /// Intake key to the proposal id minted for it. Rebuilt through ledger
+    /// dedupe after a restart (see noteDenial).
+    private var knownIDs: [IntakeKey: String] = [:]
     private var appliedIDs: Set<String> = []
 
     public init(configDirectory: URL) {
@@ -92,8 +101,8 @@ public actor NetworkReviewQueue {
         guard denial.reason == .deniedPolicy else { return nil }
         guard let rule = LiveNetworkRule(host: denial.host, port: denial.port) else { return nil }
         if channel.contains(rule) { return nil }
-        let fingerprint = EgressProposal.fingerprint(for: rule).rawValue
-        if let known = knownIDs[fingerprint],
+        let key = IntakeKey(workspace: workspace, fingerprint: EgressProposal.fingerprint(for: rule).rawValue)
+        if let known = knownIDs[key],
             let record = try? await store.load(id: ApprovalID(rawValue: known), now: now)
         {
             switch record.state {
@@ -119,7 +128,7 @@ public actor NetworkReviewQueue {
         }
         do {
             let created = try await store.create(request, now: now)
-            knownIDs[fingerprint] = created.id.rawValue
+            knownIDs[key] = created.id.rawValue
             return created.id
         } catch PendingApprovalError.storeFull {
             return nil
@@ -140,7 +149,8 @@ public actor NetworkReviewQueue {
     /// plant is refused.
     public func applyResolved(now: Date) async -> AppliedUpdate? {
         var newlyApplied: [String] = []
-        for (fingerprint, idValue) in knownIDs {
+        for (key, idValue) in knownIDs {
+            let fingerprint = key.fingerprint
             if appliedIDs.contains(idValue) { continue }
             guard let record = try? await store.load(id: ApprovalID(rawValue: idValue), now: now)
             else { continue }

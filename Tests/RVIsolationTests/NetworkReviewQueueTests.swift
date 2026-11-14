@@ -192,6 +192,26 @@ struct NetworkReviewQueueTests {
         #expect(unparsable == nil)
     }
 
+    // A proposal id is workspace-scoped: another workspace blocked on the
+    // same host files its own proposal and never gets this one's id.
+    @Test func intakeNeverReturnsAnotherWorkspacesProposalID() async throws {
+        let config = try reviewTempConfig(named: "cross-workspace")
+        let queue = NetworkReviewQueue(configDirectory: config)
+        let (first, directory) = try reviewWorkspace()
+        let second = WorkspaceSessionID()
+        let now = Date()
+        let policy = EgressProxyDenial(host: "blocked.invalid", port: 443, reason: .deniedPolicy, recordedAt: now)
+        let firstID = try #require(
+            await queue.noteDenial(policy, workspace: first, workspaceDirectory: directory, now: now))
+        let secondID = try #require(
+            await queue.noteDenial(policy, workspace: second, workspaceDirectory: directory, now: now))
+        #expect(secondID != firstID)
+        #expect(await queue.noteDenial(policy, workspace: first, workspaceDirectory: directory, now: now) == firstID)
+        #expect(await queue.noteDenial(policy, workspace: second, workspaceDirectory: directory, now: now) == secondID)
+        let store = PendingApprovalStore(baseDirectory: config)
+        #expect(Set(try await store.list(now: now).map(\.id)) == [firstID, secondID])
+    }
+
     @Test func intakeSkipsLiveRules() async throws {
         let config = try reviewTempConfig(named: "live-skip")
         let queue = NetworkReviewQueue(configDirectory: config)
