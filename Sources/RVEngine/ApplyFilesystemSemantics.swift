@@ -166,8 +166,33 @@ private func gitClaimRedirectResult(
 }
 
 /// Evaluates one filesystem action exactly as the single-command path. Nil
-/// means the pack verdict stands; non-nil is a deny to return.
+/// means the pack verdict stands; non-nil is a deny to return. A policy
+/// deny wins; otherwise a write onto a host MCP config denies while the
+/// guard is on (`MCPHostConfigGuard`), whatever packs are enabled.
 private func filesystemSegmentResult(
+    action: FilesystemAction,
+    pack: EvaluationResult,
+    analysis: SemanticAnalysis,
+    command: ShellCommand,
+    filesystemWorld: FilesystemAnalysisWorld,
+    enabledPacks: [PackID],
+    policy: EffectiveActionPolicy
+) -> EvaluationResult? {
+    if let denied = filesystemPolicyResult(
+        action: action, pack: pack, analysis: analysis, command: command,
+        filesystemWorld: filesystemWorld, enabledPacks: enabledPacks, policy: policy
+    ) {
+        return denied
+    }
+    if let (guarded, home) = mcpHostConfigGuard(filesystemWorld),
+       landsOnMCPHostConfig(action, guard: guarded, home: home)
+    {
+        return mcpHostConfigDeny(pack: pack, analysis: analysis)
+    }
+    return nil
+}
+
+private func filesystemPolicyResult(
     action: FilesystemAction,
     pack: EvaluationResult,
     analysis: SemanticAnalysis,
