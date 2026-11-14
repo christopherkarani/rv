@@ -141,6 +141,12 @@ public struct GatedEvaluate: Sendable {
            WiringPathGuard.protects(action.path.rawValue, home: home, cwd: cwd) {
             result = WiringPathGuard.deny(path: action.path.rawValue)
         }
+        // Edit/Write to a host MCP config while rv's MCP gateway is in use.
+        if case .allow = result.decision, action.kind != .read,
+           let guarded = MCPHostConfigDoor.hostConfigGuard(home: home, managed: ManagedGate.state(home: home, now: now)),
+           MCPHostConfigDoor.protects(action.path.rawValue, guard: guarded, home: home, cwd: cwd) {
+            result = MCPHostConfigDoor.deny(path: action.path.rawValue)
+        }
         switch posture(result, door: .file(action), guardMode: guardMode, cwd: cwd, home: home, now: now, effects: &effects) {
         case .observed(let observed, let wouldBe):
             // `would_be` stays deny: the hook's file wire never asks
@@ -842,12 +848,17 @@ public struct GatedEvaluate: Sendable {
                     GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
                 },
                 filesystemProbe: { unwrapped in
-                    FilesystemLiveProbe.context(
+                    let world = FilesystemLiveProbe.context(
                         unwrapped: unwrapped,
                         command: request.command,
                         cwd: cwd,
                         homeDirectory: home
                     )
+                    guard let guarded = store.mcpHostConfigGuard, case .probed(var context) = world else {
+                        return world
+                    }
+                    context.mcpHostConfigGuard = guarded
+                    return .probed(context)
                 },
                 policy: policy,
                 // The hook client's deadline (bound by `JudgeOffload`): an
