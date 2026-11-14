@@ -98,17 +98,17 @@ private func foldedPath(_ path: String) -> String {
 /// python3 x.py`). The one copy that does not is a plain `cp` that provably
 /// only reads the name (`plainCopyOnlyReads`).
 func mcpHostConfigUnmodeledWrite(
-    _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext
+    _ raw: String, guard guarded: MCPHostConfigGuard, context: FilesystemAnalysisContext,
+    reads: HostTextReads = HostTextReads()
 ) -> Bool {
     let launched = launchedCommandHeads(raw)
-    let reads = HostTextReads()
     if launched.contains(where: { isHostMCPMutation($0, reads: reads) }) { return true }
     // Input the launcher parser stopped following may hide a host CLI.
     if launched.contains(where: \.truncated), mayNameHostMCP(raw) { return true }
     // Any program may run a command line another word carries (`echo
     // 'claude mcp add x' | sh`, `| at now`, `$(echo '…')`, `bash <<< '…'`,
     // `python3 -c 'os.system("…")'`).
-    if carriesHostMCPText(launched, reads: reads) || hostMCPTextNamesMutation(raw) { return true }
+    if carriesHostMCPText(launched, reads: reads) || hostMCPTextNamesMutation(raw, reads: reads) { return true }
     if launched.contains(where: hasOptionAfterOperand) { return true }
     let argvMentions = launched.reduce(0) { total, command in
         total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }

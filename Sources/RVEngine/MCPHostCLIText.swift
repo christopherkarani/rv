@@ -6,13 +6,33 @@ import Foundation
 /// and a read past either counts as a mutation (fail closed). Text no
 /// decoding of which names a host CLI, a group or an installer
 /// (`mayNameHostMCP`) is never read, so ordinary commands spend nothing.
+/// Text scanned as program text (`textNamesHostMCPMutation`) spends pieces:
+/// at most `maxTokenPieces` in one text and `maxPieces` in all.
 final class HostTextReads {
     static let maxReads = 512
     static let maxDepth = 6
+    static let maxTokenPieces = 4_096
+    static let maxPieces = 65_536
 
     private var remaining = HostTextReads.maxReads
     private var depth = 0
     private var seen: Set<String> = []
+    /// Texts read as command lines so far.
+    private(set) var readsDone = 0
+    /// Pieces scanned as program text so far.
+    private(set) var piecesExamined = 0
+    /// A cap was reached, so a read or scan counted as a mutation.
+    private(set) var exceeded = false
+
+    /// Spends `count` pieces of one text; false (and `exceeded`) past a cap.
+    func examine(pieces count: Int) -> Bool {
+        guard count <= Self.maxTokenPieces, piecesExamined + count <= Self.maxPieces else {
+            exceeded = true
+            return false
+        }
+        piecesExamined += count
+        return true
+    }
 
     /// Whether `text`, read as a command line, runs a host MCP mutation. A
     /// `nested` read is a word's own quoting level: its words and joined
@@ -21,8 +41,12 @@ final class HostTextReads {
     /// commands are judged.
     func runsHostMCPMutation(_ text: String, nested: Bool = true) -> Bool {
         guard mayNameHostMCP(text), seen.insert((nested ? "n" : "f") + text).inserted else { return false }
-        guard remaining > 0, depth < Self.maxDepth else { return true }
+        guard remaining > 0, depth < Self.maxDepth else {
+            exceeded = true
+            return true
+        }
         remaining -= 1
+        readsDone += 1
         if nested { depth += 1 }
         defer { if nested { depth -= 1 } }
         let launched = launchedCommandHeads(text)
@@ -88,12 +112,14 @@ private let printers: Set<String> = ["echo", "printf", "print"]
 
 /// Every shell word of `raw`, as written and decoded, read as program text
 /// (`textNamesHostMCPMutation`): inline interpreter code, quoted strings
-/// and assignments that never become a command of their own.
-func hostMCPTextNamesMutation(_ raw: String) -> Bool {
+/// and assignments that never become a command of their own. Each distinct
+/// text is scanned once, under the pieces budget of `reads`.
+func hostMCPTextNamesMutation(_ raw: String, reads: HostTextReads) -> Bool {
+    var scanned: Set<String> = []
     for view in Set([raw, raw.replacingOccurrences(of: "\\\n", with: "")]) {
         for token in ShellPipeline.tokenize(view) {
             for variant in Set([unescapeBackslashPairs(token.lexeme), decodingAnsiCEscapes(token.lexeme)])
-            where textNamesHostMCPMutation(variant) {
+            where scanned.insert(variant).inserted && textNamesHostMCPMutation(variant, reads: reads) {
                 return true
             }
         }
