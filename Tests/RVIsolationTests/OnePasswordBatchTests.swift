@@ -33,6 +33,12 @@ struct OnePasswordBatchTests {
         return ["PATH": "\(directory.path):/usr/bin:/bin", "HOME": directory.path]
     }
 
+    /// Runs `body` with the fake `op`'s directory as the only trusted
+    /// directory; a user-owned PATH entry is never searched.
+    func trusting<T>(_ environment: [String: String], _ body: () throws -> T) rethrows -> T {
+        try SecretCommandProviders.$trustedDirectories.withValue([environment["HOME"]!]) { try body() }
+    }
+
     private func calls(_ environment: [String: String]) -> [String] {
         let text = (try? String(contentsOfFile: environment["HOME"]! + "/calls", encoding: .utf8)) ?? ""
         return text.split(separator: "\n").map(String.init)
@@ -45,8 +51,10 @@ struct OnePasswordBatchTests {
 
     @Test func severalReferencesResolveInOneInject() throws {
         let environment = try environment()
-        let results = SecretCommandProviders.onePasswordBatch(
-            ["op://Eng/a/alpha", "op://Eng/b/beta", "op://Eng/c/gamma", "op://Eng/a/alpha"], environment: environment)
+        let results = trusting(environment) {
+            SecretCommandProviders.onePasswordBatch(
+                ["op://Eng/a/alpha", "op://Eng/b/beta", "op://Eng/c/gamma", "op://Eng/a/alpha"], environment: environment)
+        }
         #expect(revealed(results["op://Eng/a/alpha"]) == "value-alpha")
         #expect(revealed(results["op://Eng/b/beta"]) == "value-beta")
         #expect(revealed(results["op://Eng/c/gamma"]) == "value-gamma")
@@ -55,8 +63,9 @@ struct OnePasswordBatchTests {
 
     @Test func aFailedBatchFallsBackToSingleReadsAndNamesTheBadReference() throws {
         let environment = try environment()
-        let results = SecretCommandProviders.onePasswordBatch(
-            ["op://Eng/a/alpha", "op://Eng/missing/beta"], environment: environment)
+        let results = trusting(environment) {
+            SecretCommandProviders.onePasswordBatch(["op://Eng/a/alpha", "op://Eng/missing/beta"], environment: environment)
+        }
         #expect(revealed(results["op://Eng/a/alpha"]) == "value-alpha")
         guard case .failure(let error) = results["op://Eng/missing/beta"] else {
             Issue.record("bad reference resolved")
@@ -77,8 +86,10 @@ struct OnePasswordBatchTests {
 
     @Test func aBracedReferenceNeverEntersTheInjectTemplate() throws {
         let environment = try environment()
-        let results = SecretCommandProviders.onePasswordBatch(
-            ["op://Eng/a/alpha", "op://Eng/b/beta", "op://Eng/c/x}}y"], environment: environment)
+        let results = trusting(environment) {
+            SecretCommandProviders.onePasswordBatch(
+                ["op://Eng/a/alpha", "op://Eng/b/beta", "op://Eng/c/x}}y"], environment: environment)
+        }
         #expect(revealed(results["op://Eng/a/alpha"]) == "value-alpha")
         #expect(revealed(results["op://Eng/b/beta"]) == "value-beta")
         #expect(revealed(results["op://Eng/c/x}}y"]) == "value-x}}y")
@@ -87,7 +98,9 @@ struct OnePasswordBatchTests {
 
     @Test func oneReferenceUsesOpRead() throws {
         let environment = try environment()
-        let results = SecretCommandProviders.onePasswordBatch(["op://Eng/a/alpha"], environment: environment)
+        let results = trusting(environment) {
+            SecretCommandProviders.onePasswordBatch(["op://Eng/a/alpha"], environment: environment)
+        }
         #expect(revealed(results["op://Eng/a/alpha"]) == "value-alpha")
         #expect(calls(environment) == ["read"])
     }
@@ -105,11 +118,13 @@ struct OnePasswordBatchTests {
     @Test func liveResolverPrefetchBatchesOnlyOnePasswordSources() throws {
         let environment = try environment()
         let resolver = SecretResolver.live(environment: environment, home: environment["HOME"]!)
-        let prefetched = resolver.prefetch([
-            .onePassword(reference: "op://Eng/a/alpha"),
-            .hostEnvironment(variable: "PATH"),
-            .onePassword(reference: "op://Eng/b/beta"),
-        ])
+        let prefetched = trusting(environment) {
+            resolver.prefetch([
+                .onePassword(reference: "op://Eng/a/alpha"),
+                .hostEnvironment(variable: "PATH"),
+                .onePassword(reference: "op://Eng/b/beta"),
+            ])
+        }
         #expect(Set(prefetched.keys) == [0, 2])
         #expect(revealed(prefetched[2]) == "value-beta")
         #expect(calls(environment) == ["inject"])
@@ -131,12 +146,14 @@ extension OnePasswordBatchTests {
             configDirectory: fixture.directory,
             resolver: .live(environment: environment, home: environment["HOME"]!), workspace: nil)
         defer { broker.stop() }
-        let lease = try broker.lease(names: ["ALPHA", "BETA"], agent: nil).get()
+        let lease = try trusting(environment) { try broker.lease(names: ["ALPHA", "BETA"], agent: nil).get() }
         #expect(lease.environment.map(\.name) == ["ALPHA", "BETA"])
         #expect(lease.environment.map(\.value) == ["value-alpha", "value-beta"])
         #expect(calls(environment) == ["inject"])
 
-        guard case .failure(.resolution(secret: "BAD", _)) = broker.lease(names: ["ALPHA", "BAD"], agent: nil) else {
+        guard case .failure(.resolution(secret: "BAD", _)) = trusting(environment, {
+            broker.lease(names: ["ALPHA", "BAD"], agent: nil)
+        }) else {
             Issue.record("the bad reference must be named")
             return
         }

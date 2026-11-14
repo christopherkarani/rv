@@ -627,7 +627,10 @@ struct SecretGatewayAWSTests {
             """.utf8).write(to: script)
         chmod(script.path, 0o755)
         let environment = ["PATH": directory.path, "HOME": directory.path]
-        let value = try SecretCommandProviders.awsProfile("dev", environment: environment).get()
+        // The fake's directory is user-owned, so only a trusted directory reaches it, never PATH.
+        let value = try SecretCommandProviders.$trustedDirectories.withValue([directory.path]) {
+            try SecretCommandProviders.awsProfile("dev", environment: environment).get()
+        }
         #expect(AWSCredentialSet(value)?.expires == Self.start)
         #expect(String(describing: value) == "<redacted>")
         let args = try String(contentsOf: directory.appendingPathComponent("args"), encoding: .utf8)
