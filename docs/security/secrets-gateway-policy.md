@@ -290,6 +290,13 @@ How it starts the command:
   rv's group and the command in the background, so Ctrl-Z then stops rv
   but not the command. A command that reads the terminal stops on
   `SIGTTIN`, rv stops with it, and the next `fg` hands the terminal over.
+  A Ctrl-C that lands just as the capability probe below finishes can be
+  dropped (press it again). One that lands outside a guard (while rv
+  resolves the secrets and stages the lease, or after the command was
+  reaped) ends rv at once with the default action; no child exists then,
+  and the placeholders and the gateway are in rv's memory only, so they
+  end with it. Without a terminal, a stopped command stays stopped until
+  something continues it; a signal rv forwards continues it.
   rv exits with
   the command's code, or 128 plus the signal that ended it; 125 means
   `rv run` refused and the command never ran (126: could not be started,

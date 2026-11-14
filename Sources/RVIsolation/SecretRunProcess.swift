@@ -63,12 +63,7 @@ enum SecretRunProcess {
     ) -> Result<Int32, SecretRunRefusal> {
         var job = SecretRunJobControl()
         // Said before the spawn: no I/O between the spawn and the resume.
-        if let terminal,
-            job.tellsHeldBack(
-                rvInForeground: terminal.rvInForeground, sharesGroup: terminal.rvInForeground && terminal.sharesGroup)
-        {
-            notice(SecretRunJobControl.heldBackNotice)
-        }
+        if let terminal { tellHeldBack(foregroundState(terminal), job: &job, notice: notice) }
         let pid: pid_t
         switch spawnSuspended(
             executable: executable, arguments: arguments, environment: environment,
@@ -91,7 +86,9 @@ enum SecretRunProcess {
             abandon()
             return .failure(refusal)
         }
-        if let terminal, handOff(terminal, to: pid, job: &job, signals: signals, notice: { _ in }) == false {
+        // Read again, but not told: if rv's group was shared only since, it
+        // is said after the next stop.
+        if let terminal, handOff(terminal, foregroundState(terminal), to: pid, job: &job, signals: signals) == false {
             abandon()
             return .failure(.spawnFailed("could not give it the terminal"))
         }
@@ -110,21 +107,31 @@ enum SecretRunProcess {
         return .success(supervise(pid, terminal: terminal, job: &job, signals: signals, notice: notice))
     }
 
-    /// Hands the terminal to `pid`'s group when `job` decides so, and says
-    /// once why it is held back when rv shares its group. False only when
-    /// handing it failed.
-    static func handOff(
-        _ terminal: any SecretRunTerminalControl, to pid: pid_t, job: inout SecretRunJobControl,
-        signals: SecretRunSignals, notice: (String) -> Void
-    ) -> Bool {
+    /// Whether rv holds the foreground, and whether its group holds anyone
+    /// else: read only while it does, since otherwise nothing is handed.
+    static func foregroundState(_ terminal: any SecretRunTerminalControl) -> (foreground: Bool, shares: Bool) {
         let foreground = terminal.rvInForeground
-        // Read only while rv holds the foreground: otherwise nothing is handed anyway.
-        let shares = foreground && terminal.sharesGroup
-        if job.tellsHeldBack(rvInForeground: foreground, sharesGroup: shares) {
+        return (foreground, foreground && terminal.sharesGroup)
+    }
+
+    /// Says once in a run why the terminal is held back, when `seen` has rv
+    /// sharing its group.
+    static func tellHeldBack(
+        _ seen: (foreground: Bool, shares: Bool), job: inout SecretRunJobControl, notice: (String) -> Void
+    ) {
+        if job.tellsHeldBack(rvInForeground: seen.foreground, sharesGroup: seen.shares) {
             notice(SecretRunJobControl.heldBackNotice)
         }
+    }
+
+    /// Hands the terminal to `pid`'s group when `job` decides so for `seen`.
+    /// False only when handing it failed.
+    static func handOff(
+        _ terminal: any SecretRunTerminalControl, _ seen: (foreground: Bool, shares: Bool), to pid: pid_t,
+        job: inout SecretRunJobControl, signals: SecretRunSignals
+    ) -> Bool {
         guard job.handsTerminal(
-            rvInForeground: foreground, sharesGroup: shares,
+            rvInForeground: seen.foreground, sharesGroup: seen.shares,
             rvIgnoresInterrupt: signals.inheritedIgnored.contains(SIGINT), to: pid)
         else { return true }
         return terminal.hand(to: pid)
@@ -213,20 +220,22 @@ enum SecretRunProcess {
     }
 
     /// Waits for the leader to exit, passing its signal stops through to
-    /// rv's own job control when there is a terminal. Before reaping, kills
-    /// what is left of its group, as a contained runtime's teardown does:
-    /// the unreaped leader keeps the group id from being reused, so the
-    /// signal cannot reach an unrelated group. Forwarding stops before the
-    /// reap, for the same reason. Returns the leader's `waitpid` status.
+    /// rv's own job control when there is a terminal; without one a stop is
+    /// only consumed, and the group stays stopped until something continues
+    /// it. Before reaping, kills what is left of its group, as a contained
+    /// runtime's teardown does: the unreaped leader keeps the group id from
+    /// being reused, so the signal cannot reach an unrelated group.
+    /// Forwarding stops before the reap, for the same reason. Returns the
+    /// leader's `waitpid` status.
     static func supervise(
         _ pid: pid_t, terminal: (any SecretRunTerminalControl)?, job: inout SecretRunJobControl,
         signals: SecretRunSignals, notice: (String) -> Void
     ) -> Int32 {
-        let stops = terminal == nil ? 0 : WSTOPPED
         while true {
             var info = siginfo_t()
             // WNOWAIT: an exit is only observed here; the leader is reaped below, after the group kill.
-            if waitid(P_PID, id_t(pid), &info, WEXITED | stops | WNOWAIT) != 0 {
+            // WSTOPPED always: Darwin reports a stop even without it, and a stop is never an exit.
+            if waitid(P_PID, id_t(pid), &info, WEXITED | WSTOPPED | WNOWAIT) != 0 {
                 if errno == EINTR { continue }
                 // Not our unreaped child any more: its pgid may already be
                 // someone else's, so nothing is signalled.
@@ -234,11 +243,11 @@ enum SecretRunProcess {
                 takeBack(terminal, &job)
                 return SIGKILL
             }
-            guard info.si_code == CLD_STOPPED, let terminal else { break }
+            guard info.si_code == CLD_STOPPED else { break }
             // Consume the stop. Without WEXITED this never reaps, even if the
             // leader exited since. The spawn suspension reads as a stop with
             // no signal; only a signal stop is passed on.
-            guard consumeStop(pid) != nil else { continue }
+            guard consumeStop(pid) != nil, let terminal else { continue }
             // Ctrl-Z (or a background read) stopped the command's group,
             // which the shell does not see; stop rv too so the shell regains
             // the terminal. `fg` gives rv the foreground before continuing
@@ -246,7 +255,9 @@ enum SecretRunProcess {
             // with the shell. Either way the group continues.
             takeBack(terminal, &job)
             terminal.stopSelf()
-            _ = handOff(terminal, to: pid, job: &job, signals: signals, notice: notice)
+            let seen = foregroundState(terminal)
+            tellHeldBack(seen, job: &job, notice: notice)
+            _ = handOff(terminal, seen, to: pid, job: &job, signals: signals)
             _ = kill(-pid, SIGCONT)
         }
         takeBack(terminal, &job)
