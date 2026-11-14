@@ -128,12 +128,16 @@ public enum MCPCustodianFrame {
         try? JSONDecoder().decode(type, from: Data(body))
     }
 
+    #if os(Linux)
     /// Writes one frame. False when the value does not fit or the peer is gone.
     public static func write<T: Encodable>(_ value: T, to fd: Int32) -> Bool {
         guard let frame = encode(value) else { return false }
         var sent = 0
         while sent < frame.count {
-            let count = frame.withUnsafeBytes { send(fd, $0.baseAddress! + sent, frame.count - sent, Int32(MSG_NOSIGNAL)) }
+            let count = frame.withUnsafeBytes { bytes -> Int in
+                guard let base = bytes.baseAddress else { return -1 }
+                return send(fd, base + sent, frame.count - sent, Int32(MSG_NOSIGNAL))
+            }
             if count < 0, errno == EINTR { continue }
             guard count > 0 else { return false }
             sent += count
@@ -151,16 +155,21 @@ public enum MCPCustodianFrame {
     }
 
     private static func bytes(_ count: Int, from fd: Int32) -> [UInt8]? {
+        guard count > 0 else { return [] }
         var buffer = [UInt8](repeating: 0, count: count)
         var filled = 0
         while filled < count {
-            let got = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress! + filled, count - filled, 0) }
+            let got = buffer.withUnsafeMutableBytes { bytes -> Int in
+                guard let base = bytes.baseAddress else { return -1 }
+                return recv(fd, base + filled, count - filled, 0)
+            }
             if got < 0, errno == EINTR { continue }
             guard got > 0 else { return nil }
             filled += got
         }
         return buffer
     }
+    #endif
 }
 
 /// A MAC the socket custodian issues: `v1.<counter>.<hex>`. The counter

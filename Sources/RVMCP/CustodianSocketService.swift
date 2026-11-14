@@ -1,3 +1,6 @@
+#if canImport(Glibc)
+import Glibc
+#endif
 import RVDomain
 
 extension MCPMACPurpose {
@@ -91,6 +94,29 @@ public struct MCPCustodianPeer: Equatable, Sendable {
         self.pid = pid
     }
 }
+
+#if os(Linux)
+/// `struct ucred` (glibc hides it behind `_GNU_SOURCE`): 12 bytes.
+private struct SocketCredentials {
+    var pid: pid_t = 0
+    var uid: uid_t = 0
+    var gid: gid_t = 0
+}
+
+extension MCPCustodianPeer {
+    /// The process at the other end of a connected Unix socket, as the
+    /// kernel recorded it when the connection was made (`SO_PEERCRED`).
+    /// For a client, that is the process that was listening.
+    public init?(socket fd: Int32) {
+        var credentials = SocketCredentials()
+        var length = socklen_t(MemoryLayout<SocketCredentials>.size)
+        guard getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0,
+            length == socklen_t(MemoryLayout<SocketCredentials>.size), credentials.pid > 0
+        else { return nil }
+        self.init(uid: credentials.uid, pid: credentials.pid)
+    }
+}
+#endif
 
 /// The key daemon's decisions, with no I/O of its own: which peer may ask
 /// what, when the owner must be present, and what each key operation

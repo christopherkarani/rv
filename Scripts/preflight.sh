@@ -126,6 +126,7 @@ check_value_types() {
     | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/CustodianXPCClient.swift:' \
+    | grep -v 'Sources/RVMCP/CustodianSocketClient.swift:' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
@@ -378,7 +379,7 @@ check_no_main_in_library() {
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
-    | grep -v 'Sources/rv-mcp-custodian/' || true)
+    | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
@@ -394,7 +395,7 @@ check_no_main_in_library() {
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
     | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' \
-    | grep -v 'Sources/rv-mcp-custodian/' || true)
+    | grep -v 'Sources/rv-mcp-custodian/' | grep -v 'Sources/rv-mcp-custodian-linux/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then

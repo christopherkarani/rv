@@ -1486,7 +1486,7 @@ struct MCP: AsyncParsableCommand {
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
             MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPOnboard.self, MCPServe.self,
-            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self,
+            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self, MCPCustodian.self,
         ],
         defaultSubcommand: MCPList.self
     )
