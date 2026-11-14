@@ -90,7 +90,8 @@ let coreLibraryTargets: [Target] = [
             "proxy_connector.c",
             "include",
             "README.md",
-        ]
+        ],
+        resources: [.embedInCode("Resources/providers")]
     ),
     .target(name: "RVTheme"),
     .target(name: "RVEngine", dependencies: ["RVDomain"]),

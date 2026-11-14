@@ -135,6 +135,61 @@ Enforcement:
   after one decode (`%252e`). A path such as GitLab's
   `projects/group%2Fproject` therefore needs no rules on its binding.
 
+## Provider profiles
+
+`rv secrets providers` lists profiles rv ships in
+`Sources/RVIsolation/Resources/providers/providers.json`. Each one names
+one or more endpoints (an https upstream, its surfaces and allow rules), the
+variables clients read, and optionally `binaries`. `rv secrets set NAME
+--provider ID` turns the endpoint `NAME` belongs to into a gateway delivery.
+`--provider ID:ENDPOINT` picks another endpoint, which needs
+`--base-url-env` unless `NAME` is that endpoint's variable.
+
+| profile | upstream | allow |
+|---|---|---|
+| `anthropic`, `openai`, `openrouter`, `vercel`, `stripe` | the service API | any method and path |
+| `github` (`api`) | `https://api.github.com` | `github-read` |
+| `github` (`git`) | `https://github.com` | `github-clone` (no push) |
+| `npm` | `https://registry.npmjs.org` | `PUT /*`: publish one unscoped package |
+| `pypi` | `https://upload.pypi.org/legacy` | `POST /legacy/`: an upload |
+
+The profile is the ceiling. `--surface` must list surfaces the endpoint
+lists, and each `--allow` rule must fall inside one of its rules: methods a
+subset, every query condition kept, and a path glob that matches only paths
+the endpoint's glob matches. The check is conservative: a rule it cannot
+prove narrower is refused. `--base-url-env` and `--placeholder-prefix` rename
+things and carry no authority. Expansion happens once, when the secret is
+defined; `secrets.json` holds the result, and editing it remains possible
+like any other definition.
+
+The catalog is decoded as strictly as `secrets.json`. Unknown keys,
+duplicate keys or ids, a non-https upstream, an invalid glob or preset, or a
+variable claimed by two profiles refuse the whole catalog, and then
+`--provider` fails and no well-known name gets a default.
+
+Left out: `claude-code` (its credential and upstream are `anthropic`'s; the
+CLI's telemetry hosts carry no key) and `codex` (OAuth tokens, a refresh
+grant in the request body, and four hosts; the gateway substitutes in no
+body). Limits: GitHub GraphQL needs POST and stays refused under `github`,
+so `gh` commands that use it fail; npm escapes a scope's `/` as `%2f`,
+which the gateway refuses whenever rules are set, so scoped packages cannot
+be published through `npm`; PyPI tools must post to the base URL with a
+trailing slash.
+
+The `npm` refusals are by method and path only. Unpublish
+(`/<pkg>/-rev/<rev>`), dist-tags (`/-/package/...`), owner changes and
+`npm deprecate` (which first reads `GET /<pkg>?write=true`) are refused, but
+the body of an allowed `PUT /<pkg>` is opaque to rv: whatever the registry
+accepts in a package document goes through. `*` also matches an empty
+segment, so `PUT /` and `PUT /-` match `/*` too; they are accepted residuals
+left to the registry.
+
+Only `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`,
+`GITHUB_TOKEN`, `GH_TOKEN` and `VERCEL_TOKEN` get a default on a bare
+`rv secrets set`. The other catalog variables (`NPM_TOKEN`,
+`TWINE_PASSWORD`, `UV_PUBLISH_TOKEN`, `OPENROUTER_API_KEY`) are bound only
+through `--provider`, so their scope is never silently dropped.
+
 ## Runtime binding
 
 The gateway listens on `127.0.0.1`, and the cage may reach any loopback port
