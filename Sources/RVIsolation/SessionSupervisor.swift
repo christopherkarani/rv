@@ -136,9 +136,9 @@ final class LiveSeatbeltChild: Sendable {
     let resources: RuntimeResourceManifest?
     /// Workspace whose micro-VM control placeholders this run holds.
     let placeholderWorkspace: String?
-    /// Wall-clock deadline. The watch kills the group here, the way a
+    /// Deadline on the continuous clock, so time asleep counts. The watch kills the group here, the way a
     /// cancel does; `rv-pty-claim`'s watchdog backs it up if this host dies.
-    let deadline: Date?
+    let deadline: ContinuousClock.Instant?
     private let timedOut = Mutex(false)
     private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
 
@@ -184,7 +184,7 @@ final class LiveSeatbeltChild: Sendable {
         terminal: RuntimeTerminal?,
         resources: RuntimeResourceManifest?,
         placeholderWorkspace: String? = nil,
-        deadline: Date? = nil
+        deadline: ContinuousClock.Instant? = nil
     ) {
         self.deadline = deadline
         self.session = session
@@ -425,7 +425,7 @@ func terminalOpenFault(for fault: RuntimeSpawnFault?) -> TerminalOpenFault? {
         return .unlock
     case .slave:
         return .slaveOpen
-    case .spawn, .register, .rlimit, nil:
+    case .spawn, .register, .rlimit, .missingHelper, nil:
         return nil
     }
 }
@@ -828,7 +828,7 @@ func spawnSeatbeltProcessBody(
         terminal: terminal,
         resources: request.resources,
         placeholderWorkspace: placeholdersHeld ? workspace : nil,
-        deadline: limits.timeoutSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
+        deadline: limits.timeoutSeconds.map { ContinuousClock.now + .seconds(Int64($0)) }
     )
     handedOff = true
     resourceStageHandedOff = true
@@ -864,7 +864,7 @@ private func seatbeltSpawnSetup(
     // parent cannot install the controlling terminal from outside the
     // child's session; a live unclaimed group is the boundary failure.
     let handshakeScript = spawnHandshakeScript
-    guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
+    guard request.spawnFault != .missingHelper, let claim = resolvedPtyClaimPath(workspace: workspace) else {
         return .failure(.lifetimeBoundaryFailed)
     }
     // Limit options, then the slave ("-" without a terminal; the helper
@@ -1391,7 +1391,7 @@ private func waitForSeatbeltSession(
     preface: Data = Data(),
     admission: RuntimeAdmissionSession,
     stop: RuntimeCancellation,
-    deadline: Date? = nil,
+    deadline: ContinuousClock.Instant? = nil,
     onTimedOut: () -> Void = {},
     onEstablished: () -> Void,
     drain: () -> Void,
@@ -1406,7 +1406,7 @@ private func waitForSeatbeltSession(
         // The deadline reuses the cancel path below: the same group kill,
         // reap and teardown budget. Marked before the request, so whoever
         // reads the cancel also sees why.
-        if let deadline, deadlineReached == false, stop.isRequested == false, Date() >= deadline {
+        if let deadline, deadlineReached == false, stop.isRequested == false, ContinuousClock.now >= deadline {
             deadlineReached = true
             onTimedOut()
             stop.request()

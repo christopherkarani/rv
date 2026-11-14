@@ -2,7 +2,7 @@
  * Darwin pre-sandbox exec helper for a contained runtime's leader.
  *
  *   rv-pty-claim [--rlimit=NAME:VALUE]... [--deadline-seconds=N]
- *                [--rlimit-fault] SLAVE|- PAYLOAD [ARGS...]
+ *                [--owner-pid=PID] [--rlimit-fault] SLAVE|- PAYLOAD [ARGS...]
  *
  * This image runs outside Seatbelt, as the process-group (or session)
  * leader rv just spawned, START_SUSPENDED. It does three things, then
@@ -19,16 +19,16 @@
  *    stdout and stderr are the slave. The signal mask is restored so the
  *    payload does not inherit a blocked SIGTTIN or SIGTTOU.
  *
- * 2. Deadline watchdog (--deadline-seconds). A double-forked process in
- *    its own session, outside the runtime's group and outside Seatbelt,
- *    holds a kqueue on this leader's exit and a timer. At the deadline it
- *    SIGKILLs the whole group. When the leader exits first it SIGKILLs
- *    the group at once (leader death is session death, as in the host)
- *    and exits. It holds no descriptor of the runtime. It exists so the
- *    deadline holds when the workspace host that also enforces it dies;
- *    the host's deadline is earlier, so a live host records the timeout.
- *    The cage cannot signal it: the profile allows same-sandbox signals
- *    only. Exec does not happen until the watchdog reports it is armed.
+ * 2. Watchdog (--deadline-seconds, --owner-pid, or a cpu limit; see
+ *    watchdog.c). --owner-pid names the leader of the runtime an
+ *    admitted one-shot serves, so the one-shot ends with it. A
+ *    detached process outside the runtime's groups and outside Seatbelt
+ *    tracks this leader's process tree, kills a process over the CPU cap
+ *    (XNU's RLIMIT_CPU is only a signal), and ends the whole tree at the
+ *    deadline or when the leader exits. It exists so both hold when the
+ *    workspace host that also enforces the deadline dies; the host's
+ *    deadline is earlier, so a live host records the timeout. Exec does
+ *    not happen until the watchdog reports it is armed.
  *
  * 3. Resource limits (--rlimit). NAME is core, nofile, fsize or cpu. Each
  *    only lowers: hard = min(VALUE, inherited hard), soft = min(inherited
@@ -47,13 +47,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/event.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "watchdog.h"
 
 #define RV_CLAIM_FAILED 127
 #define RV_LIMIT_FAILED 125
@@ -228,104 +229,6 @@ static int apply_refused_limit(void) {
     return setrlimit(RLIMIT_NOFILE, &refused);
 }
 
-static void close_every_descriptor_but(int keep) {
-    int top = getdtablesize();
-    int fd;
-    for (fd = 0; fd < top; fd++) {
-        if (fd != keep) {
-            close(fd);
-        }
-    }
-}
-
-/* Runs in the detached watchdog. Never returns. */
-static void watch_leader(pid_t leader, uint64_t seconds, int ready) {
-    struct kevent changes[2];
-    struct kevent fired;
-    int queue = kqueue();
-    if (queue < 0) {
-        _exit(1);
-    }
-    EV_SET(&changes[0], (uintptr_t)leader, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
-    EV_SET(&changes[1], 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_SECONDS, (intptr_t)seconds, NULL);
-    if (kevent(queue, changes, 2, NULL, 0, NULL) != 0) {
-        _exit(1);
-    }
-    if (write(ready, "1", 1) != 1) {
-        _exit(1);
-    }
-    close_every_descriptor_but(queue);
-    for (;;) {
-        int count = kevent(queue, NULL, 0, &fired, 1, NULL);
-        if (count < 0 && errno == EINTR) {
-            continue;
-        }
-        /* Deadline, leader exit, or a kqueue failure: each ends the group. */
-        kill(-leader, SIGKILL);
-        _exit(0);
-    }
-}
-
-/*
- * Arms the watchdog for this leader. Returns 0 only after the watchdog
- * has registered both events. The intermediate child is reaped here, so
- * the watchdog belongs to launchd, not to the payload.
- */
-static int start_deadline_watchdog(uint64_t seconds) {
-    pid_t leader = getpid();
-    int ready[2];
-    pid_t intermediate;
-    int status = 0;
-    char byte = 0;
-    ssize_t got;
-    /* The watchdog signals the group named by this pid; a leader that does
-     * not lead its own group would leave the deadline unenforced. */
-    if (seconds == 0 || seconds > INTPTR_MAX || getpgrp() != leader || pipe(ready) != 0) {
-        return -1;
-    }
-    if (fcntl(ready[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(ready[1], F_SETFD, FD_CLOEXEC) != 0) {
-        close(ready[0]);
-        close(ready[1]);
-        return -1;
-    }
-    intermediate = fork();
-    if (intermediate < 0) {
-        close(ready[0]);
-        close(ready[1]);
-        return -1;
-    }
-    if (intermediate == 0) {
-        pid_t watchdog;
-        close(ready[0]);
-        if (setsid() < 0) {
-            _exit(1);
-        }
-        watchdog = fork();
-        if (watchdog < 0) {
-            _exit(1);
-        }
-        if (watchdog > 0) {
-            _exit(0);
-        }
-        watch_leader(leader, seconds, ready[1]);
-    }
-    close(ready[1]);
-    while (waitpid(intermediate, &status, 0) < 0) {
-        if (errno != EINTR) {
-            close(ready[0]);
-            return -1;
-        }
-    }
-    do {
-        got = read(ready[0], &byte, 1);
-    } while (got < 0 && errno == EINTR);
-    close(ready[0]);
-    if (WIFEXITED(status) == 0 || WEXITSTATUS(status) != 0 || got != 1 || byte != '1') {
-        return -1;
-    }
-    return 0;
-}
-
 static int refuse(const char *what) {
     /* stderr is the slave or what rv granted; the message names no secret. */
     dprintf(STDERR_FILENO, "rv-pty-claim: %s; the runtime was not started\n", what);
@@ -339,6 +242,8 @@ int main(int argc, char **argv) {
     uint64_t deadline = 0;
     int has_deadline = 0;
     int inject_fault = 0;
+    uint64_t cpu_cap = 0;
+    uint64_t owner = 0;
     int index = 1;
     int limit;
     const char *slave;
@@ -361,6 +266,10 @@ int main(int argc, char **argv) {
                 return RV_CLAIM_FAILED;
             }
             has_deadline = 1;
+        } else if (strncmp(arg, "--owner-pid=", 12) == 0) {
+            if (owner != 0 || parse_u64(arg + 12, &owner) != 0 || owner <= 1 || owner > 2147483647u) {
+                return RV_CLAIM_FAILED;
+            }
         } else if (strcmp(arg, "--rlimit-fault") == 0 && inject_fault == 0) {
             inject_fault = 1;
         } else {
@@ -375,8 +284,14 @@ int main(int argc, char **argv) {
     if (strcmp(slave, "-") != 0 && claim(slave) != 0) {
         return RV_CLAIM_FAILED;
     }
-    if (has_deadline && start_deadline_watchdog(deadline) != 0) {
-        return refuse("the deadline watchdog could not be armed");
+    for (limit = 0; limit < limit_count; limit++) {
+        if (limits[limit].resource == RLIMIT_CPU) {
+            cpu_cap = (uint64_t)limits[limit].cap;
+        }
+    }
+    if ((has_deadline || cpu_cap != 0 || owner != 0)
+        && rv_start_watchdog(deadline, cpu_cap, (pid_t)owner) != 0) {
+        return refuse("the runtime watchdog could not be armed");
     }
     for (limit = 0; limit < limit_count; limit++) {
         if (apply_limit(&limits[limit]) != 0) {

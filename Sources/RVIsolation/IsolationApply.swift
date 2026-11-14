@@ -111,6 +111,8 @@ enum RuntimeSpawnFault: Equatable, Sendable {
     /// `rv-pty-claim` asks the kernel for a limit it refuses, so the leader
     /// exits before exec. Applies to Seatbelt launches.
     case rlimit
+    /// `rv-pty-claim` cannot be found, as on a broken install.
+    case missingHelper
 }
 
 /// Prepared launch. Not established. Production construction is `prepare`.

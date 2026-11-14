@@ -247,6 +247,40 @@ func admittedOneShotEnvironment(
     )
 }
 
+/// The one-shot's argv, starting with the helper it is spawned as. The
+/// leader applies the owning runtime's caps in `rv-pty-claim` before it
+/// execs sandbox-exec; without the helper nothing would, so no helper
+/// means no command (nil). `--owner-pid` names the runtime's leader, so
+/// the helper's watchdog ends the one-shot with its runtime even when
+/// the host is gone.
+func admittedOneShotArguments(
+    helper: String?,
+    command: IsolatedCommand,
+    launch: AdmittedLaunchContext,
+    nonce: String
+) -> [String]? {
+    guard let helper else { return nil }
+    var arguments = [helper]
+    arguments.append(contentsOf: launch.processLimits.withoutDeadline.helperArguments())
+    if launch.sessionLeader > 1 {
+        arguments.append("--owner-pid=\(launch.sessionLeader)")
+    }
+    arguments.append(contentsOf: [
+        "-",
+        IsolationBackends.sandboxExecPath,
+        "-p",
+        launch.profileSource,
+        "/bin/sh",
+        "-c",
+        spawnHandshakeScript,
+        "rv-admit",
+        nonce,
+        command.executable,
+    ])
+    arguments.append(contentsOf: command.arguments)
+    return arguments
+}
+
 private func spawnAdmittedCommand(
     _ command: IsolatedCommand,
     launch: AdmittedLaunchContext
@@ -310,27 +344,15 @@ private func spawnAdmittedCommand(
         return .failure(.spawnFailed)
     }
 
-    // The one-shot leader applies the cage's resource limits in
-    // `rv-pty-claim` before it execs sandbox-exec; without the helper
-    // nothing would, so a missing helper refuses the command.
-    guard let helper = resolvedPtyClaimPath(workspace: launch.workspacePath) else {
+    guard let arguments = admittedOneShotArguments(
+        helper: resolvedPtyClaimPath(workspace: launch.workspacePath),
+        command: command,
+        launch: launch,
+        nonce: nonce
+    ) else {
         return .failure(.spawnFailed)
     }
-    var arguments = [helper]
-    arguments.append(contentsOf: launch.processLimits.withoutDeadline.helperArguments())
-    arguments.append(contentsOf: [
-        "-",
-        IsolationBackends.sandboxExecPath,
-        "-p",
-        launch.profileSource,
-        "/bin/sh",
-        "-c",
-        spawnHandshakeScript,
-        "rv-admit",
-        nonce,
-        command.executable,
-    ])
-    arguments.append(contentsOf: command.arguments)
+    let helper = arguments[0]
     let environment = admittedOneShotEnvironment(launch: launch)
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)

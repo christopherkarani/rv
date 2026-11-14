@@ -148,30 +148,164 @@ struct CageProcessLimitsSeatbeltTests {
     }
 
     /// The watchdog is the deadline when nothing on the host acts: the
-    /// helper runs here with no supervisor watching it at all.
-    @Test func theWatchdogKillsTheGroupWithoutTheHost() throws {
+    /// helper runs here with no supervisor watching it at all. Children
+    /// that left the group (setpgid) or the session (setsid) die too.
+    @Test func theWatchdogKillsTheTreeWithoutTheHost() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let claim = try #require(resolvedPtyClaimPath(workspace: tree.workspaceURL.path))
-        let pidFile = tree.workspaceURL.appendingPathComponent("bg.pid")
+        let files = ["bg", "pg", "sid"].map { tree.workspaceURL.appendingPathComponent("\($0).pid") }
         let leader = Process()
-        // perl makes the helper lead its own group, as the spawn does.
-        leader.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        // Process makes the helper lead its own group, as the spawn does.
+        leader.executableURL = URL(fileURLWithPath: claim)
         leader.arguments = [
-            "-e", "setpgrp(0, 0); exec @ARGV or exit 126", claim,
-            "--deadline-seconds=1", "-", "/bin/sh", "-c",
-            "/bin/sleep 300 & echo $! > '\(pidFile.path)'; /bin/sleep 300",
+            "--deadline-seconds=2", "-", "/bin/sh", "-c",
+            "/bin/sleep 300 & echo $! > '\(files[0].path)'; "
+                + "/usr/bin/perl -e 'setpgrp(0, 0); sleep 300' & echo $! > '\(files[1].path)'; "
+                + "/usr/bin/perl -e 'use POSIX; POSIX::setsid(); sleep 300' & echo $! > '\(files[2].path)'; "
+                + "/bin/sleep 300",
         ]
         try leader.run()
-        #expect(limitsWait(seconds: 20) { FileManager.default.fileExists(atPath: pidFile.path) })
-        let background = try #require(pid_t(
-            String(decoding: try Data(contentsOf: pidFile), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        ))
+        #expect(limitsWait(seconds: 20) {
+            files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+        })
+        let children = try files.map { file in
+            try #require(pid_t(
+                String(decoding: try Data(contentsOf: file), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            ))
+        }
         leader.waitUntilExit()
         #expect(leader.terminationReason == .uncaughtSignal)
         #expect(leader.terminationStatus == SIGKILL)
-        #expect(limitsWait(seconds: 10) { limitsProcessGone(background) })
+        #expect(limitsWait(seconds: 10) { children.allSatisfy(limitsProcessGone) })
+        for child in children where limitsProcessGone(child) == false {
+            kill(child, SIGKILL)
+        }
+    }
+
+    /// XNU's RLIMIT_CPU only signals SIGXCPU once; the watchdog is what
+    /// stops a process that ignores it.
+    @Test func theCPUCapHoldsWhenSIGXCPUIsIgnored() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let claim = try #require(resolvedPtyClaimPath(workspace: tree.workspaceURL.path))
+        let spinner = Process()
+        spinner.executableURL = URL(fileURLWithPath: claim)
+        spinner.arguments = [
+            "--rlimit=cpu:1", "-", "/usr/bin/perl", "-e", "$SIG{XCPU} = 'IGNORE'; 1 while 1",
+        ]
+        try spinner.run()
+        let bounded = limitsWait(seconds: 240) { spinner.isRunning == false }
+        if bounded == false { spinner.terminate() }
+        #expect(bounded)
+        spinner.waitUntilExit()
+        #expect(spinner.terminationReason == .uncaughtSignal)
+        #expect(spinner.terminationStatus == SIGKILL)
+    }
+
+    @Test func aMissingHelperRefusesTheLaunch() throws {
+        let opened = try LimitsWorkspace()
+        defer { opened.close() }
+        let marker = opened.tree.workspaceURL.appendingPathComponent("must-not-run")
+        let launched = opened.supervisor.launch(
+            host: nil,
+            command: try limitsShell("printf ran > must-not-run"),
+            plan: compileContainedPlan(workspace: opened.supervisor.snapshot.policyWorkspace),
+            io: .discard,
+            admission: .failClosed,
+            sessionStore: .file(opened.runtimeLog),
+            spawnFault: .missingHelper
+        )
+        guard case .failure(.apply(.lifetimeBoundaryFailed)) = launched else {
+            Issue.record("a missing helper must refuse the launch, got \(launched)")
+            return
+        }
+        Thread.sleep(forTimeInterval: 0.5)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        #expect(opened.supervisor.runtimeFacts().contains { $0.running } == false)
+    }
+
+    @Test func oneShotsCarryTheRuntimeCapsAndNeedTheHelper() throws {
+        let command = try #require(IsolatedCommand(executable: "/usr/bin/touch", arguments: ["x"]))
+        var launch = AdmittedLaunchContext(
+            plan: compileContainedPlan(workspace: try #require(WorkingDirectory(validating: "/tmp/w"))),
+            profileSource: "(version 1)",
+            workspacePath: "/tmp/w"
+        )
+        launch.processLimits = CageProcessLimits(policy: RuntimeProcessLimits(
+            openFiles: 256, fileSizeBytes: 1 << 20, cpuSeconds: 30, timeoutSeconds: 60
+        ))
+        #expect(admittedOneShotArguments(helper: nil, command: command, launch: launch, nonce: "n") == nil)
+        let arguments = try #require(admittedOneShotArguments(
+            helper: "/opt/rv/rv-pty-claim", command: command, launch: launch, nonce: "n"
+        ))
+        #expect(Array(arguments.prefix(6)) == [
+            "/opt/rv/rv-pty-claim",
+            "--rlimit=core:0", "--rlimit=nofile:256", "--rlimit=fsize:1048576", "--rlimit=cpu:30",
+            "-",
+        ])
+        // One-shots live under the owning runtime's clock, not their own.
+        #expect(arguments.contains { $0.hasPrefix("--deadline") } == false)
+        #expect(arguments.contains { $0.hasPrefix("--owner-pid") } == false)
+        #expect(Array(arguments.suffix(2)) == ["/usr/bin/touch", "x"])
+        launch.sessionLeader = 4242
+        let owned = try #require(admittedOneShotArguments(
+            helper: "/opt/rv/rv-pty-claim", command: command, launch: launch, nonce: "n"
+        ))
+        #expect(Array(owned[5...6]) == ["--owner-pid=4242", "-"])
+    }
+
+    /// An admitted one-shot's own watchdog ends it when the runtime leader
+    /// it serves exits, with no host to stop it.
+    @Test func aOneShotEndsWithItsOwnerWithoutTheHost() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let claim = try #require(resolvedPtyClaimPath(workspace: tree.workspaceURL.path))
+        let owner = Process()
+        owner.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        owner.arguments = ["2"]
+        try owner.run()
+        let file = tree.workspaceURL.appendingPathComponent("bg.pid")
+        let oneShot = Process()
+        oneShot.executableURL = URL(fileURLWithPath: claim)
+        oneShot.arguments = [
+            "--owner-pid=\(owner.processIdentifier)", "-", "/bin/sh", "-c",
+            "/bin/sleep 300 & echo $! > '\(file.path)'; /bin/sleep 300",
+        ]
+        try oneShot.run()
+        #expect(limitsWait(seconds: 20) { FileManager.default.fileExists(atPath: file.path) })
+        let child = try #require(pid_t(
+            String(decoding: try Data(contentsOf: file), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        owner.waitUntilExit()
+        let ended = limitsWait(seconds: 30) { oneShot.isRunning == false }
+        if ended == false { oneShot.terminate() }
+        #expect(ended)
+        oneShot.waitUntilExit()
+        #expect(oneShot.terminationStatus == SIGKILL)
+        #expect(limitsWait(seconds: 10) { limitsProcessGone(child) })
+        if limitsProcessGone(child) == false { kill(child, SIGKILL) }
+    }
+
+    @Test func aOneShotWhoseOwnerIsGoneDoesNotStart() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let claim = try #require(resolvedPtyClaimPath(workspace: tree.workspaceURL.path))
+        let owner = Process()
+        owner.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try owner.run()
+        owner.waitUntilExit()
+        let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
+        let oneShot = Process()
+        oneShot.executableURL = URL(fileURLWithPath: claim)
+        oneShot.arguments = ["--owner-pid=\(owner.processIdentifier)", "-", "/usr/bin/touch", marker.path]
+        oneShot.standardError = FileHandle.nullDevice
+        try oneShot.run()
+        oneShot.waitUntilExit()
+        #expect(oneShot.terminationStatus == 125)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
     }
 
     @Test func theWatchdogRefusesALeaderOutsideItsOwnGroup() throws {
