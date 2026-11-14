@@ -91,5 +91,8 @@ enum GatedEffect: Sendable, Equatable {
         /// `allowOnce`, `allowlist`, `rebaseRecovery` or `containedReversible`.
         let override: String
         let workspace: URL?
+        /// The rows for the deny this stays when the override row does not
+        /// land (`command.denied` and the denial ledger).
+        let denial: DenialRow
     }
 }

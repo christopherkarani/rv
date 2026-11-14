@@ -125,6 +125,10 @@ struct GateAuditTests {
         }
         #expect(kept.ruleID == deny.ruleID)
         #expect(kept.reason == GatedEvaluate.unrecordedOverrideReason)
+        // G6: the deny it stays is still written to the denial ledger,
+        // a separate file the broken audit log does not block.
+        let blocks = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home)).records(asOf: Self.now)
+        #expect(blocks.map(\.ruleID) == [deny.ruleID])
     }
 
     @Test func ledgerCopiesOfChainedDeniesAreNotExportedTwice() throws {
