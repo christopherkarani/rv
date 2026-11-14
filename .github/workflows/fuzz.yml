@@ -9,6 +9,9 @@ on:
       - "Sources/RVIsolation/SecretGateway*.swift"
       - "Sources/RVIsolation/EgressProxy.swift"
       - "Sources/RVIsolation/EgressAdmission.swift"
+      - "Sources/RVMCP/JSONValue*.swift"
+      - "Sources/RVMCP/MCPGatewayRuntime.swift"
+      - "Sources/RVPolicy/JSON*.swift"
       - "Sources/RVEngine/**"
       - "Sources/RVPacks/**"
       - "Sources/RVDomain/**"
@@ -36,9 +39,13 @@ jobs:
         include:
           # max_len reaches past each parser's cap: the 64 KiB gateway head,
           # the 16 KiB TLS record (+ split byte), and commandByteCap (65,536).
+          # mcp-json spans two of readLines' 64 KiB reads; secret-rewrite
+          # holds its whole input layout (1 + 256 + 256 + 1,024 bytes).
           - { harness: gateway-request, dir: GatewayRequest, max_len: 66000, dict: Fuzz/GatewayRequest/http.dict }
           - { harness: tls-client-hello, dir: TLSClientHello, max_len: 17100, dict: "" }
           - { harness: normalize, dir: Normalize, max_len: 70000, dict: Fuzz/Normalize/shell.dict }
+          - { harness: mcp-json, dir: MCPJSON, max_len: 140000, dict: Fuzz/MCPJSON/json.dict }
+          - { harness: secret-rewrite, dir: SecretRewrite, max_len: 1600, dict: Fuzz/SecretRewrite/rewrite.dict }
     env:
       RV_FUZZ: "1"
       # Linux-only leak detection; Fuzz/lsan.supp holds only allocations
