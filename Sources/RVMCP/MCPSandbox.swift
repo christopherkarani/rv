@@ -1076,26 +1076,20 @@ public enum MCPSandbox {
         return ancestors
     }
 
-    /// Each ancestor exactly, in every spelling Seatbelt may check: a literal
-    /// and a case-folded regex that matches the directory itself, never what
-    /// is inside it, so files can still be made and removed there.
+    /// Each ancestor exactly, as a literal in every spelling Seatbelt may
+    /// check, so files can still be made and removed inside it. Seatbelt
+    /// matches the canonical path, so a literal also holds against case
+    /// variants, `./`, `//`, a trailing slash and a symlinked spelling
+    /// (probed on macOS 27). No case-folded regex: thirty of them on
+    /// temp-directory paths kept libsandbox compiling for over 20 minutes.
     static func ancestorFilters(_ ancestors: [String]) -> String {
         var seen = Set<[UInt32]>()
         var filters: [String] = []
-        let below = "(/+.*)?$"
         for ancestor in ancestors {
             for spelling in seatbeltSpellings(ancestor) {
                 for form in unicodeForms(spelling) {
-                    var candidates = ["(literal \(seatbeltString(escape(form), raw: false)))"]
-                    // Only `/` has no `(/+.*)?$` tail, and `/` is never an ancestor here.
-                    let pattern = seatbeltPathPattern(form)
-                    if pattern.hasSuffix(below) {
-                        let exact = String(pattern.dropLast(below.count)) + "/*$"
-                        candidates.append("(regex \(seatbeltString(exact, raw: true)))")
-                    }
-                    for filter in candidates where seen.insert(filter.unicodeScalars.map(\.value)).inserted {
-                        filters.append(filter)
-                    }
+                    let filter = "(literal \(seatbeltString(escape(form), raw: false)))"
+                    if seen.insert(filter.unicodeScalars.map(\.value)).inserted { filters.append(filter) }
                 }
             }
         }
