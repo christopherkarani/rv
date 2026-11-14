@@ -97,9 +97,10 @@ package struct UnixChkpwdChecker: OwnerPasswordChecking {
         }
         run.attach(process)
         defer { run.detach() }
-        // rvd ignores SIGPIPE, but this must not depend on its host process,
-        // so the write runs on a thread with SIGPIPE blocked: a helper that
-        // exits without reading becomes EPIPE here instead of a kill.
+        // This must not depend on the host's SIGPIPE disposition (rvd ignores
+        // SIGPIPE on Linux; on macOS it only keeps its own stdio from raising
+        // it), so the write runs on a thread with SIGPIPE blocked: a helper
+        // that exits without reading becomes EPIPE here instead of a kill.
         let writer = input.fileHandleForWriting
         #if canImport(Darwin)
         // Darwin can still raise a thread-blocked SIGPIPE on the process;

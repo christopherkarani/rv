@@ -11,11 +11,20 @@ enum RVD {
         "rvd: HOME is required, as an absolute path (rvd keeps its policy and audit log in ~/.config/rv)\n"
 
     static func main() {
-        // A closed stdout or stderr pipe fails the write with EPIPE instead
-        // of killing rvd (systemd already starts services this way; launchd
-        // does not). Sockets and helper pipes already expect EPIPE.
+        // A write to a closed stdout or stderr pipe fails with EPIPE instead
+        // of killing rvd. On Darwin this is per open file, so the children
+        // rvd spawns keep SIGPIPE at its default; a closed descriptor
+        // (EBADF) cannot raise SIGPIPE, so the result is ignored. Linux has
+        // no per-file flag: ignore SIGPIPE, as systemd already starts rvd.
+        // Sockets and helper pipes already expect EPIPE.
+        #if canImport(Darwin)
+        _ = fcntl(STDOUT_FILENO, F_SETNOSIGPIPE, 1)
+        _ = fcntl(STDERR_FILENO, F_SETNOSIGPIPE, 1)
+        #else
         signal(SIGPIPE, SIG_IGN)
-        // launchd hands rvd /dev/null; keep failures visible in the log.
+        #endif
+        // launchd hands rvd /dev/null; keep failures visible in the log
+        // (a regular file, which cannot raise SIGPIPE).
         RVDLogFile.captureDiscardedStderr()
         do {
             let configuration = try RVDLaunch.parse(arguments: ProcessInfo.processInfo.arguments)
