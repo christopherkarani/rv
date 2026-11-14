@@ -1438,15 +1438,10 @@ public enum MCPSandbox {
             last.stillChecked()
         else { return false }
         let existingPath = existingCount == 0 ? "/" : "/" + parts.prefix(existingCount).joined(separator: "/")
-        let watched = watchedWritableRoots(path)
-        let watchedBefore = watched.map(treeStamp)
+        let watchedBefore = watchedRootIdentities(path)
         afterAncestorMatch?()
         guard pathStillNames(existingPath, held: last) else { return false }
-        // A rename into an existing child does not change the watched
-        // directory's own link count or timestamps. The child's stamp does.
-        if zip(watched, watchedBefore).contains(where: { treeStamp($0.0) != $0.1 }) {
-            return false
-        }
+        guard watchedRootIdentities(path) == watchedBefore else { return false }
         guard createMissing(pinned.missing, parent: current) else { return false }
         guard pathStillNames(existingPath, held: last) else {
             removeCreated(pinned.missing, parent: current)
@@ -1462,244 +1457,40 @@ public enum MCPSandbox {
         return true
     }
 
-    /// `Library/Caches`, `~/.npm`, and `~/.cache`. The profile allows all
-    /// three. Moving a project into a directory that already exists does not
-    /// change that directory's inode: `rename` into a non-empty directory
-    /// keeps it. The link count and timestamps do change.
+    /// `Library/Caches`, `~/.npm`, and `~/.cache`. The profile allows writes
+    /// under all three, by path, for the server's whole life. Creation and
+    /// `profile` check only that each path still names the entry it named
+    /// when the scratch was created, so a root swapped for another directory
+    /// or a symlink is refused. Nothing under a root is read: a directory
+    /// moved under one is writable to the cage whenever the move happens,
+    /// so a check during the milliseconds of creation stops nothing the same
+    /// move a second later would not do. A symlink under a root reaches
+    /// nothing outside it, because Seatbelt authorizes the resolved path.
     private static func watchedWritableRoots(_ scratch: String) -> [String] {
         guard let marker = scratch.range(of: "/Library/Caches/") else { return [] }
         let home = String(scratch[..<marker.lowerBound])
         return [home + "/Library/Caches", home + "/.npm", home + "/.cache"]
     }
 
-    private struct InodeStamp: Equatable {
-        var present: Bool
-        var device: UInt64
-        var inode: UInt64
-        var links: UInt64
-        var modified: Int64
-        var modifiedNsec: Int64
-        var changed: Int64
-        var changedNsec: Int64
-        /// Set when `path` is a symlink. The target directory can be unlistable
-        /// on both reads; a move into it still changes this link count.
-        var targetPresent: Bool = false
-        var targetDevice: UInt64 = 0
-        var targetInode: UInt64 = 0
-        var targetLinks: UInt64 = 0
-        var targetModified: Int64 = 0
-        var targetModifiedNsec: Int64 = 0
-        var targetChanged: Int64 = 0
-        var targetChangedNsec: Int64 = 0
+    /// What one watched root's path names, read with `lstat`: a symlink is
+    /// its own entry, never followed. Kind, device and inode only, since
+    /// writes under a root change its link count and timestamps all the
+    /// time. A read that fails other than with `ENOENT` carries a fresh
+    /// token, so it equals no other read and the caller refuses.
+    private enum RootIdentity: Equatable {
+        case absent
+        case entry(kind: UInt32, device: UInt64, inode: UInt64)
+        case unreadable(UUID)
     }
 
-    private static func inodeStamp(_ path: String) -> InodeStamp {
-        var info = stat()
-        guard lstat(path, &info) == 0 else {
-            return InodeStamp(
-                present: false, device: 0, inode: 0, links: 0,
-                modified: 0, modifiedNsec: 0, changed: 0, changedNsec: 0)
-        }
-        let clock = directoryClock(info)
-        return InodeStamp(
-            present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino), links: UInt64(info.st_nlink),
-            modified: clock.modified, modifiedNsec: clock.modifiedNsec,
-            changed: clock.changed, changedNsec: clock.changedNsec)
-    }
-
-    /// The watched directory and every directory under it, including the
-    /// directory a symlink already names. Moving a project into a grandchild
-    /// changes that directory's link count and timestamps. A direct child's
-    /// own stamp does not. The symlink's inode stays in the stamp, so
-    /// replacing a directory with a link still changes it. The target
-    /// directory's own inode is on that same stamp: its link count is the
-    /// change a move into it leaves behind. A child that already exists under
-    /// an unlistable target is on the stamp too. Listing that target adds the
-    /// owner's read bit and restores the mode; chmod changes ctime, so that
-    /// ctime is not part of the stamp. The child's link count is.
-    private struct TreeStamp: Equatable {
-        var root: InodeStamp
-        var children: [String: InodeStamp]
-    }
-
-    private struct DirectoryWalk {
-        var stamps: [String: InodeStamp]
-        var clearedChangeTime: Bool
-    }
-
-    private static func treeStamp(_ path: String) -> TreeStamp {
-        var visited: Set<String> = []
-        if let identity = directoryIdentity(path) {
-            visited.insert(identity)
-        }
-        var root = inodeStamp(path)
-        let walked = directoryStamps(under: path, relative: "", visited: &visited)
-        if walked.clearedChangeTime {
-            root.changed = 0
-            root.changedNsec = 0
-        }
-        return TreeStamp(root: root, children: walked.stamps)
-    }
-
-    private static func directoryStamps(
-        under path: String, relative: String, visited: inout Set<String>
-    ) -> DirectoryWalk {
-        var stamps: [String: InodeStamp] = [:]
-        let listed = listDirectory(path)
-        guard let names = listed.names else {
-            return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
-        }
-        for name in names where name != "." && name != ".." {
-            let child = path == "/" ? "/" + name : path + "/" + name
+    /// One `lstat` per root: three for any scratch under `Library/Caches`.
+    private static func watchedRootIdentities(_ scratch: String) -> [RootIdentity] {
+        watchedWritableRoots(scratch).map { root in
             var info = stat()
-            guard lstat(child, &info) == 0 else { continue }
-            let kind = info.st_mode & S_IFMT
-            guard kind == S_IFDIR || kind == S_IFLNK else { continue }
-            let rel = relative.isEmpty ? name : relative + "/" + name
-            var entered: String?
-            if kind == S_IFDIR {
-                stamps[rel] = inodeStamp(child)
-                entered = child
-            } else if let target = symlinkDirectory(child) {
-                stamps[rel] = stampNotingTarget(child, target: target)
-                entered = target
-            } else {
-                stamps[rel] = inodeStamp(child)
-            }
-            guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
-                continue
-            }
-            let nested = directoryStamps(under: entered, relative: rel, visited: &visited)
-            if nested.clearedChangeTime, var stamp = stamps[rel] {
-                if kind == S_IFDIR {
-                    stamp.changed = 0
-                    stamp.changedNsec = 0
-                } else {
-                    stamp.targetChanged = 0
-                    stamp.targetChangedNsec = 0
-                }
-                stamps[rel] = stamp
-            }
-            for (deeper, stamp) in nested.stamps {
-                stamps[deeper] = stamp
-            }
+            guard lstat(root, &info) == 0 else { return errno == ENOENT ? .absent : .unreadable(UUID()) }
+            return .entry(
+                kind: UInt32(info.st_mode & S_IFMT), device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
         }
-        return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
-    }
-
-    /// Names in `path`. Mode `0111` cannot be listed. The owner read bit is
-    /// added for this call and the mode is put back; chmod updates ctime
-    /// and leaves mtime and the link count alone, so the caller drops
-    /// ctime. On Darwin the directory is held by fd throughout (`O_SEARCH`
-    /// needs only execute permission, so a 0111 directory can still be
-    /// opened): swapping `path` for a symlink between the stat and the
-    /// chmod cannot redirect the mode change (or the listing) at a foreign
-    /// directory such as `~/.ssh`.
-    private static func listDirectory(_ path: String) -> (names: [String]?, clearedChangeTime: Bool) {
-        if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
-            return (names, false)
-        }
-        #if canImport(Darwin)
-        let fd = open(path, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { return (nil, false) }
-        defer { close(fd) }
-        var info = stat()
-        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
-            return (nil, false)
-        }
-        let mode = info.st_mode & 0o7777
-        guard (mode & S_IRUSR) == 0, chmodHeld(fd, mode | S_IRUSR) else {
-            return (nil, false)
-        }
-        defer { _ = chmodHeld(fd, mode) }
-        let listing = openat(fd, ".", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        guard listing >= 0, let stream = fdopendir(listing) else {
-            if listing >= 0 { close(listing) }
-            return (nil, true)
-        }
-        defer { closedir(stream) }
-        var names: [String] = []
-        while let entry = readdir(stream) {
-            var entry = entry.pointee
-            let name = withUnsafeBytes(of: &entry.d_name) { raw -> String in
-                guard let base = raw.baseAddress else { return "" }
-                return String(cString: base.assumingMemoryBound(to: CChar.self))
-            }
-            if name.isEmpty == false { names.append(name) }
-        }
-        return (names, true)
-        #else
-        // Linux has no O_SEARCH and Swift's Glibc module does not export
-        // O_PATH; seatbelt itself is Darwin-only, so keep the original
-        // path-based form here rather than inventing an untested fd dance.
-        var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
-            return (nil, false)
-        }
-        let mode = info.st_mode & 0o7777
-        guard (mode & S_IRUSR) == 0, chmod(path, mode | S_IRUSR) == 0 else {
-            return (nil, false)
-        }
-        defer { _ = chmod(path, mode) }
-        return (try? FileManager.default.contentsOfDirectory(atPath: path), true)
-        #endif
-    }
-
-    #if canImport(Darwin)
-    /// chmod the directory behind a search fd.
-    private static func chmodHeld(_ fd: Int32, _ mode: mode_t) -> Bool {
-        fchmod(fd, mode) == 0
-    }
-    #endif
-
-    /// The symlink's own inode, plus the directory it names. Listing that
-    /// directory can fail (mode `0111`) while its link count still changes.
-    private static func stampNotingTarget(_ path: String, target: String) -> InodeStamp {
-        var stamp = inodeStamp(path)
-        let noted = inodeStamp(target)
-        stamp.targetPresent = noted.present
-        stamp.targetDevice = noted.device
-        stamp.targetInode = noted.inode
-        stamp.targetLinks = noted.links
-        stamp.targetModified = noted.modified
-        stamp.targetModifiedNsec = noted.modifiedNsec
-        stamp.targetChanged = noted.changed
-        stamp.targetChangedNsec = noted.changedNsec
-        return stamp
-    }
-
-    /// The real directory a symlink names, relative target included.
-    /// A link that does not name a directory is only its own inode.
-    private static func symlinkDirectory(_ path: String) -> String? {
-        guard let raw = readLink(path) else { return nil }
-        let absolute: String
-        if raw.hasPrefix("/") {
-            absolute = raw
-        } else {
-            let parent = parentDirectory(path)
-            absolute = parent == "/" ? "/" + raw : parent + "/" + raw
-        }
-        guard let resolved = resolveExisting(absolute) else { return nil }
-        guard directoryIdentity(resolved) != nil else { return nil }
-        return resolved
-    }
-
-    private static func directoryIdentity(_ path: String) -> String? {
-        var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
-        return "\(UInt64(info.st_dev)):\(UInt64(info.st_ino))"
-    }
-
-    private static func directoryClock(_ info: stat) -> (modified: Int64, modifiedNsec: Int64, changed: Int64, changedNsec: Int64) {
-        #if canImport(Darwin)
-        return (
-            Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec),
-            Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec))
-        #else
-        return (
-            Int64(info.st_mtim.tv_sec), Int64(info.st_mtim.tv_nsec),
-            Int64(info.st_ctim.tv_sec), Int64(info.st_ctim.tv_nsec))
-        #endif
     }
 
     private struct AncestorPin: Equatable {
@@ -1716,10 +1507,9 @@ public enum MCPSandbox {
         /// Parent, then each directory above it. Moving `rv-mcp` together
         /// with the leaf keeps those two inodes and changes `Caches`.
         var ancestors: [AncestorPin]
-        /// `~/Library/Caches`, `~/.npm`, and `~/.cache` at the moment the leaf
-        /// was recorded. A later move into a grandchild does not change the
-        /// ancestor inodes. `profile` re-reads these stamps.
-        var watched: [String: TreeStamp]
+        /// What `~/Library/Caches`, `~/.npm`, and `~/.cache` named when the
+        /// leaf was recorded. `profile` reads them again.
+        var watched: [RootIdentity]
     }
 
     private static let leafRecords = Mutex<[String: LeafIdentity]>([:])
@@ -1729,7 +1519,7 @@ public enum MCPSandbox {
         guard lstat(path, &info) == 0 else {
             return LeafIdentity(
                 present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0,
-                ancestors: [], watched: [:])
+                ancestors: [], watched: [])
         }
         var parentInfo = stat()
         let parent = parentDirectory(path)
@@ -1739,15 +1529,7 @@ public enum MCPSandbox {
             parentDevice: parentOK ? UInt64(parentInfo.st_dev) : 0,
             parentInode: parentOK ? UInt64(parentInfo.st_ino) : 0,
             ancestors: ancestorPins(parent),
-            watched: watchedStamps(path))
-    }
-
-    private static func watchedStamps(_ path: String) -> [String: TreeStamp] {
-        var stamps: [String: TreeStamp] = [:]
-        for root in watchedWritableRoots(path) {
-            stamps[root] = treeStamp(root)
-        }
-        return stamps
+            watched: watchedRootIdentities(path))
     }
 
     private static func ancestorPins(_ path: String) -> [AncestorPin] {
