@@ -108,6 +108,9 @@ struct SecretPlaceholderLaunchTests {
         #expect(holds(["AUTH": "Bearer \(long)"]))
         #expect(holds([:], ["--token", long]))
         #expect(holds([:], ["--token=\(long)"]))
+        // A variable's name reaches the process as surely as its value.
+        #expect(holds([long: "x"]))
+        #expect(holds(["KEY_\(long)": "x"]))
 
         // Contained from the 8-byte floor on.
         #expect(holds(["URL": "postgres://u:hunter22@db"]))
