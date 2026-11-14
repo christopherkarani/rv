@@ -100,7 +100,7 @@ struct MCPProbeProcargsTests {
     /// no real process produces are covered: no exec path terminator, padding
     /// that is not NUL or runs past the buffer, and fewer than argc
     /// arguments each fail the read, never pass for "no environment".
-    @Test(.timeLimit(.minutes(1)), arguments: [
+    static let malformedBuffers: [(hex: String, expected: String)] = [
         // argc 1, "/a" with no NUL.
         ("01000000" + "2f61", "failed no exec path"),
         // argc 1, "/a\0", padding to byte 12 holds an 'x'.
@@ -113,7 +113,9 @@ struct MCPProbeProcargsTests {
         ("01000000" + "2f6100" + "0000000000" + "00" + "484f4d453d2f7800", "ok argc=1 strings=1 home=yes"),
         // A negative argc word.
         ("ffffffff" + "2f6100", "failed argc=-1"),
-    ])
+    ]
+
+    @Test(.timeLimit(.minutes(1)), arguments: malformedBuffers)
     func malformedBuffersFailTheRead(_ hex: String, _ expected: String) throws {
         let probe = try mcpProbe()
         let process = Process()
