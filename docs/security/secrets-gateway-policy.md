@@ -155,8 +155,14 @@ therefore honored only on a connection from the runtime it was leased to.
 - On each request, rv takes the connection's port pair and looks (libproc
   on macOS, `/proc` on Linux; see below) for one of those processes holding
   the client socket: the leader
-  first, then the descendants (at most 4096), then the session. Each match
-  is re-checked after the scan so a reused pid does not count. Every
+  first, then the descendants (at most 4096), then the session. The
+  listings only name candidates. A candidate found holding the socket is
+  proved a member again from fresh reads: it is the recorded leader, or
+  every parent link from it up to the leader holds (each process read
+  again after its parent was, and no parent younger than its child), or
+  it is in the session the leader leads. So a pid that exited and was
+  reused mid-scan, by the holder or by a process between it and the
+  leader, does not count. Every
   placeholder in the request is checked, so one runtime cannot spend
   another's placeholder beside its own.
 - Not a member: `403`, refusal `runtimeMismatch`, and a `secret.misuse`
@@ -187,10 +193,20 @@ The check is the same scan; only the reads differ.
   be. A process holds it when one of its `/proc/<pid>/fd/*` links, or one
   of a thread's `/proc/<pid>/task/<tid>/fd/*` (a thread that unshared its
   table with `unshare(CLONE_FILES)`), reads `socket:[<inode>]`. A forked
-  child that inherited the socket is a holder too.
+  child that inherited the socket is a holder too. The kernel may print a
+  row twice when the table changes while it is read; the same row twice
+  is one socket.
+- A socket registered with an io_uring instance
+  (`IORING_REGISTER_FILES`, direct descriptors) whose descriptor was then
+  closed is named by no `fd` link: the ring holds it. A process holding
+  the ring (`anon_inode:[io_uring]`) holds every socket the ring's
+  `/proc/<pid>/fdinfo/<fd>` lists under `UserFiles:`. A ring whose files
+  cannot be read (the kernel omits the list while the ring is busy), or
+  that holds another ring, leaves the scan undecided.
 - A process is identified by its pid and its start time (`/proc/<pid>/stat`
   field 22, clock ticks after boot). The `comm` field is read from the last
-  `)`, as bytes, so a process cannot forge the fields after its name.
+  `)`, as bytes, so a process cannot forge the fields after its name. A
+  `stat` that does not end in a newline is a read cut short and is refused.
 - Descendants come from one pass over every process's `stat`, so every
   `stat` on the host must be readable.
 - Each candidate's `stat` is read before and after its descriptors. A
@@ -201,31 +217,82 @@ The check is the same scan; only the reads differ.
   the scan lists processes, or a zombie, is skipped, as on macOS. A
   process whose main thread exited while other threads run reads as a
   zombie in `stat` but is alive: it is kept while `/proc/<pid>/task` lists
-  more than one thread.
+  more than one thread. Its main thread has no descriptors any more (and
+  the kernel gives that thread's `fd` directory to root), so only the
+  threads that run are read.
+- One decision reads a bounded amount of `/proc`: at most 2^20 files,
+  links and directory entries (a listing is one read per process on the
+  host; a descriptor scan is up to threads times descriptors per
+  candidate). Past that every read fails and the answer is
+  `runtimeUnverified`.
 - In a terminal runtime's session, a listed process whose session cannot
   be read leaves the scan undecided too.
 - `runtimeUnverified` also covers: a `/proc` whose `self` is not rv's pid
-  (another pid namespace's), a `/proc` mounted with `hidepid` other than
+  (another pid namespace's: nothing at all is read from it, not one
+  process's `stat`), a `/proc` mounted with `hidepid` other than
   `0`/`off` (a descendant running as another user could not be seen), an
   unreadable descriptor table, the process's or any thread's (a setuid,
-  non-dumpable or other user's process when rv lacks `CAP_SYS_PTRACE`, an
-  LSM ptrace rule, or one that exited mid-read), a socket table that is missing, truncated,
+  non-dumpable or other user's process when rv lacks `CAP_SYS_PTRACE`, rv
+  itself confined by an LSM policy with no ptrace-read rule, or one that
+  exited mid-read), a socket table that is missing, truncated,
   malformed, ambiguous, or lacks the gateway's end, and a client end no
-  process holds (inode 0: time-wait or orphaned).
+  process holds (inode 0: time-wait or orphaned). Yama's `ptrace_scope`
+  restricts attaching, not these reads, at every setting.
 - A process in another network namespace cannot reach the gateway's
-  loopback, so it is never a holder. A listening socket shared with
+  loopback, so it is never a holder, even with the same port pair on its
+  own loopback. A listening socket shared with
   `SO_REUSEPORT` does not matter: a connected 4-tuple is unique within a
-  namespace.
-- Limits beyond macOS's: a recorded group's start time is ticks after
-  boot, so it names a process only until the host reboots. A process
-  whose main thread exited has no readable `/proc/<pid>/exe`, so binary
-  binding on it is `runtimeUnverified`.
+  namespace. A descendant in a pid namespace of its own (`unshare --pid`,
+  a rootless container) is still a process of rv's `/proc` and is read
+  like any other; `/proc` mounted with `subset=pid` hides nothing the
+  check reads.
+- Descriptors that change hands: holding the socket is the criterion,
+  however a process came to hold it. A runtime process that passes its
+  connection to a process outside the runtime (`SCM_RIGHTS`, `fork`) is
+  still a holder while it keeps its own descriptor, and the request is
+  served, as it would be if the runtime relayed it; once the runtime
+  closes its descriptor the connection is `runtimeMismatch`. The reverse
+  is a limit (the same on macOS): a runtime process that receives
+  descriptors from outside its runtime can be handed an outsider's
+  connection, and is then its holder.
+- Limits beyond macOS's:
+  - A recorded group's start time is ticks after boot, so it names a
+    process only until the host reboots, and only to the tick (10 ms): a
+    pid reused within one tick is the same identity.
+  - Socket inode numbers are 32 bits and the kernel reuses them after
+    2^32 allocations (the limit `ss -p` and `lsof` share). A local process
+    that can drive the counter around and land on the number of a socket
+    a runtime process holds would be attributed to the runtime. Driving
+    it takes on the order of hours of CPU.
+  - A socket in flight inside a Unix socket message (sent, not yet
+    received) is in no descriptor table: a request on it is
+    `runtimeMismatch` until a runtime process receives it. A child forked
+    after the scan listed processes, whose parent then exits, is missed
+    the same way.
+  - A process whose main thread exited has no readable `/proc/<pid>/exe`,
+    so binary binding on it is `runtimeUnverified`. A secret with
+    `binaries` is also `runtimeUnverified` while any runtime process has
+    an unreadable descriptor table (a setuid or non-dumpable child such
+    as `sudo` or `ssh-agent`): every holder must be read.
+  - A container started through a daemon (`docker run`) is the daemon's
+    child, not the runtime's: with host networking its requests are
+    `runtimeMismatch`.
+
+Verified on real kernels by `SecretGatewayLinuxPeerTests`,
+`SecretGatewayLinuxAttackTests` and `Scripts/linux-peer-binding-e2e.sh`,
+which runs the binding under `hidepid`, `subset=pid`, another pid
+namespace's `/proc`, root without `CAP_SYS_PTRACE`, an AppArmor-confined
+reader, Yama `ptrace_scope` 1 to 3, and a default Docker container.
 
 ## Uncontained launches (`rv run`)
 
 `rv run --secret NAME -- COMMAND` (or `--all`) starts a command with no
 cage and the gateway in front of it. It is for running `claude`, `codex`,
 or a script with placeholders instead of real values, without a workspace.
+On Linux the whole path is run for real by `Scripts/linux-rv-run-e2e.sh`:
+an unprivileged account, a TLS upstream on localhost, the command's and
+its child's requests carrying the real value, the same placeholder from
+outside the command's tree refused, and rv's exit status.
 
 How it starts the command:
 
@@ -258,6 +325,37 @@ How it starts the command:
   and start time, binds the lease to it, hands it the terminal, and only
   then sends `SIGCONT`. If any step fails, or a signal reaches rv before
   the resume, the stopped child is killed. Only stdio is inherited.
+- On Linux, where `posix_spawn` cannot start a process stopped, the child
+  is a launcher: `rv-isolation-exec --stopped`, the helper installed
+  beside rv and found from `/proc/self/exe` (never `PATH`). It is spawned
+  as its own group leader (`POSIX_SPAWN_SETPGROUP`), closes every
+  descriptor above stdio with `close_range` (it exits 125 instead if the
+  kernel refuses, so a kernel before 5.9 cannot run `rv run`), stops
+  itself with `SIGSTOP`, and execs the command only once continued. rv
+  waits for that stop, and takes only a stop by `SIGSTOP` for it: a
+  launcher that exited, was killed, stopped for another reason, or has
+  not stopped within 10 seconds is killed and the launch refused. A
+  standard descriptor rv itself was started without (`<&-`) is closed for
+  the command too: its number may by then name something rv opened, and
+  every descriptor rv opens is close-on-exec, so a closed or close-on-exec
+  one is never passed on (the same rule applies on macOS). The launcher
+  is told rv's pid and checks that rv is still its parent before it stops
+  and after it is continued: if rv has died, it exits without running the
+  command (if rv dies while it is stopped and nothing continues it, it
+  stays stopped and never runs). The rest is the same code as on macOS:
+  rv records the stopped process's pid and start time, which survive
+  `exec`, binds the lease, hands over the terminal and sends `SIGCONT`.
+  So the command's image runs no instruction before its placeholders are
+  bound, and holds none of rv's descriptors. If `exec` then fails the
+  launcher says why on stderr and exits 126. A `SIGSTOP` sent to the new
+  child by another process before its own is indistinguishable from it:
+  rv binds and continues the launcher, which then stops once more at its
+  own. With a terminal rv stops with it, as for Ctrl-Z, and `fg` resumes
+  both; without one the command waits for a `SIGCONT` (any signal rv
+  forwards is followed by one). It is bound either way. The launcher is
+  an ordinary dynamically linked program started with the command's
+  environment, so loader variables in it (`LD_PRELOAD`) act in the
+  launcher, before its stop, as they would in the command after it.
 - `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
   command's group, each followed by `SIGCONT` so a stopped group gets it,
   until the leader exits; nothing is signalled once it is reaped. A
@@ -268,22 +366,29 @@ How it starts the command:
   (`nohup`, a parent that ignores `SIGPIPE`) stays ignored for it. The
   dispositions are process-wide and installed once however many guards
   are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
-  behind rv. rv takes its terminal from `/dev/tty`, so a command reading
+  behind rv. macOS ignores the four signals and reads them from a signal
+  source. Linux discards an ignored signal unread, so there each has a
+  handler that writes its number to a pipe one thread reads. A signal rv
+  inherited ignored gets no handler on Linux: it stays ignored for rv and
+  for the command, and is not forwarded. If that pipe cannot be made the
+  four stay ignored: rv forwards nothing and ends with the command. rv takes its terminal from `/dev/tty`, so a command reading
   the terminal while stdin is a pipe still stops and resumes with job
   control. Ctrl-Z stops rv with the command, and `fg` resumes both; `bg`
   resumes both and leaves the terminal with the shell. rv hands the
   terminal on only while it holds the foreground and its process group
   holds nothing but rv and its own parents (read with
-  `proc_listpgrppids`), and it did not inherit `SIGINT` ignored (an
-  asynchronous list, `rv run … &`, in a script without job control: the
-  terminal stays with the script). In a pipeline (`rv run -- x | less`)
-  the other commands share rv's group, so the terminal stays with them:
-  Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops
-  rv but not the command. rv says so once on stderr, also when the group
-  could not be read. If the group comes to be shared only after rv's
-  check before the spawn, rv says so at the command's first stop, and
-  says nothing if the command never stops (nothing is written between the
-  spawn and the resume). rv takes the terminal back only from the command's
+  `proc_listpgrppids`; on Linux from one pass over `/proc`, and a `/proc`
+  that cannot be listed counts as shared), and it did not inherit `SIGINT`
+  ignored (an asynchronous list, `rv run … &`, in a script without job
+  control: the terminal stays with the script). In a pipeline
+  (`rv run -- x | less`) the other commands share rv's group, so the
+  terminal stays with them: Ctrl-C reaches the command only because rv
+  forwards it, and Ctrl-Z stops rv but not the command. rv says so once on
+  stderr, also when the group could not be read. If the group comes to be
+  shared only after rv's check before the spawn, rv says so at the
+  command's first stop, and says nothing if the command never stops
+  (nothing is written between the spawn and the resume). rv takes the
+  terminal back only from the command's
   group, or from a group nobody is in any more: if the shell gave it to
   another job while rv was stopped, that job keeps it. Terminal modes are
   saved when rv takes it back and re-applied when it hands it on. rv
@@ -337,10 +442,11 @@ doing them (`SecretRunCapability.check`): it spawns a suspended probe
 child holding one end of a loopback connection, and the gateway's peer
 check must call that connection the probe's and a second one not. A
 platform without a no-window spawn, or whose peer check cannot tell
-(`/proc` hidden, no libproc), is refused with exit 125 and the command
-never starts. Linux has no no-window spawn in `rv run` yet, so it is
-refused there (`rv run: this platform cannot start the command suspended
-...`) even once its peer check binds process groups.
+(`/proc` hidden or another pid namespace's, no libproc, rv confined so
+it may not read other processes, the Linux launcher missing), is refused
+with exit 125 and the command never starts. On Linux a missing
+launcher is named as such (`rv-isolation-exec is not installed beside
+rv ... reinstall rv`).
 
 ## Stdio MCP servers (`rv mcp serve`)
 

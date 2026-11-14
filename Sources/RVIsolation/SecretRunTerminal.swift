@@ -6,7 +6,21 @@ import Glibc
 import Dispatch
 import Foundation
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
+/// libc under names the types below do not shadow with their own methods.
+private func closeFile(_ fd: Int32) { _ = close(fd) }
+private func listenOn(_ fd: Int32, _ backlog: Int32) -> Int32 { listen(fd, backlog) }
+private func connectTo(_ fd: Int32, _ address: UnsafePointer<sockaddr>, _ length: socklen_t) -> Int32 {
+    connect(fd, address, length)
+}
+private func streamSocket() -> Int32 {
+    #if canImport(Darwin)
+    socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+}
+
 /// rv's controlling terminal. The command gets the foreground for its run
 /// while rv holds it alone, so Ctrl-C and Ctrl-Z reach its group, and rv
 /// takes it back when the command stops or exits.
@@ -29,7 +43,7 @@ final class SecretRunTerminal: SecretRunTerminalControl {
         guard fd >= 0 else { return nil }
         var modes = termios()
         guard tcgetpgrp(fd) > 0, tcgetattr(fd, &modes) == 0 else {
-            _ = Darwin.close(fd)
+            closeFile(fd)
             return nil
         }
         return SecretRunTerminal(fd: fd, saved: modes)
@@ -41,7 +55,7 @@ final class SecretRunTerminal: SecretRunTerminalControl {
     }
 
     func close() {
-        _ = Darwin.close(fd)
+        closeFile(fd)
     }
 
     var rvInForeground: Bool { tcgetpgrp(fd) == getpgrp() }
@@ -55,6 +69,7 @@ final class SecretRunTerminal: SecretRunTerminalControl {
     /// by membership, not by whether stdout is a pipe: a pipe to a file
     /// reader in another group would read the same.
     var sharesGroup: Bool {
+        #if os(macOS)
         var ancestors: Set<pid_t> = []
         var current = getppid()
         while current > 1, ancestors.count < 256, ancestors.insert(current).inserted {
@@ -63,6 +78,12 @@ final class SecretRunTerminal: SecretRunTerminalControl {
         }
         return SecretRunJobControl.sharesGroup(
             members: listedPIDs(proc_listpgrppids, getpgrp()), rv: getpid(), ancestors: ancestors)
+        #else
+        // The same two facts from `/proc`: one table, one reading of it.
+        let table = ProcFSProcessTable()
+        return SecretRunJobControl.sharesGroup(
+            members: table.groupMembers(getpgrp()) ?? [], rv: getpid(), ancestors: table.ancestors(of: getpid()))
+        #endif
     }
 
     /// `SIGTTOU` must be ignored (as `SecretRunSignals` does): once the
@@ -103,7 +124,12 @@ package final class SecretRunSignals: Sendable {
     static let forwarded = [SIGINT, SIGQUIT, SIGTERM, SIGHUP]
     /// Signals rv resets for the command but never changes itself; with
     /// `forwarded` and `SIGTTOU`, every signal the command gets the default for.
+    #if os(macOS)
     static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH, SIGINFO]
+    #else
+    /// Linux has no `SIGINFO`.
+    static let untouched = [SIGTSTP, SIGTTIN, SIGPIPE, SIGWINCH]
+    #endif
 
     private let forwarding = SecretRunSignalTarget()
     /// nil while installed: the table knows what rv inherited ignored.
@@ -158,10 +184,10 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     private let queue = DispatchQueue(label: "rv.run.signals")
     private var members: [ObjectIdentifier: SecretRunSignalTarget] = [:]
     private var sources: [any DispatchSourceSignal] = []
-    /// Whole `sigaction`s, never `sig_t?`: `SIG_IGN` is 1, which Swift
-    /// reads as nil one optional further out (a `for` over such pairs ends
-    /// at the first ignored one, and the rest stayed ignored).
-    private var previous: [(number: Int32, action: sigaction)] = []
+    /// Whole `sigaction`s (`SavedDisposition`), never `sig_t?`: `SIG_IGN` is
+    /// 1, which Swift reads as nil one optional further out (a `for` over
+    /// such pairs ends at the first ignored one, and the rest stayed ignored).
+    private var previous: [SavedDisposition] = []
     private var ignoredBefore: Set<Int32> = []
     private var delivered = 0
 
@@ -196,7 +222,11 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         guard members.removeValue(forKey: ObjectIdentifier(target)) != nil, members.isEmpty else { return }
         for source in sources { source.cancel() }
         sources.removeAll()
-        for entry in previous.reversed() { _ = Self.set(entry.number, entry.action) }
+        #if os(Linux)
+        SecretRunSignalRelay.remove()
+        #endif
+        // By index: see `SavedDisposition`.
+        for index in previous.indices.reversed() { previous[index].restore() }
         previous.removeAll()
         ignoredBefore.removeAll()
     }
@@ -214,42 +244,65 @@ private final class SecretRunSignalTable: @unchecked Sendable {
     /// Under `lock`, by the first member.
     private func install() {
         for number in SecretRunSignals.forwarded + [SIGTTOU] {
-            let before = Self.set(number, Self.action(SIG_IGN))
-            previous.append((number, before))
-            if Self.ignores(before.__sigaction_u.__sa_handler) { ignoredBefore.insert(number) }
+            let saved = SavedDisposition(number)
+            previous.append(saved)
+            if saved.isIgnored { ignoredBefore.insert(number) }
+            _ = signal(number, SIG_IGN)
         }
-        previous.append((SIGCHLD, Self.set(SIGCHLD, Self.action(SIG_DFL))))
-        for number in SecretRunSignals.forwarded {
+        previous.append(SavedDisposition(SIGCHLD))
+        _ = signal(SIGCHLD, SIG_DFL)
+        // Not the ones rv inherited ignored (`nohup rv run`): they stay
+        // ignored, here and for the command, and are never an interrupt.
+        let relayed = SecretRunSignals.forwarded.filter { ignoredBefore.contains($0) == false }
+        #if os(macOS)
+        // A signal source reads a signal even while it is ignored.
+        for number in relayed {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
             source.setEventHandler { [unowned self] in self.deliver(number) }
             source.resume()
             sources.append(source)
         }
-    }
-
-    /// Sets `number`'s action and returns the one it replaces.
-    private static func set(_ number: Int32, _ action: sigaction) -> sigaction {
-        var action = action
-        var replaced = sigaction()
-        _ = sigaction(number, &action, &replaced)
-        return replaced
-    }
-
-    private static func action(_ handler: sig_t?) -> sigaction {
-        var action = sigaction()
-        action.__sigaction_u.__sa_handler = handler
-        return action
-    }
-
-    private static func ignores(_ handler: sig_t?) -> Bool {
-        unsafeBitCast(handler, to: Int.self) == unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+        #else
+        // Linux drops an ignored signal before a signal source could read
+        // it, so these get a handler (which would not survive `exec`).
+        SecretRunSignalRelay.install(relayed) { [unowned self] in self.deliver($0) }
+        #endif
     }
 
     /// Read without changing it.
     private static func ignoredNow(_ number: Int32) -> Bool {
-        var action = sigaction()
-        guard sigaction(number, nil, &action) == 0 else { return false }
-        return ignores(action.__sigaction_u.__sa_handler)
+        SavedDisposition(number).isIgnored
+    }
+}
+
+/// One signal's disposition as it was, whole (handler, mask and flags), to
+/// be put back exactly. Kept as a `sigaction`, never as an optional handler
+/// in a tuple: Swift gives `Optional<(Int32, sig_t?)>` the bit pattern of
+/// `SIG_IGN` (1) for `nil`, so a loop over such tuples ends at the first
+/// ignored signal and restores nothing after it.
+private struct SavedDisposition {
+    let number: Int32
+    private var action: sigaction
+
+    /// A disposition that cannot be read reads as the default, not ignored.
+    init(_ number: Int32) {
+        self.number = number
+        action = sigaction()
+        _ = sigaction(number, nil, &action)
+    }
+
+    var isIgnored: Bool {
+        #if canImport(Darwin)
+        let handler = action.__sigaction_u.__sa_handler
+        #else
+        let handler = action.__sigaction_handler.sa_handler
+        #endif
+        return unsafeBitCast(handler, to: Int.self) == unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+    }
+
+    func restore() {
+        var action = action
+        _ = sigaction(number, &action, nil)
     }
 }
 
@@ -261,23 +314,23 @@ struct SecretRunLoopback {
     let peer: GatewayPeer
 
     func close() {
-        _ = Darwin.close(client)
-        _ = Darwin.close(server)
+        closeFile(client)
+        closeFile(server)
     }
 
     /// A listener on 127.0.0.1 and an ephemeral port.
     static func listen() -> (fd: Int32, port: UInt16)? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = streamSocket()
         guard fd >= 0 else { return nil }
         var address = loopback(port: 0)
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let ready = withUnsafeMutablePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, length) == 0 && Darwin.listen(fd, 2) == 0 && getsockname(fd, $0, &length) == 0
+                bind(fd, $0, length) == 0 && listenOn(fd, 2) == 0 && getsockname(fd, $0, &length) == 0
             }
         }
         guard ready else {
-            _ = Darwin.close(fd)
+            closeFile(fd)
             return nil
         }
         return (fd, UInt16(bigEndian: address.sin_port))
@@ -286,21 +339,21 @@ struct SecretRunLoopback {
     /// The client end sits at fd 10 or above, so it can never be the fd 3
     /// it is duplicated onto in the probe child.
     static func connect(_ listener: (fd: Int32, port: UInt16)) -> SecretRunLoopback? {
-        let opened = socket(AF_INET, SOCK_STREAM, 0)
+        let opened = streamSocket()
         guard opened >= 0 else { return nil }
         let client = fcntl(opened, F_DUPFD_CLOEXEC, 10)
-        _ = Darwin.close(opened)
+        closeFile(opened)
         guard client >= 0 else { return nil }
         var address = loopback(port: listener.port)
         let connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+                connectTo(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
             }
         }
         let server = connected ? accept(listener.fd, nil, nil) : -1
         guard server >= 0, let peer = GatewayPeer.of(server) else {
-            _ = Darwin.close(client)
-            if server >= 0 { _ = Darwin.close(server) }
+            closeFile(client)
+            if server >= 0 { closeFile(server) }
             return nil
         }
         return SecretRunLoopback(client: client, server: server, peer: peer)
@@ -308,7 +361,9 @@ struct SecretRunLoopback {
 
     private static func loopback(port: UInt16) -> sockaddr_in {
         var address = sockaddr_in()
+        #if canImport(Darwin)
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         address.sin_addr.s_addr = GatewayPeer.loopback

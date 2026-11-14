@@ -101,15 +101,15 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
         let after = try report(fixture, rvExecutable: rv.path)
-        #if os(macOS)
-        // Imported local servers carry no sandbox yet: governed, but check
-        // stays red until one is added and the file is re-trusted.
-        #expect(after.passes == false)
-        #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
-        #else
-        // No cage off macOS yet: check names the bare server as uncaged.
-        #expect(after.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
-        #endif
+        if MCPSandbox.enforced {
+            // Imported local servers carry no sandbox yet: governed, but check
+            // stays red until one is added and the file is re-trusted.
+            #expect(after.passes == false)
+            #expect(after.problems.contains { $0.message.contains("github has no sandbox") })
+        } else {
+            // No cage on this host: check names the bare server as uncaged.
+            #expect(after.problems.contains { $0.message == MCPPlatformSupport.runsUncaged(server: "github") })
+        }
         #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
         let relative = try report(fixture, rvExecutable: "")
         #expect(relative.rows.contains { $0.name == "github" && $0.status == "governed" } == false)
@@ -162,11 +162,7 @@ struct MCPCommandTests {
         #expect(uncaged.count == 3)
         #expect(uncaged.allSatisfy { $0.message.contains("sandbox is unavailable on this host") })
         let platformDefault = MCPRun.sandboxProblems(configuration, configDirectory: directory)
-        #if os(macOS)
-        #expect(platformDefault == enforced)
-        #else
-        #expect(platformDefault == uncaged)
-        #endif
+        #expect(platformDefault == (MCPSandbox.enforced ? enforced : uncaged))
     }
 
     @Test func problemLinesLabelEachProblem() {
@@ -5660,14 +5656,14 @@ struct MCPCommandTests {
                 sandbox: MCPSandboxPolicy(network: false))
         ]))
         let initial = try report(fixture)
-        #if os(macOS)
-        #expect(initial.passes)
-        #else
-        // No cage off macOS yet: the sandboxed fixture server cannot serve,
-        // so check reports it instead of passing.
-        #expect(initial.passes == false)
-        #expect(initial.problems.contains { $0.message.contains("sandbox is unavailable on this host") })
-        #endif
+        if MCPSandbox.enforced {
+            #expect(initial.passes)
+        } else {
+            // No cage on this host: the sandboxed fixture server cannot
+            // serve, so check reports it instead of passing.
+            #expect(initial.passes == false)
+            #expect(initial.problems.contains { $0.message.contains("sandbox is unavailable on this host") })
+        }
         let path = ".config/rv/mcp.json"
         try fixture.write(path, fixture.text(path).replacingOccurrences(of: "write_*", with: "zz_*"))
         chmod(fixture.home.appendingPathComponent(path).path, 0o600)
@@ -5895,24 +5891,25 @@ struct MCPCommandTests {
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             #expect(lines.contains { $0.hasSuffix("sandbox network false") })
             #expect(lines.contains { $0.hasSuffix("sandbox network true") })
+            // The write roots every cage has, as this platform spells them.
+            #if os(Linux)
+            let (scratch, roots) = ("~/.cache/rv-mcp/", ["/tmp", "/dev", "~/.npm", "~/.cache"])
+            #else
+            let (scratch, roots) = (
+                "~/Library/Caches/rv-mcp/", ["/private/tmp", "/private/var/folders", "/dev", "~/.cache", "~/Library/Caches"])
+            #endif
             #expect(lines.contains { line in
                 line.contains("sandbox writable ")
-                    && line.contains("~/Library/Caches/rv-mcp/closed")
+                    && line.contains(scratch + "closed")
                     && line.contains("TMPDIR") == false
-                    && line.contains("/private/tmp")
-                    && line.contains("/private/var/folders")
-                    && line.contains("/dev")
+                    && roots.allSatisfy { line.contains($0) }
                     && line.hasSuffix("\"/Users/me/proj\\\\n\(trailer)\"")
             })
             #expect(lines.contains { line in
                 line.contains("sandbox writable ")
-                    && line.contains("~/Library/Caches/rv-mcp/open")
+                    && line.contains(scratch + "open")
                     && line.contains("TMPDIR") == false
-                    && line.contains("/private/tmp")
-                    && line.contains("/private/var/folders")
-                    && line.contains("/dev")
-                    && line.contains("~/.cache")
-                    && line.contains("~/Library/Caches")
+                    && roots.allSatisfy { line.contains($0) }
                     && line.hasSuffix("\"/\"")
                     && line.contains("proj") == false
             })
@@ -5988,10 +5985,14 @@ struct MCPCommandTests {
         _ = try await MCPRun.trust(
             environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 = text } }
         ).get()
+        #if os(Linux)
+        let paths = ["~/.cache/rv-mcp/caged", "/tmp", "/dev", "~/.npm", "~/.cache"]
+        #else
         let paths = [
             "~/Library/Caches/rv-mcp/caged", "/private/tmp", "/private/var/folders", "/dev",
             "~/.npm", "~/.cache", "~/Library/Caches",
         ]
+        #endif
         for text in [shown.withLock { $0 }, reasonAtPrompt.withLock { $0 }, imported.shown, imported.reason] {
             #expect(text.contains("writable none") == false)
             #expect(text.contains("TMPDIR") == false)

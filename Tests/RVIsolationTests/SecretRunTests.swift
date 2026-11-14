@@ -441,7 +441,7 @@ struct SecretRunLaunchTests {
         #expect(lease.definitions.map(\.name) == ["OPENAI_API_KEY"])
     }
 
-    #if os(macOS)
+    #if os(macOS) || os(Linux)
     /// The stop a supervisor observed may be followed at once by the
     /// leader's exit. Consuming the stop must not reap that exit: the zombie
     /// is what keeps the group id from being reused before the group kill.
@@ -460,6 +460,32 @@ struct SecretRunLaunchTests {
         #expect(kill(pid, 0) == 0)  // still an unreaped zombie
         var status: Int32 = 0
         #expect(waitpid(pid, &status, 0) == pid)
+    }
+
+    /// rv started with a standard descriptor closed (`rv run ... <&-`) has
+    /// since opened something of its own at that number. "Inherit stdin as
+    /// it is" must give the command that number closed, not rv's file.
+    @Test(.timeLimit(.minutes(1)))
+    func aStandardDescriptorRvOpenedItselfIsClosedInTheCommand() throws {
+        let saved = dup(STDIN_FILENO)
+        try #require(saved >= 0)
+        let own = open("/dev/null", O_RDONLY | O_CLOEXEC)
+        try #require(own >= 0)
+        // What rv's own open would have left at 0: a close-on-exec descriptor.
+        try #require(dup2(own, STDIN_FILENO) == STDIN_FILENO)
+        try #require(fcntl(STDIN_FILENO, F_SETFD, FD_CLOEXEC) == 0)
+        _ = close(own)
+        let spawned = SecretRunProcess.spawnSuspended(
+            executable: "/bin/sh", arguments: ["sh", "-c", "if [ -e /dev/fd/0 ]; then exit 7; fi; exit 4"],
+            environment: ["PATH=/usr/bin:/bin"],
+            descriptors: [STDIN_FILENO: STDIN_FILENO, STDOUT_FILENO: STDOUT_FILENO, STDERR_FILENO: STDERR_FILENO])
+        #expect(dup2(saved, STDIN_FILENO) == STDIN_FILENO)
+        _ = close(saved)
+        let pid = try spawned.get()
+        #expect(kill(pid, SIGCONT) == 0)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+        #expect(status == 4 << 8, "the command was given rv's own descriptor as its stdin")
     }
 
     /// A real child stops itself (as Ctrl-Z would stop it): rv takes the
@@ -654,8 +680,8 @@ struct SecretRunLaunchTests {
         let bound = Shared<pid_t>(0)
         let spent = Shared<UInt64>(0)
         let result = bounded(killing: bound) {
-            let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
-            defer { spent.set(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start) }
+            let start = threadCPUNanoseconds()
+            defer { spent.set(threadCPUNanoseconds() - start) }
             return launchShell(stopsAfterMarker + "exit 4", directory: directory.path, terminal: nil, bound: bound)
         }
         finished.set(true)
@@ -664,6 +690,103 @@ struct SecretRunLaunchTests {
         // few waits cost milliseconds.
         #expect(spent.value < 250_000_000, "\(spent.value / 1_000_000) ms of CPU time")
     }
+
+    #if os(Linux)
+    // Real guards in the test process, on Linux only: on macOS the guard
+    // ignores the forwarded signals, which children other suites spawn
+    // meanwhile would inherit, so there the same checks run out of process
+    // in `rv-run-probe` (`SecretRunProbeTests`), which is macOS-only.
+
+    /// `rv run` opens two guards in turn: one around its capability probe,
+    /// one around the launch. The first must put every disposition back,
+    /// an ignored one included, or the second sees its own leftovers as
+    /// what rv inherited and the command loses `nohup`.
+    @Test(.timeLimit(.minutes(1)))
+    func aSignalRvInheritedIgnoredStaysIgnoredAcrossTheProbeAndTheLaunch() {
+        let previous = signal(SIGHUP, SIG_IGN)
+        defer { _ = signal(SIGHUP, previous) }
+        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD]
+        let before = watched.map(disposition)
+        // Of the signals the guard changes: `inheritedIgnored` also reports
+        // the ones it leaves alone (`untouched`), as the test process has them.
+        let changed = Set(SecretRunSignals.forwarded + [SIGTTOU])
+        let probing = SecretRunSignals()
+        #expect(probing.inheritedIgnored.intersection(changed) == [SIGHUP])
+        probing.restore()
+        #expect(watched.map(disposition) == before)
+        let signals = SecretRunSignals()
+        defer { signals.restore() }
+        #expect(signals.inheritedIgnored.intersection(changed) == [SIGHUP])
+        // A hangup while rv waits is ignored, as rv was told to: it is not an interrupt.
+        _ = kill(getpid(), SIGHUP)
+        usleep(100_000)
+        #expect(signals.interrupted == nil)
+        let result = SecretRunProcess.launch(
+            executable: "/bin/sh", arguments: ["sh", "-c", "kill -HUP $$; exit 4"],
+            environment: ["PATH=/usr/bin:/bin"], terminal: nil, signals: signals, notice: { _ in }
+        ) { _ in .success(()) }
+        #expect(result == .success(4 << 8))
+    }
+
+    /// Signals arriving while guards open and close must not wedge the
+    /// guard: closing one waits on nothing a delivery holds.
+    @Test(.timeLimit(.minutes(2)))
+    func guardsOpenAndCloseUnderAStormOfSignals() {
+        // A handler, so a signal that lands between two guards is harmless.
+        let noted: sig_t = { _ in }
+        let previous = signal(SIGQUIT, noted)
+        defer { _ = signal(SIGQUIT, previous) }
+        let storming = Mutex(true)
+        let stormed = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            while storming.withLock({ $0 }) {
+                _ = kill(getpid(), SIGQUIT)
+                usleep(200)
+            }
+            stormed.signal()
+        }
+        let finished = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            for _ in 0..<2_000 {
+                let signals = SecretRunSignals()
+                _ = signals.target(Int32.max)  // no such group: forwarding sends nothing
+                signals.restore()
+            }
+            finished.signal()
+        }
+        let done = finished.wait(timeout: .now() + 60)
+        storming.withLock { $0 = false }
+        #expect(done == .success, "opening and closing guards under signals did not finish")
+        _ = stormed.wait(timeout: .now() + 10)
+        // `installed` takes the table's lock: not asked of a run that hung.
+        #expect(done != .success || SecretRunSignals.installed == false)
+    }
+
+    /// Dispositions are process-wide: every guard shares one installation,
+    /// which the last one out restores, whichever order they leave in.
+    /// While installed, SIGCHLD is default so nothing reaps behind rv.
+    @Test func signalGuardsShareOneInstallationThatTheLastOutRestores() {
+        let watched = [SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTTOU, SIGCHLD]
+        let noted: sig_t = { _ in }
+        let previousChild = signal(SIGCHLD, noted)
+        defer { _ = signal(SIGCHLD, previousChild) }
+        let before = watched.map(disposition)
+        for lastOut in [0, 1] {
+            let guards = [SecretRunSignals(), SecretRunSignals()]
+            #expect(SecretRunSignals.installed)
+            #expect(isGuarded(SIGINT))
+            #expect(disposition(SIGTTOU) == ignoredDisposition)
+            #expect(disposition(SIGCHLD) == 0)
+            guards[1 - lastOut].restore()
+            guards[1 - lastOut].restore()  // idempotent: it does not leave on the other's behalf
+            #expect(SecretRunSignals.installed)
+            #expect(isGuarded(SIGTERM))
+            guards[lastOut].restore()
+            #expect(SecretRunSignals.installed == false)
+            #expect(watched.map(disposition) == before)
+        }
+    }
+    #endif
     #endif
 
     /// Every refusal comes before the command could run: a marker it would
@@ -695,8 +818,8 @@ struct SecretRunLaunchTests {
         let unavailable: SecretRunRefusal? = SecretRunProcess.isAvailable ? .peerBindingUnavailable : .spawnUnavailable
         #expect(SecretRunCapability.check(.alwaysMember) == unavailable)
         #expect(SecretRunCapability.check(.neverAnswers) == unavailable)
-        #if os(macOS)
-        // The kernel check (libproc) binds here; elsewhere it is whatever that platform offers.
+        #if os(macOS) || os(Linux)
+        // The kernel check (libproc, /proc) binds here; elsewhere it is whatever that platform offers.
         #expect(SecretRunCapability.check(.runtime) == nil)
         #endif
     }
@@ -896,7 +1019,7 @@ struct SecretRunLaunchTests {
     }
 }
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
 /// Stands in for rv's terminal: models which group holds the foreground and
 /// records what `supervise` asks of it. rv never stops itself here.
 private final class RecordingTerminal: SecretRunTerminalControl, Sendable {
@@ -963,6 +1086,26 @@ private func launchShell(
     }
 }
 
+/// The handler installed for `number`, as a number: 0 is `SIG_DFL`.
+private func disposition(_ number: Int32) -> Int {
+    var action = sigaction()
+    _ = sigaction(number, nil, &action)
+    #if canImport(Darwin)
+    return unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self)
+    #else
+    return unsafeBitCast(action.__sigaction_handler.sa_handler, to: Int.self)
+    #endif
+}
+
+private let ignoredDisposition = unsafeBitCast(SIG_IGN as sig_t?, to: Int.self)
+
+/// CPU time the calling thread has used so far, in nanoseconds.
+private func threadCPUNanoseconds() -> UInt64 {
+    var now = timespec()
+    _ = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now)
+    return UInt64(now.tv_sec) * 1_000_000_000 + UInt64(now.tv_nsec)
+}
+
 /// The start of a `launchShell` script that, once running, writes its pid
 /// to `pid` in the directory and stops itself.
 private let stopsAfterMarker = "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; "
@@ -996,10 +1139,27 @@ private func continueStill(_ pid: pid_t, after seconds: Double) {
     if isStopped(pid) { _ = kill(pid, SIGCONT) }
 }
 
-/// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`).
+/// Whether rv's guard holds `number`: ignored and read from a signal source
+/// on macOS; a handler on Linux, which drops ignored signals unread.
+private func isGuarded(_ number: Int32) -> Bool {
+    #if os(macOS)
+    disposition(number) == ignoredDisposition
+    #else
+    disposition(number) != 0 && disposition(number) != ignoredDisposition
+    #endif
+}
+
+/// Whether `pid` is stopped (`SSTOP` in `<sys/proc.h>`; `T` in `stat`).
 private func isStopped(_ pid: pid_t) -> Bool {
+    #if os(macOS)
     guard pid > 1, case .found(let info) = ProcessGroupRecovery.lookup(pid) else { return false }
     return info.pbi_status == 4
+    #else
+    guard pid > 1, case .value(let bytes) = ProcFSReader.file("/proc/\(pid)/stat"),
+        let stat = ProcFSParse.stat(bytes)
+    else { return false }
+    return stat.state == UInt8(ascii: "T")
+    #endif
 }
 #endif
 

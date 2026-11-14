@@ -181,8 +181,15 @@ public enum MCPHostConfigPaths {
     /// distinctive names). For commands rv cannot model: a word that never
     /// mentions one of these is not a write rv can attribute to them.
     public static func mentions(_ word: String) -> Bool {
-        let folded = foldedPathComponent(word)
+        let folded = foldedMention(word)
         return mentionTokens.contains { folded.contains($0) }
+    }
+
+    /// Text as `mentions` compares it. A mention is a word handed to a
+    /// program rv cannot model, not a path rv resolved, so it is case-folded
+    /// on every platform (`foldedPathComponent` folds on Darwin only).
+    public static func foldedMention(_ text: String) -> String {
+        text.folding(options: .caseInsensitive, locale: nil)
     }
 
     /// Distinctive names derived from the table: the file name, or
@@ -201,7 +208,7 @@ public enum MCPHostConfigPaths {
         for path in parts {
             guard let name = path.last else { continue }
             let token = generic.contains(name) && path.count > 1 ? path.suffix(2).joined(separator: "/") : name
-            let folded = foldedPathComponent(token)
+            let folded = foldedMention(token)
             if tokens.contains(folded) == false { tokens.append(folded) }
         }
         return tokens

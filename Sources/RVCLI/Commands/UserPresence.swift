@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVIPC
+import RVMCP
 #if canImport(LocalAuthentication)
 import LocalAuthentication
 #endif
@@ -61,6 +62,12 @@ struct UserPresence: Sendable {
             let owner = await deviceOwner(reason)
             return finishPrintedCode(
                 ttyPath: prompt.ttyPath, codeVerified: true, deviceOwner: owner, deviceOwnerCanRun: true)
+            #elseif os(Linux)
+            // With the approvals custodian installed, its presence helper
+            // is the device-owner check; without it there is none.
+            let owner = custodianOwner(reason)
+            return finishPrintedCode(
+                ttyPath: prompt.ttyPath, codeVerified: true, deviceOwner: owner, deviceOwnerCanRun: owner != nil)
             #else
             return finishPrintedCode(
                 ttyPath: prompt.ttyPath, codeVerified: true, deviceOwner: nil, deviceOwnerCanRun: false)
@@ -70,10 +77,31 @@ struct UserPresence: Sendable {
             if let outcome = await deviceOwner(reason) { return outcome }
             return terminal(reason, challenge)
             #else
+            #if os(Linux)
+            if let owner = custodianOwner(reason) { return owner }
+            #endif
             return await ownerPassword(reason) { summary in try await OwnerConfirmation.require(summary) }
             #endif
         }
     }
+
+    #if os(Linux)
+    /// Linux with the approvals custodian installed: the owner's login
+    /// password, checked with PAM by the custodian's presence helper (root),
+    /// which then lets this process's connection to the key daemon sign for
+    /// a short while. The password is checked by a process this user
+    /// cannot run or change, and what it unlocks is the signature itself:
+    /// a caller that skipped this step would get no signature. Nil when no
+    /// custodian is installed.
+    static func custodianOwner(_ reason: String) -> PresenceOutcome? {
+        let client = MCPCustodianSocketClient.shared
+        guard client.isInstalled else { return nil }
+        switch client.provePresence(reason: "rv: \(ownerSummary(reason))") {
+        case .proved: return .confirmed(method: "login password (checked by the approvals custodian)")
+        case .refused(let why): return .refused(why)
+        }
+    }
+    #endif
 
     /// Linux device owner: the route every other owner action takes
     /// (`OwnerConfirmation`): the login password typed at the terminal and

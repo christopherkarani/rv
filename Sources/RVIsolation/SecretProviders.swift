@@ -535,12 +535,16 @@ package enum BoundedProcess {
         environment: [String: String],
         timeout: TimeInterval = 30,
         maximumOutputBytes: Int = 1_048_576,
-        input: [UInt8]? = nil
+        input: [UInt8]? = nil,
+        workingDirectory: String? = nil
     ) -> Outcome? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = environment
+        // Left alone, the child starts where rv is, and does not start at
+        // all where this user may not enter that directory.
+        if let workingDirectory { process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory) }
         let stdin = input.map { _ in Pipe() }
         process.standardInput = stdin ?? FileHandle.nullDevice
         let out = Pipe()

@@ -52,7 +52,7 @@ enum HelpCatalog {
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
-                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox, macOS only)"),
+                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
@@ -137,7 +137,7 @@ enum HelpCatalog {
                 HelpRow(name: "terminal", description: "When rv holds the terminal alone, the command gets it, so Ctrl-C and Ctrl-Z reach it. In a pipeline (rv run -- x | less), or when started with & from a script, the terminal stays where it is (rv says so on stderr for a pipeline): Ctrl-C reaches the command only because rv forwards it, and Ctrl-Z stops rv but not the command. SIGINT, SIGQUIT, SIGTERM and SIGHUP sent to rv are forwarded to its process group; a signal rv inherited ignored (nohup) stays ignored for the command"),
                 HelpRow(name: "store login", description: "When a selected secret comes from Vault, rv's own Vault login (VAULT_TOKEN) is removed as well; ~/.vault-token is not. Provider CLIs (op, aws, infisical, bws, gcloud, az) keep their own logins and files, which the command can use as you can"),
                 HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
-                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. Linux has no suspended start yet, so it refuses there"),
+                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. On Linux the suspended start needs rv-isolation-exec installed beside rv"),
             ]),
         ],
         examples: [
@@ -705,6 +705,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
                 HelpRow(name: "rv mcp trust"),
                 HelpRow(name: "rv mcp connect <server> [--client-id <id>] [--scope <s>] [--no-browser] [--forget]"),
+                HelpRow(name: "sudo rv mcp custodian install | uninstall [--purge]; rv mcp custodian status"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
                 HelpRow(name: "order", description: "Strictest matching glob or rule (deny > ask > allow), else default"),
@@ -719,7 +720,7 @@ enum HelpCatalog {
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(
                     name: "sandbox",
-                    description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
+                    description: "\"sandbox\" cages the server (macOS, Linux 6.7+); \"hosts\" allows those names on port 443 through a proxy"
                 ),
                 HelpRow(
                     name: "defaults",
@@ -741,6 +742,10 @@ enum HelpCatalog {
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
                 HelpRow(name: "integrity", description: "An outside edit does not launch until `rv mcp trust` (needs you present)"),
                 HelpRow(name: "import", description: "Copying a host command into mcp.json needs you present"),
+                HelpRow(
+                    name: "custodian",
+                    description: "Linux: trust and approvals need the key custodian (systemd, PAM), installed once with sudo; signing then asks for your login password at your terminal"
+                ),
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",

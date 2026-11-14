@@ -121,7 +121,7 @@ enum ManagedRun {
         } else if mcp.requireSandbox {
             lines.append("mcp: no MCP server sandbox on this host, so every local server is refused here (remote servers are exempt)")
         } else {
-            lines.append("mcp: sandboxes need macOS; sandboxed servers are refused here (remote servers are exempt)")
+            lines.append("mcp: no MCP server sandbox on this host; sandboxed servers are refused here (remote servers are exempt)")
         }
         if mcp.deny.isEmpty == false { lines.append("mcp deny: " + mcp.deny.joined(separator: ", ")) }
         if mcp.ask.isEmpty == false { lines.append("mcp ask: " + mcp.ask.joined(separator: ", ")) }
