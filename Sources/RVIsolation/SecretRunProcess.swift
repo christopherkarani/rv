@@ -209,20 +209,22 @@ enum SecretRunProcess {
     }
 
     /// Waits for the leader to exit, passing its signal stops through to
-    /// rv's own job control when there is a terminal. Before reaping, kills
-    /// what is left of its group, as a contained runtime's teardown does:
-    /// the unreaped leader keeps the group id from being reused, so the
-    /// signal cannot reach an unrelated group. Forwarding stops before the
-    /// reap, for the same reason. Returns the leader's `waitpid` status.
+    /// rv's own job control when there is a terminal; without one a stop is
+    /// only consumed, and the group stays stopped until something continues
+    /// it. Before reaping, kills what is left of its group, as a contained
+    /// runtime's teardown does: the unreaped leader keeps the group id from
+    /// being reused, so the signal cannot reach an unrelated group.
+    /// Forwarding stops before the reap, for the same reason. Returns the
+    /// leader's `waitpid` status.
     static func supervise(
         _ pid: pid_t, terminal: (any SecretRunTerminalControl)?, job: inout SecretRunJobControl,
         signals: SecretRunSignals, notice: (String) -> Void
     ) -> Int32 {
-        let stops = terminal == nil ? 0 : WSTOPPED
         while true {
             var info = siginfo_t()
             // WNOWAIT: an exit is only observed here; the leader is reaped below, after the group kill.
-            if waitid(P_PID, id_t(pid), &info, WEXITED | stops | WNOWAIT) != 0 {
+            // WSTOPPED always: Darwin reports a stop even without it, and a stop is never an exit.
+            if waitid(P_PID, id_t(pid), &info, WEXITED | WSTOPPED | WNOWAIT) != 0 {
                 if errno == EINTR { continue }
                 // Not our unreaped child any more: its pgid may already be
                 // someone else's, so nothing is signalled.
@@ -230,11 +232,11 @@ enum SecretRunProcess {
                 takeBack(terminal, &job)
                 return SIGKILL
             }
-            guard info.si_code == CLD_STOPPED, let terminal else { break }
+            guard info.si_code == CLD_STOPPED else { break }
             // Consume the stop. Without WEXITED this never reaps, even if the
             // leader exited since. The spawn suspension reads as a stop with
             // no signal; only a signal stop is passed on.
-            guard consumeStop(pid) != nil else { continue }
+            guard consumeStop(pid) != nil, let terminal else { continue }
             // Ctrl-Z (or a background read) stopped the command's group,
             // which the shell does not see; stop rv too so the shell regains
             // the terminal. `fg` gives rv the foreground before continuing

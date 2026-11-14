@@ -572,30 +572,35 @@ struct SecretRunLaunchTests {
     func signalsToRvReachTheCommandsGroupEvenWhenStopped(number: Int32) throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let marker = directory.appendingPathComponent("pid").path
         let signals = SecretRunSignals(detached: [])
         let finished = Shared(false)
-        Thread.detachNewThread {
-            let deadline = Date().addingTimeInterval(20)
-            var pid: pid_t = 0
-            while pid == 0, finished.value == false, Date() < deadline {
-                let text = (try? String(contentsOfFile: marker, encoding: .utf8)) ?? ""
-                pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                usleep(10_000)
-            }
-            while isStopped(pid) == false, finished.value == false, Date() < deadline { usleep(10_000) }
-            guard pid > 1, finished.value == false else { return }
-            signals.deliver(number)
-        }
+        onceStopped(markerIn: directory, unless: finished) { _ in signals.deliver(number) }
         let bound = Shared<pid_t>(0)
         let result = bounded(killing: bound) {
             launchShell(
-                "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; exit 0",
-                directory: directory.path, terminal: nil, bound: bound, signals: signals)
+                stopsAfterMarker + "exit 0", directory: directory.path, terminal: nil, bound: bound, signals: signals)
         }
         finished.set(true)
         let status = try #require(result).get()
         #expect(SecretRunExit.code(waitStatus: status) == 128 + number)
+    }
+
+    /// Without a terminal a stop is only waited through: a command another
+    /// process stops and continues exits with its own code. Darwin's
+    /// `waitid` reports the stop even when not asked for stops; it is never
+    /// taken for an exit (which killed the group).
+    @Test(.timeLimit(.minutes(1)))
+    func aCommandStoppedWithoutATerminalIsWaitedThrough() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let finished = Shared(false)
+        onceStopped(markerIn: directory, unless: finished) { pid in _ = kill(pid, SIGCONT) }
+        let bound = Shared<pid_t>(0)
+        let result = bounded(killing: bound) {
+            launchShell(stopsAfterMarker + "exit 4", directory: directory.path, terminal: nil, bound: bound)
+        }
+        finished.set(true)
+        #expect(result == .success(4 << 8))
     }
 
     /// The one test that installs real dispositions, kept to microseconds
@@ -955,6 +960,32 @@ private func launchShell(
     ) { group in
         bound.set(group.pgid.rawValue)
         return .success(())
+    }
+}
+
+/// The start of a `launchShell` script that, once running, writes its pid
+/// to `pid` in the directory and stops itself.
+private let stopsAfterMarker = "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; "
+
+/// On a thread of its own: once the command has written `pid` in
+/// `directory` (so it has run) and is stopped, calls `action` with its pid,
+/// unless `finished` was set first. Waits on those two states, for at most
+/// 20 seconds, after which the test's `bounded` ends the launch.
+private func onceStopped(
+    markerIn directory: URL, unless finished: Shared<Bool>, _ action: @escaping @Sendable (pid_t) -> Void
+) {
+    let marker = directory.appendingPathComponent("pid").path
+    Thread.detachNewThread {
+        let deadline = Date().addingTimeInterval(20)
+        var pid: pid_t = 0
+        while pid == 0, finished.value == false, Date() < deadline {
+            let text = (try? String(contentsOfFile: marker, encoding: .utf8)) ?? ""
+            pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            if pid == 0 { usleep(5_000) }
+        }
+        while isStopped(pid) == false, finished.value == false, Date() < deadline { usleep(5_000) }
+        guard pid > 1, isStopped(pid), finished.value == false else { return }
+        action(pid)
     }
 }
 
