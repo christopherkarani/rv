@@ -369,11 +369,14 @@ struct MCPSandboxHostsLiveTests {
     /// A clone out of the scratch into that directory is refused. Links and
     /// clones between files in the scratch work (package managers link and
     /// clone inside their caches). The fake home is under the resolved temp
-    /// directory. The outside file cannot be: every path under
-    /// `/private/var/folders` is a write root, so it is under the real home
-    /// in a fresh directory, as `cagedServerReachesItsProxyButNothingElse`
-    /// does, and removed afterwards.
-    @Test(.timeLimit(.minutes(1)))
+    /// directory. The outside file cannot be: `seatbeltWriteRoots` makes all
+    /// of `/private/var/folders` and `/private/tmp` writable, a fake home's
+    /// spare corners included. It is in a fresh 0700 directory under
+    /// `/Users/Shared`, which no profile line names, never the real home;
+    /// skipped where `/Users/Shared` is not writable.
+    @Test(
+        .timeLimit(.minutes(1)),
+        .enabled(if: access("/Users/Shared", W_OK) == 0, "needs a writable /Users/Shared outside the cage's write roots"))
     func cagedServerCannotLinkOrWriteAFileFromOutsideItsWriteRoots() throws {
         let temporary = try #require(MCPSandbox.resolveExisting(FileManager.default.temporaryDirectory.path))
         let root = URL(fileURLWithPath: temporary, isDirectory: true)
@@ -384,10 +387,10 @@ struct MCPSandboxHostsLiveTests {
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
         let tmp = root.appendingPathComponent("tmp")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        let project = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".rv-cage-test-link-\(UUID().uuidString)")
+        let project = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+            .appendingPathComponent("rv-cage-test-\(UUID().uuidString)", isDirectory: true)
+        try #require(mkdir(project.path, 0o700) == 0, "could not create \(project.path): errno \(errno)")
         defer { try? FileManager.default.removeItem(at: project) }
-        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let outside = project.appendingPathComponent("App.swift")
         try Data("original".utf8).write(to: outside)
         var before = stat()
@@ -398,6 +401,8 @@ struct MCPSandboxHostsLiveTests {
         let text = try MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: scratch.path, home: home.path,
             configDirectory: config.path, temporaryDirectory: tmp.path).get()
+        // No profile line names `/Users/Shared`: it is not a write root.
+        #expect(text.contains("/Users/Shared") == false, "\(text)")
         let script = """
             outside="$1"; s="$2"; project="$3"
             /bin/ln "$outside" "$s/linked" 2> "$s/ln.err" && echo LINK_OUT_OK
