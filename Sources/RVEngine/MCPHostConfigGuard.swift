@@ -114,8 +114,13 @@ func mcpHostConfigUnmodeledWrite(
     for command in launched {
         if isHostMCPMutation(command, reads: &reads) { return true }
     }
-    // Input the launcher parser stopped following may hide a host CLI.
-    if launched.contains(where: \.truncated), mayNameHostMCP(raw, budget: &reads.spelling) { return true }
+    // Input the launcher parser stopped following, or a segment the splitter
+    // could not scan (`{claude,zzqx} mcp add`), may hide a host CLI.
+    if launched.contains(where: { $0.truncated || isUnscannedLaunch($0) }),
+       mayNameHostMCP(raw, budget: &reads.spelling)
+    {
+        return true
+    }
     // So may text the tokenizer splits or quotes unlike a shell
     // (`watch "sh -c \"claude mcp add x\""`, zsh `=(…)`).
     if hostMCPTextIsUnfollowable(raw, launched, reads: &reads) { return true }

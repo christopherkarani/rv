@@ -46,15 +46,27 @@ struct WordSpelling: Sendable {
     let expands: Bool
 
     /// The word's spelling, spending `budget`. A word with no metacharacters
-    /// is only itself. So is a word with a blank: the tokenizer joined a
-    /// quoted or escaped run there, and every expansion keeps the blank, so
-    /// none can be a word the guard matches (`claude -p "f() { ... } ../x"`).
+    /// is only itself. A word with a blank (a quoted or escaped run the
+    /// tokenizer joined) is only itself when a blank sits outside every
+    /// brace, since each expansion keeps it (`claude -p "f() { ... } ../x"`);
+    /// one whose blanks all sit inside braces is brace-expanded, as bash
+    /// splits `{mcp,"x y"}` into `mcp` and `x y`. A word longer than
+    /// `SpellingBudget.maxWordLength` may be any words, unless it holds no
+    /// brace and its shortest match is longer than every word the guard
+    /// matches (a presigned URL with `?`): then it is only itself.
     static func of(_ word: String, budget: inout SpellingBudget) -> WordSpelling {
-        guard hasExpansionMetacharacters(word), word.contains(where: \.isWhitespace) == false else {
-            return WordSpelling(word: word, expansions: [word], expands: false)
+        let literal = WordSpelling(word: word, expansions: [word], expands: false)
+        guard hasExpansionMetacharacters(word) else { return literal }
+        if word.contains(where: \.isWhitespace) {
+            guard word.contains("{"), word.contains(","), hasBlankOutsideBraces(word) == false else { return literal }
+            return WordSpelling(word: word, expansions: boundedBraceExpansions(word, budget: &budget), expands: true)
         }
         guard word.count <= SpellingBudget.maxWordLength else {
-            return WordSpelling(word: word, expansions: nil, expands: true)
+            guard word.contains("{") == false, budget.spend(2 * word.count),
+                  shortestGlobMatch(word) > longestSpelledLiteral,
+                  shortestGlobMatch(commandName(word)) > longestSpelledLiteral
+            else { return WordSpelling(word: word, expansions: nil, expands: true) }
+            return literal
         }
         return WordSpelling(word: word, expansions: boundedBraceExpansions(word, budget: &budget), expands: true)
     }
@@ -100,6 +112,49 @@ private func hasGlobCharacters(_ word: String) -> Bool {
     word.contains("*") || word.contains("?") || word.contains("[")
 }
 
+/// Whether some blank in `word` sits outside every `{`…`}` pair, counted
+/// naively (an unmatched `}` never goes below zero). Such a blank is in
+/// every word bash's brace expansion yields: a group that expands is a
+/// matched pair, so a blank inside one is at depth one or more.
+private func hasBlankOutsideBraces(_ word: String) -> Bool {
+    var depth = 0
+    for char in word {
+        if char == "{" {
+            depth += 1
+        } else if char == "}" {
+            depth = max(0, depth - 1)
+        } else if depth == 0, char.isWhitespace {
+            return true
+        }
+    }
+    return false
+}
+
+/// The fewest characters `globCanMatch` can match `pattern` against: one per
+/// element other than `*`, a closed `[…]` class counting once.
+func shortestGlobMatch(_ pattern: String) -> Int {
+    let p = Array(pattern)
+    var count = 0
+    var index = 0
+    while index < p.count {
+        if p[index] == "*" {
+            index += 1
+            continue
+        }
+        if p[index] == "[", let end = globClassEnd(p, index) {
+            index = end.close + 1
+        } else {
+            index += 1
+        }
+        count += 1
+    }
+    return count
+}
+
+/// The longest word `mayBe`, `nameMayBe` or `patternMayBe` is ever asked
+/// about: a table word, or `install`.
+let longestSpelledLiteral: Int = (spellingTableWords + ["install"]).map(\.count).max() ?? 0
+
 /// Whether one expanded word may be `literal`: a glob match, or equality. An
 /// expansion still holding a value rv cannot read (`m$x`) is judged as
 /// written, like any dynamic word (`wordIsDynamic`).
@@ -111,11 +166,11 @@ func patternMayBe(_ word: String, _ literal: String, budget: inout SpellingBudge
 }
 
 /// Whether `word` holds a value rv cannot resolve to a fixed string: a
-/// parameter (`$x`, `${x:-y}`), a command substitution (`$(…)`, backticks) or
-/// a process substitution. ANSI-C quoting (`$'…'`), which rv decodes, is not
-/// dynamic.
+/// parameter (`$x`, `"$x"`, `${x:-y}`) or a command substitution (`$(…)`,
+/// backticks). The tokenizer emits ANSI-C quoting (`$'x'`) as `$x`, which
+/// cannot be told from a parameter, so it counts too (fail closed).
 func wordIsDynamic(_ word: String) -> Bool {
-    collapsingSubstitutions(word.ansiCDecodedIfMarked).contains("$")
+    collapsingSubstitutions(word).contains("$")
 }
 
 /// Bash brace expansion of `word`: comma groups and `{x..y[..step]}` ranges of
@@ -248,59 +303,85 @@ private enum BraceRange {
     }
 }
 
+/// The closing `]` of the bracket expression opening at `open` in `p`, and
+/// whether it holds a POSIX class, equivalence class or collating symbol;
+/// nil when it never closes (the `[` is then a literal).
+private func globClassEnd(_ p: [Character], _ open: Int) -> (close: Int, anyCharacter: Bool)? {
+    var k = open + 1
+    if k < p.count, p[k] == "!" || p[k] == "^" { k += 1 }
+    if k < p.count, p[k] == "]" { k += 1 }
+    var anyCharacter = false
+    while k < p.count, p[k] != "]" {
+        if p[k] == "[", k + 1 < p.count, ":=.".contains(p[k + 1]) {
+            anyCharacter = true
+            let kind = p[k + 1]
+            var j = k + 2
+            while j + 1 < p.count, (p[j] == kind && p[j + 1] == "]") == false { j += 1 }
+            // An unterminated `[:` is plain text inside the class.
+            if j + 1 < p.count {
+                k = j + 2
+                continue
+            }
+        }
+        k += 1
+    }
+    return k < p.count ? (k, anyCharacter) : nil
+}
+
+/// Whether the bracket expression `body` (between `[` and `]`) of a
+/// case-folded pattern may match `ch` of a case-folded word. Folding lost
+/// each letter's case, so the class is judged as every class it may have
+/// been: a range whose start is a letter may have started at its capital
+/// (`[M-c]` folds to `[m-c]`, which bash still matches against `a`), and a
+/// letter or a range ending at a letter may not cover a negated class's
+/// letters (`[!A-Z]` folds to `[!a-z]`, which bash still matches against `a`).
+/// Each answer can only be wider than the unfolded class's.
+private func foldedClassMayMatch(_ body: ArraySlice<Character>, _ ch: Character) -> Bool {
+    var items = Array(body)
+    var negate = false
+    if let first = items.first, first == "!" || first == "^" {
+        negate = true
+        items.removeFirst()
+    }
+    func isLowerLetter(_ char: Character) -> Bool { ("a"..."z").contains(char) }
+    func capital(_ char: Character) -> Character { Character(char.uppercased()) }
+    // `wider`: some unfolded class may hold `ch`. `surely`: every one does.
+    var wider = false
+    var surely = false
+    var i = 0
+    while i < items.count {
+        if i + 2 < items.count, items[i + 1] == "-" {
+            let (low, high) = (items[i], items[i + 2])
+            let lowest = isLowerLetter(low) ? capital(low) : low
+            if lowest <= ch, ch <= high { wider = true }
+            let highestSure = isLowerLetter(high) ? capital(high) : high
+            if low <= ch, ch <= highestSure { surely = true }
+            i += 3
+        } else {
+            if items[i] == ch {
+                wider = true
+                if isLowerLetter(items[i]) == false { surely = true }
+            }
+            i += 1
+        }
+    }
+    return negate ? surely == false : wider
+}
+
 /// Whether the shell glob `pattern` can match `text`: `*`, `?` and `[…]` (with
 /// `!`/`^` negation and ranges). A bracket expression holding a POSIX class,
 /// equivalence class or collating symbol (`[[:alpha:]]`, `[[=a=]]`,
-/// `[[.a.]]`) may match any one character (fail closed). No filesystem: a
-/// wildcard or class is assumed satisfiable. Memoised; each state visited
-/// and each class scanned spends steps first, and once the budget is spent
-/// the pattern may match.
+/// `[[.a.]]`) may match any one character, and every class is judged as any
+/// class its case-folded text may have been (`foldedClassMayMatch`): fail
+/// closed. No filesystem: a wildcard or class is assumed satisfiable.
+/// Memoised; the call, each state visited and each class scanned spend steps
+/// first, and once the budget is spent the pattern may match.
 func globCanMatch(_ pattern: String, _ text: String, budget: inout SpellingBudget) -> Bool {
     let p = Array(pattern)
     let t = Array(text)
+    guard budget.spend(p.count + t.count) else { return true }
     let width = t.count + 1
     var failed: Set<Int> = []
-    func classEnd(_ open: Int) -> (close: Int, anyCharacter: Bool)? {
-        var k = open + 1
-        if k < p.count, p[k] == "!" || p[k] == "^" { k += 1 }
-        if k < p.count, p[k] == "]" { k += 1 }
-        var anyCharacter = false
-        while k < p.count, p[k] != "]" {
-            if p[k] == "[", k + 1 < p.count, ":=.".contains(p[k + 1]) {
-                anyCharacter = true
-                let kind = p[k + 1]
-                var j = k + 2
-                while j + 1 < p.count, (p[j] == kind && p[j + 1] == "]") == false { j += 1 }
-                // An unterminated `[:` is plain text inside the class.
-                if j + 1 < p.count {
-                    k = j + 2
-                    continue
-                }
-            }
-            k += 1
-        }
-        return k < p.count ? (k, anyCharacter) : nil
-    }
-    func classMatches(_ body: ArraySlice<Character>, _ ch: Character) -> Bool {
-        var items = Array(body)
-        var negate = false
-        if let first = items.first, first == "!" || first == "^" {
-            negate = true
-            items.removeFirst()
-        }
-        var matched = false
-        var i = 0
-        while i < items.count {
-            if i + 2 < items.count, items[i + 1] == "-" {
-                if items[i] <= ch, ch <= items[i + 2] { matched = true }
-                i += 3
-            } else {
-                if items[i] == ch { matched = true }
-                i += 1
-            }
-        }
-        return matched != negate
-    }
     func match(_ startP: Int, _ startT: Int) -> Bool {
         var pi = startP
         var ti = startT
@@ -311,8 +392,8 @@ func globCanMatch(_ pattern: String, _ text: String, budget: inout SpellingBudge
             // A closed `[…]` class; an unclosed `[` is a literal (`default`).
             if p[pi] == "[" {
                 guard budget.spend(p.count - pi) else { return true }
-                if let end = classEnd(pi) {
-                    guard ti < t.count, end.anyCharacter || classMatches(p[(pi + 1)..<end.close], t[ti]) else {
+                if let end = globClassEnd(p, pi) {
+                    guard ti < t.count, end.anyCharacter || foldedClassMayMatch(p[(pi + 1)..<end.close], t[ti]) else {
                         failed.insert(key)
                         return false
                     }
