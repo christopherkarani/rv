@@ -848,17 +848,16 @@ public struct GatedEvaluate: Sendable {
                     GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
                 },
                 filesystemProbe: { unwrapped in
-                    let world = FilesystemLiveProbe.context(
-                        unwrapped: unwrapped,
-                        command: request.command,
-                        cwd: cwd,
+                    attachingMCPHostConfigGuard(
+                        store.mcpHostConfigGuard,
+                        to: FilesystemLiveProbe.context(
+                            unwrapped: unwrapped,
+                            command: request.command,
+                            cwd: cwd,
+                            homeDirectory: home
+                        ),
                         homeDirectory: home
                     )
-                    guard let guarded = store.mcpHostConfigGuard, case .probed(var context) = world else {
-                        return world
-                    }
-                    context.mcpHostConfigGuard = guarded
-                    return .probed(context)
                 },
                 policy: policy,
                 // The hook client's deadline (bound by `JudgeOffload`): an
