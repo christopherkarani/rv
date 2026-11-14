@@ -210,8 +210,12 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         }
         previous.append(SavedDisposition(SIGCHLD))
         _ = signal(SIGCHLD, SIG_DFL)
+        // Not the ones rv inherited ignored (`nohup rv run`): they stay
+        // ignored, here and for the command, and are never an interrupt.
+        let relayed = SecretRunSignals.forwarded.filter { ignoredBefore.contains($0) == false }
         #if os(macOS)
-        for number in SecretRunSignals.forwarded {
+        // A signal source reads a signal even while it is ignored.
+        for number in relayed {
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
             source.setEventHandler { [unowned self] in self.deliver(number) }
             source.resume()
@@ -219,12 +223,8 @@ private final class SecretRunSignalTable: @unchecked Sendable {
         }
         #else
         // Linux drops an ignored signal before a signal source could read
-        // it, so the forwarded ones get a handler. Not the ones rv inherited
-        // ignored: they stay ignored, here and (a handler would not survive
-        // `exec`) for the command.
-        SecretRunSignalRelay.install(SecretRunSignals.forwarded.filter { ignoredBefore.contains($0) == false }) {
-            [unowned self] in self.deliver($0)
-        }
+        // it, so these get a handler (which would not survive `exec`).
+        SecretRunSignalRelay.install(relayed) { [unowned self] in self.deliver($0) }
         #endif
     }
 

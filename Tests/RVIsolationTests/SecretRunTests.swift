@@ -364,6 +364,32 @@ struct SecretRunLaunchTests {
         #expect(waitpid(pid, &status, 0) == pid)
     }
 
+    /// rv started with a standard descriptor closed (`rv run ... <&-`) has
+    /// since opened something of its own at that number. "Inherit stdin as
+    /// it is" must give the command that number closed, not rv's file.
+    @Test(.timeLimit(.minutes(1)))
+    func aStandardDescriptorRvOpenedItselfIsClosedInTheCommand() throws {
+        let saved = dup(STDIN_FILENO)
+        try #require(saved >= 0)
+        let own = open("/dev/null", O_RDONLY | O_CLOEXEC)
+        try #require(own >= 0)
+        // What rv's own open would have left at 0: a close-on-exec descriptor.
+        try #require(dup2(own, STDIN_FILENO) == STDIN_FILENO)
+        try #require(fcntl(STDIN_FILENO, F_SETFD, FD_CLOEXEC) == 0)
+        _ = close(own)
+        let spawned = SecretRunProcess.spawnSuspended(
+            executable: "/bin/sh", arguments: ["sh", "-c", "if [ -e /dev/fd/0 ]; then exit 7; fi; exit 4"],
+            environment: ["PATH=/usr/bin:/bin"],
+            descriptors: [STDIN_FILENO: STDIN_FILENO, STDOUT_FILENO: STDOUT_FILENO, STDERR_FILENO: STDERR_FILENO])
+        #expect(dup2(saved, STDIN_FILENO) == STDIN_FILENO)
+        _ = close(saved)
+        let pid = try spawned.get()
+        #expect(kill(pid, SIGCONT) == 0)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+        #expect(status == 4 << 8, "the command was given rv's own descriptor as its stdin")
+    }
+
     /// A real child stops itself (as Ctrl-Z would stop it): rv takes the
     /// terminal back, stops itself so the shell sees the job stop, hands the
     /// terminal on when continued in the foreground, continues the group,
@@ -512,7 +538,8 @@ struct SecretRunLaunchTests {
         storming.withLock { $0 = false }
         #expect(done == .success, "opening and closing guards under signals did not finish")
         _ = stormed.wait(timeout: .now() + 10)
-        #expect(SecretRunSignals.installed == false || done != .success)
+        // `installed` takes the table's lock: not asked of a run that hung.
+        #expect(done != .success || SecretRunSignals.installed == false)
     }
 
     /// Dispositions are process-wide: every guard shares one installation,

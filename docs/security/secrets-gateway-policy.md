@@ -334,9 +334,10 @@ How it starts the command:
   standard descriptor rv itself was started without (`<&-`) is closed for
   the command too: its number may by then name something rv opened, and
   every descriptor rv opens is close-on-exec, so a closed or close-on-exec
-  one is never passed on. If rv dies while the launcher is stopped, the
-  launcher sees its parent changed when the kernel continues it and exits
-  without running the command. The rest is the same code as on macOS:
+  one is never passed on (the same rule applies on macOS). The launcher
+  is told rv's pid and checks that rv is still its parent before it stops
+  and after it is continued: if rv has died, it exits without running the
+  command. The rest is the same code as on macOS:
   rv records the stopped process's pid and start time, which survive
   `exec`, binds the lease, hands over the terminal and sends `SIGCONT`.
   So the command's image runs no instruction before its placeholders are

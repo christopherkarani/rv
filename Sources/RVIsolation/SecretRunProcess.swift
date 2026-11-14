@@ -146,6 +146,8 @@ enum SecretRunProcess {
         guard posix_spawn_file_actions_init(&actions) == 0 else { return .failure(.spawnFailed("spawn file actions")) }
         defer { posix_spawn_file_actions_destroy(&actions) }
         for (target, source) in descriptors.sorted(by: { $0.key < $1.key }) {
+            // Not passed on: POSIX_SPAWN_CLOEXEC_DEFAULT closes it in the child.
+            if target == source, passesOn(descriptorFlags: fcntl(source, F_GETFD)) == false { continue }
             let added = target == source
                 ? posix_spawn_file_actions_addinherit_np(&actions, target)
                 : posix_spawn_file_actions_adddup2(&actions, source, target)
@@ -168,6 +170,17 @@ enum SecretRunProcess {
         return .success(pid)
     }
     #endif
+
+    /// Whether a descriptor asked to be inherited as it is (same number in
+    /// the child) is passed on, from its `fcntl(F_GETFD)` flags (-1 when it
+    /// is closed). A descriptor rv was started with is never close-on-exec;
+    /// every one rv opens is. So one that is closed, or close-on-exec, is
+    /// not the caller's to pass on: rv was started without it (`<&-`) and
+    /// its number is free, or now names something of rv's own. The child
+    /// gets it closed.
+    static func passesOn(descriptorFlags flags: Int32) -> Bool {
+        flags != -1 && flags & FD_CLOEXEC == 0
+    }
 
     /// For a child that must never run: kills its group and reaps it. The
     /// child is unreaped until then, so its pgid cannot have been reused.

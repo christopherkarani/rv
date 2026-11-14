@@ -43,20 +43,12 @@ package enum SecretRunLauncher {
         }
     }
 
-    /// Whether a descriptor asked to be inherited as it is (same number in
-    /// the child) is passed on, from its `fcntl(F_GETFD)` flags (-1 when it
-    /// is closed). A descriptor rv was started with is never close-on-exec;
-    /// every one rv opens is. So one that is closed, or close-on-exec, is
-    /// not the caller's to pass on: rv was started without it (`<&-`) and
-    /// its number is free, or now names something of rv's own. The child
-    /// gets it closed.
-    static func passesOn(descriptorFlags flags: Int32) -> Bool {
-        flags != -1 && flags & FD_CLOEXEC == 0
-    }
-
-    /// The launcher's argv: the executable, then the command's own argv.
-    static func arguments(floor: Floor, executable: String, arguments: [String]) -> [String] {
-        [IsolationBackends.isolationExecName, "--stopped", String(floor.rawValue), "--", executable] + arguments
+    /// The launcher's argv: the floor, the pid that must be its parent
+    /// before and after its stop (this rv), the executable, then the
+    /// command's own argv.
+    static func arguments(floor: Floor, parent: pid_t, executable: String, arguments: [String]) -> [String] {
+        [IsolationBackends.isolationExecName, "--stopped", String(floor.rawValue), String(parent), "--", executable]
+            + arguments
     }
 
     /// What `waitid` reported about the launcher before rv resumed it.
@@ -148,16 +140,20 @@ extension SecretRunProcess {
         var actions = posix_spawn_file_actions_t()
         guard posix_spawn_file_actions_init(&actions) == 0 else { return .failure(.spawnFailed("spawn file actions")) }
         defer { posix_spawn_file_actions_destroy(&actions) }
-        for (target, source) in descriptors.sorted(by: { $0.key < $1.key }) {
-            if target == source, SecretRunLauncher.passesOn(descriptorFlags: fcntl(source, F_GETFD)) == false {
-                continue
+        // Every number below the floor is given or closed: the launcher
+        // closes from the floor up, and nothing else of rv's may be left.
+        for target in 0..<floor.rawValue {
+            let source = descriptors[target]
+            let passed = source.map { $0 != target || passesOn(descriptorFlags: fcntl($0, F_GETFD)) } ?? false
+            let added = if let source, passed {
+                posix_spawn_file_actions_adddup2(&actions, source, target)
+            } else {
+                posix_spawn_file_actions_addclose(&actions, target)
             }
-            guard posix_spawn_file_actions_adddup2(&actions, source, target) == 0 else {
-                return .failure(.spawnFailed("spawn file actions"))
-            }
+            guard added == 0 else { return .failure(.spawnFailed("spawn file actions")) }
         }
         let argv = SpawnPointers(
-            SecretRunLauncher.arguments(floor: floor, executable: executable, arguments: arguments))
+            SecretRunLauncher.arguments(floor: floor, parent: getpid(), executable: executable, arguments: arguments))
         let envp = SpawnPointers(environment)
         defer {
             argv.release()
@@ -177,11 +173,13 @@ extension SecretRunProcess {
     /// Waits for the launcher's own stop and consumes its report, so the
     /// supervisor later sees only stops the command's signals cause.
     private static func awaitStop(_ pid: pid_t, deadline: TimeInterval) -> Result<pid_t, SecretRunRefusal> {
-        let end = Date().addingTimeInterval(deadline)
+        let end = ContinuousClock.now + .seconds(deadline)
         var info = siginfo_t()
         while true {
             info = siginfo_t()
-            let waited = waitid(P_PID, id_t(pid), &info, WSTOPPED | WEXITED | WNOHANG)
+            // WCONTINUED: a stop someone else continued between two polls
+            // is reported as that, not missed; it is not `ready`.
+            let waited = waitid(P_PID, id_t(pid), &info, WSTOPPED | WCONTINUED | WEXITED | WNOHANG)
             if waited != 0 {
                 if errno == EINTR { continue }
                 // Not rv's child to wait for, so not rv's to signal either.
@@ -189,7 +187,7 @@ extension SecretRunProcess {
             }
             // With WNOHANG, no report yet leaves `si_pid` 0.
             if info.si_pid == pid { break }
-            guard Date() < end else {
+            guard ContinuousClock.now < end else {
                 // Alive, unreaped and rv's own: its group is still its own.
                 discard(pid)
                 return .failure(.spawnFailed("the launcher did not stop within \(Int(deadline)) seconds"))

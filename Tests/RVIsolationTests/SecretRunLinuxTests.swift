@@ -74,22 +74,23 @@ extension SecretRunLaunchTests {
     /// rv is started with a standard descriptor closed (`<&-`), its number
     /// goes to something rv opens, and the command must not get that.
     @Test func aClosedOrCloseOnExecDescriptorIsNotPassedOnAsItIs() throws {
-        #expect(SecretRunLauncher.passesOn(descriptorFlags: -1) == false)
-        #expect(SecretRunLauncher.passesOn(descriptorFlags: FD_CLOEXEC) == false)
-        #expect(SecretRunLauncher.passesOn(descriptorFlags: 0))
+        #expect(SecretRunProcess.passesOn(descriptorFlags: -1) == false)
+        #expect(SecretRunProcess.passesOn(descriptorFlags: FD_CLOEXEC) == false)
+        #expect(SecretRunProcess.passesOn(descriptorFlags: 0))
         var ends: [Int32] = [-1, -1]
         try #require(pipe(&ends) == 0)
         let own = fcntl(ends[0], F_DUPFD_CLOEXEC, 100)
         defer { [ends[0], ends[1], own].forEach { _ = close($0) } }
-        #expect(SecretRunLauncher.passesOn(descriptorFlags: fcntl(own, F_GETFD)) == false)
-        #expect(SecretRunLauncher.passesOn(descriptorFlags: fcntl(ends[0], F_GETFD)))
-        #expect(SecretRunLauncher.passesOn(descriptorFlags: fcntl(own + 1_000, F_GETFD)) == false)
+        #expect(SecretRunProcess.passesOn(descriptorFlags: fcntl(own, F_GETFD)) == false)
+        #expect(SecretRunProcess.passesOn(descriptorFlags: fcntl(ends[0], F_GETFD)))
+        #expect(SecretRunProcess.passesOn(descriptorFlags: fcntl(own + 1_000, F_GETFD)) == false)
     }
 
     @Test func theLaunchersArgumentsAreTheFloorTheExecutableAndTheCommandsOwn() throws {
         let floor = try #require(SecretRunLauncher.Floor(keeping: [0, 1, 2]))
-        #expect(SecretRunLauncher.arguments(floor: floor, executable: "/bin/sh", arguments: ["sh", "-c", "--stopped"])
-            == ["rv-isolation-exec", "--stopped", "3", "--", "/bin/sh", "sh", "-c", "--stopped"])
+        #expect(SecretRunLauncher.arguments(
+            floor: floor, parent: 4_321, executable: "/bin/sh", arguments: ["sh", "-c", "--stopped"])
+            == ["rv-isolation-exec", "--stopped", "3", "4321", "--", "/bin/sh", "sh", "-c", "--stopped"])
     }
 
     /// Only a stop by `SIGSTOP` is the launcher's own; everything else is a
@@ -137,21 +138,30 @@ extension SecretRunLaunchTests {
     /// nothing is ever bound to a launcher that would exec something else.
     @Test(.timeLimit(.minutes(1)), arguments: [
         ["--stopped"],
-        ["--stopped", "3", "--", "/bin/true"],
-        ["--stopped", "3", "/bin/true", "true", "x"],
-        ["--stopped", "2", "--", "/bin/true", "true"],
-        ["--stopped", "0", "--", "/bin/true", "true"],
-        ["--stopped", "", "--", "/bin/true", "true"],
-        ["--stopped", "+3", "--", "/bin/true", "true"],
-        ["--stopped", "3x", "--", "/bin/true", "true"],
-        ["--stopped", " 3", "--", "/bin/true", "true"],
-        ["--stopped", "-1", "--", "/bin/true", "true"],
-        ["--stopped", "99999999999", "--", "/bin/true", "true"],
-        ["--stopped", "3", "--", "true", "true"],
-        ["--stopped", "3", "--", "", "true"],
+        ["--stopped", "3", "SELF", "--", "/bin/true"],
+        ["--stopped", "3", "SELF", "/bin/true", "true", "x"],
+        ["--stopped", "3", "--", "/bin/true", "true", "x"],
+        ["--stopped", "2", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "0", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "+3", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "3x", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", " 3", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "-1", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "99999999999", "SELF", "--", "/bin/true", "true"],
+        ["--stopped", "3", "SELF", "--", "true", "true"],
+        ["--stopped", "3", "SELF", "--", "", "true"],
+        // Not the process that started it: 1, nobody, and a malformed pid.
+        ["--stopped", "3", "1", "--", "/bin/true", "true"],
+        ["--stopped", "3", "0", "--", "/bin/true", "true"],
+        ["--stopped", "3", "", "--", "/bin/true", "true"],
+        ["--stopped", "3", "SELFx", "--", "/bin/true", "true"],
+        ["--stopped", "3", "-SELF", "--", "/bin/true", "true"],
     ])
     func theLauncherRefusesArgumentsItDoesNotUnderstand(arguments: [String]) throws {
-        #expect(try launcherExit(arguments) == 125)
+        // SELF: this process, the launcher's real parent.
+        let own = String(getpid())
+        #expect(try launcherExit(arguments.map { $0.replacingOccurrences(of: "SELF", with: own) }) == 125)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -159,7 +169,8 @@ extension SecretRunLaunchTests {
         let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let marker = directory.appendingPathComponent("ran").path
-        #expect(try launcherExit(["--stopped", "3", "--", "/bin/sh", "sh", "-c", "touch \"$1\"", "sh", marker]) == nil)
+        #expect(try launcherExit(
+            ["--stopped", "3", String(getpid()), "--", "/bin/sh", "sh", "-c", "touch \"$1\"", "sh", marker]) == nil)
         #expect(FileManager.default.fileExists(atPath: marker) == false)
     }
 
@@ -240,8 +251,9 @@ extension SecretRunLaunchTests {
         #expect(read(directory.appendingPathComponent("fds")) == "0 1 2")
     }
 
-    /// The capability probe hands its child one extra descriptor (3); the
-    /// floor moves past it, and nothing above it survives.
+    /// The capability probe hands its child one descriptor (3) and nothing
+    /// else: the floor moves past it, nothing above it survives, and a
+    /// standard descriptor it was not given is closed, as on macOS.
     @Test(.timeLimit(.minutes(1)))
     func aDescriptorGivenToTheChildIsKeptAndEverythingAboveItClosed() throws {
         var ends: [Int32] = [-1, -1]
@@ -257,7 +269,7 @@ extension SecretRunLaunchTests {
             Issue.record("the child's descriptors are unreadable")
             return
         }
-        #expect(names.compactMap { Int($0) }.sorted() == [0, 1, 2, 3])
+        #expect(names.compactMap { Int($0) }.sorted() == [3])
         // Descriptor 3 is the pipe end it was given.
         var mine = Glibc.stat()
         try #require(fstat(given, &mine) == 0)
@@ -337,10 +349,14 @@ extension SecretRunLaunchTests {
         let marker = directory.appendingPathComponent("ran").path
         let pidFile = directory.appendingPathComponent("pid").path
         // A shell starts the launcher, waits until it has stopped (as rv
-        // does), records its pid and exits, orphaning it.
+        // does), records its pid and exits, orphaning it. The wait is
+        // bounded: a launcher that never stops must fail this, not hang it.
         let script = """
-            "$1" --stopped 3 -- /usr/bin/touch touch "$2" &
-            while [ "$(cut -d' ' -f3 /proc/$!/stat 2>/dev/null)" != T ]; do sleep 0.01; done
+            "$1" --stopped 3 $$ -- /usr/bin/touch touch "$2" &
+            tries=0
+            while [ "$(cut -d' ' -f3 /proc/$!/stat 2>/dev/null)" != T ] && [ $tries -lt 1000 ]; do
+              sleep 0.01; tries=$((tries + 1))
+            done
             echo $! > "$3"
             """
         let parent = Process()

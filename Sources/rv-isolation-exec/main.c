@@ -9,14 +9,15 @@
  * the inner ran.
  *
  * Second form, for `rv run` (no Landlock):
- *   rv-isolation-exec --stopped FLOOR -- EXECUTABLE ARGV0 [ARG...]
+ *   rv-isolation-exec --stopped FLOOR PARENT -- EXECUTABLE ARGV0 [ARG...]
  * closes every descriptor from FLOOR up, stops itself with SIGSTOP and,
- * once continued, execs EXECUTABLE with the arguments after it. glibc has
+ * once continued, execs EXECUTABLE with the arguments after it. PARENT is
+ * the pid of the rv that started it. glibc has
  * no spawn that starts a process stopped; this is that. rv binds its
  * placeholders to this process while it is stopped, and pid, process
  * group and start time survive exec, so what it bound is the command.
  * Bad argv or descriptors that cannot be closed exit 125 before the stop,
- * as does a parent that changed while it was stopped (rv is gone); a
+ * as does a parent that is not PARENT before or after it (rv is gone); a
  * failed execve says why on stderr and exits 126.
  *
  * Third form, for an MCP server (Sources/RVIsolation/landlock_confine.c):
@@ -79,13 +80,15 @@ static int rv_parse_floor(const char *text, unsigned int *floor) {
 
 static int rv_run_stopped(int argc, char **argv) {
     unsigned int floor;
-    pid_t parent;
+    unsigned int parent;
     int failure;
 
-    if (argc < 6 || rv_parse_floor(argv[2], &floor) != 0) {
+    /* PARENT has the same form as FLOOR; no process has a pid below 3 here
+     * that could be rv. */
+    if (argc < 7 || rv_parse_floor(argv[2], &floor) != 0 || rv_parse_floor(argv[3], &parent) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
-    if (strcmp(argv[3], "--") != 0 || argv[4][0] != '/') {
+    if (strcmp(argv[4], "--") != 0 || argv[5][0] != '/') {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     /* Everything rv had open that is not close-on-exec is still open here.
@@ -94,17 +97,22 @@ static int rv_run_stopped(int argc, char **argv) {
     if (syscall(SYS_close_range, floor, UINT_MAX, 0u) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
-    parent = getppid();
+    /* The rv that started this must still be the parent, or nobody will
+     * wait for the stop: stopping would leave this (and rv's stdio) held
+     * forever, for any later SIGCONT to run the command. */
+    if ((unsigned int)getppid() != parent) {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
     if (raise(SIGSTOP) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     /* Continued by someone other than the rv that started this: rv died
      * while this was stopped (the kernel continues an orphaned stopped
      * group), so nothing bound the command and nothing will serve it. */
-    if (getppid() != parent) {
+    if ((unsigned int)getppid() != parent) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
-    execve(argv[4], &argv[5], environ);
+    execve(argv[5], &argv[6], environ);
     failure = errno;
     dprintf(STDERR_FILENO, "rv run: could not start the command: %s\n", strerror(failure));
     return RV_ISOLATION_EXEC_EXEC_FAILED;
