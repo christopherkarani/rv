@@ -383,6 +383,33 @@ struct MCPToolPinTests {
         #expect(outputs.audits.first?.reason == MCPGatewayCore.hidingSchemaReason, comment)
     }
 
+    /// What a refused call to an untracked tool of a server that listed a
+    /// hiding tool past the tracking cap looks like.
+    static func expectRefusedUntracked(_ outputs: [MCPGatewayOutput], _ comment: Comment) {
+        #expect(outputs.toUpstream.isEmpty, comment)
+        #expect(outputs.audits.map(\.decision) == [.deny], comment)
+        #expect(outputs.audits.first?.reason == MCPGatewayCore.untrackedHidingReason, comment)
+    }
+
+    static let untrackedHidingNotice = "rv now hides and refuses"
+
+    /// Round 7 L1: a prompt held for a tool rv does not track is refused on
+    /// accept once its server listed a hiding tool past the cap; the
+    /// prompt was shown before rv knew.
+    @Test func aHeldPromptForAnUntrackedToolIsRefusedOnceItsServerHidOnePastTheCap() throws {
+        let cap = MCPGatewayCore.maximumTrackedTools
+        var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        _ = harness.client(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#)
+        _ = Self.list(&harness, (0..<cap).map { #"{"name":"f\#($0)"}"# })
+        let asked = Self.call(&harness, "tag")
+        let key = try #require(asked.toClient.first(where: { $0["method"] == .string("elicitation/create") })?["id"]?.stringValue)
+        _ = Self.list(&harness, [Self.hidingSchemaTools[1]])
+        #expect(harness.core.hidingUntracked.contains("github"))
+        let answered = harness.client(#"{"jsonrpc":"2.0","id":"\#(key)","result":{"action":"accept","content":{"approve":true}}}"#)
+        Self.expectRefusedUntracked(answered, "accepted after the server hid a tool past the cap")
+        #expect(answered.toClient.count == 1)
+    }
+
     /// Round 5 M1: a tool once listed hiding stays refused until a listing
     /// shows it with a definition that does not hide. A listing that omits
     /// it, or an upstream error reply, does not clear it, even when its
@@ -501,19 +528,26 @@ struct MCPToolPinTests {
     /// Round 6 A1: the hidden set is bounded with `observed`. A hiding tool
     /// past `maximumTrackedTools` is not kept in it, so its server then
     /// refuses every tool rv does not track: such a tool stays refused and
-    /// never asks.
+    /// never asks. Round 7 L2: such a refusal has its own reason, and stderr
+    /// says once, instead of "they always ask", that rv now refuses them.
     @Test func theHiddenSetIsBoundedAndAHidingToolPastTheCapIsStillRefused() {
         let cap = MCPGatewayCore.maximumTrackedTools
         var harness = Self.harness(PinRecorder().pinning(Self.pinned))
+        var logs: [[String]] = []
         for round in 0..<3 {
             let tools = (0..<cap).map { #"{"name":"h\#(round)_\#($0)","inputSchema":{"type":"object","required":["a\u001b"]}}"# }
-            _ = Self.list(&harness, tools)
+            logs.append(Self.list(&harness, tools).logs)
             #expect((harness.core.hidingSchemas["github"]?.count ?? 0) <= cap, "round \(round)")
         }
         #expect(harness.core.observed["github"]?.count == cap)
         Self.expectHidden(Self.call(&harness, "h0_0"), "tracked")
-        Self.expectHidden(Self.call(&harness, "h1_7"), "past the cap, an earlier listing")
-        Self.expectHidden(Self.call(&harness, "h2_0"), "past the cap, the latest listing")
+        Self.expectRefusedUntracked(Self.call(&harness, "h1_7"), "past the cap, an earlier listing")
+        Self.expectRefusedUntracked(Self.call(&harness, "h2_0"), "past the cap, the latest listing")
+        let notices = logs.map { round in round.filter { $0.contains(Self.untrackedHidingNotice) } }
+        #expect(notices.map(\.count) == [0, 1, 0])
+        #expect(notices[1].first?.contains("more than \(cap) tools") == true)
+        #expect(notices[1].first?.contains("rv mcp serve") == true)
+        #expect(logs.joined().contains { $0.contains("always ask") } == false)
         #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
     }
 
