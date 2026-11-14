@@ -184,16 +184,14 @@ struct SecretRunPlanTests {
     /// Once released (before the leader is reaped), no signal reaches the
     /// group id, which may by then be someone else's.
     @Test func signalsStopReachingTheGroupOnceReleased() {
-        let sent = Mutex<[Int32]>([])
-        let forwarding = SecretRunSignalTarget(send: { group, number in
-            sent.withLock { $0.append(group == 4242 ? number : -1) }
-        })
+        let sent = Notices()
+        let forwarding = SecretRunSignalTarget(send: { group, number in sent.sink("\(group) \(number)") })
         forwarding.deliver(SIGINT)
         #expect(forwarding.target(4242) == SIGINT)  // arrived before: the launch is abandoned
         forwarding.deliver(SIGTERM)
         forwarding.release()
         forwarding.deliver(SIGHUP)
-        #expect(sent.withLock { $0 } == [SIGTERM])
+        #expect(sent.all == ["4242 \(SIGTERM)"])
     }
 
     @Test func waitStatusesMapToShellExitCodes() {
