@@ -101,6 +101,13 @@ func mcpHostConfigUnmodeledWrite(
 ) -> Bool {
     let launched = launchedCommandHeads(raw)
     if launched.contains(where: isHostMCPMutation) { return true }
+    // A shell or `xargs` reading stdin may run a command line another word
+    // carries (`echo 'claude mcp add x' | sh`, `bash <<< '…'`).
+    if launched.contains(where: { consumerPrograms.contains(commandName($0.head)) }),
+       launched.contains(where: { $0.argv.dropFirst().contains(where: carriesHostMCPMutation) })
+    {
+        return true
+    }
     if launched.contains(where: hasOptionAfterOperand) { return true }
     let argvMentions = launched.reduce(0) { total, command in
         total + (command.argv.dropFirst() + command.assignments).reduce(0) { $0 + mentionCount($1) }
@@ -151,7 +158,8 @@ private func mentionCount(_ text: String) -> Int {
 /// grammars: neither is modelled here, so both count.
 private func hasOptionAfterOperand(_ command: LaunchedCommand) -> Bool {
     let name = commandName(command.head)
-    guard ["cp", "mv", "ln", "install"].contains(name) else { return false }
+    // macOS `scp` and `ditto` parse the same way. `rsync` permutes, as GNU does.
+    guard ["cp", "mv", "ln", "install", "scp", "ditto"].contains(name) else { return false }
     var sawOperand = false
     var optionsEnded = false
     var skipValue = false

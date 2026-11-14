@@ -24,16 +24,15 @@ func isHostMCPMutation(_ command: LaunchedCommand) -> Bool {
     let feedsWords = argvFeeders.contains(head)
     let runs = { (index: Int) in index == 0 || hostRunners.contains(head) }
     for (index, word) in words.enumerated() {
-        if isConfigInstallerPackage(word) || runs(index) && configInstallerPrograms.contains(commandName(word)) {
+        if isConfigInstallerPackage(word) { return true }
+        if runs(index),
+           configInstallerPrograms.contains(commandName(word)) || configInstallerNames.contains(packageName(word))
+        {
             return true
         }
         // A runner given a command line as one word (`watch 'claude mcp
         // add x'`, `su -c '…'`, `parallel '…' ::: x`, Linux `script -c`).
-        if index > 0, hostRunners.contains(head), word.contains(where: \.isWhitespace),
-           launchedCommandHeads(word).contains(where: isHostMCPMutation)
-        {
-            return true
-        }
+        if index > 0, hostRunners.contains(head), carriesHostMCPMutation(word) { return true }
         guard let host = hostCLI(word) else { continue }
         let rest = Array(words[(index + 1)...])
         if editorHosts.contains(host) {
@@ -68,8 +67,46 @@ private func hostCLI(_ word: String) -> String? {
     let name = commandName(word)
     if hostGroups[name] != nil || editorHosts.contains(name) || pythonInstallers.contains(name) { return name }
     for (package, host) in hostPackages where word.contains(package) { return host }
-    if name == "claude-code" || word.contains("/claude/versions/") { return "claude" }
-    return nil
+    if word.contains("/claude/versions/") { return "claude" }
+    return hostPackageNames[packageName(word)]
+}
+
+/// A word holding a whole command line that runs a host MCP CLI (`'claude
+/// mcp add x'` given to a runner, echoed into a shell, or a here-string).
+func carriesHostMCPMutation(_ word: String) -> Bool {
+    word.contains(where: \.isWhitespace) && launchedCommandHeads(word).contains(where: isHostMCPMutation)
+}
+
+/// The package a runner word names, whatever the spec: a registry or
+/// protocol prefix (`npm:`, `jsr:`, `github:`, `file:`, `git+https://`,
+/// `https://`) dropped, then a `#ref`/`?query`, a `.tgz`/`.tar.gz`/`.git`
+/// suffix, the path up to the last `/` (keeping an `@scope/`), an
+/// `@version`, and an `npm pack` version (`install-mcp-1.0.0.tgz`).
+/// `smithery-cli` is how `npm pack` spells `@smithery/cli`.
+private func packageName(_ word: String) -> String {
+    var spec = Substring(word)
+    if let scheme = spec.range(of: "://") {
+        spec = spec[scheme.upperBound...]
+    } else if let colon = spec.firstIndex(of: ":"), colon != spec.startIndex,
+              spec[..<colon].allSatisfy({ $0.isLetter || $0 == "+" })
+    {
+        spec = spec[spec.index(after: colon)...]
+    }
+    if let cut = spec.firstIndex(where: { $0 == "#" || $0 == "?" }) { spec = spec[..<cut] }
+    for suffix in [".tgz", ".tar.gz", ".git"] where spec.hasSuffix(suffix) {
+        spec = spec.dropLast(suffix.count)
+        break
+    }
+    let parts = spec.split(separator: "/")
+    guard let last = parts.last else { return "" }
+    var name = String(last)
+    if parts.count >= 2, parts[parts.count - 2].hasPrefix("@") { name = String(parts[parts.count - 2]) + "/" + name }
+    if let at = name.lastIndex(of: "@"), at != name.startIndex { name = String(name[..<at]) }
+    let chars = Array(name)
+    if let dash = chars.indices.dropLast().first(where: { chars[$0] == "-" && chars[$0 + 1].isNumber }) {
+        name = String(chars[..<dash])
+    }
+    return name
 }
 
 /// An expansion rv cannot read that may become the subcommand or several
@@ -123,10 +160,12 @@ private let pythonRunners: Set<String> = argvFeeders.union([
 ])
 
 private let hostGroups: [String: Set<String>] = [
-    "claude": ["mcp", "plugin", "plugins"],
-    "codex": ["mcp", "mcp-server"],
-    "gemini": ["mcp", "extensions"],
-    "opencode": ["mcp"],
+    // `config` writes the host's settings (`claude config set|add|remove`):
+    // only `config`, `config list` and `config get NAME` stay read-only.
+    "claude": ["mcp", "plugin", "plugins", "config"],
+    "codex": ["mcp", "mcp-server", "config"],
+    "gemini": ["mcp", "extensions", "config"],
+    "opencode": ["mcp", "config"],
     "cursor": ["mcp"],
     "cursor-agent": ["mcp"],
 ]
@@ -141,9 +180,20 @@ private let hostPackages: [(String, String)] = [
     ("opencode-ai", "opencode"),
 ]
 
+/// `packageName` of an agent CLI's package in any spec shape (`github:
+/// google-gemini/gemini-cli`, `…/anthropic-ai-claude-code-2.0.14.tgz`).
+private let hostPackageNames: [String: String] = [
+    "@anthropic-ai/claude-code": "claude", "anthropic-ai-claude-code": "claude", "claude-code": "claude",
+    "@openai/codex": "codex", "openai-codex": "codex",
+    "@google/gemini-cli": "gemini", "google-gemini-cli": "gemini", "gemini-cli": "gemini",
+    "opencode-ai": "opencode",
+]
+
 /// Packages and programs whose job is writing a server into host configs.
 private let configInstallerPackages: [String] = ["@smithery/cli", "install-mcp", "add-mcp"]
 private let configInstallerPrograms: Set<String> = ["smithery", "install-mcp", "add-mcp"]
+/// `packageName` of an installer in any spec shape, for a word a runner runs.
+private let configInstallerNames: Set<String> = ["@smithery/cli", "smithery-cli", "install-mcp", "add-mcp"]
 
 /// The exact argv tails (after the host word) that only print. `NAME`
 /// stands for one non-option word. `claude mcp serve` and `codex
@@ -168,6 +218,9 @@ private func isReadOnlyHostForm(host: String, _ rest: [String]) -> Bool {
     default:
         forms = [["mcp"], ["mcp", "list"]]
     }
+    let configForms: [[String]] = hostGroups[host]?.contains("config") == true
+        ? [["config"], ["config", "list"], ["config", "get", "NAME"]]
+        : []
     // `<group> help`, `<group> --help`, `<group> <sub> --help` only print.
     // A bare `help` elsewhere is an operand (`claude plugin install help`).
     if (2...3).contains(rest.count), hostGroups[host]?.contains(rest[0]) == true,
@@ -175,7 +228,7 @@ private func isReadOnlyHostForm(host: String, _ rest: [String]) -> Bool {
     {
         return true
     }
-    return forms.contains { form in
+    return (forms + configForms).contains { form in
         form.count == rest.count
             && zip(form, rest).allSatisfy { expected, word in
                 expected == "NAME" ? word.hasPrefix("-") == false : expected == word
