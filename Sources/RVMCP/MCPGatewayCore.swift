@@ -282,9 +282,14 @@ public struct MCPGatewayCore {
     var untrustedNoticed: Set<String> = []
     /// Servers already reported on stderr as listing names rv does not serve.
     var unservedNoticed: Set<String> = []
-    /// server → tools its latest listing named with a schema
-    /// `schemaNamesHideText` rejects; neither listed nor called.
+    /// server → tools a listing this session named with a schema
+    /// `schemaNamesHideText` rejects, until a later listing shows them with
+    /// one it does not; neither listed nor called. With pinning enforced,
+    /// only tools in `observed`, so bounded with it.
     var hidingSchemas: [String: Set<String>] = [:]
+    /// Servers that listed such a tool past `maximumTrackedTools`: every
+    /// tool of theirs not in `observed` is refused like one in `hidingSchemas`.
+    var hidingUntracked: Set<String> = []
     /// Servers already reported on stderr as listing such tools.
     var hidingSchemaNoticed: Set<String> = []
     /// server → `mcp.tool.changed` events written this session.
@@ -638,8 +643,10 @@ public struct MCPGatewayCore {
                 .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
-        // Not listed either: its schema names a property a client may show raw.
-        guard hidingSchemas[server]?.contains(tool) != true else {
+        // Not listed either: its schema names a property a client may show
+        // raw, or it may and rv could not track it.
+        let untrackedOnHidingServer = hidingUntracked.contains(server) && observed[server]?[tool] == nil
+        guard hidingSchemas[server]?.contains(tool) != true, untrackedOnHidingServer == false else {
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
@@ -1056,6 +1063,13 @@ public struct MCPGatewayCore {
                 definitions[name] = definition
             }
             observed[server, default: [:]].merge(seen) { _, new in new }
+            // Keep only tracked hiding tools; one past the cap is refused
+            // through `hidingUntracked` instead, so it never merely asks.
+            if let hidden = hidingSchemas[server] {
+                let tracked = hidden.filter { observed[server]?[$0] != nil }
+                if tracked.count < hidden.count { hidingUntracked.insert(server) }
+                hidingSchemas[server] = tracked
+            }
             if untracked > 0, untrackedNoticed.insert(server).inserted {
                 outputs.append(.log(
                     "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools; "
@@ -1274,8 +1288,10 @@ public struct MCPGatewayCore {
     }
 
     /// Keywords whose values are data, kept byte-exact: a client sends them
-    /// back verbatim, so a hiding scalar in one is an accepted residual
-    /// (`rv mcp trust` showed it escaped).
+    /// back verbatim. A hiding scalar in a `const`, `enum`, `default` or
+    /// `examples` value is an accepted residual (`rv mcp trust` showed it
+    /// escaped); `dependentRequired` names properties, so
+    /// `schemaNamesHideText` checks it first and serves no tool it rejects.
     static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples", "dependentRequired"]
     /// Keywords whose members are named subschemas (or, for
     /// `dependencies`, property-name lists); a member may be called
