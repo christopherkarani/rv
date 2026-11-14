@@ -648,10 +648,11 @@ enum MCPRun {
         }
         // Nothing of a configured server to pin: still drop queued tools of
         // servers no longer in mcp.json, so they stop taking queue space.
-        if tools.isEmpty, environment.approvalSigning.honorsGrants, pinningSkipped == nil {
-            pinStore.pruneReview(configured: Set(configuration.servers.map(\.name)))
-        }
+        // Only by a server list the owner stands behind: the signed mcp.json
+        // here, or this one once the owner has confirmed and it is signed.
+        let pruneUnconfigured = tools.isEmpty && environment.approvalSigning.honorsGrants && pinningSkipped == nil
         if configTrusted, tools.isEmpty {
+            if pruneUnconfigured { pinStore.pruneReview(configured: Set(configuration.servers.map(\.name))) }
             return .success("mcp.json already matches rv's signature; nothing to trust\n" + tools.waitingHint)
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
@@ -697,6 +698,7 @@ enum MCPRun {
                 configDirectory: environment.configDirectory)
             done.append("trusted mcp.json; rv signs it again on every change it makes")
         }
+        if pruneUnconfigured { pinStore.pruneReview(configured: Set(configuration.servers.map(\.name))) }
         if tools.isEmpty == false {
             switch pinStore.trust(
                 reviewed: tools.reviewed, expectedPins: tools.expectedPins, configured: Set(configuration.servers.map(\.name))

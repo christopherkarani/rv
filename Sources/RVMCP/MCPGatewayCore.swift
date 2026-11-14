@@ -275,6 +275,9 @@ public struct MCPGatewayCore {
     var queueNoticed: Set<String> = []
     /// Servers already told on stderr that they list more tools than rv tracks.
     var untrackedNoticed: Set<String> = []
+    /// Servers already told (stderr and one event) that they reached
+    /// `maximumTrackedChanges`, so later changed definitions are not queued.
+    var trackingFullNoticed: Set<String> = []
     /// Servers already reported on stderr as having untrusted tools.
     var untrustedNoticed: Set<String> = []
     /// Servers already reported on stderr as listing names rv does not serve.
@@ -1033,13 +1036,25 @@ public struct MCPGatewayCore {
                 // Offered to the review queue once per definition, again
                 // only after the queue did not keep it; at most
                 // `maximumTrackedChanges` per server, and the tool asks either way.
-                if reportedChanges[server]?.contains(change) != true,
-                    (reportedChanges[server]?.count ?? 0) < Self.maximumTrackedChanges
-                {
-                    reportedChanges[server, default: []].insert(change)
-                    // The pinned definition itself, listed again after another
-                    // one, asks for this session but has nothing to review.
-                    if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                if reportedChanges[server]?.contains(change) != true {
+                    if (reportedChanges[server]?.count ?? 0) < Self.maximumTrackedChanges {
+                        reportedChanges[server, default: []].insert(change)
+                        // The pinned definition itself, listed again after another
+                        // one, asks for this session but has nothing to review.
+                        if pins?[server]?[name] != hash { unpinned[name] = definitions[name] }
+                    } else if pins?[server]?[name] != hash, trackingFullNoticed.insert(server).inserted {
+                        // Not queued, and possibly past the event budget too:
+                        // say once that this session stopped queueing.
+                        let reason = "MCP tool tracking is full for \(server); later changed definitions are not queued "
+                            + "for review. They still ask. Restart `rv mcp serve` after `rv mcp trust`"
+                        outputs.append(.log(
+                            "MCP tool tracking is full for \(shownServer) (\(Self.maximumTrackedChanges) definitions this "
+                                + "session); later changed definitions are not queued for review and still ask. "
+                                + "Restart `rv mcp serve` after `rv mcp trust`"))
+                        outputs.append(.event(AuditEvent(
+                            time: clock(), kind: .mcpToolChanged, decision: .pending, subject: server,
+                            reason: reason, source: "mcp-gateway", detail: ["server": server, "trackingFull": "true"])))
+                    }
                 }
                 // Audited once per definition, even when the queue keeps
                 // offering it; a later, different definition is audited anew.

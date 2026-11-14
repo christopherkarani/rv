@@ -22,6 +22,10 @@ enum RVD {
                 Data("rvd: production transport is XPC; --socket is not supported\n".utf8)
             )
             Foundation.exit(2)
+        } catch RVDLaunchError.homeRequired {
+            try? FileHandle.standardError.write(contentsOf: Data(
+                "rvd: HOME is required, as an absolute path (rvd keeps its policy and audit log in ~/.config/rv)\n".utf8))
+            Foundation.exit(1)
         } catch UnixSocketPathError.runtimeDirectoryMissing {
             #if os(Linux)
             let message = "rvd: XDG_RUNTIME_DIR is set but empty; unset it (rvd then uses /run/user/\(getuid())) "

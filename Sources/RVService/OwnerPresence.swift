@@ -361,12 +361,18 @@ actor OwnerPresence {
     /// Appends one `owner.action` event to the hash-chained audit log, on a
     /// global queue: the append can wait for the file lock, and the caller
     /// is the `ServiceRuntime` actor that hook evaluation also enters.
-    /// False when the event was not written; an approval must then not be
-    /// acted on. True without a home (nothing is configured to record to).
+    /// False when the event was not written, or when there is no home to
+    /// keep `audit.jsonl` under: an approval must then not be acted on.
+    /// Each drop is logged (`AuditDropLog`).
     nonisolated static func audit(
-        summary: String, approved: Bool, outcome: String, context: AuthenticatedRequestContext, home: HomeDirectory?
+        summary: String, approved: Bool, outcome: String, context: AuthenticatedRequestContext, home: HomeDirectory?,
+        dropLog: AuditDropLog = .shared
     ) async -> Bool {
-        guard let home else { return true }
+        let consequence = approved ? "the owner's approval was refused" : "the refusal stands unrecorded"
+        guard let home else {
+            dropLog.report(.ownerAction, file: nil, consequence: consequence)
+            return false
+        }
         var detail = ["outcome": outcome]
         if let role = context.componentRole { detail["caller"] = String(describing: role) }
         let event = AuditEvent(
@@ -375,10 +381,14 @@ actor OwnerPresence {
             subject: String(summary.prefix(ConfirmOwnerActionParams.maxSummaryBytes)),
             source: AuditLedger.Source.audit.rawValue, detail: detail)
         let directory = RVPolicyPaths.configDirectory(home: home)
-        return await withCheckedContinuation { continuation in
+        let recorded: Bool = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: AuditLog.append(event, configDirectory: directory))
             }
         }
+        if recorded == false {
+            dropLog.report(.ownerAction, file: AuditLog.fileURL(configDirectory: directory), consequence: consequence)
+        }
+        return recorded
     }
 }

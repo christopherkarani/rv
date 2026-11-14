@@ -494,7 +494,7 @@ public actor ServiceRuntime {
             context: context, home: configHome)
         // An approval rvd could not record is not given: the CLI acts on it.
         if reply.outcome == .approved, recorded == false {
-            return .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .unavailable))
+            return .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .auditUnwritable))
         }
         return .confirmOwnerAction(reply)
     }
@@ -598,7 +598,8 @@ public actor ServiceRuntime {
         // An approval rvd could not record plants nothing.
         guard recorded else {
             return .attestTTYRedemption(AttestTTYRedemptionReply(
-                planted: false, epoch: grants.epoch.uuidString, ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable)))
+                planted: false, epoch: grants.epoch.uuidString,
+                ownerCheck: ConfirmOwnerActionReply(outcome: .auditUnwritable)))
         }
         let now = clock()
         switch await grants.plant(
@@ -667,7 +668,7 @@ public actor ServiceRuntime {
         }
         // An approval rvd could not record mints nothing.
         guard recorded else {
-            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable)))
+            return .mintAllowOnce(MintAllowOnceReply(ownerCheck: ConfirmOwnerActionReply(outcome: .auditUnwritable)))
         }
         do {
             let code = try await allowOnce.mintPreArmed(
