@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVHistory
 import RVPolicy
 import Synchronization
 
@@ -41,9 +42,39 @@ public struct ManagedSerialStore: Sendable {
             for (directory, serial) in raised.highest {
                 if let stored = record.highest[directory], serial < stored { return unusable }
             }
-            guard OwnerOnlyFile.write(raised.encoded(), to: url) else { return unusable }
+            // Accepting a new serial changes the gate: recorded write-ahead,
+            // so a serial the audit log cannot hold is not accepted (the
+            // bundle stays invalid, which enforces, and the next load retries).
+            guard case .active(let bundle) = checked.state,
+                let event = Self.acceptedEvent(bundle, prior: record.highest[bundle.directory])
+            else { return unusable }
+            do {
+                try ConfigChangeAudit.commit(event, configDirectory: url.deletingLastPathComponent()) {
+                    guard OwnerOnlyFile.write(raised.encoded(), to: url) else { throw ManagedSerialUnsaved() }
+                }
+            } catch is ManagedSerialUnsaved {
+                return unusable
+            } catch {
+                return .invalid("the audit log could not record organization policy serial \(event.detail["serial"] ?? ""), so it was not accepted")
+            }
             return checked.state
         }
+    }
+
+    /// `policy.managed` for a newly accepted serial: the bundle's serial,
+    /// content hash and signer, never its body (an `audit_forward` header
+    /// can hold a credential).
+    static func acceptedEvent(_ bundle: ManagedPolicyBundle, prior: Int?) -> AuditEvent? {
+        guard let serial = bundle.policy.serial else { return nil }
+        let signer = bundle.signingKey.map { "organization signature (key \($0))" }
+            ?? (bundle.isSigned ? "organization signature" : "unsigned bundle")
+        var detail = [
+            "change": "serial-accepted", "serial": String(serial), "sha256": bundle.sha256,
+            "directory": bundle.directory, "signed": String(bundle.isSigned), "authorized_by": signer,
+        ]
+        if let prior { detail["prior_serial"] = String(prior) }
+        return ConfigChangeAudit.event(
+            .policyManaged, subject: bundle.policy.organization ?? bundle.directory, detail: detail)
     }
 
     /// Exclusive lock on a sibling of the state file. `OwnerOnlyFile.write`
@@ -90,3 +121,5 @@ extension ManagedPolicyLocation {
         ManagedSerialStore(configDirectory: configDirectory).check(load())
     }
 }
+
+private struct ManagedSerialUnsaved: Error {}

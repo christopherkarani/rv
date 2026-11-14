@@ -36,11 +36,23 @@ enum OwnerConfirmation {
     /// one stderr line and no usage banner.
     static let refusalExitCode = EX_NOPERM
 
+    /// How a passed check is recorded on the change it authorized
+    /// (`authorized_by`, bound through `ConfigChangeAudit.authorization`).
+    #if canImport(LocalAuthentication)
+    static let authorization = "owner (Touch ID or password at rvd's prompt)"
+    #else
+    static let authorization = "owner (login password, checked by rvd)"
+    #endif
+    /// Tests: the `.authenticated` seam stood in for the owner.
+    static let testAuthorization = "owner (test seam)"
+
     /// Runs the owner check. A refusal prints its line on stderr and throws
     /// `ExitCode(EX_NOPERM)`, so every command it gates exits the same way.
-    static func require(_ summary: String, client: ServiceClient? = nil) async throws {
+    /// Returns how the owner was checked, for the change's audit event.
+    @discardableResult
+    static func require(_ summary: String, client: ServiceClient? = nil) async throws -> String {
         do {
-            try await check(summary, client: client)
+            return try await check(summary, client: client)
         } catch let refused as Refused {
             CommandContext.writeStderr(refused.message + "\n")
             throw ExitCode(refusalExitCode)
@@ -48,19 +60,21 @@ enum OwnerConfirmation {
     }
 
     /// The owner check itself; throws `Refused` (callers that word the
-    /// refusal themselves use this).
-    static func check(_ summary: String, client: ServiceClient? = nil) async throws {
+    /// refusal themselves use this). Returns `authorization`.
+    @discardableResult
+    static func check(_ summary: String, client: ServiceClient? = nil) async throws -> String {
         if let context = CLIProcess.context {
             // Tests: an explicit `.authenticated` seam stands in for the
             // human; anything else fails closed and never prompts.
             guard context.ownerAuthOutcome == .authenticated else {
                 throw Refused("rv: \(summary) needs owner authentication, which was not given")
             }
-            return
+            return testAuthorization
         }
         #if canImport(LocalAuthentication)
         CommandContext.writeStderr("rv: approve \"\(summary)\" with Touch ID or your password\n")
         try await confirm(summary, proof: nil, client: client)
+        return authorization
         #else
         // A locked or empty password can never match: say so instead of
         // prompting for a check that only adds a lockout strike.
@@ -71,6 +85,7 @@ enum OwnerConfirmation {
             throw Refused("rv: \(summary) needs your login password at an interactive terminal")
         }
         try await confirm(summary, proof: OwnerProof(password: password), client: client)
+        return authorization
         #endif
     }
 
