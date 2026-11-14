@@ -410,7 +410,10 @@ struct AgentSkillContentTests {
     /// real command line (a bare `<x>` is a shell redirect).
     private static func concrete(_ command: String) -> String {
         command
-            .replacingOccurrences(of: "<code>", with: "a1b2c3")
+            // All digits: SelfProtectionGuard.isUnlockCode does not yet
+            // accept hex letters (tracked separately); "123456" is still a
+            // valid six-character code.
+            .replacingOccurrences(of: "<code>", with: "123456")
             .replacingOccurrences(of: "<id>", with: "0F3A9C2E-1B2D-4E5F-8A9B-112233445566")
             .replacingOccurrences(of: "<host>", with: "claude")
             .replacingOccurrences(of: "<pack>", with: "core.git")
@@ -462,9 +465,14 @@ struct AgentSkillContentTests {
     @Test("the human list carries the grants and the never list is really refused")
     func humanAndNeverLists() {
         let named = Self.commands(in: AgentSkill.text)
-        let human = named.filter { $0.bucket == .human }.map(\.text)
-        #expect(human.contains("rv allow-once <code>"))
-        #expect(human.contains("rv egress approve <id>"))
+        let human = named.filter { $0.bucket == .human }
+        #expect(human.map(\.text).contains("rv allow-once <code>"))
+        #expect(human.map(\.text).contains("rv egress approve <id>"))
+        // The section says rv blocks agents from these: it must be true.
+        for command in human {
+            let line = ShellCommand(rawValue: Self.concrete(command.text))
+            #expect(SelfProtectionGuard.weakensPolicy(line), "human-only command the guard allows: \(command.text)")
+        }
         let never = named.filter { $0.bucket == .never }
         #expect(never.count >= 5)
         for command in never {

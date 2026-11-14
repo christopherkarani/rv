@@ -42,7 +42,12 @@ not an error to work around.
 
 ## Commands you may run
 
+These only read. If rv does not run where you are (for example inside a
+sandbox), quote them for the human instead.
+
 - `rv explain <command>` shows why rv allows or blocks a command.
+- `rv egress pending` lists egress proposals waiting for review.
+- `rv egress denials` lists recent egress refusals.
 
 ## Commands only the human runs
 
@@ -51,8 +56,6 @@ yourself; rv blocks agents from running them.
 
 - `rv allow-once <code>` redeems the code from a hook deny, once.
 - `rv egress approve <id>` approves the egress proposal named in `next_step`.
-- `rv egress pending` lists egress proposals waiting for review.
-- `rv egress denials` lists recent egress refusals.
 
 ## Never
 
