@@ -29,7 +29,8 @@ struct GatewayHarness {
 
     init(
         _ configuration: MCPConfiguration, secrets: [String: [(name: String, value: String)]] = [:],
-        pinning: MCPToolPinning = .unenforced
+        pinning: MCPToolPinning = .unenforced,
+        recordForward: @escaping @Sendable (MCPCallRecord) -> Bool = { _ in true }
     ) {
         let upstreams = configuration.servers.map {
             MCPGatewayCore.Upstream(definition: $0, secretValues: secrets[$0.name] ?? [])
@@ -37,7 +38,7 @@ struct GatewayHarness {
         let approvals = self.approvals
         core = MCPGatewayCore(
             configuration: configuration, upstreams: upstreams, approvals: approvals.gate, pinning: pinning,
-            clock: { Date() })
+            recordForward: recordForward, clock: { Date() })
     }
 
     /// Starts and answers every upstream initialize.

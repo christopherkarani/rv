@@ -46,6 +46,9 @@ public struct MCPCallRecord: Sendable, Equatable {
         case ran(durationMilliseconds: Int, grant: Grant?)
         /// Allowed (or granted), then the upstream or rv failed before an answer.
         case interrupted(grant: Grant?)
+        /// Allowed (or granted) and about to go upstream. Written before the
+        /// call is forwarded; a call whose record cannot be written is refused.
+        case forwarding(grant: Grant?)
         /// Stopped for an approval nobody has answered yet.
         case awaiting(approvalID: String?)
         /// The prompt ended without a yes: the user refused, the prompt failed
@@ -78,7 +81,7 @@ public struct MCPCallRecord: Sendable, Equatable {
 
     public var approvalID: String? {
         switch outcome {
-        case .ran(_, let grant), .interrupted(let grant): grant?.approvalID
+        case .ran(_, let grant), .interrupted(let grant), .forwarding(let grant): grant?.approvalID
         case .awaiting(let id): id
         case .declined(let id): id
         case .notRun: nil
@@ -87,7 +90,7 @@ public struct MCPCallRecord: Sendable, Equatable {
 
     public var approvedVia: MCPApprovalChannel? {
         switch outcome {
-        case .ran(_, let grant), .interrupted(let grant): grant?.channel
+        case .ran(_, let grant), .interrupted(let grant), .forwarding(let grant): grant?.channel
         case .awaiting, .declined, .notRun: nil
         }
     }
@@ -209,6 +212,9 @@ public struct MCPGatewayCore {
     let order: [String]
     let approvals: MCPApprovalGate
     let pinning: MCPToolPinning
+    /// Writes the `mcp.call` record for a call about to go upstream; false
+    /// when it could not be written, and the call is then refused.
+    let recordForward: @Sendable (MCPCallRecord) -> Bool
     let clock: () -> Date
     let version: String
 
@@ -233,6 +239,7 @@ public struct MCPGatewayCore {
         upstreams: [Upstream],
         approvals: MCPApprovalGate,
         pinning: MCPToolPinning,
+        recordForward: @escaping @Sendable (MCPCallRecord) -> Bool,
         version: String = "1",
         clock: @escaping () -> Date = { Date() }
     ) {
@@ -242,6 +249,7 @@ public struct MCPGatewayCore {
         self.approvals = approvals
         self.pinning = pinning
         self.pins = pinning.pins
+        self.recordForward = recordForward
         self.clock = clock
         self.version = version
     }
@@ -414,11 +422,31 @@ public struct MCPGatewayCore {
         guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
             return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
         }
-        let approval = Approval(id: key, channel: .elicitation)
-        let upstreamID = allocate(.call(
-            client: call.client, server: call.server, tool: call.tool, keys: call.keys, approval: approval, started: clock()))
-        return [.toUpstream(server: call.server, message: Self.request(
-            id: .int(upstreamID), method: "tools/call", params: .object(call.params)))]
+        return forward(
+            client: call.client, server: call.server, tool: call.tool, keys: call.keys,
+            approval: Approval(id: key, channel: .elicitation), params: call.params)
+    }
+
+    /// Records the call, then forwards it. A call whose record cannot be
+    /// written is refused: nothing reaches an upstream unaudited.
+    mutating func forward(
+        client: JSONValue, server: String, tool: String, keys: [String], approval: Approval?, params: JSONObject
+    ) -> [MCPGatewayOutput] {
+        let record = MCPCallRecord(
+            server: server, tool: tool, decision: approval == nil ? .allow : .ask, argumentKeys: keys, isError: false,
+            outcome: .forwarding(grant: approval?.grant))
+        guard recordForward(record) else {
+            let shownServer = MCPDisplayedText.field(server)
+            let shownTool = MCPDisplayedText.field(tool)
+            return [
+                .log("could not write the audit record for \(shownServer) tool \(shownTool); the call was not forwarded"),
+                .toClient(Self.error(
+                    id: client, code: -32603,
+                    message: "rv could not write the audit record for \(shownServer) tool \(shownTool); the call was not run")),
+            ]
+        }
+        let id = allocate(.call(client: client, server: server, tool: tool, keys: keys, approval: approval, started: clock()))
+        return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(params)))]
     }
 
 
@@ -560,8 +588,7 @@ public struct MCPGatewayCore {
                     note: note)
             }
         }
-        let id = allocate(.call(client: client, server: server, tool: tool, keys: keys, approval: approval, started: clock()))
-        return outputs + [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(forwarded)))]
+        return outputs + forward(client: client, server: server, tool: tool, keys: keys, approval: approval, params: forwarded)
     }
 
     /// Elicitation when the client can show it; otherwise a pending request
@@ -1178,7 +1205,7 @@ extension MCPCallRecord {
         case .deny: audited = .denied
         case .ask:
             switch outcome {
-            case .ran, .interrupted: audited = .allowed
+            case .ran, .interrupted, .forwarding: audited = .allowed
             case .awaiting: audited = .pending
             case .declined, .notRun: audited = .denied
             }
@@ -1193,6 +1220,7 @@ extension MCPCallRecord {
         if let approvalID { detail["approval"] = approvalID }
         if let approvedVia { detail["approvedVia"] = approvedVia.rawValue }
         if let durationMilliseconds { detail["durationMs"] = String(durationMilliseconds) }
+        if case .forwarding = outcome { detail["stage"] = "forward" }
         return AuditEvent(
             time: time, kind: .mcpCall, decision: audited, subject: "\(server)/\(tool)", reason: reason,
             source: "mcp-gateway", detail: detail)

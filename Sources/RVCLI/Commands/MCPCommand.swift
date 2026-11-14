@@ -880,6 +880,12 @@ enum MCPRun {
         auditOrLog(record.auditEvent(), configDirectory: configDirectory)
     }
 
+    /// The `mcp.call` record written before a call goes upstream. False
+    /// when the audit log cannot hold it: the gateway then refuses the call.
+    static func recordForward(_ record: MCPCallRecord, configDirectory: URL) -> Bool {
+        AuditLog.append(record.auditEvent(), configDirectory: configDirectory)
+    }
+
     static func reviewField(_ text: String) -> String {
         MCPDisplayedText.field(text)
     }
@@ -1487,7 +1493,9 @@ struct MCPServe: AsyncParsableCommand {
         let (pinning, pinFailure) = MCPToolPinStore(
             configDirectory: configDirectory, signing: environment.approvalSigning
         ).pinning()
-        if let pinFailure {
+        if pinFailure == .unprotected {
+            log("\(MCPToolPinStore.LoadFailure.unprotected.reason); every MCP tool asks")
+        } else if let pinFailure {
             log("\(pinFailure.reason); every MCP tool asks until `rv mcp trust`")
             MCPRun.auditOrLog(
                 AuditEvent(
@@ -1499,7 +1507,8 @@ struct MCPServe: AsyncParsableCommand {
             configuration: configuration,
             upstreams: planned.map { $0.0 },
             approvals: .store(environment.approvals),
-            pinning: pinning)
+            pinning: pinning,
+            recordForward: { MCPRun.recordForward($0, configDirectory: configDirectory) })
         let runtime = MCPGatewayRuntime(
             core: core,
             connections: planned.map { $0.1 },

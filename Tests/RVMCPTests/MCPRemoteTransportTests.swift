@@ -181,7 +181,7 @@ struct MCPRemoteRuntimeTests {
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }),
-            pinning: .unenforced)
+            pinning: .unenforced, recordForward: { _ in true })
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
