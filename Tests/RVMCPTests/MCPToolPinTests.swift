@@ -309,10 +309,10 @@ struct MCPToolPinTests {
     /// scalars, each in a different place a schema names properties.
     static let hidingSchemaTools = [
         #"{"name":"push","inputSchema":{"type":"object","properties":{"re\u001b[2Jpo":{"type":"string"}}}}"#,
-        #"{"name":"tag","inputSchema":{"type":"object","required":["a‮b"]}}"#,
-        #"{"name":"nest","inputSchema":{"type":"object","properties":{"o":{"type":"object","properties":{"x ":{}}}}}}"#,
+        #"{"name":"tag","inputSchema":{"type":"object","required":["a\u202eb"]}}"#,
+        #"{"name":"nest","inputSchema":{"type":"object","properties":{"o":{"type":"object","properties":{"x\u2028":{}}}}}}"#,
         #"{"name":"out","outputSchema":{"type":"object","dependentRequired":{"a":["b\u001b"]}}}"#,
-        #"{"name":"deps","inputSchema":{"type":"object","dependencies":{"c‮":["d"]}}}"#,
+        #"{"name":"deps","inputSchema":{"type":"object","dependencies":{"c\u202e":["d"]}}}"#,
     ]
     static let schemaNotice = "property names rv does not serve"
 
@@ -378,7 +378,7 @@ struct MCPToolPinTests {
     /// `title` or `description` (tool, annotation or schema) that is not a
     /// string is dropped. `dependentRequired` names are data, kept exact.
     @Test func aPinnedToolsOtherProseIsEscapedAndNonStringProseIsDropped() throws {
-        let tool = #"{"name":"push","description":["a\u001b"],"title":{"x":"\u001b"},"annotations":{"title":["\u001b"],"readOnlyHint":true},"inputSchema":{"type":"object","$comment":"c\u001b[2J","properties":{"r":{"type":"string","markdownDescription":"m‮","description":{"bad":"\u001b"},"title":7}},"dependentRequired":{"description":["title"]}}}"#
+        let tool = #"{"name":"push","description":["a\u001b"],"title":{"x":"\u001b"},"annotations":{"title":["\u001b"],"readOnlyHint":true},"inputSchema":{"type":"object","$comment":"c\u001b[2J","properties":{"r":{"type":"string","markdownDescription":"m\u202e","description":{"bad":"\u001b"},"title":7}},"dependentRequired":{"description":["title"]}}}"#
         var pins = Self.pinned
         pins["github"]?["push"] = Self.hash(tool)
         var harness = Self.harness(PinRecorder().pinning(pins))
