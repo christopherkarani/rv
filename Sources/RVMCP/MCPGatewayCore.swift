@@ -748,8 +748,8 @@ public struct MCPGatewayCore {
     }
 
     /// The whole listed description of a tool that is not pinned. Such a
-    /// tool is listed with only its name, this marker, an empty object
-    /// schema and the four boolean hints (`exposedTool`).
+    /// tool is listed with only its name, this marker and an empty object
+    /// schema (`exposedTool`).
     static func pinMarker(_ status: MCPToolPinStatus) -> String? {
         let hidden = "its description and parameters are hidden until the user runs `rv mcp trust`; every call needs the user's approval]"
         return switch status {
@@ -1100,8 +1100,7 @@ public struct MCPGatewayCore {
     /// is not pinned (changed, new, or unverifiable) always asks and is
     /// listed with no upstream string but its name: its description is rv's
     /// marker, its input schema `{"type":"object"}`, it has no output
-    /// schema, and its annotations are only `withheldHints` with boolean
-    /// values. For a pinned tool the prose fields (`description`, `title`,
+    /// schema and no annotations. For a pinned tool the prose fields (`description`, `title`,
     /// `annotations.title`, and every `description`/`title` string in its
     /// schemas) keep line breaks and backslashes and lose only hiding
     /// scalars (`MCPDisplayedText.description`). Everything else is
@@ -1128,20 +1127,14 @@ public struct MCPGatewayCore {
         }
         var walked = object
         if let marker = Self.pinMarker(pinStatus(server: upstream.definition.name, tool: name)) {
-            // No upstream string but the (conforming) name: an empty object
+            // No upstream field but the (conforming) name: an empty object
             // schema, so the arguments an approved call forwards are the
-            // client's own, and only the four boolean hints.
+            // client's own, and no annotations (an unreviewed
+            // `readOnlyHint: true` could let a host skip its own prompt).
             var withheld = JSONObject()
             withheld["name"] = .string(listedName)
             withheld["description"] = .string(marker)
             withheld["inputSchema"] = .object(["type": .string("object")])
-            if let annotations = object["annotations"]?.objectValue {
-                var flags = JSONObject()
-                for key in Self.withheldHints {
-                    if let value = annotations[key], value.boolValue != nil { flags[key] = value }
-                }
-                if flags.isEmpty == false { withheld["annotations"] = .object(flags) }
-            }
             return .object(withheld)
         }
         let shownDescription = MCPDisplayedText.description(rawDescription ?? "")
@@ -1163,10 +1156,6 @@ public struct MCPGatewayCore {
         walked["name"] = .string(MCPDisplayedText.field(listedName))
         return .object(walked)
     }
-
-    /// The only annotations a tool that is not pinned keeps, and only with
-    /// boolean values: the keys are rv's, not the upstream's.
-    static let withheldHints = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]
 
     /// Keywords whose values are data, kept byte-exact.
     static let schemaValueKeywords: Set<String> = ["const", "enum", "default", "examples"]

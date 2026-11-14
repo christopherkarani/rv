@@ -176,8 +176,9 @@ struct MCPToolPinTests {
         "evil.example", "call_fs_first", "delete the repo", "run me first", "exfiltrateHint", "x-hint", "vendor", "yes",
     ]
 
-    /// N1, N3: a tool that is not pinned is listed with its name, rv's
-    /// marker, the empty object schema, and the four boolean hints only.
+    /// N1, N3, H1: a tool that is not pinned is listed with its name, rv's
+    /// marker and the empty object schema only. No annotation is forwarded:
+    /// an unreviewed `readOnlyHint: true` could make a host auto-approve.
     @Test func anUntrustedToolIsListedWithNoUpstreamStringButItsName() throws {
         var harness = Self.harness(PinRecorder().pinning(Self.pinned))
         let listing = Self.list(&harness, [Self.listIssues, Self.search, Self.richUntrusted])
@@ -186,8 +187,8 @@ struct MCPToolPinTests {
             "name": .string("push"),
             "description": .string(Self.untrustedMarker),
             "inputSchema": .object(["type": .string("object")]),
-            "annotations": .object(["destructiveHint": .bool(true), "idempotentHint": .bool(false)]),
         ]))
+        #expect(tool["annotations"] == nil)
         let text = tool.compactText
         for leaked in Self.richUpstreamStrings { #expect(text.contains(leaked) == false, "\(leaked)") }
     }
