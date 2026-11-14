@@ -186,9 +186,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         // instance at the spawn seam (REQ-2-1), so no open loopback proxy
         // survives as a cross-runtime authority (SEC-2-2, separation —
         // not cross-cage secrecy on the coarse profile; see
-        // `egressProxyURL`). Denial intake
-        // still feeds the review queue ahead of the production denial log,
-        // per proxy (see makeRuntimeEgress).
+        // `egressProxyURL`). Policy denials
+        // still feed the review queue beside the production denial log,
+        // per proxy (see makeEgressReview).
         self.reviewQueue = reviewConfigDirectory.map(NetworkReviewQueue.init(configDirectory:))
         self.denialRecorder = denialRecorder
     }
@@ -1480,7 +1480,8 @@ final class WorkspaceSessionSupervisor: Sendable {
                     policy: .publicHTTPS
                 )
             ],
-            record: makeEgressRecord()
+            record: denialRecorder ?? EgressProxy.productionDenialLog(),
+            review: makeEgressReview()
         )
         switch proxy.start() {
         case .success(let port):
@@ -1494,25 +1495,25 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
     }
 
-    /// Denial intake for one per-runtime proxy: the production denial log
-    /// (or the injected test recorder), chained ahead of the review queue,
-    /// which is never replaced.
-    private func makeEgressRecord() -> @Sendable (EgressProxyDenial) -> Void {
-        let logDenial = denialRecorder ?? EgressProxy.productionDenialLog()
-        let queue = reviewQueue
+    /// Review-queue intake for one per-runtime proxy, beside the denial log
+    /// (production or the injected test recorder), which it never replaces.
+    /// The proxy calls it for `denied-policy` refusals only. These proxies
+    /// are credentialed, so they file the proposal but never name its id in
+    /// the refusal body: approvals do not reach them live (see
+    /// `EgressProxy.advertisesProposals`). Nil without a queue.
+    private func makeEgressReview() -> EgressReviewHook? {
+        guard let queue = reviewQueue else { return nil }
         let workspaceID = id
         let workspaceDirectory = original
-        return { denial in
-            logDenial(denial)
-            if let queue {
-                Task {
-                    await queue.noteDenial(
-                        denial,
-                        workspace: workspaceID,
-                        workspaceDirectory: workspaceDirectory,
-                        now: Date()
-                    )
-                }
+        return { denial, answer in
+            Task {
+                let id = await queue.noteDenial(
+                    denial,
+                    workspace: workspaceID,
+                    workspaceDirectory: workspaceDirectory,
+                    now: Date()
+                )
+                answer(id?.rawValue)
             }
         }
     }
