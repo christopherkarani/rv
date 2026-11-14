@@ -705,6 +705,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
                 HelpRow(name: "rv mcp trust"),
                 HelpRow(name: "rv mcp connect <server> [--client-id <id>] [--scope <s>] [--no-browser] [--forget]"),
+                HelpRow(name: "sudo rv mcp custodian install | uninstall [--purge]; rv mcp custodian status"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
                 HelpRow(name: "order", description: "Strictest matching glob or rule (deny > ask > allow), else default"),
@@ -741,6 +742,10 @@ enum HelpCatalog {
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
                 HelpRow(name: "integrity", description: "An outside edit does not launch until `rv mcp trust` (needs you present)"),
                 HelpRow(name: "import", description: "Copying a host command into mcp.json needs you present"),
+                HelpRow(
+                    name: "custodian",
+                    description: "Linux: trust and approvals need the key custodian (systemd, PAM), installed once with sudo; signing then asks for your login password at your terminal"
+                ),
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",
