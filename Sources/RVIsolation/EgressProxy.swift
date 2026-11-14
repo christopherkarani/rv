@@ -205,10 +205,13 @@ public final class EgressProxy: @unchecked Sendable {
     /// tests on starved CI hosts.
     let proposalWait: TimeInterval
     static let defaultProposalWait: TimeInterval = 0.25
-    /// Runs review hooks off the serve thread: a hook that blocks delays
-    /// only its own answer.
+    /// Runs review hooks off the serve thread, one at a time. Serial so a
+    /// hook that blocks parks one thread, not a growing set drawn from the
+    /// root pool the relay queue also uses; the cost is that it delays
+    /// later hooks' answers too (each serve thread still gives up after
+    /// `proposalWait`, so the deny is never held longer than that).
     private static let reviewDispatch = DispatchQueue(
-        label: "rv.egress.review", qos: .userInitiated, attributes: .concurrent
+        label: "rv.egress.review", qos: .userInitiated
     )
     /// At most this many serve threads wait on `review` at once; a flood of
     /// fresh denied hosts past it still files proposals but denies at once,
@@ -712,8 +715,11 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     /// Writes the 403 refusal (`EgressDenialResponse`: status, Proxy-Status,
-    /// JSON body), closes, and records. Only a `denied-policy` denial asks
-    /// the review queue for a proposal id, bounded by `proposalWait`.
+    /// JSON body), records, then closes. Recording before the FIN means a
+    /// client that has read to EOF can rely on the denial being logged; the
+    /// full refusal is already written either way. Only a `denied-policy`
+    /// denial asks the review queue for a proposal id, bounded by
+    /// `proposalWait`.
     private func deny(
         client: Int32,
         host: String,
@@ -731,8 +737,8 @@ public final class EgressProxy: @unchecked Sendable {
         let proposalID = reason == .deniedPolicy ? awaitProposal(for: denial) : nil
         let response = EgressDenialResponse(reason: reason, host: host, port: port, proposalID: proposalID)
         _ = EgressProxy.writeAll(client, bytes: response.bytes)
-        EgressProxy.closeAfterRefusal(client)
         record(denial)
+        EgressProxy.closeAfterRefusal(client)
     }
 
     /// Whether refusals on this instance may name a proposal id. Only when
@@ -819,8 +825,8 @@ public final class EgressProxy: @unchecked Sendable {
     private func denyProxyAuthRequired(client: Int32, host: String, port: Int) {
         let response = EgressDenialResponse(reason: .deniedCredential, host: host, port: port)
         _ = EgressProxy.writeAll(client, bytes: response.bytes)
-        EgressProxy.closeAfterRefusal(client)
         record(EgressProxyDenial(host: host, port: port, reason: .deniedCredential, recordedAt: Date()))
+        EgressProxy.closeAfterRefusal(client)
     }
 
     /// Presented proxy credential from a header block, or nil when absent or
