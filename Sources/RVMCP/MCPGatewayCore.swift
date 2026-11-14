@@ -213,7 +213,9 @@ public struct MCPGatewayCore {
     static let maximumChangeEvents = 64
     /// Tools per server whose definitions a session tracks against the
     /// pins, across all of its listings. A tool past this is never pinned:
-    /// it asks. One listing already lists at most this many.
+    /// it asks, or, once its server listed a hiding tool past this
+    /// (`hidingUntracked`), is hidden and refused. One listing already
+    /// lists at most this many.
     static let maximumTrackedTools = maximumListedTools
     /// Definitions per server a session offers to the review queue. Past
     /// this a new definition is not queued (its tool still asks).
@@ -257,7 +259,8 @@ public struct MCPGatewayCore {
     let pins: [String: [String: String]]?
     /// server → tool → hash of the definition this session last listed. At
     /// most `maximumTrackedTools` tools per server; a tool past that is
-    /// never observed, so it is unverified and asks.
+    /// never observed, so it is unverified and asks, or is refused once its
+    /// server is in `hidingUntracked`.
     var observed: [String: [String: String]] = [:]
     /// `server\0tool` listed this session with a definition that differs
     /// from its pin or from another listing. Sticky: such a tool is never
@@ -503,6 +506,17 @@ public struct MCPGatewayCore {
                     "rv refused \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)): \(reason). The call was not run.")),
             ]
         }
+        // Refused as `callTool` would now: the prompt may predate a listing
+        // that left an untracked tool's binding unchanged.
+        if let reason = hiddenRefusal(server: call.server, tool: call.tool) {
+            let exposed = prefixesTools ? call.server + Self.separator + call.tool : call.tool
+            return [
+                .audit(MCPCallRecord(
+                    server: call.server, tool: call.tool, decision: .deny, argumentKeys: call.keys, isError: true,
+                    reason: reason, outcome: .notRun)),
+                .toClient(Self.error(id: call.client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
+            ]
+        }
         return forward(
             client: call.client, server: call.server, tool: call.tool, keys: call.keys,
             approval: Approval(id: key, channel: .elicitation), params: call.params)
@@ -645,11 +659,11 @@ public struct MCPGatewayCore {
         }
         // Not listed either: its schema names a property a client may show
         // raw, or it may and rv could not track it.
-        guard refusesAsHidden(server: server, tool: tool) == false else {
+        if let reason = hiddenRefusal(server: server, tool: tool) {
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true,
-                    reason: Self.hidingSchemaReason, outcome: .notRun)),
+                    reason: reason, outcome: .notRun)),
                 .toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(MCPDisplayedText.field(exposed))")),
             ]
         }
@@ -1066,10 +1080,16 @@ public struct MCPGatewayCore {
             // through `hidingUntracked` instead, so it never merely asks.
             if let hidden = hidingSchemas[server] {
                 let tracked = hidden.filter { observed[server]?[$0] != nil }
-                if tracked.count < hidden.count { hidingUntracked.insert(server) }
+                if tracked.count < hidden.count, hidingUntracked.insert(server).inserted {
+                    outputs.append(.log(
+                        "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools, and one past them "
+                            + "names schema properties with control, separator or format characters; \(Self.untrackedHidingNotice) "
+                            + "every tool of it that rv does not track until `rv mcp serve` restarts. Have the server list "
+                            + "fewer tools, then restart the MCP host"))
+                }
                 hidingSchemas[server] = tracked
             }
-            if untracked > 0, untrackedNoticed.insert(server).inserted {
+            if untracked > 0, hidingUntracked.contains(server) == false, untrackedNoticed.insert(server).inserted {
                 outputs.append(.log(
                     "MCP server \(shownServer) lists more than \(Self.maximumTrackedTools) tools; "
                         + "rv cannot check the rest against your trusted tools, so they always ask"))
@@ -1162,18 +1182,21 @@ public struct MCPGatewayCore {
         }
         // A name refused as hidden is not listed either, whichever of its
         // entries (a clean duplicate, one on another page) is exposed.
-        let shown = listed.filter { tool in
-            scrub(tool, for: server)["name"]?.stringValue.map { refusesAsHidden(server: server, tool: $0) } != true
+        let shown = zip(listed, scrubbed).filter { _, tool in
+            tool["name"]?.stringValue.map { hiddenRefusal(server: server, tool: $0) != nil } != true
         }
-        return (shown.compactMap { exposedTool($0, upstream: upstream) }, outputs)
+        return (shown.compactMap { exposedTool($0.0, upstream: upstream) }, outputs)
     }
 
-    /// True when a call to `tool` on `server` is refused as hidden: it was
-    /// listed with a schema `schemaNamesHideText` rejects, or its server
-    /// listed such a tool rv could not track and rv does not track this one.
-    func refusesAsHidden(server: String, tool: String) -> Bool {
-        hidingSchemas[server]?.contains(tool) == true
-            || (hidingUntracked.contains(server) && observed[server]?[tool] == nil)
+    /// Why a call to `tool` on `server` is refused as hidden, or nil: it
+    /// was listed with a schema `schemaNamesHideText` rejects
+    /// (`hidingSchemaReason`), or its server listed such a tool past
+    /// `maximumTrackedTools` and rv does not track this one
+    /// (`untrackedHidingReason`).
+    func hiddenRefusal(server: String, tool: String) -> String? {
+        if hidingSchemas[server]?.contains(tool) == true { return Self.hidingSchemaReason }
+        if hidingUntracked.contains(server), observed[server]?[tool] == nil { return Self.untrackedHidingReason }
+        return nil
     }
 
     /// Tools whose name or description holds every term; name matches first.
@@ -1315,6 +1338,11 @@ public struct MCPGatewayCore {
     static let schemaProseKeywords: Set<String> = ["description", "title", "$comment", "markdownDescription"]
     /// Why a call to a tool `schemaNamesHideText` rejects is refused.
     static let hidingSchemaReason = "rv does not serve tools whose schema property names hide text"
+    /// Why a call to an untracked tool of a server in `hidingUntracked` is refused.
+    static let untrackedHidingReason = "the server listed more tools than rv tracks, one of them with schema property "
+        + "names that hide text, so rv does not serve its tools it does not track"
+    /// The words the stderr notice for such a server uses.
+    static let untrackedHidingNotice = "rv now hides and refuses"
 
     /// True when a tool's `inputSchema` or `outputSchema` names a property
     /// (a `properties`, `dependencies` or `dependentSchemas` member, a
