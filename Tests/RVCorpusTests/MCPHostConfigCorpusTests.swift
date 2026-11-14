@@ -148,7 +148,7 @@ struct MCPHostConfigCorpusTests {
     @Test("guard on does not touch commands that name no host config", arguments: [
         "make -C mcp install", "pnpm --filter mcp install", "npm --prefix mcp install lodash",
         "uv add mcp", "pip install 'mcp[cli]'", "git checkout -b add-mcp-support",
-        "git commit -m 'install-mcp docs'", "grep -rn claude \"$DIR\"", "grep -rn install-mcp src",
+        "git commit -m 'add mcp install docs'", "grep -rn claude \"$DIR\"", "watch -n 5 'npm test'",
         "claude -p \"fix the failing test in $FILE\"", "claude --version", "codex exec 'run the tests'",
         "npm install -D typescript", "cp a.txt b.txt", "cp -r src dst", "mv old.txt new.txt",
         "ls mcp", "cat mcp/README.md", "less +F build.log", "git grep -n TODO",
