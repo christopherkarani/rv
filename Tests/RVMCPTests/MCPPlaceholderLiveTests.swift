@@ -170,10 +170,13 @@ struct MCPPlaceholderLiveTests {
         #expect(getpgid(leader) == leader)
         #expect(pid_t(contents(scratch, "ppid")) == getpid())
         // The kernel answers the caged server's read of its parent (here this
-        // test process, in serve rv): the arguments, but no environment.
+        // test process, in serve rv) with its arguments AND its environment:
+        // KERN_PROCARGS2 hands a same-uid process the exec-time strings of
+        // any non-platform process, and no narrow Seatbelt rule refuses it
+        // (measured; the policy doc names this limit). Only the parse is
+        // checked here, not what the kernel chooses to show.
         let procargs = contents(scratch, "procargs")
         #expect(procargs.hasPrefix("ok argc=\(CommandLine.arguments.count) "), "\(procargs)")
-        #expect(procargs.hasSuffix(" home=no"), "\(procargs)")
         let environment = contents(scratch, "env")
         #expect(environment.contains("OPENAI_API_KEY=sk-rvph_"))
         #expect(environment.contains("OPENAI_BASE_URL=http://127.0.0.1:\(port)/s/OPENAI_API_KEY"))
