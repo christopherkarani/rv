@@ -134,6 +134,60 @@ struct EgressReviewTokenTests {
         #expect(try await isAwaiting(store, proposal))
     }
 
+    // The ledger's refusals run before the token compare, so each keeps
+    // its own error instead of reading as a review change.
+
+    @Test func boundResolveOfAResolvedRowIsAlreadyResolved() async throws {
+        let store = PendingApprovalStore(baseDirectory: try reviewTokenConfig())
+        let proposal = try await propose(store, host: "api.example.com", workspace: WorkspaceSessionID())
+        let reviewed = try await token(store, proposal)
+        try await grant(store, proposal)
+        await #expect(throws: PendingApprovalError.alreadyResolved) {
+            _ = try await approveReviewed(store, proposal, reviewed)
+        }
+    }
+
+    @Test func boundResolveOfAnUnknownRowIsNotFound() async throws {
+        let store = PendingApprovalStore(baseDirectory: try reviewTokenConfig())
+        let proposal = try await propose(store, host: "api.example.com", workspace: WorkspaceSessionID())
+        let reviewed = try await token(store, proposal)
+        let otherStore = PendingApprovalStore(baseDirectory: try reviewTokenConfig())
+        await #expect(throws: PendingApprovalError.notFound) {
+            _ = try await approveReviewed(otherStore, proposal, reviewed)
+        }
+    }
+
+    @Test func boundResolveOfAnExpiredRowIsTimedOut() async throws {
+        let store = PendingApprovalStore(baseDirectory: try reviewTokenConfig())
+        let proposal = try await propose(store, host: "api.example.com", workspace: WorkspaceSessionID())
+        let reviewed = try await token(store, proposal)
+        let later = proposal.expiresAt.addingTimeInterval(1)
+        await #expect(throws: PendingApprovalError.timedOut) {
+            _ = try await store.resolve(
+                id: proposal.id, decision: .allowOnce,
+                fingerprint: proposal.fingerprint, identity: proposal.identity, now: later,
+                onlyIf: { EgressReview.token(for: proposal.id, in: $0) == reviewed }
+            )
+        }
+    }
+
+    /// An unreadable ledger is a store failure, never an empty ledger.
+    @Test func boundResolveOfAnUnreadableStoreFailsClosed() async throws {
+        guard geteuid() != 0 else { return }  // root reads through 0o000
+        let config = try reviewTokenConfig()
+        let store = PendingApprovalStore(baseDirectory: config)
+        let proposal = try await propose(store, host: "api.example.com", workspace: WorkspaceSessionID())
+        let reviewed = try await token(store, proposal)
+        let file = RVPolicyPaths.pendingApprovalsFile(inConfigDir: config)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await approveReviewed(store, proposal, reviewed)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        #expect(try await isAwaiting(store, proposal))
+    }
+
     @Test func noTokenForRowsThatCannotBeApproved() async throws {
         let store = PendingApprovalStore(baseDirectory: try reviewTokenConfig())
         let proposal = try await propose(store, host: "api.example.com", workspace: WorkspaceSessionID())

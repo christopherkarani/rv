@@ -66,6 +66,11 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     /// ledger. The check runs inside the same file lock as the write, so
     /// no other resolve can land between check and write. Returns nil and
     /// writes nothing when the check fails.
+    ///
+    /// The ledger's own refusals come first, so `stillHolds` judges only a
+    /// readable ledger in which the row still awaits: an unreadable file
+    /// throws `encodeFailed` (never an empty ledger), and an unknown,
+    /// resolved, expired or timed-out row throws its usual error.
     public func resolve(
         id: ApprovalID,
         decision: ApprovalDecision,
@@ -77,8 +82,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: (PendingApproval, [PendingApprovalEvent])?
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
-                guard stillHolds(PendingApprovalLedger.sweep(loaded, now: now)) else { return nil }
+                let loaded = try store.loadChecked().filter { $0.schemaVersion == 1 }.map(\.approval)
                 let (record, next) = try PendingApprovalLedger.resolve(
                     records: loaded,
                     id: id,
@@ -87,6 +91,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
                     identity: identity,
                     now: now
                 )
+                guard stillHolds(PendingApprovalLedger.sweep(loaded, now: now)) else { return nil }
                 try writeRecords(next)
                 return (record, timeoutEvents(before: loaded, after: next) + [.resolved(record)])
             }
@@ -100,6 +105,10 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         return outcome.0
     }
 
+    /// Record a human decision exactly once. Unbound: network (egress)
+    /// approvals must use `resolve(…, onlyIf:)` with their review token
+    /// (`EgressReview`), so an approval cannot apply against grant state
+    /// the owner never saw.
     public func resolve(
         id: ApprovalID,
         decision: ApprovalDecision,
