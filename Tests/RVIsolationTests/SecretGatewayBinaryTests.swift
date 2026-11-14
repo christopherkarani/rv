@@ -356,9 +356,13 @@ struct SecretGatewayBinaryTests {
     ///   trailing `true` stops bash from exec'ing curl).
     /// - `shared`: the leader opens the connection and a bash child, which
     ///   inherits the socket, sends the request; both hold it.
-    /// Returns the status code, and the audit refusal code of the last record.
+    /// - `quiet`: as `direct`, and the leader first forks a child that
+    ///   closes every descriptor and execs `/bin/sleep`: a descendant with
+    ///   an empty descriptor table, as a placeholder launch with none is.
+    /// Returns the status code, the audit refusal code of the last record,
+    /// and for `quiet` whether that child's descriptor table read as empty.
     private func scan(mode: String, pins: (pid_t) throws -> [GatewayBinaryPin]) throws
-        -> (status: String, refusal: String?)
+        -> (status: String, refusal: String?, quietChildIsEmpty: Bool?)
     {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-scan-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -373,6 +377,13 @@ struct SecretGatewayBinaryTests {
         let script = """
             use IO::Socket::INET;
             my ($go, $out, $mode) = @ARGV;
+            if ($mode eq 'quiet') {
+                my $child = fork(); die unless defined $child;
+                if ($child == 0) { require POSIX; POSIX::close($_) for 0..4095; exec('/bin/sleep', '30') or POSIX::_exit(1); }
+                select(undef, undef, undef, 0.2);
+                open(my $q, '>', "$out.quiet.tmp") or die; print $q $child; close $q; rename("$out.quiet.tmp", "$out.quiet");
+                $mode = 'direct';
+            }
             select(undef, undef, undef, 0.05) until -s $go;
             open(my $g, '<', $go) or die; my ($port, $placeholder) = split(' ', <$g>); close $g;
             my @curl = ('/usr/bin/curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}',
@@ -421,7 +432,22 @@ struct SecretGatewayBinaryTests {
             if status.isEmpty == false { break }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        return (status, audit.items.withLock { $0.last?.refusal?.code })
+        var quietChildIsEmpty: Bool?
+        if mode == "quiet" {
+            // Still running: the group is killed only on return.
+            let child = pid_t(((try? String(contentsOfFile: out + ".quiet", encoding: .utf8)) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines))
+            quietChildIsEmpty = child.map(Self.hasEmptyDescriptorTable) ?? false
+        }
+        return (status, audit.items.withLock { $0.last?.refusal?.code }, quietChildIsEmpty)
+    }
+
+    /// libproc's listing filled nothing and set no errno: an empty table.
+    private static func hasEmptyDescriptorTable(_ pid: pid_t) -> Bool {
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: 256)
+        errno = 0
+        let filled = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
+        return filled == 0 && errno == 0 && kill(pid, 0) == 0
     }
 
     @Test func theRealScanAdmitsAPinnedHolderOrAncestorAndRefusesOthers() throws {
@@ -448,6 +474,22 @@ struct SecretGatewayBinaryTests {
             [bash, try GatewayBinaryPin.pin(try #require(GatewayBinaryScan.executablePath(leader))).get()]
         })
         #expect(admitted.status == "200")
+    }
+
+    /// A descendant with no descriptors holds no socket, so it neither makes
+    /// the binary check unverifiable (`runtimeUnverified`, before libproc
+    /// read an empty table as a failed read) nor passes for the holder: the
+    /// real holder's binary still decides.
+    @Test func aDescendantWithNoDescriptorsLeavesTheBinaryCheckToTheHolder() throws {
+        let curl = try pin("/usr/bin/curl")
+        let bash = try pin("/bin/bash")
+        let admitted = try scan(mode: "quiet", pins: { _ in [curl] })
+        #expect(admitted.quietChildIsEmpty == true)
+        #expect(admitted.status == "200")
+        let refused = try scan(mode: "quiet", pins: { _ in [bash] })
+        #expect(refused.quietChildIsEmpty == true)
+        #expect(refused.status == "403")
+        #expect(refused.refusal == "binaryMismatch")
     }
     #endif
 }
