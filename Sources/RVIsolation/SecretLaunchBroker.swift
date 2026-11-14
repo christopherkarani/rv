@@ -12,11 +12,17 @@ struct SecretLease: Sendable {
     /// parts), so an uncontained launch can drop any inherited variable
     /// that holds one. Never printed (`SecretValue` redacts itself).
     let realValues: [SecretValue]
+    /// The definitions staged, as loaded for this lease.
+    let definitions: [SecretDefinition]
 
-    init(placeholders: [SecretPlaceholder], environment: [(name: String, value: String)], realValues: [SecretValue] = []) {
+    init(
+        placeholders: [SecretPlaceholder], environment: [(name: String, value: String)],
+        realValues: [SecretValue] = [], definitions: [SecretDefinition] = []
+    ) {
         self.placeholders = placeholders
         self.environment = environment
         self.realValues = realValues
+        self.definitions = definitions
     }
 
     static let empty = SecretLease(placeholders: [], environment: [])
@@ -247,7 +253,9 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 ])))
         }
         for event in staged { _ = AuditLog.append(event, configDirectory: configDirectory) }
-        return .success(SecretLease(placeholders: placeholders, environment: environment, realValues: realValues))
+        return .success(SecretLease(
+            placeholders: placeholders, environment: environment, realValues: realValues,
+            definitions: released.map(\.definition)))
     }
 
     /// Organization rules for a resource profile's `keychain` entries, checked

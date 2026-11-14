@@ -231,34 +231,52 @@ How it starts the command:
 
 - Only `gateway` and `awsSigV4` secrets are staged. A named secret with
   `environment` delivery, or with an `agents` filter (`rv run` carries no
-  agent tag), is refused; `--all` skips those and names them on stderr.
-  Nothing selected is refused.
+  agent tag), is refused; `--all` skips those, names them on stderr, and
+  removes what they would have set (and a `hostEnvironment` source's
+  variable) from the command's environment. Nothing selected is refused.
 - The command's environment is rv's own, minus every variable a selected
   secret stages (the shell's copy of the real value among them, and
   `AWS_SESSION_TOKEN`/`AWS_SECURITY_TOKEN` for an AWS secret), minus the
   variable a `hostEnvironment` source reads, minus any variable whose
   value (trimmed of surrounding whitespace or not) is a selected secret's
-  real value or one part of an AWS credential set, plus the lease:
-  placeholders, base URLs, and the AWS endpoint, key id and a throwaway
-  signing key. When a selected secret comes from Vault, `VAULT_TOKEN`
-  (the login rv's Vault provider reads) is removed too; provider CLIs
-  (`op`, `aws`, `infisical`, `bws`, `gcloud`, `az`) read their own logins,
-  which rv does not name, so those pass through. Values are compared in memory; the names removed by value
-  are listed on stderr. A variable that only contains a value (a
-  connection URL with a password in it) is not recognised.
+  real value or one part of an AWS credential set, or contains one that is
+  12 bytes or longer (`Bearer <token>`, a connection URL with the password
+  in it), plus the lease: placeholders, base URLs, and the AWS endpoint,
+  key id and a throwaway signing key. A shorter value is matched only
+  exactly, so a short PIN does not take unrelated variables with it. The
+  names to strip come from the definitions the lease staged. When a
+  selected secret comes from Vault, rv's own Vault login (`VAULT_TOKEN`) is
+  removed too; `~/.vault-token` is not, and provider CLIs (`op`, `aws`,
+  `infisical`, `bws`, `gcloud`, `az`) read their own logins, which rv does
+  not name, so those pass through. Values are compared in memory as bytes;
+  the names removed by value are listed on stderr. A variable whose value
+  is not valid UTF-8 reaches rv already repaired by Foundation, so a real
+  value hidden in one is not recognised.
 - On macOS, `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and
   `POSIX_SPAWN_START_SUSPENDED` creates the command as its own group leader
   and stops it before its first instruction. rv records the leader's pid
   and start time, binds the lease to it, hands it the terminal, and only
-  then sends `SIGCONT`. If any step fails, the stopped child is killed.
-  Only stdio is inherited.
-- `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv go to the command's group,
-  until the leader exits; nothing is signalled once it is reaped. rv
-  takes its terminal from `/dev/tty`, so a command reading the terminal
-  while stdin is a pipe still stops and resumes with job control.
-  Ctrl-Z stops rv with the command, and `fg` resumes both; `bg` resumes
-  both and leaves the terminal with the shell. rv hands the terminal on
-  only while it holds the foreground. rv exits with
+  then sends `SIGCONT`. If any step fails, or a signal reaches rv before
+  the resume, the stopped child is killed. Only stdio is inherited.
+- `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGHUP` sent to rv go to the
+  command's group, each followed by `SIGCONT` so a stopped group gets it,
+  until the leader exits; nothing is signalled once it is reaped. One rv
+  inherited ignored (`nohup`) stays ignored for the command. The
+  dispositions are process-wide and installed once however many guards
+  are open; `SIGCHLD` is default meanwhile, so nothing reaps the command
+  behind rv. rv takes its terminal from `/dev/tty`, so a command reading
+  the terminal while stdin is a pipe still stops and resumes with job
+  control. Ctrl-Z stops rv with the command, and `fg` resumes both; `bg`
+  resumes both and leaves the terminal with the shell. rv hands the
+  terminal on only while it holds the foreground and its process group
+  holds nothing but rv and its own parents (read with
+  `proc_listpgrppids`). In a pipeline (`rv run -- x | less`) the other
+  commands share rv's group, so the terminal stays with them: Ctrl-C
+  reaches the command only because rv forwards it, and Ctrl-Z stops rv but
+  not the command. rv takes the terminal back only from the command's
+  group, or from a group nobody is in any more: if the shell gave it to
+  another job while rv was stopped, that job keeps it. Terminal modes are
+  saved when rv takes it back and re-applied when it hands it on. rv exits with
   the command's code, or 128 plus the signal that ended it; 125 means
   `rv run` refused and the command never ran (126: could not be started,
   127: not found).
@@ -280,11 +298,14 @@ What it does not:
 - It is not a sandbox. The command runs as you, with your files and
   network. It can read whatever your user can, which may include where the
   real values are stored: a `.env` file, `~/.aws/credentials`, a signed-in
-  password manager CLI, a keychain item it is allowed to read.
+  password manager CLI, a keychain item it is allowed to read. It may also
+  be able to read the environments of its parent processes, rv's own
+  (which holds what rv inherited) included.
 - Other variables pass through unchanged, including secrets you did not
-  select.
-- A process that leaves the command's tree (reparented to launchd, or in a
-  new group made with `setsid`) cannot spend the placeholders, but it is not
+  select (other than those `--all` skipped).
+- A process in a new session or group (`setsid`) can still spend the
+  placeholders while its chain of parents reaches the command. Only a
+  process reparented to launchd (its parent exited) cannot, and it is not
   killed when the command exits.
 
 Before resolving any secret, `rv run` checks both things it relies on by
