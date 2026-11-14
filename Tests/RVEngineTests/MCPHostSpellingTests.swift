@@ -121,6 +121,10 @@ struct MCPHostSpellingTests {
         return cases
     }()
 
+    /// A compact JSON body longer than `SpellingBudget.maxWordLength`.
+    static let longJSONCurl = "curl -d '{" + (0..<40).map { "\"k\($0)\":\($0)" }.joined(separator: ",")
+        + "}' https://api.example.com/x"
+
     @Test("every spelling of a host mutation still asks", arguments: spellingCases)
     func spellingStillAsks(_ item: SpellCase) {
         if let reason = item.knownIssue {
@@ -214,12 +218,132 @@ struct MCPHostSpellingTests {
     }
 
     /// A program not known to leave its operands alone may run them: these
-    /// ask as their literal forms (`ls mcp install`) always have.
+    /// ask as their literal forms (`ls mcp install`) always have. So does a
+    /// command that leaves them alone when a wrapper or a path runs it, or
+    /// git with an option before its subcommand; and its literal words and
+    /// carried text are read as before.
     @Test("a spelled operand of a program that may run still asks", arguments: [
-        "ls mcp *", "git add mcp *", "ls mcp $DIR",
+        "chronic mcp *", "tar czf out.tgz mcp $EXTRA", "stdbuf -o0 ls mcp $DIR", "/bin/ls mcp $DIR",
+        "git -C . add mcp *", "ls mcp install", "ls 'chronic mcp install x'",
+        "git add mcp install",
     ])
     func runnableSpelledOperandAsks(_ command: String) {
         #expect(judgeSpelling(command), "\(command)")
+    }
+
+    /// `ls`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `cat` and `git
+    /// add|status|diff|rm`, by their plain names, never run an operand: its
+    /// brace, glob and dynamic spellings do not count.
+    @Test("a spelled operand of a command that leaves its operands alone allows", arguments: [
+        "ls mcp *", "git add mcp *", "ls mcp $DIR", "cp -r packages/mcp \"$DEST\"", "rm -rf build/mcp $TMP",
+        "mv mcp $BACKUP", "touch {a..z}{0..9}", "mkdir -p {a..h}/{1..9}", "git status mcp *",
+        "git diff mcp $REF", "cat mcp/{a,b}.md", "sudo rm -rf build/mcp $TMP",
+    ])
+    func operandsLeftAloneAllow(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// A segment the splitter cannot scan (a head still `{`/`(` that does not
+    /// peel) asks when its line may name a host CLI, bare or carried; one a
+    /// command reads as data, and groups that peel, are read as before.
+    @Test("an unscannable segment that may name a host asks", arguments: [
+        "{claude,mcp} add evil -- x", "{chronic,zzqx} mcp install srv", "x; {claude,zzqx} mcp add evil -- x",
+        "watch '{claude,zzqx} mcp add evil -- x'", "echo '(claude) mcp add evil -- x' | sh",
+    ])
+    func unscannableSegmentAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    @Test("a peeled group or a pattern read as data allows", arguments: [
+        "grep -E '(mcp|claude) add' src", "(cd mcp && npm test)", "{ cd mcp; npm test; } 2>&1 | tee log",
+        "rg -n '(config|plugin) list' docs",
+    ])
+    func scannableGroupsAllow(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// Bash splits a brace word at its commas even where an alternative holds
+    /// a blank (`{mcp,"x y"}` is `mcp` and `x y`); a blank outside every
+    /// brace stays in every word.
+    @Test("a blank inside a brace alternative still splits", arguments: [
+        "claude {mcp,add,srv,\"x y\"}", "claude {mcp,add,srv,'x y'}", "chronic {'a b',mcp} install srv",
+        "stdbuf -o0 {claude,'x y'} mcp add evil -- x",
+    ])
+    func blankInBraceAsks(_ command: String) {
+        #expect(judgeSpelling(command), "\(command)")
+    }
+
+    @Test("a blank outside every brace keeps the word whole", arguments: [
+        "claude -p 'rename {a,b}.ts to ../c'", "codex exec \"use {a, b} = obj in ../src\"",
+        "claude -p \"fix {x} in f({a, b}) and g({c, d})\"",
+    ])
+    func blankOutsideBracesAllows(_ command: String) {
+        #expect(judgeSpelling(command) == false, "\(command)")
+    }
+
+    /// Words are case-folded before matching, so a class is judged as any
+    /// class its folded text may have been: bash matches `cl[M-c]ude` and
+    /// `cl[!A-Z]ude` against `claude`.
+    @Test("a folded class matches what the unfolded class may")
+    func foldedClassGlob() {
+        var budget = SpellingBudget()
+        for pattern in ["cl[m-c]ude", "cl[b-z]ude", "cl[z-a]ude", "cl[!a-z]ude", "cl[a-c]ude"] {
+            #expect(globCanMatch(pattern, "claude", budget: &budget), "\(pattern)")
+        }
+        #expect(globCanMatch("cl[0-9]ude", "claude", budget: &budget) == false)
+        #expect(globCanMatch("cl[x]ude", "claude", budget: &budget) == false)
+        #expect(globCanMatch("cl[!.]ude", "cl.ude", budget: &budget) == false)
+        #expect(globCanMatch("cl[!0-9]ude", "cl5ude", budget: &budget) == false)
+        for command in ["stdbuf -o0 cl[M-c]ude mcp add evil -- x", "stdbuf -o0 cl[!A-Z]ude mcp add evil -- x"] {
+            #expect(judgeSpelling(command), "\(command)")
+        }
+    }
+
+    /// A word past `SpellingBudget.maxWordLength` with no brace whose
+    /// shortest match, and its basename's, is longer than every table word
+    /// cannot be one; any other long spelled word may be any words.
+    @Test("a long glob word is judged by its shortest match")
+    func longGlobWords() {
+        #expect(shortestGlobMatch("a*b?[cd]") == 4)
+        #expect(shortestGlobMatch("[]a]x") == 2)
+        #expect(shortestGlobMatch("[ab") == 3)
+        #expect(shortestGlobMatch("***") == 0)
+        #expect(longestSpelledLiteral >= "@anthropic-ai/claude-code".count)
+        let url = "https://bucket.s3.amazonaws.com/f.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            + "&X-Amz-Credential=AKIAEXAMPLE%2F20240101%2Fus-east-1%2Fs3%2Faws4_request"
+            + "&X-Amz-Date=20240101T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host"
+            + "&X-Amz-Signature=" + String(repeating: "0123456789abcdef", count: 4)
+        #expect(url.count > SpellingBudget.maxWordLength)
+        #expect(judgeSpelling("curl -o f.zip \"\(url)\"") == false)
+        let stars = String(repeating: "*", count: 300)
+        let deep = "/" + String(repeating: "d/", count: 150) + "clau?e"
+        for command in ["stdbuf -o0 \(stars) mcp add evil -- x", "stdbuf -o0 \(deep) mcp add evil -- x"] {
+            #expect(judgeSpelling(command), "\(command.prefix(40))")
+        }
+    }
+
+    /// The false-positive table from review 12, measured on the guard alone
+    /// (gateway in use). `true` asks. An ask row that starts to allow is a
+    /// narrowing to re-check against the deny rows, not a failure to restore.
+    @Test("everyday commands judge as measured", arguments: [
+        ("grep -rn claude *", false), ("rg codex * | head", false), ("ls mcp *", false),
+        ("git add mcp *", false), ("cp -r packages/mcp \"$DEST\"", false), ("rm -rf build/mcp $TMP", false),
+        ("npm install $PKG", false), ("make $TARGET install", false), ("touch {a..z}{0..9}", false),
+        ("mkdir -p {a..h}/{1..9}", false), ("ls ~/Library/Application\\ Support/*", true),
+        ("find . -name '*.swift' -exec wc -l {} +", false), ("git commit -m \"fix config $IFS handling\"", false),
+        ("claude -p \"explain f() { ... }\"", false), ("for f in *; do echo $f; done", false),
+        ("grep -rn \"\\\"version\\\"\" * | head", true), ("cd \"$DIR\" && npm test", false),
+        ("npx $PKG --version", false), ("rm -rf \"$TMP\"", false), ("cp -r \"$SRC\" mcp", false),
+        // A dynamic word after a program that may run it, with a group word
+        // later: it may be a host CLI (`$VAR` is now read as dynamic).
+        ("find \"$DIR\" -name config", true), ("node \"$ENTRY\" mcp list", true),
+        // A brace word at a may-run operand: expanded within the cap, and
+        // past `SpellingBudget.maxWordLength` it may be any words.
+        ("curl -d '{\"a\":1,\"b\":2}' https://api.example.com/x", false),
+        (MCPHostSpellingTests.longJSONCurl, true),
+    ] as [(String, Bool)])
+    func everydayVerdicts(_ command: String, _ asks: Bool) {
+        #expect(judgeSpelling(command) == asks, "\(command)")
     }
 
     @Test("brace expansion yields the shell's words")
@@ -267,27 +391,38 @@ struct MCPHostSpellingTests {
     }
 
     /// Many dynamic words after a runner, none followed by a group word: one
-    /// pass over the words, no work per pair.
+    /// pass over the words, no work per pair. Each word is visited a fixed
+    /// number of times (spelling, `LaterWords`, the dynamic-word pass, the
+    /// judged pass). The same words before a group word ask.
     @Test("dynamic words are judged in linear word visits")
     func dynamicWordsAreLinear() {
-        let args = ["-o0"] + Array(repeating: "$a", count: 16_000) + ["x"]
-        let command = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: args, headIsDynamic: false)
-        var reads = HostTextReads()
-        #expect(isHostMCPMutation(command, reads: &reads) == false)
-        #expect(reads.wordVisits <= 3 * (args.count + 1) + 2)
-        #expect(reads.spelling.steps == 0)
-        #expect(judgeSpelling("stdbuf " + args.joined(separator: " ")) == false)
+        for dynamic in ["$a", "${a}", "$(a)"] {
+            #expect(wordIsDynamic(dynamic), "\(dynamic)")
+            let args = ["-o0"] + Array(repeating: dynamic, count: 16_000) + ["x"]
+            let command = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: args, headIsDynamic: false)
+            var reads = HostTextReads()
+            #expect(isHostMCPMutation(command, reads: &reads) == false)
+            #expect(reads.wordVisits <= 4 * (args.count + 1) + 2)
+            #expect(reads.wordVisits >= 4 * (args.count + 1))
+            #expect(reads.spelling.steps == 0)
+            #expect(judgeSpelling("stdbuf " + args.joined(separator: " ")) == false)
+            let grouped = LaunchedCommand.make(
+                head: "stdbuf", program: "stdbuf", args: args + ["mcp"], headIsDynamic: false)
+            var groupedReads = HostTextReads()
+            #expect(isHostMCPMutation(grouped, reads: &groupedReads))
+        }
     }
 
     /// A ~64 KiB line of dynamic words, star-heavy globs, a long run of `{`
-    /// and a long `*` word: the spelling work stops at the budget and the
-    /// line asks (fail closed); word visits stay linear.
+    /// and a long `*` word: the dynamic words ask before any group word is
+    /// spelled, the spelling work stops at the budget and the line asks (fail
+    /// closed); word visits stay linear.
     @Test("an adversarial line is judged within the spelling budget")
     func adversarialLineIsBounded() {
         let stars = (0..<200).map { index in
             String(repeating: "*a", count: 120) + "*" + String(Character(UnicodeScalar(UInt8(98 + index % 20))))
         }
-        let args = ["-o0"] + Array(repeating: "$a", count: 2_000) + stars
+        let args = ["-o0"] + Array(repeating: "${a}", count: 2_000) + stars
             + [String(repeating: "{", count: 4_000) + ",", String(repeating: "*a", count: 2_000)]
         let line = "stdbuf " + args.joined(separator: " ")
         #expect(line.utf8.count > 60_000)
@@ -295,14 +430,14 @@ struct MCPHostSpellingTests {
         var reads = HostTextReads()
         #expect(isHostMCPMutation(command, reads: &reads))
         #expect(reads.spelling.steps <= SpellingBudget.maxSteps)
-        #expect(reads.wordVisits <= 3 * (args.count + 1) + 2)
+        #expect(reads.wordVisits <= 4 * (args.count + 1) + 2)
         // The stars alone, with nothing rv cannot expand after them.
         let starArgs = ["-o0"] + stars + ["x"]
         let starCommand = LaunchedCommand.make(head: "stdbuf", program: "stdbuf", args: starArgs, headIsDynamic: false)
         var starReads = HostTextReads()
         _ = isHostMCPMutation(starCommand, reads: &starReads)
         #expect(starReads.spelling.steps <= SpellingBudget.maxSteps)
-        #expect(starReads.wordVisits <= 3 * (starArgs.count + 1) + 2)
+        #expect(starReads.wordVisits <= 4 * (starArgs.count + 1) + 2)
         var lineReads = HostTextReads()
         #expect(judgeSpelling(line, &lineReads))
         #expect(lineReads.spelling.steps <= SpellingBudget.maxSteps)
