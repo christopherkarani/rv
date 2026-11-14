@@ -173,7 +173,83 @@ its processes may spend the placeholder unless the secret lists `binaries`
 leader's group; unless it is in a terminal runtime's session, its requests are refused as
 `runtimeMismatch`. Linux has no check (no
 libproc), so every gateway request there is `runtimeUnverified`. Contained
-launches on Linux are already refused before exec.
+launches on Linux are already refused before exec, and so is `rv run`.
+
+## Uncontained launches (`rv run`)
+
+`rv run --secret NAME -- COMMAND` (or `--all`) starts a command with no
+cage and the gateway in front of it. It is for running `claude`, `codex`,
+or a script with placeholders instead of real values, without a workspace.
+
+How it starts the command:
+
+- Only `gateway` and `awsSigV4` secrets are staged. A named secret with
+  `environment` delivery, or with an `agents` filter (`rv run` carries no
+  agent tag), is refused; `--all` skips those and names them on stderr.
+  Nothing selected is refused.
+- The command's environment is rv's own, minus every variable a selected
+  secret stages (the shell's copy of the real value among them, and
+  `AWS_SESSION_TOKEN`/`AWS_SECURITY_TOKEN` for an AWS secret), minus the
+  variable a `hostEnvironment` source reads, minus any variable whose
+  value (trimmed of surrounding whitespace or not) is a selected secret's
+  real value or one part of an AWS credential set, plus the lease:
+  placeholders, base URLs, and the AWS endpoint, key id and a throwaway
+  signing key. When a selected secret comes from Vault, `VAULT_TOKEN`
+  (the login rv's Vault provider reads) is removed too; provider CLIs
+  (`op`, `aws`, `infisical`, `bws`, `gcloud`, `az`) read their own logins,
+  which rv does not name, so those pass through. Values are compared in memory; the names removed by value
+  are listed on stderr. A variable that only contains a value (a
+  connection URL with a password in it) is not recognised.
+- On macOS, `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and
+  `POSIX_SPAWN_START_SUSPENDED` creates the command as its own group leader
+  and stops it before its first instruction. rv records the leader's pid
+  and start time, binds the lease to it, hands it the terminal, and only
+  then sends `SIGCONT`. If any step fails, the stopped child is killed.
+  Only stdio is inherited.
+- `SIGINT`, `SIGTERM` and `SIGHUP` sent to rv go to the command's group,
+  until the leader exits; nothing is signalled once it is reaped. rv
+  takes its terminal from `/dev/tty`, so a command reading the terminal
+  while stdin is a pipe still stops and resumes with job control.
+  Ctrl-Z stops rv with the command, and `fg` resumes both; `bg` resumes
+  both and leaves the terminal with the shell. rv hands the terminal on
+  only while it holds the foreground. rv exits with
+  the command's code, or 128 plus the signal that ended it; 125 means
+  `rv run` refused and the command never ran (126: could not be started,
+  127: not found).
+- When the leader exits, rv kills what is left of its process group,
+  revokes the placeholders and stops the gateway, on every path.
+
+What it protects:
+
+- The real values are never in the command's environment, so it cannot
+  print, log, or paste into a transcript a value it was never given.
+- A placeholder is spent only on a connection from the command or a process
+  it started ([runtime binding](#runtime-binding)), only for requests the
+  secret's `allow` rules permit, and only while the command runs. Requests an
+  `approve` rule matches are refused: there is no approver outside a
+  workspace.
+
+What it does not:
+
+- It is not a sandbox. The command runs as you, with your files and
+  network. It can read whatever your user can, which may include where the
+  real values are stored: a `.env` file, `~/.aws/credentials`, a signed-in
+  password manager CLI, a keychain item it is allowed to read.
+- Other variables pass through unchanged, including secrets you did not
+  select.
+- A process that leaves the command's tree (reparented to launchd, or in a
+  new group made with `setsid`) cannot spend the placeholders, but it is not
+  killed when the command exits.
+
+Before resolving any secret, `rv run` checks both things it relies on by
+doing them (`SecretRunCapability.check`): it spawns a suspended probe
+child holding one end of a loopback connection, and the gateway's peer
+check must call that connection the probe's and a second one not. A
+platform without a no-window spawn, or whose peer check cannot tell
+(`/proc` hidden, no libproc), is refused with exit 125 and the command
+never starts. Linux has no no-window spawn in `rv run` yet, so it is
+refused there (`rv run: this platform cannot start the command suspended
+...`) even once its peer check binds process groups.
 
 ## Binary binding
 

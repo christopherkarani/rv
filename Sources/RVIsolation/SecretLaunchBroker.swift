@@ -8,6 +8,16 @@ import RVPolicy
 struct SecretLease: Sendable {
     let placeholders: [SecretPlaceholder]
     let environment: [(name: String, value: String)]
+    /// The real values behind the placeholders (an AWS set and each of its
+    /// parts), so an uncontained launch can drop any inherited variable
+    /// that holds one. Never printed (`SecretValue` redacts itself).
+    let realValues: [SecretValue]
+
+    init(placeholders: [SecretPlaceholder], environment: [(name: String, value: String)], realValues: [SecretValue] = []) {
+        self.placeholders = placeholders
+        self.environment = environment
+        self.realValues = realValues
+    }
 
     static let empty = SecretLease(placeholders: [], environment: [])
 }
@@ -27,6 +37,10 @@ enum SecretLeaseError: Error, Sendable, Equatable {
     /// A path in the definition's `binaries` cannot be pinned: not a regular
     /// file now, or one nothing would ever run as (a script, a developer shim).
     case binaryUnavailable(secret: String, path: String, reason: GatewayBinaryPin.Unpinnable)
+    /// A placeholders-only lease named a secret delivered as its real value.
+    case realValueDelivery(String)
+    /// A placeholders-only lease named a secret its agent filter would skip.
+    case agentScoped(secret: String, agents: [String])
 
     var message: String {
         switch self {
@@ -47,6 +61,11 @@ enum SecretLeaseError: Error, Sendable, Equatable {
             "secrets \(secrets.joined(separator: " and ")) would both set \(variable); stage one per launch"
         case .binaryUnavailable(let name, let path, let reason):
             "secret \(name): binary \(path) in its binaries list \(reason.reason)"
+        case .realValueDelivery(let name):
+            "secret \(name) is delivered as an environment variable, so its real value would be in the "
+                + "command's environment; only gateway and awsSigV4 secrets can be staged here"
+        case .agentScoped(let name, let agents):
+            "secret \(name) stages only for \(agents.joined(separator: ", ")); this launch carries no agent tag"
         }
     }
 }
@@ -116,7 +135,14 @@ final class SecretLaunchBroker: @unchecked Sendable {
     /// Resolves `names` for one launch. Secrets whose `agents` filter
     /// excludes `agent` are skipped, mirroring keychain entries. Any other
     /// failure stages nothing.
-    func lease(names: [String], agent: String?) -> Result<SecretLease, SecretLeaseError> {
+    ///
+    /// `placeholdersOnly` is for launches outside a cage: checked against
+    /// the definitions loaded here, it refuses an environment-delivered
+    /// secret (its real value would land in the environment) and one the
+    /// agent filter would skip, instead of staging or dropping it.
+    func lease(
+        names: [String], agent: String?, placeholdersOnly: Bool = false
+    ) -> Result<SecretLease, SecretLeaseError> {
         guard names.isEmpty == false else { return .success(.empty) }
         let configuration: SecretsConfiguration
         switch SecretsConfiguration.load(configDirectory: configDirectory) {
@@ -126,6 +152,12 @@ final class SecretLaunchBroker: @unchecked Sendable {
         var definitions: [SecretDefinition] = []
         for name in names {
             guard let definition = configuration.secret(named: name) else { return .failure(.unknownSecret(name)) }
+            if placeholdersOnly {
+                if definition.delivery == .environment { return .failure(.realValueDelivery(name)) }
+                if definition.stages(forAgent: agent) == false {
+                    return .failure(.agentScoped(secret: name, agents: definition.agents ?? []))
+                }
+            }
             guard definition.stages(forAgent: agent) else { continue }
             definitions.append(definition)
         }
@@ -139,6 +171,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
         }
         var placeholders: [SecretPlaceholder] = []
         var environment: [(name: String, value: String)] = []
+        var realValues: [SecretValue] = []
         var staged: [AuditEvent] = []
         func fail(_ error: SecretLeaseError) -> Result<SecretLease, SecretLeaseError> {
             gateway.revoke(placeholders)
@@ -156,6 +189,10 @@ final class SecretLaunchBroker: @unchecked Sendable {
             let value = secret.value
             let expires = secret.expires
             let fingerprint = fingerprint(value)
+            realValues.append(value)
+            if case .awsSigV4 = definition.delivery, let set = AWSCredentialSet(value) {
+                realValues.append(contentsOf: set.values)
+            }
             var pins: [GatewayBinaryPin] = []
             for path in definition.binaries ?? [] {
                 switch GatewayBinaryPin.pin(path) {
@@ -210,7 +247,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 ])))
         }
         for event in staged { _ = AuditLog.append(event, configDirectory: configDirectory) }
-        return .success(SecretLease(placeholders: placeholders, environment: environment))
+        return .success(SecretLease(placeholders: placeholders, environment: environment, realValues: realValues))
     }
 
     /// Organization rules for a resource profile's `keychain` entries, checked

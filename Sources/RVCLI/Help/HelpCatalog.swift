@@ -33,6 +33,7 @@ enum HelpCatalog {
         case .mcp: mcp
         case .managed: managed
         case .report: report
+        case .run: run
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -51,6 +52,7 @@ enum HelpCatalog {
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
+                    HelpRow(name: "run", description: "Run a command with secrets as placeholders (not a sandbox, macOS only)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
@@ -104,6 +106,44 @@ enum HelpCatalog {
                 HelpRow(name: "rv help <command>"),
                 HelpRow(name: "rv help service status"),
             ]),
+        ]
+    )
+
+    static let run = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv run --secret <name> [--secret <name>]... -- <command> [args...]"),
+                HelpRow(name: "rv run --all -- <command> [args...]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--secret", description: "A secret from secrets.json to stage as a placeholder; repeatable. It must use gateway or awsSigV4 delivery and have no agents filter, or the launch is refused"),
+                HelpRow(name: "--all", description: "Every secret that can be a placeholder; the ones it skips are named on stderr"),
+                HelpRow(name: "--", description: "Everything after it is the command, including --help"),
+            ]),
+            HelpSection(heading: "Protects", rows: [
+                HelpRow(name: "values", description: "The command's environment holds per-launch placeholders, never the real values: the parent's copies of those variables, a hostEnvironment source's variable, and any variable holding one of those values are removed (named on stderr), so it cannot print, log, or paste into a transcript a value it was never given"),
+                HelpRow(name: "use", description: "The loopback gateway swaps a placeholder for the real value only on a connection from the command or a process it started, and only for requests the secret's allow rules permit. Requests an approve rule matches are refused: there is no approver outside a workspace"),
+                HelpRow(name: "lifetime", description: "When the command exits, its placeholders are revoked, the gateway stops, and what is left of its process group is killed"),
+            ]),
+            HelpSection(heading: "Does not", rows: [
+                HelpRow(name: "cage", description: "rv run is not a sandbox. The command runs as you, with your files and network. It can read anything your user can, which may include where the real values live (a .env file, ~/.aws/credentials, a signed-in password manager CLI)"),
+                HelpRow(name: "other secrets", description: "Every other variable passes through unchanged, including secrets you did not select"),
+                HelpRow(name: "escape", description: "A process that leaves the command's process tree (a daemon reparented to launchd) cannot spend the placeholders, but it keeps running after rv run exits"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "command", description: "A bare name is searched in PATH's absolute directories; a name with a slash is a path"),
+                HelpRow(name: "terminal", description: "The command gets the terminal; Ctrl-C and Ctrl-Z reach it, and SIGINT, SIGTERM, SIGHUP sent to rv are forwarded to its process group"),
+                HelpRow(name: "store login", description: "When a selected secret comes from Vault, VAULT_TOKEN is removed as well. Provider CLIs (op, aws, infisical, bws, gcloud, az) keep their own logins and files, which the command can use as you can"),
+                HelpRow(name: "exit", description: "The command's exit code, or 128+N when signal N ended it. 125: rv run refused and the command never started; 126: it could not be started; 127: not found"),
+                HelpRow(name: "platform", description: "rv run first checks that it can start the command suspended and that the gateway can tell which process sent a request, and refuses otherwise. Linux has no suspended start yet, so it refuses there"),
+            ]),
+        ],
+        examples: [
+            "rv run --secret OPENAI_API_KEY -- codex",
+            "rv run --all -- claude",
+            "rv run --secret GITHUB_TOKEN -- gh pr list",
         ]
     )
 

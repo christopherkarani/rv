@@ -35,6 +35,7 @@ public enum HelpTopic: Equatable, Sendable {
     case mcp
     case managed
     case report
+    case run
     case opencode
     case workspace
     case `operator`
@@ -106,6 +107,8 @@ public enum HelpDispatch {
         guard let head = path.first else { return .root }
         let rest = Array(path.dropFirst())
         switch head {
+        case "run":
+            return isRunPath(rest) ? .run : nil
         case "opencode":
             return isOpenCodePath(rest) ? .opencode : nil
         case "workspace":
@@ -187,6 +190,24 @@ public enum HelpDispatch {
             } else if token.hasPrefix("--executable=") || token.hasPrefix("--workspace=")
                 || token.hasPrefix("--resource-profile=")
             {
+                index = tokens.index(after: index)
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// `rv run` flags only; anything else (a `--`, a command) is the command's.
+    private static func isRunPath(_ tokens: [String]) -> Bool {
+        var index = tokens.startIndex
+        while index < tokens.endIndex {
+            let token = tokens[index]
+            if token == "--secret" {
+                let value = tokens.index(after: index)
+                guard value < tokens.endIndex else { return false }
+                index = tokens.index(after: value)
+            } else if token == "--all" || token.hasPrefix("--secret=") {
                 index = tokens.index(after: index)
             } else {
                 return false
