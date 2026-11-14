@@ -298,9 +298,14 @@ rv is one binary, 25 commands. The rest of the surface:
   (no path or wrapper, no git option first), never run an operand, so
   only their operands' literal words and carried text count (`ls mcp *`,
   `cp -r packages/mcp "$DEST"`, `touch {a..z}{0..9}` allow; `ls mcp
-  install` and `stdbuf -o0 ls mcp $DIR` ask). A segment rv's splitter
-  cannot scan (a head still `{` or `(` that does not peel, such as
-  `{claude,zzqx} mcp add`) asks when its line may name a host CLI.
+  install` and `stdbuf -o0 ls mcp $DIR` ask), unless the line may define
+  or redefine a command (a function, alias or hash entry, a `PATH`
+  change, `source`/`.`, `eval`, `trap`, `autoload` or a dynamic program:
+  `ls() { "$@"; }; ls mcp $X` asks). A segment rv's splitter cannot scan
+  (a head still `{` or `(` that does not peel, such as `{claude,zzqx} mcp
+  add`) asks when its line may name a host CLI; so do odd heads that only
+  look like a group, such as `{claude}mcp` or `{claude,codex}-helper
+  --version`.
   Carried text is read when it holds a host stem or such a word (`watch
   'chronic m?p install srv'`). Where nothing runs the word (a `grep` or
   `rg` operand, a commit message) and in text such a command carries,
@@ -309,7 +314,14 @@ rv is one binary, 25 commands. The rest of the surface:
   `$(…)`, and ANSI-C `$'…'`, which rv cannot tell from a variable there),
   used as the program at any position after a runner it does not strip
   and followed anywhere by a group word (`stdbuf -o0 $c mcp add`, and so
-  `find "$DIR" -name config` and `node "$ENTRY" mcp list`), or in a
+  `node "$ENTRY" mcp list`), but not as an operand that a plain `find`,
+  `xargs` or `watch` heading the command takes as its own on a line that
+  defines no command (`find`'s start paths and primaries outside
+  `-exec`, `-execdir`, `-ok` and `-okdir`; the separate value of an
+  `xargs -P|-n|-I|…` or `watch -n` option: `find . -maxdepth "$DEPTH"
+  -name config` and `xargs -P "$N" grep -l config` allow, `find . -exec
+  $c mcp add x \;` asks; `find "$DIR" -name config` still asks, as its
+  operands re-read as a command line start with `$DIR`), or in a
   completing position of a `claude`, `codex`, `gemini`, `opencode` or
   `cursor-agent` mutation, counts as that word; so does one in the
   subcommand position after a literal `mcp` or `fastmcp` where it may run
