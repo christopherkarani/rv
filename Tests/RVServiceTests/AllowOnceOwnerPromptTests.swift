@@ -212,7 +212,7 @@ struct AllowOnceOwnerPromptTests {
             return
         }
         #expect(reply.planted == false)
-        #expect(reply.ownerCheck == ConfirmOwnerActionReply(outcome: .unavailable))
+        #expect(reply.ownerCheck == ConfirmOwnerActionReply(outcome: .auditUnwritable))
         #expect(isAllow(await evaluate("git push --force origin main", rig)) == false)
     }
 
@@ -225,7 +225,7 @@ struct AllowOnceOwnerPromptTests {
             Issue.record("an unrecorded pre-arm must answer with the owner check")
             return
         }
-        #expect(reply.ownerCheck?.outcome == .unavailable)
+        #expect(reply.ownerCheck?.outcome == .auditUnwritable)
         #expect(reply.code == nil)
         #expect(await rig.store.list(now: now).isEmpty)
     }

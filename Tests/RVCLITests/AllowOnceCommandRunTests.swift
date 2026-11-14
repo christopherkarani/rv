@@ -648,6 +648,24 @@ struct AllowOnceCommandRunTests {
         #expect(rows.allSatisfy { $0.kind == .pending })
     }
 
+    /// G1: an approval rvd could not write to its audit log plants nothing;
+    /// the redeem fails, the code stays live and the text names the log.
+    @Test func redeem_anApprovalRvdCouldNotRecordIsRefusedAndKeepsThePendingCode() async throws {
+        let refused = ConfirmOwnerActionReply(outcome: .auditUnwritable)
+        let run = try await pendingRedeem(result: .attestTTYRedemption(
+            AttestTTYRedemptionReply(planted: false, epoch: "e", ownerCheck: refused)))
+        guard case .failure(let error) = run.outcome else {
+            Issue.record("an unrecorded approval must not report a grant")
+            return
+        }
+        #expect(error as? AllowOnceAttestError == .notApproved(refused))
+        let rows = await run.store.list(now: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(rows.allSatisfy { $0.kind == .pending })
+        let text = AllowOnceCLI.notApprovedMessage(refused)
+        #expect(text.contains("audit.jsonl"))
+        #expect(text.contains("the code stays live"))
+    }
+
     @Test func redeem_aCommandRvdCannotShowIsReportedAsTooLong() async throws {
         let run = try await pendingRedeem(result: .attestTTYRedemption(AttestTTYRedemptionReply(
             planted: false, epoch: "e", ownerCheck: ConfirmOwnerActionReply(outcome: .unavailable),

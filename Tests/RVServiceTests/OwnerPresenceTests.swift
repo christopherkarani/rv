@@ -392,9 +392,9 @@ struct OwnerPresenceTests {
         return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
     }
 
-    /// A2: an owner approval rvd cannot record is answered unavailable, so
-    /// the CLI does not act on it.
-    @Test func anApprovalThatCannotBeAuditedIsUnavailable() async throws {
+    /// A2, G1: an owner approval rvd cannot record is answered
+    /// `auditUnwritable`, so the CLI does not act on it and says why.
+    @Test func anApprovalThatCannotBeAuditedIsAuditUnwritable() async throws {
         let (runtime, home, url) = try runtime(checker: FakeChecker(accepted: "secret"), authenticator: FakeAuthenticator(approve: true))
         defer { try? FileManager.default.removeItem(at: url) }
         // A directory where audit.jsonl goes: every append fails at once.
@@ -404,7 +404,7 @@ struct OwnerPresenceTests {
             IPCRequest(method: .confirmOwnerAction(ConfirmOwnerActionParams(
                 summary: "set safety to strict", proof: nil, clientSemver: "1.0.0"))),
             context: Self.unroledXPCContext())
-        #expect(reply.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .unavailable)))
+        #expect(reply.result == .confirmOwnerAction(ConfirmOwnerActionReply(outcome: .auditUnwritable)))
     }
 
     @Test func confirmOwnerActionOverTheSocketApprovesAndAudits() async throws {
