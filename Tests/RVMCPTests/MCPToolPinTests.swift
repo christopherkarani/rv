@@ -249,6 +249,52 @@ struct MCPToolPinTests {
         #expect(Self.list(&harness, [#"{"name":"\#(prose)"}"#]).logs.filter { $0.contains("names rv does not serve") }.isEmpty)
     }
 
+    /// What a refused call to a name rv does not serve looks like: no
+    /// upstream message, a deny record, an "Unknown tool" error.
+    static func expectUnserved(_ outputs: [MCPGatewayOutput], _ comment: Comment) {
+        #expect(outputs.toUpstream.isEmpty, comment)
+        #expect(outputs.audits.map(\.decision) == [.deny], comment)
+        #expect(outputs.audits.first?.reason == "rv does not serve tools with this name", comment)
+        #expect(outputs.toClient.first?["error"]?["message"]?.stringValue?.hasPrefix("Unknown tool: ") == true, comment)
+    }
+
+    /// N2: a name rv does not serve is refused when it arrives through
+    /// prefix routing (two servers, `server__tool`), even with pinning off.
+    @Test func anUnservedNameIsRefusedThroughPrefixRouting() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [MCPGatewayCoreTests.github, MCPGatewayCoreTests.notes]))
+        _ = harness.ready()
+        for name in ["github__a/b", "github__a:b", "github__" + String(repeating: "a", count: 65), "notes__x y"] {
+            let called = harness.client(#"{"jsonrpc":"2.0","id":"c","method":"tools/call","params":{"name":"\#(name)","arguments":{}}}"#)
+            Self.expectUnserved(called, "\(name)")
+        }
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":"c","method":"tools/call","params":{"name":"github__list_issues","arguments":{}}}"#).toUpstream.count == 1)
+    }
+
+    /// N2: and through search mode's `rv_call_tool`.
+    @Test func anUnservedNameIsRefusedThroughRvCallTool() throws {
+        let configuration = try MCPConfiguration.decode(Data(#"""
+            {"version": 1, "toolMode": "search", "servers": [{"name": "github", "command": "gh-mcp", "tools": {"allow": ["*"]}}]}
+            """#.utf8)).get()
+        var harness = GatewayHarness(configuration)
+        _ = harness.ready()
+        let called = harness.client(
+            #"{"jsonrpc":"2.0","id":"c","method":"tools/call","params":{"name":"rv_call_tool","arguments":{"name":"a/b","arguments":{"q":"x"}}}}"#)
+        Self.expectUnserved(called, "rv_call_tool")
+    }
+
+    /// N2: an `ask` tool with a name rv does not serve is refused before
+    /// any prompt: nothing is held, elicited or sent for approval.
+    @Test func anUnservedAskNameIsNeverHeld() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [MCPGatewayCoreTests.github]))
+        _ = harness.ready()
+        _ = harness.client(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#)
+        let called = harness.client(#"{"jsonrpc":"2.0","id":"c","method":"tools/call","params":{"name":"create_a/b","arguments":{"title":"t"}}}"#)
+        Self.expectUnserved(called, "create_a/b")
+        #expect(called.toClient.contains { $0["method"] == .string("elicitation/create") } == false)
+        #expect(harness.core.held.isEmpty)
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
+    }
+
     /// N2: the notice escapes and truncates the name it quotes.
     @Test func theUnservedNameNoticeIsEscapedAndBounded() throws {
         var harness = Self.harness(PinRecorder().pinning(Self.pinned))

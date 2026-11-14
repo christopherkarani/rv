@@ -454,17 +454,19 @@ struct MCPGatewayCoreTests {
             return (harness, id)
         }
 
-        var (cancelled, _) = started(1)
+        var cancelled = started(1).0
         _ = cancelled.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"c1"}}"#)
         #expect(cancelled.core.progressTokens.isEmpty)
         #expect(Self.progress(&cancelled, ["progressToken": .int(1), "progress": .int(2)]).isEmpty)
 
-        var (exited, _) = started(2)
+        var exited = started(2).0
         _ = exited.core.handle(.upstreamExited(server: "github"))
         #expect(exited.core.progressTokens.isEmpty)
         #expect(Self.progress(&exited, ["progressToken": .int(2), "progress": .int(2)]).isEmpty)
 
-        var (failed, id) = started(3)
+        let third = started(3)
+        var failed = third.0
+        let id = third.1
         #expect(id >= 0)
         _ = failed.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"error":{"code":-1,"message":"no"}}"#)
         #expect(failed.core.progressTokens.isEmpty)
