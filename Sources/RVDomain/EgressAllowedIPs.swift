@@ -239,12 +239,15 @@ public struct EgressAllowedIPs: Sendable, Hashable {
     /// `spansMappedBlock` refuses a wider IPv6 network that covers it,
     /// which would otherwise sit silently inert.
     ///
-    /// Every IPv4 and IPv6 block `EgressWire.isPublicIPv4`/`isPublicIPv6`
-    /// refuses as never a LAN service is here too: 192.0.0.0/24 (IETF
-    /// protocol assignments, and Oracle's legacy metadata 192.0.0.192),
-    /// the 6to4 relay anycast, documentation and benchmarking. Only the
-    /// private and CGNAT blocks (and ULA, minus the metadata hosts) are
-    /// listable.
+    /// The IPv4 blocks `EgressWire.isPublicIPv4` refuses as never a LAN
+    /// service are here too: 192.0.0.0/24 (IETF protocol assignments, and
+    /// Oracle's legacy metadata 192.0.0.192), the 6to4 relay anycast,
+    /// documentation and benchmarking; so are the IPv6 documentation and
+    /// IETF-assignment blocks. Not every block `isPublicIPv6` refuses is
+    /// listed: unallocated space such as 4000::/2, the 100::/64 discard
+    /// prefix and 5f00::/16 SRv6 SIDs stay listable, which is harmless
+    /// (nothing answers there). AWS's IPv6 platform hosts (metadata, DNS,
+    /// time) are refused one by one, so the rest of ULA stays listable.
     static let forbiddenRanges: [ForbiddenRange] = ([
         ("0.0.0.0/8", "unspecified"),
         ("127.0.0.0/8", "loopback"),
@@ -271,6 +274,8 @@ public struct EgressAllowedIPs: Sendable, Hashable {
         ("fec0::/10", "site-local"),
         ("ff00::/8", "multicast"),
         ("fd00:ec2::254/128", "cloud metadata"),
+        ("fd00:ec2::253/128", "cloud DNS resolver"),
+        ("fd00:ec2::123/128", "cloud time service"),
         ("fd20:ce::254/128", "cloud metadata"),
     ] as [(String, String)]).compactMap { text, reason in
         (try? EgressCIDR(parsing: text)).map { ForbiddenRange(network: $0, reason: reason) }

@@ -89,8 +89,8 @@ import Testing
 
     /// The forbidden table is built by parsing; a typo must not drop a row.
     @Test func everyForbiddenRangeParses() {
-        #expect(EgressAllowedIPs.forbiddenRanges.count == 26)
-        for metadata in ["fd00:ec2::254/128", "fd20:ce::254/128", "192.0.0.0/24"] {
+        #expect(EgressAllowedIPs.forbiddenRanges.count == 28)
+        for metadata in ["fd00:ec2::254/128", "fd00:ec2::253/128", "fd00:ec2::123/128", "fd20:ce::254/128", "192.0.0.0/24"] {
             #expect(EgressAllowedIPs.forbiddenRanges.contains { $0.network.description == metadata }, "\(metadata)")
         }
         #expect(EgressAllowedIPs.forbiddenRanges.allSatisfy { $0.network.prefixLength > 0 })
@@ -108,7 +108,7 @@ import Testing
         "2001::/32", "::ffff:0:0:0/96", "::ffff:127.0.0.1", "::ffff:169.254.169.254", "::ffff:7f00:0/104",
         "::a9fe:a9fe", "fd20:ce::254", "fd20:ce::/32", "192.0.0.192", "192.0.0.0/24", "192.88.99.1",
         "192.0.2.0/24", "198.51.100.7", "203.0.113.0/24", "198.18.0.0/15", "198.19.0.1", "2001:db8::/32",
-        "3fff::1", "2001:2::/48",
+        "3fff::1", "2001:2::/48", "fd00:ec2::253", "fd00:ec2::123",
     ])
     func refusesForbiddenRangesAtParseTime(_ entry: String) throws {
         let error = try #require(throws: EgressAllowedIPError.self) { try EgressAllowedIPs(parsing: [entry]) }
@@ -119,6 +119,16 @@ import Testing
         #expect(named == entry)
         #expect(range.isEmpty == false)
         #expect(error.message.contains(entry))
+    }
+
+    /// Neighbours of the forbidden blocks stay listable, so a typo in the
+    /// forbidden table (a prefix one bit too short) cannot hide here.
+    @Test(arguments: [
+        "2001:200::/23", "2001:4860::/32", "198.20.0.0/16", "192.0.1.0/24", "192.88.98.0/24",
+        "fd00:ec2::252/128", "fd00:ec2::1:254/128",
+    ])
+    func neighboursOfForbiddenRangesParse(_ entry: String) throws {
+        #expect(try EgressAllowedIPs(parsing: [entry]).entries == [entry])
     }
 
     @Test(arguments: [

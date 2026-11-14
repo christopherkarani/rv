@@ -1086,6 +1086,10 @@ public final class EgressProxy: @unchecked Sendable {
     /// cage every host service on that port. So a non-public answer is
     /// also refused when any address equals a local interface address,
     /// and when the interfaces cannot be listed (`localAddresses` nil).
+    /// The interface set is a snapshot taken per dial. Other routes back
+    /// to the host (a Docker or Lima host-gateway address, a NAT that
+    /// hairpins to it) are not detected; the owner's list is the control
+    /// there.
     static func externalAnswerAdmitted(
         _ candidates: [EgressDialCandidate],
         allowedIPs: EgressAllowedIPs?,
@@ -1113,6 +1117,13 @@ public final class EgressProxy: @unchecked Sendable {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0 else { return nil }
         defer { freeifaddrs(head) }
+        return interfaceAddresses(from: head)
+    }
+
+    /// The IPv4 and IPv6 addresses in one `getifaddrs` list. Nil when it
+    /// holds none: a listing without even loopback is not trusted to
+    /// prove an answer is not this machine.
+    static func interfaceAddresses(from head: UnsafeMutablePointer<ifaddrs>?) -> Set<EgressIPAddress>? {
         var addresses = Set<EgressIPAddress>()
         var cursor = head
         while let entry = cursor {
@@ -1133,7 +1144,7 @@ public final class EgressProxy: @unchecked Sendable {
             }
             if let address { addresses.insert(address) }
         }
-        return addresses
+        return addresses.isEmpty ? nil : addresses
     }
 
     /// The address one candidate dials, for `allowed_ips` coverage. Nil

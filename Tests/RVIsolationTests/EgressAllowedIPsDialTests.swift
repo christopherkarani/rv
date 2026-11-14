@@ -129,6 +129,34 @@ import Testing
         #expect(dialed.all.isEmpty)
     }
 
+    /// A listing that yields no IPv4 or IPv6 address (no entries, an
+    /// entry without an address, only other families) is unlistable, so
+    /// private-range dials fail closed; one usable entry is returned.
+    @Test func interfaceListingWithoutAddressesIsUnlistable() throws {
+        #expect(EgressProxy.interfaceAddresses(from: nil) == nil)
+        let unix = UnsafeMutablePointer<sockaddr>.allocate(capacity: 1)
+        defer { unix.deallocate() }
+        unix.initialize(to: sockaddr())
+        unix.pointee.sa_family = sa_family_t(AF_UNIX)
+        let tail = UnsafeMutablePointer<ifaddrs>.allocate(capacity: 1)
+        defer { tail.deallocate() }
+        tail.initialize(to: ifaddrs())
+        tail.pointee.ifa_addr = unix
+        let head = UnsafeMutablePointer<ifaddrs>.allocate(capacity: 1)
+        defer { head.deallocate() }
+        head.initialize(to: ifaddrs())
+        head.pointee.ifa_next = tail
+        #expect(EgressProxy.interfaceAddresses(from: head) == nil)
+
+        let inet = UnsafeMutablePointer<sockaddr_in>.allocate(capacity: 1)
+        defer { inet.deallocate() }
+        inet.initialize(to: sockaddr_in())
+        inet.pointee.sin_family = sa_family_t(AF_INET)
+        withUnsafeMutableBytes(of: &inet.pointee.sin_addr) { $0.copyBytes(from: [192, 168, 1, 10] as [UInt8]) }
+        tail.pointee.ifa_addr = UnsafeMutablePointer<sockaddr>(OpaquePointer(inet))
+        #expect(EgressProxy.interfaceAddresses(from: head) == [try #require(EgressIPAddress(parsing: "192.168.1.10"))])
+    }
+
     /// The production listing sees this machine's loopback interface.
     @Test func localInterfaceAddressesListsLoopback() throws {
         let local = try #require(EgressProxy.localInterfaceAddresses())
@@ -139,12 +167,13 @@ import Testing
     /// it, and a mapped loopback or metadata address stays forbidden.
     @Test func mappedIPv6AnswersAreJudgedAsIPv4() throws {
         let allowed = try Self.list(["10.0.5.0/24"])
-        #expect(EgressProxy.externalAnswerAdmitted([try Self.v6("::ffff:10.0.5.20")], allowedIPs: allowed))
-        #expect(EgressProxy.externalAnswerAdmitted([try Self.v6("::ffff:10.0.6.20")], allowedIPs: allowed) == false)
+        func admitted(_ text: String) throws -> Bool {
+            EgressProxy.externalAnswerAdmitted([try Self.v6(text)], allowedIPs: allowed, localAddresses: { [] })
+        }
+        #expect(try admitted("::ffff:10.0.5.20"))
+        #expect(try admitted("::ffff:10.0.6.20") == false)
         for forbidden in ["::ffff:127.0.0.1", "::ffff:169.254.169.254", "::1", "fe80::1", "fd00:ec2::254"] {
-            #expect(
-                EgressProxy.externalAnswerAdmitted([try Self.v6(forbidden)], allowedIPs: allowed) == false,
-                "\(forbidden)")
+            #expect(try admitted(forbidden) == false, "\(forbidden)")
         }
     }
 
@@ -152,10 +181,11 @@ import Testing
     /// owner's list does not name. The same address unscoped passes.
     @Test func scopedIPv6AnswersAreRefused() throws {
         let allowed = try Self.list(["fd12:3456:789a::/48"])
-        #expect(EgressProxy.externalAnswerAdmitted([try Self.v6("fd12:3456:789a::10")], allowedIPs: allowed))
-        #expect(
-            EgressProxy.externalAnswerAdmitted([try Self.v6("fd12:3456:789a::10", scope: 3)], allowedIPs: allowed)
-                == false)
+        func admitted(_ candidate: EgressDialCandidate) -> Bool {
+            EgressProxy.externalAnswerAdmitted([candidate], allowedIPs: allowed, localAddresses: { [] })
+        }
+        #expect(admitted(try Self.v6("fd12:3456:789a::10")))
+        #expect(admitted(try Self.v6("fd12:3456:789a::10", scope: 3)) == false)
         #expect(EgressProxy.coverageAddress(of: try Self.v6("fd12:3456:789a::10", scope: 3)) == nil)
     }
 
@@ -182,7 +212,7 @@ import Testing
         let dialed = DialedAddresses()
         let outcome = EgressProxy.dial(
             host: Self.host, port: 443, external: true, allowedIPs: try Self.list(["10.0.5.0/24"]),
-            resolve: { resolver.resolve($0, $1) }, connect: { dialed.record($0) }
+            resolve: { resolver.resolve($0, $1) }, connect: { dialed.record($0) }, localAddresses: { [] }
         )
         #expect(outcome == .connectFailed)
         #expect(resolver.calls == 1)
