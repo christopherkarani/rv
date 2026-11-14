@@ -450,6 +450,11 @@ struct SecretRunLaunchTests {
             guarded.withLock { $0 = false }
             signals.restore()
         }
+        // What happened when, for a failure's message: seconds from the
+        // start to the command's pid being read, to its stop being seen, and
+        // to the signal being sent (-1: never).
+        let began = Date()
+        let seen = Mutex<(pid: Double, stopped: Double, sent: Double)>((-1, -1, -1))
         Thread.detachNewThread {
             // As long as the test may take: on a loaded machine the command
             // can take tens of seconds to start. A signal sent before it has
@@ -461,16 +466,31 @@ struct SecretRunLaunchTests {
                 pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
                 usleep(10_000)
             }
+            if pid != 0 { seen.withLock { $0.pid = Date().timeIntervalSince(began) } }
             while isStopped(pid) == false, Date() < deadline { usleep(10_000) }
-            guarded.withLock { if $0 { _ = kill(getpid(), number) } }
+            if isStopped(pid) { seen.withLock { $0.stopped = Date().timeIntervalSince(began) } }
+            guarded.withLock {
+                guard $0 else { return }
+                _ = kill(getpid(), number)
+                seen.withLock { $0.sent = Date().timeIntervalSince(began) }
+            }
         }
+        let ignoredBefore = signals.inheritedIgnored
         let script = "echo $$ > \"$1/pid.tmp\"; mv \"$1/pid.tmp\" \"$1/pid\"; kill -STOP $$; exit 0"
         let result = SecretRunProcess.launch(
             executable: "/bin/sh", arguments: ["sh", "-c", script, "sh", directory.path],
             environment: ["PATH=/usr/bin:/bin"], terminal: nil, signals: signals
         ) { _ in .success(()) }
+        let returned = Date().timeIntervalSince(began)
         let status = try result.get()
-        #expect(SecretRunExit.code(waitStatus: status) == 128 + number)
+        let times = seen.withLock { $0 }
+        #expect(
+            SecretRunExit.code(waitStatus: status) == 128 + number,
+            """
+            wait status \(status); the launch returned after \(returned) s; the command's pid was read after \
+            \(times.pid) s, its stop seen after \(times.stopped) s, the signal sent after \(times.sent) s; \
+            signals rv had ignored before: \(ignoredBefore.sorted())
+            """)
     }
 
     /// Under `nohup` rv inherits SIGHUP ignored; the command keeps it
