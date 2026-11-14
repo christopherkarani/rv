@@ -132,9 +132,8 @@ package final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchec
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = MCPHTTPExchange.requestTimeout
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        let session = URLSession(
+            configuration: configuration, delegate: self, delegateQueue: MCPHTTPExchange.delegateQueue("rv.mcp.remote"))
         locked { self.session = session }
         guard launch.transport == .sse else { return }
         openStream(session: session, retried: false)

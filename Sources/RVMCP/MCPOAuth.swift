@@ -130,7 +130,8 @@ public enum MCPOAuthHTTP {
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         let delegate = MCPBoundedOneShot(limit: maximumBodyBytes)
-        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        let session = URLSession(
+            configuration: configuration, delegate: delegate, delegateQueue: MCPHTTPExchange.delegateQueue("rv.mcp.oauth"))
         defer { session.invalidateAndCancel() }
         session.dataTask(with: request).resume()
         let timeout = request.timeoutInterval > 0 ? request.timeoutInterval : 30
