@@ -23,10 +23,16 @@ struct MCPApprovePinTests {
             .write(configDirectory: fixture.config, signing: .file(configDirectory: fixture.config)).get()
     }
 
+    /// The last prompt shown. A class, so presence closures can share it.
+    final class Prompt: Sendable {
+        let text = Mutex("")
+        var shown: String { text.withLock { $0 } }
+    }
+
     /// Answers the printed-code challenge with `code` and keeps the prompt.
-    static func typing(_ code: String, into prompt: Mutex<String>) -> UserPresence {
+    static func typing(_ code: String, into prompt: Prompt) -> UserPresence {
         UserPresence { reason, challenge in
-            prompt.withLock { $0 = reason }
+            prompt.text.withLock { $0 = reason }
             guard case .printedCode(let check) = challenge, check(code) else { return .refused("wrong confirmation code") }
             return .confirmed(method: "terminal confirmation code")
         }
@@ -44,24 +50,24 @@ struct MCPApprovePinTests {
         let ticket = try #require(store.request(
             server: "github", tool: "push\(Self.hostile)", argumentsHash: "h", argumentKeys: ["k\(Self.hostile)"],
             binding: binding))
-        let prompt = Mutex("")
+        let prompt = Prompt()
         let approved = try await MCPRun.approve(
             id: ticket.id, always: false,
             environment: fixture.environment(presence: Self.typing(try #require(ticket.code), into: prompt))
         ).get()
-        let shown = prompt.withLock { $0 }
+        let shown = prompt.shown
         #expect(shown.contains("(CHANGED since you trusted it; definition sha256 abc123) "), "\(shown)")
         #expect(shown.hasSuffix(" once"))
         #expect(Self.hasHidingScalar(shown) == false)
-        #expect(shown.contains(#"push a\u001b[2Jb‮c1d"#), "\(shown)")
+        #expect(shown.contains(#"push a\u001b[2Jb\u202ec\ue0041d"#), "\(shown)")
         // Argument names are quoted, so their escapes' backslashes double.
         #expect(shown.contains(#"keys "ka\\u001b[2Jb\\u202ec\\ue0041d""#), "\(shown)")
         #expect(Self.hasHidingScalar(approved) == false)
-        #expect(approved.contains(#"a\u001b[2Jb‮c1d"#))
+        #expect(approved.contains(#"a\u001b[2Jb\u202ec\ue0041d"#))
 
         let line = try String(contentsOf: AuditLog.fileURL(configDirectory: fixture.config), encoding: .utf8)
         #expect(Self.hasHidingScalar(line) == false)
-        #expect(line.contains(#"‮"#) || line.contains(#"‮"#))
+        #expect(line.contains(#"\u202e"#) || line.contains(#"\u202E"#))
         #expect(fixture.approvalEvents().last?.subject == "github/push\(Self.hostile)")
 
         // The grant is bound to the definition the prompt named.
@@ -85,13 +91,13 @@ struct MCPApprovePinTests {
         let ticket = try #require(store.request(
             server: "github", tool: "search", argumentsHash: "h", argumentKeys: [],
             binding: MCPToolBinding(definitionHash: "def456", pinStatus: .new)))
-        let prompt = Mutex("")
+        let prompt = Prompt()
         let approved = try await MCPRun.approve(
             id: ticket.id, always: true,
             environment: fixture.environment(presence: Self.typing(try #require(ticket.code), into: prompt))
         ).get()
         #expect(approved == "approved github search once; mcp.json already allows it: it asks because its tool definition is not trusted (not yet trusted). Run `rv mcp trust` to review and pin it\n")
-        let shown = prompt.withLock { $0 }
+        let shown = prompt.shown
         #expect(shown.contains("(not yet trusted; definition sha256 def456) "), "\(shown)")
         #expect(shown.hasSuffix(" once"), "\(shown)")
         #expect(try Data(contentsOf: config) == before)
@@ -107,7 +113,7 @@ struct MCPApprovePinTests {
         let ticket = try #require(store.request(
             server: "github", tool: "push", argumentsHash: "h", argumentKeys: [],
             binding: MCPToolBinding(definitionHash: "def456", pinStatus: .changed)))
-        let prompt = Mutex("")
+        let prompt = Prompt()
         let approved = try await MCPRun.approve(
             id: ticket.id, always: true,
             environment: fixture.environment(presence: Self.typing(try #require(ticket.code), into: prompt))
