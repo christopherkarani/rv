@@ -17,10 +17,18 @@ public enum AuditLog {
         configDirectory.appendingPathComponent(AuditLedger.Source.audit.rawValue, isDirectory: false)
     }
 
+    /// How long an append waits for another process holding the file lock.
+    public static let defaultLockTimeout: TimeInterval = 2
+
     /// Each line's `prev` is the SHA-256 of the line before it (see `AuditChain`).
     /// A torn last line is closed with a newline first, so it stays one bad line.
+    /// False, with nothing written, when another process holds the file
+    /// lock for longer than `lockTimeout`: a writer stuck on the lock never
+    /// stalls the caller (or every other thread waiting behind it).
     @discardableResult
-    public static func append(_ event: AuditEvent, configDirectory: URL) -> Bool {
+    public static func append(
+        _ event: AuditEvent, configDirectory: URL, lockTimeout: TimeInterval = defaultLockTimeout
+    ) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -38,7 +46,7 @@ public enum AuditLog {
             let fd = open(url.path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { return false }
             defer { close(fd) }
-            guard lock(fd) else { return false }
+            guard lock(fd, timeout: lockTimeout) else { return false }
             defer { _ = flock(fd, LOCK_UN) }
             guard let tail = lastLine(fd) else { return false }
             var chained = event
@@ -142,17 +150,15 @@ public enum AuditLog {
         }
     }
 
-    /// Excludes other processes. Callers already hold `AppendLock`.
-    private static func lock(_ fd: Int32) -> Bool {
-        for _ in 0..<16 {
-            if flock(fd, LOCK_EX) == 0 {
-                return true
-            }
-            if errno != EINTR {
-                return false
-            }
+    /// Excludes other processes, waiting at most `timeout`. Callers already
+    /// hold `AppendLock`.
+    private static func lock(_ fd: Int32, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK || errno == EINTR, Date() < deadline else { return false }
+            usleep(10_000)
         }
-        return false
+        return true
     }
 
     private static func writeAll(_ fd: Int32, _ data: Data) -> Bool {

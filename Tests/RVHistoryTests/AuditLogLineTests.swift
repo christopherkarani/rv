@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 import Testing
@@ -54,5 +59,53 @@ struct AuditLogLineTests {
         #expect(decoded.detail["argumentKeys"] == hostile)
         #expect(decoded.detail[hostile] == "v")
         #expect(try AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: dir)).get().firstBreak == nil)
+    }
+
+    /// The length of the first line `event("edge", reason:)` writes.
+    private func firstLineBytes(reason: String) throws -> Int {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(AuditLog.append(event("edge", reason: reason), configDirectory: dir))
+        return try Data(contentsOf: AuditLog.fileURL(configDirectory: dir)).count - 1
+    }
+
+    /// M4: a line exactly `maximumLineBytes` long is refused; one byte
+    /// shorter is written and verifies.
+    @Test func aLineAtTheLimitIsRefusedAndOneByteUnderIsWritten() throws {
+        let probe = try firstLineBytes(reason: "k")
+        let atLimit = String(repeating: "k", count: AuditChain.maximumLineBytes - probe + 1)
+        let refused = try scratch()
+        defer { try? FileManager.default.removeItem(at: refused) }
+        #expect(AuditLog.append(event("edge", reason: atLimit), configDirectory: refused) == false)
+        #expect(try Data(contentsOf: AuditLog.fileURL(configDirectory: refused)).isEmpty)
+
+        let accepted = try scratch()
+        defer { try? FileManager.default.removeItem(at: accepted) }
+        #expect(AuditLog.append(event("edge", reason: String(atLimit.dropLast())), configDirectory: accepted))
+        let file = AuditLog.fileURL(configDirectory: accepted)
+        #expect(try Data(contentsOf: file).count == AuditChain.maximumLineBytes)
+        #expect(AuditLog.append(event("next"), configDirectory: accepted))
+        let report = try AuditChain.verify(fileURL: file).get()
+        #expect(report.lines == 2)
+        #expect(report.firstBreak == nil)
+    }
+
+    /// N13: another process holding the file lock makes `append` give up
+    /// after its timeout, writing nothing, instead of blocking forever.
+    @Test func aHeldFileLockTimesOutAndWritesNothing() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = AuditLog.fileURL(configDirectory: dir)
+        let holder = open(file.path, O_CREAT | O_RDWR, 0o600)
+        #expect(holder >= 0)
+        defer { close(holder) }
+        #expect(flock(holder, LOCK_EX) == 0)
+        let started = Date()
+        #expect(AuditLog.append(event("blocked"), configDirectory: dir, lockTimeout: 0.2) == false)
+        #expect(Date().timeIntervalSince(started) < 2)
+        #expect(try Data(contentsOf: file).isEmpty)
+        _ = flock(holder, LOCK_UN)
+        #expect(AuditLog.append(event("after"), configDirectory: dir, lockTimeout: 0.2))
+        #expect(try AuditChain.verify(fileURL: file).get().lines == 1)
     }
 }
