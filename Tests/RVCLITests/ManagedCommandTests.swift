@@ -193,6 +193,22 @@ struct ManagedCommandTests {
         #expect(build().compliant)
     }
 
+    @Test func reportCountsProjectEntriesWhenRunInsideAProject() throws {
+        let scratch = Scratch()
+        let project = scratch.root.appendingPathComponent("work/repo")
+        try scratch.write("work/repo/.mcp.json", #"{"mcpServers": {"team": {"command": "team-mcp"}}}"#)
+        func build(_ project: URL?) -> ReportRun.Report {
+            ReportRun.build(ReportRun.Inputs(
+                configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], managed: .none,
+                managedDirectory: "/managed", now: Date(), hostName: "h", userName: "dev", userID: 501,
+                fileExists: { _ in false }, project: project))
+        }
+        #expect(build(nil).mcp.counts.isEmpty)
+        let inside = build(project)
+        #expect(inside.mcp.counts == ["unreviewed": 1])
+        #expect(inside.mcp.failing.count == 1)
+    }
+
     @Test func reportSummarizesPostureWithoutSecretValues() throws {
         let scratch = Scratch()
         try scratch.write("home/.cursor/mcp.json", #"{"mcpServers": {"loose": {"command": "x", "env": {"GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"}}}}"#)

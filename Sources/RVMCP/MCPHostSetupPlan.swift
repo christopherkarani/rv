@@ -75,6 +75,9 @@ extension MCPHostSetup {
             let file = snapshot.file
             guard case .data(let data) = snapshot.state.contents else { continue }
             switch file.format {
+            case .pluginServers, .pluginManifest:
+                // Read-only sources: setup never rewrites a plugin.
+                continue
             case .codexTOML:
                 let entries = (try? MCPInventory.entries(in: data, file: file).get()) ?? []
                 for entry in entries where wanted(entry.name, filter) && entry.governedServer == nil

@@ -23,6 +23,9 @@ enum ReportRun {
         var userID: UInt32
         var fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
         var approvalSigning: MCPApprovalSigning = .unavailable
+        /// Project whose MCP configs count too (`rv report` passes its
+        /// working directory, as `rv mcp check` does); nil for user scope only.
+        var project: URL? = nil
     }
 
     struct Report: Encodable, Equatable {
@@ -149,7 +152,8 @@ enum ReportRun {
             return Report.MCPSummary(ok: false, error: failure.message, servers: 0, counts: [:], failing: [], plaintextCredentials: 0)
         case .success(let configuration):
             let report = MCPRun.report(
-                environment, project: nil, configuration: configuration, rvExecutable: MCPExecutable.currentPath())
+                environment, project: inputs.project, configuration: configuration,
+                rvExecutable: MCPExecutable.currentPath())
             var counts: [String: Int] = [:]
             for row in report.rows { counts[row.status, default: 0] += 1 }
             return Report.MCPSummary(
@@ -267,7 +271,8 @@ struct ReportCommand: AsyncParsableCommand {
             hostName: ProcessInfo.processInfo.hostName,
             userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
             userID: getuid(),
-            approvalSigning: .live(configDirectory: configDirectory, home: home.rawValue)))
+            approvalSigning: .live(configDirectory: configDirectory, home: home.rawValue),
+            project: MCPRun.projectURL(nil)))
         ctx.writeStdout(
             ctx.explicitRobot
                 ? try RobotJSON.encode(report, options: .pretty)
