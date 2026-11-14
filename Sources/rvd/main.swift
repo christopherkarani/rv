@@ -16,7 +16,7 @@ enum RVD {
         // rvd spawns keep SIGPIPE at its default; a closed descriptor
         // (EBADF) cannot raise SIGPIPE, so the result is ignored. Linux has
         // no per-file flag: ignore SIGPIPE process-wide. systemd already did
-        // for its unit; `rv service start` starts rvd with the default.
+        // for its unit; a direct start (DirectRvd) gives rvd the default.
         // Sockets and helper pipes already expect EPIPE.
         #if canImport(Darwin)
         _ = fcntl(STDOUT_FILENO, F_SETNOSIGPIPE, 1)
